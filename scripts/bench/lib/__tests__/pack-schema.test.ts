@@ -2284,17 +2284,22 @@ describe("packs/_tiny.json", () => {
     ).toBe(true);
   });
 
-  it("is three divisions, six entrants, four streams, exactly two reconstructed", () => {
+  it("is four divisions, nine entrants, eight streams, exactly two reconstructed", () => {
     // B03 T5 added `d-badminton` alongside `d-tiny` — the pack's first real
     // exercise of the multi-division generalisation `tinyPlan`'s
     // `divisions.length !== 1` refusal used to block (deleted in T4). B03r
     // tasks 9+10 added `d-registration` (registration-ui smoke floor) — it
     // declares TWO more entrants (the "shadow" rows a live run never seeds,
-    // build-packs/_tiny.ts's own comment) but NO streams of its own.
+    // build-packs/_tiny.ts's own comment) but NO streams of its own. B05 T3
+    // added d-tiny's own playoff final (`se-r0-i0`, provenance "real"), which
+    // is why the stream count moved to five while "reconstructed" did not.
+    // B05 T5a added `d-tiebreak` (3 entrants, 3 "real" streams) — the
+    // ordering-differential tie-order-cascade subject — moving entrants to
+    // nine and streams to eight, with "reconstructed" still unchanged.
     const p = parsed(raw);
-    expect(p.divisions).toHaveLength(3);
-    expect(p.entrants).toHaveLength(6);
-    expect(p.streams).toHaveLength(4);
+    expect(p.divisions).toHaveLength(4);
+    expect(p.entrants).toHaveLength(9);
+    expect(p.streams).toHaveLength(8);
     expect(p.streams.filter((s) => s.provenance === "reconstructed")).toHaveLength(2);
   });
 
@@ -2310,9 +2315,14 @@ describe("packs/_tiny.json", () => {
     const p = parsed(raw);
     const tinyDivision = p.divisions.find((d) => d.ref === "d-tiny");
     const badmintonDivision = p.divisions.find((d) => d.ref === "d-badminton");
+    // B05 T3: "se-r0-i0" is `buildSingleElim`'s own id for d-tiny's second
+    // stage, s-playoff — a 2-slot single-elim bracket, not a round-robin
+    // fixture, so it does not follow the `rr-r{round}-c{court}` pattern this
+    // test's own name describes; it is asserted here anyway because it is
+    // still a d-tiny stream.
     expect(
       p.streams.filter((s) => s.divisionRef === "d-tiny").map((s) => s.fixtureExtKey),
-    ).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1"]);
+    ).toEqual(["rr-r1-c1", "rr-r2-c1", "rr-r3-c1", "se-r0-i0"]);
     expect(tinyDivision?.stages[0]?.config).toEqual({ legs: 3 });
     expect(
       p.streams.filter((s) => s.divisionRef === "d-badminton").map((s) => s.fixtureExtKey),

@@ -1,30 +1,30 @@
-// B03 T6b — proves `runTinySuite` actually DRIVES the player-stats baseline
-// end to end against the REAL committed `_tiny.json` pack: removing the
-// `if (input.sql !== undefined) { ... readPlayerStatsBaseline(...) ... }`
-// block in `lib/suites/tiny.ts`, or the `competitionVisibility` passthrough
-// it feeds into `seedSuite`, reds a test here (AGENTS.md recurring-failure
-// class 1 — "the inert seam"; the same acceptance criteria T7's own
-// `tiny-suite-plan.test.ts` was built to satisfy for the DLS-gate probe).
+// B05 T2 — proves `runTinySuite` actually DRIVES division B's own streams
+// through the batch-import route end to end against the REAL committed
+// `_tiny.json` pack: removing the
+// `if (input.sql !== undefined) { ... importDivisionStreams(...) ... }`
+// block in `lib/suites/tiny.ts` reds a test here (AGENTS.md recurring-
+// failure class 1 — "the inert seam", the same class T1's own
+// `tiny-suite-simulate.test.ts` closes for division A). `import.ts`'s own
+// unit suite (`import.test.ts`) already covers chunking, caps, idempotency
+// and refusal handling exhaustively — this file's only job is proving the
+// WIRING actually reaches it on a `_tiny`-shaped run, never merely that it
+// is reachable in principle.
 //
 // A fresh, self-contained fake — same "minimize blast radius outside what
-// THIS task owns" precedent `tiny-suite-plan.test.ts`'s own header comment
-// gives for not extending `tiny-suite.test.ts`'s shared `makeFakeServer()`.
-// This fake's `request()` surface is copied from `tiny-suite-plan.test.ts`'s
-// own `fakeServer` (same generic legs/ext_key derivation, needed because
-// `input.sql` present ALSO drives the DLS-gate probe and officials seam
-// unconditionally — there is no way to exercise T6b's own gating without
-// the whole surface answering), extended with the stats-baseline routes
-// this task adds: `GET /api/orgs`, `GET /api/v1/divisions/{id}` (bare —
-// the division's slug read-back), `GET /api/v1/persons/{id}/stats`,
-// `GET /api/v1/divisions/{id}/stats/players`, and the public route.
+// THIS task owns" precedent `tiny-suite-simulate.test.ts`'s own header
+// comment gives (which is itself `tiny-suite-stats.test.ts`'s `fakeServer`
+// copied verbatim). This one is THAT fake copied verbatim, with exactly one
+// addition: a `refuseImportWith` knob on `raw()`'s `/events/import` branch,
+// so one test can prove a call-level refusal actually reaches
+// `report.errors`/`report.gate`, never a silent skip or retry.
 import { describe, expect, it } from "vitest";
 import pino from "pino";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
+import { readFile } from "node:fs/promises";
+
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
-// B04 — the seven scheduling endpoints, shared with the other fakes in this
-// directory, so no two of them can disagree about what landed on the board.
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -51,7 +51,7 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-function fakeServer(opts: { statsPlayerGranted: boolean }): {
+function fakeServer(opts: { refuseImportWith?: { status: number; code: string; message: string } } = {}): {
   transport: ProbeTransport;
   sql: PlanSql;
   calls: RecordedCall[];
@@ -77,6 +77,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   // could never witness that guard.
   const divisionSportById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
+  const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
   const claimInvites = new Map<string, unknown>();
   let divisionCounter = 0;
@@ -93,14 +94,16 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   const schedule = makeScheduleWorld({ solverEngine: "optimized" });
   // B05 T2.5 (D9) — see `_division-phase.ts`'s own header comment: EVERY
   // `sql`-passing fake now reaches `/start`/`GET /divisions/{id}`
-  // unconditionally. This file is not ABOUT the start step, so it only
-  // answers `/start` and the re-read.
+  // unconditionally, and phase-gating `/events/import` here is what makes
+  // this file's own "clean fold" assertions a real regression against the
+  // start step being wired in.
   const phase = makeDivisionPhaseWorld();
   // B05 T3 — see `_advance-routes.ts`'s own header comment: EVERY
   // `sql`-passing fake now reaches the advancement routes unconditionally,
   // because `_tiny.json`'s own `s-playoff` always declares a `progression`.
-  // This file is not ABOUT advancement; it exists so the player-stats
-  // baseline assertions this file DOES cover stay green.
+  // This file is not ABOUT advancement; it exists so this file's OWN
+  // "clean fold, gate green" assertions stay green rather than reddening on
+  // an unmodeled route.
   const advanceRoutes = makeAdvanceRoutesWorld({
     getQualifiers: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
@@ -234,6 +237,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
             ? [(() => {
                 const id = `fx-${++fixtureCounter}`;
                 if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                fixtureExtKeyById.set(id, "se-r0-i0");
                 return { id, ext_key: "se-r0-i0" };
               })()]
             : Array.from(
@@ -246,7 +250,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
                 (_v, i) => {
                   const id = `fx-${++fixtureCounter}`;
                   if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                  return { id, ext_key: `rr-r${i + 1}-c1` };
+                  const extKey = `rr-r${i + 1}-c1`;
+                  fixtureExtKeyById.set(id, extKey);
+                  return { id, ext_key: extKey };
                 },
               );
         schedule.addFixtures(stageId, fixtures);
@@ -278,7 +284,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
         fixtureOfficials.set(fixtureId, set);
-        // B04: onto the BOARD too — see the same note in the other fakes.
         schedule.setOfficials(fixtureId, set);
         return { ok: true } as T;
       }
@@ -296,23 +301,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         const personId = routePath.split("/")[4]!;
         return (claimInvites.get(personId) ?? null) as T;
       }
-      // B03 T6b — the stats baseline's own routes.
-      const personStatsMatch = /^\/api\/v1\/persons\/[^/]+\/stats$/.test(routePath);
-      if (method === "GET" && personStatsMatch) {
-        return { divisions: [] } as unknown as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+\/stats\/players$/.test(routePath)) {
-        return { metrics: [], rows: [], requires_detailed_scoring: false } as unknown as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/public\/orgs\/[^/]+\/competitions\/[^/]+\/divisions\/[^/]+\/stats$/.test(routePath)) {
-        return { rows: [] } as unknown as T;
-      }
-      // Bare `GET /api/v1/divisions/{id}` — the division-slug read-back.
-      // Ordered AFTER every more specific `/divisions/{id}/...` pattern
-      // above so it only ever matches the bare form.
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
-        // B05 T2.5 — `status` is D9's own RE-READ; `slug` is the pre-existing
-        // read-back this file's own header comment names.
+        // B05 T2.5 — `status` is D9's own RE-READ; `slug` is unrelated
+        // scaffolding no production call site actually reads.
         return { slug: `slug-${routePath.split("/")[4]}`, ...phase.handleDivisionGet(method, routePath) } as T;
       }
       if (method === "POST" && /^\/api\/admin\/orgs\/[^/]+\/entitlement-override$/.test(routePath)) {
@@ -341,22 +332,39 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       // B05 T5b-3 — the discipline surface (see `_discipline-routes.ts`).
       const disciplined = discipline.handle(method, path, body);
       if (disciplined !== undefined) return disciplined;
-      // B05 T2 — division B's own streams (`d-badminton`) fold through THIS
-      // route unconditionally whenever `sql` is present, same gating as
-      // division A's single-event fold below. This suite is not ABOUT the
-      // import path — it exists so the player-stats-baseline assertions
-      // stay green rather than reddening on an unmodeled route.
-      const importMatch = /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.exec(path);
+      // B05 T2's own addition: division B's batch-import fold. Refuses the
+      // WHOLE call when `opts.refuseImportWith` is set (so a wiring test can
+      // prove a call-level refusal reaches `report.errors`/`report.gate`,
+      // never a silent skip or retry); otherwise every stream in the call
+      // reports "imported".
+      const importMatch = /^\/api\/v1\/divisions\/([^/]+)\/events\/import$/.exec(path);
       if (importMatch) {
+        const importDivisionId = importMatch[1]!;
+        // B05 T2.5 (D9) — the phase gate `usecases/event-import.ts:704`
+        // enforces: this is what proves `runDivisionStartLayer` actually ran
+        // BEFORE this fold, not merely that the function exists. Checked
+        // BEFORE `opts.refuseImportWith` — a caller that wants to test the
+        // call-refused-finding path never needs to also start the division
+        // first, since `fakeServer()` (no overrides) already does.
+        const phaseRefused = phase.refuseUnlessStarted(importDivisionId, "import");
+        if (phaseRefused !== undefined) return phaseRefused;
+        if (opts.refuseImportWith !== undefined) {
+          const { status, code, message } = opts.refuseImportWith;
+          return { status, json: { ok: false, error: { code, message } } as never };
+        }
         const sent = (body as { streams: { fixture: { id: string }; events: unknown[] }[] }).streams;
         return {
           status: 200,
           json: {
             ok: true,
             data: {
-              importId: "x",
+              importId: (body as { import_id: string }).import_id,
               totals: { imported: sent.length, skipped: 0, rejected: 0 },
-              results: sent.map((s) => ({ fixture: s.fixture.id, status: "imported", eventsAppended: s.events.length })),
+              results: sent.map((row) => ({
+                fixture: row.fixture.id,
+                status: "imported",
+                eventsAppended: row.events.length,
+              })),
             },
           } as never,
         };
@@ -376,7 +384,19 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
-      const { type, payload } = body as { type: string; payload: { target?: unknown } };
+      const fixtureId = m[1]!;
+      const divisionId = fixtureDivisionId.get(fixtureId);
+      const { type, payload, expected_seq } = body as { type: string; payload: { target?: unknown }; expected_seq: number };
+      // B05 T2.5 (D9) — same scoping-away-from-cricket.* reasoning as
+      // `tiny-suite-simulate.test.ts`'s own identical comment: the DLS-gate
+      // probe's own throwaway division is never started by this run, and its
+      // probe cells must reach the ENTITLEMENT door, not this phase door.
+      // This file drives no division-A scoring calls of its own, but the DLS
+      // probe's unconditional cells still hit this same route.
+      if (divisionId !== undefined && !type.startsWith("cricket.")) {
+        const phaseRefused = phase.refuseUnlessStarted(divisionId, "scoring");
+        if (phaseRefused !== undefined) return phaseRefused;
+      }
       // B05: SCORING IS FREE (owner ruling; V390__scoring_free.sql, and
       // V393__entitlements_v18.sql:63-70 puts `cricket.dls` on `community`),
       // so NO plan check gates this route. The only refusal a `cricket.revise`
@@ -392,7 +412,7 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
           json: { ok: false, error: { code: "INVALID_EVENT", message: "revise needs oversPerSide and/or target" } } as never,
         };
       }
-      return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
+      return { status: 201, json: { ok: true, data: { seq: expected_seq + 1 } } as never };
     },
   };
 
@@ -412,17 +432,10 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
       if (featureKey === "stats.player") {
-        return [
-          { plan_key: "community", bool_value: false },
-          { plan_key: "pro", bool_value: opts.statsPlayerGranted },
-        ] satisfies PlanEntitlementRow[];
+        return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
       return [];
     },
-    // B05 T0: `chooseGrantingPlanForCapabilities` now filters candidates to
-    // is_public plans — "pro" is the only plan this fixture ever grants
-    // anything to, so it just needs to be marked public to keep resolving
-    // the way it always did.
     async planCandidateInfo(planKeys) {
       return planKeys
         .filter((k) => k === "community" || k === "pro")
@@ -445,33 +458,26 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   return { transport, sql, calls };
 }
 
-describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
-  it("statsPlayerGranted: drives all three stats routes for real, and reports a passing oracle", async () => {
-    const { transport, sql, calls } = fakeServer({ statsPlayerGranted: true });
+/** Every `POST .../events/import` call. */
+function importPostCalls(calls: RecordedCall[]): RecordedCall[] {
+  return calls.filter((c) => c.method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.test(c.path));
+}
+
+describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
+  it("drives a real POST for division B's own stream and reports a populated importSimulation section", async () => {
+    const { transport, sql, calls } = fakeServer();
 
     const report = await runTinySuite({
       base: "http://bench.example",
       engine: "optimized",
       keep: false,
       log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
       cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
       sql,
       probeTransport: transport,
-      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
-      // {id}/events` generically (201, unless the DLS-gate probe's own
-      // cricket.revise/dls-enabled combination applies), so it doubles as
-      // the simulate step's transport with no further changes.
       simTransport: transport,
-      // B05 T2 — the SAME fake now handles `/events/import` too (this
-      // file's own `raw()`), so division B's own streams fold cleanly
-      // rather than falling back to a real `fetch()`.
       importTransport: transport,
       startTransport: transport,
       advanceTransport: transport,
@@ -479,104 +485,119 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
     });
 
     expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/divisions\/div-\d+$/.test(c.path))).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats\?division_id=/.test(c.path))).toBe(
-      true,
+    // B05 T2.5 (D9) — both `_tiny.json`'s streamed divisions were started and
+    // RE-READ as active BEFORE either fold ran — this is the whole reason
+    // the import call below succeeded rather than 409ing against the fake's
+    // own phase gate.
+    expect(report.divisionStart).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ divisionRef: "d-tiny", started: true, confirmedStatus: "active" }),
+        expect.objectContaining({ divisionRef: "d-badminton", started: true, confirmedStatus: "active" }),
+      ]),
     );
-    expect(calls.some((c) => c.method === "GET" && /\/stats\/players$/.test(c.path))).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && c.path.includes("/api/v1/public/orgs/"))).toBe(true);
-    // The competition's visibility was cleared for the public route — see
-    // lib/stats.ts's header comment on why (default 'private' 404s it).
-    // TWO competitions get created (the DLS-gate probe's own throwaway one,
-    // then `_tiny`'s own via `seedSuite`) — `_tiny`'s is the one that never
-    // names itself "Bench DLS Gate Probe ...".
-    const competitionPosts = calls.filter((c) => c.method === "POST" && c.path === "/api/v1/competitions");
-    const tinyCompetitionPost = competitionPosts.find(
-      (c) => !(c.body as { name: string }).name.startsWith("Bench DLS Gate Probe"),
-    );
-    expect((tinyCompetitionPost?.body as { visibility?: string }).visibility).toBe("unlisted");
-
-    const oracle = (report.oracles ?? []).find((o) => o.name === "player-stats: baseline");
-    expect(oracle).toBeDefined();
-    expect(oracle?.passed).toBe(true);
-  });
-
-  it("statsPlayerGranted FALSE: the baseline is SKIPPED (no stats routes called), and the report says why", async () => {
-    const { transport, sql, calls } = fakeServer({ statsPlayerGranted: false });
-
-    const report = await runTinySuite({
-      base: "http://bench.example",
-      engine: "optimized",
-      keep: false,
-      log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
-      cliEntry: "admin",
-      packPath: TINY_PACK_PATH,
-      transport,
-      sql,
-      probeTransport: transport,
-      // B05 T1 — this fake's `raw()` already answers `POST .../fixtures/
-      // {id}/events` generically (201, unless the DLS-gate probe's own
-      // cricket.revise/dls-enabled combination applies), so it doubles as
-      // the simulate step's transport with no further changes.
-      simTransport: transport,
-      // B05 T2 — the SAME fake now handles `/events/import` too (this
-      // file's own `raw()`), so division B's own streams fold cleanly
-      // rather than falling back to a real `fetch()`.
-      importTransport: transport,
-      startTransport: transport,
-      advanceTransport: transport,
-      oracleTransport: transport,
-    });
-
-    expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(false);
-    // NOT `/stats/players` (B05 T4b now calls that route independently, via
-    // `raw()`, for the leaderboard oracle — unconditionally, regardless of
-    // this `statsPlayerGranted` knob, which only gates B03 T6b's OWN
-    // `request()`-based baseline read).
+    // `_tiny.json`'s division B (`d-badminton`) declares ONE stream; B05 T5a
+    // added a THIRD streamed division (`d-tiebreak`), which the SAME "every
+    // OTHER division" import fold covers with no code change (`lib/suites/
+    // tiny.ts`'s own comment: "grouped by divisionRef... so a future pack
+    // adding a third streamed division folds it too") — so this sends one
+    // import POST per non-division0 division, never re-grouped into one.
     //
-    // B05 T5b-2 narrowed this from `/persons/{id}/stats(\?|$)` to the
-    // `?division_id=` form for the SAME reason, and only that reason: the
-    // career/person-card oracles now call the bare path and its
-    // `?group=sport` sibling unconditionally, via `raw()`. `?division_id=`
-    // is the ONE shape only this baseline ever sends (`player-stats.ts`'s
-    // per-division read), so the discriminator is still exact rather than
-    // weakened — and the two assertions below pin the baseline's absence by
-    // its own oracle and warning, independently of any route count.
-    expect(
-      calls.some((c) => c.method === "GET" && /^\/api\/v1\/persons\/[^/]+\/stats\?division_id=/.test(c.path)),
-    ).toBe(false);
-    expect((report.oracles ?? []).some((o) => o.name === "player-stats: baseline")).toBe(false);
-    expect((report.warnings ?? []).some((w) => w.includes("player-stats baseline skipped"))).toBe(true);
+    // B05 T5b — the expected per-division totals are now READ OUT OF THE PACK
+    // rather than typed here. They had already gone stale twice: T5a's own
+    // three streams were written as `[6, 76]`, and T5b-1 then added two more
+    // `generic.score` events to `d-tiebreak` for Ana's career rollup, making
+    // this assertion red on a pack change it was never about. A count derived
+    // from the pack moves with the pack; a literal freezes yesterday's one.
+    const packStreams = (
+      JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+        divisions: { ref: string }[];
+        streams: { divisionRef: string; events: unknown[] }[];
+      }
+    );
+    const division0Ref = packStreams.divisions[0]!.ref;
+    const expectedByDivision = new Map<string, number>();
+    for (const st of packStreams.streams) {
+      if (st.divisionRef === division0Ref) continue;
+      expectedByDivision.set(st.divisionRef, (expectedByDivision.get(st.divisionRef) ?? 0) + st.events.length);
+    }
+    const expectedEventCounts = [...expectedByDivision.values()].sort((a, b) => a - b);
+    const calls2 = importPostCalls(calls);
+    expect(calls2).toHaveLength(expectedByDivision.size);
+    const eventCounts = calls2
+      .map((c) => (c.body as { streams: { events: unknown[] }[] }).streams)
+      .map((streams) => streams.reduce((sum, st) => sum + st.events.length, 0))
+      .sort((a, b) => a - b);
+    expect(eventCounts).toEqual(expectedEventCounts);
+    // Not a tautology against the line above: a pack whose non-division0
+    // streams carried nothing would satisfy `toEqual` with two empty sums,
+    // so the totals are pinned as non-empty in their own right.
+    expect(expectedEventCounts.every((n) => n > 0)).toBe(true);
+    // `/start` happens BEFORE the import POST — never the other way around.
+    const firstStartIdx = calls.findIndex((c) => c.method === "POST" && /\/start$/.test(c.path));
+    const firstImportIdx = calls.findIndex((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
+    expect(firstStartIdx).toBeGreaterThan(-1);
+    expect(firstImportIdx).toBeGreaterThan(firstStartIdx);
+
+    expect(report.importSimulation).toBeDefined();
+    expect(report.importSimulation?.eventsSent).toBe(expectedEventCounts.reduce((a, b) => a + b, 0));
+    expect(report.importSimulation?.chunks).toBe(2);
+    expect(report.importSimulation?.findings ?? []).toHaveLength(0);
+    expect(report.timings.importMs).toBeDefined();
   });
 
-  it("without `sql`: the baseline never runs, and the competition is never sent a visibility override", async () => {
-    const { transport, calls } = fakeServer({ statsPlayerGranted: true });
+  it("without `sql`, the import fold never runs — no import calls, no importSimulation section", async () => {
+    const { transport, calls } = fakeServer();
 
     const report = await runTinySuite({
       base: "http://bench.example",
       engine: "optimized",
       keep: false,
       log: silent,
-      // B03r tasks 9+10: `_tiny.json` now declares a THIRD division
-      // (`d-registration`) — this file is about the player-stats baseline,
-      // not registration, so `cliEntry: "admin"` keeps it there (also live
-      // coverage of the task's own acceptance criterion: `--entry admin`
-      // needs neither Stripe nor a browser).
       cliEntry: "admin",
       packPath: TINY_PACK_PATH,
       transport,
     });
 
     expect(report.gate).toBe("green");
-    expect(calls.some((c) => c.method === "GET" && c.path === "/api/orgs")).toBe(false);
-    const competitionPost = calls.find((c) => c.method === "POST" && c.path === "/api/v1/competitions");
-    expect(competitionPost?.body && "visibility" in (competitionPost.body as object)).toBe(false);
+    expect(importPostCalls(calls)).toHaveLength(0);
+    expect(report.importSimulation).toBeUndefined();
+  });
+
+  it("a deliberate call-level refusal reaches report.errors and reds the gate — never silently retried", async () => {
+    const { transport, sql, calls } = fakeServer({
+      refuseImportWith: { status: 409, code: "import.concurrent", message: "another import with this import_id is already running for this division" },
+    });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    });
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("import.concurrent"))).toBe(true);
+    // B05 T5a — the knob refuses EVERY `/events/import` call unconditionally,
+    // and there are now TWO (d-badminton, d-tiebreak — the same "every OTHER
+    // division" fold the test above names), so both refuse.
+    expect(report.importSimulation?.findings).toHaveLength(2);
+    for (const finding of report.importSimulation?.findings ?? []) {
+      expect(finding).toMatchObject({ kind: "call_refused", code: "import.concurrent", status: 409 });
+    }
+    expect(report.importSimulation?.eventsSent).toBe(0);
+
+    // Never retried: exactly one import POST per division, for the one
+    // chunk each division's own streams needed.
+    expect(importPostCalls(calls)).toHaveLength(2);
   });
 });

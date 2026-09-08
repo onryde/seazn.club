@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BenchReport,
   gateOf,
+  oracleVerdictOf,
   renderMarkdown,
   resolveRunId,
   writeReport,
@@ -40,7 +41,7 @@ function fullReport(): BenchReportType {
       {
         suite: "_tiny",
         gate: "green",
-        timings: { seedMs: 120, scheduleMs: 45 },
+        timings: { seedMs: 120, scheduleMs: 45, importMs: 512 },
         solver: { engine: "greedy", requestedEngine: "greedy", status: "ok" },
         conflictCount: 0,
         believabilityMetrics: { gapDispersion: 0.5 },
@@ -56,6 +57,54 @@ function fullReport(): BenchReportType {
         // report.json and from report.md with it, silently, and a renderer
         // test alone cannot see that — it renders the in-memory object.
         warnings: ["leaderboards.not_derived @ expected.leaderboards: not checked offline"],
+        // B05 T1 — deliberately all-distinct values (same discipline as
+        // `registrationDivision` below) so a swapped-field mutation
+        // (eventsSent/wallMs, or a finding's status/eventIndex) lands on a
+        // wrong number in a specific cell rather than "some number changed".
+        simulation: {
+          eventsSent: 9,
+          wallMs: 741,
+          eventsPerSecond: 12.15,
+          findings: [
+            {
+              streamKey: '["d-tiny","rr-r2-c1"]',
+              fixtureId: "fx-2",
+              eventIndex: 3,
+              status: 409,
+              code: "SEQ_CONFLICT",
+              message: "expected seq 3 but ledger is at 4",
+              currentSeq: 4,
+            },
+          ],
+        },
+        // B05 T2 — same "all-distinct values" discipline as `simulation`
+        // above, over the batch write path's own finding shapes (a
+        // call-level refusal AND a per-stream product outcome, so a
+        // swapped-field mutation lands on a wrong number in a specific
+        // cell).
+        importSimulation: {
+          eventsSent: 6,
+          wallMs: 388,
+          eventsPerSecond: 15.46,
+          chunks: 2,
+          findings: [
+            {
+              kind: "call_refused",
+              chunkIndex: 1,
+              streamKeys: ['["d-badminton","rr-r2-c1"]'],
+              status: 409,
+              code: "import.concurrent",
+              message: "another import with this import_id is already running for this division",
+            },
+            {
+              kind: "stream_not_imported",
+              streamKey: '["d-badminton","rr-r3-c1"]',
+              fixture: "fx-9",
+              status: "rejected",
+              code: "import.fold_rejected",
+            },
+          ],
+        },
       },
     ],
     gate: "green",
@@ -132,6 +181,46 @@ describe("report schema round-trip", () => {
       ...base,
       entryMode: "registration",
       suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), registration: [registrationDivision()] }],
+    };
+
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+  });
+
+  // B05 T2.5 (D9) — same discipline as the B02/B03r comments above:
+  // `writeReport` PARSES before it writes, so a `divisionStart` field the
+  // schema does not declare would be silently stripped from both
+  // report.json and report.md, invisible to a renderer-only test.
+  it("round-trips a suite's divisionStart section, including a blocking-conflicts row", async () => {
+    const dir = await tempDir();
+    const base = fullReport();
+    const report: BenchReportType = {
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          divisionStart: [
+            {
+              divisionRef: "d-tiny",
+              acknowledgedWarnings: true,
+              warnings: [{ fixtureId: "fx-1", blocking: false, kind: "back_to_back" }],
+              started: true,
+              confirmedStatus: "active",
+            },
+            {
+              divisionRef: "d-badminton",
+              acknowledgedWarnings: false,
+              warnings: [],
+              blockingConflicts: [{ fixtureId: "fx-9", blocking: true, kind: "court_overlap" }],
+              checkerClean: true,
+              checkerFindingCount: 0,
+              started: false,
+            },
+          ],
+        },
+      ],
     };
 
     const written = await writeReport(dir, report);
@@ -231,6 +320,158 @@ describe("gateOf", () => {
         suites: [{ suite: "_tiny", gate: "skipped", timings: {} }],
       }),
     ).toBe("red");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B05 T6 fix 2 — an oracle that compared NOTHING is not a pass
+//
+// The first live run printed, for two of three divisions:
+//
+//   PASS oracle: d-tiny/s-league tie-order cascade — live order agrees with
+//   cascade [points,diff] on every tied pair (0 checked, 0 skipped)
+//
+// Zero tied pairs were compared, and it read as PASS — the exact vacuity
+// this wave exists to eliminate, printing itself green in the wave's own
+// report. `no_subject` is a THIRD verdict beside pass/fail: it does not red
+// the run (an absent subject is not a failure, and `passed` stays true so
+// nothing gating on that changes), but it must never render as PASS, and the
+// run summary must be able to say how many oracles actually had a subject.
+// ---------------------------------------------------------------------------
+
+function reportWithOracles(oracles: BenchReportType["suites"][number]["oracles"]): BenchReportType {
+  const base = fullReport();
+  return { ...base, suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), oracles }] };
+}
+
+describe("B05 T6 — the no-subject oracle verdict", () => {
+  it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "tie-order cascade", passed: true, verdict: "no_subject", detail: "0 checked, 0 skipped" },
+      ]),
+    );
+    const line = md.split("\n").find((l) => l.includes("tie-order cascade"));
+    expect(line).toBeDefined();
+    expect(line).toContain("NO SUBJECT");
+    expect(line).not.toContain("PASS");
+  });
+
+  it("its POSITIVE PAIR: one comparison that agreed still renders PASS", () => {
+    const md = renderMarkdown(
+      reportWithOracles([{ name: "tie-order cascade", passed: true, verdict: "pass", detail: "1 checked, 0 skipped" }]),
+    );
+    const line = md.split("\n").find((l) => l.includes("tie-order cascade"));
+    expect(line).toContain("PASS");
+    expect(line).not.toContain("NO SUBJECT");
+  });
+
+  it("an oracle with NO verdict field at all keeps its old rendering — pass and fail both", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "legacy green", passed: true },
+        { name: "legacy red", passed: false },
+      ]),
+    );
+    expect(md.split("\n").find((l) => l.includes("legacy green"))).toContain("PASS");
+    expect(md.split("\n").find((l) => l.includes("legacy red"))).toContain("FAIL");
+  });
+
+  it("the run summary says how many oracles actually had a subject", () => {
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail" },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    // 4 oracles, 3 with a subject (2 pass + 1 fail), 1 with none — every
+    // number derived from the fixture above, none of them the same value, so
+    // a swapped-counter mutant lands on a wrong cell rather than a tie.
+    expect(md).toContain("- Oracles: 4 total, 3 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("a FAIL raised over ZERO comparisons is not counted as having a subject (B05 review round 1)", () => {
+    // The count used to be derived as `verdict !== no_subject`, so an oracle
+    // that reds precisely BECAUSE it compared nothing — a board resolving zero
+    // entries, an empty rank crossing — was tallied among the ones that had a
+    // subject. `subject` is set by the call site off the comparator's own
+    // field (`reason`, `checkedPairs`, the entry count), so the summary
+    // reports what was compared rather than re-deriving it from the verdict.
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail", subject: false },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    // The verdict tallies stay verdict tallies — the FAIL is still rendered
+    // as a FAIL on its own line, so it is still counted as one here. Only
+    // "with a subject" moves, and it deliberately no longer adds up to the
+    // verdict counts: that arithmetic gap IS the fact being reported.
+    expect(md).toContain("- Oracles: 4 total, 2 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("an explicit `subject: true` on a FAIL still counts — the positive pair", () => {
+    // Without this, "never count a fail" satisfies the red above.
+    const md = renderMarkdown(
+      reportWithOracles([
+        { name: "a", passed: true, verdict: "pass" },
+        { name: "b", passed: false, verdict: "fail", subject: true },
+        { name: "c", passed: true, verdict: "no_subject" },
+        { name: "d", passed: true },
+      ]),
+    );
+    expect(md).toContain("- Oracles: 4 total, 3 with a subject (2 PASS, 1 FAIL), 1 NO SUBJECT");
+  });
+
+  it("a no_subject oracle can never claim `subject: true` — the schema pins the two against each other", () => {
+    // Same discipline the `passed`/`verdict` pairing already gets: two
+    // answers to one question, left free to drift, is how the summary line
+    // would quietly start over-counting again.
+    const bad = BenchReport.safeParse(
+      reportWithOracles([{ name: "x", passed: true, verdict: "no_subject", subject: true }]),
+    );
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain("subject");
+
+    const good = BenchReport.safeParse(
+      reportWithOracles([{ name: "x", passed: true, verdict: "no_subject", subject: false }]),
+    );
+    expect(good.success).toBe(true);
+  });
+
+  it("says nothing about oracles when a run has none — an oracle-free report is unchanged", () => {
+    expect(renderMarkdown({ ...fullReport(), suites: [] })).not.toContain("- Oracles:");
+  });
+
+  it("round-trips the verdict through writeReport's own parse — it reaches report.json", async () => {
+    const dir = await tempDir();
+    const report = reportWithOracles([
+      { name: "tie-order cascade", passed: true, verdict: "no_subject", detail: "0 checked, 0 skipped" },
+    ]);
+    const written = await writeReport(dir, report);
+    const onDisk: unknown = JSON.parse(await readFile(written.jsonPath, "utf8"));
+    const reparsed = BenchReport.parse(onDisk);
+    expect(reparsed).toEqual(JSON.parse(JSON.stringify(report)));
+    expect(await readFile(written.mdPath, "utf8")).toContain("NO SUBJECT");
+  });
+
+  it("REFUSES a no_subject oracle marked passed:false — the two halves can never drift apart", () => {
+    const bad = reportWithOracles([{ name: "x", passed: false, verdict: "no_subject" }]);
+    expect(() => BenchReport.parse(bad)).toThrow();
+    const alsoBad = reportWithOracles([{ name: "x", passed: true, verdict: "fail" }]);
+    expect(() => BenchReport.parse(alsoBad)).toThrow();
+    const stillBad = reportWithOracles([{ name: "x", passed: false, verdict: "pass" }]);
+    expect(() => BenchReport.parse(stillBad)).toThrow();
+  });
+
+  it("oracleVerdictOf derives the verdict for an oracle that carries none", () => {
+    expect(oracleVerdictOf({ name: "x", passed: true })).toBe("pass");
+    expect(oracleVerdictOf({ name: "x", passed: false })).toBe("fail");
+    expect(oracleVerdictOf({ name: "x", passed: true, verdict: "no_subject" })).toBe("no_subject");
   });
 });
 

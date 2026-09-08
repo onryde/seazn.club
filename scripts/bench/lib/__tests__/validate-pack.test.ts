@@ -114,12 +114,27 @@ const TINY = { expectedSuite: "_tiny" } as const;
 const UNIT = { expectedSuite: "_unit" } as const;
 
 /**
- * `_tiny` declares two leaderboards and a champion, and stage 0 derives
- * NEITHER — so every green `_tiny` run carries exactly these two warnings.
+ * `_tiny` declares two leaderboards, a champion, and (B05 T3 — d-tiny's
+ * second stage, s-playoff) a finalRanks order, and stage 0 derives NONE of
+ * them — so every green `_tiny` run carries exactly these three warnings.
  * Spelled out rather than filtered away, because the whole point of the
  * not-derived warnings is that a reader sees them.
  */
-const TINY_NOT_DERIVED = ["leaderboards.not_derived", "champions.not_derived"];
+const TINY_NOT_DERIVED = [
+  "leaderboards.not_derived",
+  "champions.not_derived",
+  "finalRanks.not_derived",
+  // B05 T5b — `_tiny.json` now declares expected.careers (Ana Alvarez's
+  // cross-division rollup), so stage 0's FOURTH permanent notice is part of
+  // this pack's clean baseline. Order matches validate-pack.ts's own
+  // emission order (:1839-1870), which this list is compared against exactly.
+  "careers.not_derived",
+  // B05 T5b-3 — `_tiny.json` now declares an expected.suspensions row
+  // (`p-hotel` banned from d-tiebreak's `rr-r3-c1`), so stage 0's FIFTH
+  // permanent notice joins the baseline. Last in the list because
+  // validate-pack.ts emits it last (:1864-1874).
+  "suspensions.not_derived",
+];
 
 /** `genericPack` declares a league stage and no `expected.tables`, so stage 0
  *  says the stage's points and tie order are asserted by nothing. */
@@ -303,33 +318,52 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     expect(result.pack?.suite).toBe("_tiny");
     // The notices are not decoration: each names what it did not check.
     expect(warnings(result.findings).map((f) => f.message)).toEqual([
+      // B05 T5b — FOUR now: d-tiny's own two (scores, points) plus
+      // d-tiebreak's own two, the second division contributing to Ana
+      // Alvarez's career rollup.
       expect.stringContaining(
-        "2 declared expected.leaderboards entries are NOT checked offline",
+        "4 declared expected.leaderboards entries are NOT checked offline",
       ),
       expect.stringContaining(
         "1 declared expected.champions entry is NOT checked offline",
+      ),
+      // B05 T3 — d-tiny's second stage, s-playoff.
+      expect.stringContaining(
+        "1 declared expected.finalRanks entry is NOT checked offline",
+      ),
+      // B05 T5b — the cross-division career rollup, both metric rows.
+      expect.stringContaining(
+        "2 declared expected.careers entries are NOT checked offline",
+      ),
+      // B05 T5b-3 — the discipline carry-over: p-hotel's ban in d-tiebreak.
+      expect.stringContaining(
+        "1 declared expected.suspensions entry is NOT checked offline",
       ),
     ]);
   });
 
   it("reports the provenance split per division and overall", () => {
     const result = validatePack(tiny(), TINY);
-    // d-tiny: two `real` streams and one `reconstructed`. d-badminton (B03
-    // T5): one `reconstructed` stream (`reconstructSetBasedStream`, folded
-    // through the real generator). Overall sums both divisions.
+    // d-tiny: THREE `real` streams (B05 T3 added the playoff final,
+    // provenance "real") and one `reconstructed`. d-badminton (B03 T5): one
+    // `reconstructed` stream (`reconstructSetBasedStream`, folded through the
+    // real generator). d-tiebreak (B05 T5a): three `real` streams (the
+    // tie-order-cascade subject, plain generic.result events). Overall sums
+    // all three streamed divisions.
     expect(result.provenance.overall).toEqual({
-      real: 2,
+      real: 6,
       reconstructed: 2,
       synthetic: 0,
-      total: 4,
+      total: 8,
     });
     expect(result.provenance.byDivision).toEqual({
-      "d-tiny": { real: 2, reconstructed: 1, synthetic: 0, total: 3 },
+      "d-tiny": { real: 3, reconstructed: 1, synthetic: 0, total: 4 },
       "d-badminton": { real: 0, reconstructed: 1, synthetic: 0, total: 1 },
       // d-registration (B03r tasks 9+10) declares no streams at all — its
       // split is present and zeroed, same as "gives every declared division
       // a split" below proves for d-tiny/d-badminton with streams emptied.
       "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-tiebreak": { real: 3, reconstructed: 0, synthetic: 0, total: 3 },
     });
   });
 
@@ -339,6 +373,12 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.expected.matches = [];
     pack.expected.tables = [];
     pack.expected.specials = [];
+    // T5b-3: `expected.suspensions[].missesFixtureExtKeys` resolves against
+    // `streams` too (pack-schema.ts:2202-2213), so emptying the streams
+    // without emptying this reds the pack on a ref error and `validatePack`
+    // returns before it ever builds a provenance split — which is exactly
+    // how this test first failed.
+    pack.expected.suspensions = [];
     // officials[].assignments name a (divisionRef, fixtureExtKey) that must
     // resolve against `streams` — emptied above, so this has to empty too,
     // or `checkReservations` reds the pack for a reason this test is not
@@ -346,12 +386,13 @@ describe("validatePack — _tiny.json, the shared fixture", () => {
     pack.officials = [];
     const result = validatePack(pack, TINY);
     // An absent key and a zero count are different facts: a report that cannot
-    // tell them apart hides a division nothing replayed. Both declared
-    // divisions appear, each zeroed.
+    // tell them apart hides a division nothing replayed. Every declared
+    // division appears, each zeroed.
     expect(result.provenance.byDivision).toEqual({
       "d-tiny": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
       "d-badminton": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
       "d-registration": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
+      "d-tiebreak": { real: 0, reconstructed: 0, synthetic: 0, total: 0 },
     });
   });
 });
@@ -660,14 +701,16 @@ describe("validatePack — provenance", () => {
     (pack.streams[1] as TinyStream).provenance = "synthetic";
     const result = validatePack(pack, TINY);
     expectClean(result, TINY_NOT_DERIVED);
-    // d-tiny's two `real` streams, the mutated `synthetic` one, and
-    // d-badminton's own `reconstructed` stream (B03 T5) — untouched by this
-    // mutation, since it targets `pack.streams[1]`, d-tiny's own.
+    // d-tiny's THREE `real` streams (B05 T3 added the playoff final), the
+    // mutated `synthetic` one, d-badminton's own `reconstructed` stream
+    // (B03 T5), and d-tiebreak's own THREE `real` streams (B05 T5a) — all
+    // untouched by this mutation, since it targets `pack.streams[1]`,
+    // d-tiny's own.
     expect(result.provenance.overall).toEqual({
-      real: 2,
+      real: 6,
       reconstructed: 1,
       synthetic: 1,
-      total: 4,
+      total: 8,
     });
   });
 });
@@ -1191,13 +1234,25 @@ describe("validatePack — the limits stage 0 declares", () => {
 
   it("cannot bind streams to a stage in a MULTI-STAGE division, and says so", () => {
     const pack = tiny();
+    // B05 T3 gave d-tiny a real second stage (s-playoff, seq 2) whose own
+    // streams declare an explicit `stageRef` — so a THIRD stage alone no
+    // longer reproduces "cannot bind": every d-tiny stream now resolves
+    // fine on its own declared ref. `seq: 3` avoids colliding with
+    // s-playoff's seq 2 (PackSchema refuses a duplicate stage seq outright,
+    // a schema-level error this test is not about), and clearing every
+    // league stream's OWN `stageRef` recreates the ambiguity this test
+    // exists to prove: a stream naming no stage cannot be resolved once its
+    // division has more than one.
     pack.divisions[0]!.stages.push({
       ref: "s-ko",
-      seq: 2,
+      seq: 3,
       kind: "knockout",
       name: "Knockout",
       config: {},
     });
+    for (const stream of pack.streams) {
+      if (stream.divisionRef === "d-tiny") delete (stream as { stageRef?: string }).stageRef;
+    }
     const result = validatePack(pack, TINY);
     expect(errors(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
@@ -2028,6 +2083,16 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     const pack = tiny();
     pack.expected.leaderboards = [];
     pack.expected.champions = [];
+    // B05 T3 — `_tiny.json` now declares its own expected.finalRanks
+    // (d-tiny/s-playoff); cleared here too so this test still proves silence
+    // on an EMPTY block rather than silently stopping being about finalRanks.
+    (pack.expected as Record<string, unknown>)["finalRanks"] = [];
+    // B05 T5b — same again for expected.careers, which `_tiny.json` now
+    // declares: without this the test asserts silence on a block that is no
+    // longer empty, which is the opposite of what it is named for.
+    (pack.expected as Record<string, unknown>)["careers"] = [];
+    // B05 T5b-3 — and expected.suspensions, which `_tiny.json` now declares.
+    (pack.expected as Record<string, unknown>)["suspensions"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 
@@ -2041,7 +2106,10 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
       },
     ] as TinyShape["expected"]["suspensions"];
     const result = validatePack(pack, TINY);
-    expectClean(result, [...TINY_NOT_DERIVED, "suspensions.not_derived"]);
+    // T5b-3: `suspensions.not_derived` is part of TINY_NOT_DERIVED now, and
+    // the assignment above REPLACES the committed pack's own row rather than
+    // adding to it — so the notice still fires exactly once, over 1 entry.
+    expectClean(result, TINY_NOT_DERIVED);
     const suspension = warnings(result.findings).find(
       (f) => f.code === "suspensions.not_derived",
     );
@@ -2052,6 +2120,11 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
 
   it("warns for finalRanks — a bracket's placement order is the product's answer, not the fold's", () => {
     const pack = tiny();
+    // B05 T3 — `_tiny.json` now declares its OWN finalRanks entry
+    // (d-tiny/s-playoff, already covered by TINY_NOT_DERIVED below); this
+    // REPLACES it with a different one (same count, 1, so the warning's own
+    // count assertion below is unaffected) to keep proving the block is
+    // reachable independent of which stage it names.
     (pack.expected as Record<string, unknown>)["finalRanks"] = [
       {
         divisionRef: "d-tiny",
@@ -2063,7 +2136,7 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     // The block is REACHABLE and the warning names its count and its owner —
     // a shape the schema accepts and stage 0 never mentions is the inert seam
     // this warning channel exists to prevent.
-    expectClean(result, [...TINY_NOT_DERIVED, "finalRanks.not_derived"]);
+    expectClean(result, TINY_NOT_DERIVED);
     const found = warnings(result.findings).find(
       (f) => f.code === "finalRanks.not_derived",
     );
@@ -2083,7 +2156,11 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
       { person: "p-bo", name: "Bo Baptiste", metricKey: "scores", count: 1 },
     ];
     const result = validatePack(pack, TINY);
-    expectClean(result, [...TINY_NOT_DERIVED, "careers.not_derived"]);
+    // B05 T5b — `careers.not_derived` is already part of TINY_NOT_DERIVED
+    // now that the committed pack declares its own careers block; this test
+    // REPLACES that block with two rows of its own to pin the COUNT in the
+    // message below, so the warning list is unchanged, not one longer.
+    expectClean(result, TINY_NOT_DERIVED);
     const found = warnings(result.findings).find(
       (f) => f.code === "careers.not_derived",
     );
@@ -2102,6 +2179,8 @@ describe("validatePack — the oracles it does NOT derive say so", () => {
     pack.expected.champions = [];
     (pack.expected as Record<string, unknown>)["finalRanks"] = [];
     (pack.expected as Record<string, unknown>)["careers"] = [];
+    // B05 T5b-3 — and expected.suspensions, which `_tiny.json` now declares.
+    (pack.expected as Record<string, unknown>)["suspensions"] = [];
     expectClean(validatePack(pack, TINY), []);
   });
 

@@ -7,6 +7,18 @@
 // entitlements v18 W1 is `requiresDlsEntitlement` (cricket.dls) — the old
 // fidelity-band gate this file's ancestors might have expected is deleted.
 //
+// BOTH OF THOSE ARE HISTORY, corrected 2026-09-08 (B05). There is no
+// scoring-door refusal left to unblock: SCORING IS FREE by owner ruling
+// (V390__scoring_free.sql, ruled 2026-08-30; restated 2026-09-08, "we made
+// all scoring is free"), and `V393__entitlements_v18.sql:63-70` grants
+// `cricket.dls` on `community` — the plan a subscription-less org resolves
+// to — so `requiresDlsEntitlement` still fires and `requireFeature` simply
+// never throws. This file's plan flip now exists for `officials.auto` and
+// `stats.player`, which ARE still sold; `lib/dls-gate.ts`'s header records
+// the whole reversal, including why manufacturing a refusal with an
+// `org_entitlement_overrides` deny was considered and rejected. Do not
+// restore a scoring paywall anywhere on the strength of an old comment here.
+//
 // ---------------------------------------------------------------------------
 // The precedent this hand-copies: scripts/smoke.ts's `setPlan` /
 // `bustOrgEntitlements` (smoke.ts:17007-17043 / :16952+), read directly, not
@@ -51,14 +63,18 @@
 // being true — which is the whole hazard of recording a matrix fact in prose
 // next to code that deliberately reads the matrix at call time.
 //
-// There is a behavioural consequence for whoever owns this bench, and it is NOT
-// fixed here because the chooser and its fixtures belong to that programme:
-// `chooseGrantingPlanForCapabilities` iterates `[...primaryGrantors].sort()`,
-// so with `cricket.dls` granted by {community, enterprise, pro}, `enterprise`
-// sorts before `pro` and satisfies every desired capability — and `enterprise`
-// is `is_public = false`, the Contact-us plan, with unlimited caps. The bench
-// baseline moved onto it silently when `pro_plus` was deleted. Written up with
-// the evidence in `docs/superpowers/specs/bench-product-value/_MASTER.md`.
+// FIXED by B05 T0 (this task). `chooseGrantingPlanForCapabilities` used to
+// iterate `[...primaryGrantors].sort()`, so with `cricket.dls` granted by
+// {community, enterprise, pro}, `enterprise` sorted before `pro` and
+// satisfied every desired capability — and `enterprise` is `is_public =
+// false`, the Contact-us plan, with unlimited caps. The bench baseline moved
+// onto it silently when `pro_plus` was deleted. `chooseGrantingPlan` and
+// `chooseGrantingPlanForCapabilities` now take a `candidates:
+// PlanCandidateInfo[]` parameter (see their own doc comments) that filters
+// to `is_public` plans and orders survivors least-to-most privileged, both
+// derived from `PlanSql.planCandidateInfo` — never a hardcoded plan key.
+// Originally written up in `docs/superpowers/specs/bench-product-value/
+// _MASTER.md`.
 
 import postgres from "postgres";
 import { defaultTransport, type SeedTransport } from "./seed.ts";
@@ -67,6 +83,61 @@ import type { Session } from "./http.ts";
 export interface PlanEntitlementRow {
   readonly plan_key: string;
   readonly bool_value: boolean | null;
+}
+
+/**
+ * The plan key an org with no subscription row coalesces to —
+ * `apps/web/src/lib/entitlements.ts:70` ("Falls back to 'community' plan when
+ * no subscription row exists"), and :103's own `isPaidPlan` boundary.
+ *
+ * Hardcoded, unlike every plan key in this file, and deliberately: this is
+ * not "which plan grants X" (derived from the matrix at call time, see the
+ * header) but the identity of the free tier itself, which has exactly one
+ * source of truth and no query that could derive it. A bench asking "is this
+ * feature still behind a paywall for a customer who never paid" has to name
+ * the tier that customer is on.
+ */
+export const FREE_PLAN_KEY = "community";
+
+/**
+ * Whether `featureKey`'s live rows still put it BEHIND A PAYWALL for an org
+ * on the free tier: the free plan does not grant it, and some other plan
+ * does.
+ *
+ * Both halves matter. Without the first, a key every plan grants reads as
+ * gated; without the second, a key NO plan grants (dead, or deleted from the
+ * matrix like V390's fidelity keys) reads as gated when in truth there is
+ * nothing to sell and nothing to refuse for. Derived from the rows, never
+ * from a list of "paid features" typed into a bench — that list is exactly
+ * what went stale when scoring went free.
+ */
+export function paywalledOnFreePlan(rows: readonly PlanEntitlementRow[]): boolean {
+  return !planGrants(rows, FREE_PLAN_KEY) && rows.some((r) => r.bool_value === true && r.plan_key !== FREE_PLAN_KEY);
+}
+
+/**
+ * B03 T7 FIX (this task): everything `chooseGrantingPlan` /
+ * `chooseGrantingPlanForCapabilities` need to know about a candidate plan
+ * BEYOND whether it grants the one feature being asked about — `plans` (V101
+ * __billing.sql:13-20) carries `is_public` but no rank/tier/price column, so
+ * "how privileged is this plan" has to be DERIVED from the entitlement
+ * matrix itself, never typed into a table (see those two functions' own doc
+ * comments for the derivation and the ordering rule).
+ */
+export interface PlanCandidateInfo {
+  readonly plan_key: string;
+  /** `plans.is_public` — false for a comped/staff-only plan with no Stripe
+   *  price ids (`enterprise`, inserted `is_public = false` by
+   *  V393__entitlements_v18.sql:25-26, "Never self-serve"). A plan a
+   *  customer cannot buy must never be a candidate the bench provisions
+   *  onto, no matter what it grants or how it sorts. */
+  readonly is_public: boolean;
+  /** Breadth of what this plan grants across the WHOLE `plan_entitlements`
+   *  matrix — every feature_key, not just the ones a given run asked
+   *  about. Used ONLY to rank plans that already satisfy a run's
+   *  requirements, least to most privileged; never to decide whether a plan
+   *  satisfies anything. Higher = more privileged. */
+  readonly privilege: number;
 }
 
 /**
@@ -83,6 +154,34 @@ export interface PlanSql {
    *  refusing; a pass tier with no row at all is simply absent from the
    *  result. */
   entitlementRows(featureKey: string): Promise<readonly PlanEntitlementRow[]>;
+  /**
+   * `PlanCandidateInfo` for each of `planKeys` — one query, a join against
+   * `plans`: `select p.key as plan_key, p.is_public, (count(pe.*) filter
+   * (where pe.bool_value = true) + count(pe.*) filter (where pe.bool_value
+   * is null and pe.int_value is null)) as privilege from plans p left join
+   * plan_entitlements pe on pe.plan_key = p.key where p.key = any($1) group
+   * by p.key, p.is_public`.
+   *
+   * `privilege` counts, across every `feature_key` this plan has a row for
+   * (not just the ones the caller asked about): boolean features it
+   * explicitly grants (`bool_value = true`), plus numeric caps it leaves
+   * unbounded (`int_value IS NULL` with no `bool_value` set — V393's own
+   * resolver-semantics comment: "int_value = NULL means unlimited"; excluding
+   * rows that carry a `bool_value` avoids double-counting a boolean
+   * feature's own null `int_value`, which is simply "not applicable" there,
+   * as an unbounded cap). A plan copied wholesale from a retired one with
+   * every cap loosened to unlimited (`enterprise`, V393:25-48) reads as
+   * strictly MORE privileged than the plan it was copied from under this
+   * measure — which is exactly the property `chooseGrantingPlan`'s ordering
+   * rule needs.
+   *
+   * A `planKeys` entry with no corresponding `plan_entitlements` row at all
+   * still gets a result row (`privilege: 0`) via the `left join` — only a
+   * plan_key absent from `plans` itself is left out entirely, which callers
+   * must treat as "not public" (see `chooseGrantingPlan`'s own doc comment)
+   * rather than assumed safe.
+   */
+  planCandidateInfo(planKeys: readonly string[]): Promise<readonly PlanCandidateInfo[]>;
   /** `select subscription_id from organizations where id = $1`. `null` when
    *  the org bills through nothing yet (a fresh org — resolves to
    *  'community' per `lib/entitlements.ts`'s own fallback). */
@@ -197,23 +296,91 @@ export interface PlanSql {
   setOrgCurrency(orgId: string, currency: string): Promise<void>;
 }
 
+function candidateMap(candidates: readonly PlanCandidateInfo[]): ReadonlyMap<string, PlanCandidateInfo> {
+  return new Map(candidates.map((c) => [c.plan_key, c] as const));
+}
+
 /**
- * Picks the plan this feature is provisioned onto — the lexicographically
- * FIRST plan_key with an explicit `bool_value = true` row for `featureKey`.
- * Deterministic (never "whichever the DB happened to order first") and
- * derived from whatever the target actually has: on the schema this task
- * was briefed against that is "pro" for `cricket.dls` (community=false,
- * pro=true, pro_plus=true — "pro" sorts first), but nothing here assumes
- * that; a target where `pro_plus` is retired (entitlements W2) or where
- * `pro` itself changes still resolves correctly because the choice is read
- * off `rows`, not typed in.
+ * Every `plan_key` in `grantors` that is BOTH public and has a
+ * `PlanCandidateInfo` entry at all (a plan_key missing from `candidates` is
+ * treated as not public — never assumed safe without positive evidence: see
+ * `PlanSql.planCandidateInfo`'s own doc comment on why the real seam always
+ * returns a row for a plan_key that exists in `plans`, so a missing entry
+ * here means the plan itself does not exist on the target, not merely that
+ * nobody asked about it).
+ *
+ * Ordered LEAST to MOST privileged (ties broken lexicographically by
+ * `plan_key` — deterministic, never DB order), so callers that want "the
+ * cheapest plan that qualifies" can simply take element 0.
  */
-export function chooseGrantingPlan(rows: readonly PlanEntitlementRow[]): string {
-  const granting = [...new Set(rows.filter((r) => r.bool_value === true).map((r) => r.plan_key))].sort();
-  const chosen = granting[0];
-  if (chosen === undefined) {
+function publicGrantorsLeastPrivilegedFirst(
+  grantors: ReadonlySet<string>,
+  candidates: ReadonlyMap<string, PlanCandidateInfo>,
+): string[] {
+  return [...grantors]
+    .filter((plan) => candidates.get(plan)?.is_public === true)
+    .sort((a, b) => candidates.get(a)!.privilege - candidates.get(b)!.privilege || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * Picks the plan this feature is provisioned onto: the LEAST-PRIVILEGED
+ * PUBLIC plan with an explicit `bool_value = true` row for `featureKey`.
+ *
+ * Two independent rules, applied in order:
+ *
+ *   1. PUBLIC ONLY. A plan with `is_public = false` (a comped/staff-only
+ *      plan with no Stripe price ids — `enterprise`, V393
+ *      __entitlements_v18.sql:25-26) is never a candidate, no matter what it
+ *      grants. This is the B03 T7 fix: `[...primaryGrantors].sort()`'s
+ *      alphabetical order used to let `enterprise` win purely because
+ *      "enterprise" < "pro" lexicographically — a plan no customer can buy,
+ *      chosen by an accident of spelling.
+ *   2. LEAST PRIVILEGED WINS. Among the plans that survive rule 1, this
+ *      picks the one with the lowest `PlanCandidateInfo.privilege` (breadth
+ *      of what it grants across the WHOLE matrix, not just `featureKey`) —
+ *      a bench that wants to prove a feature works on the CHEAPEST plan that
+ *      unlocks it should never land on a broader, more expensive plan just
+ *      because that plan also happens to grant it. A tie in privilege breaks
+ *      lexicographically by `plan_key`, same determinism precedent this
+ *      function has always used — deterministic, never DB order, but no
+ *      longer an ACCIDENT.
+ *
+ * STALE PROSE CORRECTED 2026-09-08 (B05). This paragraph used to read
+ * "today's real catalog (community=false, pro=true for `cricket.dls`) has
+ * exactly one public grantor, so this rule picks 'pro' because it is the
+ * only candidate" — describing `cricket.dls` as Pro-gated. It is not, and
+ * has not been since `V393__entitlements_v18.sql:63-70` put it on
+ * `community` (`bool_value = true`), which is deliberate: SCORING IS FREE by
+ * owner ruling (V390__scoring_free.sql, ruling 2026-08-30; restated
+ * 2026-09-08, "we made all scoring is free"). `community` is therefore a
+ * public, privilege-0 grantor of `cricket.dls` and sorts FIRST here — which
+ * is correct and load-bearing: `chooseGrantingPlanForCapabilities` walks
+ * past it only because it satisfies no OTHER capability the run asked for.
+ * A single-capability caller asking about `cricket.dls` alone would now get
+ * "community" back, which is the right answer to the question it asked.
+ * Do not "restore" a DLS paywall on the strength of an old comment.
+ *
+ * Derived from whatever the target actually has — nothing here assumes a
+ * specific plan_key exists; a target where a plan is renamed, retired, or
+ * where a new one is added still resolves correctly because the choice is
+ * read off `rows`/`candidates`, never typed in.
+ */
+export function chooseGrantingPlan(
+  rows: readonly PlanEntitlementRow[],
+  candidates: readonly PlanCandidateInfo[],
+): string {
+  const grantors = new Set(rows.filter((r) => r.bool_value === true).map((r) => r.plan_key));
+  if (grantors.size === 0) {
     throw new Error(
       "chooseGrantingPlan: no plan_entitlements row grants this feature (bool_value = true) — nothing to provision",
+    );
+  }
+  const ranked = publicGrantorsLeastPrivilegedFirst(grantors, candidateMap(candidates));
+  const chosen = ranked[0];
+  if (chosen === undefined) {
+    throw new Error(
+      `chooseGrantingPlan: ${grantors.size} plan(s) grant this feature (${[...grantors].sort().join(", ")}) ` +
+        "but none is public (is_public = true) — nothing purchasable to provision onto",
     );
   }
   return chosen;
@@ -286,32 +453,43 @@ function grantingPlanSet(rows: readonly PlanEntitlementRow[]): Set<string> {
  *
  * Every requirement AFTER the first is DESIRED, not required: among the
  * plans that grant the primary feature, this picks the one that ALSO grants
- * the most of the rest (lexicographically-first plan_key breaks a tie, same
- * determinism precedent as `chooseGrantingPlan`), preferring a plan that
- * grants every one of them. When no single plan does, `unsatisfied` names
- * exactly which desired feature(s) the chosen plan lacks — reported, never
- * silently dropped (see `CapabilityPlanChoice.unsatisfied`'s own doc
- * comment). This is a legitimate outcome on a catalog where no plan happens
- * to bundle every capability a bench run wants; it is not this function's
- * job to invent one.
+ * the most of the rest, preferring a plan that grants every one of them.
+ * When no single plan does, `unsatisfied` names exactly which desired
+ * feature(s) the chosen plan lacks — reported, never silently dropped (see
+ * `CapabilityPlanChoice.unsatisfied`'s own doc comment). This is a
+ * legitimate outcome on a catalog where no plan happens to bundle every
+ * capability a bench run wants; it is not this function's job to invent one.
+ *
+ * `candidates` filters and orders the primary feature's grantors exactly the
+ * way `chooseGrantingPlan` does (see its own doc comment: public-only, then
+ * least-privileged-first) — this function iterates that SAME ordering, so
+ * the plan it lands on when several candidates tie on `unsatisfied.length`
+ * (most commonly 0 — every candidate grants everything desired too) is the
+ * least-privileged PUBLIC one among them, never an alphabetical accident and
+ * never a plan like `enterprise` (`is_public = false`) no matter how broad
+ * its grants are.
  */
 export function chooseGrantingPlanForCapabilities(
   requirements: readonly CapabilityRequirement[],
+  candidates: readonly PlanCandidateInfo[],
 ): CapabilityPlanChoice {
   if (requirements.length === 0) {
     throw new Error("chooseGrantingPlanForCapabilities: no capability requirements given — nothing to provision");
   }
   const [primary, ...rest] = requirements;
-  // Throws "no plan_entitlements row grants this feature" when nothing
-  // grants the REQUIRED capability — same message as chooseGrantingPlan's
-  // own single-feature callers see, deliberately not duplicated here.
-  chooseGrantingPlan(primary.rows);
+  // Reuses chooseGrantingPlan's own throws — both "nothing grants this at
+  // all" and "grants exist but none is public" — for message parity with
+  // its single-feature callers; its return value is otherwise discarded
+  // here, because the picture this function needs is the FULL ordered list
+  // of PUBLIC plans granting the primary feature, not merely the first one.
+  chooseGrantingPlan(primary.rows, candidates);
 
   const primaryGrantors = grantingPlanSet(primary.rows);
+  const ranked = publicGrantorsLeastPrivilegedFirst(primaryGrantors, candidateMap(candidates));
   const desired = rest.map((r) => ({ featureKey: r.featureKey, plans: grantingPlanSet(r.rows) }));
 
   let best: { plan: string; unsatisfied: string[] } | undefined;
-  for (const plan of [...primaryGrantors].sort()) {
+  for (const plan of ranked) {
     const unsatisfied = desired.filter((d) => !d.plans.has(plan)).map((d) => d.featureKey);
     if (best === undefined || unsatisfied.length < best.unsatisfied.length) {
       best = { plan, unsatisfied };
@@ -455,6 +633,19 @@ export function createRealPlanSql(): RealPlanSqlHandle {
     async entitlementRows(featureKey) {
       return getSql()<PlanEntitlementRow[]>`
         select plan_key, bool_value from plan_entitlements where feature_key = ${featureKey}`;
+    },
+    async planCandidateInfo(planKeys) {
+      if (planKeys.length === 0) return [];
+      return getSql()<PlanCandidateInfo[]>`
+        select p.key as plan_key,
+               p.is_public,
+               (coalesce(count(pe.*) filter (where pe.bool_value = true), 0)
+                 + coalesce(count(pe.*) filter (where pe.bool_value is null and pe.int_value is null), 0))::int
+                 as privilege
+          from plans p
+          left join plan_entitlements pe on pe.plan_key = p.key
+         where p.key = any(${planKeys})
+         group by p.key, p.is_public`;
     },
     async getOrgSubscriptionId(orgId) {
       const [row] = await getSql()<{ subscription_id: string | null }[]>`

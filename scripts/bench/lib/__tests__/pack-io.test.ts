@@ -36,12 +36,21 @@ const TINY_TEXT = readFileSync(TINY_PACK_PATH, "utf8");
 const tinyRaw = (): unknown => JSON.parse(TINY_TEXT) as unknown;
 
 /**
- * `_tiny` declares two leaderboards and a champion and stage 0 derives
- * NEITHER, so every green `_tiny` load carries exactly these two warnings.
- * Spelled out rather than filtered away — the whole point of a not-derived
- * warning is that a reader sees it.
+ * `_tiny` declares leaderboards, a champion, (B05 T3 — d-tiny's second stage,
+ * s-playoff) a finalRanks order, and (B05 T5b) a cross-division career
+ * rollup, and stage 0 derives NONE of them, so every green `_tiny` load
+ * carries exactly these four warnings. Spelled out rather than filtered away
+ * — the whole point of a not-derived warning is that a reader sees it.
  */
-const TINY_WARNINGS = ["leaderboards.not_derived", "champions.not_derived"];
+const TINY_WARNINGS = [
+  "leaderboards.not_derived",
+  "champions.not_derived",
+  "finalRanks.not_derived",
+  "careers.not_derived",
+  // B05 T5b-3 — and a discipline carry-over (`p-hotel` banned from
+  // d-tiebreak's `rr-r3-c1`). Five now, in validate-pack.ts's emission order.
+  "suspensions.not_derived",
+];
 
 const codes = (load: PackLoad): { errors: string[]; warnings: string[] } => ({
   errors: load.ok ? [] : load.errors.map((f) => f.code),
@@ -69,7 +78,7 @@ describe("splitBySeverity", () => {
 });
 
 describe("loadPackValue — the committed micro-pack", () => {
-  it("loads GREEN and still surfaces its two permanent warnings", () => {
+  it("loads GREEN and still surfaces its three permanent warnings", () => {
     const load = loadPackValue(tinyRaw(), TINY_PACK_PATH);
     expect(codes(load)).toEqual({ errors: [], warnings: TINY_WARNINGS });
     expect(load.ok).toBe(true);
@@ -80,6 +89,11 @@ describe("loadPackValue — the committed micro-pack", () => {
     expect(load.warnings.map((f) => f.where)).toEqual([
       "expected.leaderboards",
       "expected.champions",
+      "expected.finalRanks",
+      // B05 T5b — the cross-division career rollup.
+      "expected.careers",
+      // B05 T5b-3 — the discipline carry-over.
+      "expected.suspensions",
     ]);
   });
 });

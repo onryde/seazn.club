@@ -114,7 +114,7 @@ import type pino from "pino";
 import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import { fixtureKey, type Pack, type PackDivision } from "../pack-schema.ts";
+import { fixtureKey, type Pack, type PackDivision, type PackStream } from "../pack-schema.ts";
 // B04 — the five modules this suite wires together. Each is CLOSED and owns
 // one layer: `schedule.ts` drives the seven steps, `checker.ts` recomputes the
 // rules independently of the product, `certificate.ts` runs §6.3's protocol,
@@ -122,8 +122,11 @@ import { fixtureKey, type Pack, type PackDivision } from "../pack-schema.ts";
 // seam plus `judgeDivision`, the one place a division's verdict is composed.
 import {
   readEngineArtifacts,
+  runDivisionStartLayer,
   runScheduleLayer,
   writeEngineArtifact,
+  type DivisionStartTransport,
+  type DivisionToStart,
   type EngineSnapshot,
   type EngineSnapshotDivision,
   type ScheduleDivision,
@@ -154,20 +157,69 @@ import {
   type SeedTransport,
 } from "../seed.ts";
 import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
-import { type PlanSql } from "../plan.ts";
+import { FREE_PLAN_KEY, type PlanSql } from "../plan.ts";
 import {
   readPlayerStatsBaseline,
   playerStatsBaselineIssues,
   type RosterMemberRef,
 } from "../stats.ts";
+import { oracleLogFields } from "../report.ts";
 import type {
   DivisionScheduleReport,
+  DivisionStartConflictReport,
+  DivisionStartReport,
   EngineDeltaSection,
+  ImportFindingReport,
+  ImportSimulationReport,
   OracleResult,
+  OracleVerdict,
   RegistrationDivisionReport,
+  SimulationReport,
   SolverResult,
   SuiteReport,
 } from "../report.ts";
+import { computeEventsPerSecond, simulateDivisionStreams } from "../simulate.ts";
+import { buildImportId, importDivisionStreams, type ImportFinding } from "../import.ts";
+import {
+  advanceStageSeeding,
+  compareFinalRanks,
+  completeStageCapture,
+} from "../advance.ts";
+import {
+  compareCareerStats,
+  compareChampion,
+  compareLeaderboard,
+  comparePersonDivisionStat,
+  compareRankCrossings,
+  compareStandings,
+  compareSuspensions,
+  compareTieOrderCascade,
+  confirmSuspension,
+  createManualSuspension,
+  fetchActiveSuspensions,
+  fetchDivisionPlayerStats,
+  fetchFixtureLineup,
+  putFixtureLineup,
+  suspensionMismatchReasons,
+  fetchPersonCareerStats,
+  fetchPersonStats,
+  fetchStandings,
+  renderChampionMismatch,
+  renderLeaderboardMismatch,
+  renderRankCrossingMismatch,
+  renderSideBySide,
+  renderStandingsMismatch,
+  renderUndeclaredMetrics,
+  standingsRankOrder,
+  type DivisionPlayerStatsWire,
+  type ExpectedCareerStat,
+  type ExpectedLeaderboardEntry,
+  type ExpectedStandingsRow,
+  type ExpectedSuspension,
+  type PersonCareerStatsWire,
+  type PersonStatsWire,
+  type SuspensionFixtureSheet,
+} from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
   resolveEntryMode,
@@ -460,6 +512,72 @@ export interface TinySuiteInput {
    *  above. Defaults to `dls-gate.ts`'s own `defaultProbeTransport`; a live
    *  run never passes it. Meaningless (never read) when `sql` is omitted. */
   probeTransport?: ProbeTransport;
+  /**
+   * B05 T1 — overridable so a test can drive the division-A stream fold's
+   * OWN HTTP surface through a fake, never `global.fetch`. `ProbeTransport`
+   * (not a bespoke type) because it is exactly the shape `simulate.ts`'s own
+   * `SimTransport` needs — `raw()`, to read back a refusal's real status and
+   * body rather than have `request()` throw it away. Defaults to
+   * `simulate.ts`'s own `defaultSimTransport`; a live run never passes it.
+   * Meaningless (never read) when `sql` is omitted — same gating as
+   * `probeTransport`, and for the same reason: every EXISTING caller that
+   * does not know about this step gets today's behavior unchanged. A
+   * SEPARATE field from `probeTransport` (never falls back to it) — the two
+   * probes are independent, and a test wanting different fakes for each
+   * must be able to say so.
+   */
+  simTransport?: ProbeTransport;
+  /**
+   * B05 T2 — overridable so a test can drive division B's batch-import
+   * fold's OWN HTTP surface through a fake, never `global.fetch`.
+   * `ProbeTransport` (not a bespoke type), same reasoning as `simTransport`
+   * above — it is exactly the shape `import.ts`'s own `ImportTransport`
+   * needs (`raw()`, to read back a refusal's real status and body). Defaults
+   * to `import.ts`'s own `defaultImportTransport`; a live run never passes
+   * it. Meaningless (never read) when `sql` is omitted — same gating as
+   * `simTransport`. A SEPARATE field from `simTransport` (never falls back
+   * to it): the two write paths are independent, and a test wanting
+   * different fakes for each must be able to say so.
+   */
+  importTransport?: ProbeTransport;
+  /**
+   * B05 T2.5 (D9) — overridable so a test can drive the division-start
+   * step's OWN HTTP surface through a fake, never `global.fetch`.
+   * `DivisionStartTransport` (`schedule.ts`'s own type — structurally the
+   * same `signIn`/`request`/`raw` shape as `ProbeTransport`, so a fake typed
+   * either way satisfies both). Defaults to `schedule.ts`'s own
+   * `defaultDivisionStartTransport`; a live run never passes it. Meaningless
+   * (never read) when `sql` is omitted — same gating as `simTransport`/
+   * `importTransport`. A SEPARATE field from both (never falls back to
+   * either): starting is neither fold, and runs before both of them.
+   */
+  startTransport?: DivisionStartTransport;
+  /**
+   * B05 T3 — overridable so a test can drive the stage-advancement step's
+   * (`advance.ts`) OWN HTTP surface through a fake, never `global.fetch`.
+   * `ProbeTransport`, same reasoning as `simTransport`/`importTransport`
+   * above — it is exactly the shape `advance.ts`'s own `AdvanceTransport`
+   * needs (`raw()`). Defaults to `advance.ts`'s own `defaultAdvanceTransport`;
+   * a live run never passes it. Meaningless (never read) when `sql` is
+   * omitted, or when `division0`'s second stage declares no `progression` —
+   * same gating discipline as every other B05 transport field. A SEPARATE
+   * field from every other one above: advancement is neither fold nor the
+   * start step, and runs after both folds and the player-stats baseline.
+   */
+  advanceTransport?: ProbeTransport;
+  /**
+   * B05 T4 — overridable so a test can drive the runtime-oracle step's OWN
+   * HTTP surface through a fake, never `global.fetch`. `ProbeTransport`,
+   * same reasoning as `advanceTransport` above — it is exactly the shape
+   * `oracle.ts`'s own `OracleTransport` needs (`raw()`). Defaults to
+   * `oracle.ts`'s own `defaultOracleTransport`; a live run never passes it.
+   * Meaningless (never read) when `sql` is omitted, or when `division0`'s
+   * second stage declares no `progression` — same gating discipline as
+   * `advanceTransport`. A SEPARATE field: the oracle step reads standings
+   * AFTER the advance step writes, and a test wanting different fakes for
+   * each must be able to say so.
+   */
+  oracleTransport?: ProbeTransport;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -637,6 +755,47 @@ function describeExpectedCount(
  * GREEN `_tiny` while the product mints the wrong number of fixtures, which is
  * the one failure the addendum exists to prevent.
  */
+/**
+ * B05 T3 — how many of `seeded.fixtureIdByKey`'s bound fixtures belong to a
+ * LEAGUE-kind stage, the only kind `expectedFixtureCounts` can derive a
+ * number for (`SeedPlan.expectedFixtureCounts`'s own doc comment: "a
+ * bracket/group/swiss/etc. stage simply has no entry here, not a wrong
+ * one"). `d-tiny` gained a second stage this task (`s-playoff`, a knockout)
+ * whose own TBD placeholder fixture is generated and bound exactly like
+ * every other one — `seedSuite`'s per-stage `/generate` loop does not
+ * discriminate by kind — so `seeded.fixtureIdByKey.size` now counts a
+ * fixture `expectedFixtureCounts` was never asked about. Comparing the two
+ * totals wholesale would red every division that ever grows a non-league
+ * stage, forever, regardless of whether the league stage itself seeded
+ * correctly — exactly the false attribution `fixtureCountIssue`'s own doc
+ * comment warns a silent shape change produces.
+ *
+ * Scoped by STREAM rather than by re-deriving a per-stage generated count:
+ * `bindStreamFixtures` already proved (its own two anti-vacuity checks) that
+ * every pack stream matches exactly one generated, bound fixture and vice
+ * versa, so "how many streams resolve to a league-kind stage" and "how many
+ * bound fixtures belong to a league-kind stage" are the same number. A
+ * stream's stage is resolved the same way `validate-pack.ts`'s `resolveStage`
+ * does — declared `stageRef` wins, absent means "the division's only stage"
+ * — reimplemented here rather than imported because that resolver is a
+ * validate-pack.ts private helper, not an exported one.
+ */
+function leagueBoundStreamCount(pack: Pack, plan: SeedPlan): number {
+  let count = 0;
+  for (const stream of pack.streams) {
+    const division = plan.divisions.find((d) => d.ref === stream.divisionRef);
+    if (division === undefined) continue;
+    const stage =
+      stream.stageRef !== undefined
+        ? division.stages.find((s) => s.ref === stream.stageRef)
+        : division.stages.length === 1
+          ? division.stages[0]
+          : undefined;
+    if (stage?.kind === "league") count += 1;
+  }
+  return count;
+}
+
 export function fixtureCountIssue(
   actual: number,
   plan: SeedPlan,
@@ -729,6 +888,84 @@ export function divisionDeclaresOfficials(pack: Pack, divisionRef: string): bool
   return (pack.officials ?? []).some((official) =>
     official.assignments.some((a) => a.divisionRef === divisionRef),
   );
+}
+
+/** B05 T2.5 (D9) — `schedule.ts`'s own `WireConflict` shape
+ *  (`fixture_id?`/`blocking?`/`details.kind?`, read through `details.kind`
+ *  ONLY, never `code`) renamed onto `report.ts`'s `DivisionStartConflictReport`
+ *  — one rename site, matching every other wire-to-report mapper in this
+ *  file. Typed structurally rather than importing `WireConflict` by name:
+ *  that type is not exported from `schedule.ts` (it is this module's own
+ *  private wire shape), and this function needs nothing beyond its shape. */
+function toDivisionStartConflictReport(c: {
+  fixture_id?: string;
+  blocking?: boolean;
+  details?: { kind?: string };
+}): DivisionStartConflictReport {
+  return {
+    ...(c.fixture_id === undefined ? {} : { fixtureId: c.fixture_id }),
+    ...(c.blocking === undefined ? {} : { blocking: c.blocking }),
+    ...(typeof c.details?.kind === "string" ? { kind: c.details.kind } : {}),
+  };
+}
+
+/** B05 T2 — flattens `import.ts`'s discriminated `ImportFinding` union into
+ *  `report.ts`'s single reportable row shape (`ImportFindingReport`). A
+ *  `switch` over `kind` rather than a spread, so a FOURTH finding kind added
+ *  to the union later is a `tsc` error here (`never` narrows to nothing)
+ *  instead of silently reporting an empty row. */
+function toImportFindingReport(finding: ImportFinding): ImportFindingReport {
+  switch (finding.kind) {
+    case "stream_oversize":
+      return {
+        kind: finding.kind,
+        streamKey: finding.streamKey,
+        eventCount: finding.eventCount,
+        cap: finding.cap,
+        code: "import.stream_exceeds_cap",
+      };
+    case "call_refused":
+      return {
+        kind: finding.kind,
+        chunkIndex: finding.chunkIndex,
+        streamKeys: [...finding.streamKeys],
+        status: finding.status,
+        code: finding.code,
+        message: finding.message,
+      };
+    case "stream_not_imported":
+      return {
+        kind: finding.kind,
+        streamKey: finding.streamKey,
+        fixture: finding.fixture,
+        status: finding.status,
+        ...(finding.code === undefined ? {} : { code: finding.code }),
+        ...(finding.eventIndex === undefined ? {} : { eventIndex: finding.eventIndex }),
+      };
+  }
+}
+
+/** Human-readable form of the same finding, for `errors.push(...)` — same
+ *  "a refusal is a FINDING, reported and never silently retried" convention
+ *  division A's block already uses. */
+function describeImportFinding(finding: ImportFinding): string {
+  switch (finding.kind) {
+    case "stream_oversize":
+      return (
+        `stream ${finding.streamKey} carries ${finding.eventCount} events, over the ` +
+        `${finding.cap} eventsPerFixture cap — excluded from every call`
+      );
+    case "call_refused":
+      return (
+        `chunk #${finding.chunkIndex} (streams ${finding.streamKeys.join(", ")}) refused: ` +
+        `${finding.code} (HTTP ${finding.status}) — ${finding.message}`
+      );
+    case "stream_not_imported":
+      return (
+        `stream ${finding.streamKey} (fixture ${finding.fixture}) ${finding.status}` +
+        (finding.code === undefined ? "" : ` — ${finding.code}`)
+      );
+  }
 }
 
 /** The one distinct defined value in a list, or `undefined` when the list has
@@ -1085,7 +1322,7 @@ export async function runTinySuite(
   const errors: string[] = [];
   const warnings: string[] = [];
   const oracles: OracleResult[] = [];
-  const timings: { seedMs?: number; scheduleMs?: number } = {};
+  const timings: { seedMs?: number; scheduleMs?: number; simMs?: number; importMs?: number } = {};
   const registrationReports: RegistrationDivisionReport[] = [];
   /** B04 — one row per division actually driven through the scheduling layer.
    *  Empty for a run that never reached it (stage 0 refused, `--keep` short
@@ -1104,6 +1341,18 @@ export async function runTinySuite(
   let engineDelta: EngineDeltaSection | undefined;
   let conflictCount: number | undefined;
   let solver: Omit<SolverResult, "requestedEngine"> | undefined;
+  /** B05 T1 — set only when the simulate step actually ran (`input.sql`
+   *  present AND division A declared at least one stream). */
+  let simulation: SimulationReport | undefined;
+  /** B05 T2 — set only when the import step actually ran (`input.sql`
+   *  present AND some OTHER division declared at least one stream). */
+  let importSimulation: ImportSimulationReport | undefined;
+  /** B05 T2.5 (D9) — one row per division `runDivisionStartLayer` started,
+   *  set only when the step actually ran (`input.sql` present AND at least
+   *  one division declared a stream). Populated BEFORE `simulation`/
+   *  `importSimulation` above run, since neither fold can succeed against an
+   *  unstarted division. */
+  let divisionStart: DivisionStartReport[] | undefined;
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -1205,15 +1454,22 @@ export async function runTinySuite(
       };
     }
 
-    // `_tiny.json` declares exactly one division and one (league) stage —
-    // `buildSeedPlan`/`seedSuite` are generalised past that, but this
-    // suite's OWN scheduling walk below still only ever drives the first of
-    // each, matching what `_tiny.json` actually contains. `divisions.min(1)`
-    // on `PackSchema` guarantees at least one; a stage-less division would be
-    // an authoring bug stage 0 does not currently catch, so it is named here
+    // `_tiny.json` declares exactly one FIRST division — `buildSeedPlan`/
+    // `seedSuite` are generalised past that, but this suite's OWN scheduling
+    // walk below still only ever drives the first division's FIRST stage,
+    // matching what `_tiny.json`'s league stage needs. `divisions.min(1)` on
+    // `PackSchema` guarantees at least one; a stage-less division would be an
+    // authoring bug stage 0 does not currently catch, so it is named here
     // rather than silently producing `undefined.id` downstream.
+    //
+    // B05 T3: `division0` now legitimately declares a SECOND stage
+    // (`s-playoff`, a knockout fed from the league) — `stage1`, undefined for
+    // every pack (and division) that does not. Every existing reader of
+    // `division0`/`stage0` above is unaffected; `stage1` is read only by the
+    // advance step below.
     const division0 = plan.divisions[0];
     const stage0 = division0?.stages[0];
+    const stage1 = division0?.stages[1];
     if (division0 === undefined || stage0 === undefined) {
       throw new Error(
         "tiny: the pack's plan has no division/stage to seed and schedule",
@@ -1268,6 +1524,36 @@ export async function runTinySuite(
           );
         }
       }
+      // THE PROMISE at the matrix, as its own oracle (dls-gate.ts's header,
+      // point 2). The cells above prove the door is open for THIS org over
+      // HTTP; this proves it is open for every org that never paid. Scoring
+      // is free by owner ruling — a false here means a migration put it back
+      // behind a price.
+      oracles.push({
+        name: "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
+        passed: probe.dlsFreeOnCommunityPlan,
+        detail: probe.dlsFreeOnCommunityPlan
+          ? `plan_entitlements grants cricket.dls on "${FREE_PLAN_KEY}" — scoring is free, as ruled ` +
+            `(V390__scoring_free.sql; V393__entitlements_v18.sql:63-70)`
+          : `plan_entitlements no longer grants cricket.dls on "${FREE_PLAN_KEY}" — scoring has been ` +
+            `re-gated for customers who never paid, which contradicts the standing owner ruling`,
+      });
+      if (!probe.dlsFreeOnCommunityPlan) {
+        errors.push(
+          `entitlement-gate: cricket.dls is no longer granted on "${FREE_PLAN_KEY}" — scoring is supposed to be free`,
+        );
+      }
+      // The paywall cell retires itself when nothing this probe can provoke
+      // is still sold (`DlsGateProbeResult.gatedFeatureProbed`). That is a
+      // finding to act on — point one of those gates at a key that IS sold —
+      // never a silent loss of coverage.
+      if (probe.gatedFeatureProbed === null) {
+        warnings.push(
+          "tiny: no feature key the DLS-gate probe knows how to provoke is still gated for a " +
+            `"${FREE_PLAN_KEY}" org, so the "a 402 names its feature_key" cell did not run — that ` +
+            "coverage is retired until PROVOCABLE_GATED_FEATURES (lib/dls-gate.ts) names a key that is still sold",
+        );
+      }
       autoAssign = probe.officialsAutoGranted;
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
@@ -1287,6 +1573,8 @@ export async function runTinySuite(
           officialsAutoGranted: probe.officialsAutoGranted,
           unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
           statsPlayerGranted,
+          dlsFreeOnCommunityPlan: probe.dlsFreeOnCommunityPlan,
+          gatedFeatureProbed: probe.gatedFeatureProbed,
         },
         "tiny: entitlement-gate probe complete",
       );
@@ -1395,7 +1683,11 @@ export async function runTinySuite(
     // DERIVED from the pack (entrants choose two, times its declared legs) —
     // never a constant. See `fixtureCountIssue`'s own doc comment for why
     // this comparison lives on the testable side of the network boundary.
-    const countIssue = fixtureCountIssue(seeded.fixtureIdByKey.size, plan);
+    // B05 T3: scoped to LEAGUE-stage-bound fixtures ONLY — see
+    // `leagueBoundStreamCount`'s own doc comment for why the pool-wide
+    // `seeded.fixtureIdByKey.size` stopped being the right number the moment
+    // `d-tiny` grew a second, non-league stage.
+    const countIssue = fixtureCountIssue(leagueBoundStreamCount(pack, plan), plan);
     if (countIssue !== null) errors.push(countIssue);
     timings.seedMs = Math.round(performance.now() - seedStart);
 
@@ -1925,7 +2217,97 @@ export async function runTinySuite(
 
     timings.scheduleMs = Math.round(performance.now() - scheduleStart);
 
-
+    // B05 T2.5 (D9) — start every division this run's folds need. Gated on
+    // `input.sql`, same as the player-stats baseline and both folds below —
+    // every EXISTING caller that does not know about this step gets today's
+    // behavior unchanged. Runs BEFORE either fold (T1's division-A
+    // single-event fold, T2's division-B batch import): both write paths
+    // refuse a division still "setup"/"scheduled"
+    // (`usecases/scoring.ts:222` WRONG_PHASE, `usecases/event-import.ts:704`
+    // 409 `import.division_not_started`), and `runScheduleLayer` above only
+    // ever takes a division that far.
+    if (input.sql !== undefined) {
+      // EVERY streamed division, not only `division0` — `division0`'s own
+      // streams AND every "other" division's (the exact same grouping T1's
+      // and T2's blocks below each re-derive for their own fold) all need
+      // the phase moved before either fold below can succeed.
+      const streamedDivisionRefs = new Set(pack.streams.map((st) => st.divisionRef));
+      const divisionsToStart: DivisionToStart[] = [];
+      for (const ref of streamedDivisionRefs) {
+        const id = seeded.divisionIdByRef.get(ref);
+        if (id === undefined) {
+          // Never silent — same discipline as the import block below's
+          // identical guard for an unresolved divisionId.
+          errors.push(
+            `tiny: division "${ref}" declares streams but has no resolved divisionId — cannot start it`,
+          );
+          continue;
+        }
+        divisionsToStart.push({ divisionRef: ref, divisionId: id });
+      }
+      if (divisionsToStart.length > 0) {
+        log.info(
+          { divisions: divisionsToStart.map((d) => d.divisionRef) },
+          "tiny: starting the division(s) the folds below need (B05 T2.5, D9)",
+        );
+        const startLayer = await runDivisionStartLayer({
+          base,
+          session: s,
+          divisions: divisionsToStart,
+          ...(input.startTransport === undefined ? {} : { transport: input.startTransport }),
+        });
+        divisionStart = startLayer.outcomes.map((outcome) => {
+          // D9's "report both sides": what B04's OWN independent checker
+          // (`scheduling[]`'s own `.checker`, populated moments earlier in
+          // THIS division's own walk above) said about the SAME board —
+          // populated only alongside a blocking refusal, since that is the
+          // one case D9 asks the two to be compared.
+          const schedRow = scheduling.find((r) => r.divisionRef === outcome.divisionRef);
+          return {
+            divisionRef: outcome.divisionRef,
+            acknowledgedWarnings: outcome.acknowledgedWarnings,
+            warnings: outcome.warnings.map(toDivisionStartConflictReport),
+            ...(outcome.blockingConflicts === undefined
+              ? {}
+              : {
+                  blockingConflicts: outcome.blockingConflicts.map(toDivisionStartConflictReport),
+                  // T2.5 review MINOR: an absent `schedRow.checker` (the
+                  // board fetch itself failed earlier in this division's own
+                  // walk) is reported EXPLICITLY as "nothing to compare",
+                  // never left to read the same as "the checker said clean" —
+                  // D9's "report both sides" needs a THIRD, honest state
+                  // between "clean" and "found something".
+                  ...(schedRow?.checker === undefined
+                    ? { checkerUnavailable: true as const }
+                    : {
+                        checkerClean: schedRow.checker.clean,
+                        checkerFindingCount: schedRow.checker.findings.length,
+                      }),
+                }),
+            ...(outcome.confirmedStatus === undefined ? {} : { confirmedStatus: outcome.confirmedStatus }),
+            started: outcome.started,
+          };
+        });
+        for (const outcome of startLayer.outcomes) {
+          // `errors`, never `warnings`: D9's blocking/unrecognized/re-read
+          // refusals are all product disagreements or bugs, matching the
+          // "a refusal is a FINDING, reported and never silently retried"
+          // convention both folds below already follow.
+          for (const err of outcome.errors) errors.push(`start: ${err}`);
+          log.info(
+            {
+              division: outcome.divisionRef,
+              acknowledgedWarnings: outcome.acknowledgedWarnings,
+              warningCount: outcome.warnings.length,
+              blockingConflictCount: outcome.blockingConflicts?.length,
+              confirmedStatus: outcome.confirmedStatus,
+              started: outcome.started,
+            },
+            "suite_division_started",
+          );
+        }
+      }
+    }
 
     // B03 T6b: the player-stats baseline. Gated on `input.sql` — it needs
     // the org-authenticated routes' `stats.player` entitlement (derived
@@ -1989,6 +2371,1189 @@ export async function runTinySuite(
         });
         for (const issue of issues)
           errors.push(`player-stats baseline: ${issue}`);
+      }
+    }
+
+    // B05 T5b-3 — the DISCIPLINE CARRY (bench spec section 8), wired against
+    // `expected.suspensions` through `oracle.ts`'s `compareSuspensions`.
+    // That block carried ZERO rows until this task, so its oracle was a
+    // silence: nothing compared, nothing able to fail.
+    //
+    // POSITION IS LOAD-BEARING. This runs BEFORE the folds below, not beside
+    // the other oracles after them, because `putLineup`
+    // (`usecases/fixtures.ts:333-335`) refuses any fixture whose status has
+    // left `scheduled` — "lineup is locked once a fixture is decided". Once
+    // T1/T2 have folded, no team sheet can be written at all.
+    //
+    // Read `compareSuspensions`'s header in oracle.ts for how a suspension
+    // actually comes about here. T5b-3 measured the enforcement question
+    // rather than answering it (the product had not decided); B05 answered it,
+    // so the probe below is an ORACLE now — 422 SUSPENDED_PLAYER for the
+    // banned player, acceptance for the eligible team-mate, both sides on the
+    // same sheet.
+    //
+    // Gated on `input.sql !== undefined`, like every other B05 step.
+    if (input.sql !== undefined) {
+      if (pack.expected.suspensions.length === 0) {
+        // An EMPTY expected set is not a passing oracle — the same discipline
+        // T5b-2's career block states. A green "discipline carry" line for a
+        // pack that declares no ban is exactly the vacuity this wave removes.
+        //
+        // B05 review round 1, MAJOR 2: the PACK declared nothing here, so the
+        // zero-subject rule (report.ts, beside `OracleVerdict`) says
+        // `no_subject` — counted, never red, never readable as a pass. It used
+        // to be a warning and NOTHING else, which left a skipped comparator
+        // indistinguishable from one nobody ever wrote, both in
+        // `report.oracles` and on the `oracle_checked` stream.
+        warnings.push(
+          `oracle: pack declares no expected.suspensions rows — the discipline-carry oracle ` +
+            `(compareSuspensions) has no subject and was NOT run`,
+        );
+        oracles.push({
+          name: `oracle: discipline carry`,
+          passed: true,
+          verdict: "no_subject",
+          subject: false,
+          detail:
+            `the pack declares no expected.suspensions rows — the discipline-carry oracle ` +
+            `(compareSuspensions) has NO SUBJECT and compared nothing`,
+        });
+        log.info(oracleLogFields("suspension_carry", "no_subject"), "oracle_checked");
+      } else {
+        for (const sus of pack.expected.suspensions) {
+          const susDivisionId = seeded.divisionIdByRef.get(sus.divisionRef);
+          const bannedPersonId = seeded.personIdByRef.get(sus.person);
+          if (susDivisionId === undefined || bannedPersonId === undefined) {
+            errors.push(
+              `oracle: expected.suspensions names division "${sus.divisionRef}" / person "${sus.person}" ` +
+                `and one of them has no resolved id`,
+            );
+            continue;
+          }
+          // The entrant is DERIVED from the pack's own rosters, never named
+          // by `expected.suspensions` — a second declaration of the same fact
+          // could disagree with the roster and still pass.
+          const bannedEntrant = pack.entrants.find(
+            (e) => e.divisionRef === sus.divisionRef && e.roster.some((m) => m.person === sus.person),
+          );
+          if (bannedEntrant === undefined) {
+            errors.push(
+              `oracle: expected.suspensions names person "${sus.person}", who is on no entrant of ` +
+                `division "${sus.divisionRef}" — there is nothing to ban them from`,
+            );
+            continue;
+          }
+          // The POSITIVE half's subject: a team-mate on the SAME entrant that
+          // no expected.suspensions row bans. Without one, "was she refused?"
+          // is satisfied by a product that refuses everybody.
+          const bannedRefs = new Set(
+            pack.expected.suspensions
+              .filter((other) => other.divisionRef === sus.divisionRef)
+              .map((other) => other.person),
+          );
+          const controlRef = bannedEntrant.roster
+            .map((m) => m.person)
+            .find((ref) => !bannedRefs.has(ref));
+          const controlPersonId = controlRef === undefined ? undefined : seeded.personIdByRef.get(controlRef);
+          const susEntrantId = seeded.entrantIdByRef.get(bannedEntrant.ref);
+          if (controlRef === undefined || controlPersonId === undefined || susEntrantId === undefined) {
+            errors.push(
+              `oracle: entrant "${bannedEntrant.ref}" cannot carry a two-sided discipline check — ` +
+                `${controlRef === undefined ? "every one of its members is banned, so there is no ELIGIBLE control" : "an id never resolved"}`,
+            );
+            continue;
+          }
+          const controlPerson = pack.persons?.find((pp) => pp.ref === controlRef);
+
+          // Every fixture this entrant is a side of, split by the pack's own
+          // verdict. `missed` is what `expected.suspensions` names; `played`
+          // is the REST, and it is the fixture-identity discriminator — a ban
+          // from every fixture also satisfies "absent from the named one".
+          const missedKeys = new Set<string>(sus.missesFixtureExtKeys);
+          const entrantStreams = pack.streams.filter(
+            (st) =>
+              st.divisionRef === sus.divisionRef &&
+              (st.home === bannedEntrant.ref || st.away === bannedEntrant.ref),
+          );
+          const unresolvedFixtures: string[] = [];
+          const targets: { extKey: string; fixtureId: string; missed: boolean }[] = [];
+          for (const st of entrantStreams) {
+            const fid = seeded.fixtureIdByKey.get(fixtureKey(sus.divisionRef, st.fixtureExtKey));
+            if (fid === undefined) {
+              unresolvedFixtures.push(st.fixtureExtKey);
+              continue;
+            }
+            targets.push({ extKey: st.fixtureExtKey, fixtureId: fid, missed: missedKeys.has(st.fixtureExtKey) });
+          }
+          if (unresolvedFixtures.length > 0) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" could not resolve fixture id(s) ` +
+                `${unresolvedFixtures.join(", ")} in division "${sus.divisionRef}"`,
+            );
+            continue;
+          }
+
+          // A local write, used twice below: the PLAYED sheets go in before the
+          // ban exists, the MISSED ones after it. The read-BACK is deliberately
+          // NOT here — it is one pass at the end, so every sheet is read at the
+          // SAME moment, after every write and after the ban is confirmed. A
+          // read taken beside its own write would sample the played sheets
+          // before the ban existed at all, and a ban that then reached too far
+          // would be invisible to `absentOnPlayed`.
+          const writtenTargets: { extKey: string; fixtureId: string; missed: boolean }[] = [];
+          const writeFailures: string[] = [];
+          const writeSheet = async (
+            target: { extKey: string; fixtureId: string; missed: boolean },
+            wanted: readonly string[],
+          ): Promise<boolean> => {
+            const written = await putFixtureLineup(
+              base,
+              s,
+              target.fixtureId,
+              susEntrantId,
+              wanted,
+              input.oracleTransport,
+            );
+            if (written.status >= 400) {
+              writeFailures.push(
+                `${target.extKey}: HTTP ${written.status}${written.code === undefined ? "" : ` ${written.code}`}`,
+              );
+              return false;
+            }
+            if (!writtenTargets.some((t) => t.fixtureId === target.fixtureId)) writtenTargets.push(target);
+            return true;
+          };
+
+          // (1) The PLAYED sheets — the fixtures the pack does NOT say this
+          // person misses — written BEFORE the ban exists.
+          //
+          // THE ORDER IS THE PRODUCT'S, not a convenience. A ban names no
+          // fixtures: `suspensions` carries no fixture list and no date range,
+          // so while a row is `active` the lineup gate refuses that person on
+          // EVERY fixture of the division, the ones this pack says they play
+          // included. Writing these after the confirm would be asking the
+          // product to contradict the gate, and the honest sequence is a real
+          // season anyway — the organiser names a squad, a ban lands, and the
+          // sheets for the fixtures the player misses get redone.
+          for (const target of targets.filter((t) => !t.missed)) {
+            await writeSheet(target, [controlPersonId, bannedPersonId]);
+          }
+
+          // (2) The PRODUCER, through the product's own two calls. A row this
+          // bench wrote in SQL would prove the fixture, not the product.
+          const pending = await createManualSuspension(
+            base,
+            s,
+            susDivisionId,
+            {
+              personId: bannedPersonId,
+              // DERIVED, never declared: the ban is exactly as long as the
+              // list of fixtures the pack says are missed.
+              matchesTotal: sus.missesFixtureExtKeys.length,
+              reason: sus.reason ?? `bench discipline carry: ${sus.person}`,
+            },
+            input.oracleTransport,
+          );
+          const confirmed = await confirmSuspension(base, s, pending.id, input.oracleTransport);
+
+          // (3) The ENFORCEMENT ORACLE. Until B05 this was a WARNING: it
+          // reported the live HTTP status and asserted neither answer, because
+          // the product had not decided whether discipline was advisory. It
+          // has decided — `putLineup` reads `suspensions` and refuses an
+          // `active` ban with 422 SUSPENDED_PLAYER — so the measurement is an
+          // assertion now, and the bench PROVES the gate instead of
+          // describing it.
+          //
+          // BOTH directions, on the SAME fixture and the SAME entrant. A
+          // product that refuses every team sheet satisfies the negative half
+          // on its own, which is why the eligible team-mate's acceptance is
+          // asserted here rather than left to the sheets loop below.
+          // ZERO-SUBJECT RULE (report.ts): this REDS rather than reporting
+          // `no_subject` — the pack declared this suspension, so a run with no
+          // missed fixture to refuse a sheet for is a missing answer, not an
+          // absent question.
+          const probeFixture = targets.find((f) => f.missed);
+          if (probeFixture === undefined) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" resolved no MISSED fixture — the ` +
+                `enforcement assertion has no subject to refuse a team sheet for`,
+            );
+          } else {
+            const refusal = await putFixtureLineup(
+              base,
+              s,
+              probeFixture.fixtureId,
+              susEntrantId,
+              [controlPersonId, bannedPersonId],
+              input.oracleTransport,
+            );
+            const refused = refusal.status === 422 && refusal.code === "SUSPENDED_PLAYER";
+            // The POSITIVE half doubles as this fixture's real team sheet:
+            // `putLineup` REPLACES an entrant's whole lineup, so this write is
+            // the stored state the comparison below reads back.
+            const accepted = await writeSheet(probeFixture, [controlPersonId]);
+            const enforced = refused && accepted;
+            oracles.push({
+              name: `oracle: ${sus.divisionRef} discipline enforced at the team sheet (${sus.person})`,
+              passed: enforced,
+              detail: enforced
+                ? `naming the ACTIVE-suspended "${sus.person}" on "${probeFixture.extKey}" was REFUSED ` +
+                  `with 422 SUSPENDED_PLAYER, and the ELIGIBLE team-mate "${controlRef}" alone was ` +
+                  `ACCEPTED on that same sheet — the gate refuses the banned player, not everybody`
+                : [
+                    refused
+                      ? undefined
+                      : `the banned player was NOT refused: HTTP ${refusal.status}` +
+                        `${refusal.code === undefined ? "" : ` ${refusal.code}`} (expected 422 SUSPENDED_PLAYER)`,
+                    accepted
+                      ? undefined
+                      : `the ELIGIBLE team-mate "${controlRef}" was refused too — the gate is refusing everybody`,
+                  ]
+                    .filter((x): x is string => x !== undefined)
+                    .join("; "),
+            });
+            log.info(
+              { ...oracleLogFields("discipline_enforced", enforced ? "pass" : "fail"), division: sus.divisionRef },
+              "oracle_checked",
+            );
+            if (!enforced) {
+              errors.push(
+                `oracle: ${sus.divisionRef}: the lineup gate did not enforce "${sus.person}"'s ACTIVE ban on ` +
+                  `"${probeFixture.extKey}" — banned player HTTP ${refusal.status}` +
+                  `${refusal.code === undefined ? "" : ` ${refusal.code}`}, eligible team-mate ` +
+                  `${accepted ? "accepted" : "REFUSED"}`,
+              );
+            }
+          }
+
+          // (4) Every remaining MISSED sheet (the probe wrote the first one):
+          // the banned player OFF the fixtures the pack names, the eligible
+          // team-mate on all of them. The PLAYED sheets went in at (1).
+          for (const target of targets) {
+            if (!target.missed || target.fixtureId === probeFixture?.fixtureId) continue;
+            await writeSheet(target, [controlPersonId]);
+          }
+
+          // (5) The read-BACK, never the PUTs' own echoes, and all of it AFTER
+          // every write: the stored state as it stands at comparison time is
+          // what the oracle compares.
+          const sheets: SuspensionFixtureSheet[] = [];
+          for (const target of writtenTargets) {
+            const lineup = await fetchFixtureLineup(
+              base,
+              s,
+              target.fixtureId,
+              susEntrantId,
+              input.oracleTransport,
+            );
+            sheets.push({
+              fixtureExtKey: target.extKey,
+              fixtureId: target.fixtureId,
+              missed: target.missed,
+              lineup,
+            });
+          }
+          if (writeFailures.length > 0) {
+            errors.push(
+              `oracle: discipline carry for "${sus.person}" could not write the team sheet(s) it compares — ` +
+                `${writeFailures.join("; ")}`,
+            );
+          }
+
+          // (6) The comparison, against the product's own active-ban list.
+          const active = await fetchActiveSuspensions(base, s, susDivisionId, input.oracleTransport);
+          const expectedSuspensions: ExpectedSuspension[] = [
+            {
+              personId: bannedPersonId,
+              personName: pack.persons?.find((pp) => pp.ref === sus.person)?.fullName ?? sus.person,
+              divisionId: susDivisionId,
+              entrantId: susEntrantId,
+              matchesTotal: sus.missesFixtureExtKeys.length,
+              controlPersonId,
+              controlPersonName: controlPerson?.fullName ?? controlRef,
+            },
+          ];
+          const susCheck = compareSuspensions(expectedSuspensions, { active, sheets });
+          const entry = susCheck.entries[0];
+          oracles.push({
+            name: `oracle: ${sus.divisionRef} discipline carry (${sus.person})`,
+            passed: susCheck.matched,
+            detail: susCheck.matched
+              ? `the ban confirmed through POST /divisions/{id}/suspensions + PATCH {kind:"confirm"} is ACTIVE ` +
+                `over ${confirmed.matchesTotal} match(es), stamped on entrant "${bannedEntrant.ref}", and "${sus.person}" ` +
+                `is off the team sheet of ${sus.missesFixtureExtKeys.join(", ")} while still on ` +
+                `${entry?.playedFixturesChecked ?? 0} fixture(s) the pack does NOT name — and the ELIGIBLE ` +
+                `team-mate "${controlRef}" holds no ban and is on all ${sheets.length} sheet(s)`
+              : entry === undefined
+                ? `compareSuspensions returned no entry for "${sus.person}" — the expected list resolved empty`
+                : suspensionMismatchReasons(entry).join("; "),
+          });
+          log.info(
+            { ...oracleLogFields("suspension_carry", susCheck.matched ? "pass" : "fail"), division: sus.divisionRef },
+            "oracle_checked",
+          );
+          if (!susCheck.matched) {
+            errors.push(
+              `oracle: ${sus.divisionRef}: the live discipline state disagrees with the pack's ` +
+                `expected.suspensions row for "${sus.person}" — ` +
+                `${entry === undefined ? "no comparison entry" : suspensionMismatchReasons(entry).join("; ")}`,
+            );
+          }
+        }
+      }
+    }
+
+    // B05 T1 — the single-event write-path fold (design doc §3 D4): division
+    // A's own streams (`division0` — this file's own "declares exactly one
+    // FIRST division" comment above is why that index is always the division
+    // the pack calls A) folded through the LIVE `POST /fixtures/{id}/events`
+    // route, strictly sequential per fixture (`simulate.ts`'s own header
+    // comment). Division B's import path is a SEPARATE task (T2) — this
+    // block touches only `division0`'s streams.
+    //
+    // Gated on `input.sql`, placed AFTER the player-stats baseline above on
+    // purpose: that baseline's own oracle asserts EMPTY rows ("B03 folds no
+    // score events") and would go stale the moment real events land on
+    // division A's fixtures — running the fold first would silently turn a
+    // correct baseline oracle into a wrong one for every future `input.sql`
+    // caller. Ordered AFTER, this step touches nothing the baseline already
+    // read.
+    //
+    // B05 T3: scoped to `stage0`'s OWN streams, never `stage1`'s (a
+    // progression-fed stage's fixture has no real entrants until the advance
+    // step below confirms them — folding it here would score a TBD fixture
+    // before it exists as anything but a placeholder). A stream naming no
+    // stage still counts when the division has exactly one — the same
+    // "absent means the division's only stage" convention `validate-pack.ts`'s
+    // own `resolveStage` uses — so no pack before this task sees any change.
+    // `stage1`'s own stream is folded separately, after the advance step,
+    // reusing this exact function (see that block's own comment for why: the
+    // acceptance bar is "the existing fold covers it", not a new primitive).
+    if (input.sql !== undefined) {
+      const divisionAStreams = pack.streams.filter(
+        (st) =>
+          st.divisionRef === division0.ref &&
+          (st.stageRef === undefined
+            ? division0.stages.length === 1
+            : st.stageRef === stage0.ref),
+      );
+      if (divisionAStreams.length > 0) {
+        // `@`-sigilled payload refs (pack-schema.ts header note 6) name
+        // EITHER an entrant or a person — ONE namespace, so merging both
+        // maps is exactly as authoritative as keeping them separate.
+        const refIdByKey = new Map<string, string>([
+          ...seeded.entrantIdByRef,
+          ...seeded.personIdByRef,
+        ]);
+        log.info(
+          { streams: divisionAStreams.length },
+          "tiny: folding division A's streams through the single-event scoring route (B05 T1)",
+        );
+        const sim = await simulateDivisionStreams({
+          base,
+          session: s,
+          streams: divisionAStreams,
+          fixtureIdByKey: seeded.fixtureIdByKey,
+          refIdByKey,
+          ...(input.simTransport === undefined
+            ? {}
+            : { transport: input.simTransport }),
+        });
+        timings.simMs = sim.wallMs;
+        simulation = {
+          eventsSent: sim.eventsSent,
+          wallMs: sim.wallMs,
+          eventsPerSecond: sim.eventsPerSecond,
+          ...(sim.findings.length > 0 ? { findings: [...sim.findings] } : {}),
+        };
+        // D5: a refusal is a FINDING, reported and never silently retried —
+        // and, for `_tiny`'s own real historical stream, also a genuine
+        // product defect (the pack's events are meant to fold cleanly), so
+        // it reds the run rather than staying a quiet report-only note.
+        for (const finding of sim.findings) {
+          errors.push(
+            `simulate: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+              `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+          );
+        }
+        log.info(
+          // B05 T2 — `path` added so this event and the batch-import fold's
+          // own `suite_simulated` below are distinguishable in a log stream
+          // by more than which fields happen to be present.
+          { events: sim.eventsSent, ms: sim.wallMs, eventsPerSecond: sim.eventsPerSecond, path: "single" },
+          "suite_simulated",
+        );
+      }
+    }
+
+    // B05 T2 — the batch write-path fold (design doc §3 D4): every OTHER
+    // division's own streams (never `division0` — that is `simulate.ts`'s
+    // job, immediately above) folded through the LIVE
+    // `POST /divisions/{id}/events/import` route. `_tiny.json` declares
+    // exactly one such division today (`d-badminton`); grouped by
+    // `divisionRef` rather than hardcoding that name, so a future pack
+    // adding a third streamed division folds it too, aggregated into the
+    // same report section (T7 owns splitting that presentation out per
+    // division, if it ever needs to be).
+    //
+    // Gated on `input.sql`, same as division A's block — a unit test with no
+    // `sql` gets today's behavior unchanged.
+    if (input.sql !== undefined) {
+      const otherStreamsByDivisionRef = new Map<string, PackStream[]>();
+      for (const st of pack.streams) {
+        if (st.divisionRef === division0.ref) continue;
+        const group = otherStreamsByDivisionRef.get(st.divisionRef) ?? [];
+        group.push(st);
+        otherStreamsByDivisionRef.set(st.divisionRef, group);
+      }
+      if (otherStreamsByDivisionRef.size > 0) {
+        const refIdByKey = new Map<string, string>([
+          ...seeded.entrantIdByRef,
+          ...seeded.personIdByRef,
+        ]);
+        const importStart = performance.now();
+        let importEventsSent = 0;
+        const importFindings: ImportFinding[] = [];
+        let importChunks = 0;
+        for (const [divisionRef, streams] of otherStreamsByDivisionRef) {
+          const divisionId = seeded.divisionIdByRef.get(divisionRef);
+          if (divisionId === undefined) {
+            // Never silent: a division that declares streams but was never
+            // seeded/scheduled is indistinguishable in a report from one the
+            // import fold simply skipped.
+            errors.push(
+              `tiny: division "${divisionRef}" declares streams but has no resolved divisionId — ` +
+                "cannot fold them through the import route",
+            );
+            continue;
+          }
+          log.info(
+            { division: divisionRef, streams: streams.length },
+            "tiny: folding division B's streams through the batch-import route (B05 T2)",
+          );
+          const imp = await importDivisionStreams({
+            base,
+            session: s,
+            divisionId,
+            importId: buildImportId(divisionRef, input.runId),
+            streams,
+            fixtureIdByKey: seeded.fixtureIdByKey,
+            refIdByKey,
+            ...(input.importTransport === undefined
+              ? {}
+              : { transport: input.importTransport }),
+          });
+          importEventsSent += imp.eventsSent;
+          importChunks += imp.chunks;
+          importFindings.push(...imp.findings);
+        }
+        const importWallMs = Math.round(performance.now() - importStart);
+        timings.importMs = importWallMs;
+        importSimulation = {
+          eventsSent: importEventsSent,
+          wallMs: importWallMs,
+          eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+          chunks: importChunks,
+          ...(importFindings.length > 0
+            ? { findings: importFindings.map(toImportFindingReport) }
+            : {}),
+        };
+        // Same D5 discipline as division A's block: a refusal/oversize/
+        // not-imported finding is reported and never silently retried, and —
+        // for `_tiny`'s own real historical streams — also a genuine product
+        // defect (the pack's events are meant to fold cleanly), so it reds
+        // the run rather than staying a quiet report-only note.
+        for (const finding of importFindings) {
+          errors.push(`import: ${describeImportFinding(finding)}`);
+        }
+        log.info(
+          // Same event name as division A's fold above (`suite_simulated`),
+          // same core fields (events/ms/eventsPerSecond), plus `path` to
+          // distinguish which write path produced this line, and `chunks`
+          // (meaningless for the single-event door, so not present there).
+          {
+            events: importEventsSent,
+            ms: importWallMs,
+            eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+            chunks: importChunks,
+            path: "import",
+          },
+          "suite_simulated",
+        );
+      }
+    }
+
+    // B05 T4b — the standings comparator (design doc §3, oracle.ts's
+    // `compareStandings`), wired against EVERY `expected.tables` row the
+    // pack declares — not only the final stage's placement crossing T4
+    // already wires above. T4 built and unit-tested this comparator but
+    // reached it from nothing on a real run (AGENTS.md failure class 1, the
+    // inert seam — the exact thing this whole wave exists to close;
+    // `b05-oracle-comparators.md`'s own vacuity note). Gated on
+    // `input.sql !== undefined` only — unlike T3's advance step below, this
+    // does NOT depend on `stage1?.progression`: `d-badminton` (T2's
+    // batch-import division, folded just above) carries its own
+    // `expected.tables` row and is never advanced through a progression at
+    // all, so a gate on `stage1?.progression` would leave it permanently
+    // unreached.
+    if (input.sql !== undefined) {
+      for (const table of pack.expected.tables) {
+        const tableStageId = seeded.stageIdByRef.get(table.stageRef);
+        if (tableStageId === undefined) {
+          errors.push(
+            `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names a stage ref with no resolved id`,
+          );
+          continue;
+        }
+        const expectedRows: ExpectedStandingsRow[] = [];
+        const unresolvedEntrantRefs: string[] = [];
+        for (const row of table.rows) {
+          const entrantId = seeded.entrantIdByRef.get(row.entrant);
+          if (entrantId === undefined) {
+            unresolvedEntrantRefs.push(row.entrant);
+            continue;
+          }
+          expectedRows.push({
+            entrantId,
+            played: row.played,
+            won: row.won,
+            drawn: row.drawn,
+            lost: row.lost,
+            points: row.points,
+            ...(row.metrics === undefined ? {} : { metrics: row.metrics }),
+          });
+        }
+        if (unresolvedEntrantRefs.length > 0) {
+          errors.push(
+            `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names entrant ref(s) with no ` +
+              `resolved id: ${unresolvedEntrantRefs.join(", ")}`,
+          );
+          continue;
+        }
+        // `compareStandings`'s own empty-case discipline ("an empty expected
+        // table is itself a case this asserts on, never silently vacuous")
+        // is exercised here for free: `table.rows.min(1)` (pack-schema.ts)
+        // means `expectedRows` is never empty for a REAL pack row, but a
+        // live fetch returning ZERO rows (a stage nothing ever folded events
+        // into) still reds via `actual.length === expected.length`, never a
+        // vacuous pass.
+        const standingsWire = await fetchStandings(base, s, tableStageId, table.poolKey, input.oracleTransport);
+        const tableCheck = compareStandings(expectedRows, standingsWire.rows);
+        // B05 T6 fix 1 — a metric the pack does NOT declare is not a failure
+        // (`compareMetrics`), but it is not nothing either: the live rows'
+        // undeclared metrics ride along on the oracle's own detail line so a
+        // reader SEES them. Empty string when there are none, so a table
+        // whose every live metric was declared renders exactly as before.
+        const undeclaredNote = renderUndeclaredMetrics(tableCheck);
+        const undeclaredSuffix =
+          undeclaredNote === ""
+            ? ""
+            : ` — live rows also carry metric(s) this pack does not declare (not gated): ${undeclaredNote}`;
+        oracles.push({
+          name: `oracle: ${table.divisionRef}/${table.stageRef} standings table`,
+          passed: tableCheck.matched,
+          detail: tableCheck.matched
+            ? `live standings for "${table.stageRef}" match the pack's expected.tables row${undeclaredSuffix}`
+            : `${renderStandingsMismatch(tableCheck)}${undeclaredSuffix}`,
+        });
+        log.info(oracleLogFields("standings_table", tableCheck.matched ? "pass" : "fail"), "oracle_checked");
+        if (!tableCheck.matched) {
+          errors.push(
+            `oracle: ${table.divisionRef}/${table.stageRef}: live standings disagree with the pack's ` +
+              `expected.tables row — ${renderStandingsMismatch(tableCheck)}`,
+          );
+        }
+
+        // B05 T5a — the tie-order cascade oracle (design doc §3, oracle.ts's
+        // `compareTieOrderCascade`): reviewer MAJOR #2 — this comparator had
+        // no call site anywhere. Wired into the SAME loop, reusing the SAME
+        // already-fetched `standingsWire.rows` above (no second fetch, no
+        // second route), against the DIVISION's own declared `tiebreakers`
+        // — never a hardcoded order, per the comparator's own doc comment.
+        // `d-tiebreak`'s own table (B05 T5a) is what makes this reachable
+        // with a genuine ordering-differential tie; d-tiny/d-badminton's
+        // tables carry no tied rows, so this runs for them too but always
+        // reports `checkedPairs: 0`.
+        const tableDivision = pack.divisions.find((d) => d.ref === table.divisionRef);
+        if (tableDivision?.tiebreakers === undefined) {
+          // B05 review round 1, MAJOR 2: the third warn-with-no-oracle site.
+          // `tiebreakers` is the PACK's own declaration, so an absent one is
+          // the pack side being empty — `no_subject` by the zero-subject rule
+          // (report.ts), pushed and emitted rather than left as a warning
+          // string no oracle consumer can see.
+          warnings.push(
+            `oracle: division "${table.divisionRef}" declares no tiebreakers — tie-order cascade oracle ` +
+              `skipped for "${table.stageRef}"`,
+          );
+          oracles.push({
+            name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
+            passed: true,
+            verdict: "no_subject",
+            subject: false,
+            detail:
+              `division "${table.divisionRef}" declares no tiebreakers — this oracle has NO SUBJECT ` +
+              `and compared nothing (0 checked, 0 skipped)`,
+          });
+          log.info(oracleLogFields("tie_order_cascade", "no_subject"), "oracle_checked");
+        } else {
+          const cascade = tableDivision.tiebreakers;
+          const cascadeCheck = compareTieOrderCascade(cascade, standingsWire.rows);
+          // B05 T6 fix 2 — the first live run printed a PASS here for two of
+          // three divisions over ZERO tied pairs. `matched` is `issues.length
+          // === 0`, which an empty check satisfies vacuously; `checkedPairs`
+          // is the only field that answers "was there a subject at all", so
+          // it is what picks the verdict. `no_subject` keeps `passed: true`
+          // (an absent subject is not a failure, and nothing below this line
+          // reds) but never renders as PASS.
+          const cascadeVerdict: OracleVerdict = !cascadeCheck.matched
+            ? "fail"
+            : cascadeCheck.checkedPairs === 0
+              ? "no_subject"
+              : "pass";
+          oracles.push({
+            name: `oracle: ${table.divisionRef}/${table.stageRef} tie-order cascade`,
+            passed: cascadeVerdict !== "fail",
+            verdict: cascadeVerdict,
+            // From the comparator's OWN count, never re-derived from the
+            // verdict — see `OracleResult.subject` in report.ts.
+            subject: cascadeCheck.checkedPairs > 0,
+            detail:
+              cascadeVerdict === "no_subject"
+                ? `no two rows in "${table.stageRef}" are tied on points that cascade ` +
+                  `[${cascade.join(",")}] could decide — this oracle has NO SUBJECT and compared nothing ` +
+                  `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
+                : cascadeCheck.matched
+                  ? `live order agrees with cascade [${cascade.join(",")}] on every tied pair ` +
+                    `(${cascadeCheck.checkedPairs} checked, ${cascadeCheck.skippedPairs} skipped)`
+                  : cascadeCheck.issues.map((i) => i.detail).join("; "),
+          });
+          log.info(oracleLogFields("tie_order_cascade", cascadeVerdict), "oracle_checked");
+          if (!cascadeCheck.matched) {
+            errors.push(
+              `oracle: ${table.divisionRef}/${table.stageRef}: live order disagrees with the division's own ` +
+                `cascade [${cascade.join(",")}] — ${cascadeCheck.issues.map((i) => i.detail).join("; ")}`,
+            );
+          }
+        }
+      }
+    }
+
+    // B05 T4b — the leaderboard comparator (design §8, oracle.ts's
+    // `compareLeaderboard`), wired against `expected.leaderboards` via
+    // `GET /divisions/{id}/stats/players` — the SAME "built by T4, reached
+    // by nothing" gap `compareStandings` above closes. Grouped by a
+    // per-division cache so a division with more than one `metricKey` entry
+    // (`_tiny.json`'s own d-tiny: "scores" and "points") fetches once, not
+    // once per entry.
+    if (input.sql !== undefined && pack.expected.leaderboards.length > 0) {
+      const playerStatsCache = new Map<string, DivisionPlayerStatsWire>();
+      // B05 T5b-2 — `comparePersonDivisionStat`'s own cache. `GET
+      // /persons/{id}/stats` (UNFILTERED — no `?division_id=`) answers with
+      // EVERY division that person appears in, so one fetch per person serves
+      // every board they are named on: `p-ana` is on all four of `_tiny`'s
+      // boards and is fetched once.
+      const personStatsCache = new Map<string, PersonStatsWire>();
+      for (const board of pack.expected.leaderboards) {
+        const leaderboardDivisionId = seeded.divisionIdByRef.get(board.divisionRef);
+        if (leaderboardDivisionId === undefined) {
+          errors.push(
+            `oracle: expected.leaderboards names division ref "${board.divisionRef}" with no resolved id`,
+          );
+          continue;
+        }
+        let playerStats = playerStatsCache.get(leaderboardDivisionId);
+        if (playerStats === undefined) {
+          playerStats = await fetchDivisionPlayerStats(base, s, leaderboardDivisionId, input.oracleTransport);
+          playerStatsCache.set(leaderboardDivisionId, playerStats);
+        }
+        const expectedEntries: ExpectedLeaderboardEntry[] = [];
+        const unresolvedPersonRefs: string[] = [];
+        for (const entry of board.entries) {
+          const personId = seeded.personIdByRef.get(entry.person);
+          if (personId === undefined) {
+            unresolvedPersonRefs.push(entry.person);
+            continue;
+          }
+          expectedEntries.push({ personId, name: entry.name, count: entry.count });
+        }
+        if (unresolvedPersonRefs.length > 0) {
+          errors.push(
+            `oracle: expected.leaderboards "${board.divisionRef}"/"${board.metricKey}" names person ref(s) with no ` +
+              `resolved id: ${unresolvedPersonRefs.join(", ")}`,
+          );
+          continue;
+        }
+        // Name AND count, independently (design §8) — `compareLeaderboard`'s
+        // own discipline, exercised here against a LIVE fetch for the first
+        // time: a count-only or name-only check would each pass for a wrong
+        // half of a mis-attributed entry (D6, below).
+        const boardCheck = compareLeaderboard(board.metricKey, expectedEntries, playerStats);
+        oracles.push({
+          name: `oracle: ${board.divisionRef} leaderboard (${board.metricKey})`,
+          passed: boardCheck.matched,
+          detail: boardCheck.matched
+            ? `live leaderboard "${board.metricKey}" matches the pack's expected.leaderboards row`
+            : renderLeaderboardMismatch(boardCheck),
+        });
+        log.info(oracleLogFields("leaderboard", boardCheck.matched ? "pass" : "fail"), "oracle_checked");
+        if (!boardCheck.matched) {
+          errors.push(
+            `oracle: ${board.divisionRef}/${board.metricKey}: live leaderboard disagrees with the pack's ` +
+              `expected.leaderboards row — ${renderLeaderboardMismatch(boardCheck)}`,
+          );
+        }
+
+        // B05 T5b-2 — `comparePersonDivisionStat`, wired: the SECOND wire
+        // crossing of the same historical fact the board above already pins.
+        // A customer can read a division's leaderboard OR a player's own
+        // card, and `usecases/player-stats.ts` derives them separately —
+        // `personStats` walks that person's own rows, `divisionPlayerStats`
+        // walks the division's. Two derivations of one history that are
+        // never compared is precisely the gap this oracle closes; the
+        // comparator existed since T5b and was reached by nothing.
+        //
+        // Reuses `expectedEntries` above rather than re-resolving refs: the
+        // expected count IS the leaderboard's own authored count, never a
+        // second number typed anywhere.
+        const cardIssues: { label: string; expected: string; actual: string }[] = [];
+        for (const entry of expectedEntries) {
+          let personStats = personStatsCache.get(entry.personId);
+          if (personStats === undefined) {
+            personStats = await fetchPersonStats(base, s, entry.personId, undefined, input.oracleTransport);
+            personStatsCache.set(entry.personId, personStats);
+          }
+          const cardCheck = comparePersonDivisionStat(
+            board.metricKey,
+            entry.count,
+            leaderboardDivisionId,
+            personStats,
+          );
+          if (!cardCheck.matched) {
+            cardIssues.push({
+              label: `${board.metricKey}: ${entry.name}`,
+              expected: String(cardCheck.expectedCount),
+              actual: cardCheck.actualCount === undefined ? "(absent)" : String(cardCheck.actualCount),
+            });
+          }
+        }
+        // `expectedEntries.length` is what answers "did we check anything",
+        // exactly as `compareLeaderboard`'s own doc comment says of its
+        // entries — an `every()` over an empty list is a silent yes. The
+        // guard above (`unresolvedPersonRefs`) already `continue`s before
+        // here, and `pack-schema.ts` gives every board `entries.min(1)`, so
+        // an empty list here would mean the pack changed shape underneath
+        // this block rather than that nothing was owed.
+        //
+        // ZERO-SUBJECT RULE (report.ts, beside `OracleVerdict`): this REDS
+        // rather than reporting `no_subject`, deliberately. The pack declared
+        // a board — `pack-schema.ts` gives every one of them `entries.min(1)`
+        // — so zero resolved entries here is a missing answer to a question
+        // that WAS asked, not an absent subject.
+        const cardsChecked = expectedEntries.length;
+        const cardsMatched = cardsChecked > 0 && cardIssues.length === 0;
+        oracles.push({
+          name: `oracle: ${board.divisionRef} person cards (${board.metricKey})`,
+          passed: cardsMatched,
+          // A zero-entry board REDS (see the rule above) but did not compare
+          // anything, and the run summary must not count it as if it had.
+          subject: cardsChecked > 0,
+          detail: cardsMatched
+            ? `each of the ${cardsChecked} person(s) on this board carries the SAME "${board.metricKey}" count ` +
+              `on their own /persons/{id}/stats card for "${board.divisionRef}"`
+            : cardsChecked === 0
+              ? `expected.leaderboards "${board.divisionRef}"/"${board.metricKey}" resolved ZERO person entries — ` +
+                `nothing was cross-checked against /persons/{id}/stats`
+              : renderSideBySide(cardIssues),
+        });
+        log.info(oracleLogFields("person_division_stat", cardsMatched ? "pass" : "fail"), "oracle_checked");
+        if (!cardsMatched) {
+          errors.push(
+            `oracle: ${board.divisionRef}/${board.metricKey}: a person's own /persons/{id}/stats card ` +
+              `disagrees with the SAME count the division leaderboard already pins — ` +
+              `${cardsChecked === 0 ? "zero entries resolved" : renderSideBySide(cardIssues)}`,
+          );
+        }
+      }
+    }
+
+    // B05 T5b-2 — `compareCareerStats`, wired against `expected.careers` via
+    // `GET /persons/{id}/stats?group=sport`. T5b-1 gave this comparator its
+    // first real subject on `_tiny` (Ana Alvarez scoring across `d-tiny` and
+    // `d-tiebreak`, both `generic`, so `personCareerStats` files them under
+    // ONE sports[] entry and SUMS them); until this block it was still
+    // reached by nothing — AGENTS.md failure class 1.
+    //
+    // Grouped by PERSON, not per row: `compareCareerStats` takes a person's
+    // whole expected metric list at once, and one `?group=sport` fetch
+    // answers all of them.
+    //
+    // Gated on `input.sql !== undefined` only — a career rollup crosses no
+    // stage and no progression, so it has nothing to wait for beyond the
+    // folds above.
+    if (input.sql !== undefined) {
+      if (pack.expected.careers.length === 0) {
+        // An EMPTY expected set is not a passing oracle. `compareCareerStats`
+        // says so itself ("no expected careers is vacuously matched, and
+        // callers must check length before trusting it") — pushing an oracle
+        // here would report a green "career rollup" for a pack that declares
+        // no career at all, which is the vacuity this wave exists to remove.
+        // Stated as a warning, the same way T5a's cascade states a division
+        // that declares no tiebreakers.
+        //
+        // B05 review round 1, MAJOR 2: and, since the pack is the empty side,
+        // ALSO as a `no_subject` oracle row — see the zero-subject rule in
+        // report.ts. The warning alone was invisible to every oracle consumer.
+        warnings.push(
+          `oracle: pack declares no expected.careers rows — the cross-division career rollup oracle ` +
+            `(compareCareerStats) has no subject and was NOT run`,
+        );
+        oracles.push({
+          name: `oracle: career rollup`,
+          passed: true,
+          verdict: "no_subject",
+          subject: false,
+          detail:
+            `the pack declares no expected.careers rows — the cross-division career rollup oracle ` +
+            `(compareCareerStats) has NO SUBJECT and compared nothing`,
+        });
+        log.info(oracleLogFields("career_stats", "no_subject"), "oracle_checked");
+      } else {
+        const careersByPerson = new Map<string, ExpectedCareerStat[]>();
+        const unresolvedCareerRefs: string[] = [];
+        for (const career of pack.expected.careers) {
+          const personId = seeded.personIdByRef.get(career.person);
+          if (personId === undefined) {
+            unresolvedCareerRefs.push(career.person);
+            continue;
+          }
+          const bucket = careersByPerson.get(career.person);
+          const row: ExpectedCareerStat = {
+            personId,
+            name: career.name,
+            metricKey: career.metricKey,
+            count: career.count,
+          };
+          if (bucket === undefined) careersByPerson.set(career.person, [row]);
+          else bucket.push(row);
+        }
+        if (unresolvedCareerRefs.length > 0) {
+          errors.push(
+            `oracle: expected.careers names person ref(s) with no resolved id: ` +
+              `${[...new Set(unresolvedCareerRefs)].join(", ")}`,
+          );
+        }
+        const careerStatsCache = new Map<string, PersonCareerStatsWire>();
+        for (const [personRef, expectedCareers] of careersByPerson) {
+          const careerPersonId = expectedCareers[0].personId;
+          let careerWire = careerStatsCache.get(careerPersonId);
+          if (careerWire === undefined) {
+            careerWire = await fetchPersonCareerStats(base, s, careerPersonId, input.oracleTransport);
+            careerStatsCache.set(careerPersonId, careerWire);
+          }
+          const careerCheck = compareCareerStats(expectedCareers, careerWire);
+          // `expectedCareers.length > 0` by construction (a key only exists
+          // once a row landed in it), so this `matched` is never the empty
+          // set's vacuous yes — the empty case is the `warnings.push` branch
+          // above, which reports NO oracle at all.
+          oracles.push({
+            name: `oracle: ${personRef} career rollup`,
+            passed: careerCheck.matched,
+            detail: careerCheck.matched
+              ? `the live ?group=sport rollup carries all ${careerCheck.entries.length} of this person's ` +
+                `expected.careers metric(s), each in exactly one sport`
+              : renderSideBySide(
+                  careerCheck.entries
+                    .filter((e) => !e.matched)
+                    .map((e) => ({
+                      label: `${e.metricKey} (found in ${e.foundInSports} sport(s))`,
+                      expected: String(e.expectedCount),
+                      actual: e.actualValue === undefined ? "(absent or ambiguous)" : String(e.actualValue),
+                    })),
+                ),
+          });
+          log.info(oracleLogFields("career_stats", careerCheck.matched ? "pass" : "fail"), "oracle_checked");
+          if (!careerCheck.matched) {
+            errors.push(
+              `oracle: ${personRef}: the live career rollup disagrees with the pack's expected.careers ` +
+                `row(s) — ${careerCheck.entries
+                  .filter((e) => !e.matched)
+                  .map(
+                    (e) =>
+                      `${e.metricKey}: expected ${e.expectedCount}, got ` +
+                      `${e.actualValue === undefined ? "(absent or ambiguous)" : e.actualValue} ` +
+                      `(found in ${e.foundInSports} sport(s))`,
+                  )
+                  .join("; ")}`,
+            );
+          }
+        }
+      }
+    }
+
+    // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second
+    // stage, `stage1`, when it declares a `progression` (a `timing:"setup"`
+    // knockout fed from `stage0`'s standings, in `_tiny`'s own case) is
+    // advanced through the LIVE `propose -> assert -> confirm -> generate`
+    // flow (`advance.ts`), its own stream folded through the SAME
+    // `simulateDivisionStreams` T1 uses above, and completed with the
+    // `finalRanks` response CAPTURED (D1 — it is the only time they cross the
+    // wire; `GET /divisions/{id}/history` never carries the payload).
+    //
+    // Gated on `input.sql`, same as every other B05 step — a unit test with
+    // no `sql` gets today's behavior unchanged. A no-op for any pack (or
+    // division) whose second stage declares no `progression`: `_tiny` is the
+    // only pack this bench runs, and its OTHER two divisions
+    // (d-badminton, d-registration) are both single-stage.
+    if (input.sql !== undefined && stage1?.progression !== undefined) {
+      const sourceStageId = seeded.stageIdByRef.get(stage0.ref);
+      const targetStageId = seeded.stageIdByRef.get(stage1.ref);
+      if (sourceStageId === undefined || targetStageId === undefined) {
+        errors.push(
+          `tiny: division "${division0.ref}" declares a progression-fed stage "${stage1.ref}" but one of ` +
+            `its own stage ids ("${stage0.ref}" / "${stage1.ref}") never resolved — cannot advance it`,
+        );
+      } else {
+        // The expected qualifier order (D7's "expected qualifier list"),
+        // derived from the SOURCE stage's own `expected.tables` row — the
+        // pack's already-authored, already-offline-checked final standings
+        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
+        // minted. Assumes the progression's own take rule pulls every ranked
+        // entrant of that table, in order (true of `_tiny`'s own
+        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
+        // of 8, would need this sliced to the qualifier count, out of this
+        // task's scope).
+        const sourceTable = pack.expected.tables.find(
+          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
+        );
+        const expectedQualifierEntrantIds: string[] = [];
+        const unresolvedQualifierRefs: string[] = [];
+        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
+          const id = seeded.entrantIdByRef.get(row.entrant);
+          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
+          else expectedQualifierEntrantIds.push(id);
+        }
+        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
+          errors.push(
+            sourceTable === undefined
+              ? `tiny: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
+                `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
+                "against before confirming (D7)"
+              : `tiny: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
+                `${unresolvedQualifierRefs.join(", ")}`,
+          );
+        } else {
+          log.info(
+            { sourceStage: stage0.ref, targetStage: stage1.ref, expected: expectedQualifierEntrantIds },
+            "tiny: advancing the progression-fed stage (B05 T3)",
+          );
+          // The SOURCE stage must be COMPLETE before `computeSeedProposal`
+          // will resolve its standings (409 SEEDING_SOURCE_INCOMPLETE
+          // otherwise) — nothing upstream of this block ever completes a
+          // stage, so this run does it here, once, immediately before
+          // proposing into the stage it feeds.
+          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+
+          const advanceOutcome = await advanceStageSeeding({
+            base,
+            session: s,
+            stageId: targetStageId,
+            expectedQualifierEntrantIds,
+            ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+          });
+          const qc = advanceOutcome.qualifierCheck;
+          oracles.push({
+            name: `advance: ${stage1.ref} seed proposal qualifiers`,
+            passed: qc.matched,
+            detail: qc.matched
+              ? `proposal qualifiers [${qc.actual.join(", ")}] match the pack's expected order`
+              : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
+                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
+          });
+          // B05 review round 1, MAJOR 4: this pushed an `OracleResult` and
+          // emitted nothing, so a log consumer reading `oracle_checked`
+          // undercounted the wave against the report's own oracle list.
+          log.info(oracleLogFields("seed_proposal_qualifiers", qc.matched ? "pass" : "fail"), "oracle_checked");
+          if (!qc.matched) {
+            errors.push(
+              `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
+                `pack's expected order [${qc.expected.join(", ")}]`,
+            );
+          } else {
+            // The newly-confirmed stage's OWN stream(s), folded through the
+            // SAME single-event route T1 uses above — reusing that function
+            // is the acceptance bar (T3's brief: "the existing fold covers
+            // it", not a new folding primitive). Explicit `stageRef` match
+            // only: `division0` now has more than one stage, so the "absent
+            // means the division's only stage" fallback (T1's own block)
+            // does not apply here.
+            const stage1Streams = pack.streams.filter(
+              (st) => st.divisionRef === division0.ref && st.stageRef === stage1.ref,
+            );
+            if (stage1Streams.length > 0) {
+              const refIdByKey = new Map<string, string>([
+                ...seeded.entrantIdByRef,
+                ...seeded.personIdByRef,
+              ]);
+              const advSim = await simulateDivisionStreams({
+                base,
+                session: s,
+                streams: stage1Streams,
+                fixtureIdByKey: seeded.fixtureIdByKey,
+                refIdByKey,
+                ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+              });
+              for (const finding of advSim.findings) {
+                errors.push(
+                  `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+                    `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+                );
+              }
+              log.info(
+                { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
+                "suite_simulated",
+              );
+            }
+
+            const completion = await completeStageCapture(
+              base,
+              s,
+              targetStageId,
+              input.advanceTransport,
+            );
+            // D1 — the finalRanks oracle: the pack's OWN expected order
+            // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
+            // block that can assert a bracket's placement order) compared
+            // against the CAPTURED `complete` response. A mismatch renders
+            // BOTH sides, never just one.
+            const expectedFinalRanksRow = pack.expected.finalRanks.find(
+              (fr) => fr.divisionRef === division0.ref && fr.stageRef === stage1.ref,
+            );
+            if (expectedFinalRanksRow === undefined) {
+              errors.push(
+                `tiny: stage "${stage1.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
+                  "there is nothing to compare the captured finalRanks against",
+              );
+            } else {
+              const expectedIds: string[] = [];
+              const unresolvedFinalRankRefs: string[] = [];
+              for (const ref of expectedFinalRanksRow.order) {
+                const id = seeded.entrantIdByRef.get(ref);
+                if (id === undefined) unresolvedFinalRankRefs.push(ref);
+                else expectedIds.push(id);
+              }
+              if (unresolvedFinalRankRefs.length > 0) {
+                errors.push(
+                  `tiny: stage "${stage1.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
+                    `${unresolvedFinalRankRefs.join(", ")}`,
+                );
+              } else {
+                const franksCheck = compareFinalRanks(expectedIds, completion.finalRanks);
+                oracles.push({
+                  name: `advance: ${stage1.ref} finalRanks`,
+                  passed: franksCheck.matched,
+                  // `reason` is set by the comparator only when a side was
+                  // EMPTY — i.e. exactly when there was nothing to compare.
+                  subject: franksCheck.reason === undefined,
+                  detail: franksCheck.matched
+                    ? `captured finalRanks [${(franksCheck.actual ?? []).join(", ")}] match the pack's expected order`
+                    : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
+                      `disagree with the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                });
+                // B05 review round 1, MAJOR 4 — see the sibling emitter above.
+                log.info(oracleLogFields("final_ranks", franksCheck.matched ? "pass" : "fail"), "oracle_checked");
+                if (!franksCheck.matched) {
+                  errors.push(
+                    `advance: ${stage1.ref}: captured finalRanks ` +
+                      `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
+                      `the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                  );
+                }
+
+                // B05 T4 — the runtime oracle layer proper (design doc D1/D2).
+                // A SECOND, independently-fetched crossing of the same final
+                // order: `GET /stages/{id}/standings`'s own `rank` field is
+                // re-readable at any time (unlike the `complete` response
+                // captured above, which is not — `advance.ts`'s own header
+                // comment) and is what a CUSTOMER actually sees. Comparing it
+                // against the captured response is the genuinely new check
+                // this task owes; comparing it against the pack's own
+                // `expected.finalRanks` re-derives D7's own assertion from a
+                // wholly different route.
+                const standingsWire = await fetchStandings(base, s, targetStageId, undefined, input.oracleTransport);
+                const standingsRanked = standingsRankOrder(standingsWire.rows);
+
+                const rankCrossing = compareRankCrossings(completion.finalRanks, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
+                  passed: rankCrossing.matched,
+                  subject: rankCrossing.reason === undefined,
+                  detail: rankCrossing.matched
+                    ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
+                    : renderRankCrossingMismatch(rankCrossing),
+                });
+                log.info(oracleLogFields("rank_crossing", rankCrossing.matched ? "pass" : "fail"), "oracle_checked");
+                if (!rankCrossing.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
+                      `${renderRankCrossingMismatch(rankCrossing)}`,
+                  );
+                }
+
+                const standingsVsExpected = compareFinalRanks(expectedIds, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
+                  passed: standingsVsExpected.matched,
+                  subject: standingsVsExpected.reason === undefined,
+                  detail: standingsVsExpected.matched
+                    ? `re-read standings [${standingsRanked.join(", ")}] match the pack's expected order`
+                    : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +
+                      `[${expectedIds.join(", ")}]`,
+                });
+                log.info(oracleLogFields("standings_final_rank", standingsVsExpected.matched ? "pass" : "fail"), "oracle_checked");
+                if (!standingsVsExpected.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
+                      `pack's expected order [${expectedIds.join(", ")}]`,
+                  );
+                }
+
+                // D2 — champion, defined as rank 1 of the final stage's
+                // standings, cross-checked against the captured response,
+                // compared against `expected.champions`. No champion field
+                // exists anywhere on the wire (F1b) — the bench does not
+                // invent one.
+                const expectedChampionRow = pack.expected.champions.find(
+                  (c) => c.divisionRef === division0.ref && (c.stageRef === undefined || c.stageRef === stage1.ref),
+                );
+                if (expectedChampionRow === undefined) {
+                  warnings.push(
+                    `oracle: division "${division0.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
+                  );
+                } else {
+                  const expectedChampionId = seeded.entrantIdByRef.get(expectedChampionRow.entrant);
+                  if (expectedChampionId === undefined) {
+                    errors.push(
+                      `tiny: expected.champions names entrant ref "${expectedChampionRow.entrant}" with no resolved id`,
+                    );
+                  } else {
+                    const championCheck = compareChampion(expectedChampionId, standingsRanked, completion.finalRanks);
+                    oracles.push({
+                      name: `oracle: ${division0.ref} champion`,
+                      passed: championCheck.matched,
+                      detail: championCheck.matched
+                        ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
+                        : renderChampionMismatch(championCheck),
+                    });
+                    log.info(oracleLogFields("champion", championCheck.matched ? "pass" : "fail"), "oracle_checked");
+                    if (!championCheck.matched) {
+                      errors.push(`oracle: champion mismatch — ${renderChampionMismatch(championCheck)}`);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
 
@@ -2329,5 +3894,8 @@ export async function runTinySuite(
     // on every pre-B04 report would be noise — but never omitted when it
     // fired, because nothing else in the run can see it.
     ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
+    ...(divisionStart === undefined || divisionStart.length === 0 ? {} : { divisionStart }),
+    ...(simulation === undefined ? {} : { simulation }),
+    ...(importSimulation === undefined ? {} : { importSimulation }),
   };
 }

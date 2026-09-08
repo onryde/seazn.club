@@ -134,6 +134,13 @@ export interface FakeScheduleWorld {
   addCourt(venueId: string, id: string, name: string): void;
   addStage(stageId: string, divisionId: string): void;
   addEntrants(divisionId: string, entrantIds: readonly string[]): void;
+  /** B05 T3 — read-only access to what `addEntrants` recorded, IN CREATION
+   *  ORDER. Shared here for the same "one implementation" reason as
+   *  everything else in this file: `_advance-routes.ts`'s fake seed-proposal
+   *  needs a division's own entrant ids to answer qualifiers/finalRanks with,
+   *  and this is the one place that already tracks them. Empty array, never
+   *  undefined, for a division `addEntrants` never saw. */
+  entrantsOfDivision(divisionId: string): readonly string[];
   /** Called from the fake's own `/generate` handler with what it returned. */
   addFixtures(stageId: string, rows: readonly { id: string; ext_key: string }[]): void;
   setOfficials(fixtureId: string, set: unknown[]): void;
@@ -196,6 +203,9 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
     },
     addEntrants(divisionId, entrantIds) {
       entrantsByDivisionId.set(divisionId, [...entrantIds]);
+    },
+    entrantsOfDivision(divisionId) {
+      return entrantsByDivisionId.get(divisionId) ?? [];
     },
     addFixtures(stageId, rows) {
       const divisionId = divisionIdByStageId.get(stageId);

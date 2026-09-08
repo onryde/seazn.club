@@ -1068,8 +1068,15 @@ describe("runTinySuite — the cross-division gate, end to end", () => {
 
     const clashes = report.crossDivisionCourtClashes ?? [];
     expect(clashes.length).toBeGreaterThan(0);
+    // B05 T5a added a THIRD scheduled division (`d-tiebreak`), so
+    // `SCHEDULED_REFS` no longer stands in for "the two divisions that
+    // clash": d-tiebreak's own `scheduleConfig` deliberately lives on day 3
+    // (see build-packs/_tiny.ts's own comment on why), a day neither d-tiny
+    // nor d-badminton ever touches, so even blind/naive placement never
+    // lands it on the same slot as either — the clash stays exactly the
+    // pair it always was.
     expect([clashes[0]?.a.divisionRef, clashes[0]?.b.divisionRef].sort()).toEqual(
-      [...SCHEDULED_REFS].sort(),
+      ["d-badminton", "d-tiny"],
     );
     // It GATES. A report-only finding here would be a physical impossibility
     // printed in a green run.

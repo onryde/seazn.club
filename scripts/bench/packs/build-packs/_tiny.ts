@@ -280,6 +280,36 @@ const TINY_DIVISION: PackInput["divisions"][number] = {
       config: { legs: 3 },
       seeding: ["e-alpha", "e-bravo"],
     },
+    // B05 T3: a second stage, fed from the league by a REAL `progression`
+    // (not a hand-authored `.seeding` list, which s-league above uses) — the
+    // non-vacuous subject the propose->assert->confirm->generate->complete
+    // advancement flow (design doc D7) needs. `take: [{kind:"rankRange",
+    // from:1,to:2}]` pulls both of s-league's two ranks (there are only two
+    // entrants in the whole division, so this is the smallest possible
+    // knockout: one TBD fixture, `se-r0-i0` — buildSingleElim's own id for a
+    // 2-slot single-elim bracket, `scheduling/bracket.ts:170`, marked
+    // `isFinal` since `rounds===1`). `timing: "setup"` is what makes this
+    // stage's ONE fixture exist as a TBD placeholder from `seedSuite`'s own
+    // per-stage `/generate` loop (seed.ts:658-675) — the SAME "ALL stages'
+    // fixtures are generated at setup time" owner ruling `generateStage
+    // Fixtures`'s own header comment cites — so no NEW bench primitive is
+    // needed to create it; T3's `advance.ts` only has to seed real entrants
+    // into slots that already exist. `placement: "rank_order"` (not "snake"
+    // or "seeded_map") is the only legal placement for a single, ungrouped
+    // league source (progression.ts's own refusal: snake is for a
+    // multi-pool wave).
+    {
+      ref: "s-playoff",
+      seq: 2,
+      kind: "knockout",
+      name: "Playoff",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    },
   ],
   // B04 T6 (design §7): BOTH scheduled divisions get one, and both are
   // scheduled. `_INDEX.md` recorded that `runTinySuite` drove
@@ -322,6 +352,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r1-c1",
+    stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
@@ -333,6 +364,7 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r2-c1",
+    stageRef: "s-league",
     home: "e-bravo",
     away: "e-alpha",
     provenance: "reconstructed",
@@ -347,12 +379,36 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "rr-r3-c1",
+    stageRef: "s-league",
     home: "e-alpha",
     away: "e-bravo",
     provenance: "real",
     events: [
       { type: "core.start" },
       { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired hurt" } },
+    ],
+  },
+  // B05 T3 — the playoff final. `home`/`away` are declared here exactly as
+  // for every other stream (header note 9): the propose/confirm flow seeds
+  // rank 1 (e-alpha, the league's own winner) into `buildSingleElim`'s seat
+  // 1, which `entrantOfSeed`/`positions[0]` always resolves to `home`
+  // (scheduling/bracket.ts:171-172), so this is deterministic given the
+  // league table above, not a guess. A plain `generic.result` (no
+  // `generic.score` events) on purpose — this stream must not perturb
+  // TINY_LEADERBOARDS below, which is entirely derived from rr-r2-c1's own
+  // three `generic.score` events (B05 review: adding scoring events here
+  // would silently change an oracle two blocks away in a diff nobody would
+  // think to re-check).
+  {
+    divisionRef: "d-tiny",
+    fixtureExtKey: "se-r0-i0",
+    stageRef: "s-playoff",
+    home: "e-alpha",
+    away: "e-bravo",
+    provenance: "real",
+    events: [
+      { type: "core.start" },
+      { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } },
     ],
   },
 ];
@@ -385,6 +441,18 @@ const TINY_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
       { entrant: "e-bravo", line: "L" },
     ],
   },
+  // B05 T3 — the playoff final: a clean regulation win for the league's own
+  // winner (e-alpha stays champion end to end, so TINY_CHAMPIONS below needs
+  // no change — see that block's own note).
+  {
+    divisionRef: "d-tiny",
+    fixtureExtKey: "se-r0-i0",
+    outcome: { kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" },
+    perSide: [
+      { entrant: "e-alpha", line: "2" },
+      { entrant: "e-bravo", line: "0" },
+    ],
+  },
 ];
 
 const TINY_TABLES: NonNullable<PackInput["expected"]["tables"]> = [
@@ -396,6 +464,18 @@ const TINY_TABLES: NonNullable<PackInput["expected"]["tables"]> = [
       { entrant: "e-bravo", rank: 2, played: 3, won: 0, drawn: 1, lost: 2, points: 1 },
     ],
   },
+];
+
+// B05 T3 (design doc D1) — s-playoff's full placement order, the subject
+// advance.ts's `complete` capture compares against. `expected.tables` is a
+// HARD ERROR on a bracket stage (validate-pack.ts's TABLE_STAGE_KINDS), so
+// this is the ONLY block that can assert a knockout's finish order — see
+// PackExpectedFinalRanks's own doc comment. e-alpha wins the final too, so
+// this agrees with TINY_CHAMPIONS' division-wide (no stageRef) champion —
+// not a checked consistency rule (that rule is stage-scoped-champion-only),
+// but true regardless and worth keeping true.
+const TINY_FINAL_RANKS: NonNullable<PackInput["expected"]["finalRanks"]> = [
+  { divisionRef: "d-tiny", stageRef: "s-playoff", order: ["e-alpha", "e-bravo"] },
 ];
 
 const TINY_CHAMPIONS: NonNullable<PackInput["expected"]["champions"]> = [
@@ -419,6 +499,29 @@ const TINY_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
       { person: "p-bo", name: "Bo Baptiste", count: 2 },
     ],
   },
+];
+
+// B05 T5b — the cross-division career rollup (`oracle.ts`'s
+// `compareCareerStats`, which had NO subject on this pack at all: `expected.
+// careers` was absent entirely and the comparator's verdict was silence).
+//
+// AUTHORED, never summed by this generator. `PackExpectedCareer`'s own doc
+// comment is explicit that deriving a career from the per-division
+// leaderboards would make the bench compute its expected value out of its
+// other expected values; these two counts are stated as history, and
+// `__tests__/_tiny.test.ts` cross-checks them against the two divisions'
+// independently-authored leaderboard rows.
+//
+// Ana Alvarez plays in d-tiny (e-alpha) and d-tiebreak (seat 3) — both
+// `generic`, so `personCareerStats` files them under ONE `sports[]` entry
+// and sums them. `scores` counts her three `generic.score` events (two in
+// d-tiny's rr-r2-c1, one in d-tiebreak's rr-r2-c1); `points` sums their
+// `points` fields (1 + 1 + 1). Both totals differ from EITHER division's own
+// leaderboard count (2 and 1), so a rollup that served one division's total
+// in place of the career cannot pass.
+const TINY_CAREERS: NonNullable<PackInput["expected"]["careers"]> = [
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "scores", count: 3 },
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 3 },
 ];
 
 const TINY_SPECIALS: NonNullable<PackInput["expected"]["specials"]> = [
@@ -548,6 +651,20 @@ const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [
     what: "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\").",
     why: "Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small.",
     where: "claimInvites[]",
+  },
+  {
+    what:
+      "d-tiny gained a SECOND stage, s-playoff (kind: knockout, progression-fed from s-league, " +
+      "timing: setup), a fourth stream (se-r0-i0) and expected.finalRanks — B05 T3's non-vacuous " +
+      "subject for the propose->assert->confirm->generate->complete advancement flow, and the " +
+      "first pack stage anywhere that asserts a knockout's placement order rather than a table.",
+    why:
+      "B05's design doc (D1/D7) found every division in this pack single-stage, so an advancement " +
+      "layer built against it would have no subject and expected.finalRanks no value to compare " +
+      "(the exact vacuity B04 shipped one layer down). Two entrants keep it the smallest possible " +
+      "knockout: one TBD fixture (se-r0-i0, buildSingleElim's own id), generated at setup time by " +
+      "seedSuite's existing per-stage /generate loop, no new bench seeding primitive required.",
+    where: "divisions[0].stages[1], streams[3], expected.matches[3], expected.finalRanks",
   },
 ];
 
@@ -885,6 +1002,335 @@ const REGISTRATION_ADAPTATIONS: NonNullable<PackInput["meta"]["adaptations"]> = 
 ];
 
 // ---------------------------------------------------------------------------
+// d-tiebreak — B05 T5a: a genuine subject for `oracle.ts`'s
+// `compareTieOrderCascade`. Neither d-tiny (7 points to 1) nor d-badminton (2
+// to 0) ever ties, and a strictly TWO-entrant closed round robin never can:
+// with only each other to play, `diff(A) = for(A) - for(B) = -diff(B)`
+// identically, so a "diff" cascade and a "for" cascade can never disagree —
+// there is no fixture of 2 entrants that could ever witness a REORDERED
+// cascade producing a different answer. Three entrants is the minimum field
+// where two rows can tie on points while disagreeing on which of two OTHER
+// metrics ranks them, which is exactly what an "ordering-differential" case
+// (bench spec: ladder needs an ordering-differential case) requires.
+//
+// `generic`'s own metric keys (`for`/`against`/`diff`, generic.ts:642-646)
+// are literal `row.metrics` field names — unlike badminton's `set_ratio`/
+// `point_ratio` (cross-multiplied RATIOS with no single stored field),
+// `oracle.ts`'s `cascadeValue` can read them directly. That is why this
+// division reuses the generic module rather than adding a third sport.
+//
+// e-echo and e-golf finish tied on points (4 each); e-foxtrot is well clear
+// last (0). Between echo and golf: echo's `diff` (+3) beats golf's (+1), but
+// golf's `for` (10) beats echo's (4) — cascade `["points","diff","for"]`
+// (this division's own declared order) ranks echo ahead of golf, while the
+// SAME two rows under `["points","for","diff"]` would rank golf ahead of
+// echo. That reversal is the whole point: a mutant that reverses the
+// cascade actually flips this pair's winner, so a test built on it can tell
+// which cascade ran, not merely that both rows are present (T5a's dispatch:
+// "a tie whose outcome is the same under any cascade proves nothing").
+// Unscheduled deliberately (no `scheduleConfig`) — `_tiny`'s own scheduling/
+// rest-day/court-hours tests are tuned to the EXACT fixture counts of
+// d-tiny (3) and d-badminton (1); this division stays outside that
+// machinery entirely rather than risk perturbing it.
+const TIEBREAK_DIVISION_REF = "d-tiebreak";
+const TIEBREAK_STAGE_REF = "s-tiebreak-league";
+const TIEBREAK_HOME_ECHO = "e-echo";
+const TIEBREAK_AWAY_FOXTROT = "e-foxtrot";
+const TIEBREAK_THIRD_GOLF = "e-golf";
+// B05 T5b-3: named because `expected.suspensions` has to point at the SAME
+// fixture the stream below declares — a literal on both ends could drift.
+const TIEBREAK_STREAM_R3 = "rr-r3-c1";
+
+// B05 T5b: seat 3 has NO person of its own. The entrant refs here are NATO
+// SEAT LABELS — exactly what `e-alpha`/`e-bravo` are in d-tiny, where the
+// people are Ana and Bo — so `e-golf` naming a person called "Golf" was never
+// the convention. Seat 3 is Ana Alvarez (`p-ana`, d-tiny's own e-alpha)
+// entering a SECOND division, which is the only thing that gives
+// `expected.careers` a cross-division subject to roll up: `personCareerStats`
+// groups by sport_key, and d-tiny and d-tiebreak are both `generic` while
+// d-badminton is not.
+//
+// B05 T5b-3: `p-hotel` is the DISCIPLINE subject — a second member of seat 2
+// (`e-foxtrot`), carrying no events of her own so that adding her moves no
+// `expected.leaderboards` count, no `expected.tables` row and no
+// `expected.careers` rollup. She exists to be banned, and `p-foxtrot` beside
+// her exists to stay ELIGIBLE: a one-sided ban test passes against a product
+// that refuses everybody, so the pack has to declare both people on the same
+// entrant or the oracle has no control to compare against.
+const TIEBREAK_PERSONS: NonNullable<PackInput["persons"]> = [
+  { ref: "p-echo", fullName: "Elena Reyes", lane: "player", shortName: "E. Reyes" },
+  { ref: "p-foxtrot", fullName: "Farid Haddad", lane: "player", shortName: "F. Haddad" },
+  { ref: "p-hotel", fullName: "Hana Okonkwo", lane: "player", shortName: "H. Okonkwo" },
+];
+
+const TIEBREAK_ENTRANTS: PackInput["entrants"] = [
+  {
+    ref: TIEBREAK_HOME_ECHO,
+    divisionRef: TIEBREAK_DIVISION_REF,
+    kind: "individual",
+    displayName: "Elena Reyes",
+    seed: 1,
+    roster: [{ person: "p-echo", captain: true, squadNumber: 1 }],
+  },
+  // B05 T5b-3: the ONLY multi-person entrant in the pack, and it has to be —
+  // `entrantKindCap` (`packages/engine/src/sport/entrant-model.ts:49-57`) caps
+  // an `individual` at ONE person, so a suspended player and an eligible
+  // team-mate cannot both sit on an individual seat. `generic` is the one
+  // builtin that declares no `entrantModel` at all
+  // (`packages/engine/src/testkit/conformance.ts:270`), so `effectiveEntrantModel`
+  // falls through to ALL THREE kinds with no member cap and this seat may be a
+  // `team`. Standings are entrant-keyed, so the kind change moves no expected
+  // table row; the display name is deliberately left alone.
+  {
+    ref: TIEBREAK_AWAY_FOXTROT,
+    divisionRef: TIEBREAK_DIVISION_REF,
+    kind: "team",
+    displayName: "Farid Haddad",
+    seed: 2,
+    roster: [
+      { person: "p-foxtrot", captain: true, squadNumber: 1 },
+      { person: "p-hotel", captain: false, squadNumber: 2 },
+    ],
+  },
+  {
+    ref: TIEBREAK_THIRD_GOLF,
+    divisionRef: TIEBREAK_DIVISION_REF,
+    kind: "individual",
+    displayName: "Ana Alvarez",
+    seed: 3,
+    roster: [{ person: "p-ana", captain: true, squadNumber: 1 }],
+  },
+];
+
+const TIEBREAK_DIVISION: PackInput["divisions"][number] = {
+  ref: TIEBREAK_DIVISION_REF,
+  name: "Tiebreak",
+  sportKey: "generic",
+  variantKey: "score",
+  moduleVersion: "1.0.0",
+  cfgOverrides: {
+    resultMode: "score",
+    allowDraws: true,
+    points: { w: 3, d: 1, l: 0 },
+    progressScore: false,
+  },
+  // The DIVISION's own declared cascade, read by `oracle.ts`'s
+  // `compareTieOrderCascade` rather than hardcoded — extends `generic`'s own
+  // default order (`["points","diff","for","h2h_points","lots"]`,
+  // generic.ts:647) by exactly the two keys this pack's tie needs.
+  tiebreakers: ["points", "diff", "for"],
+  stages: [
+    {
+      ref: TIEBREAK_STAGE_REF,
+      seq: 1,
+      kind: "league",
+      name: "Tiebreak League",
+      config: { legs: 1 },
+      seeding: [TIEBREAK_HOME_ECHO, TIEBREAK_AWAY_FOXTROT, TIEBREAK_THIRD_GOLF],
+    },
+  ],
+  // A pack that declares ANY venue/courts schedules EVERY division
+  // (`pack.division_missing_schedule_config`) — there is no "opt out of
+  // scheduling" carve-out short of `d-registration`'s OWN reason (excluded
+  // from `seedSuite` entirely, never seeded at all). Deliberately the
+  // LOOSEST legal config rather than a copy of `TINY_SCHEDULE_CONFIG`: no
+  // blackouts, no day-cap/rest constraints, a session window spanning the
+  // whole competition — this division exists to prove the tie-order
+  // cascade, not to add a second subject to the court-hours/rest-day rules
+  // d-tiny/d-badminton already exercise precisely.
+  // Day 3 ONLY, deliberately: d-tiny's own fixtures land on day 1 (two) and
+  // day 2 (one), d-badminton's on day 1 — see the header comment table above
+  // (`TINY_COURT_HOURS`'s own block). A session window spanning the whole
+  // competition put this division's own fixtures on day 1 too, clashing
+  // cross-division on the shared courts with d-tiny's already-tuned slots
+  // (a real "one court, two fixtures at once" defect the checker's own
+  // cross-division rule correctly caught) — day 3 is untouched by either
+  // existing division, so there is nothing left to clash with.
+  scheduleConfig: {
+    startAt: "2099-01-03T08:00:00.000Z",
+    matchMinutes: 30,
+    gapMinutes: 0,
+    courts: TINY_COURT_REFS.map((ref) => `@${ref}`),
+    perEntrantMinRest: 0,
+    sessionWindows: [{ from: "2099-01-03T08:00:00.000Z", to: "2099-01-03T20:00:00.000Z" }],
+  },
+};
+
+// The product's own round-robin fixture-id format (badminton's own comment
+// above), 3 entrants over 1 leg: the circle method's odd-field pivot-bye
+// means 3 rounds, not 1 (`packages/engine/src/scheduling/roundrobin.ts`) —
+// echo/foxtrot round 1, golf/echo round 2 (foxtrot's bye), foxtrot/golf
+// round 3 (echo's bye). Every fixture is a plain `generic.result`, the same
+// shape d-tiny's own real (non-reconstructed) streams use.
+const TIEBREAK_STREAMS: NonNullable<PackInput["streams"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: "rr-r1-c1",
+    stageRef: TIEBREAK_STAGE_REF,
+    home: TIEBREAK_HOME_ECHO,
+    away: TIEBREAK_AWAY_FOXTROT,
+    provenance: "real",
+    events: [
+      { type: "core.start" },
+      { type: "generic.result", payload: { p1Score: 3, p2Score: 0 } },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: "rr-r2-c1",
+    stageRef: TIEBREAK_STAGE_REF,
+    home: TIEBREAK_THIRD_GOLF,
+    away: TIEBREAK_HOME_ECHO,
+    provenance: "real",
+    // B05 T5b — the ONLY person-attributed fixture in this division, and the
+    // second half of Ana Alvarez's career rollup. A bare `generic.result`
+    // (no p1Score/p2Score) derives the 1–1 this stream already folded to
+    // from the two `generic.score` events themselves, so the division's
+    // table, its tie-order cascade and every T5a assertion above are
+    // untouched: the SCORE is identical, only its ATTRIBUTION is new.
+    events: [
+      { type: "core.start" },
+      { type: "generic.score", payload: { by: `@${TIEBREAK_THIRD_GOLF}`, points: 1, person: "@p-ana" } },
+      { type: "generic.score", payload: { by: `@${TIEBREAK_HOME_ECHO}`, points: 1, person: "@p-echo" } },
+      { type: "generic.result" },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: TIEBREAK_STREAM_R3,
+    stageRef: TIEBREAK_STAGE_REF,
+    home: TIEBREAK_AWAY_FOXTROT,
+    away: TIEBREAK_THIRD_GOLF,
+    provenance: "real",
+    // Deliberately high-scoring: this is what buys golf's own "for" (10)
+    // past echo's (4) even though golf's "diff" (+1) trails echo's (+3) —
+    // the ordering-differential pair this whole division exists for.
+    events: [
+      { type: "core.start" },
+      { type: "generic.result", payload: { p1Score: 8, p2Score: 9 } },
+    ],
+  },
+];
+
+const TIEBREAK_MATCHES: NonNullable<PackInput["expected"]["matches"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: "rr-r1-c1",
+    outcome: { kind: "win", winner: TIEBREAK_HOME_ECHO, loser: TIEBREAK_AWAY_FOXTROT, method: "regulation" },
+    perSide: [
+      { entrant: TIEBREAK_HOME_ECHO, line: "3" },
+      { entrant: TIEBREAK_AWAY_FOXTROT, line: "0" },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: "rr-r2-c1",
+    outcome: { kind: "draw" },
+    perSide: [
+      { entrant: TIEBREAK_THIRD_GOLF, line: "1" },
+      { entrant: TIEBREAK_HOME_ECHO, line: "1" },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    fixtureExtKey: "rr-r3-c1",
+    outcome: { kind: "win", winner: TIEBREAK_THIRD_GOLF, loser: TIEBREAK_AWAY_FOXTROT, method: "regulation" },
+    perSide: [
+      { entrant: TIEBREAK_AWAY_FOXTROT, line: "8" },
+      { entrant: TIEBREAK_THIRD_GOLF, line: "9" },
+    ],
+  },
+];
+
+// B05 T5b — d-tiebreak's own leaderboard, the SECOND division contributing to
+// Ana's career rollup and the second subject `comparePersonDivisionStat`
+// crosses against `/persons/{id}/stats`. Its counts (1 each) differ from
+// d-tiny's (2 and 1), which is what lets a division-mixup bug be seen at all:
+// a per-division card serving the wrong division's row cannot pass both.
+//
+// BOTH of `generic`'s playerStats metrics are declared, matching d-tiny's own
+// pair. They are not redundant: `scores` is a COUNT of score events and
+// `points` a SUM of their `points` field, so d-tiny separates them (2 and 2
+// off three events) even though this division's single attributed fixture
+// happens to give each person 1 of each.
+const TIEBREAK_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    metricKey: "scores",
+    entries: [
+      { person: "p-ana", name: "Ana Alvarez", count: 1 },
+      { person: "p-echo", name: "Elena Reyes", count: 1 },
+    ],
+  },
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    metricKey: "points",
+    entries: [
+      { person: "p-ana", name: "Ana Alvarez", count: 1 },
+      { person: "p-echo", name: "Elena Reyes", count: 1 },
+    ],
+  },
+];
+
+// B05 T5b-3 — the discipline-carry subject. `expected.suspensions` sat at ZERO
+// rows from the day `PackExpectedSuspension` was written, so its oracle was a
+// silence: nothing to compare, nothing to fail.
+//
+// WHAT THIS PACK CAN HONESTLY DECLARE, and what it deliberately does not.
+// A suspension reaches `suspensions` by exactly three routes in this product
+// (`apps/web/src/server/usecases/discipline.ts`):
+//   (a) AUTO — `detectSuspensions` re-folds the division's `score_events`
+//       through the sport module's `discipline` model on every read. Needs a
+//       `discipline_rules` row with `enabled = true` AND a module that
+//       declares a card model. `generic` declares none, so this route cannot
+//       reach `d-tiebreak` at all.
+//   (b) REPORT BRIDGE — `usecases/match-reports.ts` raises a *pending* row
+//       off a named incident in a match report.
+//   (c) MANUAL — `POST /api/v1/divisions/{id}/suspensions`
+//       (`createManualSuspension`), which is the route this pack uses.
+// All three land the row as `status: "pending"`. Nothing is a ban until an
+// organiser CONFIRMS it: `PATCH /api/v1/suspensions/{id}` `{kind:"confirm"}`
+// -> `decideSuspension` flips it to `active` and only then stamps
+// `entrant_id` and `decided_at`. So the bench's producer is two calls, not
+// one, and a pack that only POSTed would be asserting against a row the
+// product does not consider a ban.
+//
+// `missesFixtureExtKeys` is the WHOLE assertion and it is deliberately a
+// STRICT SUBSET of `e-foxtrot`'s fixtures: seat 2 plays `rr-r1-c1` (away to
+// echo) and `rr-r3-c1` (home to golf), and only the second is missed. A ban
+// that removed the player from EVERY fixture and a ban that removed her from
+// the RIGHT one both satisfy "was she absent from rr-r3-c1?" — the oracle
+// pins the identity by also requiring her PRESENT on `rr-r1-c1`, which it
+// can only do because this list names one of the two and not both.
+//
+// `matches_total` is NOT declared here: it is `missesFixtureExtKeys.length`,
+// derived at the wire by the suite. A hand-typed ban length could drift away
+// from the fixtures the pack says are missed and still pass.
+const TIEBREAK_SUSPENSIONS: NonNullable<PackInput["expected"]["suspensions"]> = [
+  {
+    divisionRef: TIEBREAK_DIVISION_REF,
+    person: "p-hotel",
+    missesFixtureExtKeys: [TIEBREAK_STREAM_R3],
+    reason: "Dissent toward the match official",
+  },
+];
+
+// echo and golf tie on points (4 each) — this block's own header works the
+// arithmetic. Rank order here is the REAL engine's own tiebreaker cascade
+// applied to this division's declared `tiebreakers` (validate-pack.ts's
+// `deriveStandings`/`completeTableStage`), never hand-imposed: stage 0
+// reds if this disagrees with what the fold actually produces.
+const TIEBREAK_TABLE: NonNullable<PackInput["expected"]["tables"]>[number] = {
+  divisionRef: TIEBREAK_DIVISION_REF,
+  stageRef: TIEBREAK_STAGE_REF,
+  rows: [
+    { entrant: TIEBREAK_HOME_ECHO, rank: 1, played: 2, won: 1, drawn: 1, lost: 0, points: 4, metrics: { for: 4, against: 1, diff: 3 } },
+    { entrant: TIEBREAK_THIRD_GOLF, rank: 2, played: 2, won: 1, drawn: 1, lost: 0, points: 4, metrics: { for: 10, against: 9, diff: 1 } },
+    { entrant: TIEBREAK_AWAY_FOXTROT, rank: 3, played: 2, won: 0, drawn: 0, lost: 2, points: 0, metrics: { for: 8, against: 12, diff: -4 } },
+  ],
+};
+
+// ---------------------------------------------------------------------------
 // Assembly
 // ---------------------------------------------------------------------------
 
@@ -905,19 +1351,21 @@ export function buildTinyPack(): PackInput {
       description:
         "The bench's own proof fixture: the smallest pack that still exercises every part of PackSchema.",
     },
-    divisions: [TINY_DIVISION, BADMINTON_DIVISION, REGISTRATION_DIVISION],
-    persons: [...TINY_PERSONS, ...BADMINTON_PERSONS, ...REGISTRATION_PERSONS],
-    entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS, ...REGISTRATION_SHADOW_ENTRANTS],
-    streams: [...TINY_STREAMS, BADMINTON_STREAM],
+    divisions: [TINY_DIVISION, BADMINTON_DIVISION, REGISTRATION_DIVISION, TIEBREAK_DIVISION],
+    persons: [...TINY_PERSONS, ...BADMINTON_PERSONS, ...REGISTRATION_PERSONS, ...TIEBREAK_PERSONS],
+    entrants: [...TINY_ENTRANTS, ...BADMINTON_ENTRANTS, ...REGISTRATION_SHADOW_ENTRANTS, ...TIEBREAK_ENTRANTS],
+    streams: [...TINY_STREAMS, BADMINTON_STREAM, ...TIEBREAK_STREAMS],
     venues: TINY_VENUES,
     officials: TINY_OFFICIALS,
     claimInvites: TINY_CLAIM_INVITES,
     expected: {
-      matches: [...TINY_MATCHES, BADMINTON_MATCH],
-      tables: [...TINY_TABLES, BADMINTON_TABLE],
+      matches: [...TINY_MATCHES, BADMINTON_MATCH, ...TIEBREAK_MATCHES],
+      tables: [...TINY_TABLES, BADMINTON_TABLE, TIEBREAK_TABLE],
       champions: TINY_CHAMPIONS,
-      leaderboards: TINY_LEADERBOARDS,
-      suspensions: [],
+      finalRanks: TINY_FINAL_RANKS,
+      leaderboards: [...TINY_LEADERBOARDS, ...TIEBREAK_LEADERBOARDS],
+      careers: TINY_CAREERS,
+      suspensions: TIEBREAK_SUSPENSIONS,
       specials: TINY_SPECIALS,
     },
     registration: { byDivision: { [REGISTRATION_DIVISION_REF]: REGISTRATION_BLOCK } },

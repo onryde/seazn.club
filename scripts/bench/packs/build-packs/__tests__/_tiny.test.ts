@@ -56,9 +56,9 @@ describe("build-packs/_tiny.ts — the determinism gate", () => {
 });
 
 describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
-  it("declares THREE divisions (generic d-tiny, badminton d-badminton, registration d-registration)", () => {
+  it("declares FOUR divisions (generic d-tiny, badminton d-badminton, registration d-registration, generic d-tiebreak)", () => {
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
-    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
+    expect(pack.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]);
   });
 
   it("d-registration declares entry:\"registration-ui\" and a registration block with 2 free entries, manual approval, 1 approve", () => {
@@ -75,21 +75,34 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
     expect(block.organiser).toEqual([{ action: "approve", target: "reg-cap1" }]);
   });
 
-  it("validates GREEN through the real stage-0 validator, with exactly the two permanent not_derived warnings", () => {
+  it("validates GREEN through the real stage-0 validator, with exactly the three permanent not_derived warnings", () => {
     const raw = JSON.parse(readFileSync(TINY_JSON_PATH, "utf8"));
     const result = validatePack(raw, { expectedSuite: "_tiny" });
     expect(errorsOf(result.findings)).toEqual([]);
     expect(result.ok).toBe(true);
-    // The two permanent warnings _tiny has always carried (leaderboards +
-    // champions, both declared only by d-tiny) — MUST survive, per the task
-    // brief, and nothing else should have appeared alongside them. A
-    // "drop a stream" mutant (removing streams[3], the badminton stream,
-    // while its expected.matches row stays) reds THIS test: `checkExpected`
-    // then reports "no stream declares fixture ... d-badminton" as an ERROR,
-    // so `result.ok` goes false and `errorsOf(...)` stops being empty.
+    // The three permanent warnings _tiny now carries (leaderboards +
+    // champions + finalRanks, all declared only by d-tiny — B05 T3 added
+    // d-tiny's second stage, s-playoff, and its own expected.finalRanks
+    // entry) — MUST survive, per the task brief, and nothing else should
+    // have appeared alongside them. A "drop a stream" mutant (removing
+    // streams[3], the badminton stream, while its expected.matches row
+    // stays) reds THIS test: `checkExpected` then reports "no stream
+    // declares fixture ... d-badminton" as an ERROR, so `result.ok` goes
+    // false and `errorsOf(...)` stops being empty.
     expect(warningsOf(result.findings).map((f) => f.code).sort()).toEqual([
+      // B05 T5b — the FOURTH permanent notice: `expected.careers` now
+      // carries Ana Alvarez's cross-division rollup, and a career total
+      // rides the player-stats fold across divisions, which stage 0 does not
+      // derive offline (validate-pack.ts's own LIMITS block says so).
+      "careers.not_derived",
       "champions.not_derived",
+      "finalRanks.not_derived",
       "leaderboards.not_derived",
+      // B05 T5b-3 — the FIFTH: `expected.suspensions` now carries p-hotel's
+      // ban from d-tiebreak's `rr-r3-c1`, and a discipline carry-over spans
+      // fixtures while stage 0 folds each one on its own. (`.sort()` above
+      // is why this reads alphabetically rather than in emission order.)
+      "suspensions.not_derived",
     ]);
     // Both divisions actually folded — not just parsed. `overall.real` is the
     // two `d-tiny` "real" streams; `overall.reconstructed` is d-tiny's
@@ -134,6 +147,60 @@ describe("packs/_tiny.json — two divisions, stage 0, no new errors", () => {
     ]);
     expect(state.setsWon).toEqual({ home: 2, away: 0 });
   });
+
+  // B05 T5b — the CAREER-ROLLUP subject. `expected.careers` was absent from
+  // this pack entirely, so `oracle.ts`'s `compareCareerStats` had nothing to
+  // compare and its verdict was silence rather than a pass.
+  //
+  // A career rollup is only meaningful ACROSS divisions (`PackExpectedCareer`
+  // carries no `divisionRef` for exactly that reason), and
+  // `personCareerStats` groups by SPORT — so the two contributing divisions
+  // have to share a sport_key or the rollup never sums anything. d-tiny and
+  // d-tiebreak are both `generic`; d-badminton is not, which is why seat 3 of
+  // d-tiebreak (`e-golf` — a NATO seat label, exactly like d-tiny's own
+  // `e-alpha`/`e-bravo`, never a person name) is Ana Alvarez entering a
+  // second division rather than a fourth person.
+  it("B05 T5b — declares a CROSS-DIVISION career rollup whose count differs from either division's own leaderboard", () => {
+    const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
+
+    // Ana is rostered in TWO divisions — the precondition without which the
+    // rollup below is a one-division total wearing a career's name.
+    const anaDivisions = pack.entrants
+      .filter((e) => e.roster.some((m) => m.person === "p-ana"))
+      .map((e) => e.divisionRef)
+      .sort();
+    expect(anaDivisions).toEqual(["d-tiebreak", "d-tiny"]);
+    // …and both of them are the SAME sport, or `personCareerStats` files them
+    // under two separate `sports[]` entries and sums neither.
+    const sportsOf = new Set(
+      anaDivisions.map((ref) => pack.divisions.find((d) => d.ref === ref)?.sportKey),
+    );
+    expect([...sportsOf]).toEqual(["generic"]);
+
+    // The authored career rows. Derived HERE from the pack's own
+    // per-division leaderboards rather than typed as a constant, so a change
+    // to either division's authored history moves this assertion with it —
+    // the two sides are authored independently (a career is NOT generated by
+    // summing leaderboards, see PackExpectedCareer's own doc comment), and
+    // their agreement is the check.
+    const careers = pack.expected.careers.filter((c) => c.person === "p-ana");
+    expect(careers.map((c) => c.metricKey).sort()).toEqual(["points", "scores"]);
+    for (const career of careers) {
+      const contributions = pack.expected.leaderboards
+        .filter((l) => l.metricKey === career.metricKey && anaDivisions.includes(l.divisionRef))
+        .map((l) => l.entries.find((e) => e.person === "p-ana")?.count ?? 0);
+      // Both divisions contribute — a rollup summing ONE division is the
+      // vacuity this subject exists to close.
+      expect(contributions.length).toBe(2);
+      expect(contributions.every((c) => c > 0)).toBe(true);
+      expect(career.count).toBe(contributions.reduce((a, b) => a + b, 0));
+      // …and the right answer differs from BOTH wrong answers: a product bug
+      // that served either division's own total in place of the career
+      // rollup must not be able to pass this row.
+      for (const c of contributions) expect(career.count).not.toBe(c);
+      expect(career.name).toBe("Ana Alvarez");
+    }
+  });
 });
 
 describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-division pack", () => {
@@ -141,7 +208,7 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     const pack = PackSchema.parse(JSON.parse(readFileSync(TINY_JSON_PATH, "utf8")));
     const plan = buildSeedPlan(pack);
 
-    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration"]);
+    expect(plan.divisions.map((d) => d.ref)).toEqual(["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]);
 
     const badmintonEntrants = plan.entrants.filter((e) => e.divisionRef === "d-badminton");
     expect(badmintonEntrants.map((e) => e.ref).sort()).toEqual(["e-cho", "e-dahl"]);
@@ -153,14 +220,28 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     // has no knowledge of which divisions `suites/tiny.ts` later filters out.
     const registrationEntrants = plan.entrants.filter((e) => e.divisionRef === "d-registration");
     expect(registrationEntrants.map((e) => e.ref).sort()).toEqual(["e-reg-priya", "e-reg-sami"]);
+    // B05 T5a — d-tiebreak's own THREE entrants, the ordering-differential
+    // tie-order-cascade subject (oracle.ts's `compareTieOrderCascade`).
+    const tiebreakEntrants = plan.entrants.filter((e) => e.divisionRef === "d-tiebreak");
+    expect(tiebreakEntrants.map((e) => e.ref).sort()).toEqual(["e-echo", "e-foxtrot", "e-golf"]);
 
-    // Every player-lane person, from ALL THREE divisions, becomes a `persons`
+    // Every player-lane person, from ALL FOUR divisions, becomes a `persons`
     // row; Dee Duarte and Eli Ostrander (d-tiny's officials) do not.
     expect(plan.persons.map((p) => p.ref).sort()).toEqual([
       "p-ana",
       "p-bo",
       "p-cho",
       "p-dahl",
+      "p-echo",
+      "p-foxtrot",
+      // B05 T5b-3 — the discipline subject: a SECOND member of seat 2
+      // (`e-foxtrot`, now a `team`), so the ban has a team-mate to stay
+      // eligible beside. Sorts here, between p-foxtrot and p-reg-priya.
+      "p-hotel",
+      // B05 T5b — `p-golf` is gone: d-tiebreak's third SEAT (`e-golf`, a
+      // NATO ordinal label, not a person) is now Ana Alvarez entering her
+      // second division, which is what gives `expected.careers` a
+      // cross-division subject. `p-ana` above therefore covers both.
       "p-reg-priya",
       "p-reg-sami",
     ]);
@@ -171,10 +252,13 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     // d-tiny: 2 entrants over 3 legs = 3. d-badminton: 2 entrants over 1
     // leg = 1. d-registration's stage is kind:"knockout" (never "league"),
     // so it contributes NO entry here at all — see build-packs/_tiny.ts's
-    // own comment on why that stage kind was chosen.
+    // own comment on why that stage kind was chosen. d-tiebreak: 3 entrants
+    // over 1 leg = 3 (the odd-field round robin's own pivot-bye round, not
+    // just `legs`).
     expect(plan.expectedFixtureCounts).toEqual([
       { divisionRef: "d-tiny", stageRef: "s-league", count: 3 },
       { divisionRef: "d-badminton", stageRef: "s-badminton-league", count: 1 },
+      { divisionRef: "d-tiebreak", stageRef: "s-tiebreak-league", count: 3 },
     ]);
   });
 

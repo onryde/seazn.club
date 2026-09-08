@@ -48,6 +48,9 @@ export const PhaseTimings = z.object({
   seedMs: z.number().optional(),
   scheduleMs: z.number().optional(),
   simMs: z.number().optional(),
+  /** B05 T2 — division B's batch-import fold, separate from `simMs` (T1's
+   *  single-event fold) so a reader can tell the two write paths apart. */
+  importMs: z.number().optional(),
 });
 export type PhaseTimings = z.infer<typeof PhaseTimings>;
 
@@ -65,12 +68,254 @@ export const SolverResult = z.object({
 });
 export type SolverResult = z.infer<typeof SolverResult>;
 
-export const OracleResult = z.object({
-  name: z.string(),
-  passed: z.boolean(),
-  detail: z.string().optional(),
-});
+/**
+ * B05 T6 fix 2 — a THIRD verdict beside pass/fail.
+ *
+ * The first live run printed `PASS oracle: d-tiny/s-league tie-order cascade
+ * … (0 checked, 0 skipped)` for two of three divisions. A comparator that
+ * checked nothing has not passed — it had no subject, which is the exact
+ * vacuity this wave exists to eliminate, printing itself green in the wave's
+ * own report.
+ *
+ * `no_subject` does not RED a run (an absent subject is not a failure), but it
+ * must never READ as PASS.
+ *
+ * ---------------------------------------------------------------------------
+ * B05 review round 1, MAJOR 2 — THE ZERO-SUBJECT RULE, stated once, here.
+ *
+ * The wave shipped three different answers to "this comparator had nothing to
+ * compare": this verdict, a hard FAIL, and a warning with NO oracle row at all
+ * (the last one invisible to `report.oracles` AND to the `oracle_checked`
+ * stream, so a reader could not tell a skipped comparator from one that was
+ * never written). Which answer is right turns on WHOSE side the emptiness is
+ * on, and that is the whole rule:
+ *
+ *  - The PACK declared nothing for this comparator  -> `no_subject`.
+ *    The bench was never owed a check. It still pushes an oracle row (and
+ *    emits `oracle_checked`), so the absence is COUNTED rather than silent,
+ *    and it never reds. Empty `expected.suspensions`/`expected.careers`, a
+ *    division declaring no `tiebreakers`.
+ *
+ *  - The pack declared a subject and the PRODUCT returned nothing for it
+ *    -> `fail`. That is not an absent subject, it is a missing answer to a
+ *    question that WAS asked, and it reds. Every site that reds this way
+ *    states the reason in one line beside the guard: `compareRankCrossings`
+ *    and `compareFinalRanks` (an empty crossing where a completed stage owed
+ *    a ranking), the person-cards block (a board `pack-schema.ts` gives
+ *    `entries.min(1)` resolving to zero), the enforcement probe (a declared
+ *    suspension with no missed fixture to refuse a sheet for).
+ *
+ * A new comparator picks its side by asking which of those two it is. There
+ * is no third answer.
+ * ---------------------------------------------------------------------------
+ */
+export const OracleVerdict = z.enum(["pass", "fail", "no_subject"]);
+export type OracleVerdict = z.infer<typeof OracleVerdict>;
+
+export const OracleResult = z
+  .object({
+    name: z.string(),
+    passed: z.boolean(),
+    detail: z.string().optional(),
+    /** Absent on every oracle written before B05 T6 — `oracleVerdictOf`
+     *  derives `pass`/`fail` from `passed` for those, so an existing report
+     *  round-trips and renders byte-identically. */
+    verdict: OracleVerdict.optional(),
+    /** B05 review round 1, MINOR: did this oracle actually COMPARE anything?
+     *
+     *  The run summary used to answer that by deriving it — `verdict !==
+     *  "no_subject"` — which counted a FAIL raised precisely BECAUSE nothing
+     *  was compared (a board resolving zero entries, an empty rank crossing)
+     *  among the oracles that had a subject. It is set by the call site off
+     *  the comparator's OWN field — `RankCrossingComparison.reason`,
+     *  `FinalRanksComparison.reason`, `TieOrderCascadeComparison.checkedPairs`,
+     *  the resolved entry count — so the summary reports what the comparator
+     *  measured instead of re-deriving it from the verdict.
+     *
+     *  Absent means "not reported", and the old derivation stands for it, so
+     *  every oracle written before this round round-trips unchanged. */
+    subject: z.boolean().optional(),
+  })
+  .superRefine((o, ctx) => {
+    // B05 review round 1, MINOR: `no_subject` and `subject: true` are two
+    // answers to one question, and left free to drift they are how the
+    // summary line would quietly start over-counting again.
+    if (o.verdict === "no_subject" && o.subject === true) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subject"],
+        message: `oracle "${o.name}": verdict "no_subject" cannot also report subject: true`,
+      });
+    }
+    if (o.verdict === undefined) return;
+    // `passed` is the GATE-facing half and `verdict` the READER-facing half.
+    // Pinned against each other here rather than left to each call site,
+    // because two answers to one question left free to drift is how a
+    // "no_subject" oracle would quietly acquire a red gate (or a "fail" a
+    // green one). Only ONE combination is legal per verdict.
+    const expectedPassed = o.verdict !== "fail";
+    if (o.passed !== expectedPassed) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["passed"],
+        message: `oracle "${o.name}": verdict "${o.verdict}" requires passed: ${expectedPassed}, got ${o.passed}`,
+      });
+    }
+  });
 export type OracleResult = z.infer<typeof OracleResult>;
+
+/** The reader-facing verdict for one oracle — the ONE place `passed` is
+ *  turned into a label, so a renderer can never invent a fourth answer. */
+export function oracleVerdictOf(o: OracleResult): OracleVerdict {
+  return o.verdict ?? (o.passed ? "pass" : "fail");
+}
+
+/**
+ * The `oracle_checked` pino payload's verdict half — `kind`, the reader-facing
+ * `verdict`, and the `passed` boolean every existing log consumer already
+ * reads, all DERIVED here from one input so the log stream cannot carry a
+ * `no_subject` event that also says `passed: false` (or a `fail` that says
+ * `passed: true`). The report's own `superRefine` above stops the same drift
+ * inside report.json; this stops it in the logs.
+ */
+export function oracleLogFields(kind: string, verdict: OracleVerdict): {
+  readonly kind: string;
+  readonly passed: boolean;
+  readonly verdict: OracleVerdict;
+} {
+  return { kind, passed: verdict !== "fail", verdict };
+}
+
+const ORACLE_VERDICT_LABEL: Readonly<Record<OracleVerdict, string>> = {
+  pass: "PASS",
+  fail: "FAIL",
+  no_subject: "NO SUBJECT",
+};
+
+/** B05 T1 — one refusal `simulate.ts` hit while folding a division's streams
+ *  through the live single-event scoring route. Reported, never silently
+ *  retried or dropped (D5): a `SEQ_CONFLICT` (409), an entitlement/feature
+ *  refusal (`PAYMENT_REQUIRED`, 402 — the REAL shape; see `dls-gate.ts`'s own
+ *  header comment on why an entitlement refusal is 402, not 422), or a
+ *  generic 422. */
+export const SimulationFinding = z.object({
+  streamKey: z.string(),
+  fixtureId: z.string(),
+  eventIndex: z.number().int(),
+  status: z.number().int(),
+  code: z.string(),
+  message: z.string(),
+  currentSeq: z.number().int().optional(),
+});
+export type SimulationFinding = z.infer<typeof SimulationFinding>;
+
+/** B05 T1 — the single-event write-path fold's own section: report-only
+ *  throughput (never a gate — the load-sensitive-timing rule, `_RULES.md`
+ *  §1) plus any refusal findings. Kept minimal on purpose: T7 owns the
+ *  report's PRESENTATION and the "which checks had a subject" naming. */
+export const SimulationReport = z.object({
+  eventsSent: z.number().int(),
+  wallMs: z.number(),
+  eventsPerSecond: z.number(),
+  findings: z.array(SimulationFinding).optional(),
+});
+export type SimulationReport = z.infer<typeof SimulationReport>;
+
+/** B05 T2 — the batch write-path fold's own finding shape. Flattens
+ *  `import.ts`'s three finding kinds (`stream_oversize`, `call_refused`,
+ *  `stream_not_imported`) into one reportable row rather than three
+ *  separate arrays — `code` and `message`/`eventCount`/`cap` are populated
+ *  per kind. Never a gate — same D5 "report, never silently retry or drop"
+ *  convention `SimulationFinding` already follows.
+ *
+ *  T2.5 review MINOR: `kind` is a REQUIRED discriminator, not inferred from
+ *  which optional fields happen to be populated. The three kinds' field sets
+ *  are disjoint TODAY (a `chunkIndex` names a call-level refusal; a bare
+ *  `streamKey` with no `chunkIndex` names either an oversize stream or a
+ *  per-stream product outcome) but nothing enforced that beyond the mapper's
+ *  own discipline — a reader inferring the kind from field presence breaks
+ *  the moment two kinds' shapes overlap even slightly, and a discriminator
+ *  costs nothing to keep correct. */
+export const ImportFindingReport = z.object({
+  kind: z.enum(["stream_oversize", "call_refused", "stream_not_imported"]),
+  chunkIndex: z.number().int().optional(),
+  streamKeys: z.array(z.string()).optional(),
+  streamKey: z.string().optional(),
+  fixture: z.string().optional(),
+  status: z.union([z.number().int(), z.enum(["skipped_duplicate", "rejected"])]).optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+  eventIndex: z.number().int().optional(),
+  eventCount: z.number().int().optional(),
+  cap: z.number().int().optional(),
+});
+export type ImportFindingReport = z.infer<typeof ImportFindingReport>;
+
+/** B05 T2 — division B's streams folded through the batch-import route.
+ *  Kept minimal, same as `SimulationReport` above: report-only throughput
+ *  (never a gate) plus any refusal/oversize/per-stream findings. T7 owns the
+ *  report's PRESENTATION and the "which checks had a subject" naming. */
+export const ImportSimulationReport = z.object({
+  eventsSent: z.number().int(),
+  wallMs: z.number(),
+  eventsPerSecond: z.number(),
+  chunks: z.number().int(),
+  findings: z.array(ImportFindingReport).optional(),
+});
+export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
+
+/** B05 T2.5 (D9) — one `ScheduleConflict` row `runDivisionStartLayer` read
+ *  off a 422 body. Same three fields `schedule.ts`'s own `WireConflict`
+ *  reads and no others (`details.kind` ONLY, never `code`/`detail` — see
+ *  that type's own doc comment) — present on BOTH refusal codes
+ *  (`assertPublishable`'s shared `{ conflicts }` extra, apps/web). */
+export const DivisionStartConflictReport = z.object({
+  fixtureId: z.string().optional(),
+  blocking: z.boolean().optional(),
+  kind: z.string().optional(),
+});
+export type DivisionStartConflictReport = z.infer<typeof DivisionStartConflictReport>;
+
+/** B05 T2.5 (D9) — one division's walk through `runDivisionStartLayer`: the
+ *  step between "scheduled" and every write path this bench drives after it
+ *  (`simulate.ts`'s and `import.ts`'s folds both 409 against an unstarted
+ *  division). Never a gate on its own fields — `_tiny.ts`'s wiring folds a
+ *  blocking refusal or a failed re-read into the suite's own `errors`, which
+ *  is what actually reds `SuiteReport.gate`. */
+export const DivisionStartReport = z.object({
+  divisionRef: z.string(),
+  /** True iff the retry (`acknowledge_warnings: true`) is what succeeded. */
+  acknowledgedWarnings: z.boolean(),
+  /** Every warning conflict recorded from an `SCHEDULE_UNACKNOWLEDGED_WARNINGS`
+   *  refusal, before the retry — empty when the first attempt succeeded
+   *  outright. */
+  warnings: z.array(DivisionStartConflictReport),
+  /** Present only on a `SCHEDULE_BLOCKING_CONFLICTS` refusal — the product's
+   *  own conflict list. */
+  blockingConflicts: z.array(DivisionStartConflictReport).optional(),
+  /** D9's "report both sides": what B04's OWN independent checker
+   *  (`checkBoard`, `SuiteReport.scheduling[]`'s own `.checker` field for the
+   *  SAME `divisionRef`) said about this board moments earlier — populated
+   *  alongside `blockingConflicts` so a reader can see the product's fresh
+   *  refusal next to the checker's own verdict for the same board. */
+  checkerClean: z.boolean().optional(),
+  checkerFindingCount: z.number().int().optional(),
+  /** T2.5 review MINOR — set (`true`) INSTEAD of `checkerClean`/
+   *  `checkerFindingCount` when a `SCHEDULE_BLOCKING_CONFLICTS` refusal fires
+   *  but this division's own `scheduling[]` row carries no `.checker` at all
+   *  (the board fetch itself failed earlier in this SAME division's walk).
+   *  Without this, "the checker had nothing to say" and "the checker said
+   *  clean" were both just an absent `checkerClean` — D9's "report both
+   *  sides" silently degraded to one side that reads as agreement. */
+  checkerUnavailable: z.boolean().optional(),
+  /** The division's status as RE-READ after a 200 — absent when no attempt
+   *  ever returned 200. */
+  confirmedStatus: z.string().optional(),
+  /** THE D9 gate this row exists to prove: true iff a 200 was returned AND
+   *  the re-read confirms the product's own "started" status. */
+  started: z.boolean(),
+});
+export type DivisionStartReport = z.infer<typeof DivisionStartReport>;
 
 /**
  * design §5.3 / §7: an unexpected 4xx/5xx or failed UI step attaches its
@@ -446,6 +691,21 @@ export const SuiteReport = z.object({
   /** F-T6-3 — the run-level cross-division court gate's findings. RUN-level,
    *  so exactly one list per suite. Absent when it found nothing. */
   crossDivisionCourtClashes: z.array(CrossDivisionCourtClashReport).readonly().optional(),
+  /** B05 T2.5 (D9) — one row per division `runDivisionStartLayer` started,
+   *  in the order it started them — always BEFORE `simulation`/
+   *  `importSimulation` below, since neither fold can run against an
+   *  unstarted division. Absent for a run that never reached the step (no
+   *  `input.sql`) or that declared no streamed division at all. */
+  divisionStart: z.array(DivisionStartReport).optional(),
+  /** B05 T1 — division A's streams folded through the single-event scoring
+   *  route. Absent for a run that never reached the step (no `input.sql`,
+   *  same gating the DLS-gate probe and the player-stats baseline already
+   *  use) or whose division declared no streams at all. */
+  simulation: SimulationReport.optional(),
+  /** B05 T2 — division B's streams folded through the batch-import route
+   *  (D4's OTHER write path). Same gating as `simulation` above; absent when
+   *  no division besides division A declares streams. */
+  importSimulation: ImportSimulationReport.optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -539,6 +799,27 @@ function renderHeader(report: BenchReport): string {
     `- Started: ${report.startedAt}`,
   ];
   if (report.finishedAt) lines.push(`- Finished: ${report.finishedAt}`);
+  // B05 T6 fix 2 — the run-level answer to "how many oracles actually had a
+  // subject". Rendered only when a run produced oracles at all, so an
+  // oracle-free report (a preflight refusal, a `--keep` short circuit) stays
+  // byte-identical to what it was.
+  const allOracles = report.suites.flatMap((s) => s.oracles ?? []);
+  if (allOracles.length > 0) {
+    const verdicts = allOracles.map(oracleVerdictOf);
+    const noSubject = verdicts.filter((v) => v === "no_subject").length;
+    // B05 review round 1, MINOR: read from the comparator's own `subject`
+    // where it reports one, and fall back to the verdict only for oracles
+    // that do not — a FAIL raised over ZERO comparisons is not an oracle that
+    // had a subject, and deriving this from the verdict alone said it was.
+    // The verdict tallies below stay verdict tallies, so this number
+    // deliberately need not add up to them: that gap IS the fact.
+    const withSubject = allOracles.filter((o) => o.subject ?? oracleVerdictOf(o) !== "no_subject").length;
+    lines.push(
+      `- Oracles: ${allOracles.length} total, ${withSubject} with a subject ` +
+        `(${verdicts.filter((v) => v === "pass").length} PASS, ${verdicts.filter((v) => v === "fail").length} FAIL), ` +
+        `${noSubject} NO SUBJECT`,
+    );
+  }
   return lines.join("\n");
 }
 
@@ -641,6 +922,7 @@ function renderSuitesSection(report: BenchReport): string {
       t.seedMs !== undefined ? `seed ${t.seedMs}ms` : undefined,
       t.scheduleMs !== undefined ? `schedule ${t.scheduleMs}ms` : undefined,
       t.simMs !== undefined ? `sim ${t.simMs}ms` : undefined,
+      t.importMs !== undefined ? `import ${t.importMs}ms` : undefined,
     ].filter((part): part is string => part !== undefined);
     if (timingParts.length > 0) lines.push(`- Timings: ${timingParts.join(", ")}`);
     if (suite.keep !== undefined) lines.push(`- Data left in place: ${suite.keep ? "yes (--keep)" : "no (--wipe requested)"}`);
@@ -652,7 +934,9 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
-      for (const o of suite.oracles) lines.push(`  - ${o.passed ? "PASS" : "FAIL"} ${o.name}${o.detail ? ` — ${o.detail}` : ""}`);
+      for (const o of suite.oracles) {
+        lines.push(`  - ${ORACLE_VERDICT_LABEL[oracleVerdictOf(o)]} ${o.name}${o.detail ? ` — ${o.detail}` : ""}`);
+      }
     }
     if (suite.errors && suite.errors.length > 0) {
       lines.push("- Errors:");

@@ -1,0 +1,322 @@
+# B05 review findings — running record
+
+One row per finding, written as it happens rather than reconstructed at the
+end. Reviews on this wave are per-task (implementer → reviewer → orchestrator
+re-gate), per `_MASTER.md`'s session lifecycle and AGENTS.md failure class 12
+("five implementers once ran back-to-back with zero reviewer passes; the wave
+was green and still Needs Fixes").
+
+Branch `feat/bench-b05-simulation`. Design of record:
+`designs/2026-09-07-b05-simulation-layer-design.md`. Re-pins:
+`B05-repins-2026-09-07.md`.
+
+## Verdicts so far
+
+| task | commits | reviewer | verdict | findings |
+|---|---|---|---|---|
+| T0 plan chooser | `599ca30fd`, `ec3fb4665` | subagent | SHIP | 2 MINOR, 1 fixed, 1 declared theoretical |
+| T1 single-POST fold | `c8da050c0` | subagent | SHIP | none |
+| T2 import fold | `2841ae8f7`, `7716a0e98` | subagent | SHIP | 3 MINOR, all fixed in T2.5 |
+| T2.5 division start (D9) | `1974dbb23`, `b488ea5de` | subagent | SHIP | 2 MINOR, 1 fixed in T3, 1 accepted |
+| T3 advancement + pack stage | `a1d4f573f`, `55171ef13`, `6dee0d855` | **orchestrator** (subagent stalled twice under machine load) | SHIP | 1 MINOR, fixed `2915d3fa0` |
+| T4 comparators | `c731357ed`, `1794992c9`, `6695c65c2` | subagent | **NEEDS FIXES** | 2 MAJOR, 1 MINOR — being fixed in T5a |
+| T4b wiring | `34b7dfb8c` … `28291950e` (8) | subagent (same pass) | — | see above |
+
+## Findings, with what happened to each
+
+### F-T0-1 — the catalog guard claimed to cover renames and did not (FIXED `ec3fb4665`)
+
+T0's migration-derived plan guard parsed inserts minus deletes; its commit
+message claimed it guarded "retirement/rename". Every migration in this tree
+retires a plan by inserting the replacement and deleting the old row, so no
+delta exercises a rename and the prose could stand unchallenged. Now handles
+`update plans set key = …`, with a synthetic-SQL witness (no real delta can
+provide one) and the direction nobody would notice being wrong pinned too: a
+rename of a key that was never inserted must add nothing. Mutant `void ren`
+reds exactly that test.
+
+### F-T0-2 — privilege score could miscount an all-NULL row (ACCEPTED, theoretical)
+
+`PlanCandidateInfo.privilege` counts unbounded int caps; a boolean-feature row
+with both `bool_value` and `int_value` explicitly NULL would read as an
+unbounded cap. No such row exists in any migration (V101/V112/V270/V290/V341/
+V393 checked). Recorded rather than fixed.
+
+### F-T2-1/2/3 — three MINORs (ALL FIXED in `1974dbb23` / `b488ea5de`)
+
+`eventsPerCall` had only a far-over chunking case (added exact-at-cap and
+one-over, independent of the streams cap); `ImportFindingReport` had no `kind`
+discriminator and readers inferred the kind from which optional fields were
+populated; `resolvePayloadRefs`, shared with the import fold, threw with a
+hardcoded `"simulate:"` prefix so an import failure reported itself as a
+simulate failure.
+
+### F-T2.5-1 — a missing checker read as a clean one (FIXED in `55171ef13`)
+
+D9 says a blocking-conflict refusal reports BOTH sides — the product's
+conflicts and the checker's verdict on the same board. `checkerClean` was
+attached only when the board fetch had succeeded, so a half-failed scheduling
+walk would have degraded silently to one side that reads as clean. The
+omission is now explicit.
+
+### F-T2.5-2 — the acknowledged retry's own refusal is not chased (ACCEPTED)
+
+If the retry is refused again, its conflict list is folded into a generic
+"still refused" error rather than reported. Consistent with the stated policy
+and exercised by a test; noted as the one branch where a second warnings list
+is discarded.
+
+### F-T3-1 — the new stage filter could empty a board and call it clean (FIXED `2915d3fa0`)
+
+**The most valuable finding of the wave so far**, because its failure mode is
+silent. T3 scoped the board fetch to the stage being scheduled — correct, and a
+no-op on single-stage divisions — but compares `stage_id`, which the bench's
+`WireFixture` types as optional while `S.Fixture`
+(`api-v1/schemas.ts:1091-1093`) declares it required. Had that field ever
+stopped arriving, every row would fail the comparison, the board would come
+back EMPTY, and an empty board has no unplaced fixtures and no conflicts: a
+clean judgement over nothing at all.
+
+Now reds with both counts named, into the division's own error sink so it
+reports as a finding rather than crashing the walk. Witness: a test masking
+every fetched row's `stage_id` to a foreign value — a state no pack can
+produce. Neutering the guard (`if (false && …)`) reds exactly that test,
+78 → 77; restored 78/78.
+
+### F-T4-1 — a third unwired comparator, and the only one nobody disclosed (OPEN, T5a)
+
+MAJOR. `compareTieOrderCascade` (`oracle.ts:410`) has no call site anywhere in
+`lib/suites/tiny.ts`. Two other comparators were knowingly left unwired for
+want of a pack subject and were reported as such; this one was not mentioned in
+any commit message or hand-off, so it would have shipped as an inert seam with
+nobody counting it as owed. `_tiny` genuinely has no tied rows (7≠1, 2≠0), so
+it needs a pack subject as well as a call site — and the tie has to be
+ORDERING-DIFFERENTIAL, or the case cannot witness which cascade ran.
+
+The lesson is not "wire it": it is that the vacuity ledger has to be written
+down and checked against the code, because a comparator nobody remembers is
+indistinguishable from one that passes.
+
+### F-T4-2 — the D1-critical comparator passes on empty/empty (OPEN, T5a)
+
+MAJOR. `compareRankCrossings` (`oracle.ts:483-491`) returns `matched: true`
+when both the captured ranks and the standings ranks are empty: `[].every(...)`
+is vacuously true and the lengths agree at 0. No test covers empty/empty
+(`oracle.test.ts:355-380` covers agree, disagree, absent-capture). Production
+is masked today only by the sibling `standingsVsExpected` check at
+`tiny.ts:2833` reddening independently — two guards covering for each other,
+which AGENTS.md failure class 3 says means neither is tested. Fixed in T5a as
+`matched: false` with a reason, plus the empty/empty test and its positive pair.
+
+### F-T4-3 — leaderboard's empty case is unit-only (OPEN, T5a)
+
+MINOR, same class: standings' empty-actual case is proven through the wire
+(`a830a775a`), the leaderboard's only in the comparator's own unit test.
+
+### Verified as sound in the same pass
+
+The D6 mis-attribution regression runs through the real `runTinySuite` against
+a mutated temp pack, not a fixture; the two rank crossings come from genuinely
+separate fake responses, so the "they disagree" test is not a tautology; the
+narrowed `/stats/players` → `/persons/{id}/stats` assertion in
+`tiny-suite-stats.test.ts` is a narrowing, not a weakening (the baseline oracle
+name and warning still assert the original intent).
+
+### F-T5b-3-1 — a confirmed ban does not keep a player off the team sheet (PRODUCT FINDING, spec §15)
+
+The brief for T5b-3 told the implementer to prove suspension carry with a pair
+this wave had pinned: a lineup PUT naming the banned person 422s
+`ELIGIBILITY_VIOLATION`, and the GET omits them. **That pair does not exist for
+discipline**, and the implementer said so instead of building a test around it.
+Verified independently here: `grep -c -a "suspen"` returns **0** in both
+`apps/web/src/server/usecases/fixtures.ts` and
+`usecases/registration-eligibility.ts`, and `gateRosterEligibility`
+(`registration-eligibility.ts:342`) gates ROSTER eligibility — age and category,
+via `rosterIssues` — with no reference to the suspensions table at all. Every
+reader of that table is a display surface or the stage-rebuild guard.
+
+**So discipline in this product is advisory: a player with an active, confirmed
+ban is accepted onto a team sheet.** The pin in `B05-repins-2026-09-07.md` was
+wrong because it conflated registration eligibility with discipline — the 422 is
+real, it just fires for a different reason than the one it was cited for.
+
+How the suite handles it, which is the right call: it does NOT assert either
+behaviour. It measures what the product actually does per run and reports a
+warning naming the fixture and the live HTTP status. Freezing today's behaviour
+as the expected value is how a live bug gets carried through two sign-offs
+(AGENTS.md failure class 4), and asserting the behaviour the product does not
+have would red every run for a decision nobody has made.
+
+What IS asserted, both directions: the ban is active, sized to
+`missesFixtureExtKeys.length`, stamped on her own entrant, and off exactly the
+named sheets; the eligible team-mate is unbanned and present on all sheets
+including the missed one.
+
+Also pinned while there (`usecases/discipline.ts`), none of it assumed: a
+suspension arrives by three routes — auto (`detectSuspensions` re-folds
+`score_events` through the module's card model, needing `discipline_rules.enabled`
+and a module that HAS a card model, which `generic` does not), the match-report
+bridge, and manual `POST /divisions/{id}/suspensions`. **All three land
+`status:'pending'`; only `PATCH /suspensions/{id}` `{kind:"confirm"}` makes it a
+ban**, and only there are `entrant_id`/`decided_at` stamped. All gated on
+`discipline.enforced`.
+
+#### Recommendation to the owner (bench recommendation, NOT a ruling)
+
+This is a product change in `apps/web`, so it is outside B05's file set and
+belongs in its own small wave. Recorded here because the bench found it.
+
+**Recommend: make a confirmed ban block the team sheet, reusing the
+override-with-reason seam roster eligibility already has, behind the paid flag
+that already exists.**
+
+What the customer gets. Today an organiser can announce a two-match ban, record
+it, confirm it — and the banned player is accepted onto the sheet and scored.
+The rule exists everywhere except the one moment it matters, which is a team
+manager naming a player. The failure mode is not a bug report: it is a banned
+player appearing in a knockout final, a protest, and a result that has to be
+replayed or forfeited in public. Organisers buy this product to run competitions
+that hold up when challenged, and this is the seam where one does not.
+
+What the business gets. `discipline.enforced` is an entitlement key
+(`usecases/discipline.ts:519,532,560,581,610,729`) sold on the pricing matrix as
+"Automatic suspension tracking" (`dictionaries/en/marketing.json:133`). The paid
+tier currently delivers detection and a record; the word in its own key is
+`enforced`. Closing the gap completes a feature customers already pay for and
+lets the matrix say enforcement rather than tracking — a stronger line at the
+same price, and one a competitor cannot claim by shipping a list view.
+
+Why override-with-reason rather than a hard block. Appeals get upheld, the wrong
+person gets banned, a tournament committee overrules. `gateRosterEligibility`
+already solves exactly this shape: 422 unless `override.reason` is supplied,
+with the reason recorded. Reusing it means no new UX concept, an audit trail
+that protects the organiser in the dispute the ban exists for, and a change with
+a blast radius of one gate rather than a redesign.
+
+Cost and risk. One gate in the lineup write path plus its tests. It stays behind
+`discipline.enforced`, so free orgs and orgs that never confirm a suspension see
+nothing change. The behaviour only tightens for an org that has bought the
+feature, created a suspension AND confirmed it — which is a deliberate act, not
+an accident. Orgs deliberately running advisory discipline keep working via the
+override.
+
+If the owner decides advisory is correct and deliberate, the fix is one line of
+copy rather than code: say tracking, not enforced, where a customer can read it.
+Either way B05's measurement stays, and becomes the regression that proves the
+decision held.
+
+## Corrections to this wave's own documents
+
+- **F1 was too narrow** (fixed `698476409`). The design doc and re-pin record
+  said `stage_completed`/`finalRanks` appears "for a ladder/bracket
+  completion". It is emitted for EVERY stage kind:
+  `packages/engine/src/competition/stage.ts:237` (table/pool, ranks from
+  `crossPoolOrder`), `:275` (bracket, `bracketRanks`),
+  `engine-db/competition.ts:498` (ladder, `config.ladder_order`). The error
+  came from grepping `finalRanks` inside `competition.ts` and reading the one
+  arm that matched as the whole story — the table path's emission lives in the
+  engine package and never appeared in the hit list. A grep is not a read.
+  The load-bearing half of F1 is unchanged: the complete-call RESPONSE is the
+  only time the ranks cross the wire.
+
+## Product findings owed to bench spec §15
+
+Not bench bugs — things the bench learned about the product, to be written into
+the spec's §15 appendix at T7/T8 rather than filed as issues (`_RULES.md` §1,
+spec §7 both forbid filing):
+
+1. **The product has no champion concept on the wire.** Grep
+   `champion|winner_entrant|division_winner` across `apps/web/src/server` and
+   `apps/web/src/app/api/v1`: zero code hits, only marketing copy. "Who won"
+   is expressible only as `rank: 1` in a final stage's standings or
+   `finalRanks[0]` in a complete-call response.
+2. **`finalRanks` is unreadable after the fact.** `GET /divisions/{id}/history`
+   selects `seq, type, actor_id, created_at` and not `payload`, so the ranks a
+   completion computed cannot be re-read by any client that missed the
+   response. Worth knowing before a UI tries.
+3. ~~**A confirmed ban does not keep a player off a team sheet**~~ — **CLOSED
+   in this branch, owner ruled it should block.** `gateLineupSuspensions`
+   (`usecases/discipline.ts`) refuses the write with 422 `SUSPENDED_PLAYER`,
+   overridable with a reason against a `suspension.overridden` ledger row,
+   behind the existing paid `discipline.enforced` flag via `hasFeature` so an
+   org that never bought discipline sees no change. Verified by hand in a
+   browser: banned refused, team-mate accepted, override accepted and the
+   French reason landed in `competition_events`. No longer a §15 entry.
+4. **`event-import.ts` cannot be imported by any non-Next consumer** — it opens
+   `import "server-only"`, a webpack alias with no package behind it, so
+   `IMPORT_CAPS` had to be hand-mirrored with a text-diff guard. The same is
+   true of `lib/schedule-board.ts` (via `@/lib/zoned-datetime`) for the two
+   publish refusal codes.
+
+## The live run — what it proved, and the two defects it found
+
+Three green live runs, the last on the rebased tree (`a40d40167`) against a
+v400 database, plus both legs `_RULES.md` §2 demands:
+
+| leg | placement | engine | gate | oracles |
+|---|---|---|---|---|
+| A | up | `optimized` | GREEN | 33 total, 31 with a subject (31 PASS, 0 FAIL), 2 NO SUBJECT |
+| B | down | `greedy` (`solver_unavailable`) | GREEN | same |
+
+Same verdicts through the solver and through the fallback, which is what CI
+will see — smoke has no placement container by design.
+
+The pipeline that ran end to end: seed → schedule → **start** → fold (single-POST
+9 events @ 28/s AND import 84 events in 2 chunks @ 112/s) → advance
+`s-league → s-playoff` with the captured ranks agreeing with the re-read
+standings → oracles → registration funnel.
+
+**Two defects the live run found that 1,340 passing unit tests could not:**
+
+1. **The standings comparator failed on metrics the pack never declared.** Every
+   declared field matched; the live row simply carried `for/diff/against` (or
+   `sets_won/points_won`) that `expected.tables` does not declare. Any pack
+   omitting an optional metrics map could never pass. Fixed by comparing what
+   the pack declares and carrying the rest as informational — NOT by making
+   `_tiny` declare every metric, which would have hidden the bug in the
+   comparator and left the trap for the next pack author. The `_oracle-routes`
+   fake had answered no metrics at all, which is exactly why the suite was blind.
+2. **A PASS over zero comparisons.** `tie-order cascade … (0 checked, 0 skipped)`
+   printed green on two divisions. A comparator that compared nothing has not
+   passed — it had no subject. Now a third verdict, counted separately in the
+   run summary, never reading as PASS and never reddening the run.
+
+## The product fix, proven outside the test suite
+
+Driven by hand in a browser against the real server, as the organiser, after
+creating and confirming a two-match ban through the product's own API:
+
+| attempt | result |
+|---|---|
+| name the banned player | **422 `SUSPENDED_PLAYER`** — "Farid Haddad is serving an active suspension in this division and cannot be named on a team sheet." |
+| name his eligible team-mate | **200** — not refusing everyone |
+| name the banned player WITH an override reason | **200** — the organiser proceeds on the record |
+
+A decided fixture refuses earlier ("lineup is locked once a fixture is decided"),
+so the check had to be driven on a scheduled one — worth knowing before someone
+concludes the gate does not fire.
+
+## The i18n fix, verified visually
+
+French, at 1280 / 768 / 320, on the product's own refusal:
+« Purge une suspension active dans cette division et ne peut pas figurer sur la
+feuille de match : Farid Haddad ». Wraps to 2 / 1 / 3 lines respectively,
+nothing clipped, save button intact, and `scrollWidth <= clientWidth` at 320.
+Two capture traps hit: at 320 the editor is folded behind the phone disclosure
+(opened it rather than weakening the capture, AGENTS.md rule 22), and the cookie
+banner covered the refusal until dismissed.
+
+**A11y finding, separate and not fixed here:** the page renders French while
+`document.documentElement.lang` stays `"en"`. `resolve-locale.ts`'s own header
+says the static root layout deliberately never calls it, so the resolved locale
+never reaches the `<html>` tag. A screen reader will pronounce French copy with
+English rules. Recorded for the owner; not this wave's file set.
+
+## Still owed
+
+- T4 oracles, T5 suspension carry + specials, T6 people layer, T7 report
+  sections + provenance, T8 the live `_tiny` run.
+- A clean full-suite number on a quiet box (the `strip-types-loadable.test.ts`
+  reds under load average 40+ are environmental — every module loads directly
+  under `node --experimental-strip-types` in 3-12s, exit 0).
+- The whole-branch review before the PR, and §15's three entries above.

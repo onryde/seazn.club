@@ -13,7 +13,7 @@
 //
 // The things this file pins, in order:
 //  * The run SUCCEEDS on a pack carrying warnings, and still surfaces them.
-//    `_tiny` permanently carries two `*.not_derived` warnings by design. A
+//    `_tiny` permanently carries three `*.not_derived` warnings by design. A
 //    stage that gated on "any finding at all" would red forever and the
 //    honest warning would be deleted to make it pass — which is the wrong
 //    repair.
@@ -84,15 +84,30 @@ describe("TINY_PACK_PATH", () => {
 // ---------------------------------------------------------------------------
 
 describe("tinyPackStage — warnings are reportable, never fatal", () => {
-  it("SUCCEEDS on the committed pack and still surfaces its two warnings", async () => {
+  it("SUCCEEDS on the committed pack and still surfaces its five warnings", async () => {
     const stage = await tinyPackStage(TINY_PACK_PATH);
     // The run proceeds…
     expect(stage.ok).toBe(true);
     if (!stage.ok) throw new Error(`refused: ${stage.errors.join(" | ")}`);
     // …and the warnings reach the report rather than being swallowed.
-    expect(stage.warnings).toHaveLength(2);
+    //
+    // FIVE, not three. This count was left behind twice: T5b (2d40b85a4) gave
+    // the pack `expected.careers` and T5b-3 gave it `expected.suspensions`,
+    // and each block's `*.not_derived` notice is permanent for as long as the
+    // block is non-empty. It was already red on arrival at T5b-3 — the
+    // careers row alone made it 4 — so this is a repair of an inherited red,
+    // not a weakening: every `toContain` below is untouched and two more join
+    // them.
+    expect(stage.warnings).toHaveLength(5);
     expect(stage.warnings.join(" | ")).toContain("leaderboards.not_derived");
     expect(stage.warnings.join(" | ")).toContain("champions.not_derived");
+    // B05 T5b / T5b-3 — the two blocks whose arrival moved this count.
+    expect(stage.warnings.join(" | ")).toContain("careers.not_derived");
+    expect(stage.warnings.join(" | ")).toContain("suspensions.not_derived");
+    // B05 T3 — d-tiny's second stage (s-playoff) gave the pack its first
+    // expected.finalRanks entry, which is exactly as offline-unverifiable
+    // as champions (see PackExpectedFinalRanks's own doc comment).
+    expect(stage.warnings.join(" | ")).toContain("finalRanks.not_derived");
     // Each says what was NOT checked and who owes it, not merely that
     // something happened.
     expect(stage.warnings.join(" | ")).toContain("NOT checked offline");
@@ -227,29 +242,31 @@ describe("fixtureCountIssue — addendum 1's comparison, on the testable side of
   const plan = (): SeedPlan => buildSeedPlan(tinyPack());
 
   it("is null when the generator minted exactly what the pack implies", () => {
-    // `_tiny` implies three from d-tiny's league PLUS one from d-badminton's
-    // (B03 T5) — four, summed across BOTH league stages, since `actual` at
-    // the real call site is a pool-wide count spanning every division.
-    expect(fixtureCountIssue(4, plan())).toBeNull();
+    // `_tiny` implies three from d-tiny's league, one from d-badminton's
+    // (B03 T5), and three from d-tiebreak's (B05 T5a) — seven, summed across
+    // all THREE league stages, since `actual` at the real call site is a
+    // pool-wide count spanning every division.
+    expect(fixtureCountIssue(7, plan())).toBeNull();
   });
 
   it("names BOTH numbers and a per-division breakdown when the count is short", () => {
     const issue = fixtureCountIssue(1, plan());
-    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
+    expect(issue).toContain("expected 7 fixture(s) total across 3 league stage(s)");
     expect(issue).toContain("got 1");
     // Each division's own arithmetic is named, not just the total — a reader
     // has to be able to tell WHICH stage's count is off.
     expect(issue).toContain('"d-tiny": 3 fixture(s) from the pack\'s 2-entrant league over 3 leg(s)');
     expect(issue).toContain('"d-badminton": 1 fixture(s) from the pack\'s 2-entrant league over 1 leg(s)');
+    expect(issue).toContain('"d-tiebreak": 3 fixture(s) from the pack\'s 3-entrant league over 1 leg(s)');
   });
 
   it("names both numbers when the count is LONG too — the inverted operator", () => {
     // The direction matters: an inversion reports a mismatch as a match and a
     // match as a mismatch, so an arm that only ever sees `actual < expected`
     // cannot witness it.
-    const issue = fixtureCountIssue(6, plan());
-    expect(issue).toContain("expected 4 fixture(s) total across 2 league stage(s)");
-    expect(issue).toContain("got 6");
+    const issue = fixtureCountIssue(9, plan());
+    expect(issue).toContain("expected 7 fixture(s) total across 3 league stage(s)");
+    expect(issue).toContain("got 9");
   });
 
   it("degrades to the ORIGINAL single-entry sentence for a one-league-stage pack — no shape change for every pack before T5", () => {
@@ -346,9 +363,10 @@ describe("runTinySuite — what the SuiteReport carries", () => {
     // The network is unreachable, so the gate is red for THAT reason…
     expect(report.gate).toBe("red");
     expect(report.errors ?? []).not.toHaveLength(0);
-    // …and the pack's two permanent warnings still reached the report rather
-    // than being dropped on the way through the run.
-    expect(report.warnings ?? []).toHaveLength(2);
+    // …and the pack's five permanent warnings still reached the report
+    // rather than being dropped on the way through the run. (Same inherited
+    // drift as `tinyPackStage`'s own count above — see the note there.)
+    expect(report.warnings ?? []).toHaveLength(5);
     expect((report.warnings ?? []).join(" | ")).toContain("leaderboards.not_derived");
   });
 });
@@ -620,23 +638,41 @@ export function makeFakeServer(
         return out as unknown as T;
       }
       if (method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(routePath)) {
-        // STAGE-AWARE, because `_tiny.json` now declares TWO league stages
-        // (B03 T5 — the badminton division) and `seedSuite` calls `/generate`
-        // once per stage (lib/seed.ts): d-tiny's mints three round-robin
-        // fixtures (2 entrants, 3 legs), d-badminton's mints one (2 entrants,
-        // 1 leg). A single hardcoded response here would hand d-badminton
-        // three UNCLAIMED fixtures and leave its own stream unmatched —
-        // `bindStreamFixtures`'s two anti-vacuity checks (lib/seed.ts:184-185)
-        // exist precisely to catch that.
+        // STAGE-AWARE, because `_tiny.json` now declares THREE stages that
+        // each get their own `/generate` call (lib/seed.ts, once per stage):
+        // d-tiny's league mints three round-robin fixtures (2 entrants, 3
+        // legs), d-badminton's mints one, and d-tiny's own s-playoff (B05 T3
+        // — a knockout fed from the league, `timing:"setup"`) mints ONE TBD
+        // placeholder (`se-r0-i0`, buildSingleElim's own id for a 2-slot
+        // single-elim bracket — no real entrants; this fake never resolves
+        // the progression, it only has to hand back an ext_key stream
+        // binding can claim). A single hardcoded response here would hand a
+        // division three UNCLAIMED fixtures and leave its own stream
+        // unmatched — `bindStreamFixtures`'s two anti-vacuity checks
+        // (lib/seed.ts:184-185) exist precisely to catch that.
         const stageId = routePath.split("/")[4]!;
         const generated =
           stageId === "stage-badminton-league"
             ? [{ id: "fx-bm-1", ext_key: "rr-r1-c1" }]
-            : [
-                { id: "fx-1", ext_key: "rr-r1-c1" },
-                { id: "fx-2", ext_key: "rr-r2-c1" },
-                { id: "fx-3", ext_key: "rr-r3-c1" },
-              ];
+            : stageId === "stage-playoff"
+              ? [{ id: "fx-playoff-1", ext_key: "se-r0-i0" }]
+              : // B05 T5a — `d-tiebreak`'s own league (3 entrants, 1 leg — the
+                // odd-field round robin's pivot-bye means 3 rounds, the SAME
+                // count as d-tiny's own s-league below, which is why this
+                // branch needs its OWN `fx-tb-*` ids: reusing `fx-1..3` for
+                // BOTH stages would collide in `schedule.addFixtures`'
+                // shared table and silently orphan d-tiny's own fixtures.
+                stageId === "stage-tiebreak-league"
+                ? [
+                    { id: "fx-tb-1", ext_key: "rr-r1-c1" },
+                    { id: "fx-tb-2", ext_key: "rr-r2-c1" },
+                    { id: "fx-tb-3", ext_key: "rr-r3-c1" },
+                  ]
+                : [
+                    { id: "fx-1", ext_key: "rr-r1-c1" },
+                    { id: "fx-2", ext_key: "rr-r2-c1" },
+                    { id: "fx-3", ext_key: "rr-r3-c1" },
+                  ];
         // B04: the SAME rows become this world's fixture table, so the board
         // `GET /divisions/{id}/fixtures` returns below is the one `/generate`
         // actually minted rather than a second, independently invented list.
