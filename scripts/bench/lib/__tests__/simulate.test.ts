@@ -148,6 +148,19 @@ describe("resolvePayloadRefs", () => {
   it("throws, naming the unresolved ref, rather than sending the literal @-string", () => {
     expect(() => resolvePayloadRefs({ by: "@nobody" }, new Map())).toThrow(/@nobody/);
   });
+
+  it("defaults its throw's prefix to \"simulate:\" when no caller is named", () => {
+    expect(() => resolvePayloadRefs({ by: "@nobody" }, new Map())).toThrow(/^simulate: payload ref/);
+  });
+
+  // T2.5 review MINOR: `import.ts:336` reuses this function, and an
+  // unresolved ref there used to throw with a HARDCODED "simulate:" prefix —
+  // an import-fold failure would misreport itself as a simulate failure. The
+  // prefix now reflects the ACTUAL caller.
+  it("reflects the actual caller in its throw's prefix, nested inside an array/object too", () => {
+    expect(() => resolvePayloadRefs({ by: "@nobody" }, new Map(), "import")).toThrow(/^import: payload ref/);
+    expect(() => resolvePayloadRefs({ sides: ["@nobody"] }, new Map(), "import")).toThrow(/^import: payload ref/);
+  });
 });
 
 // ---------------------------------------------------------------------------

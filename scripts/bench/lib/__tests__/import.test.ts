@@ -243,6 +243,30 @@ describe("chunkStreamsForImport", () => {
     );
   });
 
+  // T2.5 review MINOR: the FAR-OVER test above proves the events-per-call
+  // bound splits SOMETHING, but its 25,000-event scale cannot isolate a
+  // `>`/`>=` mutation on `wouldExceedEvents` from `wouldExceedStreams` — both
+  // caps trip at similar points. These two use an injected `caps.streams`
+  // high enough that only the EVENTS cap can ever fire, so a `>=` mutant
+  // (which would wrongly split the exact-at-cap case) or a `>` mutant that
+  // instead over-relaxes (which would wrongly NOT split the one-over case)
+  // is caught deliberately, not incidentally.
+  it("packs two streams into ONE chunk when their combined events land EXACTLY at eventsPerCall", () => {
+    const a = stream("d-b", "a", Array.from({ length: 3 }, () => ev("core.start")));
+    const b = stream("d-b", "b", Array.from({ length: 4 }, () => ev("core.start")));
+    const { chunks, oversize } = chunkStreamsForImport([a, b], { streams: 50, eventsPerFixture: 1000, eventsPerCall: 7 });
+    expect(oversize).toEqual([]);
+    expect(chunks).toEqual([[a, b]]);
+  });
+
+  it("splits into TWO chunks when combined events land ONE OVER eventsPerCall", () => {
+    const a = stream("d-b", "a", Array.from({ length: 3 }, () => ev("core.start")));
+    const b = stream("d-b", "b", Array.from({ length: 5 }, () => ev("core.start")));
+    const { chunks, oversize } = chunkStreamsForImport([a, b], { streams: 50, eventsPerFixture: 1000, eventsPerCall: 7 });
+    expect(oversize).toEqual([]);
+    expect(chunks).toEqual([[a], [b]]);
+  });
+
   it("honors an injected caps override for a targeted small-scale test", () => {
     const streams = manyStreams("d-b", 3, 2);
     const { chunks } = chunkStreamsForImport(streams, { streams: 1, eventsPerFixture: 10, eventsPerCall: 10 });
@@ -349,6 +373,17 @@ describe("importDivisionStreams — a clean multi-chunk fold", () => {
     await expect(
       importDivisionStreams(baseInput({ streams: [s], fixtureIdByKey: new Map(), transport: { raw: async () => importedReportFor([]) } })),
     ).rejects.toThrow(/wrong-key/);
+  });
+
+  // T2.5 review MINOR: an unresolved `@`-ref used to throw with `simulate.ts`'s
+  // own hardcoded "simulate:" prefix, so an import-fold failure misreported
+  // itself as a simulate failure. It now names ITS OWN caller.
+  it("an unresolved payload ref throws with an \"import:\" prefix, not \"simulate:\"", async () => {
+    const s = stream("d-b", "fx1", [ev("generic.score", { by: "@nobody" })]);
+    const fixtureIdByKey = fixtureMapFor([s]);
+    await expect(
+      importDivisionStreams(baseInput({ streams: [s], fixtureIdByKey, refIdByKey: new Map(), transport: { raw: async () => importedReportFor([s]) } })),
+    ).rejects.toThrow(/^import: payload ref "@nobody"/);
   });
 
   it("throws when a 200 response's results array length does not match the chunk it was sent — positional correlation would silently mismatch", async () => {

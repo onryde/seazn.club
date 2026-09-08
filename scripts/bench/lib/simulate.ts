@@ -138,22 +138,33 @@ export function computeEventsPerSecond(eventsSent: number, wallMs: number): numb
 // `seedSuite` actually minted; a miss here means a bug in what the caller
 // merged into `refIdByKey`, not a bad pack.
 // ---------------------------------------------------------------------------
-export function resolvePayloadRefs(value: unknown, refIdByKey: ReadonlyMap<string, string>): unknown {
+/** `caller` names WHO is resolving refs, for the thrown message's prefix
+ *  ONLY — never read for any other purpose. `import.ts:336` reuses this
+ *  function (its own header comment says so) and used to inherit a
+ *  hardcoded `"simulate:"` prefix, so an import-fold failure misreported
+ *  itself as a simulate failure (T2.5 review MINOR). Defaults to
+ *  `"simulate"` — this file's own call site — so every existing caller and
+ *  test is unaffected. */
+export function resolvePayloadRefs(
+  value: unknown,
+  refIdByKey: ReadonlyMap<string, string>,
+  caller = "simulate",
+): unknown {
   if (typeof value === "string") {
     if (!value.startsWith("@")) return value;
     const ref = value.slice(1);
     const id = refIdByKey.get(ref);
     if (id === undefined) {
       throw new Error(
-        `simulate: payload ref "${value}" resolved to no known entrant/person id — check what seedSuite actually bound`,
+        `${caller}: payload ref "${value}" resolved to no known entrant/person id — check what seedSuite actually bound`,
       );
     }
     return id;
   }
-  if (Array.isArray(value)) return value.map((v) => resolvePayloadRefs(v, refIdByKey));
+  if (Array.isArray(value)) return value.map((v) => resolvePayloadRefs(v, refIdByKey, caller));
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, resolvePayloadRefs(v, refIdByKey)]),
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, resolvePayloadRefs(v, refIdByKey, caller)]),
     );
   }
   return value;
@@ -215,7 +226,7 @@ async function foldOneStream(
   let eventsSent = 0;
   for (let i = 0; i < stream.events.length; i += 1) {
     const event = stream.events[i];
-    const payload = resolvePayloadRefs(event.payload, refIdByKey);
+    const payload = resolvePayloadRefs(event.payload, refIdByKey, "simulate");
     const body = { expected_seq: i, type: event.type, payload };
     // Sequential, on purpose: the next iteration must not fire until THIS
     // one's response is back (_RULES.md §3's "strictly sequential per

@@ -333,7 +333,7 @@ function buildImportRequestBody(
         // mutation sweep found: removing it changed no test outcome.
         events: stream.events.map((event) => ({
           type: event.type,
-          payload: resolvePayloadRefs(event.payload, refIdByKey),
+          payload: resolvePayloadRefs(event.payload, refIdByKey, "import"),
           at: event.at,
         })),
       };
