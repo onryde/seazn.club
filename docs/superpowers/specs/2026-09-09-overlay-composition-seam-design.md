@@ -103,8 +103,14 @@ read `status` and they disagreed on screen.
 ### 4.2 Slots
 
 ```ts
-export type SlotName = "brand" | "moment" | "sponsor";
+export type SlotName = "brand" | "clubMark" | "moment" | "sponsor";
 ```
+
+`brand` and `clubMark` are **two slots, not one** (owner, 2026-09-09 — §4.4).
+The seazn watermark is permanent; a club mark is additional and never displaces
+it. Modelling them as one replaceable slot would make "the club has a logo"
+and "seazn is unattributed" the same state, which is exactly the state the
+owner ruled out.
 
 A closed union, for the reason `ThemeId` is a closed union: a typo becomes a
 compile error rather than a silently-missing graphic.
@@ -187,14 +193,29 @@ cloud compositor, per the programme invariant.
 
 ### 4.4 Brand (axis 3)
 
-**Owner requirement, 2026-09-09: "we must able to replace our logo easily", and
-the format is "transprent svg".** So the club mark is a first-class replaceable
-asset, not a build-time constant — and that is what makes the brand mark the
-right first panel (§8) rather than merely a tidy-up.
+**Owner, 2026-09-09: "we must able to replace our logo easily", "transprent
+svg", and — on whether a club mark may displace `seazn` — "no, watermark should
+be alway right".**
 
-**Easily means data, not code.** Replacing a logo must be an org-settings
-change that takes effect on the next poll — no deploy, no theme edit, no code
-path per club.
+**Two marks, and only one of them is ours to give away.**
+
+- **`brand` — the seazn watermark. Always rendered, always right-positioned.**
+  Not replaceable by a club, not hideable by an entitlement, not a function of
+  the club's plan. "Replace our logo easily" is scoped to **us** swapping the
+  seazn asset — which is precisely what making it a panel buys, since today it
+  is hardcoded three times (§7.2) and a rebrand would mean editing every theme.
+  Right-positioning is already what bar and bug do (`.ovl-brand` at the bar's
+  right end, the bug header's right), so this ratifies the built behaviour
+  rather than changing it.
+- **`clubMark` — the club's own mark. Optional, additional, never in the
+  `brand` slot.** Entitlement-gated, absent for most clubs.
+
+Modelling these as one replaceable slot would make "this club has a logo" and
+"seazn is unattributed" the same state. They are not, and the owner ruled the
+second one out.
+
+**Easily means data, not code** — for the club mark, an org-settings change that
+takes effect on the next poll: no deploy, no theme edit, no code path per club.
 
 **There is already exactly one authority for this and the panel must reuse it.**
 `resolveLogoUrl(logo_storage_path, logo_url)`
@@ -333,21 +354,24 @@ Deferred with named gaps: takeover panels (no consumer yet), `timer` and
 - **No multi-fixture designs** — `sides` stays a pair (§2).
 - **Approach B**, resolved into B-for-anchored / C-for-takeover (§3).
 
+- **Club COLOUR is allowed only in NON-TEXT roles, verified at resolve time**
+  (owner: "apply your rec", 2026-09-09). The author had not in fact recorded a
+  recommendation for this one and made the call rather than infer a prior
+  position: a club colour may drive an accent or a plate, where §2's 3:1
+  graphical floor applies and can be computed server-side against the sport's
+  own palette; if it fails the check it falls back to the sport token. **Text
+  stays on `--sport-ink` unconditionally.** Sellable as "your colours",
+  enforceable in code, and it cannot produce unreadable copy.
+- **The mark gets a PLATE, not a guideline** (owner: "apply your rec"). A
+  constrained plate behind the club mark is enforceable; "supply a
+  light-on-transparent mark" is a rule nobody reads, and an unreadable mark on
+  a live broadcast is our failure regardless of who supplied the artwork.
+- **The seazn watermark always shows, always right; a club mark never displaces
+  it** (owner: "no, watermark should be alway right"). Two slots — §4.2, §4.4.
+
 **Still open:**
 
-1. **Club COLOUR vs contrast (§4.4).** The logo ships without it. Colour tokens
-   can land on text, where `_THEMES.md` §2's 4.5:1 floor applies and arbitrary
-   club colour cannot be trusted to clear it. Constrain club colour to
-   contrast-checked roles, or keep it off text entirely? This decides what can
-   be sold as "your colours".
-2. **Legibility treatment for the mark (§4.4.1).** A plate behind the logo
-   (enforceable) or a documented light-on-transparent rule (not enforceable).
-   Author's recommendation: the plate.
-3. **Attribution.** If a club replaces `seazn` with its own mark, does the
-   `seazn` mark disappear entirely, or move? That is pricing and brand policy,
-   not engineering — but the panel's placement rules differ depending on whether
-   two marks can be on screen at once.
-4. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
+1. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
    is R2's; `_THEMES.md` §4a treats it as registry entry three; W1 built it on
    2026-09-09 under "fix all". The tree and the programme design now disagree
    and one of them needs correcting.
