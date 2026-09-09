@@ -307,6 +307,7 @@
   "landing.status.live.one": "En vivo: {count} partido",
   "landing.status.live.other": "En vivo: {count} partidos",
   "landing.status.next": "Próximo: {when}",
+  "landing.status.matchDay": "Día de partido",
   "landing.status.finished": "Finalizado",
   "landing.status.dates": "{from} – {to}",
   "landing.status.datesFrom": "Desde {from}",

@@ -307,6 +307,7 @@
   "landing.status.live.one": "Nu live: {count} wedstrijd",
   "landing.status.live.other": "Nu live: {count} wedstrijden",
   "landing.status.next": "Volgende: {when}",
+  "landing.status.matchDay": "Wedstrijddag",
   "landing.status.finished": "Afgelopen",
   "landing.status.dates": "{from} – {to}",
   "landing.status.datesFrom": "Vanaf {from}",

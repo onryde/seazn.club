@@ -307,6 +307,7 @@
   "landing.status.live.one": "Live now: {count} match",
   "landing.status.live.other": "Live now: {count} matches",
   "landing.status.next": "Next: {when}",
+  "landing.status.matchDay": "Match day",
   "landing.status.finished": "Finished",
   "landing.status.dates": "{from} – {to}",
   "landing.status.datesFrom": "From {from}",

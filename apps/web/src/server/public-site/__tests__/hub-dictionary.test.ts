@@ -35,7 +35,19 @@ import { LEADER_SPECS } from "../leaders";
 export const W2_KEYS = [
   // landing shell
   "landing.tabsLabel", "landing.tab.overview", "landing.tab.matches", "landing.tab.table", "landing.tab.stats", "landing.tab.teams", "landing.tab.gallery", "landing.tab.info",
-  "landing.status.empty", "landing.status.live.one", "landing.status.live.other", "landing.status.next", "landing.status.finished", "landing.status.dates", "landing.status.datesFrom",
+  // One key per RUNG of `landingStatus`'s ladder (`lib/matches-hub.ts:270`):
+  // empty → live → next → match_day → finished → dates. `matchDay` was missing
+  // from all four locales until PR 2's pre-flight scan for Task 8 found it, and
+  // the way it was missed is worth keeping: it was looked for among CONSUMERS,
+  // found to have none, and dropped as speculative — while the PRODUCER emits
+  // it unconditionally at `matches-hub.ts:330`. A key is owed by what can emit
+  // it, never by what happens to read it yet.
+  //
+  // This list is still hand-written, so it cannot fail when a NEW rung is
+  // added. The exhaustive guard belongs at the renderer: Task 11 must switch
+  // over `LandingStatus["kind"]` with a `never` default, which makes tsc — not
+  // a reviewer — reject a rung with no branch.
+  "landing.status.empty", "landing.status.live.one", "landing.status.live.other", "landing.status.next", "landing.status.matchDay", "landing.status.finished", "landing.status.dates", "landing.status.datesFrom",
   "landing.liveNow", "landing.nextUp", "landing.tables", "landing.register", "landing.present", "landing.divisions.one", "landing.divisions.other",
   "landing.entrants.one", "landing.entrants.other", "landing.liveCount.one", "landing.liveCount.other", "landing.sponsors", "landing.presentedBy", "landing.partners", "landing.noDivisions",
   // matches hub

@@ -2453,6 +2453,7 @@ export type DictionaryKey =
   | "landing.status.finished"
   | "landing.status.live.one"
   | "landing.status.live.other"
+  | "landing.status.matchDay"
   | "landing.status.next"
   | "landing.tab.gallery"
   | "landing.tab.info"
