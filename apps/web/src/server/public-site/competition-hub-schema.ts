@@ -11,12 +11,6 @@
 // file), and every user-facing string that is not already resolved travels as
 // a `Msg` — a dictionary key plus params, resolved client-side with `t()`.
 import { z } from "zod";
-import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema";
-// The tab list is DERIVED, and the refinement at the bottom of this file makes
-// that a rule the document must satisfy rather than a comment nobody enforces
-// — so the derivation itself is imported instead of restated. `matches-hub.ts`
-// is pure and imports nothing, so pulling it in costs this module nothing.
-//
 // RELATIVE, with the explicit `.ts` extension, following the reasoning written
 // out at `server/api-v1/schemas.ts:24-28`: that module is shared with the
 // standalone OpenAPI generator, which runs under bare
@@ -24,15 +18,17 @@ import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema";
 // `@/...` specifier throws ERR_MODULE_NOT_FOUND there while resolving fine
 // under tsc, Next and vitest.
 //
-// Being accurate about what that buys, because the first version of this
-// comment claimed more: THIS MODULE IS NOT LOADABLE UNDER BARE NODE TODAY.
-// The `./match-centre-schema` import above is extensionless — measured,
-// `node --input-type=module -e 'await import(<this file>)'` fails with
-// `ERR_MODULE_NOT_FOUND: …/public-site/match-centre-schema`. Nothing imports
-// this file from the generator, so nothing is broken; the extension here is
-// the shape to copy, and the day something does wire it in, BOTH imports need
-// one. Left as a single deliberate inconsistency rather than a silent edit to
-// a line this task did not own.
+// Spectator W2 Task 5 — this is the day the comment above used to warn about:
+// the OpenAPI generator now imports THIS file (openapi.ts's CompetitionHubDoc
+// entry), so the missing extension on this specifier is no longer a
+// theoretical gap. Measured: `node --experimental-strip-types
+// scripts/openapi-gen.ts` failed with `ERR_MODULE_NOT_FOUND:
+// …/public-site/match-centre-schema` before this extension was added.
+import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema.ts";
+// The tab list is DERIVED, and the refinement at the bottom of this file makes
+// that a rule the document must satisfy rather than a comment nobody enforces
+// — so the derivation itself is imported instead of restated. `matches-hub.ts`
+// is pure and imports nothing, so pulling it in costs this module nothing.
 import { deriveHubTabs } from "../../lib/matches-hub.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because

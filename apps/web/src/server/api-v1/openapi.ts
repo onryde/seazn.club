@@ -9,6 +9,16 @@
 import { z, type ZodType } from "zod";
 import * as S from "./schemas.ts";
 import { matchKeyRoute } from "./key-scopes.ts";
+// Spectator surface W2, Task 5 — imported directly rather than routed through
+// schemas.ts's `S.` namespace (unlike W1's MatchCentreDoc, which schemas.ts
+// re-exports as a field of PublicFixtureSummary): this is the document's own
+// top-level route response, not a field nested inside another schema. Same
+// relative-import, explicit-`.ts`-extension reasoning as every other import
+// in this file that reaches the standalone generator script — verified
+// transitively before wiring: competition-hub-schema.ts imports zod,
+// ./match-centre-schema.ts (zod only) and ../../lib/matches-hub.ts (no
+// imports at all), so nothing here reaches a `server-only` module.
+import { CompetitionHubDoc } from "../public-site/competition-hub-schema.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -195,6 +205,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/orgs/{id}/courts/{courtId}/calendar", method: "put", summary: "Replace a court's weekly hours + exceptions in one write — full replace, no per-row PATCH surface. An exception date always wins over that weekday's hours (closed = no windows). 422 COURT_HOURS_OVERLAP when two ranges on the same weekday overlap. Response carries two ADVISORY, non-blocking numbers: `newlyStrandedFixtureCount` — unplayed fixtures THIS write stranded, which is what a client should attribute to the edit — and `strandedFixtureCount`, every unplayed fixture on the court currently outside a usable window, including ones a division session window or blackout stranded independently of this write (the real conflict code is P10's)", tag: "venues", request: S.PutCourtCalendar, response: S.CourtCalendar, errors: [404, 422] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
+  { path: "/public/orgs/{orgSlug}/competitions/{slug}/hub", method: "get", summary: "Public competition hub: matches, tables, leaders, teams, info — the landing page's live document", tag: "public", public: true, response: CompetitionHubDoc },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/schedule", method: "get", summary: "Public schedule", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings", method: "get", summary: "Public standings", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/entrants", method: "get", summary: "Public entrants (consent-filtered)", tag: "public", public: true },
