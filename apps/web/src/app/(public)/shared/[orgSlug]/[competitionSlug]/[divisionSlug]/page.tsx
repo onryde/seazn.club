@@ -8,6 +8,7 @@ import type { Metadata } from "next";
 import { resolveModule } from "@/server/engine-db";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { getPublicDivision } from "@/server/public-site/data";
+import { BRACKET_KINDS, divisionChampion } from "@/server/public-site/champion";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { sharedRenameTarget } from "@/server/slug-resolve";
 import { publicThemeStyle } from "@/lib/public-theme";
@@ -50,8 +51,6 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       : {}),
   };
 }
-
-const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
 export default async function DivisionHomePage({ params }: Props) {
   const { orgSlug, competitionSlug, divisionSlug } = await params;
@@ -122,31 +121,11 @@ export default async function DivisionHomePage({ params }: Props) {
   // Champion (v1 parity): once the decisive stage is done, crown the winner
   // above the table. Bracket → winner of the last-round fixture; league/group
   // → rank 1 of the final overall standings.
-  const championId: string | null = (() => {
-    const decisive = [...stages].sort((a, b) => b.seq - a.seq)[0];
-    if (!decisive) return null;
-    // Crown when the stage is flagged complete OR every one of its fixtures is
-    // already decided (a fully-played stage isn't always flipped to complete).
-    const stageFixtures = fixtures.filter((f) => f.stage_id === decisive.id);
-    const finished = (f: (typeof fixtures)[number]) =>
-      f.status === "decided" || f.status === "finalized" || f.outcome?.winner != null;
-    const stageDone =
-      decisive.status === "complete" ||
-      (stageFixtures.length > 0 && stageFixtures.every(finished));
-    if (!stageDone) return null;
-    if (BRACKET_KINDS.has(decisive.kind)) {
-      const decided = stageFixtures.filter((f) => f.outcome?.winner);
-      if (decided.length === 0) return null;
-      const final = decided.reduce((a, b) => (b.round_no > a.round_no ? b : a));
-      return final.outcome?.winner ?? null;
-    }
-    const snap =
-      standings.find((s) => s.stage_id === decisive.id && !s.pool_id) ??
-      standings.find((s) => s.stage_id === decisive.id);
-    if (!snap) return null;
-    const top = (snap.rows as StandingsRow[]).find((r) => r.rank === 1);
-    return top?.entrantId ?? null;
-  })();
+  //
+  // The rule itself lives in `server/public-site/champion.ts` — the competition
+  // hub crowns the same entrant on every table it publishes, and two copies of
+  // this ladder would be two crowns that agree only until one of them moves.
+  const championId: string | null = divisionChampion(stages, fixtures, standings);
 
   // Rendered at the very top of the division page (above the tabs) so the
   // winner is visible on Schedule/Standings/Entrants alike — v1 parity.
