@@ -9,17 +9,44 @@ import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData } from
 
 export const POLL_MS = 15_000;
 
-export interface UseLiveFixtureResult {
-  data: LiveFixtureData;
-  transport: "realtime" | "poll";
+/** Stream overlay W1 (design §3.3): the ONE transport now serves two payloads
+ *  — the public fixture JSON (`MatchCentre`, the default) and the overlay
+ *  endpoint (`OverlayStage`, via `fetcher`). `delayMs` is R2's presentation
+ *  buffer, built here so the seam is real from W1; with it absent the hook is
+ *  byte-identical to the spectator-W1 version.
+ *
+ *  `fetcher` must be STABLE across renders (a module-level function such as
+ *  `fetchOverlayFixture`, or a `useCallback`). It is a dependency of `refresh`,
+ *  which is a dependency of the poll effect — an inline arrow would re-arm the
+ *  interval every render and the poll would never fire. */
+export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
+  fetcher?: (fixtureId: string) => Promise<T>;
+  /** Present snapshots no sooner than `delayMs` after they were received. */
+  delayMs?: number;
 }
 
-export function useLiveFixture(
+export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> {
+  data: T;
+  transport: "realtime" | "poll";
+  /** How far behind wall time the PRESENTED snapshot is (= `delayMs`, 0 by
+   *  default). The overlay clock subtracts it (design §3.6); nothing else
+   *  reads it. A FIELD here, never a module export — one authority per hook
+   *  instance (design FS17). */
+  presentationNowOffsetMs: number;
+}
+
+export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   fixtureId: string,
-  initial: LiveFixtureData,
+  initial: T,
   realtime: boolean,
-): UseLiveFixtureResult {
-  const [data, setData] = useState<LiveFixtureData>(initial);
+  options: UseLiveFixtureOptions<T> = {},
+): UseLiveFixtureResult<T> {
+  const fetcher = options.fetcher ?? (fetchLiveFixture as (id: string) => Promise<T>);
+  const delayMs = options.delayMs ?? 0;
+  const [data, setData] = useState<T>(initial);
+  // The delay buffer: snapshots RECEIVED, waiting to be PRESENTED. Empty and
+  // unused when delayMs is 0.
+  const bufferRef = useRef<{ receivedAt: number; snapshot: T }[]>([]);
   // NO `updatedAt` state here. The freshness line ("Updated 5s ago") derives
   // from `header.updatedAt` — the DOCUMENT's own timestamp, ticked every
   // second by `useNow()` in `court-card.tsx` — never from when this hook last
@@ -41,13 +68,17 @@ export function useLiveFixture(
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetchLiveFixture(fixtureId);
+      const next = await fetcher(fixtureId);
       if (!mountedRef.current) return;
-      setData(next);
+      if (delayMs <= 0) {
+        setData(next);
+        return;
+      }
+      bufferRef.current.push({ receivedAt: Date.now(), snapshot: next });
     } catch {
       // transient — keep the last known data (never throw to the UI)
     }
-  }, [fixtureId]);
+  }, [fixtureId, fetcher, delayMs]);
 
   const live = data.status === "in_play" || data.status === "scheduled";
 
@@ -92,6 +123,24 @@ export function useLiveFixture(
     };
   }, [fixtureId, realtime, live, refresh]);
 
+  // Drain the delay buffer once per second: present the newest snapshot whose
+  // receivedAt ≤ now − delayMs, drop everything older. One interval, armed only
+  // while delayMs > 0 — the no-option path never creates it.
+  useEffect(() => {
+    if (delayMs <= 0) return;
+    const id = setInterval(() => {
+      const due = Date.now() - delayMs;
+      const buf = bufferRef.current;
+      let idx = -1;
+      for (let i = 0; i < buf.length; i++) if (buf[i]!.receivedAt <= due) idx = i;
+      if (idx >= 0 && mountedRef.current) {
+        setData(buf[idx]!.snapshot);
+        bufferRef.current = buf.slice(idx + 1);
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [delayMs]);
+
   // 15 s polling fallback (Community, or realtime not connected).
   useEffect(() => {
     if (!live || subscribed) return;
@@ -99,5 +148,5 @@ export function useLiveFixture(
     return () => clearInterval(id);
   }, [live, subscribed, refresh]);
 
-  return { data, transport: subscribed ? "realtime" : "poll" };
+  return { data, transport: subscribed ? "realtime" : "poll", presentationNowOffsetMs: delayMs };
 }

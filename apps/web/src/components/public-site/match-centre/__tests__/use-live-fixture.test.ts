@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderIsland } from "@/components/__tests__/_hook-harness";
 import type { LiveFixtureData } from "../../live-score-data";
-import type { UseLiveFixtureResult } from "../use-live-fixture";
+import type { UseLiveFixtureOptions, UseLiveFixtureResult } from "../use-live-fixture";
 
 vi.mock("../../live-score-data", async () => {
   const actual = await vi.importActual<typeof import("../../live-score-data")>("../../live-score-data");
@@ -25,14 +25,19 @@ vi.mock("../../live-score-data", async () => {
 import { fetchLiveFixture } from "../../live-score-data";
 import { POLL_MS, useLiveFixture } from "../use-live-fixture";
 
-function mount(fixtureId: string, initial: LiveFixtureData, realtime: boolean) {
+function mount(
+  fixtureId: string,
+  initial: LiveFixtureData,
+  realtime: boolean,
+  options?: UseLiveFixtureOptions<LiveFixtureData>,
+) {
   let latest!: UseLiveFixtureResult;
-  function Probe(props: { fixtureId: string; initial: LiveFixtureData; realtime: boolean; onReady: (r: UseLiveFixtureResult) => void }) {
-    const result = useLiveFixture(props.fixtureId, props.initial, props.realtime);
+  function Probe(props: { fixtureId: string; initial: LiveFixtureData; realtime: boolean; options?: UseLiveFixtureOptions<LiveFixtureData>; onReady: (r: UseLiveFixtureResult) => void }) {
+    const result = useLiveFixture(props.fixtureId, props.initial, props.realtime, props.options);
     props.onReady(result);
     return null;
   }
-  const island = renderIsland(Probe, { fixtureId, initial, realtime, onReady: (r) => (latest = r) });
+  const island = renderIsland(Probe, { fixtureId, initial, realtime, options, onReady: (r) => (latest = r) });
   return {
     get current() {
       return latest;
@@ -112,5 +117,119 @@ describe("useLiveFixture", () => {
     expect(() => resolveFetch(late)).not.toThrow();
     await vi.advanceTimersByTimeAsync(0); // flush the now-resolved promise's continuation
     expect(hook.current.data).toBe(scheduled); // unchanged — the guarded setState never applied
+  });
+
+  // ---- Stream overlay W1 (design §3.3): generic fetcher + presentation delay ----
+
+  it("polls the public fixture URL by default — every existing caller is byte-identical", async () => {
+    // The default fetcher IS `fetchLiveFixture` (mocked here), called with the id.
+    vi.mocked(fetchLiveFixture).mockResolvedValueOnce({ ...scheduled, status: "in_play" } as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false);
+    expect(hook.current.presentationNowOffsetMs, "no delay → offset 0, by value").toBe(0);
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(fetchLiveFixture).toHaveBeenCalledWith("fx-1");
+    expect(hook.current.data.status).toBe("in_play");
+  });
+
+  it("uses the fetcher it is given, and then never calls fetchLiveFixture (one transport, two payloads)", async () => {
+    const own = vi.fn(async (id: string) => ({ ...scheduled, status: "in_play", summary: { headline: `own:${id}` } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher: own });
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(own).toHaveBeenCalledWith("fx-1");
+    expect(fetchLiveFixture).not.toHaveBeenCalled();
+    expect(hook.current.data.summary?.headline).toBe("own:fx-1");
+  });
+
+  it("without options arms ONLY the poll timer — no drain timer (the positive pair for the delay cases)", () => {
+    mount("fx-1", scheduled, false);
+    // One pending timer: the POLL_MS interval. A drain interval would make it two.
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it("delayMs: a snapshot received at t is presented at t + delayMs, on the 1 s drain, and the offset is exposed by value", async () => {
+    const fetcher = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "1 — 1" } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher, delayMs: 3000 });
+    expect(hook.current.presentationNowOffsetMs).toBe(3000);
+    expect(vi.getTimerCount(), "poll + drain").toBe(2);
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // received at POLL_MS
+    expect(hook.current.data.summary?.headline, "not yet — 3 s have not passed").toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2000);                 // drains at +1 s, +2 s: still held
+    expect(hook.current.data.summary?.headline).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);                 // +3 s: presented
+    expect(hook.current.data.summary?.headline).toBe("1 — 1");
+  });
+
+  it("delayMs: successive snapshots present in order, each one delayMs after ITS OWN receipt", async () => {
+    let n = 0;
+    const fetcher = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: `s${++n}` } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher, delayMs: 2000 });
+    // The poll interval ticks at fixed POLL_MS boundaries, so the two receipts
+    // are POLL_MS apart: s1 at t = 15 000, s2 at t = 30 000. The 1 s drain
+    // presents each 2 s after ITS OWN receipt — s1 at t = 17 000, s2 at
+    // t = 32 000 — so at t = 30 500 the presented snapshot is still s1.
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // t = 15 000: s1 received
+    await vi.advanceTimersByTimeAsync(500);                  // t = 15 500: s1 presented at 17 000 (below)
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // t = 30 500: s1 long presented, s2 received at 30 000
+    expect(hook.current.data.summary?.headline).toBe("s1");
+    await vi.advanceTimersByTimeAsync(2000);                 // t = 32 500: s2 became due at 32 000
+    expect(hook.current.data.summary?.headline).toBe("s2");
+  });
+
+  // Mutation finding (task 1, step 5): deleting `refresh`'s try/catch leaves
+  // every case in this file GREEN and SILENT — the interval never awaits
+  // `refresh()`, so a rejection just escapes and nothing observes it. "Never
+  // throws to the UI" was therefore untested. The overlay polls an endpoint
+  // that is allowed to die (design §3.1, step 2b), so this pins it: catch a
+  // process-level unhandled rejection, which is exactly what escapes.
+  it("a rejected fetch is swallowed INSIDE refresh — no unhandled rejection escapes the poll interval", async () => {
+    const escaped: unknown[] = [];
+    const onUnhandled = (reason: unknown) => escaped.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const fetcher = vi.fn(async (): Promise<LiveFixtureData> => {
+        throw new Error("overlay endpoint is dead");
+      });
+      const hook = mount("fx-1", scheduled, false, { fetcher });
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(hook.current.data).toBe(scheduled);
+      // The rejection is created under fake timers; node only reports an
+      // unhandled one on a later REAL turn, so hand the loop one.
+      vi.useRealTimers();
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      expect(escaped, "refresh's own catch is the only thing keeping this empty").toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("delayMs: two snapshots BOTH due at one drain tick — the newest wins and the older is never painted", async () => {
+    // The case above never puts two snapshots in the buffer at once, so it
+    // cannot witness WHICH due snapshot the drain picks. Here the first fetch
+    // is held in flight until t = 29 500 and the second poll lands at
+    // t = 30 000, so at the t = 32 000 tick (due = 30 000) BOTH are due.
+    let releaseFirst!: (v: LiveFixtureData) => void;
+    const s1 = { ...scheduled, status: "in_play", summary: { headline: "s1" } } as LiveFixtureData;
+    const s2 = { ...scheduled, status: "in_play", summary: { headline: "s2" } } as LiveFixtureData;
+    const fetcher = vi
+      .fn(async () => s2)
+      .mockImplementationOnce(
+        () =>
+          new Promise<LiveFixtureData>((resolve) => {
+            releaseFirst = resolve;
+          }),
+      );
+    const hook = mount("fx-1", scheduled, false, { fetcher, delayMs: 2000 });
+
+    await vi.advanceTimersByTimeAsync(POLL_MS);              // t = 15 000: poll 1 fires, held in flight
+    await vi.advanceTimersByTimeAsync(14_500);               // t = 29 500: still nothing received
+    expect(hook.current.data.summary?.headline, "nothing received yet").toBeUndefined();
+    releaseFirst(s1);
+    await vi.advanceTimersByTimeAsync(0);                    // s1 RECEIVED at t = 29 500
+    await vi.advanceTimersByTimeAsync(500);                  // t = 30 000: poll 2 → s2 RECEIVED at 30 000
+    await vi.advanceTimersByTimeAsync(1000);                 // t = 31 000, due = 29 000: neither yet
+    expect(hook.current.data.summary?.headline, "s1 is not due until 31 500").toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);                 // t = 32 000, due = 30 000: BOTH due
+    expect(hook.current.data.summary?.headline, "the newest DUE snapshot, never s1").toBe("s2");
   });
 });
