@@ -232,6 +232,13 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `ai.credits.trial` | – | **15** | – | – | 20 | Pro re-cut 20 → 15 (W2 T12). Enterprise deliberately KEEPS 20 — its numbers are set per deal, so the asymmetry is intended and is not a drift to "fix" |
 | pass credit grant (constant, not a key) | | | **+25** | **+35** | | R9; per-rung map replaces `PASS_CREDIT_GRANT`. L re-cut 50 → 35 with the monthly grants (W2 T12) |
 
+### Streaming (W1 — dark rollout, added 2026-09-09)
+
+| key | Free | Pro | Pass M | Pass L | Ent | why |
+|---|---|---|---|---|---|---|
+| `streaming.overlay` | F | F | F | F | F | Stream Overlay W1 (V402): false on EVERY plan, including Enterprise — nobody has this yet. Not a "keep", a genuine dark launch: the row exists only so `/admin/entitlements` shows the key under "other" before a tier is picked. The GA flip (pro/event_pass_l/enterprise per design §5.1) is a LATER migration shipped with its own pricing copy; not added to `ENTITLEMENT_DOMAINS`, so it does not render on `/pricing` while dark |
+| `streaming.relay` | F | F | F | F | F | Stream Overlay W1 (V402), same row shape and same reason as `streaming.overlay` directly above — the Phone tab's realtime relay grant, seeded in the same migration so a later reader never finds one key catalogued without the other |
+
 Rule going forward: **the matrix carries only enforced keys.** Anything that
 is copy-only lives in dictionaries, never in `plan_entitlements`.
 
