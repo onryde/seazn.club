@@ -71,9 +71,9 @@ function hubMatch(
   };
 }
 
-function card(m: HubMatchT, now: number = NOW, opts: { showDivision?: boolean; compact?: boolean } = {}) {
+function card(m: HubMatchT, now: number = NOW, opts: { showDivision?: boolean } = {}) {
   return renderToStaticMarkup(
-    <MatchCard match={m} dict={dict} locale="en" now={now} showDivision={opts.showDivision ?? true} compact={opts.compact} />,
+    <MatchCard match={m} dict={dict} locale="en" now={now} showDivision={opts.showDivision ?? true} />,
   );
 }
 
@@ -104,15 +104,54 @@ describe("MatchCard", () => {
     expect(h).not.toContain(`data-testid="mh-match-starts"`);
   });
 
-  it("scheduled within 24h: 'Starts in 2 hours' from Intl.RelativeTimeFormat in the org locale; beyond 24h: the venue-zone date+time; unscheduled: Time TBD", () => {
+  it("scheduled within 24h: 'Starts in 2 hours' from Intl.RelativeTimeFormat in the org locale; beyond 24h: the venue-zone DATE; unscheduled: no starts line at all", () => {
+    // COUNTED, not merely contained. The card has two slots that can each
+    // carry a time — the status slot top-right and this line bottom-right —
+    // and the visual pass found them saying the same thing twice on two of
+    // these three cases. `toContain("15:00")` and `toContain("Time TBD")`
+    // passed in BOTH the duplicated and the fixed state, so they could not
+    // witness the defect they sat next to. Counting can.
     const now = Date.parse("2026-09-05T12:00:00Z");
-    expect(
-      card(hubMatch({ bucket: "upcoming", scheduledAt: "2026-09-05T14:00:00Z", tz: "Europe/London" }), now),
-    ).toMatch(/mh-match-starts[^<]*>Starts in 2 hours</);
-    expect(
-      card(hubMatch({ bucket: "upcoming", scheduledAt: "2026-09-12T14:00:00Z", tz: "Europe/London" }), now),
-    ).toContain("15:00"); // BST
-    expect(card(hubMatch({ bucket: "upcoming", scheduledAt: null }), now)).toContain("Time TBD");
+    const times = (h: string, s: string) => h.split(s).length - 1;
+
+    const soon = card(
+      hubMatch({ bucket: "upcoming", scheduledAt: "2026-09-05T14:00:00Z", tz: "Europe/London" }),
+      now,
+    );
+    expect(soon).toMatch(/mh-match-starts[^<]*>Starts in 2 hours</);
+    // The exact time still appears once, in the status slot: a relative
+    // sentence alone would not tell a spectator when to turn up.
+    expect(times(soon, "15:00")).toBe(1);
+
+    const far = card(
+      hubMatch({ bucket: "upcoming", scheduledAt: "2026-09-12T14:00:00Z", tz: "Europe/London" }),
+      now,
+    );
+    expect(times(far, "15:00")).toBe(1); // BST, and stated ONCE
+    expect(far).toMatch(/mh-match-starts[^<]*>Sat 12 Sep/); // the DATE is what this line adds
+    expect(far).not.toMatch(/mh-match-starts[^<]*>[^<]*15:00/);
+
+    const tbd = card(hubMatch({ bucket: "upcoming", scheduledAt: null }), now);
+    expect(times(tbd, "Time TBD")).toBe(1); // status slot only
+    expect(tbd).not.toContain(`data-testid="mh-match-starts"`);
+  });
+
+  it("the meta row wraps rather than truncating the venue behind a result line", () => {
+    // A class assertion, and it is honest about its limit: `apps/web` vitest is
+    // `environment: "node"`, so nothing here can see a line box. What this
+    // pins is that the row is allowed to wrap at all — the layout itself was
+    // verified in a browser at 320/360/390/768/1280 during the visual pass,
+    // where the un-wrapped row truncated "Garon Park · Court 1" to
+    // "Garon Park · …" with the ellipsis landing after the separator.
+    const h = card(
+      hubMatch({
+        bucket: "completed",
+        winnerIndex: 1,
+        resultLine: "Queens Park won by 4 wickets",
+        header: { status: "decided" },
+      }),
+    );
+    expect(h).toMatch(/class="[^"]*flex-wrap[^"]*"[^>]*>\s*<span class="[^"]*truncate/);
   });
 
   it("meta line shows roundLabel when present, and a 'Round N' fallback from the round number when it is null (positive pair)", () => {

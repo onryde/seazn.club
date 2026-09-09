@@ -27,7 +27,12 @@ export interface MatchCardProps {
   locale: string;
   now: number;
   showDivision?: boolean;
-  compact?: boolean;
+  // NO `compact`. The brief declared one and its card markup had no branch for
+  // it, so the prop shipped dead: Task 11's Overview tab passes `compact` on
+  // every live-rail card and would have got an identical card back, with
+  // nothing red to say so. A declared-but-dead prop is worse than an absent
+  // one, because the caller believes it works. Task 11 adds it when it has a
+  // dense variant and a test that proves the two differ.
 }
 
 export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCardProps) {
@@ -41,8 +46,20 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
   // Math.round(Δ/60_000)` prefers the hour-rounded value unless it rounds to
   // exactly zero, in which case it falls back to minutes — so "starts in 40
   // minutes" doesn't print as "starts in 0 hours".
-  function startsText(): string {
-    if (!m.scheduledAt) return t(dict, "matchesHub.timeTbd");
+  // VISUAL PASS 2026-09-09, both arms found by looking at the rendered card at
+  // 320 rather than by reading the markup — this line and the status slot in
+  // the meta row above it are each correct alone and say the same thing twice
+  // when you see them together on one card.
+  //
+  //  * Unscheduled printed "Time TBD" top-right AND bottom-right, 100px apart.
+  //    The status slot is where Live / Ended / the kick-off time already live,
+  //    so that is where TBD belongs; this line returns null and its span does
+  //    not render.
+  //  * Beyond 24h printed "15:00" top-right and "Sat 12 Sept 15:00" here. The
+  //    time was stated twice and only the DATE was new, so that is all this
+  //    returns now. Both facts survive, neither repeats.
+  function startsText(): string | null {
+    if (!m.scheduledAt) return null;
     const delta = Date.parse(m.scheduledAt) - now;
     if (Math.abs(delta) < 24 * 3_600_000) {
       const when = new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(
@@ -51,7 +68,7 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
       );
       return t(dict, "matchesHub.startsIn", { when });
     }
-    return `${fmtDate(m.tz, m.scheduledAt, { weekday: "short", day: "numeric", month: "short" })} ${fmtTime(m.tz, m.scheduledAt)}`;
+    return fmtDate(m.tz, m.scheduledAt, { weekday: "short", day: "numeric", month: "short" });
   }
 
   function sideRow(i: 0 | 1) {
@@ -78,6 +95,10 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
       </div>
     );
   }
+
+  // Bound once: the span renders only when there is something to say, so the
+  // condition and the content cannot drift apart.
+  const starts = startsText();
 
   return (
     <Link
@@ -113,15 +134,23 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
         </span>
       </div>
       <div className="mt-2 space-y-1">{[0, 1].map((i) => sideRow(i as 0 | 1))}</div>
-      <div className="mt-2 flex items-baseline justify-between gap-2 text-xs text-ink-muted">
+      {/* `flex-wrap` (visual pass, 320): a decided card has to fit the venue
+          AND the result line, and at 320 that is 288px of content in 264px of
+          box — so the venue truncated to "Garon Park · …", with the ellipsis
+          landing after the separator, which reads as broken rather than
+          shortened. Wrapping gives the venue the whole first line and drops
+          the result onto its own, both complete. It costs a line only on the
+          cards that were crowded: a single-item row does not wrap, so the
+          venue-less card keeps its result right-aligned exactly as it was. */}
+      <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs text-ink-muted">
         <span className="min-w-0 truncate">{[m.venueName, m.courtName].filter(Boolean).join(" · ")}</span>
         {m.resultLine ? (
           <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
             {m.resultLine}
           </span>
-        ) : m.bucket === "upcoming" ? (
+        ) : m.bucket === "upcoming" && starts ? (
           <span data-testid="mh-match-starts" className="shrink-0">
-            {startsText()}
+            {starts}
           </span>
         ) : null}
       </div>
