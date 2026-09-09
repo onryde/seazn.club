@@ -19,8 +19,21 @@
 // a CI job" (db-suite-ci-wiring) or "is this spec selected by a Playwright
 // project" (e2e-ci-wiring) or "does every staging workflow agree on one
 // origin" (stg-base-url).
+//
+// MOVED 2026-09-09 (#757): the eight scheduled ops workflows, this one among
+// them, now live in onryde/seazn.club.workflow. They ran identical schedules
+// against the same endpoints from both repos, so every cron double-fired.
+// This repo can no longer read that file, and a guard cannot assert on a file
+// it cannot see — so the suite below splits in two.
+//
+// What stays here is what THIS repo still owns: the endpoint the sweep calls,
+// and its auth. What moves is everything about the workflow's own shape; if
+// that guard is wanted, it belongs beside the workflow, in the repo that now
+// holds it. The property assertions are kept rather than deleted, behind a
+// runIf, so that a copy re-added here is still held to them instead of
+// arriving unguarded.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /** apps/web/src/lib/__tests__ — five levels up reaches the repo root (same
@@ -38,8 +51,40 @@ const stripComments = (text: string) =>
     .map((line) => line.replace(/(^|\s)#.*$/, ""))
     .join("\n");
 
-describe("registrations sweep workflow", () => {
-  const raw = readFileSync(WORKFLOW, "utf8");
+const PRESENT = existsSync(WORKFLOW);
+const ROUTE = join(
+  REPO_ROOT,
+  "apps/web/src/app/api/cron/registrations/route.ts",
+);
+
+describe("registrations sweep — what this repo still owns", () => {
+  it("the workflow is NOT here: it moved to onryde/seazn.club.workflow (#757)", () => {
+    // Reds if a copy comes back, which is the point: two repos scheduling the
+    // same cron is what #757 removed, and it would come back silently.
+    // Re-adding one here is then a decision someone has to make out loud —
+    // either delete it again, or delete this line and let the runIf block
+    // below hold it to every property it used to have.
+    expect(PRESENT).toBe(false);
+  });
+
+  it("the endpoint the sweep calls still exists, and still demands the secret", () => {
+    // The half this repo can actually prove. A workflow in another repo POSTs
+    // here with x-cron-secret; if this route ever stops checking it, the sweep
+    // becomes an unauthenticated write path and no guard in EITHER repo would
+    // have noticed — the workflow's own tests only prove it sends the header.
+    const route = readFileSync(ROUTE, "utf8");
+    expect(route).toMatch(/process\.env\.CRON_SECRET/);
+    expect(route).toMatch(/x-cron-secret/);
+    expect(route).toMatch(/401/);
+    // Unset secret must refuse rather than accept anything: a missing env var
+    // that read as "no auth required" is the shape this asserts against.
+    expect(route).toMatch(/503/);
+    expect(route).toMatch(/sweepRegistrations/);
+  });
+});
+
+describe.runIf(PRESENT)("registrations sweep workflow (only if re-added here)", () => {
+  const raw = PRESENT ? readFileSync(WORKFLOW, "utf8") : "";
   const yml = stripComments(raw);
 
   it("finds the workflow file this guard reads", () => {
