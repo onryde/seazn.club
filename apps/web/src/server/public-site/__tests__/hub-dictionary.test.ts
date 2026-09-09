@@ -103,3 +103,33 @@ describe("leader board stat labels exist in ui.json for every locale", () => {
     });
   }
 });
+
+// Two keys now live in BOTH dictionaries. That is deliberate: Task 16 creates
+// `components/public-site/share-labels.ts` so the public pages feed `ShareBar`
+// from the PUBLIC dict, while `components/share-button.tsx` keeps reading
+// `ui.json` through `useMsg()` for console surfaces. Both namespaces stay
+// live, so neither copy can simply be deleted.
+//
+// But two sources for one string is how translations drift apart, and these
+// two are the same words for the same action — "WhatsApp" is a proper noun,
+// and "Link copied" is one toast, not two. A translator who edits one file
+// and not the other must red here rather than ship a surface that says one
+// thing on the console and another on the public page.
+describe("the share keys that live in both dictionaries stay identical", () => {
+  const SHARED = ["share.whatsapp", "share.copied"] as const;
+
+  for (const [locale, [pub, ui]] of Object.entries({
+    en: [en, uiEn],
+    es: [es, uiEs],
+    fr: [fr, uiFr],
+    nl: [nl, uiNl],
+  })) {
+    it(`${locale} reads the same in public.json and ui.json`, () => {
+      for (const k of SHARED) {
+        expect((ui as Record<string, string>)[k], `${locale} ${k}`).toBe(
+          (pub as Record<string, string>)[k],
+        );
+      }
+    });
+  }
+});
