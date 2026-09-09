@@ -1474,9 +1474,59 @@ body {
 .ovl-chip-caution { background: var(--sport-caution); }
 .ovl-chip-dismissal { background: var(--sport-dismissal); }
 
+/* Theme C — slate (_THEMES.md §4a). Full bleed, opaque, no inset/radius/
+   shadow ("it IS the frame"). `.ovl-slate`'s box is `inset: 0` inside
+   `.ovl-canvas`, which is itself `top:0; left:0; width:1920px; height:1080px`
+   — so it is PIXEL-IDENTICAL to the canvas's own box, and the `.ovl-bug`
+   overlay-slate.tsx nests inside it keeps its stated inset (left 60, top 54)
+   unchanged, exactly as §4a requires ("at its own inset, unchanged in every
+   value"). Radial highlight: color-mix(board-2 60%) centred 50%/40%, radius
+   900 — a single `background` shorthand, gradient over the opaque ground so
+   the ground itself never carries any transparency (the "one opaque theme"
+   property `_THEMES.md` §4a names). */
+.ovl-slate { position: absolute; inset: 0; overflow: hidden;
+             background:
+               radial-gradient(circle 900px at 50% 40%,
+                 color-mix(in srgb, var(--sport-board-2) 60%, transparent), transparent),
+               var(--sport-board); }
+.ovl-slate-brand { position: absolute; left: 72px; top: 54px;
+                    font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
+                    color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+.ovl-slate-content { position: absolute; inset: 0; display: flex; flex-direction: column;
+                      align-items: center; justify-content: center; text-align: center; }
+/* `text-transform: uppercase` rather than relying on the dictionary string
+   being typed upper case (§4a's own words) — deliberately, because the
+   headline text reaching this element today is `model.header.context`
+   ("Final", a start-time label), NOT the new `overlay.slate.*` keys
+   (overlay-slate.tsx's header, gap 1): those already-resolved strings are
+   normal case elsewhere (the bar/bug header uses them unchanged), so the
+   transform keeps the SLATE headline visually upper case regardless of which
+   source string it is standing in for, and becomes a harmless no-op the day
+   gap 1 closes and the dictionary's own upper-case string arrives here. */
+.ovl-slate-headline { font-size: 96px; font-weight: 800; letter-spacing: 0.02em;
+                       color: var(--sport-ink); text-transform: uppercase; }
+.ovl-slate-line { margin-top: 12px; font-size: 27px; font-weight: 500;
+                   color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+/* Warming's three dots sit UNDER the line (§4a); each --sport-led, 15px,
+   breathing on the same `ovl-breathe` keyframes the live dot already uses,
+   staggered 300ms per dot. */
+.ovl-slate-warming-dots { display: flex; align-items: center; justify-content: center;
+                           gap: 12px; margin-top: 12px; }
+.ovl-slate-warming-dots span { width: 15px; height: 15px; border-radius: 9999px;
+                                background: var(--sport-led);
+                                animation: ovl-breathe 2s ease-in-out infinite; }
+.ovl-slate-warming-dots span:nth-child(2) { animation-delay: 300ms; }
+.ovl-slate-warming-dots span:nth-child(3) { animation-delay: 600ms; }
+
 /* Motion — _THEMES.md §6, R13. transform/opacity only; nothing on mount. */
 @keyframes ovl-tick { 0% { transform: scale(1); } 45% { transform: scale(1.12); } 100% { transform: scale(1); } }
 @keyframes ovl-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+/* §4a's own state-swap cross-fade: 250ms opacity only, applied by
+   overlay-slate.tsx toggling this class off a same-shape ref+effect+timeout
+   as overlay-stage.tsx's score tick (it cannot import that file's helper —
+   see overlay-slate.tsx's header, gap 1). */
+@keyframes ovl-slate-fade { from { opacity: 0; } to { opacity: 1; } }
+.ovl-slate-content.ovl-slate-fading { animation: ovl-slate-fade 250ms ease-in-out; }
 .ovl-tick { animation: ovl-tick 300ms ease-out; }
 .ovl-live-dot { animation: ovl-breathe 2s ease-in-out infinite; }
 .ovl-static .ovl-live-dot { animation: none; opacity: 1; }
@@ -1484,4 +1534,10 @@ body {
   .ovl-tick { animation: none; }
   .ovl-live-dot { animation: none; opacity: 1; }
   .ovl-led { transition: none; }
+  /* §4a: "the warming dots hold steady at opacity 1 and the cross-fade is
+     instant" — the dots stop breathing at full opacity, and the state-swap
+     class no longer transitions (nothing animates it, so the swap is instant
+     rather than eased over 250ms). */
+  .ovl-slate-warming-dots span { animation: none; opacity: 1; }
+  .ovl-slate-content.ovl-slate-fading { animation: none; }
 }

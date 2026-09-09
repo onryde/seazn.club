@@ -408,5 +408,10 @@
   "overlay.chase.needBalls": "Nog {runs} nodig uit {balls} ballen",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Live kijken",
-  "overlay.replay": "Herhaling"
+  "overlay.replay": "Herhaling",
+  "overlay.slate.warmingHeadline": "BEGINT ZO",
+  "overlay.slate.warmingLine": "{home} v {away} · {start}",
+  "overlay.slate.signalLostHeadline": "SIGNAAL VERLOREN",
+  "overlay.slate.signalLostLine": "Opnieuw verbinden…",
+  "overlay.slate.endedHeadline": "WEDSTRIJD AFGELOPEN"
 }

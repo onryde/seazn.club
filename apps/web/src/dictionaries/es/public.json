@@ -408,5 +408,10 @@
   "overlay.chase.needBalls": "Faltan {runs} en {balls} bolas",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Ver en directo",
-  "overlay.replay": "Repetición"
+  "overlay.replay": "Repetición",
+  "overlay.slate.warmingHeadline": "A PUNTO DE COMENZAR",
+  "overlay.slate.warmingLine": "{home} v {away} · {start}",
+  "overlay.slate.signalLostHeadline": "SEÑAL PERDIDA",
+  "overlay.slate.signalLostLine": "Reconectando…",
+  "overlay.slate.endedHeadline": "PARTIDO FINALIZADO"
 }

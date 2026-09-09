@@ -5065,5 +5065,6 @@
   "pad.cricket.action.playerLine.field.bowlingWickets": "Wickets",
   "pad.cricket.action.playerLine.field.person": "Speler",
   "stream.tab.bar": "Uitzendbalk",
-  "stream.tab.bug": "Hoek-bug"
+  "stream.tab.bug": "Hoek-bug",
+  "stream.tab.slate": "Bord"
 }

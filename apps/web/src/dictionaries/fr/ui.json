@@ -5065,5 +5065,6 @@
   "pad.cricket.action.playerLine.field.bowlingWickets": "Guichets",
   "pad.cricket.action.playerLine.field.person": "Joueur",
   "stream.tab.bar": "Bandeau diffusion",
-  "stream.tab.bug": "Incrustation d'angle"
+  "stream.tab.bug": "Incrustation d'angle",
+  "stream.tab.slate": "Ardoise"
 }

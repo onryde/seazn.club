@@ -59,16 +59,15 @@ const dictOf = (locale: string, ns: string): Record<string, string> =>
 describe("overlay + panel copy is complete in every locale", () => {
   it("finds the keys at all — a scan that matched nothing would pass vacuously", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
-    // RE-PIN finding (2026-09-09): the brief's own `>= 12` cannot be met by
-    // Task 5's actual scope. Every "stream.*" literal anywhere in the current
-    // tree (before OR after this task) is exactly `stream.tab.bar` and
-    // `stream.tab.bug` (theme-registry.ts, Step 6c) — the organiser panel that
-    // would reference stream.setup.*/stream.link.* is Task 6's work, not
-    // scanned here yet. Lowered to the true floor (2) so the guard still does
-    // its job — catching a scan that matches NOTHING — without asserting a
-    // count this task cannot produce. Recorded for the owner/Task 6 author:
-    // raise this back toward 12 once the panel lands.
-    expect(referencedKeys("stream").size).toBeGreaterThanOrEqual(2);
+    // RE-PIN (2026-09-09, task 5e): the floor moves again with `slate`.
+    // `theme-registry.ts` now references THREE `stream.tab.*` literals —
+    // `stream.tab.bar`, `stream.tab.bug`, `stream.tab.slate` — so the true
+    // floor today is 3, not the 2 the previous re-pin recorded (when only
+    // bar/bug existed). The organiser panel that will reference
+    // `stream.setup.*`/`stream.link.*` is still Task 6's, unscanned here, so
+    // this is not yet the brief's own `>= 12` either. Raise it again once
+    // the panel lands.
+    expect(referencedKeys("stream").size).toBeGreaterThanOrEqual(3);
   });
 
   for (const locale of LOCALES) {

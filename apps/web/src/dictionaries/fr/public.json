@@ -408,5 +408,10 @@
   "overlay.chase.needBalls": "Besoin de {runs} en {balls} balles",
   "overlay.brand": "seazn",
   "overlay.watchLive": "Regarder en direct",
-  "overlay.replay": "Revoir"
+  "overlay.replay": "Revoir",
+  "overlay.slate.warmingHeadline": "DÉBUT IMMINENT",
+  "overlay.slate.warmingLine": "{home} v {away} · {start}",
+  "overlay.slate.signalLostHeadline": "SIGNAL PERDU",
+  "overlay.slate.signalLostLine": "Reconnexion…",
+  "overlay.slate.endedHeadline": "MATCH TERMINÉ"
 }

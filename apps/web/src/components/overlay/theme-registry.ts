@@ -9,22 +9,24 @@
 // projection is theme-agnostic, which is what lets eleven sports and N themes
 // meet in one model.
 //
-// NOT a `"use client"` module, deliberately. It imports two client components,
-// so it becomes part of the client graph where a client component imports it;
-// the SERVER page imports only `resolveTheme` and reads `.id` off the result,
-// never `.component`, so no component reference crosses the RSC boundary as a
-// prop. The stage does the component lookup on the client side of the line.
+// NOT a `"use client"` module, deliberately. It imports three client
+// components, so it becomes part of the client graph where a client component
+// imports it; the SERVER page imports only `resolveTheme` and reads `.id` off
+// the result, never `.component`, so no component reference crosses the RSC
+// boundary as a prop. The stage does the component lookup on the client side
+// of the line.
 import type { ComponentType } from "react";
 import type { OverlayModel } from "@/lib/overlay-model";
 import { OverlayBar } from "./overlay-bar";
 import { OverlayBug } from "./overlay-bug";
+import { OverlaySlate } from "./overlay-slate";
 
 /** Every theme id the overlay can serve. Declared as an explicit union rather
  *  than derived with `keyof typeof OVERLAY_THEMES`, for two reasons: the page,
  *  the stage's props and the panel's state all need to NAME this type without
  *  importing the registry's value graph, and an explicit union makes a typo'd
  *  registry key a compile error instead of silently widening `ThemeId`. */
-export type ThemeId = "bar" | "bug";
+export type ThemeId = "bar" | "bug" | "slate";
 
 export interface OverlayThemeDef {
   id: ThemeId;
@@ -42,6 +44,7 @@ export interface OverlayThemeDef {
 export const OVERLAY_THEMES: Record<ThemeId, OverlayThemeDef> = {
   bar: { id: "bar", labelKey: "stream.tab.bar", component: OverlayBar, sports: "all" },
   bug: { id: "bug", labelKey: "stream.tab.bug", component: OverlayBug, sports: "all" },
+  slate: { id: "slate", labelKey: "stream.tab.slate", component: OverlaySlate, sports: "all" },
 };
 
 /** Which theme a sport OPENS on. Unchanged from decision 1 — cricket's chase
