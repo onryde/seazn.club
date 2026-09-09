@@ -5063,5 +5063,7 @@
   "pad.cricket.action.playerLine.field.bowlingLegalBalls": "Balles lancées",
   "pad.cricket.action.playerLine.field.bowlingRuns": "Runs concédés",
   "pad.cricket.action.playerLine.field.bowlingWickets": "Guichets",
-  "pad.cricket.action.playerLine.field.person": "Joueur"
+  "pad.cricket.action.playerLine.field.person": "Joueur",
+  "stream.tab.bar": "Bandeau diffusion",
+  "stream.tab.bug": "Incrustation d'angle"
 }

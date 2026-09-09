@@ -855,6 +855,31 @@ export async function getPublicFixture(
   return { org: shell.org, competition: shell.competition, division, ...detail };
 }
 
+/**
+ * org / competition / division slugs for a fixture id.
+ *
+ * The stream-overlay URL carries only a fixture id, but `getPublicFixture`
+ * above is keyed on three slugs (and must stay that way — its cache key and
+ * its `divisionTag` are shared with the public match page). This resolves them
+ * through the SAME `public_*_v` views `fixtureRealtimeEligible` uses (`:1037`),
+ * so a fixture in a private competition is simply not found here, exactly as
+ * it is not found there. Null means 404 for the caller — never a partial.
+ */
+export async function publicFixtureSlugs(
+  fixtureId: string,
+): Promise<{ orgSlug: string; compSlug: string; divSlug: string } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
+  const [row] = await sql<{ org_slug: string; comp_slug: string; div_slug: string }[]>`
+    select o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
+    from public_fixtures_v f
+    join public_divisions_v d on d.id = f.division_id
+    join public_competitions_v c on c.id = d.competition_id
+    join organizations o on o.id = c.org_id
+    where f.id = ${fixtureId} limit 1`;
+  if (!row) return null;
+  return { orgSlug: row.org_slug, compSlug: row.comp_slug, divSlug: row.div_slug };
+}
+
 /** PROMPT-65: per-division stat block on the player card. Free at every tier
  *  (locked decision 2026-07-18): visibility is the same consent gate as the
  *  card itself. The leaderboard TABLE (`publicDivisionStats`,

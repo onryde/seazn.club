@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import posthog from "posthog-js";
 import {
   CONSENT_KEY,
@@ -13,6 +14,10 @@ import {
 } from "@/lib/consent";
 import { readActiveLocale, clientCommon } from "@/lib/client-dict";
 import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
+
+/** The one route prefix that renders no chrome at all. Named rather than
+ *  inlined so a future overlay route cannot forget it. */
+const OVERLAY_SEGMENT = "/overlay/";
 
 /**
  * Consent banner. Essential cookies (login) always run; analytics (PostHog) is
@@ -26,6 +31,7 @@ import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
 export function CookieConsent() {
   const [visible, setVisible] = useState(false);
   const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE);
+  const pathname = usePathname();
 
   useEffect(() => {
     setLocale(readActiveLocale());
@@ -63,10 +69,28 @@ export function CookieConsent() {
     setVisible(false);
   }
 
+  // The overlay segment renders no banner (owner answer 13, Q2). OBS
+  // composites whatever is painted, so a consent banner burned into a club's
+  // broadcast goes out to every viewer until someone dismisses it in the
+  // capture browser — and there is nothing to consent to: the segment sets no
+  // cookies (proved in stream-overlay.spec.ts, Task 8).
+  //
+  // WHY HERE, and not in the overlay layout. `CookieConsent` is mounted ONCE,
+  // in the ROOT layout (`app/layout.tsx`), as a SIBLING of `children` — a
+  // nested segment layout cannot unmount it. Next's only other route to a
+  // banner-free segment is deleting `app/layout.tsx` and giving every route
+  // group its own root layout with its own `<html>`, which is a repo-wide
+  // restructure for one page. One condition, in the component that owns the
+  // decision, is the smallest correct change; `AnalyticsBootstrap` already
+  // reads `usePathname` from this same root-layout position, so the pattern
+  // is the tree's, not this wave's.
+  if (pathname?.startsWith(OVERLAY_SEGMENT)) return null;
+
   if (!visible) return null;
 
   return (
     <div
+      data-testid="cookie-consent"
       // Bottom-left, opposite corner from the dev-mode route indicator
       // (next.config.js devIndicators.position: "bottom-right" —
       // design/fix-ui audit, cross-cutting finding #1). On mobile this

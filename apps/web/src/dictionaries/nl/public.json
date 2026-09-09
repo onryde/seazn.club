@@ -393,5 +393,17 @@
   "share.whatsapp": "Delen op WhatsApp",
   "share.whatsappAria": "Deze competitie delen op WhatsApp",
   "share.copy": "Link kopiëren",
-  "share.copied": "Link gekopieerd"
+  "share.copied": "Link gekopieerd",
+  "overlay.header.live": "Live",
+  "overlay.header.ended": "Afgelopen",
+  "overlay.header.notStarted": "Niet begonnen",
+  "overlay.header.set": "Set {n}",
+  "overlay.header.game": "Game {n}",
+  "overlay.detail.serving": "{side} serveert",
+  "overlay.detail.card": "{side} {card}",
+  "overlay.chase.need": "Nog {runs} nodig",
+  "overlay.chase.needBalls": "Nog {runs} nodig uit {balls} ballen",
+  "overlay.brand": "seazn",
+  "overlay.watchLive": "Live kijken",
+  "overlay.replay": "Herhaling"
 }

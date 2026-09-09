@@ -5063,5 +5063,7 @@
   "pad.cricket.action.playerLine.field.bowlingLegalBalls": "Bolas lanzadas",
   "pad.cricket.action.playerLine.field.bowlingRuns": "Carreras concedidas",
   "pad.cricket.action.playerLine.field.bowlingWickets": "Wickets",
-  "pad.cricket.action.playerLine.field.person": "Jugador"
+  "pad.cricket.action.playerLine.field.person": "Jugador",
+  "stream.tab.bar": "Barra de transmisión",
+  "stream.tab.bug": "Bug de esquina"
 }

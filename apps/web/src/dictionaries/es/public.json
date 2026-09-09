@@ -393,5 +393,17 @@
   "share.whatsapp": "Compartir en WhatsApp",
   "share.whatsappAria": "Compartir esta competición en WhatsApp",
   "share.copy": "Copiar enlace",
-  "share.copied": "Enlace copiado"
+  "share.copied": "Enlace copiado",
+  "overlay.header.live": "En directo",
+  "overlay.header.ended": "Finalizado",
+  "overlay.header.notStarted": "Sin empezar",
+  "overlay.header.set": "Set {n}",
+  "overlay.header.game": "Juego {n}",
+  "overlay.detail.serving": "Saca {side}",
+  "overlay.detail.card": "{side} {card}",
+  "overlay.chase.need": "Faltan {runs}",
+  "overlay.chase.needBalls": "Faltan {runs} en {balls} bolas",
+  "overlay.brand": "seazn",
+  "overlay.watchLive": "Ver en directo",
+  "overlay.replay": "Repetición"
 }
