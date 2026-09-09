@@ -53,20 +53,59 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: npx turbo run typecheck
-      - name: OpenAPI spec drift gate
+
+      # typecheck, openapi:gen (+ drift check), and eslint are independent of
+      # each other — backgrounded in parallel, then waited on. Each logs to
+      # its own file so a failure's output isn't interleaved with the others;
+      # `set -o pipefail` isn't enough here since each runs as its own bg
+      # job, so exit status is captured explicitly per `wait`.
+      - name: Typecheck + OpenAPI drift + eslint (parallel)
         run: |
-          npm run openapi:gen
-          git diff --exit-code openapi/v1.json openapi/v1.public.json || {
-            echo "openapi specs are stale — run 'npm run openapi:gen' and commit."; exit 1; }
-      - name: eslint
-        run: npm run lint
+          npx turbo run typecheck > typecheck.log 2>&1 &
+          pid_tc=$!
+
+          (npm run openapi:gen && \
+            git diff --exit-code openapi/v1.json openapi/v1.public.json) > openapi.log 2>&1 &
+          pid_oa=$!
+
+          npm run lint > eslint.log 2>&1 &
+          pid_lint=$!
+
+          status=0
+          wait "$pid_tc"   || { echo "::error::typecheck failed";  cat typecheck.log; status=1; }
+          wait "$pid_oa"   || { echo "::error::openapi drift — run 'npm run openapi:gen' and commit"; cat openapi.log; status=1; }
+          wait "$pid_lint" || { echo "::error::eslint failed";     cat eslint.log;     status=1; }
+          exit $status
 
   # -------------------------------------------------------------------------
-  # Unit tests — no DB, no engine coverage; same scope as ci.yml's `test` job.
+  # Unit tests — apps/web sharded 4-way (matches ci.yml's own `test` job
+  # exactly, including the reporter/outputFile and the shard-count divisor),
+  # plus engine coverage as its own unsharded job.
   # -------------------------------------------------------------------------
   test:
-    name: Unit tests
+    name: Unit tests (apps/web) ${{ matrix.shard }}/4
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD_TOTAL: "4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Unit suite (shard ${{ matrix.shard }}/4)
+        run: npm test --workspace apps/web -- --shard=${{ matrix.shard }}/"$SHARD_TOTAL" --reporter=default --reporter=json --outputFile=vitest-results-unit.json
+
+  test-engine:
+    name: Unit tests (engine coverage)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -78,7 +117,6 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: npm test --workspace apps/web
       - run: npm run test:coverage --workspace packages/engine
 
   # Three independent jobs, all gated on [gates, test], run concurrently —
@@ -86,7 +124,7 @@ jobs:
   # default, no explicit fan-out needed.
   build-app-image:
     name: Build + push app image
-    needs: [gates, test]
+    needs: [gates, test, test-engine]
     runs-on: ubuntu-latest
     outputs:
       image: ${{ env.APP_IMAGE }}:${{ github.sha }}
@@ -117,7 +155,7 @@ jobs:
 
   build-placement-image:
     name: Build + push placement image
-    needs: [gates, test]
+    needs: [gates, test, test-engine]
     runs-on: ubuntu-latest
     outputs:
       image: ${{ env.PLACEMENT_IMAGE }}:${{ github.sha }}
@@ -140,7 +178,7 @@ jobs:
 
   package-specs:
     name: Package black-box spec files
-    needs: [gates, test]
+    needs: [gates, test, test-engine]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
