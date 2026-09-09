@@ -177,6 +177,26 @@ function cellsOf(input: OverlayModelInput): OverlayCell[] {
  * populates `summary().detail.discipline`, `packages/engine/src/sports/
  * period/kernel.ts:2524`, `cardLog: state.cardLog`).
  *
+ * FOOTBALL'S THREE ENTRIES BELOW ARE CURRENTLY UNREACHABLE (review round 2
+ * finding). Football is NOT a period-kernel sport —
+ * `packages/engine/src/sports/football/football.ts:509`, in football's own
+ * words: "The period kernel's `cardLog` is the same idea; football simply
+ * had none." Its `summary().detail` (`football.ts`, the `summary()` method's
+ * return) carries only `periods`, optionally `shootout`, optionally
+ * `abandoned` — never `discipline` — so `disciplineList()` is always `null`
+ * for football and `detailOf()`'s card branch never runs for it: no card
+ * LINE, let alone a coloured chip, regardless of how many `football.card`
+ * events the match ledger holds (`overlay-model.test.ts` folds one through
+ * the real engine and asserts exactly this). `_THEMES.md` §3/§4 describe
+ * football's card chips as live in W1 (not W2, unlike cricket's row) — the
+ * design sheet assumed engine data that does not exist, and `packages/engine`
+ * is out of scope for this whole programme, so wiring the real capability is
+ * not a fix available here. `yellow`/`red`/`second_yellow` stay in this
+ * table anyway: they cost nothing (an unreachable key is not a wrong one),
+ * they are hockey's own keys too (see below — no collision, same tones), and
+ * they are forward-compatible dead code if the engine ever adds this rather
+ * than a mapping this file would have to invent from scratch on that day.
+ *
  * A DELIBERATE LITERAL, not an import of the pad's own tables
  * (`skins/football.tsx`'s `CARD_TONES`, `skins/hockey.tsx`'s
  * `HOCKEY_CLASSES`, `skins/icehockey.tsx`'s `ICEHOCKEY_CLASSES`) — same
@@ -198,7 +218,7 @@ function cellsOf(input: OverlayModelInput): OverlayCell[] {
  * function).
  */
 export const DISCIPLINE_CLASS_TONE: Readonly<Record<string, readonly SportTone[]>> = {
-  // football (skins/football.tsx CARD_TONES)
+  // football (skins/football.tsx CARD_TONES) — UNREACHABLE today, see above.
   yellow: ["caution"],
   red: ["dismissal"],
   second_yellow: ["caution", "dismissal"],

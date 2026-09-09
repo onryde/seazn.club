@@ -484,6 +484,31 @@ describe("overlayModel — discipline chip tone (review round 1, IMPORTANT)", ()
     expect(serveLine, "tennis's serve line should be present here").toBeDefined();
     expect(serveLine!.tone).toBeUndefined();
   });
+
+  // Review round 2 finding: football's own branch of DISCIPLINE_CLASS_TONE
+  // is unreachable today — football is not a period-kernel sport
+  // (`packages/engine/src/sports/football/football.ts:509`, "The period
+  // kernel's cardLog is the same idea; football simply had none") and its
+  // `summary().detail` never carries a `discipline` key at all (only
+  // `periods`, optionally `shootout`, optionally `abandoned` — confirmed by
+  // reading the function body, not inferred). `disciplineList()` is
+  // therefore always null for football, so `detailOf()`'s card branch never
+  // runs for it — no card LINE, let alone a coloured chip. Folded through
+  // the real engine with an actual `football.card` event to prove this
+  // empirically rather than asserting it only in a comment.
+  it("football never produces a card line — not a bug, an engine data gap (review round 2)", () => {
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.card", { by: "H", color: "yellow" }],
+    ], "in_play");
+    const model = project("football", data);
+    const cardLine = model.detail.find((l) => l.text.startsWith("overlay.detail.card"));
+    expect(
+      cardLine,
+      "if this ever finds a line, football's engine summary has grown a discipline field and " +
+        "DISCIPLINE_CLASS_TONE's football entries are live — update the docstring in overlay-model.ts",
+    ).toBeUndefined();
+  });
 });
 
 describe("DISCIPLINE_CLASS_TONE mirrors the pad's own per-sport tables (one authority)", () => {
