@@ -36,6 +36,17 @@ export interface MatchCardProps {
   dict: PublicDict;
   locale: string;
   now: number;
+  /**
+   * Defaults to TRUE, stated here and in the destructure below rather than
+   * left to `undefined`. Whole-branch review m2 — the prop was optional with
+   * no default, so an omitted `showDivision` meant NO chip, while the only
+   * test helper passed `?? true` and every test therefore rendered the arm
+   * the component does not default to. A Task-11 caller that omitted the prop
+   * would have got a chip-less card on a multi-division hub with nothing red
+   * to say so. The hub is multi-division by definition, so the chip is the
+   * default; a single-division caller (the division page's own match list)
+   * passes `false`.
+   */
   showDivision?: boolean;
   // NO `compact`. The brief declared one and its card markup had no branch for
   // it, so the prop shipped dead: Task 11's Overview tab passes `compact` on
@@ -45,17 +56,34 @@ export interface MatchCardProps {
   // dense variant and a test that proves the two differ.
 }
 
-export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCardProps) {
+export function MatchCard({ match: m, dict, locale, now, showDivision = true }: MatchCardProps) {
   const s0 = m.header.sides[0];
   const s1 = m.header.sides[1];
 
   // `Δ = scheduledAt - now`. Within 24h either side: a relative sentence
   // ("Starts in 2 hours"/"Starts in 40 minutes") via `Intl.RelativeTimeFormat`
-  // in the ORG's locale. Beyond that: the venue-zone date + time. No
-  // `scheduledAt` at all: Time TBD. `Math.round(Δ/3_600_000) ||
-  // Math.round(Δ/60_000)` prefers the hour-rounded value unless it rounds to
-  // exactly zero, in which case it falls back to minutes — so "starts in 40
-  // minutes" doesn't print as "starts in 0 hours".
+  // in the ORG's locale. Beyond that: the venue-zone date. No `scheduledAt`
+  // at all: Time TBD.
+  //
+  // ONE decision, not two. The previous version chose the value
+  // (`Math.round(Δ/3_600_000) || Math.round(Δ/60_000)`) and the unit
+  // (`|Δ| >= 3_600_000 ? "hour" : "minute"`) INDEPENDENTLY, and the two
+  // disagree across the whole half-hour-to-an-hour band: `Math.round(Δ/
+  // 3_600_000)` is 1 for every Δ in [30min, 60min) — JS rounds .5 up — so the
+  // truthy check never fell through to minutes, while the unit was still
+  // "minute". Every match 30-59 minutes away read "Starts in 1 minute", and
+  // a match 45 minutes past its slot read "Starts 1 minute ago". Measured:
+  // 29min correct, 30/40/45/59min all "1 minute", 60min correct. That is
+  // exactly the window a spectator uses to decide whether to leave for the
+  // ground, and the comment this replaces cited "starts in 40 minutes" as the
+  // case it protected. The unit now picks the divisor as well as the noun, so
+  // the two cannot drift apart again.
+  //
+  // Negative Δ (a fixture past its slot still bucketed `upcoming`) keeps
+  // formatting relatively — "Starts 20 minutes ago" — deliberately: the two
+  // states that would otherwise reach it, `postponed` and a decided match,
+  // are both caught by the branches above this line in the meta row.
+  //
   // VISUAL PASS 2026-09-09, both arms found by looking at the rendered card at
   // 320 rather than by reading the markup — this line and the status slot in
   // the meta row above it are each correct alone and say the same thing twice
@@ -72,9 +100,10 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
     if (!m.scheduledAt) return null;
     const delta = Date.parse(m.scheduledAt) - now;
     if (Math.abs(delta) < 24 * 3_600_000) {
+      const useHours = Math.abs(delta) >= 3_600_000;
       const when = new Intl.RelativeTimeFormat(locale, { numeric: "always" }).format(
-        Math.round(delta / 3_600_000) || Math.round(delta / 60_000),
-        Math.abs(delta) >= 3_600_000 ? "hour" : "minute",
+        Math.round(delta / (useHours ? 3_600_000 : 60_000)),
+        useHours ? "hour" : "minute",
       );
       return t(dict, "matchesHub.startsIn", { when });
     }
@@ -114,12 +143,34 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
     <Link
       href={m.href}
       data-testid={`mh-match-${m.fixtureId}`}
+      // `aria-label` on the wrapping `<a>` REPLACES everything inside it for
+      // the accessible name, so this string is the whole of what a screen
+      // reader announces for the card. `matchesHub.card.label` shipped as the
+      // bare noun "Match card" in all four locales while this call already
+      // passed `{home, away}` — and `interpolate()` discards vars with no
+      // matching `{param}` silently — so a link list over a 40-match hub read
+      // "Match card, link" forty times, with no way to tell one card from
+      // another. The key now carries both names in every locale, and
+      // `match-card.test.tsx` asserts the RENDERED attribute rather than the
+      // call, because the call was already right.
       aria-label={t(dict, "matchesHub.card.label", { home: s0.name, away: s1.name })}
       className="block rounded-xl border border-zinc-200/80 bg-surface p-3 shadow-sm transition hover:border-accent-line"
     >
       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-ink-muted">
         {showDivision ? (
-          <span data-testid="mh-match-division" className="rounded-full bg-accent-soft px-2 py-0.5 text-accent-strong">
+          // `shrink-0 max-w-[45%] truncate` (whole-branch review m4): every
+          // other item in this flex row already controls its own white space
+          // — the stage/round span below is `min-w-0 truncate`, the status
+          // slot is `shrink-0` — and the chip had none, so a long division
+          // name ("Mixed Doubles Championship") shrank past its min-content
+          // and wrapped INSIDE the pill, turning the meta row into a two-line
+          // blob. The same failure AGENTS.md records for the detail dock's
+          // entrant chips. The cap is a share of the row rather than a fixed
+          // width so it holds at 320 and at 1280 alike.
+          <span
+            data-testid="mh-match-division"
+            className="max-w-[45%] shrink-0 truncate rounded-full bg-accent-soft px-2 py-0.5 text-accent-strong"
+          >
             {m.divisionName}
           </span>
         ) : null}

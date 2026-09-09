@@ -35,7 +35,12 @@ describe("fetchCompetitionHub", () => {
       expect.anything(),
     );
     expect(res).toEqual(doc);
-    expect(res).not.toHaveProperty("data");
+    // `Object.hasOwn`, not `toHaveProperty`. Same idiom rule the sibling
+    // dictionary suite records: `toHaveProperty` path-traverses on dots, and
+    // letting the traversal idiom spread through these files is how a flat
+    // dotted key ends up asserted as a nested path. Single segment here, so
+    // the two agree today — the point is that they stop agreeing silently.
+    expect(Object.hasOwn(res as object, "data")).toBe(false);
   });
 
   it("throws on error payloads instead of resolving undefined", async () => {

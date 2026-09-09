@@ -84,7 +84,11 @@ export function scrollActiveTabIntoView(
   el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: prefersReducedMotion ? "auto" : "smooth" });
 }
 
-function prefersReducedMotion(): boolean {
+/** Exported alongside `scrollActiveTabIntoView` so the hub's own
+ *  `PublicTabRail` (`../tab-rail.tsx`) reads ONE authority for both halves of
+ *  this behaviour rather than re-deriving the media query. Task 19 folds the
+ *  two rails together; until then they share the implementation, not a copy. */
+export function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
     : false;

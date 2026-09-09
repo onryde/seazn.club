@@ -47,6 +47,10 @@ const rt = vi.hoisted(() => {
   }
   const channels: FakeChannel[] = [];
   let status = "SUBSCRIBED";
+  // PER-NAME overrides. A single module-level `status` can only make every
+  // channel succeed or every channel fail together, which is precisely the
+  // fixture the mixed-outcome defect (one division up, one down) hid behind.
+  let statusByName: Record<string, string> = {};
   const channel = (name: string): FakeChannel => {
     const ch: FakeChannel = {
       name,
@@ -57,7 +61,7 @@ const rt = vi.hoisted(() => {
         return ch;
       },
       subscribe(cb) {
-        cb(status);
+        cb(statusByName[name] ?? status);
         return ch;
       },
       unsubscribe() {
@@ -73,9 +77,11 @@ const rt = vi.hoisted(() => {
     reset: (nextStatus = "SUBSCRIBED") => {
       channels.length = 0;
       status = nextStatus;
+      statusByName = {};
     },
-    setStatus: (s: string) => {
-      status = s;
+    /** One channel's status, by channel name — the rest keep the default. */
+    setStatusFor: (name: string, s: string) => {
+      statusByName[name] = s;
     },
   };
 });
@@ -229,7 +235,14 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
-  vi.clearAllMocks();
+  // `resetAllMocks`, not `clearAllMocks`. `clearAllMocks` runs `mockClear()`
+  // — calls and results only — so a persistent `mockResolvedValue(...)` set
+  // inside one test survived into every later test in the file. Nothing
+  // depended on it today, but that is a property of the current ORDER: moving
+  // a test, or inserting one between two others, would have changed
+  // behaviour with nothing to say so. Resetting the implementations too makes
+  // each test state its own.
+  vi.resetAllMocks();
 });
 
 describe("useLiveCompetition", () => {
@@ -417,5 +430,81 @@ describe("useLiveCompetition realtime", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(rt.channels).toHaveLength(2);
     expect(hook.current.transport).toBe("poll");
+  });
+
+  // The POSITIVE pair for the two `toBe("poll")` assertions above. Without it
+  // `transport` could be the string literal "poll" and this whole suite stays
+  // green — and `transport` is the value a consumer draws the Live/Updating
+  // indicator from, so the indicator could never be proven to appear at all.
+  it("every channel SUBSCRIBED reports transport 'realtime'", async () => {
+    const hook = mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels).toHaveLength(2);
+    expect(hook.current.transport).toBe("realtime");
+  });
+
+  // And the guard that stops the poll once realtime is up had NO test that
+  // could kill it: inside this describe the only timer advances were 0 and
+  // 250, and the two `HUB_POLL_MS` advances live in the poll describe where
+  // `realtime={false}` and nothing ever subscribes. Deleting
+  // `if (subscribed) return` left all 421 lines green while the hook polled
+  // every 15s ON TOP of realtime — double load on `/hub` for every spectator
+  // on a busy competition.
+  it("and STOPS polling — a full poll interval passes with no fetch at all", async () => {
+    mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchCompetitionHub).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+    expect(fetchCompetitionHub).not.toHaveBeenCalled();
+  });
+
+  // MIXED outcomes — the case a single shared `subscribed` boolean cannot
+  // represent. All N channels wrote it and the last writer won, so on a hub
+  // with live matches in two divisions the hook reported whichever callback
+  // fired last. Both orders are wrong and only ONE of them is fatal, which is
+  // why both are here: with `division:d1` failing, `division:d2`'s SUBSCRIBED
+  // landed last, `subscribed` went true, the poll effect returned early — and
+  // d1 has no channel pushing to it, so its live scores froze on the page
+  // until the spectator reloaded. (With `division:d2` failing instead, the
+  // last writer said false, so the poll survived and only the indicator lied;
+  // the old code passes that row, which is exactly why a single-order fixture
+  // would not have caught this.)
+  //
+  // Supabase re-invokes the status callback on a later CHANNEL_ERROR /
+  // TIMED_OUT / CLOSED as well, so this is a mid-match failure mode, not only
+  // a startup race.
+  for (const failing of ["division:d1", "division:d2"] as const) {
+    it(`${failing} CHANNEL_ERROR with the other SUBSCRIBED stays on 'poll', and keeps polling`, async () => {
+      rt.setStatusFor(failing, "CHANNEL_ERROR");
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(twoLiveDivisions());
+      const hook = mount("o", "c", twoLiveDivisions(), true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Both were attempted — this is a mixed outcome, not a missing channel.
+      expect(rt.channels.map((c) => c.name).sort()).toEqual(["division:d1", "division:d2"]);
+      expect(hook.current.transport).toBe("poll");
+
+      // The half that actually matters to a spectator: the poll is the only
+      // thing left covering the division whose channel is down.
+      expect(fetchCompetitionHub).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(fetchCompetitionHub).toHaveBeenCalledWith("o", "c");
+    });
+  }
+
+  // W1's `use-live-fixture.ts:23-28` rules that freshness derives from the
+  // DOCUMENT's own timestamp, never a hook-side clock: a `Date.now()`
+  // re-stamped on every successful poll reports the FETCH as freshness, so a
+  // hub whose scores had not moved for an hour reads "Updated 0s ago" — and
+  // seeding it from `Date.now()` hydration-mismatches, because SSR and the
+  // client run that initialiser separately. This hook shipped exactly that
+  // field with zero assertions anywhere. Pinning the whole return shape,
+  // rather than only the absence of one name, so a future clock cannot arrive
+  // under a different one either.
+  it("the hook returns NO clock of its own — { doc, transport } and nothing else", async () => {
+    const hook = mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Object.keys(hook.current).sort()).toEqual(["doc", "transport"]);
   });
 });

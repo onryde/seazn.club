@@ -71,9 +71,16 @@ function hubMatch(
   };
 }
 
+// `showDivision` is passed STRAIGHT THROUGH, never `?? true`. The helper used
+// to substitute its own default, so every test rendered the chip-visible arm
+// while the component itself defaulted to hidden — the fixture picked the arm
+// and the real default went unwitnessed in both directions. Now an omitted
+// `showDivision` here is an omitted `showDivision` there, so the live test
+// below is what proves the default, and the `showDivision: false` test proves
+// the other arm.
 function card(m: HubMatchT, now: number = NOW, opts: { showDivision?: boolean } = {}) {
   return renderToStaticMarkup(
-    <MatchCard match={m} dict={dict} locale="en" now={now} showDivision={opts.showDivision ?? true} />,
+    <MatchCard match={m} dict={dict} locale="en" now={now} showDivision={opts.showDivision} />,
   );
 }
 
@@ -90,8 +97,35 @@ describe("MatchCard", () => {
     expect(h).toContain(`data-testid="mh-match-live"`);
     expect(h).toContain("56/6");
     expect(h).toContain("(2.1)");
+    // This is now also the DEFAULT's own witness — `card()` passes no
+    // `showDivision` at all (see the helper), so the chip being here proves
+    // the component defaults to showing it. Flip `showDivision = true` to
+    // `false` in the destructure and this line reds.
     expect(h).toContain(`data-testid="mh-match-division"`);
     expect(h).toContain("Court 1");
+  });
+
+  it("showDivision={false} drops the chip entirely (the arm a division page needs, and the one no test took)", () => {
+    const h = card(live, NOW, { showDivision: false });
+    expect(h).not.toContain(`data-testid="mh-match-division"`);
+    // A positive pair, so this cannot pass by rendering nothing at all: the
+    // rest of the meta row is untouched.
+    expect(h).toContain(`data-testid="mh-match-live"`);
+    expect(h).not.toContain("Division A");
+  });
+
+  it("the accessible name NAMES THE TWO SIDES — the `aria-label` on the wrapping <a> replaces everything inside it", () => {
+    // `matchesHub.card.label` shipped as the bare noun "Match card" in all
+    // four locales while `MatchCard` already passed `{home, away}`;
+    // `interpolate()` drops vars with no matching `{param}` silently, so a
+    // screen-reader link list over a 40-match hub announced "Match card,
+    // link" forty times. Three gates passed it: the dictionary parity test
+    // compares es/fr/nl against EN and EN had zero placeholders,
+    // `check-parity.ts` compares key SETS only, and nothing here asserted the
+    // attribute. This asserts the RENDERED attribute, which is the only thing
+    // that can tell a template from a noun.
+    const h = card(live);
+    expect(h).toContain('aria-label="Blue Blazers v Queens"');
   });
 
   it("decided: the result line and the winner row in bold; no LIVE pill; no relative time (positive pair with scheduled)", () => {
@@ -134,6 +168,47 @@ describe("MatchCard", () => {
     const tbd = card(hubMatch({ bucket: "upcoming", scheduledAt: null }), now);
     expect(times(tbd, "Time TBD")).toBe(1); // status slot only
     expect(tbd).not.toContain(`data-testid="mh-match-starts"`);
+  });
+
+  // The sub-hour arm, which no test executed. `Math.round(Δ/3_600_000) ||
+  // Math.round(Δ/60_000)` picked the VALUE and `|Δ| >= 3_600_000 ? "hour" :
+  // "minute"` picked the UNIT independently, and they disagree across the
+  // entire [30min, 60min) band: the hour-rounded value is 1 there (JS rounds
+  // .5 up), which is truthy, so the minutes fallback never engaged while the
+  // unit stayed "minute". Every match half an hour to an hour away read
+  // "Starts in 1 minute" — the exact window a spectator uses to decide
+  // whether to leave for the ground — and 30/40/45/59 were all measured
+  // saying it. The suite's only relative case was 2 hours, where the two
+  // decisions happen to agree.
+  //
+  // Expectations come from `Intl.RelativeTimeFormat` itself, never a table of
+  // sentences typed in here, so a locale-data change moves the test with the
+  // product. The UNIT column is stated, because the unit boundary IS what is
+  // under test.
+  it("the relative sentence takes its value from the unit it names: 30/45/59 minutes read as minutes, not '1 minute'", () => {
+    const rtf = new Intl.RelativeTimeFormat("en", { numeric: "always" });
+    const rows: { minutes: number; unit: "hour" | "minute" }[] = [
+      { minutes: 29, unit: "minute" }, // was already right
+      { minutes: 30, unit: "minute" }, // the boundary the old `||` broke
+      { minutes: 45, unit: "minute" },
+      { minutes: 59, unit: "minute" }, // last minute before the unit flips
+      { minutes: 60, unit: "hour" }, // was already right
+      { minutes: 120, unit: "hour" },
+      { minutes: -20, unit: "minute" }, // past its slot, still bucketed upcoming
+    ];
+    for (const { minutes, unit } of rows) {
+      const h = card(
+        hubMatch({
+          bucket: "upcoming",
+          scheduledAt: new Date(NOW + minutes * 60_000).toISOString(),
+          tz: "Europe/London",
+        }),
+      );
+      const expected = rtf.format(unit === "hour" ? minutes / 60 : minutes, unit);
+      expect(h, `${minutes} minutes away`).toMatch(
+        new RegExp(`mh-match-starts[^<]*>Starts ${expected}<`),
+      );
+    }
   });
 
   // A match that was CALLED OFF, which is the case the card was silent about.
@@ -224,12 +299,43 @@ describe("MatchCard", () => {
     expect(h).toMatch(/class="[^"]*flex-wrap[^"]*"[^>]*>\s*<span class="[^"]*truncate/);
   });
 
-  it("meta line shows roundLabel when present, and a 'Round N' fallback from the round number when it is null (positive pair)", () => {
+  it("meta line shows roundLabel when present, and a bare 'Round N' fallback from the round number when it is null (positive pair)", () => {
     const withLabel = card(hubMatch({ stageName: "Playoffs", roundLabel: "Semi-final", roundNo: 3 }));
     expect(withLabel).toContain("Playoffs · Semi-final");
 
-    const withoutLabel = card(hubMatch({ stageName: "League", roundLabel: null, roundNo: 4 }));
-    expect(withoutLabel).toContain("League · Round 4");
+    // `stageName: ""`, not "League". `competition-hub.ts:501,515` hangs BOTH
+    // fields off the same `stage` (`stageName: stage?.name ?? ""`,
+    // `roundLabel: stage ? roundRoleLabel(…) : null`), so a null `roundLabel`
+    // IMPLIES an empty `stageName` — the builder cannot produce the
+    // "League" + null pairing this fixture used to assert, and the sentence
+    // it pinned ("League · Round 4") is unreachable in production. The branch
+    // was genuinely exercised; the expected VALUE was a document nobody can
+    // hit, which is how a test gets read later as confirming a pairing that
+    // does not exist. The real fallback render is the round on its own.
+    const withoutLabel = card(hubMatch({ stageName: "", roundLabel: null, roundNo: 4 }));
+    expect(withoutLabel).toMatch(/>Round 4</);
+    expect(withoutLabel).not.toContain(" · Round 4");
+  });
+
+  it("the division chip cannot wrap inside its own pill (class assertion — node vitest cannot measure a line box)", () => {
+    // `environment: "node"`: this pins the CLASSES, and cannot see geometry.
+    // What it defends is that the chip has any white-space control at all —
+    // every sibling in that flex row is protected (`min-w-0 truncate` on the
+    // stage/round span, `shrink-0` on the status slot) and the chip had none,
+    // so a long division name shrank past its min-content and wrapped INSIDE
+    // the pill, turning the meta row into a two-line blob. Same failure
+    // AGENTS.md records for the detail dock's entrant chips. The rendered
+    // result still needs a browser at 320 with a realistic long name.
+    const h = card(
+      hubMatch({ divisionName: "Mixed Doubles Championship" }),
+      NOW,
+      { showDivision: true },
+    );
+    const chipClass = h.match(/data-testid="mh-match-division" class="([^"]*)"/)?.[1];
+    expect(chipClass, "the chip's class attribute").toBeTruthy();
+    for (const cls of ["shrink-0", "truncate", "max-w-[45%]"]) {
+      expect(chipClass!.split(" "), cls).toContain(cls);
+    }
   });
 
   it("a 43-character side name renders in a min-w-0 truncate cell with a title; a TBD side (entrantId '') renders its slot label, never blank", () => {

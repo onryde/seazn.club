@@ -24,9 +24,18 @@ import { fetchCompetitionHub } from "./competition-hub-data";
 export const HUB_POLL_MS = 15_000;
 export const HUB_IDLE_POLL_MS = 60_000;
 
+// NO `updatedAt` here, matching W1's own ruling in
+// `match-centre/use-live-fixture.ts:23-28`: the freshness line derives from
+// the DOCUMENT's own timestamp (`doc.generatedAt`, and each table's own
+// `updatedAt`), never from a hook-side clock. This hook shipped a
+// `useState(() => Date.now())` re-stamped on every successful poll, which
+// reports the FETCH as freshness — a hub whose scores had not moved for an
+// hour would have read "Updated 0s ago" — and, being seeded from `Date.now()`
+// during SSR and again on the client, hydration-mismatched for any consumer
+// that rendered it. Nothing consumed it yet, so it is gone rather than
+// repaired; a consumer that needs freshness reads `doc.generatedAt`.
 export interface UseLiveCompetitionResult {
   doc: CompetitionHubDocT;
-  updatedAt: number;
   transport: "realtime" | "poll";
 }
 
@@ -42,7 +51,6 @@ export function useLiveCompetition({
   realtime: boolean;
 }): UseLiveCompetitionResult {
   const [doc, setDoc] = useState<CompetitionHubDocT>(initial);
-  const [updatedAt, setUpdatedAt] = useState<number>(() => Date.now());
 
   // Same guard as `use-live-fixture.ts:32-38` — a poll or debounced refresh
   // in flight when the component unmounts must not call `setState` on its
@@ -60,7 +68,6 @@ export function useLiveCompetition({
       const next = await fetchCompetitionHub(orgSlug, competitionSlug);
       if (!mountedRef.current) return;
       setDoc(next);
-      setUpdatedAt(Date.now());
     } catch {
       // transient — keep the last known document (never throw to the UI)
     }
@@ -99,15 +106,41 @@ export function useLiveCompetition({
           if (debounce) clearTimeout(debounce);
           debounce = setTimeout(refresh, 250);
         };
+        // PER-CHANNEL state, never one shared boolean. Every channel used to
+        // write the same `subscribed` flag and the last writer won, so on a
+        // hub with live matches in two divisions the hook reported whatever
+        // the final callback happened to say. `division:d1` reporting
+        // SUBSCRIBED after `division:d2` reported CHANNEL_ERROR left
+        // `subscribed` true, which switched the POLL off — and d2 has no
+        // channel pushing to it, so its live scores froze on the page until
+        // the spectator reloaded. That is the flagship failure mode of the
+        // whole surface, and the inverse order merely lied about the
+        // transport instead.
+        //
+        // Not only a startup race: Supabase re-invokes this callback on a
+        // later CHANNEL_ERROR / TIMED_OUT / CLOSED, so one channel dropping
+        // mid-match flipped the whole hook, and one recovering flipped it
+        // back. Realtime is claimed only when EVERY channel is up; anything
+        // less falls back to polling, which covers all of them.
+        //
+        // The loop's own `if (cancelled) return` is gone with it (review nit
+        // 2): everything after the `await` above is synchronous and React
+        // runs cleanups synchronously, so `cancelled` cannot flip mid-loop —
+        // and had it ever fired it would have LEAKED, because the channels
+        // pushed on earlier iterations were pushed after the cleanup already
+        // walked the array. The check at the `await` boundary is the real one.
+        const up = new Set<string>();
         for (const id of ids) {
-          if (cancelled) return;
           channels.push(
             sb
               .channel(`division:${id}`)
               .on("broadcast", { event: "state_changed" }, onPush)
               .on("broadcast", { event: "schedule_changed" }, onPush)
               .subscribe((status: string) => {
-                if (!cancelled) setSubscribed(status === "SUBSCRIBED");
+                if (cancelled) return;
+                if (status === "SUBSCRIBED") up.add(id);
+                else up.delete(id);
+                setSubscribed(up.size === ids.length);
               }),
           );
         }
@@ -133,5 +166,5 @@ export function useLiveCompetition({
     return () => clearInterval(id);
   }, [hasLive, subscribed, refresh]);
 
-  return { doc, updatedAt, transport: subscribed ? "realtime" : "poll" };
+  return { doc, transport: subscribed ? "realtime" : "poll" };
 }
