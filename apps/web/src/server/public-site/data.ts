@@ -49,6 +49,24 @@ const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
 });
 
 /**
+ * Final-review fix F1 — the same timestamptz normalisation as
+ * {@link normalizeFixture}, for `public_standings_v.updated_at`.
+ *
+ * `db.ts`'s date-type override only patches OID 1082 (`date`); postgres.js's
+ * default handler still owns OID 1184 (`timestamptz`) and parses it to a JS
+ * `Date` (`mergeUserTypes` merges by OID). `PublicStandings.updated_at` is
+ * declared `string`, and `competition-hub.ts:591` forwards this field
+ * unchanged into `TableView.updatedAt` (`z.string()`) — so without this, the
+ * declaration is a lie and the hub document fails schema validation. NOT
+ * NULL at the schema (`V218__standings_snapshots.sql`), so the non-null
+ * assertion matches the column's own constraint rather than assuming it.
+ */
+const normalizeStandings = (s: PublicStandings): PublicStandings => ({
+  ...s,
+  updated_at: isoDateTime(s.updated_at)!,
+});
+
+/**
  * P9 cutover: `venue_name`/`court_name` DERIVED from `venues`/`courts` via
  * `fixtures.venue_id`/`court_id`. `public_fixtures_v` (db/migration) is a
  * hand-maintained column list that has not been extended with the two id
@@ -204,6 +222,16 @@ export interface PublicDivision {
    *  `PublicDivision` now selects both. */
   youth?: boolean;
   player_name_display?: string | null;
+  /** W2 Task 4 — the division's own `divisions.config` jsonb, joined from the
+   *  base table for the same reason `youth`/`player_name_display` are:
+   *  `public_divisions_v` does not expose it and widening that widely-read
+   *  view costs more than a primary-key join. `describeFormat` parses it
+   *  through the division's PINNED module's `configSchema` to build the hub's
+   *  format sentence ("8 overs", "Best of 5"). `unknown`, not a typed cfg:
+   *  the shape is the sport module's and this file resolves no modules.
+   *  Optional so a hand-built `PublicDivision` in an existing test still
+   *  type-checks — every real query that builds one now selects it. */
+  config?: unknown;
 }
 
 export interface PublicFixture {
@@ -451,7 +479,7 @@ export async function getPublicCompetition(
                -- these (see PublicDivision's own doc comment) — a cheap
                -- primary-key join to the base table rather than widening
                -- that view for every other consumer of it.
-               dv.youth, dv.player_name_display
+               dv.youth, dv.player_name_display, dv.config
         from public_divisions_v d
         left join sports s on s.key = d.sport_key
         join divisions dv on dv.id = d.id
@@ -661,9 +689,11 @@ export async function getPublicDivision(
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const fixtures = await withCourtVenueNames(rawFixtures);
-      const standings = await sql<PublicStandings[]>`
+      const standings = (
+        await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
-        from public_standings_v where division_id = ${division.id}`;
+        from public_standings_v where division_id = ${division.id}`
+      ).map(normalizeStandings);
       const rawEntrants = await sql<PublicEntrant[]>`
         select id, division_id, kind, display_name, seed, status, members,
                team_display, badge_url

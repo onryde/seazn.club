@@ -682,7 +682,14 @@ function resultMsg(
 
 // -------------------------------------------------------------- the header
 
-function statusOf(fixtureStatus: string): MatchCentreHeaderT["status"] {
+/** The wire status → header state ladder. EXPORTED (W2 Task 4) because the
+ *  competition hub builds a header for every fixture in a competition and must
+ *  not re-derive this — a second ladder is a second answer to "is this match in
+ *  play", and the hub already carries two more views of the same fact
+ *  (`HubMatch.bucket` and `header.live`). `competition-hub.ts`'s `hubLiveness`
+ *  is the one place all three are computed, and it computes this one by calling
+ *  here. Unchanged otherwise. */
+export function statusOf(fixtureStatus: string): MatchCentreHeaderT["status"] {
   switch (fixtureStatus) {
     case "in_play":
       return "in_play";

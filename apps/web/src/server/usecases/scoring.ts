@@ -534,6 +534,13 @@ export async function invalidatePublicCache(
   await cacheDelPattern(`pub:v1:fixture:${fixtureId}`);
   if (row) {
     await cacheDelPattern(`pub:v1:div:${row.division_id}:*`);
+    // W2 — the competition HUB document (usecases/public.ts's
+    // `pub:v1:hub:{competitionId}`) carries every division's live scores, so a
+    // write to any fixture in the competition makes it stale. Competition-
+    // keyed, not division-keyed: one document spans the whole competition.
+    // Its ISR twin drops on the `division:{id}` tag `fireDivisionRevalidate`
+    // fires below — `getPublicCompetitionHub` tags every division it read.
+    await cacheDelPattern(`pub:v1:hub:${row.competition_id}`);
     fireDivisionRevalidate(row.division_id, row.competition_id);
     // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
     // fires only for discoverable competitions.

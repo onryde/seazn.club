@@ -528,6 +528,26 @@ export async function fetchImageDataUri(url: string | null | undefined, opts: Fe
 
 **Runs after checking the tree.** W2's draft owns `apps/web/src/server/public-site/describe-format.ts` and `PublicDivision.config` (P5). This task has two branches; exactly one is executed and the choice is recorded in the wave report and `_INDEX.md`.
 
+> **RESOLVED 2026-09-09 — take BRANCH A. W2 Task 4 shipped
+> `describe-format.ts` (commits `ddc0a3386`, `16f41db7c`), so Branch B is dead
+> and must not be built.** Two things in Branch B's code below are now WRONG
+> and are kept only so a later session recognises them as superseded rather
+> than restoring them:
+>
+> 1. **The key is `format.minutes`, not `format.football.minutes`** (owner
+>    ruling 17, `_INDEX.md`): one shared key for football, hockey AND ice
+>    hockey, because the last two carry the same total-minutes fact and would
+>    otherwise show no format chip at all. Every reference in this file has
+>    been renamed already.
+> 2. **`minutes` is the TOTAL, not the per-period value.** Branch B emits
+>    `halfMinutes` (45); the shipped module multiplies it by `halves` — and
+>    `periods.count × periods.minutes` for the two hockeys — so a 2×45 football
+>    match reads `90 min`. With the approved copy `"{minutes} min"`, emitting 45
+>    would print "45 min" on a ninety-minute match. The test expectation below
+>    still says 45 and would fail against the shipped module.
+>
+> W3 consumes the shipped function and adds nothing. One authority per fact.
+
 - [ ] **Step 1: Check** — `ls /Users/ashokhein/github/seazn.club/.claude/worktrees/spectator/apps/web/src/server/public-site/describe-format.ts` and `grep -n -a "config" /Users/ashokhein/github/seazn.club/.claude/worktrees/spectator/apps/web/src/server/public-site/data.ts` (looking for `config?: unknown` on `PublicDivision` and `dv.config` in `getPublicCompetition`'s SELECT).
 
 **Branch A — present (W2 merged):** consume `describeFormat(sportKey, cfg): MsgT | null` and `division.config`; nothing to build; commit nothing. Skip to Task 4.
@@ -557,7 +577,7 @@ describe("describeFormat (spec R5: format labels come from the module's config, 
   });
   it("football: halfMinutes from the module cfg (default 45 → 2 × 45 min)", () => {
     const cfg = resolveLatestModule("football").configSchema.parse({});
-    expect(describeFormat("football", cfg)).toEqual({ key: "format.football.minutes", params: { minutes: 45 } });
+    expect(describeFormat("football", cfg)).toEqual({ key: "format.minutes", params: { minutes: 45 } });
   });
   it("set-based and nested sports: bestOf from the module cfg; generic → null", () => {
     const tennis = resolveLatestModule("tennis").configSchema.parse({});
@@ -600,7 +620,7 @@ export function describeFormat(sportKey: string, cfg: unknown): MsgT | null {
   }
   if (sportKey === "football") {
     const minutes = parsed.halfMinutes;
-    return typeof minutes === "number" ? { key: "format.football.minutes", params: { minutes } } : null;
+    return typeof minutes === "number" ? { key: "format.minutes", params: { minutes } } : null;
   }
   const bestOf = parsed.bestOf;
   return typeof bestOf === "number" ? { key: "format.sets.bestOf", params: { n: bestOf } } : null;
@@ -1515,10 +1535,10 @@ import nl from "@/dictionaries/nl/public.json";
 import { POSTER_KEYS } from "@/server/og/match-poster";
 import { POSTER_UI_KEYS } from "@/components/public-site/match-centre/poster-download";
 
-const FORMAT_KEYS = ["format.cricket.overs", "format.football.minutes", "format.sets.bestOf"] as const;   // emitted by describeFormat (W2/W3 Task 3)
+const FORMAT_KEYS = ["format.cricket.overs", "format.minutes", "format.sets.bestOf"] as const;   // emitted by describeFormat (W2/W3 Task 3)
 const PARAMS: Record<string, string[]> = {
   "poster.updatedAt": ["{time}"], "poster.presentedBy": ["{sponsor}"],
-  "format.cricket.overs": ["{overs}"], "format.football.minutes": ["{minutes}"], "format.sets.bestOf": ["{n}"],
+  "format.cricket.overs": ["{overs}"], "format.minutes": ["{minutes}"], "format.sets.bestOf": ["{n}"],
 };
 const ALL = [...POSTER_KEYS, ...POSTER_UI_KEYS, ...FORMAT_KEYS];
 
@@ -1560,13 +1580,13 @@ describe("poster dictionary coverage (R2 — four locales, keys derived from the
 "poster.vs": "V",
 "poster.topPerformers": "Top performers",
 "format.cricket.overs": "{overs}-over match",
-"format.football.minutes": "2 × {minutes} min",
+"format.minutes": "{minutes} min",
 "format.sets.bestOf": "Best of {n}"
 ```
 
-Spanish: `"Descargar cartel"`, `"Formatos del cartel"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Compartir imagen"`, `"En directo"`, `"Hora por confirmar"`, `"Actualizado {time}"`, `"Presentado por {sponsor}"`, `"Con la tecnología de seazn"`, `"V"`, `"Destacados"`, `"Partido de {overs} overs"`, `"2 × {minutes} min"`, `"Al mejor de {n}"`.
-French: `"Télécharger l'affiche"`, `"Formats de l'affiche"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Partager l'image"`, `"En direct"`, `"Heure à confirmer"`, `"Mis à jour {time}"`, `"Présenté par {sponsor}"`, `"Propulsé par seazn"`, `"V"`, `"Joueurs en vue"`, `"Match de {overs} overs"`, `"2 × {minutes} min"`, `"Au meilleur des {n}"`.
-Dutch: `"Poster downloaden"`, `"Posterformaten"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Afbeelding delen"`, `"Live"`, `"Tijd nog te bevestigen"`, `"Bijgewerkt {time}"`, `"Gepresenteerd door {sponsor}"`, `"Mogelijk gemaakt door seazn"`, `"V"`, `"Uitblinkers"`, `"Wedstrijd van {overs} overs"`, `"2 × {minutes} min"`, `"Best of {n}"`.
+Spanish: `"Descargar cartel"`, `"Formatos del cartel"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Compartir imagen"`, `"En directo"`, `"Hora por confirmar"`, `"Actualizado {time}"`, `"Presentado por {sponsor}"`, `"Con la tecnología de seazn"`, `"V"`, `"Destacados"`, `"Partido de {overs} overs"`, `"{minutes} min"`, `"Al mejor de {n}"`.
+French: `"Télécharger l'affiche"`, `"Formats de l'affiche"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Partager l'image"`, `"En direct"`, `"Heure à confirmer"`, `"Mis à jour {time}"`, `"Présenté par {sponsor}"`, `"Propulsé par seazn"`, `"V"`, `"Joueurs en vue"`, `"Match de {overs} overs"`, `"{minutes} min"`, `"Au meilleur des {n}"`.
+Dutch: `"Poster downloaden"`, `"Posterformaten"`, `"Feed · 4:5"`, `"Story · 9:16"`, `"Afbeelding delen"`, `"Live"`, `"Tijd nog te bevestigen"`, `"Bijgewerkt {time}"`, `"Gepresenteerd door {sponsor}"`, `"Mogelijk gemaakt door seazn"`, `"V"`, `"Uitblinkers"`, `"Wedstrijd van {overs} overs"`, `"{minutes} min"`, `"Best of {n}"`.
 
 The three `format.*` keys are added ONLY if Task 3 ran Branch B (W3 owns them); under Branch A they already exist and this test merely asserts them. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/spectator && npm run i18n:gen-keys` and confirm `apps/web/src/lib/i18n-keys.ts` changed (`/usr/bin/git status --porcelain apps/web/src/lib/i18n-keys.ts`).
 

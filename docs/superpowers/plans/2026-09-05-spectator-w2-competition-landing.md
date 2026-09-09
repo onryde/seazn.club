@@ -87,6 +87,67 @@
 
 Every line number below was opened on 2026-09-05 on the branch named; W1 is still on two lane branches and the main worktree, so anything W1 touches can move. A false premise is a finding to record in `_INDEX.md`, not a blocker.
 
+> ### RE-PINNED 2026-09-08 against merged `main` (W1 = #743; `main` at `4ee38278d`)
+>
+> All twenty premises re-opened file by file — read, not grepped. **Three hold
+> unchanged (P3, P4, P7). Seventeen moved, changed, or were false.** The
+> corrected pins are in the **re-pin table directly below the original table**;
+> where it and the original 2026-09-05 row disagree, **the re-pin table wins**.
+> The rows below are left as written so the drift itself stays legible.
+>
+> **The five that change what gets built, not just where it lives:**
+>
+> 1. **P5 — copying W1's "TabRail contract" verbatim would re-introduce two
+>    defects W1 deliberately fixed.** The tablist does NOT carry `tabIndex={0}`
+>    (roving tabindex lives on the buttons, `tabIndex={isActive ? 0 : -1}`), and
+>    `aria-controls` is emitted only on the ACTIVE tab. A code comment at
+>    `tab-rail.tsx:39-54` records both as fixed. Task 19 must copy the CURRENT
+>    contract, and no test may assert the old one.
+> 2. **P14 — `recomputePlayerStats` is NOT watermark-based.** It re-folds EVERY
+>    `score_event` in the division on every call (`throughSeq` is a running count,
+>    not a resume point). The Stats tab calls it per division on a hub page, so
+>    this is a cost question Task 3 owes an answer to — the plan assumed an
+>    incremental read. Signature is also `(tx, divisionId)` returning
+>    `{ rows, throughSeq, hasModel }`, with no `orgId`: callers wrap it in
+>    `withTenant` themselves.
+> 3. **P11 — `bucketFixture` has never existed.** The plan cites it as a thing to
+>    reuse; it is an export of `lib/matches-hub.ts`, a file this plan CREATES.
+>    Nothing classifies a fixture under that name today. Task 4 writes it from
+>    scratch, and the empty-case-first ladder is its own to get right.
+> 4. **P13 — the reschedule staleness recorded here is too pessimistic.** Schedule
+>    writes go through `afterScheduleWrite` (`schedule.ts:97-105`), which DOES drop
+>    `pub:v1:div:{id}:*` and fire `fireDivisionRevalidate`. What it never drops is
+>    `pub:v1:fixture:{id}`. So a reschedule is not invisible until TTL; only the
+>    per-fixture key is. Task 4's hub key must be added in BOTH paths.
+> 5. **P12 — W1 already falsified this one, in our favour.** `/public/fixtures/{id}`
+>    now carries `response: S.PublicFixtureSummary` (`openapi.ts:201`, added by
+>    `21b68b2fe`). The other six public routes still carry none. Task 5 has a
+>    worked precedent to copy rather than a pattern to invent.
+>
+> **P9 — the ruling's premise is CONFIRMED, hard.** `PlayerStatsModel`
+> (`stats.ts:106`) declares no floor, threshold, qualification or leaderboard
+> field under any name, and `packages/engine/src/stats/` holds nothing else. The
+> count keys the ruling names all exist as declared metrics: cricket `runs`,
+> `wickets`, `sixes` (plus `fours`, `catches`, `stumpings`, `dismissals` and ten
+> `dismissals_<kind>`); football `goals`, `assists` (plus cards, penalties,
+> shots). So ruling 15.2 is buildable exactly as written, and the additive
+> `leaderboards` declaration it permits has no existing field to collide with.
+>
+> **P20 is the worst doc drift and touches every e2e task.** The W0 helpers did
+> NOT move to `e2e/spectator-public.spec.ts` — that file does not exist. They live
+> in `e2e/spectator-public-helpers.ts` (`postEvent:52`, `createPersons:103`,
+> `playInnings:134`, `fixtureSides:227`, `putLineups:239`, `controlSet:472`),
+> imported by `e2e/walkthrough/spectator-public.spec.ts` and `…-2.spec.ts`.
+> **`setScheduledAt` does not exist anywhere** — zero matches across `apps/`,
+> `packages/`, `scripts/`. Any task that plans to call it needs a different plan.
+> `DEFAULT_SHOT_WIDTHS` is `[1280, 768, 320]` — THREE widths, not the seven-width
+> matrix; the seven widths are `mobile.spec.ts` projects, a different mechanism.
+>
+> **P1 and P2 need no work.** P1 is ruled `mh-*` (`_INDEX.md` ruling 15.1) and the
+> plan already uses it — 94 `mh-` occurrences against 2 `cl-`, both of which are
+> inside P1's own row describing the error. No rename. P2 is stale: `W2-landing.md:4`
+> already points at this file, and the path it calls wrong does not exist.
+
 | # | Premise | Pinned at | Moves when |
 |---|---|---|---|
 | P1 | Testid prefix. The spec (R7) and `W2-landing.md` item 11 say **`mh-*`**; the dispatch brief for this plan said `cl-*`. This plan follows the spec. If the owner wants `cl-*`, it is a global rename of the `mh-` literals in Tasks 7–17 and of the smoke markers — decide before Task 7. | spec §R7; `W2-landing.md:60-63` | owner ruling |
@@ -109,6 +170,34 @@ Every line number below was opened on 2026-09-05 on the branch named; W1 is stil
 | P18 | `decidedOutcomeText(outcome, entrantNames, msgFn, shootout)` and `shootoutScoreFromDetail` (`@/lib/scoring-vocab`, used by the fixture page `page.tsx:38-45`) — the ONE result-sentence authority; it resolves through the `ui` namespace via `msgFor(locale, …)` (`lib/messages-i18n.ts:24`), already in four locales. | fixture `page.tsx:16-45` | W1 Task 14 edits this page |
 | P19 | `roundRoleFor(...)`/`roundRoleLabel(msg, role)` (`lib/round-role-label.ts:21,90`) — pin `roundRoleFor`'s parameter shape (it reads `round_no`, `lane`, `is_final`, `third_place` off a `LaneRoundFixture`, `:59-`) before Task 4. | `round-role-label.ts:59-110` | — |
 | P20 | `_hook-harness`, `expectNoHorizontalScroll` (`e2e/helpers.ts:43-101`), `screenshotAtWidths` (`helpers.ts:240`, widths `[1280, 768, 320]` at `:229`), `AxeBuilder` usage (`mobile.spec.ts:1391`), the W0 harness's `controlSet` (`w0-spectator-capture.spec.ts:266-289`) and its seeding helpers (`postEvent`, `createPersons`, `playInnings`, `fixtureSides`, `putLineups`, `setScheduledAt`, `:33-262`) — W1 Task 15 moves these into `spectator-public.spec.ts` and DELETES the W0 file; Task 17 imports from wherever W1 left them. | W1 plan Task 15 | W1 merge |
+
+### Re-pin table — verified 2026-09-08 against merged `main` (`4ee38278d`)
+
+Authoritative over the 2026-09-05 rows above. Every pin below was read in the
+file, not grepped.
+
+| # | Verdict | Corrected pin / what is actually true |
+|---|---|---|
+| P1 | **RULED, no work** | `mh-*` (`_INDEX.md` ruling 15.1). Plan already uses it: 94 `mh-` vs 2 `cl-`, both inside P1's own row. |
+| P2 | **STALE, already fixed** | `W2-landing.md:4` already points at this file. The path it calls wrong (`2026-09-04-spectator-w2.md`) does not exist. |
+| P3 | **HOLDS** | `match-centre-schema.ts` — `Msg:9`, `Side:11`, `Person:12`, `MatchCentreHeader:14`, `MatchCentreDoc:84`, `SetsView.unit`/`.columnLabels:81`, `derivedComplete:96`, `…T` types `:98-110`. |
+| P4 | **HOLDS** | `use-live-fixture.ts` — `POLL_MS = 15_000` at `:10`; `useLiveFixture` at `:17`. |
+| P5 | **CHANGED — two claims now FALSE** | `tab-rail.tsx:129`. `role="tablist":175`, `aria-label:176`, `onKeyDown:178`, `id="mc-tab-<id>":188`, `aria-controls:194`, `tabIndex:201`, Arrow/Home/End `:160-163`. **No `tabIndex={0}` on the tablist** (roving `tabIndex={isActive ? 0 : -1}` on the buttons) and **`aria-controls` only on the ACTIVE tab**. `tab-rail.tsx:39-54` records both as deliberately fixed — do not re-assert the old contract. |
+| P6 | **CHANGED** | The fixture page mounts `MatchCentreWithTabParam` (`…/fixtures/[fixtureId]/page.tsx:293`, import `:22`), which renders `MatchCentre` (`match-centre.tsx:51`). `LiveScoreBody` split exists at `live-score.tsx:103`, consumed at `match-centre.tsx:90` and `summary-tab.tsx:58`. |
+| P7 | **HOLDS** | `cricket/index.ts:68` exports `deriveCricketScorecard` + `ScorecardInput`; `__tests__/scorecard-ledger.ts` present (24.7K); `scorecard-types.ts` — `BattingLine.dismissal:21`, `BowlingLine.legalBalls:29`, `.runs:32`, `.wickets:33`. |
+| P8 | **FALSE (absence is stale)** | `apps/web/src/server/public-site/__tests__/cricket-ledger.ts` **exists** (24.8K): `scriptLedger:209`, `summaryOnlyLedger:427`, `lineLedger:468`, `SUPER_OVER_SCRIPT:516`, `TIE_NO_SUPER_OVER:491`. Task 14 copies nothing. |
+| P9 | **CONFIRMED false premise** | `PlayerStatsModel` `stats.ts:106` — fields are `metrics`, `derived?`, `awards?`, `folded?` only. **No floor/threshold/qualification, no leaderboard**, anywhere in `packages/engine/src/stats/`. Cricket keys (`cricket.ts:2602`, not `:2510`): `runs`, `sixes`, `wickets`, `fours`, `catches`, `stumpings`, `dismissals`, +10 `dismissals_<kind>`. Football (`football.ts:2642`): `goals`, `assists`, cards, penalties, shots. |
+| P10 | **CHANGED** | `slideshow.tsx:122-129` — `sb.channel(\`division:${id}\`)` takes no second argument, so no `private: true`, no token anywhere in the file; it listens for **both** `state_changed` and `schedule_changed`. Publish is `scoring.ts:144-146`. `publishDivisionUpdate(divisionId, reason: "schedule"\|"publish"\|"start"\|"score")` (`realtime.ts:49-52`) emits `state_changed` **only** when `reason === "score"` (`:69`), else `schedule_changed`. |
+| P11 | **MOVED + one FALSE** | Fixture status `schemas.ts:1195` (a field of `PublicFixture`, not a named export); `DivisionStatus` `:60`. Both unions verbatim as claimed; **no `postponed`, no `walkover`** anywhere in the file. **`bucketFixture` DOES NOT EXIST** — it is an export of `lib/matches-hub.ts`, which this plan creates. |
+| P12 | **CHANGED — W1 falsified it** | `RouteSpec.response?` still `openapi.ts:27`; interface now `:21-32`. Public block `:196-203`. **`/public/fixtures/{id}` (`:201`) HAS `response: S.PublicFixtureSummary`** (added by `21b68b2fe`). The other six (`:197-200`, `:202-203`) still carry none. |
+| P13 | **MOVED + too pessimistic** | `invalidatePublicCache` `scoring.ts:518-547`; deletes `pub:v1:fixture:${id}` `:534` and `pub:v1:div:${id}:*` `:536`, fires `fireDivisionRevalidate` `:537`. Callers: `scoring.ts:147`, `event-import.ts:470` only. Schedule writes go through **`afterScheduleWrite`** (`schedule.ts:97-105`; `moveFixture:2886` fires at `:3214`), which **does** drop `pub:v1:div:*` and revalidate — it only misses `pub:v1:fixture:{id}`. |
+| P14 | **MOVED + CHANGED** | `recomputePlayerStats` `player-stats.ts:55-272` (callers `:437`, `:523`, `:718`). `(tx: Tx, divisionId: string) => { rows, throughSeq, hasModel }` — **no `orgId`**; callers wrap in `withTenant`. **NOT watermark-based**: `:66` selects all `score_events` for the division every call; `throughSeq` is a running count. |
+| P15 | **MOVED + CHANGED** | `getPublicDivision` `data.ts:624-699`; `unstable_cache` `:645`, tags `:689`, `tz` coalesce `:679-685` — tags and tz HOLD. **Returns 9 keys, not 6**: `org, competition, division, stages, pools, fixtures, standings, entrants, tz` (the six are the inner cached callback's return, `:685`). `getPublicCompetition` `:421-433` — **selects no `config`**; the string `config` appears 0 times in the file. |
+| P16 | **FALSE for the consumer** | `_hook-harness.tsx` exists: `renderIsland:169`, `walk:99`, `textOf:112`, `propsOf:96`. But `public-site/__tests__/live-score.test.tsx` **does not import it** and has no `stubFetch`/`stubInterval` — it is a pure `renderToStaticMarkup` test. The harness consumer is `match-centre/__tests__/use-live-fixture.test.ts:10` (file-local `mount()` `:28`). `stubFetch` lives in `live-score-data.test.ts:8`; **`stubInterval` exists nowhere**. |
+| P17 | **CHANGED** | Public seed `mobile.spec.ts:348-560`. The generic-sport division (`:372`) still has entrants (`:379`) and **no fixtures** — but the same setup now seeds a real band-3 cricket fixture at `:519-556` via `seedRosteredFixture`, which creates its **own** competition/division (`helpers.ts:1733`), so it adds nothing to the generic one. `publicCricketFixturePath` set at `:559`. |
+| P18 | **HOLDS + signature change** | `scoring-vocab.ts` — `decidedOutcomeText:1440`, `shootoutScoreFromDetail:1458`. **A fifth param `sportKey?: string` was added.** Fixture page import `:34`, `msgFor` wrapper `:41-42`, both called in `decidedLineFor` (`:62`, `:66`). `msgFor` at `messages-i18n.ts:24` as claimed. |
+| P19 | **MOVED (pins swapped) + CHANGED** | `round-role-label.ts` — `roundRoleLabel:21`, `roundRoleFor:90` (the row has these reversed). `roundRoleFor(all, target, stageKind, extKey = null)` — `target` carries a **fifth field `conditional`**, and `stageKind`/`extKey` are not in the row at all. `LaneRoundFixture:59` declares only `round_no` and `lane`; `is_final`/`third_place` are on the inline `target` type. |
+| P20 | **MOVED — worst drift; touches every e2e task** | `expectNoHorizontalScroll` `helpers.ts:49-107`; `screenshotAtWidths` `:259`; `DEFAULT_SHOT_WIDTHS` `:235` = **`[1280, 768, 320]`, three widths** (the seven widths are `mobile.spec.ts` projects, a different mechanism); `AxeBuilder` `mobile.spec.ts:1620`. `w0-spectator-capture.spec.ts` is deleted, but **`e2e/spectator-public.spec.ts` does not exist** — helpers live in **`e2e/spectator-public-helpers.ts`** (`postEvent:52`, `createPersons:103`, `playInnings:134`, `fixtureSides:227`, `putLineups:239`, `controlSet:472`), imported by `e2e/walkthrough/spectator-public.spec.ts` and `…-2.spec.ts`. **`setScheduledAt` does not exist** — zero matches across `apps/`, `packages/`, `scripts/`. |
 
 ---
 
@@ -859,7 +948,7 @@ Pin before writing: `entrants.badge_url` column exists (`V288__v13_fidelity.sql:
   export const BRACKET_KINDS: ReadonlySet<string>;   // knockout, double_elim, stepladder, page_playoff (page.tsx:54)
   export function divisionChampion(stages: PublicStage[], fixtures: PublicFixture[], standings: PublicStandings[]): string | null;
   // describe-format.ts (pure)
-  export function describeFormat(sportKey: string, cfg: unknown): MsgT | null;   // cricket → {key:"format.cricket.overs", params:{overs}}; football → {key:"format.football.minutes", params:{minutes}}; set sports → {key:"format.sets.bestOf", params:{n}}; else null
+  export function describeFormat(sportKey: string, cfg: unknown): MsgT | null;   // cricket → {key:"format.cricket.overs", params:{overs}}; football → {key:"format.minutes", params:{minutes}}; set sports → {key:"format.sets.bestOf", params:{n}}; else null
   // competition-hub.ts
   export function hubSide(entrantId: string | null, slotLabel: SlotLabel | null, ctx: { names: Record<string,string>; badges: Record<string,string|null>; colours: Record<string,string|null>; slot: (label) => string }): SideT;
   export function hubHeader(f: PublicFixture, sides: [SideT, SideT], generatedAt: string): MatchCentreHeaderT;
@@ -1127,7 +1216,7 @@ export const W2_KEYS = [
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
   // format chips
-  "format.cricket.overs", "format.football.minutes", "format.sets.bestOf",
+  "format.cricket.overs", "format.minutes", "format.sets.bestOf",
 ] as const;
 
 describe("W2 public dictionary coverage", () => {
@@ -1144,7 +1233,7 @@ describe("W2 public dictionary coverage", () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect failures listing the missing keys.** **Step 3: Add the keys** (English first; Spanish, French, Dutch as real translations, not copies — cricket vocabulary stays English where the language has none, e.g. "wickets" in nl reads "wickets"). English values, verbatim: `landing.status.live.one` "Live now: {count} match" / `.other` "Live now: {count} matches"; `landing.status.next` "Next: {when}"; `landing.status.finished` "Finished"; `landing.status.dates` "{from} – {to}"; `landing.status.datesFrom` "From {from}"; `landing.status.empty` "Nothing published yet"; `matchesHub.startsIn` "Starts {when}" (with `when` from `Intl.RelativeTimeFormat`); `matchesHub.startsAt` "{when}"; `matchesHub.timesIn` "times in {tz}"; `table.tieBreak` "Level with {with} — separated on {rule}"; `table.more` "Show all columns"; `table.fewer` "Fewer columns"; `player.line.cricket` "{batting} & {bowling}"; `player.line.batting` "{runs} ({balls})"; `player.line.bowling` "{wickets}/{runs}"; `layout.tagline` "Live scores · Schedules · Standings"; `layout.poweredBy` "Powered by {brand}"; `format.cricket.overs` "{overs}-over match"; `format.football.minutes` "{minutes} min"; `format.sets.bestOf` "Best of {n}". Then `cd <worktree> && npm run i18n:gen-keys && npm run i18n:check` and confirm `apps/web/src/lib/i18n-keys.ts` changed.
+- [ ] **Step 2: Run — expect failures listing the missing keys.** **Step 3: Add the keys** (English first; Spanish, French, Dutch as real translations, not copies — cricket vocabulary stays English where the language has none, e.g. "wickets" in nl reads "wickets"). English values, verbatim: `landing.status.live.one` "Live now: {count} match" / `.other` "Live now: {count} matches"; `landing.status.next` "Next: {when}"; `landing.status.finished` "Finished"; `landing.status.dates` "{from} – {to}"; `landing.status.datesFrom` "From {from}"; `landing.status.empty` "Nothing published yet"; `matchesHub.startsIn` "Starts {when}" (with `when` from `Intl.RelativeTimeFormat`); `matchesHub.startsAt` "{when}"; `matchesHub.timesIn` "times in {tz}"; `table.tieBreak` "Level with {with} — separated on {rule}"; `table.more` "Show all columns"; `table.fewer` "Fewer columns"; `player.line.cricket` "{batting} & {bowling}"; `player.line.batting` "{runs} ({balls})"; `player.line.bowling` "{wickets}/{runs}"; `layout.tagline` "Live scores · Schedules · Standings"; `layout.poweredBy` "Powered by {brand}"; `format.cricket.overs` "{overs}-over match"; `format.minutes` "{minutes} min"; `format.sets.bestOf` "Best of {n}". Then `cd <worktree> && npm run i18n:gen-keys && npm run i18n:check` and confirm `apps/web/src/lib/i18n-keys.ts` changed.
 
 - [ ] **Step 4: Run — green** (`hub-dictionary.test.ts` and, scoped, `pnpm exec vitest run src/lib/__tests__/i18n --reporter=json` for the existing dictionary-shape tests). **Step 5: Commit** — "i18n(public): landing, matches hub, table, leaders, teams, info, division, player, layout and share keys in en/es/fr/nl; keys regenerated".
 

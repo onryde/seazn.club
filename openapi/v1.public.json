@@ -36173,6 +36173,1232 @@
         "security": []
       }
     },
+    "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/hub": {
+      "get": {
+        "summary": "Public competition hub: matches, tables, leaders, teams, info — the landing page's live document",
+        "tags": [
+          "public"
+        ],
+        "parameters": [
+          {
+            "name": "orgSlug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "competitionId": {
+                          "type": "string"
+                        },
+                        "orgSlug": {
+                          "type": "string"
+                        },
+                        "competitionSlug": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "orgName": {
+                          "type": "string"
+                        },
+                        "branded": {
+                          "type": "boolean"
+                        },
+                        "realtime": {
+                          "type": "boolean"
+                        },
+                        "locale": {
+                          "type": "string"
+                        },
+                        "generatedAt": {
+                          "type": "string"
+                        },
+                        "divisions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "slug": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "sportKey": {
+                                "type": "string"
+                              },
+                              "sportName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "tz": {
+                                "type": "string"
+                              },
+                              "entrantCount": {
+                                "type": "number"
+                              },
+                              "formatLine": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "key": {
+                                        "type": "string"
+                                      },
+                                      "params": {
+                                        "type": "object",
+                                        "propertyNames": {
+                                          "type": "string"
+                                        },
+                                        "additionalProperties": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string"
+                                            },
+                                            {
+                                              "type": "number"
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "key"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "variantKey": {
+                                "type": "string"
+                              },
+                              "href": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "slug",
+                              "name",
+                              "sportKey",
+                              "sportName",
+                              "status",
+                              "tz",
+                              "entrantCount",
+                              "formatLine",
+                              "variantKey",
+                              "href"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "matches": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fixtureId": {
+                                "type": "string"
+                              },
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "divisionName": {
+                                "type": "string"
+                              },
+                              "sportKey": {
+                                "type": "string"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              },
+                              "roundNo": {
+                                "type": "number"
+                              },
+                              "roundLabel": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "bucket": {
+                                "type": "string",
+                                "enum": [
+                                  "live",
+                                  "upcoming",
+                                  "completed"
+                                ]
+                              },
+                              "tz": {
+                                "type": "string"
+                              },
+                              "scheduledAt": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "venueName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "courtName": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "href": {
+                                "type": "string"
+                              },
+                              "header": {
+                                "type": "object",
+                                "properties": {
+                                  "live": {
+                                    "type": "boolean"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "scheduled",
+                                      "in_play",
+                                      "decided",
+                                      "other"
+                                    ]
+                                  },
+                                  "sides": {
+                                    "type": "array",
+                                    "prefixItems": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entrantId": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "short": {
+                                            "type": "string"
+                                          },
+                                          "colour": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "badgeUrl": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "entrantId",
+                                          "name",
+                                          "short",
+                                          "colour",
+                                          "badgeUrl"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "entrantId": {
+                                            "type": "string"
+                                          },
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "short": {
+                                            "type": "string"
+                                          },
+                                          "colour": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "badgeUrl": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "entrantId",
+                                          "name",
+                                          "short",
+                                          "colour",
+                                          "badgeUrl"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    ]
+                                  },
+                                  "scoreLines": {
+                                    "type": "array",
+                                    "prefixItems": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "subLines": {
+                                    "type": "array",
+                                    "prefixItems": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  "battingIndex": {
+                                    "anyOf": [
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "number",
+                                            "const": 0
+                                          },
+                                          {
+                                            "type": "number",
+                                            "const": 1
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "statusLine": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "rateLine": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "phase": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "strength": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "updatedAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "live",
+                                  "status",
+                                  "sides",
+                                  "scoreLines",
+                                  "subLines",
+                                  "battingIndex",
+                                  "statusLine",
+                                  "rateLine",
+                                  "phase",
+                                  "strength",
+                                  "updatedAt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "winnerIndex": {
+                                "anyOf": [
+                                  {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "const": 0
+                                      },
+                                      {
+                                        "type": "number",
+                                        "const": 1
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "resultLine": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "fixtureId",
+                              "divisionId",
+                              "divisionSlug",
+                              "divisionName",
+                              "sportKey",
+                              "stageName",
+                              "roundNo",
+                              "roundLabel",
+                              "bucket",
+                              "tz",
+                              "scheduledAt",
+                              "venueName",
+                              "courtName",
+                              "href",
+                              "header",
+                              "winnerIndex",
+                              "resultLine"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "tables": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "divisionName": {
+                                "type": "string"
+                              },
+                              "caption": {
+                                "type": "string"
+                              },
+                              "columns": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "key": {
+                                      "type": "string"
+                                    },
+                                    "abbr": {
+                                      "type": "string"
+                                    },
+                                    "title": {
+                                      "type": "string"
+                                    },
+                                    "compact": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
+                                    "abbr",
+                                    "title",
+                                    "compact"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "rows": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "rank": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "badgeUrl": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "cells": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "tieBreakText": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "champion": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "rank",
+                                    "entrantId",
+                                    "name",
+                                    "badgeUrl",
+                                    "cells",
+                                    "tieBreakText",
+                                    "champion"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "updatedAt": {
+                                "type": "string"
+                              },
+                              "fullHref": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "divisionId",
+                              "divisionSlug",
+                              "divisionName",
+                              "caption",
+                              "columns",
+                              "rows",
+                              "updatedAt",
+                              "fullHref"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "leaders": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "divisionName": {
+                                "type": "string"
+                              },
+                              "sportKey": {
+                                "type": "string"
+                              },
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "rows": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "person": {
+                                      "type": "object",
+                                      "properties": {
+                                        "personId": {
+                                          "type": "string"
+                                        },
+                                        "name": {
+                                          "type": "string"
+                                        },
+                                        "masked": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "personId",
+                                        "name",
+                                        "masked"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "personHref": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "entrantName": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "badgeUrl": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "value": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "person",
+                                    "personHref",
+                                    "entrantName",
+                                    "badgeUrl",
+                                    "value"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "divisionId",
+                              "divisionSlug",
+                              "divisionName",
+                              "sportKey",
+                              "key",
+                              "label",
+                              "rows"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "teams": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "entrantId": {
+                                "type": "string"
+                              },
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "divisionName": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "badgeUrl": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "colour": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "seed": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "href": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "entrantId",
+                              "divisionId",
+                              "divisionSlug",
+                              "divisionName",
+                              "name",
+                              "badgeUrl",
+                              "colour",
+                              "seed",
+                              "href"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "info": {
+                          "type": "object",
+                          "properties": {
+                            "startsOn": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "endsOn": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "venues": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "registrationOpen": {
+                              "type": "boolean"
+                            },
+                            "registerHref": {
+                              "type": "string"
+                            },
+                            "calendars": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "divisionName": {
+                                    "type": "string"
+                                  },
+                                  "href": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "divisionName",
+                                  "href"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "presentHref": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "startsOn",
+                            "endsOn",
+                            "venues",
+                            "registrationOpen",
+                            "registerHref",
+                            "calendars",
+                            "presentHref"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "tabs": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "overview",
+                              "matches",
+                              "table",
+                              "stats",
+                              "teams",
+                              "gallery",
+                              "info"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "competitionId",
+                        "orgSlug",
+                        "competitionSlug",
+                        "name",
+                        "orgName",
+                        "branded",
+                        "realtime",
+                        "locale",
+                        "generatedAt",
+                        "divisions",
+                        "matches",
+                        "tables",
+                        "leaders",
+                        "teams",
+                        "info",
+                        "tabs"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "competitionId": "example",
+                    "orgSlug": "example",
+                    "competitionSlug": "example",
+                    "name": "example",
+                    "orgName": "example",
+                    "branded": true,
+                    "realtime": true,
+                    "locale": "example",
+                    "generatedAt": "example",
+                    "divisions": [
+                      {
+                        "id": "example",
+                        "slug": "example",
+                        "name": "example",
+                        "sportKey": "example",
+                        "sportName": "example",
+                        "status": "example",
+                        "tz": "example",
+                        "entrantCount": 1,
+                        "formatLine": {
+                          "key": "example",
+                          "params": {}
+                        },
+                        "variantKey": "example",
+                        "href": "example"
+                      }
+                    ],
+                    "matches": [
+                      {
+                        "fixtureId": "example",
+                        "divisionId": "example",
+                        "divisionSlug": "example",
+                        "divisionName": "example",
+                        "sportKey": "example",
+                        "stageName": "example",
+                        "roundNo": 1,
+                        "roundLabel": "example",
+                        "bucket": "live",
+                        "tz": "example",
+                        "scheduledAt": "example",
+                        "venueName": "example",
+                        "courtName": "example",
+                        "href": "example",
+                        "header": {
+                          "live": true,
+                          "status": "scheduled",
+                          "sides": [
+                            null
+                          ],
+                          "scoreLines": [
+                            null
+                          ],
+                          "subLines": [
+                            null
+                          ],
+                          "battingIndex": 0,
+                          "statusLine": {
+                            "key": "example",
+                            "params": {}
+                          },
+                          "rateLine": "example",
+                          "phase": "example",
+                          "strength": "example",
+                          "updatedAt": "example"
+                        },
+                        "winnerIndex": 0,
+                        "resultLine": "example"
+                      }
+                    ],
+                    "tables": [
+                      {
+                        "id": "example",
+                        "divisionId": "example",
+                        "divisionSlug": "example",
+                        "divisionName": "example",
+                        "caption": "example",
+                        "columns": [
+                          {
+                            "key": "example",
+                            "abbr": "example",
+                            "title": "example",
+                            "compact": true
+                          }
+                        ],
+                        "rows": [
+                          {
+                            "rank": 1,
+                            "entrantId": "example",
+                            "name": "example",
+                            "badgeUrl": "example",
+                            "cells": [
+                              "example"
+                            ],
+                            "tieBreakText": "example",
+                            "champion": true
+                          }
+                        ],
+                        "updatedAt": "example",
+                        "fullHref": "example"
+                      }
+                    ],
+                    "leaders": [
+                      {
+                        "divisionId": "example",
+                        "divisionSlug": "example",
+                        "divisionName": "example",
+                        "sportKey": "example",
+                        "key": "example",
+                        "label": "example",
+                        "rows": [
+                          {
+                            "person": {
+                              "personId": "example",
+                              "name": "example",
+                              "masked": true
+                            },
+                            "personHref": "example",
+                            "entrantName": "example",
+                            "badgeUrl": "example",
+                            "value": "example"
+                          }
+                        ]
+                      }
+                    ],
+                    "teams": [
+                      {
+                        "entrantId": "example",
+                        "divisionId": "example",
+                        "divisionSlug": "example",
+                        "divisionName": "example",
+                        "name": "example",
+                        "badgeUrl": "example",
+                        "colour": "example",
+                        "seed": 1,
+                        "href": "example"
+                      }
+                    ],
+                    "info": {
+                      "startsOn": "example",
+                      "endsOn": "example",
+                      "venues": [
+                        "example"
+                      ],
+                      "registrationOpen": true,
+                      "registerHref": "example",
+                      "calendars": [
+                        {
+                          "divisionName": "example",
+                          "href": "example"
+                        }
+                      ],
+                      "presentHref": "example"
+                    },
+                    "tabs": [
+                      "overview"
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/schedule": {
       "get": {
         "summary": "Public schedule",

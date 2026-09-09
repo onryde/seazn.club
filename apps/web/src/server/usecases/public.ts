@@ -24,6 +24,7 @@ import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
+import { log } from "@/server/logger";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -35,6 +36,14 @@ import {
   type PublicFixture,
 } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { loadCompetitionHub } from "@/server/public-site/competition-hub";
+// The one TYPED public usecase in this file — review note N5. Every other
+// reader here returns `unknown` because it hands back a raw row set with no
+// schema; the hub has one, so Task 5's route need not re-narrow it.
+import {
+  CompetitionHubDoc,
+  type CompetitionHubDocT,
+} from "@/server/public-site/competition-hub-schema";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -50,10 +59,35 @@ export async function publicRateLimit(req: Request): Promise<void> {
 }
 
 async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  return cachedFor(key, TTL_SECONDS, load);
+}
+
+/**
+ * `cached` with an explicit TTL — the same cache-aside, for a document whose
+ * staleness window is not this file's 30-second default.
+ *
+ * `cached` above now delegates here rather than keeping its own copy of the
+ * three lines: two cache-aside implementations in one file is two places for
+ * a `cacheSet` to be forgotten, and the whole point of the layer is that a
+ * write invalidates exactly what a read populated.
+ */
+async function cachedFor<T>(
+  key: string,
+  ttlSeconds: number,
+  load: () => Promise<T>,
+  /** Optional shape check for what came BACK from Redis. `cacheGet<T>` is a
+   *  cast, not a parse: the entry was written by whatever code was deployed
+   *  when it landed, so a schema change mid-rollout, or an older build still
+   *  serving, leaves a document of the previous shape under a key this build
+   *  reads as current. A caller that can validate should, and a failure is
+   *  treated as a MISS rather than an error — a poisoned entry must not be
+   *  able to take the page down for the rest of its TTL. */
+  isValid?: (hit: unknown) => boolean,
+): Promise<T> {
   const hit = await cacheGet<T>(key);
-  if (hit !== null) return hit;
+  if (hit !== null && (!isValid || isValid(hit))) return hit;
   const fresh = await load();
-  await cacheSet(key, fresh, TTL_SECONDS);
+  await cacheSet(key, fresh, ttlSeconds);
   return fresh;
 }
 
@@ -106,6 +140,59 @@ export async function publicCompetition(orgSlug: string, slug: string): Promise<
       order by created_at, id`;
     return { ...competition, divisions };
   });
+}
+
+/** How long the hub document may be served stale. Shorter than this file's
+ *  30 s default: the hub carries LIVE scores across every division of a
+ *  competition, so it is the one public document whose staleness a spectator
+ *  watching a match actually feels. Both write paths delete the key outright
+ *  (`invalidatePublicCache`, `afterScheduleWrite`), so this is a ceiling on
+ *  how wrong a MISSED invalidation can leave the page, not the refresh rate. */
+const HUB_TTL_SECONDS = 15;
+
+/**
+ * The competition hub document (spectator W2) — the API half of the same
+ * `loadCompetitionHub` the page renders from, so a first paint and every
+ * subsequent poll agree.
+ *
+ * `findCompetition` runs FIRST and throws its own 404 for a competition that
+ * is private or does not exist, before the cache is touched: that keeps the
+ * refusal identical to every other endpoint in this file. A null document
+ * after a positive `findCompetition` is a 404 too — the visibility rules the
+ * two readers apply are the same, so it should be unreachable, and if the two
+ * ever disagree a 404 is the honest answer rather than a `null` body.
+ */
+export async function publicCompetitionHub(
+  orgSlug: string,
+  slug: string,
+): Promise<CompetitionHubDocT> {
+  const full = await findCompetition(orgSlug, slug);
+  return cachedFor(
+    `pub:v1:hub:${full.id}`,
+    HUB_TTL_SECONDS,
+    async () => {
+      const doc = await loadCompetitionHub(orgSlug, slug);
+      if (!doc) throw new HttpError(404, "competition not found");
+      // Final-review fix F3 — `isValid` below only checks what comes BACK
+      // from Redis on a HIT. Without this, a freshly built document that
+      // fails `CompetitionHubDoc` is served and CACHED anyway, and every
+      // subsequent read within the TTL re-fails the same `isValid` check,
+      // pays a full rebuild, and re-writes the same bad entry — a permanent
+      // silent cache miss with nothing in the logs to say why. This does not
+      // throw: a hard failure is worse on a public page than an unvalidated
+      // document, which is what this endpoint served before the check
+      // existed at all.
+      const parsed = CompetitionHubDoc.safeParse(doc);
+      if (!parsed.success) {
+        log.error(
+          { competitionId: full.id, orgSlug, slug, issues: parsed.error.issues },
+          "publicCompetitionHub: freshly built document failed CompetitionHubDoc — serving and caching it anyway",
+        );
+      }
+      return doc;
+    },
+    (hit) => CompetitionHubDoc.safeParse(hit).success,
+  );
 }
 
 export async function publicSchedule(

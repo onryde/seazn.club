@@ -37,7 +37,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | --- | --- | --- |
 | W0 | Prod-build capture of every existing public page at 320/375/768/1280; current-state block II; two mockup options each for match centre and poster (+ football and tennis boards); pick | **Done 2026-09-05.** Canvas: https://claude.ai/code/artifact/f745adf2-fd1f-4f14-9184-ba6f0eb41978 · plain view: https://claude.ai/code/artifact/e7ced691-6978-4036-8f20-cd134b5cfca5 · picks: match centre A, poster A — owner-confirmed, for every sport |
 | W1 | Match centre for EVERY sport: engine cricket scorecard fold, ledger Timeline + Sets/Periods for the other sports, view model in the public fixture JSON, Summary/Scorecard/Commentary/Timeline/Sets/Info tabs by sport and tier, live transport carries the model, i18n, walkthrough v1 | **MERGED** 2026-09-08 — PR #743, merge commit `60c0615b0`. Tasks 1–20 all shipped (8b, 14b–14d, 15b, the 16a and 16c cosmetic rounds, Task 16's gate, the whole-branch review). e2e green across all seven widths; CI could not give a verdict (GitHub-hosted runners were dead account-wide that morning — 0 steps, no runner allocated), so its six dead jobs were reproduced locally on the merged tree, all green. Three CI gates the branch reddened were fixed first, one of them a genuine gate defect (`git grep -a` matching random bytes in our new screenshots). Review dispositions: `W1-whole-branch-review-findings.md`. Three items deliberately carried out of W1 — see `_STATE.md`, which has the live position. |
-| W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | Plan DRAFT 2026-09-05 (19 tasks); 3 owner questions in `W2-landing.md`; not started |
+| W2 | Competition landing rail (Overview · Matches · Table · Stats · Teams · Gallery slot · Info), division + player pages for the phone, i18n sweep, walkthrough v2 | **READY — not started.** Plan 2026-09-05 (19 tasks), **RE-PINNED 2026-09-08** against merged `main` `4ee38278d`: all P1–P20 re-opened, 3 held, 17 moved/changed/false — corrected pins in the plan's own "Re-pin table", authoritative over the 2026-09-05 rows. All four owner questions ruled (ruling 15). Five re-pins change what gets built (P5 TabRail contract, P14 non-watermark recompute, P11 `bucketFixture` never existed, P13 reschedule staleness overstated, P12 already has a typed response) — see `_STATE.md`. |
 | W3 | Match poster `poster.png` feed + story, upcoming/live/result, real crests, sponsor strip, download + native share, walkthrough v3 | Plan DRAFT 2026-09-05 (10 tasks); 3 owner questions in `W3-poster.md`; not started |
 | W4 | Gallery: `gallery_photos`, storage bucket, staff upload from the public page with media-consent gate, Gallery tab + Photos strip, walkthrough v4 | Plan DRAFT 2026-09-05 (12 tasks); 6 owner questions in `W4-gallery.md` (consent data cannot express "declined" today); not started |
 | W5 | Public team page (the other sports' Timeline moved into W1 by ruling 10) | **In scope (ruling 16, 2026-09-06).** DRAFT plan 2026-09-05 (9 tasks, option A); 10 owner questions in `W5-team-page.md`; runs after W4; re-pin first |
@@ -134,6 +134,88 @@ peer session as the other.
        will be keyed on ENTRANT ids here (any string hashes the same). Alias or
        rename at the call site rather than leaving `divisionAccent(entrantId)`
        reading as a bug.
+
+16. **"yes update the W3"** (2026-09-08) — the match poster and the link share
+    card are ONE design, not two. The owner asked whether the pre-match poster
+    would also be what appears when a public match link is shared. It would
+    not have: the fixture OG route
+    (`…/fixtures/[fixtureId]/opengraph-image.tsx`, 1200×630, `revalidate = 60`)
+    already ships a matchup + score headline, and W3 was scoped to build the
+    poster as a SEPARATE downloadable route — sharing no code and no design
+    with it. W3's "Do NOT touch" list even named "the landscape OG card's
+    design", and its regression asked for the card to stay byte-identical.
+
+    **Ruled: share the MODEL, never the pixels.** W3 re-renders the existing OG
+    route from `matchPosterModel` at OG aspect, so one design and one set of
+    variants (upcoming / live / result) serve three sizes — 1200×630 share
+    card, 1080×1350 feed, 1080×1920 story.
+
+    Why not simply put the poster in the OG slot, which is the literal reading
+    of the question: a 4:5 portrait dropped into an OG card is centre-cropped
+    to roughly 1.91:1 by WhatsApp, X and Facebook. The sponsor strip and the
+    footer are exactly what gets guillotined, so the shared portrait would be a
+    WORSE card than the one shipping today — and the sponsor strip and
+    "Powered by seazn" are the growth loop this wave exists to draw.
+
+    Why it is worth doing anyway: the UPCOMING variant. Today's card leads with
+    a score headline, and before kick-off there is no score, so a pre-match
+    share is the weakest card the product renders and the one a poster design
+    most improves.
+
+    Applied to `W3-poster.md` in four places, which had to move together —
+    new scope item 7; the OG card's design REMOVED from "Do NOT touch" (its
+    route contract stays fixed: `size`, `contentType`, `revalidate`, the
+    private-competition 404); the "byte-identical" regression REPLACED with
+    what is actually pinned; and task 9 of the plan sketch widened. The
+    regression line is called out as superseded rather than deleted, so a later
+    session does not restore it as an obvious missing assertion.
+
+17. **"I think, keep same for 3 sports"** (2026-09-09) — the format chip's
+    minutes sentence is ONE key shared by football, hockey and ice hockey, not
+    a football-named key plus two silences.
+
+    Raised by W2 Task 4's implementer while building `describeFormat`. The
+    brief named `format.football.minutes`; hockey and ice hockey carry the same
+    total-minutes fact, and with no sport-neutral key they emitted `null` — so
+    two of the three minute-based sports showed NO format chip at all rather
+    than a wrong one. The alternative on the table was a football-named
+    sentence rendered on a hockey page.
+
+    **Ruled: a single `format.minutes` key serves all three.** Cricket keeps
+    `format.cricket.overs` and set sports keep `format.sets.bestOf` — those are
+    genuinely different facts, not the same fact under different names. Only
+    the minutes sentence is shared.
+
+    Consequences, which must move together: `describe-format.ts` emits
+    `format.minutes` for all three sport keys; `format.football.minutes` is
+    NEVER added to any locale (a key that exists but is never emitted is the
+    inert seam this programme keeps shipping); and Task 6's owed list carries
+    `format.minutes`, not the football-named one.
+
+    **The copy, ruled 2026-09-09 ("follow your rec"): `"{minutes} min"`,
+    identical in all four locales.** "min" is the universal abbreviation in en,
+    es, fr and nl, so unlike minutes/minutos/minuten it does not change width
+    between them — which matters because this chip sits beside a division name
+    at 320px.
+
+    Rejected, with reasons, so a later session does not re-open them as obvious
+    improvements:
+
+    - **The period structure (`2 x 45 min`, `4 x 15 min`)** unifies across the
+      three sports and carries more information, but it belongs on the match
+      page. The format chip is a glance-level element answering "what am I
+      looking at"; halves-vs-quarters is noise at that moment, and the string
+      doubles in width at exactly the breakpoint with least room.
+    - **`"{minutes} minutes"`** reads better in isolation but sits next to
+      `8 overs` and `Best of 3`, which are already terse. The long form reads
+      as inconsistent rather than clearer.
+
+    Two implementation constraints ride with it. Derive `minutes` from the
+    module's own config declarations, never a table typed into a test (R6's
+    hockey suspension shipped 2 minutes against a declared 5 for exactly this
+    reason). And where a sport's config carries no total, emit `null`, never
+    `0` — `Number("")` is `0` here, and a chip reading "0 min" is a confident
+    lie, which is worse than the absent chip shipping today.
 
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 
