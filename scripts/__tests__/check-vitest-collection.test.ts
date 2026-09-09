@@ -30,7 +30,19 @@ const SCRIPT = "scripts/check-vitest-collection.ts";
 // The files `vitest list --filesOnly src/server/public-site` selects, and the
 // one a `c*` glob removes. Named explicitly so that adding or removing a file
 // in that directory fails loudly rather than quietly changing what is proven.
-const CONSENT = "src/server/public-site/__tests__/consent.test.ts";
+// Spectator W2 made this a LIST rather than a single file: the wave added four
+// test files to that directory whose names begin with "c", so the `c*` glob now
+// removes five, not one. The name is kept plural-agnostic on purpose — what the
+// gate proves is the arithmetic between listing and execution, and that only
+// holds if this set really is everything `c*` matches.
+const C_GLOBBED = [
+  "src/server/public-site/__tests__/champion.test.ts",
+  "src/server/public-site/__tests__/competition-hub-db.test.ts",
+  "src/server/public-site/__tests__/competition-hub-schema.test.ts",
+  "src/server/public-site/__tests__/competition-hub.test.ts",
+  "src/server/public-site/__tests__/consent.test.ts",
+];
+const CONSENT = C_GLOBBED[C_GLOBBED.length - 1]!;
 const REST = [
   // P9: added with the public court/venue-name coverage. This list is
   // deliberately explicit so a new file in that directory fails HERE rather
@@ -48,6 +60,16 @@ const REST = [
   "src/server/public-site/__tests__/match-centre-parity.test.ts",
   "src/server/public-site/__tests__/public-lineups.test.ts",
   "src/server/public-site/__tests__/timeline.test.ts",
+  // Spectator W2: the hub document, its schema, the pure ladders' consumers,
+  // the standings view, the leader boards and the standings timestamp fix.
+  // The four "c*" files this wave added live in C_GLOBBED above, not here —
+  // the glob removes them from the listing, so counting them twice would make
+  // the narrowed and unnarrowed numbers disagree with what the script prints.
+  "src/server/public-site/__tests__/data-standings-timestamp.test.ts",
+  "src/server/public-site/__tests__/describe-format.test.ts",
+  "src/server/public-site/__tests__/leaders.test.ts",
+  "src/server/public-site/__tests__/public-leaders.test.ts",
+  "src/server/public-site/__tests__/standings-view.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
@@ -55,10 +77,11 @@ const EXCLUDE_C = "**/public-site/__tests__/c*";
 // proves — the `excluding` line, the two drift reports and the exit status are —
 // but a hand-copied literal beside a list that grows means every new file in
 // that directory reds this gate TWICE: once at the list (intended) and once at
-// a number that has no independent meaning (pure toil). `+ 1` is CONSENT, the
-// single file `c*` removes.
+// a number that has no independent meaning (pure toil). The addend is
+// `C_GLOBBED.length` — every file `c*` removes from the listing, which was one
+// until Spectator W2 added four more.
 const NARROWED = `listed=${REST.length} executed=${REST.length}`;
-const UNNARROWED = `listed=${REST.length + 1} executed=${REST.length}`;
+const UNNARROWED = `listed=${REST.length + C_GLOBBED.length} executed=${REST.length}`;
 
 const dir = mkdtempSync(join(tmpdir(), "collection-exclude-test-"));
 
@@ -100,7 +123,10 @@ describe("check-vitest-collection --exclude", () => {
     const results = resultsFile("unnarrowed", REST);
     const { status, output } = run(["--results", results, "--", "src/server/public-site"]);
     expect(output).toContain(UNNARROWED);
-    expect(output).toContain("LISTED BUT NOT RUN (1)");
+    // One per file the `c*` glob removes from the listing — five since
+    // Spectator W2, one before it. Derived, so the next file added to that
+    // directory moves the list and this number together.
+    expect(output).toContain(`LISTED BUT NOT RUN (${C_GLOBBED.length})`);
     expect(output).toContain(CONSENT);
     expect(status).toBe(1);
   });
