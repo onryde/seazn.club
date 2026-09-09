@@ -9,7 +9,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
-import { overlayModel, type OverlayModel, type OverlaySideInput } from "@/lib/overlay-model";
+import {
+  overlayModel,
+  type OverlayModel,
+  type OverlayMsg,
+  type OverlaySideInput,
+} from "@/lib/overlay-model";
 import { useOverlayClock } from "./use-overlay-clock";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
@@ -61,13 +66,19 @@ export function OverlayStage(props: OverlayStageProps) {
   // the clock TICKS). Formatted here, handed to the pure model as a string.
   const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs);
 
+  // ONE dictionary channel (Task 5e fix round). The projection and the theme
+  // read the SAME resolver over the SAME `props.dict` — a theme that resolved
+  // its own copy would be a second authority for the same fact, and the two
+  // could disagree about the locale mid-broadcast.
+  const msg: OverlayMsg = (key, vars) => t(props.dict, key, vars);
+
   const model: OverlayModel = overlayModel({
     sportKey: props.sportKey,
     data,
     sides: props.sides,
     startLabel: props.startLabel,
     clockLabel,
-    msg: (key, vars) => t(props.dict, key, vars),
+    msg,
     decidedTemplates: props.decidedTemplates,
   });
 
@@ -120,7 +131,11 @@ export function OverlayStage(props: OverlayStageProps) {
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
       >
-        <Theme model={model} tick={tick} />
+        {/* `OverlayThemeProps` (theme-registry.ts) — the model, the score
+            tick, the ONE `msg` above, and the sport. The last two are what
+            let a theme carry its own copy and composite the sport's own
+            scorebug; §3's bar and §4's bug ignore both. */}
+        <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
         {/* W2's slab attaches here (R4). Empty and unstyled in W1. */}
         <div data-testid="ovl-moment-slot" />
       </div>

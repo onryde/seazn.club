@@ -4,50 +4,44 @@
 // inset, unchanged in every value ("Slate is a ground plus a headline, not a
 // replacement for the bar/bug").
 //
-// THREE GAPS THIS FILE CANNOT CLOSE FROM `{model, tick}` ALONE. Every one is
-// a real registry-boundary limit (theme-registry.ts's own "one entry plus one
-// component, route/panel/projection never touched again" claim), not worked
-// around with a DOM read or an invented value — recorded here, and in the
-// task report, rather than silently patched over:
+// Task 5e shipped with THREE gaps, because `OverlayThemeDef.component` took
+// only `{model, tick}`. Two of them were a registry-boundary limit and are now
+// CLOSED by widening that contract (`OverlayThemeProps`, theme-registry.ts) —
+// which is the fix that serves every future theme, rather than teaching the
+// theme-agnostic `OverlayModel` about one theme's keys. The third is real and
+// stays recorded:
 //
-//  1. NO msg/dict/locale CHANNEL. `OverlayThemeDef.component` receives only
-//     `{model, tick}` (theme-registry.ts) and `overlay-stage.tsx` renders
-//     `<Theme model={model} tick={tick} />` — no third prop. The root
-//     layout's `<html lang="en">` is also a static literal (`app/layout.tsx`),
-//     so there is no reachable locale signal anywhere on this route either.
-//     §4a's five new `public.overlay.slate.*` keys (three headlines plus the
-//     warming/signal-lost line copy) are added in all four locales (the
-//     brief's own unconditional requirement) but are NOT referenced here:
-//     nothing in this file can resolve them. The headline/line below render
-//     the closest ALREADY-RESOLVED, correctly-localized text `OverlayModel`
-//     carries instead: `model.header.context` (not the sheet's literal
-//     "STARTING SOON" / "MATCH ENDED") for the headline, and `model.result`
-//     for the ended line — which IS §4a's exact ask ("resultMsg's full
-//     sentence … from the same producer, never a second one"), so that one
-//     pairing has zero deviation. The real fix is `overlay-stage.tsx`
-//     threading `msg`/`dict` through to the theme, or `overlay-model.ts`
-//     resolving the slate keys onto `OverlayModel` the way it already
-//     resolves `header.context`/`result` — both forbidden files this round.
-//  2. NO sportKey. §4a's "the SELECTED theme (§3 bar or §4 bug) renders ON
-//     TOP" reads as `defaultThemeFor(sportKey)` (bar for cricket, bug for
-//     the other ten) — the registry's own existing per-sport default. Theme
-//     components never receive `sportKey` (palette reaches them only via CSS
-//     custom properties `overlay-stage.tsx` sets on the ancestor
-//     `.ovl-canvas`, never as a prop), so this file cannot reproduce that
-//     split and always composites `OverlayBug`. Correct for ten of eleven
-//     sports; cricket gets the corner bug instead of its own bar under
-//     `?style=slate`.
-//  3. NO video-element seam (spec §7.5, B3). "Signal lost" is a real §4a
-//     state but is driven entirely by the relay page's `<video>` events
-//     (`stalled > 8s`), which `OverlayModel` carries no field for at all —
-//     it is a live A/V health signal, not fixture data. The brief is
-//     explicit that building that seam is out of scope here ("do not build
-//     a video element"), so `slateStateOf` below is TOTAL over the three
-//     states `?style=slate` can actually reach — warming, ended, live — and
-//     never produces "signal lost".
+//  1. CLOSED — the dictionary channel. `msg` is now a theme prop, threaded by
+//     `overlay-stage.tsx` from the SAME resolver `overlayModel` receives (one
+//     channel, not two). §4a's `public.overlay.slate.*` keys resolve here, so
+//     the headline is the sheet's own literal copy in the reader's locale
+//     rather than `model.header.context` standing in for it. The ended LINE
+//     is still `model.result` — that was never a gap, it is §4a's exact ask
+//     ("resultMsg's full sentence … from the same producer, never a second
+//     one").
+//  2. CLOSED — the sport. `sportKey` is a theme prop, so §4a's "the SELECTED
+//     theme (§3 bar or §4 bug) renders ON TOP" resolves through the
+//     registry's own `defaultThemeFor` — cricket composites the BAR, the
+//     other ten the bug. Previously hardcoded to `OverlayBug`, which was
+//     wrong for cricket.
+//  3. OPEN, and out of scope by ruling — NO video-element seam (spec §7.5,
+//     B3). "Signal lost" is a real §4a state but is driven entirely by the
+//     relay page's `<video>` events (`stalled > 8s`), which `OverlayModel`
+//     carries no field for at all — it is a live A/V health signal, not
+//     fixture data. So `slateStateOf` below is TOTAL over the three states
+//     `?style=slate` can actually reach — warming, ended, live — and never
+//     produces "signal lost". Its two dictionary keys
+//     (`overlay.slate.signalLost*`) therefore stay unreferenced until B3
+//     lands; that is the one thing here still waiting on another wave, and
+//     `overlay-slate.test.tsx` asserts they exist in all four locales so they
+//     cannot rot in the meantime.
 import { useEffect, useRef, useState } from "react";
 import type { OverlayModel } from "@/lib/overlay-model";
-import { OverlayBug } from "./overlay-bug";
+// The registry, imported back (this pair is a deliberate ES-module cycle —
+// see theme-registry.ts's header). BOTH references are read inside the
+// component body below, never at module scope: `OVERLAY_THEMES` is a `const`
+// and a module-scope read during the cycle would hit its TDZ.
+import { OVERLAY_THEMES, defaultThemeFor, type OverlayThemeProps } from "./theme-registry";
 
 /** The state `?style=slate` can derive from `OverlayModel` alone (gap 3
  *  above — "signal lost" is not reachable here, so it is not a member).
@@ -67,7 +61,17 @@ export function slateStateOf(model: OverlayModel): SlateState {
   return "live";
 }
 
-export function OverlaySlate({ model, tick }: { model: OverlayModel; tick: [boolean, boolean] }) {
+/** §4a's headline key per state. `"live"` has none — the sheet defines no
+ *  headline for ordinary live play under slate, and `.ovl-slate-content` does
+ *  not render at all in that state. Keys are LITERALS in this table, not
+ *  built by concatenation, so `overlay-dict-coverage.test.ts`'s source scan
+ *  finds them. */
+const HEADLINE_KEY: Record<Exclude<SlateState, "live">, string> = {
+  warming: "overlay.slate.warmingHeadline",
+  ended: "overlay.slate.endedHeadline",
+};
+
+export function OverlaySlate({ model, tick, msg, sportKey }: OverlayThemeProps) {
   const state = slateStateOf(model);
 
   // Motion (_THEMES.md §6): none on mount, a state SWAP is a 250ms opacity
@@ -89,6 +93,14 @@ export function OverlaySlate({ model, tick }: { model: OverlayModel; tick: [bool
   const home = model.sides[0].name;
   const away = model.sides[1].name;
 
+  // §4a: "the SELECTED theme (§3 bar or §4 bug) renders ON TOP" — resolved
+  // through the registry's OWN per-sport default, so cricket composites its
+  // lower third and the other ten their corner tile. One authority: this is
+  // the same function `resolveTheme` falls back to, not a second table.
+  // `defaultThemeFor` never returns `"slate"` (pinned over all eleven sports
+  // in overlay-stage-theme-props.test.tsx), so this cannot recurse.
+  const Scorebug = OVERLAY_THEMES[defaultThemeFor(sportKey)].component;
+
   return (
     <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state}>
       <span className="ovl-slate-brand ovl-display">seazn</span>
@@ -97,12 +109,24 @@ export function OverlaySlate({ model, tick }: { model: OverlayModel; tick: [bool
           data-testid="ovl-slate-content"
           className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}
         >
+          {/* §4a: "upper case as written in the dictionary" — the four
+              dictionaries carry the upper-case form (asserted in
+              overlay-slate.test.tsx), so nothing here upper-cases at render
+              time. A `.toUpperCase()` would also be wrong for a locale whose
+              casing rules differ from the browser's default. */}
           <span data-testid="ovl-slate-headline" className="ovl-slate-headline ovl-display">
-            {model.header.context}
+            {msg(HEADLINE_KEY[state])}
           </span>
           {state === "warming" ? (
             <>
-              <span data-testid="ovl-slate-line" className="ovl-slate-line">{`${home} · ${away}`}</span>
+              {/* §4a's warming line: "Home v Away · 14:30 <venueTz short>".
+                  `{start}` is `model.header.context`, which in this state IS
+                  the venue-zone start label the server formatted
+                  (`overlayStartLabel` → `headerContext`'s scheduled branch) —
+                  the same one authority, not a second format. */}
+              <span data-testid="ovl-slate-line" className="ovl-slate-line">
+                {msg("overlay.slate.warmingLine", { home, away, start: model.header.context })}
+              </span>
               <span data-testid="ovl-slate-indicator-warming" className="ovl-slate-warming-dots">
                 <span />
                 <span />
@@ -119,9 +143,11 @@ export function OverlaySlate({ model, tick }: { model: OverlayModel; tick: [bool
       {/* §4a: "the SELECTED theme … renders ON TOP of the slate, at its own
           inset, unchanged in every value" — nested directly inside `.ovl-slate`
           (whose box is pixel-identical to `.ovl-canvas`'s, see globals.css),
-          so `.ovl-bug`'s own absolute inset resolves to the SAME screen
-          position it would standalone. Always `OverlayBug`, per gap 2 above. */}
-      <OverlayBug model={model} tick={tick} />
+          so the scorebug's own absolute inset resolves to the SAME screen
+          position it would standalone. Every prop is passed straight through,
+          `msg`/`sportKey` included, so the composited theme is indistinguishable
+          from the same theme served directly under `?style=bar`/`?style=bug`. */}
+      <Scorebug model={model} tick={tick} msg={msg} sportKey={sportKey} />
     </div>
   );
 }
