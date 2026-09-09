@@ -19,9 +19,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache
 // outside a real request — passthrough under vitest, the same double
-// `consent.test.ts` and `public-leaders.test.ts` already use.
+// `consent.test.ts` and `public-leaders.test.ts` already use, except that this
+// one RECORDS its key parts and options. Without that recording the ISR half of
+// the hub's invalidation story has no witness at all: deleting a tag from
+// `getPublicCompetitionHub` changes no test outcome, and a cache whose tags
+// nothing checks is a cache that silently stops invalidating.
+const cacheCalls = vi.hoisted(() => [] as { keyParts: unknown; options: unknown }[]);
 vi.mock("next/cache", () => ({
-  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  unstable_cache: (fn: (...args: unknown[]) => unknown, keyParts?: unknown, options?: unknown) => {
+    cacheCalls.push({ keyParts, options });
+    return fn;
+  },
   revalidateTag: vi.fn(),
 }));
 
@@ -58,19 +66,24 @@ import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeText } from "@/lib/scoring-vocab";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { resolveLatestModule } from "@/server/engine-db";
-import type {
-  PublicCompetition,
-  PublicDivision,
-  PublicEntrant,
-  PublicFixture,
-  PublicOrg,
-  PublicStage,
-  PublicStandings,
+import {
+  competitionTag,
+  divisionTag,
+  orgTag,
+  REVALIDATE_FAST,
+  type PublicCompetition,
+  type PublicDivision,
+  type PublicEntrant,
+  type PublicFixture,
+  type PublicOrg,
+  type PublicStage,
+  type PublicStandings,
 } from "../data";
 import { MatchCentreHeader, type SideT } from "../match-centre-schema";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { describeFormat } from "../describe-format";
 import {
+  getPublicCompetitionHub,
   hubHeader,
   hubLiveness,
   hubSides,
@@ -611,6 +624,7 @@ const LEADER_ROW = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cacheCalls.splice(0);
   hasFeatureMock.mockResolvedValue(true);
   readLeaderRowsMock.mockResolvedValue([]);
   registrationMock.mockResolvedValue({
@@ -852,8 +866,10 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     expect(doc.divisions[0]!.formatLine).toEqual(
       describeFormat("football", resolveLatestModule("football"), DIV.config),
     );
+    // SPORT-NEUTRAL key (owner ruling 2026-09-09): football, hockey and ice
+    // hockey all say the same thing about how long a match runs.
     expect(doc.divisions[0]!.formatLine).toEqual({
-      key: "format.football.minutes",
+      key: "format.minutes",
       params: { minutes: 90 },
     });
   });
@@ -1063,5 +1079,190 @@ describe("loadCompetitionHub — empty leader boards are a first-class state", (
     expect(divisions).toEqual([
       expect.objectContaining({ youth: true, player_name_display: "initials" }),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1 — the shapes the whole suite never varied
+// ---------------------------------------------------------------------------
+//
+// Every fixture above lives in a division with exactly ONE stage, and three
+// defects hid behind that: a knockout final named against the league's round
+// count, an unwitnessed stage ORDER, and an unwitnessed `finalized` status.
+
+describe("loadCompetitionHub — round names are ranked WITHIN a stage", () => {
+  const league: PublicStage = { ...STAGE, id: "lg", seq: 1, kind: "league", name: "League" };
+  const ko: PublicStage = { ...STAGE, id: "ko", seq: 2, kind: "knockout", name: "Knockout" };
+  // The league runs MORE rounds than the bracket — the ordinary
+  // group-then-knockout shape, and the one that makes the bug visible. An
+  // equal-length pair cannot witness it.
+  const twoStage = [
+    F({ id: "lg-1", stage_id: "lg", round_no: 1 }),
+    F({ id: "lg-2", stage_id: "lg", round_no: 2 }),
+    F({ id: "lg-3", stage_id: "lg", round_no: 3 }),
+    F({ id: "ko-1", stage_id: "ko", round_no: 1 }),
+    F({ id: "ko-2", stage_id: "ko", round_no: 2, is_final: true }),
+  ];
+
+  const labels = async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ stages: [league, ko], fixtures: twoStage, standings: [] }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    return Object.fromEntries(doc.matches.map((m) => [m.fixtureId, m.roundLabel]));
+  };
+
+  it("the knockout FINAL is the Final, not the semi its league neighbour's round count implies", async () => {
+    // `laneRoundRank` filters by LANE only, and `lane` is null for a league AND
+    // for a single-elimination bracket — so ranking against the whole division
+    // puts rounds 1-3 (league) and 1-2 (knockout) in ONE sorted list and makes
+    // `lastRoundInLane` 3. The final then sits one round from the end and reads
+    // "Semi-finals". `is_final` does not rescue it: `round-role.ts` never reads
+    // `isFinal`, the role is `lastRoundInLane - roundInLane`.
+    const label = await labels();
+    expect(label["ko-2"]).toBe(msgFor("en", "bracket.round.final"));
+    expect(label["ko-2"]).not.toBe(msgFor("en", "bracket.round.semi"));
+  });
+
+  it("and the knockout SEMI is the semi, not a quarter", async () => {
+    const label = await labels();
+    expect(label["ko-1"]).toBe(msgFor("en", "bracket.round.semi"));
+    expect(label["ko-1"]).not.toBe(msgFor("en", "bracket.round.quarter"));
+  });
+
+  it("the league stage beside it still counts its own rounds from one", async () => {
+    const label = await labels();
+    expect([label["lg-1"], label["lg-2"], label["lg-3"]]).toEqual([
+      msgFor("en", "bracket.round.plain", { n: 1 }),
+      msgFor("en", "bracket.round.plain", { n: 2 }),
+      msgFor("en", "bracket.round.plain", { n: 3 }),
+    ]);
+  });
+});
+
+describe("loadCompetitionHub — the order tables are published in", () => {
+  const tableFor = async (stages: PublicStage[]) => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages,
+        fixtures: [],
+        standings: stages.map((s) => ({ ...SNAPSHOT, stage_id: s.id })),
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    return doc.tables.map((t) => t.caption);
+  };
+
+  it("a stage still RUNNING reads above one already complete", async () => {
+    // Input order is the WRONG order on purpose: an ordering test whose input
+    // already matches the expected output asserts nothing at all.
+    const done: PublicStage = { ...STAGE, id: "s1", seq: 1, name: "Group", status: "complete" };
+    const running: PublicStage = { ...STAGE, id: "s2", seq: 2, name: "Playoff", status: "active" };
+    expect(await tableFor([done, running])).toEqual(["Playoff", "Group"]);
+  });
+
+  it("two stages in the same state order by SEQ", async () => {
+    // The OTHER arm of the comparator, perturbed the same way: input reversed.
+    const second: PublicStage = { ...STAGE, id: "s2", seq: 2, name: "Second", status: "active" };
+    const first: PublicStage = { ...STAGE, id: "s1", seq: 1, name: "First", status: "active" };
+    expect(await tableFor([second, first])).toEqual(["First", "Second"]);
+  });
+
+  it("two COMPLETE stages also order by seq — completeness ties, seq breaks it", async () => {
+    const second: PublicStage = { ...STAGE, id: "s2", seq: 2, name: "Second", status: "complete" };
+    const first: PublicStage = { ...STAGE, id: "s1", seq: 1, name: "First", status: "complete" };
+    expect(await tableFor([second, first])).toEqual(["First", "Second"]);
+  });
+});
+
+describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
+  const finalized = F({
+    id: "fx-finalized",
+    status: "finalized",
+    round_no: 1,
+    home_entrant_id: "e1",
+    away_entrant_id: "e2",
+    scheduled_at: "2026-09-03T14:00:00.000Z",
+    outcome: { kind: "win", winner: "e2", loser: "e1" },
+    summary: {
+      perSide: [
+        { entrantId: "e1", line: "0" },
+        { entrantId: "e2", line: "3" },
+      ],
+    },
+  });
+
+  it("keeps its result sentence, its winner and its bucket — `finalized` is not a synonym nobody sends", async () => {
+    // A locked ledger is still a played match. Keying the result line on the
+    // raw string "decided" silently strips the sentence off every finalized
+    // fixture, which a spectator meets as a scoreline with no verdict.
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ fixtures: [finalized], standings: [] }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const match = doc.matches.find((m) => m.fixtureId === "fx-finalized")!;
+    expect(match.bucket).toBe("completed");
+    expect(match.header.status).toBe("decided");
+    expect(match.winnerIndex).toBe(1);
+    expect(match.resultLine).toBe(
+      decidedOutcomeText(
+        finalized.outcome,
+        { e1: "Blue Blazers", e2: "Red Rockets", e3: "Green Giants" },
+        (k, v) => msgFor("en", k, v),
+        null,
+        "football",
+      ),
+    );
+    expect(match.resultLine).toContain("Red Rockets");
+  });
+});
+
+describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
+  it("keys on the competition id and tags the org, the competition and its division", async () => {
+    const doc = await getPublicCompetitionHub("riverside", "autumn-cup");
+    expect(doc).not.toBeNull();
+    expect(cacheCalls).toHaveLength(1);
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v1", "comp-1"]);
+    // Derived from the SAME tag helpers the writers use, so the two halves of
+    // the invalidation story cannot drift: `fireDivisionRevalidate` fires
+    // `divisionTag` and `competitionTag`, and both are declared here.
+    expect(cacheCalls[0]!.options).toEqual({
+      tags: [orgTag("riverside"), competitionTag("comp-1"), divisionTag("div-1")],
+      revalidate: REVALIDATE_FAST,
+    });
+    // Spelled out ONCE as well, so a change to a tag helper is visible here
+    // rather than moving both sides of a derived assertion together.
+    expect(cacheCalls[0]!.options).toMatchObject({
+      tags: ["org-public:riverside", "competition:comp-1", "division:div-1"],
+      revalidate: 30,
+    });
+  });
+
+  it("EVERY division is tagged — a score in the second one must still invalidate the page", async () => {
+    const second: PublicDivision = { ...DIV, id: "div-2", slug: "reserves", name: "Reserves" };
+    getPublicCompetitionMock.mockResolvedValue({
+      org: ORG,
+      competition: COMP,
+      divisions: [DIV, second],
+      liveNow: [],
+    });
+    getPublicDivisionMock.mockImplementation(async (_o: string, _c: string, slug: string) =>
+      divisionDetail(slug === "reserves" ? { division: second } : {}),
+    );
+    await getPublicCompetitionHub("riverside", "autumn-cup");
+    expect(cacheCalls[0]!.options).toMatchObject({
+      tags: [
+        orgTag("riverside"),
+        competitionTag("comp-1"),
+        divisionTag("div-1"),
+        divisionTag("div-2"),
+      ],
+    });
+  });
+
+  it("a competition the shell refuses is null, and no cache entry is created for it", async () => {
+    getPublicCompetitionMock.mockResolvedValue(null);
+    expect(await getPublicCompetitionHub("riverside", "private-cup")).toBeNull();
+    expect(cacheCalls).toEqual([]);
   });
 });

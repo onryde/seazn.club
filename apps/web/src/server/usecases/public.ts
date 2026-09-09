@@ -36,6 +36,10 @@ import {
 } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
+// The one TYPED public usecase in this file — review note N5. Every other
+// reader here returns `unknown` because it hands back a raw row set with no
+// schema; the hub has one, so Task 5's route need not re-narrow it.
+import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -142,7 +146,10 @@ const HUB_TTL_SECONDS = 15;
  * two readers apply are the same, so it should be unreachable, and if the two
  * ever disagree a 404 is the honest answer rather than a `null` body.
  */
-export async function publicCompetitionHub(orgSlug: string, slug: string): Promise<unknown> {
+export async function publicCompetitionHub(
+  orgSlug: string,
+  slug: string,
+): Promise<CompetitionHubDocT> {
   const full = await findCompetition(orgSlug, slug);
   return cachedFor(`pub:v1:hub:${full.id}`, HUB_TTL_SECONDS, async () => {
     const doc = await loadCompetitionHub(orgSlug, slug);

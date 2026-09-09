@@ -23,16 +23,54 @@
 // unit-testable.
 // ---------------------------------------------------------------------------
 //
-// WHAT IS NOT DESCRIBED, and why it is null rather than wrong: the period
-// sports (hockey, icehockey) declare `periods: {count, minutes}` and so have
-// exactly the same "total minutes" fact football does — but the only key in
-// scope is `format.football.minutes`, and printing a football-named sentence
-// for a hockey match is the same defect `SHOOTOUT_IS_SKATED`
-// (`lib/scoring-vocab.ts`) exists to undo. They return null here and the
-// renderer falls back to `variantKey`. A sport-neutral `format.minutes` key
-// would close it; that is dictionary work, which Task 6 owns.
+// THE MINUTES SENTENCE IS SPORT-NEUTRAL (owner ruling, 2026-09-09).
+//
+// Football declares `halfMinutes × halves`; the period sports (hockey,
+// icehockey) declare `periods: {count, minutes}`. Those are the same fact —
+// how long the match runs — so all three emit ONE key, `format.minutes`
+// ("{minutes} min"), rather than a football-named sentence printed over a
+// hockey match. That last shape is the defect `SHOOTOUT_IS_SKATED`
+// (`lib/scoring-vocab.ts`) exists to undo, and the first draft of this file
+// shipped hockey a NULL rather than commit it. Task 6 authors the four locale
+// strings; nothing here creates a dictionary key.
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MsgT } from "./match-centre-schema";
+
+/**
+ * The product of the declared factors, as a minutes sentence — or NOTHING.
+ *
+ * ONE guard, applied per FACTOR, deliberately: an earlier shape coerced each
+ * factor to a sentinel and then range-checked the product, which made the
+ * choice of sentinel (NaN vs 0) unobservable — the two guards covered for each
+ * other and a mutant swapping them survived the whole suite. Checking each
+ * factor where it is read leaves nothing that can be changed without a test
+ * noticing.
+ *
+ * NEVER ZERO. `Number("")` is `0` in this codebase and a chip reading "0 min"
+ * is a confident lie — strictly worse than the blank chip that ships when there
+ * is nothing to say, because a reader cannot tell it from a real answer. A
+ * config that does not declare a total (a division pinned to a module version
+ * that predates the field, or a schema that stops declaring it) yields `null`
+ * and the renderer falls back to `variantKey`.
+ *
+ * No SHIPPED module can produce `0` today — football's `halfMinutes` is
+ * `positive()` and the period kernel's `periods.count` is `min(1)` — so this is
+ * a rule about what may EVER reach a spectator rather than a filter on current
+ * data, and the suite pins it with a permissive module double.
+ */
+function minutesFrom(...factors: readonly unknown[]): MsgT | null {
+  let minutes = 1;
+  for (const factor of factors) {
+    // `typeof` is here for tsc's narrowing (`minutes *= factor` needs a
+    // number); at RUNTIME it is implied by `Number.isFinite`, which does not
+    // coerce and so already answers false for `undefined`, `""` and every
+    // other non-number. `Number.isFinite` is the clause that earns its place:
+    // `NaN` and `Infinity` are both `typeof "number"` and both pass `<= 0`.
+    if (typeof factor !== "number" || !Number.isFinite(factor) || factor <= 0) return null;
+    minutes *= factor;
+  }
+  return { key: "format.minutes", params: { minutes } };
+}
 
 /**
  * A one-line description of what shape of match this division plays.
@@ -72,15 +110,26 @@ export function describeFormat(
       return { key: "format.cricket.overs", params: { overs } };
     }
     case "football": {
-      const half = c.halfMinutes;
       // `halves` is the PLAY-PERIOD COUNT, 2 or 4 — mini-soccer plays four
       // quarters, so a hardcoded `× 2` prints 20 minutes for a 40-minute
       // match. Read both, always.
-      const halves = c.halves;
-      if (typeof half !== "number" || typeof halves !== "number") return null;
-      const minutes = half * halves;
-      if (!(minutes > 0)) return null;
-      return { key: "format.football.minutes", params: { minutes } };
+      return minutesFrom(c.halfMinutes, c.halves);
+    }
+    case "hockey":
+    case "icehockey": {
+      // The period kernel's own declaration (`sports/period/kernel.ts`):
+      // `periods: {count, minutes}`. Same fact as football's, same key.
+      // Named sports rather than sniffed by shape: `periods` is also the name
+      // of a per-phase SCORE breakdown on `ScoreSummary.detail`, and a
+      // shape-sniffing branch here would be one rename away from reading the
+      // wrong one.
+      // No `typeof === "object"` guard: reading a property off a primitive
+      // auto-boxes and yields `undefined`, which `minutesFrom` refuses, so a
+      // `periods: 60` config answers null either way. The guard that used to
+      // sit here was unobservable — a mutant removing it survived the whole
+      // suite, which is the definition of decoration.
+      const p = (c.periods ?? {}) as Record<string, unknown>;
+      return minutesFrom(p.count, p.minutes);
     }
     default: {
       // BY SHAPE, not by a list of sport keys: `bestOf` is declared by the

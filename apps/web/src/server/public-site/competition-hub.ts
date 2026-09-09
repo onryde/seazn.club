@@ -463,7 +463,29 @@ export async function loadCompetitionHub(
     });
 
     const stageById = new Map(stages.map((s) => [s.id, s]));
-    const laneFixtures = fixtures.map((f) => ({ round_no: f.round_no, lane: f.lane ?? null }));
+    // PER STAGE, and that is the whole point of this map.
+    //
+    // `laneRoundRank` (`lib/round-role-label.ts`) filters by LANE only, and
+    // `lane` is null for a league AND for a single-elimination bracket
+    // (`data.ts`: "null for single-lane brackets and non-bracket stages"). So a
+    // list pooled across the division puts a league's rounds and a knockout's
+    // rounds in one sorted sequence, and `lastRoundInLane` comes off the union
+    // — a knockout FINAL in a division whose league ran more rounds resolves as
+    // `semi_final` and the page prints "Semi-finals" on the final. `is_final`
+    // does not rescue it: `round-role.ts` never reads `isFinal`, the role is
+    // `lastRoundInLane - roundInLane`. Measured, on the ordinary
+    // league-then-knockout shape.
+    //
+    // Every other caller of this helper in the repo is stage-scoped
+    // (`stages-panel.tsx`'s parameter is literally `stageFixtures`;
+    // `stage-court-tags.ts` selects `where stage_id = $1`; a public bracket IS
+    // one stage). The hub was the only pooling caller.
+    const laneByStage = new Map<string, { round_no: number; lane: "WB" | "LB" | "GF" | null }[]>();
+    for (const f of fixtures) {
+      const inStage = laneByStage.get(f.stage_id) ?? [];
+      inStage.push({ round_no: f.round_no, lane: f.lane ?? null });
+      laneByStage.set(f.stage_id, inStage);
+    }
     for (const f of fixtures) {
       const sides = hubSides(f, { names, kinds, badges, colours, slot });
       const stage = stageById.get(f.stage_id);
@@ -486,11 +508,14 @@ export async function loadCompetitionHub(
         // guard here, and the ordinal is the fixture's rank within its own
         // lane rather than a raw `round_no` a sparse bracket numbering would
         // print wrong.
+        //
+        // Dropping that guard does NOT mean dropping the stage scoping: the
+        // ranking list is this fixture's OWN stage. See `laneByStage` above.
         roundLabel: stage
           ? roundRoleLabel(
               ui,
               roundRoleFor(
-                laneFixtures,
+                laneByStage.get(f.stage_id) ?? [],
                 {
                   round_no: f.round_no,
                   lane: f.lane ?? null,
