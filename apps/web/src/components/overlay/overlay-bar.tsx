@@ -52,9 +52,12 @@ export function OverlayBar({ model, tick }: { model: OverlayModel; tick: [boolea
             <span data-testid="ovl-chase" className="ovl-detail-emphasis">{model.chase}</span>
           ) : null}
           {model.detail.map((line, i) => (
-            <span key={line + i} className="contents">
+            <span key={line.text + i} className="contents">
               {i > 0 || model.chase || model.result ? <span className="ovl-detail-sep" /> : null}
-              <span>{line}</span>
+              {line.tone ? (
+                <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
+              ) : null}
+              <span>{line.text}</span>
             </span>
           ))}
         </div>

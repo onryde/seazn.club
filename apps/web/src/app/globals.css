@@ -1351,7 +1351,19 @@ body {
                  background: var(--sport-board-2); }
 .ovl-live-row { display: flex; align-items: center; gap: 12px;
                 font-size: 24px; font-weight: 600; letter-spacing: 0.02em; }
+/* Review round 1, CRITICAL: `--sport-ink` 1-px hairline, not `--sport-board`
+   — `_THEMES.md` §2/§3, "the hairline… not the fill — is what satisfies WCAG
+   1.4.11 here". Without it hockey's live dot measures 2.75:1 on `board-2`,
+   under the 3:1 graphical floor; the overlay-tokens.ts `live-dot-on-board-2`
+   / `live-dot-on-board` exception rows were declared `covered` by this exact
+   hairline before it existed in CSS. `box-sizing: border-box` (Tailwind's
+   preflight, `@import "tailwindcss"` above) keeps the border INSIDE the
+   stated 15px/13.5px diameter — it does not grow the dot. Covers BOTH
+   locations (§3's live cell dot and §4's bug header dot, `_THEMES.md` §4
+   "same terms as §3's") in one declaration: `.ovl-bug-header .ovl-live-dot`
+   below only overrides size, never re-declares the border. */
 .ovl-live-dot { width: 15px; height: 15px; border-radius: 9999px;
+                border: 1px solid var(--sport-ink);
                 background: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.8); }
 .ovl-context { font-size: 21px; font-weight: 500;
                color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
@@ -1412,6 +1424,26 @@ body {
 .ovl-bug .ovl-led { left: 0; top: 0; bottom: 0; width: 8px; }
 .ovl-serve-dot { width: 10.5px; height: 10.5px; border-radius: 9999px;
                  background: var(--sport-led); }
+
+/* Discipline card chip (both themes) — review round 1, IMPORTANT.
+   `_THEMES.md` §3 "card chips 13.5×18 radius 3 in caution / dismissal /
+   advisory" (football/hockey/icehockey rows) and §4's identical bug-row
+   chip, "the same terms as §3's" hairline. Painted by `overlay-model.ts`'s
+   `disciplineTone()` picking the tone per `OverlayDetailLine.tone`; the fill
+   is the overrides-only sport palette exactly like every other `--sport-*`
+   read here, and the hairline is the SAME `--sport-ink` graphical boundary
+   as the live dot, for the same reason (`overlay-tokens.ts`'s
+   `advisory-swatch-on-board(-2)` / `caution-swatch-on-board(-2)` /
+   `dismissal-swatch-on-board(-2)` roles size this pair at the 3:1 graphical
+   floor already; football's `dismissal` on `board-2` is 2.56:1 and hockey's
+   is not much better, so `caution`/`advisory` get the hairline as the
+   sheet's consistency choice and `dismissal` needs it outright). */
+.ovl-chip { display: inline-block; width: 13.5px; height: 18px; border-radius: 3px;
+            border: 1px solid var(--sport-ink); vertical-align: middle; flex-shrink: 0;
+            margin-right: 6px; }
+.ovl-chip-advisory { background: var(--sport-advisory); }
+.ovl-chip-caution { background: var(--sport-caution); }
+.ovl-chip-dismissal { background: var(--sport-dismissal); }
 
 /* Motion — _THEMES.md §6, R13. transform/opacity only; nothing on mount. */
 @keyframes ovl-tick { 0% { transform: scale(1); } 45% { transform: scale(1.12); } 100% { transform: scale(1); } }

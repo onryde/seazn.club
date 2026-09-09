@@ -61,7 +61,15 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
           ) : model.chase ? (
             <span data-testid="ovl-chase" className="ovl-detail-emphasis">{model.chase}</span>
           ) : null}
-          <span>{model.detail.join(" · ")}</span>
+          {model.detail.map((line, i) => (
+            <span key={line.text + i} className="contents">
+              {i > 0 ? " · " : ""}
+              {line.tone ? (
+                <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
+              ) : null}
+              {line.text}
+            </span>
+          ))}
         </div>
       ) : null}
     </div>

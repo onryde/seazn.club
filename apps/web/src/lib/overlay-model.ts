@@ -57,13 +57,29 @@ export interface OverlayCell {
   value: string;
 }
 
+/**
+ * One line of the bar's detail band / the bug's footer (review round 1,
+ * CRITICAL+IMPORTANT findings against T1's card-chip closure). Was a bare
+ * `string`; `tone` is additive so the serve sentence and the `matchStrength`
+ * line (neither a card) carry none.
+ */
+export interface OverlayDetailLine {
+  text: string;
+  /** `_THEMES.md` §3/§4's 13.5×18 radius-3 card chip colour, present only for
+   *  a discipline-card line. Absent (no chip) for every other detail line, and
+   *  for a discipline entry whose class is DECLARED UNCOLOURED by the pad's own
+   *  table (icehockey's `bench_minor`/`double_minor`/`major`/`misconduct`/
+   *  `game_misconduct` — see `DISCIPLINE_CLASS_TONE` below). */
+  tone?: SportTone;
+}
+
 export interface OverlayModel {
   live: boolean;
   decided: boolean;
   header: { context: string; clock?: string };
   sides: [OverlaySide, OverlaySide];
   cells: OverlayCell[];
-  detail: string[];
+  detail: OverlayDetailLine[];
   chase?: string;
   result?: string;
 }
@@ -155,6 +171,62 @@ function cellsOf(input: OverlayModelInput): OverlayCell[] {
 }
 
 /**
+ * classKey → chip tone, for the three sports `_THEMES.md` §3's content table
+ * scopes card chips to (football, hockey, icehockey — `disciplineList()`
+ * returns null for every other sport BY CONSTRUCTION: only the period kernel
+ * populates `summary().detail.discipline`, `packages/engine/src/sports/
+ * period/kernel.ts:2524`, `cardLog: state.cardLog`).
+ *
+ * A DELIBERATE LITERAL, not an import of the pad's own tables
+ * (`skins/football.tsx`'s `CARD_TONES`, `skins/hockey.tsx`'s
+ * `HOCKEY_CLASSES`, `skins/icehockey.tsx`'s `ICEHOCKEY_CLASSES`) — same
+ * reasoning as `overlay-tokens.ts`'s `OVERLAY_SPORT_KEYS`: those files are
+ * `"use client"` pad skins, and `overlay-model.ts` is deliberately "no
+ * React" (this file's own header). The three real tables are the authority;
+ * `overlay-model.test.ts` imports them directly and asserts this literal
+ * equal to their union in both directions, so a class either table adds or
+ * recolours reds here until this literal is updated to match.
+ *
+ * Safe to merge into ONE flat map keyed on classKey alone (rather than
+ * `(sportKey, classKey)`): football's `{yellow, red, second_yellow}` and
+ * hockey's `{green, yellow, red}` overlap only on `yellow`/`red`, and both
+ * sports map them to the SAME tone. icehockey's key vocabulary
+ * (`minor`/`bench_minor`/…) shares no name with either. A future sport whose
+ * own class vocabulary collides with an existing key under a DIFFERENT tone
+ * would need this keyed by sport too — the mirror test below is what would
+ * catch that collision (it fails the moment the union stops being a
+ * function).
+ */
+export const DISCIPLINE_CLASS_TONE: Readonly<Record<string, readonly SportTone[]>> = {
+  // football (skins/football.tsx CARD_TONES)
+  yellow: ["caution"],
+  red: ["dismissal"],
+  second_yellow: ["caution", "dismissal"],
+  // hockey (skins/hockey.tsx HOCKEY_CLASSES) — adds green; yellow/red already above
+  green: ["advisory"],
+  // icehockey (skins/icehockey.tsx ICEHOCKEY_CLASSES) — five of seven are
+  // DECLARED UNCOLOURED (empty array), not merely absent from this table.
+  minor: ["caution"],
+  bench_minor: [],
+  double_minor: [],
+  major: [],
+  misconduct: [],
+  game_misconduct: [],
+  match: ["dismissal"],
+};
+
+/** The chip colour for one discipline entry's class, or `undefined` for an
+ *  uncoloured class (icehockey's five) or an unknown one. A multi-tone class
+ *  (football's `second_yellow`: `["caution","dismissal"]`) takes the LAST
+ *  tone — the pad's own rule for the same entry ("draws one swatch per
+ *  entry… takes the OUTCOME (the last) for the option's wash",
+ *  `skins/football.tsx`). */
+export function disciplineTone(classKey: string): SportTone | undefined {
+  const tones = DISCIPLINE_CLASS_TONE[classKey];
+  return tones && tones.length > 0 ? tones[tones.length - 1] : undefined;
+}
+
+/**
  * The bar's second band in W1: the serve line, the strength chip and the
  * discipline list — every one of them already on the aggregate summary.
  *
@@ -162,21 +234,22 @@ function cellsOf(input: OverlayModelInput): OverlayCell[] {
  * `person`, but a name on air needs the consent resolver (R17) and that is
  * W2's work; the class and the side are what W1 shows.
  */
-function detailOf(input: OverlayModelInput, codes: [string, string], live: boolean): string[] {
-  const lines: string[] = [];
+function detailOf(input: OverlayModelInput, codes: [string, string], live: boolean): OverlayDetailLine[] {
+  const lines: OverlayDetailLine[] = [];
   const serving = servingSide(input.data.summary);
   if (live && serving) {
-    lines.push(input.msg("overlay.detail.serving", { side: serving === "home" ? codes[0] : codes[1] }));
+    lines.push({ text: input.msg("overlay.detail.serving", { side: serving === "home" ? codes[0] : codes[1] }) });
   }
   const strength = live ? matchStrength(input.data.summary) : null;
-  if (strength) lines.push(strength);
+  if (strength) lines.push({ text: strength });
   for (const entry of disciplineList(input.data.summary) ?? []) {
-    lines.push(
-      input.msg("overlay.detail.card", {
+    lines.push({
+      text: input.msg("overlay.detail.card", {
         side: entry.side === "home" ? codes[0] : codes[1],
         card: disciplineLabel(entry.classKey),
       }),
-    );
+      tone: disciplineTone(entry.classKey),
+    });
   }
   return lines;
 }

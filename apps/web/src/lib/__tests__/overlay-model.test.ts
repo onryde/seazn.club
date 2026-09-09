@@ -33,7 +33,15 @@ import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
-import { overlayModel, overlayStartLabel, shortCode, splitLine, type OverlayMsg } from "@/lib/overlay-model";
+import {
+  DISCIPLINE_CLASS_TONE,
+  disciplineTone,
+  overlayModel,
+  overlayStartLabel,
+  shortCode,
+  splitLine,
+  type OverlayMsg,
+} from "@/lib/overlay-model";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 
@@ -419,8 +427,96 @@ describe("overlayModel — no literal escapes the dictionary", () => {
     const model = project("icehockey", data);
     expect(model.detail.length, "must actually carry a line, or the loop below asserts nothing").toBeGreaterThan(0);
     for (const line of model.detail) {
-      expect(line, "detail lines are dictionary keys or engine notation, never English typed here")
+      expect(line.text, "detail lines are dictionary keys or engine notation, never English typed here")
         .toMatch(/^(overlay\.|[0-9]|[A-Za-z]{1,3}v[0-9])/);
+    }
+  });
+});
+
+describe("overlayModel — discipline chip tone (review round 1, IMPORTANT)", () => {
+  // Folded through the REAL engine, same shape as the test above: icehockey's
+  // period kernel writes `classKey: payload.class` straight off the
+  // suspension event (`packages/engine/src/sports/period/kernel.ts:1195`,
+  // `:2524` for `discipline: state.cardLog`). Three classes, three different
+  // answers — the differential this table exists to prove, not one lucky
+  // sample (AGENTS.md #7): `minor` is coloured, `major` is DECLARED
+  // uncoloured (not merely unknown), `match` is a different tone again.
+  it("a coloured class (icehockey minor → caution) carries that tone", () => {
+    const data = payload("icehockey", [
+      ["core.start", {}],
+      ["icehockey.suspension.start", { by: "H", class: "minor" }],
+    ], "in_play");
+    const model = project("icehockey", data);
+    const card = model.detail.find((l) => l.text.startsWith("overlay.detail.card"));
+    expect(card, "no card line — the discipline entry itself is missing").toBeDefined();
+    expect(card!.tone).toBe("caution");
+  });
+
+  it("an uncoloured class (icehockey major) carries NO tone — declared, not unknown", () => {
+    const data = payload("icehockey", [
+      ["core.start", {}],
+      ["icehockey.suspension.start", { by: "H", class: "major" }],
+    ], "in_play");
+    const model = project("icehockey", data);
+    const card = model.detail.find((l) => l.text.startsWith("overlay.detail.card"));
+    expect(card, "no card line — the discipline entry itself is missing").toBeDefined();
+    expect(card!.tone, "major is DECLARED uncoloured (ICEHOCKEY_CLASSES: [])").toBeUndefined();
+  });
+
+  it("a THIRD class (icehockey match → dismissal) differs from both — not a constant", () => {
+    const data = payload("icehockey", [
+      ["core.start", {}],
+      ["icehockey.suspension.start", { by: "H", class: "match" }],
+    ], "in_play");
+    const model = project("icehockey", data);
+    const card = model.detail.find((l) => l.text.startsWith("overlay.detail.card"));
+    expect(card, "no card line — the discipline entry itself is missing").toBeDefined();
+    expect(card!.tone).toBe("dismissal");
+  });
+
+  it("a non-discipline detail line (the serve sentence) never carries a tone", () => {
+    const data = payload("tennis", [
+      ["core.start", {}],
+      ["tennis.point", { by: "H" }],
+    ], "in_play");
+    const model = project("tennis", data);
+    const serveLine = model.detail.find((l) => l.text.startsWith("overlay.detail.serving"));
+    expect(serveLine, "tennis's serve line should be present here").toBeDefined();
+    expect(serveLine!.tone).toBeUndefined();
+  });
+});
+
+describe("DISCIPLINE_CLASS_TONE mirrors the pad's own per-sport tables (one authority)", () => {
+  // `overlay-model.ts` deliberately holds a LITERAL rather than importing
+  // these "use client" pad skins (bundle weight — same reasoning as
+  // `overlay-tokens.ts`'s `OVERLAY_SPORT_KEYS`). This is where the two are
+  // proven equal, in BOTH directions, so neither a class this literal drops
+  // nor one the pad adds can drift unnoticed. Import cost is fine here: test
+  // code never ships (`contrast.test.ts` already imports the whole
+  // `V3_SKINS` registry the same way).
+  it("equals the union of football/hockey/icehockey's real classKey→tone tables", async () => {
+    const { CARD_TONES } = await import("@/components/v2/scorepad/v3/skins/football");
+    const { HOCKEY_CLASSES } = await import("@/components/v2/scorepad/v3/skins/hockey");
+    const { ICEHOCKEY_CLASSES } = await import("@/components/v2/scorepad/v3/skins/icehockey");
+    const union: Record<string, readonly string[]> = {
+      ...CARD_TONES,
+      ...HOCKEY_CLASSES,
+      ...ICEHOCKEY_CLASSES,
+    };
+    // Both directions, or a stale/renamed key on EITHER side reads as "still
+    // agrees" — the same shape `contrast.test.ts` uses for `OVERLAY_SPORT_KEYS`
+    // vs `V3_SKINS`. Key sets first: a count match alone would hide a renamed
+    // key (same length, different name) passing silently.
+    expect(Object.keys(DISCIPLINE_CLASS_TONE).sort(), "this literal names a class the pad's tables don't").toEqual(
+      Object.keys(union).sort(),
+    );
+    // Then every VALUE — the tone this literal resolves to via `disciplineTone`
+    // (its last-tone rule) must equal the real table's own last-tone rule,
+    // including the empty-array (uncoloured) classes, which must come back
+    // `undefined`, not a stale colour.
+    for (const [classKey, tones] of Object.entries(union)) {
+      const expected = tones.length > 0 ? tones[tones.length - 1] : undefined;
+      expect(disciplineTone(classKey), classKey).toBe(expected);
     }
   });
 });
