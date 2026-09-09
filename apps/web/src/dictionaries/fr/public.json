@@ -339,7 +339,7 @@
   "matchesHub.emptyFilter": "Aucun match pour ce filtre",
   "matchesHub.live": "En direct",
   "matchesHub.ended": "Terminé",
-  "matchesHub.round": "Ronde {round}",
+  "matchesHub.round": "Tour {round}",
   "matchesHub.timesIn": "horaires en {tz}",
   "matchesHub.card.label": "Fiche du match",
   "table.champion": "Champion",
