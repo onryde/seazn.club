@@ -216,18 +216,21 @@ describe("hubSides", () => {
     expect(away).toMatchObject({ entrantId: "e2", name: "Red Rockets", colour: null });
   });
 
-  it("resolves the two shorts TOGETHER — two people who collide under the team rule differ", () => {
-    // "Player One"/"Player Two" both compact to "PLA". A per-side builder
-    // cannot see that; `disambiguatedShorts` can, and this is the case that
-    // proves it is actually wired in rather than a per-side rule that happens
-    // to agree on teams.
+  it("resolves the two shorts TOGETHER — a shared surname still yields two labels", () => {
+    // "Ann Smith"/"Anna Smith" both take "SMI" at the first rung: a side's own
+    // name never carries enough information to know it must widen, so a
+    // builder that resolves each side alone renders the SAME abbreviation on
+    // both halves of the card. `disambiguatedShorts` compares the pair; this
+    // is the case that proves it is actually wired in rather than a per-side
+    // rule that happens to agree on team names.
     const people = {
       ...ctx,
-      names: { e1: "Player One", e2: "Player Two" },
+      names: { e1: "Ann Smith", e2: "Anna Smith" },
       kinds: { e1: "individual", e2: "individual" },
     };
     const [home, away] = hubSides(F({ id: "f1" }), people);
     expect(home.short).not.toBe(away.short);
+    expect([home.short, away.short].every((s) => s.length > 0)).toBe(true);
   });
 
   it("a TBD side renders its slot sentence as the name, with an empty entrantId", () => {
@@ -370,6 +373,23 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
           innings: [
             { entrantId: "e1", closed: true },
             { entrantId: "e2", closed: false },
+          ],
+        },
+      },
+    });
+    expect(hubHeader(fixture, SIDES(), "cricket", "T").battingIndex).toBeNull();
+  });
+
+  it("cricket between innings: every innings closed → nobody is batting", () => {
+    // Reading "the last innings" without checking `closed` answers e2 here.
+    const fixture = F({
+      id: "f1",
+      status: "in_play",
+      summary: {
+        detail: {
+          innings: [
+            { entrantId: "e1", closed: true },
+            { entrantId: "e2", closed: true },
           ],
         },
       },

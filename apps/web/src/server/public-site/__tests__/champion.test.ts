@@ -56,6 +56,14 @@ describe("divisionChampion", () => {
     expect(divisionChampion([stage({ id: "s1", seq: 1 })], [], [])).toBeNull();
   });
 
+  it("a stage with NO fixtures is not a played stage, even beside a snapshot", () => {
+    // `[].every(...)` is true, so without the length guard an undrawn division
+    // crowns whoever sits at the top of a table nobody has played into.
+    const stages = [stage({ id: "s1", seq: 1 })];
+    const standings = [snapshot({ stage_id: "s1", rows: [{ entrantId: "a", rank: 1 }] })];
+    expect(divisionChampion(stages, [], standings)).toBeNull();
+  });
+
   it("league not complete and not fully played → null", () => {
     const stages = [stage({ id: "s1", seq: 1 })];
     const fixtures = [
