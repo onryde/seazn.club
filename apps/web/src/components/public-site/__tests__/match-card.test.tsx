@@ -136,6 +136,76 @@ describe("MatchCard", () => {
     expect(tbd).not.toContain(`data-testid="mh-match-starts"`);
   });
 
+  // A match that was CALLED OFF, which is the case the card was silent about.
+  // `resultLine` cannot cover any of these: it is gated on
+  // `status === "decided"` and abandoned / forfeited / cancelled all map to
+  // `other` (`match-centre.ts:692-705`), so the card showed "Ended" and an
+  // empty line where the reason belongs.
+  describe("a called-off match says so", () => {
+    const calledOff = (fixtureStatus: string, extra: Partial<HubMatchT> = {}) =>
+      card(
+        hubMatch({
+          bucket: "completed",
+          ...extra,
+          header: {
+            status: "other",
+            statusLine: { key: `matchCentre.status.${fixtureStatus}` },
+            ...(extra.header as Partial<MatchCentreHeaderT>),
+          },
+        }),
+      );
+
+    it("abandoned reads 'Abandoned', not a blank where the result would be", () => {
+      const h = calledOff("abandoned");
+      expect(h).toContain(`data-testid="mh-match-status"`);
+      expect(h).toContain("Abandoned");
+    });
+
+    it("a FORFEITED match names the forfeit beside its bolded winner (the worst silent case)", () => {
+      // `winnerIndex` is taken straight off `winner_entrant_id` and is NOT
+      // gated on status, so before this the card bolded one side and gave no
+      // reason at all — it read as an ordinary win.
+      const h = calledOff("forfeited", { winnerIndex: 1 });
+      expect(h).toMatch(/data-testid="mh-match-side-1"[^>]*data-winner="true"/);
+      expect(h).toContain("Forfeited");
+    });
+
+    it("cancelled reads 'Cancelled'", () => {
+      expect(calledOff("cancelled")).toContain("Cancelled");
+    });
+
+    it("POSTPONED beats the countdown: it is not terminal, so it sits in Upcoming carrying its OLD kick-off time", () => {
+      // `bucketFixture` treats `postponed` as non-terminal, so the fixture
+      // stays in Upcoming with a `scheduledAt` nobody is playing to. Showing
+      // "Starts in 2 hours" there is worse than showing nothing.
+      const h = card(
+        hubMatch({
+          bucket: "upcoming",
+          scheduledAt: "2026-09-05T14:00:00Z",
+          tz: "Europe/London",
+          header: { status: "other", statusLine: { key: "matchCentre.status.postponed" } },
+        }),
+        Date.parse("2026-09-05T12:00:00Z"),
+      );
+      expect(h).toContain("Postponed");
+      expect(h).not.toContain(`data-testid="mh-match-starts"`);
+      expect(h).not.toContain("Starts in 2 hours");
+    });
+
+    it("a DECIDED match still shows its result sentence, not a status word (positive pair — the result outranks the status line)", () => {
+      const h = card(
+        hubMatch({
+          bucket: "completed",
+          winnerIndex: 1,
+          resultLine: "Queens won by 4 wickets",
+          header: { status: "decided", statusLine: null },
+        }),
+      );
+      expect(h).toContain("Queens won by 4 wickets");
+      expect(h).not.toContain(`data-testid="mh-match-status"`);
+    });
+  });
+
   it("the meta row wraps rather than truncating the venue behind a result line", () => {
     // A class assertion, and it is honest about its limit: `apps/web` vitest is
     // `environment: "node"`, so nothing here can see a line box. What this

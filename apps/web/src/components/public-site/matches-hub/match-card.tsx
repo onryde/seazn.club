@@ -158,6 +158,28 @@ export function MatchCard({ match: m, dict, locale, now, showDivision }: MatchCa
           <span data-testid="mh-match-result" className="shrink-0 font-medium text-ink">
             {m.resultLine}
           </span>
+        ) : m.header.statusLine ? (
+          // A match that was called off. The builder already puts the reason
+          // here as a `Msg` — `competition-hub.ts:312-317` sets `statusLine`
+          // for abandoned / cancelled / forfeited / postponed / walkover, and
+          // the copy exists in all four locales — and this card was dropping
+          // it, which is the inert seam in its purest form: the producer built
+          // the field for exactly this case and the consumer never read it.
+          //
+          // Without it an abandoned match reads as an ordinary finished one
+          // with its result sentence missing, and a FORFEITED match is worse:
+          // `winnerIndex` is taken straight off `winner_entrant_id` and is not
+          // gated on status, so one side renders in bold with nothing saying
+          // why. `resultLine` cannot cover these — it is gated on
+          // `status === "decided"` and these are all `other`.
+          //
+          // Ahead of the upcoming branch deliberately: `postponed` is NOT
+          // terminal, so it sits in Upcoming carrying its OLD `scheduledAt`,
+          // and "Starts in 2 hours" about a match nobody is playing is worse
+          // than saying nothing.
+          <span data-testid="mh-match-status" className="shrink-0 font-medium text-ink">
+            {t(dict, m.header.statusLine.key, m.header.statusLine.params)}
+          </span>
         ) : m.bucket === "upcoming" && starts ? (
           <span data-testid="mh-match-starts" className="shrink-0">
             {starts}
