@@ -2713,7 +2713,6 @@ export type DictionaryKey =
   | "matchesHub.filtersLabel"
   | "matchesHub.live"
   | "matchesHub.round"
-  | "matchesHub.startsAt"
   | "matchesHub.startsIn"
   | "matchesHub.timeTbd"
   | "matchesHub.timesIn"

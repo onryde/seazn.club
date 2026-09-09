@@ -40,7 +40,14 @@ export const W2_KEYS = [
   "landing.entrants.one", "landing.entrants.other", "landing.liveCount.one", "landing.liveCount.other", "landing.sponsors", "landing.presentedBy", "landing.partners", "landing.noDivisions",
   // matches hub
   "matchesHub.filter.live", "matchesHub.filter.upcoming", "matchesHub.filter.completed", "matchesHub.filtersLabel", "matchesHub.divisionsLabel", "matchesHub.division.all",
-  "matchesHub.startsIn", "matchesHub.startsAt", "matchesHub.timeTbd", "matchesHub.unscheduled", "matchesHub.empty", "matchesHub.emptyFilter", "matchesHub.live", "matchesHub.ended",
+  // NO `matchesHub.startsAt`. It was `"{when}"` — byte-identical in all four
+  // locales, because a template that is nothing but its own argument cannot
+  // differ by locale. A dictionary round trip that returns its input is not a
+  // translation, it is a lookup nobody can get wrong or right; and listing it
+  // here would have kept it alive forever once merged. It had no consumer:
+  // `MatchCard` reads `matchesHub.startsIn` for the relative sentence and
+  // `fmtTime` for the clock. Deleted from all four locales with this line.
+  "matchesHub.startsIn", "matchesHub.timeTbd", "matchesHub.unscheduled", "matchesHub.empty", "matchesHub.emptyFilter", "matchesHub.live", "matchesHub.ended",
   "matchesHub.round", "matchesHub.timesIn", "matchesHub.card.label",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
@@ -79,6 +86,47 @@ describe("W2 public dictionary coverage", () => {
 
   it("no key is namespaced with a leading `public.` (the W1 slip)", () => {
     expect(Object.keys(en).filter((k) => k.startsWith("public."))).toEqual([]);
+  });
+
+  // The parity test above compares es/fr/nl against EN, so it is blind to a
+  // key EN ITSELF authored without the placeholders its caller passes:
+  // `[] === []` in all three. `matchesHub.card.label` shipped exactly that —
+  // "Match card" / "Ficha del partido" / "Fiche du match" / "Wedstrijdkaart",
+  // no `{home}` or `{away}` anywhere — while `MatchCard` passed both names
+  // and `interpolate()` discarded them silently. Because that key is the
+  // `aria-label` on the card's wrapping `<a>`, and an aria-label REPLACES the
+  // element's content for the accessible name, a screen-reader link list over
+  // a 40-match hub read "Match card, link" forty times over.
+  //
+  // This is the anchor side of that pair: what the CALLER passes, declared
+  // here, checked against all four locales. The rendered-attribute assertion
+  // lives in `match-card.test.tsx`; that one catches EN losing its template,
+  // this one catches a translator dropping it from any of the other three.
+  // A new entry belongs here the moment a component calls `t()` with vars.
+  describe("a key its caller passes vars to declares those vars, in every locale", () => {
+    const REQUIRED_PARAMS: Record<string, string[]> = {
+      // match-card.tsx — the accessible name, and the meta row's two slots.
+      "matchesHub.card.label": ["away", "home"],
+      "matchesHub.startsIn": ["when"],
+      "matchesHub.round": ["round"],
+      // matches-hub chrome (Task 11).
+      "matchesHub.timesIn": ["tz"],
+    };
+    const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+
+    it("every key named here is a real W2 key (a typo would make this whole sweep vacuous)", () => {
+      for (const k of Object.keys(REQUIRED_PARAMS)) {
+        expect((W2_KEYS as readonly string[]).includes(k), k).toBe(true);
+      }
+    });
+
+    for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {
+      it(`${locale} carries every declared placeholder`, () => {
+        for (const [k, wanted] of Object.entries(REQUIRED_PARAMS)) {
+          expect(params((dict as Record<string, string>)[k] ?? ""), `${locale} ${k}`).toEqual(wanted);
+        }
+      });
+    }
   });
 });
 
@@ -161,6 +209,26 @@ describe("the round label reads the same whether the builder or the card supplie
       expect(card, `${locale} matchesHub.round missing`).toBeTruthy();
       expect(builder, `${locale} bracket.round.plain missing`).toBeTruthy();
       expect(norm(card), `${locale} round label`).toBe(norm(builder));
+    });
+  }
+
+  // A THIRD place the same noun appears, and the one that was drifting. The
+  // division page's view switcher ("group by round") sits on the SAME page as
+  // the round labels themselves, so a spectator reads both at once — and fr
+  // said "Par ronde" against "Tour {round}" everywhere else, two different
+  // French words for one thing, three lines apart. Commit f996c155f settled
+  // the noun per locale when it moved `matchesHub.round` onto `Tour` to agree
+  // with `bracket.round.plain`; this test is what keeps the switcher on that
+  // decision instead of leaving it to be found by eye again.
+  //
+  // Derived from `matchesHub.round` itself, never a table of nouns typed in
+  // here: whichever word a locale settles on, the switcher has to use it.
+  for (const [locale, pub] of Object.entries({ en, es, fr, nl })) {
+    it(`${locale}: division.view.round names the SAME round noun`, () => {
+      const dict = pub as Record<string, string>;
+      const noun = dict["matchesHub.round"]!.replace(/\{\w+\}/g, "").trim().toLowerCase();
+      expect(noun.length, `${locale} round noun`).toBeGreaterThan(2);
+      expect(dict["division.view.round"]!.toLowerCase(), `${locale} view switcher`).toContain(noun);
     });
   }
 });
