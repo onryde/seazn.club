@@ -298,6 +298,17 @@ export interface PublicFixture {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The club's own broadcast link (V401). Null unless an organiser saved one,
+   *  and null for a `setup` division — the view redacts it alongside the
+   *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
+   *  (R16); never an iframe, never fetched.
+   *
+   *  Optional, same convention (and reason) as lane/is_final/third_place/
+   *  conditional just above: pre-existing tests build a `PublicFixture`
+   *  literal by hand (schedule.test.tsx's `F()` helper and its four other
+   *  callers) that predates this field — `tsc --noEmit` reds five files if
+   *  this is made required, verified by trying it. */
+  stream_url?: string | null;
 }
 
 export interface PublicStage {
@@ -769,7 +780,7 @@ export async function getPublicFixture(
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional
+               lane, is_final, third_place, conditional, stream_url
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;

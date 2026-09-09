@@ -26,6 +26,11 @@ import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration
 // generator script the same way this whole file is — relative import, `.ts`
 // extension, same reasoning as `registration-rules.ts` above.
 import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
+// Stream overlay W1 (Task 3) — the ONE stream-link validator (R16), reused
+// here rather than restated. Relative + explicit `.ts`, same reason as
+// registration-rules.ts above: this file is shared with the standalone
+// OpenAPI generator script, which has no `@/` alias resolution.
+import { streamUrlSchema } from "../../lib/stream-url.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1149,6 +1154,20 @@ export const PatchFixture = z
   .strict()
   .refine((p) => Object.keys(p).length > 0, "empty patch");
 export type PatchFixture = z.infer<typeof PatchFixture>;
+
+/** PUT /fixtures/{id}/stream (stream overlay W1). `.strict()` for the reason
+ *  `PatchFixture` documents: a client sending `stream_url` (snake) instead of
+ *  `streamUrl` gets a loud 400 rather than a silent no-op. The value is
+ *  validated by the ONE allowlist both this route and the organiser panel
+ *  share (`@/lib/stream-url`, R16) — never a second host list here. */
+export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
+export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
+
+export const FixtureStream = z.object({
+  id: z.string(),
+  stream_url: z.string().nullable(),
+});
+export type FixtureStream = z.infer<typeof FixtureStream>;
 
 /** D4a (P5) i18n pattern ref for a not-yet-filled slot — {key, params}, never
  *  a prebuilt string. Named rather than inlined because THREE published

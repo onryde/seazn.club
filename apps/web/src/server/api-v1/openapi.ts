@@ -151,6 +151,7 @@ export const ROUTES: RouteSpec[] = [
   // Fixtures & scoring
   { path: "/fixtures/{id}", method: "get", summary: "Get a fixture", tag: "fixtures", response: S.Fixture },
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
+  { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "put", summary: "Replace a side's lineup", tag: "fixtures", request: S.PutLineup, errors: [422] },
   { path: "/fixtures/{id}/events", method: "post", summary: "Append a score event (THE scoring endpoint)", tag: "scoring", request: S.AppendEventRequest, response: S.AppendEventResponse, status: 201, errors: [409, 422, 429] },
