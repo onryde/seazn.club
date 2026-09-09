@@ -948,7 +948,7 @@ Pin before writing: `entrants.badge_url` column exists (`V288__v13_fidelity.sql:
   export const BRACKET_KINDS: ReadonlySet<string>;   // knockout, double_elim, stepladder, page_playoff (page.tsx:54)
   export function divisionChampion(stages: PublicStage[], fixtures: PublicFixture[], standings: PublicStandings[]): string | null;
   // describe-format.ts (pure)
-  export function describeFormat(sportKey: string, cfg: unknown): MsgT | null;   // cricket → {key:"format.cricket.overs", params:{overs}}; football → {key:"format.football.minutes", params:{minutes}}; set sports → {key:"format.sets.bestOf", params:{n}}; else null
+  export function describeFormat(sportKey: string, cfg: unknown): MsgT | null;   // cricket → {key:"format.cricket.overs", params:{overs}}; football → {key:"format.minutes", params:{minutes}}; set sports → {key:"format.sets.bestOf", params:{n}}; else null
   // competition-hub.ts
   export function hubSide(entrantId: string | null, slotLabel: SlotLabel | null, ctx: { names: Record<string,string>; badges: Record<string,string|null>; colours: Record<string,string|null>; slot: (label) => string }): SideT;
   export function hubHeader(f: PublicFixture, sides: [SideT, SideT], generatedAt: string): MatchCentreHeaderT;
@@ -1216,7 +1216,7 @@ export const W2_KEYS = [
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
   // format chips
-  "format.cricket.overs", "format.football.minutes", "format.sets.bestOf",
+  "format.cricket.overs", "format.minutes", "format.sets.bestOf",
 ] as const;
 
 describe("W2 public dictionary coverage", () => {
@@ -1233,7 +1233,7 @@ describe("W2 public dictionary coverage", () => {
 });
 ```
 
-- [ ] **Step 2: Run — expect failures listing the missing keys.** **Step 3: Add the keys** (English first; Spanish, French, Dutch as real translations, not copies — cricket vocabulary stays English where the language has none, e.g. "wickets" in nl reads "wickets"). English values, verbatim: `landing.status.live.one` "Live now: {count} match" / `.other` "Live now: {count} matches"; `landing.status.next` "Next: {when}"; `landing.status.finished` "Finished"; `landing.status.dates` "{from} – {to}"; `landing.status.datesFrom` "From {from}"; `landing.status.empty` "Nothing published yet"; `matchesHub.startsIn` "Starts {when}" (with `when` from `Intl.RelativeTimeFormat`); `matchesHub.startsAt` "{when}"; `matchesHub.timesIn` "times in {tz}"; `table.tieBreak` "Level with {with} — separated on {rule}"; `table.more` "Show all columns"; `table.fewer` "Fewer columns"; `player.line.cricket` "{batting} & {bowling}"; `player.line.batting` "{runs} ({balls})"; `player.line.bowling` "{wickets}/{runs}"; `layout.tagline` "Live scores · Schedules · Standings"; `layout.poweredBy` "Powered by {brand}"; `format.cricket.overs` "{overs}-over match"; `format.football.minutes` "{minutes} min"; `format.sets.bestOf` "Best of {n}". Then `cd <worktree> && npm run i18n:gen-keys && npm run i18n:check` and confirm `apps/web/src/lib/i18n-keys.ts` changed.
+- [ ] **Step 2: Run — expect failures listing the missing keys.** **Step 3: Add the keys** (English first; Spanish, French, Dutch as real translations, not copies — cricket vocabulary stays English where the language has none, e.g. "wickets" in nl reads "wickets"). English values, verbatim: `landing.status.live.one` "Live now: {count} match" / `.other` "Live now: {count} matches"; `landing.status.next` "Next: {when}"; `landing.status.finished` "Finished"; `landing.status.dates` "{from} – {to}"; `landing.status.datesFrom` "From {from}"; `landing.status.empty` "Nothing published yet"; `matchesHub.startsIn` "Starts {when}" (with `when` from `Intl.RelativeTimeFormat`); `matchesHub.startsAt` "{when}"; `matchesHub.timesIn` "times in {tz}"; `table.tieBreak` "Level with {with} — separated on {rule}"; `table.more` "Show all columns"; `table.fewer` "Fewer columns"; `player.line.cricket` "{batting} & {bowling}"; `player.line.batting` "{runs} ({balls})"; `player.line.bowling` "{wickets}/{runs}"; `layout.tagline` "Live scores · Schedules · Standings"; `layout.poweredBy` "Powered by {brand}"; `format.cricket.overs` "{overs}-over match"; `format.minutes` "{minutes} min"; `format.sets.bestOf` "Best of {n}". Then `cd <worktree> && npm run i18n:gen-keys && npm run i18n:check` and confirm `apps/web/src/lib/i18n-keys.ts` changed.
 
 - [ ] **Step 4: Run — green** (`hub-dictionary.test.ts` and, scoped, `pnpm exec vitest run src/lib/__tests__/i18n --reporter=json` for the existing dictionary-shape tests). **Step 5: Commit** — "i18n(public): landing, matches hub, table, leaders, teams, info, division, player, layout and share keys in en/es/fr/nl; keys regenerated".
 

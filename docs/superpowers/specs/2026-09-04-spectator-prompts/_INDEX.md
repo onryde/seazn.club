@@ -170,6 +170,53 @@ peer session as the other.
     regression line is called out as superseded rather than deleted, so a later
     session does not restore it as an obvious missing assertion.
 
+17. **"I think, keep same for 3 sports"** (2026-09-09) — the format chip's
+    minutes sentence is ONE key shared by football, hockey and ice hockey, not
+    a football-named key plus two silences.
+
+    Raised by W2 Task 4's implementer while building `describeFormat`. The
+    brief named `format.football.minutes`; hockey and ice hockey carry the same
+    total-minutes fact, and with no sport-neutral key they emitted `null` — so
+    two of the three minute-based sports showed NO format chip at all rather
+    than a wrong one. The alternative on the table was a football-named
+    sentence rendered on a hockey page.
+
+    **Ruled: a single `format.minutes` key serves all three.** Cricket keeps
+    `format.cricket.overs` and set sports keep `format.sets.bestOf` — those are
+    genuinely different facts, not the same fact under different names. Only
+    the minutes sentence is shared.
+
+    Consequences, which must move together: `describe-format.ts` emits
+    `format.minutes` for all three sport keys; `format.football.minutes` is
+    NEVER added to any locale (a key that exists but is never emitted is the
+    inert seam this programme keeps shipping); and Task 6's owed list carries
+    `format.minutes`, not the football-named one.
+
+    **The copy, ruled 2026-09-09 ("follow your rec"): `"{minutes} min"`,
+    identical in all four locales.** "min" is the universal abbreviation in en,
+    es, fr and nl, so unlike minutes/minutos/minuten it does not change width
+    between them — which matters because this chip sits beside a division name
+    at 320px.
+
+    Rejected, with reasons, so a later session does not re-open them as obvious
+    improvements:
+
+    - **The period structure (`2 x 45 min`, `4 x 15 min`)** unifies across the
+      three sports and carries more information, but it belongs on the match
+      page. The format chip is a glance-level element answering "what am I
+      looking at"; halves-vs-quarters is noise at that moment, and the string
+      doubles in width at exactly the breakpoint with least room.
+    - **`"{minutes} minutes"`** reads better in isolation but sits next to
+      `8 overs` and `Best of 3`, which are already terse. The long form reads
+      as inconsistent rather than clearer.
+
+    Two implementation constraints ride with it. Derive `minutes` from the
+    module's own config declarations, never a table typed into a test (R6's
+    hockey suspension shipped 2 minutes against a declared 5 for exactly this
+    reason). And where a sport's config carries no total, emit `null`, never
+    `0` — `Number("")` is `0` here, and a chip reading "0 min" is a confident
+    lie, which is worse than the absent chip shipping today.
+
 ## Product-owner calls made in-session (mine, recorded so they can be reversed)
 
 - Top performers are COMPUTED (runs then strike rate; wickets then economy); no
