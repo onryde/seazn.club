@@ -11,6 +11,16 @@ import {
   type AnalyticsIdentity,
 } from "@/lib/analytics-identity";
 
+/** The one route prefix that renders no chrome at all — same segment and
+ *  same local-constant pattern as cookie-consent.tsx's OVERLAY_SEGMENT (kept
+ *  local rather than shared: "the pattern is the tree's, not this wave's",
+ *  per that file's comment). OBS reloads this browser source on every scene
+ *  change, so identifying it as a "visitor" would fire a doomed, anonymous
+ *  /api/users/me fetch every reload from a machine that can never be signed
+ *  in — inflating analytics with non-human "viewers" and putting avoidable
+ *  requests on a live-broadcast path. */
+const OVERLAY_SEGMENT = "/overlay/";
+
 /**
  * Client-mounted (task-8: make the public tree actually ISR in production).
  * The old version was a server component that called getCurrentUser() (->
@@ -48,6 +58,7 @@ export function AnalyticsBootstrap() {
   // the react-hooks/set-state-in-effect warning on this pattern remains a
   // deliberate, accepted exception (task-8 report, Concern 2).
   useEffect(() => {
+    if (pathname?.startsWith(OVERLAY_SEGMENT)) return; // OBS source — never identify, see OVERLAY_SEGMENT above
     if (!posthog.__loaded) return; // no key configured, or impersonation-suppressed
     if (hasIdentifiedThisTab()) return; // done this tab — until a logout clears the flag
 
