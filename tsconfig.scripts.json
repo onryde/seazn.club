@@ -22,6 +22,7 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
+    "incremental": true,
     "types": ["node"],
     // Scripts reach into apps/web sources (openapi-gen, i18n) which use the
     // app's own "@/…" alias.
