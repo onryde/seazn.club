@@ -288,5 +288,11 @@
   "table.tieBreak.lots": "loting",
   "format.minutes": "{minutes} min",
   "format.cricket.overs": "{overs}-over match",
-  "format.sets.bestOf": "Beste van de {n}"
+  "format.sets.bestOf": "Beste van de {n}",
+  "table.col.rank": "Positie",
+  "table.team": "Team",
+  "table.more": "Alle kolommen tonen",
+  "table.fewer": "Minder kolommen",
+  "table.fullDivision": "Volledige divisie",
+  "table.empty": "Nog geen stand"
 }

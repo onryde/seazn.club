@@ -193,8 +193,33 @@ describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
   const formatSrc = readFileSync(new URL("../describe-format.ts", import.meta.url), "utf8");
   const FORMAT_KEYS = [...new Set([...formatSrc.matchAll(/key:\s*"(format\.[a-zA-Z0-9_.]+)"/g)].map((m) => m[1]!))];
 
+  // The COMPONENT's own keys, which no builder emits and no exported constant
+  // names. Found by driving the rendered page in a browser at 320: the table
+  // header read "TABLE.TEAM" and the disclosure button read "table.more",
+  // because F2 added only the keys the SERVER resolves. Scanned rather than
+  // typed, on the same principle as FORMAT_KEYS above — a sixth key added to
+  // the component lands in this list unattended.
+  const viewSrc = readFileSync(
+    new URL("../../../components/public-site/standings-table-view.tsx", import.meta.url),
+    "utf8",
+  );
+  const COMPONENT_KEYS = [
+    ...new Set([...viewSrc.matchAll(/"(table\.[a-zA-Z0-9_.]+)"/g)].map((m) => m[1]!)),
+  ];
+
   it("describe-format.ts really does declare the three keys this test expects (a scan is not a read)", () => {
     expect(FORMAT_KEYS.sort()).toEqual(["format.cricket.overs", "format.minutes", "format.sets.bestOf"]);
+  });
+
+  it("standings-table-view.tsx really does ask for these six keys (a scan is not a read)", () => {
+    expect(COMPONENT_KEYS.sort()).toEqual([
+      "table.col.rank",
+      "table.empty",
+      "table.fewer",
+      "table.fullDivision",
+      "table.more",
+      "table.team",
+    ]);
   });
 
   it.each(LOCALES)("every table.col.* / table.pool / table.tieBreak* / format.* key exists in %s", (locale) => {
@@ -207,6 +232,7 @@ describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
       "table.tieBreak",
       ...Object.values(TIE_BREAK_MSG_KEYS),
       ...FORMAT_KEYS,
+      ...COMPONENT_KEYS,
     ];
     for (const key of required) {
       expect(Object.hasOwn(dict, key), `missing ${key} in ${locale}`).toBe(true);

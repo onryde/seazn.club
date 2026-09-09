@@ -288,5 +288,11 @@
   "table.tieBreak.lots": "sorteo",
   "format.minutes": "{minutes} min",
   "format.cricket.overs": "{overs}-over match",
-  "format.sets.bestOf": "Al mejor de {n}"
+  "format.sets.bestOf": "Al mejor de {n}",
+  "table.col.rank": "Posición",
+  "table.team": "Equipo",
+  "table.more": "Ver todas las columnas",
+  "table.fewer": "Menos columnas",
+  "table.fullDivision": "División completa",
+  "table.empty": "Aún no hay clasificación"
 }

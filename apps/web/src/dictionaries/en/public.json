@@ -288,5 +288,11 @@
   "table.tieBreak.lots": "drawing of lots",
   "format.minutes": "{minutes} min",
   "format.cricket.overs": "{overs}-over match",
-  "format.sets.bestOf": "Best of {n}"
+  "format.sets.bestOf": "Best of {n}",
+  "table.col.rank": "Position",
+  "table.team": "Team",
+  "table.more": "Show all columns",
+  "table.fewer": "Fewer columns",
+  "table.fullDivision": "Full division",
+  "table.empty": "No standings yet"
 }
