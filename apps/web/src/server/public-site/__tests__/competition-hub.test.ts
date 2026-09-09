@@ -82,6 +82,7 @@ import {
 import { MatchCentreHeader, type SideT } from "../match-centre-schema";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { describeFormat } from "../describe-format";
+import { STRUCTURAL_KEYS, TIE_BREAK_MSG_KEYS } from "../standings-view";
 import {
   getPublicCompetitionHub,
   hubHeader,
@@ -173,6 +174,72 @@ describe("STATUS_LINE_KEYS", () => {
     // The fallback an unlisted status lands on must exist too, or the guard
     // trades one dotted key on screen for another.
     expect(Object.hasOwn(dict, "matchCentre.status.other")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Final-review fix F2 — every `table.*`/`format.*` key the SERVER actually
+// emits must exist in all four locales, or `GET .../hub` publishes the dotted
+// key itself (`t()`'s documented miss behaviour). The list here is DERIVED,
+// never hand-typed: `STRUCTURAL_KEYS`/`TIE_BREAK_MSG_KEYS` are the same
+// exported sources `standings-view.ts` builds `table.col.*`/`table.tieBreak.*`
+// from, and `FORMAT_KEYS` is scanned out of `describe-format.ts`'s own source
+// text (the same drift-guard convention `STATUS_LINE_KEYS`'s
+// `schemas.ts` scan above uses) so a new `format.*` sentence lands in this
+// list unattended. `table.pool` (competition-hub.ts:583) and `table.tieBreak`
+// (standings-view.ts:174) are the two literals with no exported source to
+// scan — both are call sites this file already imports/exercises elsewhere.
+describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
+  const formatSrc = readFileSync(new URL("../describe-format.ts", import.meta.url), "utf8");
+  const FORMAT_KEYS = [...new Set([...formatSrc.matchAll(/key:\s*"(format\.[a-zA-Z0-9_.]+)"/g)].map((m) => m[1]!))];
+
+  it("describe-format.ts really does declare the three keys this test expects (a scan is not a read)", () => {
+    expect(FORMAT_KEYS.sort()).toEqual(["format.cricket.overs", "format.minutes", "format.sets.bestOf"]);
+  });
+
+  it.each(LOCALES)("every table.col.* / table.pool / table.tieBreak* / format.* key exists in %s", (locale) => {
+    const dict = JSON.parse(
+      readFileSync(new URL(`../../../dictionaries/${locale}/public.json`, import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+    const required = [
+      ...[...STRUCTURAL_KEYS].map((k) => `table.col.${k}`),
+      "table.pool",
+      "table.tieBreak",
+      ...Object.values(TIE_BREAK_MSG_KEYS),
+      ...FORMAT_KEYS,
+    ];
+    for (const key of required) {
+      expect(Object.hasOwn(dict, key), `missing ${key} in ${locale}`).toBe(true);
+    }
+  });
+
+  it("es/fr/nl are real translations, not an English copy-paste, for the structural column titles", () => {
+    // Per-key equality is too strict: "Points" is genuinely spelled the same
+    // in French (a real cognate, not a missed translation). What this test
+    // catches is the whole BLOCK reading as an untranslated copy of en — so
+    // it asserts at least one of the five differs, not all five.
+    const en = JSON.parse(
+      readFileSync(new URL("../../../dictionaries/en/public.json", import.meta.url), "utf8"),
+    ) as Record<string, string>;
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const dict = JSON.parse(
+        readFileSync(new URL(`../../../dictionaries/${locale}/public.json`, import.meta.url), "utf8"),
+      ) as Record<string, string>;
+      const untranslated = [...STRUCTURAL_KEYS].filter((k) => dict[`table.col.${k}`] === en[`table.col.${k}`]);
+      expect(
+        untranslated.length,
+        `${locale}'s table.col.* reads like an English copy: ${untranslated.join(", ")}`,
+      ).toBeLessThan(STRUCTURAL_KEYS.size);
+    }
+  });
+
+  it("format.football.minutes was never added — the minutes sentence is sport-neutral", () => {
+    for (const locale of LOCALES) {
+      const dict = JSON.parse(
+        readFileSync(new URL(`../../../dictionaries/${locale}/public.json`, import.meta.url), "utf8"),
+      ) as Record<string, unknown>;
+      expect(Object.hasOwn(dict, "format.football.minutes")).toBe(false);
+    }
   });
 });
 
@@ -688,6 +755,32 @@ describe("loadCompetitionHub — the document", () => {
     expect(parsed.error?.issues ?? []).toEqual([]);
     expect(parsed.success).toBe(true);
     expect(doc.tabs).toEqual(["overview", "matches", "table", "stats", "teams", "info"]);
+  });
+
+  // Final-review fix F1 — `competition-hub.ts:591` is a deliberate BLIND
+  // passthrough of `snap.updated_at` (the fix belongs at the source,
+  // `data.ts`'s `getPublicDivision`, never here — see that file's own
+  // `normalizeStandings`). The double above (SNAPSHOT) carries the STRING
+  // `getPublicDivision` gives once it normalises, which is why every other
+  // test in this describe block is a faithful happy-path. This one instead
+  // feeds `loadCompetitionHub` the shape `getPublicDivision` would produce
+  // WITHOUT that fix — a real `Date`, exactly what postgres.js hands back for
+  // a timestamptz column absent the OID-1082-only override in `db.ts` — to
+  // pin that this layer has no rescue for it: the document comes out invalid,
+  // at exactly the field the review measured. Not reachable by reverting
+  // `data.ts`'s fix (this test's double is independent of it); see
+  // `data-standings-timestamp.test.ts` for the test that mutation covers
+  // that revert.
+  it("a Date on the standings snapshot (data.ts's contract broken) fails CompetitionHubDoc, at tables.0.updatedAt", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        standings: [{ ...SNAPSHOT, updated_at: new Date("2026-09-04T16:00:00.000Z") as unknown as string }],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const parsed = CompetitionHubDoc.safeParse(doc);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.some((i) => i.path.join(".") === "tables.0.updatedAt")).toBe(true);
   });
 
   it("carries the competition's identity and the org's own locale", async () => {

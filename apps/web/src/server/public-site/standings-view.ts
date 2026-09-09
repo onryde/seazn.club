@@ -41,8 +41,10 @@ export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "lost
  *  These are COPY (Played, Won, Drawn, Lost, Points) and get a dictionary key;
  *  every other column header is the sport's own NOTATION (GF, NRR, Buchholz
  *  Cut-1) and keeps the engine's label in every locale — the same
- *  "notation, not copy" rule W1's `stat-table.tsx` states for R/B/4s/SR. */
-const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
+ *  "notation, not copy" rule W1's `stat-table.tsx` states for R/B/4s/SR.
+ *  Exported (final-review fix F2) so the dictionary-coverage test derives its
+ *  `table.col.*` key list from here rather than typing a second copy. */
+export const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
   "played",
   "won",
   "drawn",
