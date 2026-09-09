@@ -141,6 +141,26 @@ describe("describeFormat — the sport-neutral minutes sentence", () => {
   });
 });
 
+describe("describeFormat — every OVERS sport, from its own declaration", () => {
+  // The drift guard above forces a new sport into one of four lists, but a
+  // NAME in a list is not an assertion: before this, `OVERS` was the one
+  // partition no `it.each` consumed, so a second overs sport parked there
+  // would have been classified and never described. Derived from the module's
+  // own defaults, never a typed constant, so raising cricket's default innings
+  // moves the expectation with it.
+  it.each(OVERS)("%s describes its declared default overs", (sportKey) => {
+    const module_ = mod(sportKey);
+    const cfg = module_.configSchema.parse({}) as {
+      ballsPerInnings: number;
+      ballsPerOver: number;
+    };
+    expect(describeFormat(sportKey, module_, cfg)).toEqual({
+      key: "format.cricket.overs",
+      params: { overs: Math.round(cfg.ballsPerInnings / cfg.ballsPerOver) },
+    });
+  });
+});
+
 describe("describeFormat — a total it cannot state is NULL, never zero", () => {
   // `Number("")` is 0 in this codebase and a chip reading "0 min" is a
   // confident lie — worse than the blank chip that ships when there is nothing

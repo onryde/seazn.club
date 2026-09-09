@@ -39,7 +39,10 @@ import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 // The one TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
-import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
+import {
+  CompetitionHubDoc,
+  type CompetitionHubDocT,
+} from "@/server/public-site/competition-hub-schema";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -67,9 +70,21 @@ async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
  * a `cacheSet` to be forgotten, and the whole point of the layer is that a
  * write invalidates exactly what a read populated.
  */
-async function cachedFor<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
+async function cachedFor<T>(
+  key: string,
+  ttlSeconds: number,
+  load: () => Promise<T>,
+  /** Optional shape check for what came BACK from Redis. `cacheGet<T>` is a
+   *  cast, not a parse: the entry was written by whatever code was deployed
+   *  when it landed, so a schema change mid-rollout, or an older build still
+   *  serving, leaves a document of the previous shape under a key this build
+   *  reads as current. A caller that can validate should, and a failure is
+   *  treated as a MISS rather than an error — a poisoned entry must not be
+   *  able to take the page down for the rest of its TTL. */
+  isValid?: (hit: unknown) => boolean,
+): Promise<T> {
   const hit = await cacheGet<T>(key);
-  if (hit !== null) return hit;
+  if (hit !== null && (!isValid || isValid(hit))) return hit;
   const fresh = await load();
   await cacheSet(key, fresh, ttlSeconds);
   return fresh;
@@ -151,11 +166,16 @@ export async function publicCompetitionHub(
   slug: string,
 ): Promise<CompetitionHubDocT> {
   const full = await findCompetition(orgSlug, slug);
-  return cachedFor(`pub:v1:hub:${full.id}`, HUB_TTL_SECONDS, async () => {
-    const doc = await loadCompetitionHub(orgSlug, slug);
-    if (!doc) throw new HttpError(404, "competition not found");
-    return doc;
-  });
+  return cachedFor(
+    `pub:v1:hub:${full.id}`,
+    HUB_TTL_SECONDS,
+    async () => {
+      const doc = await loadCompetitionHub(orgSlug, slug);
+      if (!doc) throw new HttpError(404, "competition not found");
+      return doc;
+    },
+    (hit) => CompetitionHubDoc.safeParse(hit).success,
+  );
 }
 
 export async function publicSchedule(

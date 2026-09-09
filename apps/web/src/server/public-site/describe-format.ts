@@ -58,7 +58,13 @@ import type { MsgT } from "./match-centre-schema";
  * a rule about what may EVER reach a spectator rather than a filter on current
  * data, and the suite pins it with a permissive module double.
  */
-function minutesFrom(...factors: readonly unknown[]): MsgT | null {
+function minutesFrom(...factors: [unknown, unknown]): MsgT | null {
+  // A FIXED PAIR, not a rest parameter. Both sports state their total the same
+  // way — a count of periods and a length for each — and the empty product is
+  // 1, so a rest signature let `minutesFrom()` answer "1 min". A runtime length
+  // check would have needed a test that could only be written by exporting an
+  // internal; the tuple makes the case unreachable for the compiler instead,
+  // which is the stronger of the two guarantees.
   let minutes = 1;
   for (const factor of factors) {
     // `typeof` is here for tsc's narrowing (`minutes *= factor` needs a
