@@ -35,6 +35,7 @@ import {
   type PublicFixture,
 } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
@@ -50,10 +51,23 @@ export async function publicRateLimit(req: Request): Promise<void> {
 }
 
 async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  return cachedFor(key, TTL_SECONDS, load);
+}
+
+/**
+ * `cached` with an explicit TTL — the same cache-aside, for a document whose
+ * staleness window is not this file's 30-second default.
+ *
+ * `cached` above now delegates here rather than keeping its own copy of the
+ * three lines: two cache-aside implementations in one file is two places for
+ * a `cacheSet` to be forgotten, and the whole point of the layer is that a
+ * write invalidates exactly what a read populated.
+ */
+async function cachedFor<T>(key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
   const hit = await cacheGet<T>(key);
   if (hit !== null) return hit;
   const fresh = await load();
-  await cacheSet(key, fresh, TTL_SECONDS);
+  await cacheSet(key, fresh, ttlSeconds);
   return fresh;
 }
 
@@ -105,6 +119,35 @@ export async function publicCompetition(orgSlug: string, slug: string): Promise<
       from public_divisions_v where competition_id = ${competition.id}
       order by created_at, id`;
     return { ...competition, divisions };
+  });
+}
+
+/** How long the hub document may be served stale. Shorter than this file's
+ *  30 s default: the hub carries LIVE scores across every division of a
+ *  competition, so it is the one public document whose staleness a spectator
+ *  watching a match actually feels. Both write paths delete the key outright
+ *  (`invalidatePublicCache`, `afterScheduleWrite`), so this is a ceiling on
+ *  how wrong a MISSED invalidation can leave the page, not the refresh rate. */
+const HUB_TTL_SECONDS = 15;
+
+/**
+ * The competition hub document (spectator W2) — the API half of the same
+ * `loadCompetitionHub` the page renders from, so a first paint and every
+ * subsequent poll agree.
+ *
+ * `findCompetition` runs FIRST and throws its own 404 for a competition that
+ * is private or does not exist, before the cache is touched: that keeps the
+ * refusal identical to every other endpoint in this file. A null document
+ * after a positive `findCompetition` is a 404 too — the visibility rules the
+ * two readers apply are the same, so it should be unreachable, and if the two
+ * ever disagree a 404 is the honest answer rather than a `null` body.
+ */
+export async function publicCompetitionHub(orgSlug: string, slug: string): Promise<unknown> {
+  const full = await findCompetition(orgSlug, slug);
+  return cachedFor(`pub:v1:hub:${full.id}`, HUB_TTL_SECONDS, async () => {
+    const doc = await loadCompetitionHub(orgSlug, slug);
+    if (!doc) throw new HttpError(404, "competition not found");
+    return doc;
   });
 }
 

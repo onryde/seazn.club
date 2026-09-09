@@ -101,6 +101,12 @@ export function afterScheduleWrite(
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
   void cacheDelPattern(`pub:v1:div:${divisionId}:*`);
+  // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
+  // every fixture's kick-off time and venue, so a RESCHEDULE makes it stale
+  // exactly as a score does. Scoring's own `invalidatePublicCache` drops the
+  // same key; a hub whose matches go stale on a reschedule is precisely the
+  // defect that costs a spectator the trip.
+  void cacheDelPattern(`pub:v1:hub:${competitionId}`);
   void publishDivisionUpdate(divisionId, reason);
 }
 

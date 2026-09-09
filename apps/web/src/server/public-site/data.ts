@@ -204,6 +204,16 @@ export interface PublicDivision {
    *  `PublicDivision` now selects both. */
   youth?: boolean;
   player_name_display?: string | null;
+  /** W2 Task 4 — the division's own `divisions.config` jsonb, joined from the
+   *  base table for the same reason `youth`/`player_name_display` are:
+   *  `public_divisions_v` does not expose it and widening that widely-read
+   *  view costs more than a primary-key join. `describeFormat` parses it
+   *  through the division's PINNED module's `configSchema` to build the hub's
+   *  format sentence ("8 overs", "Best of 5"). `unknown`, not a typed cfg:
+   *  the shape is the sport module's and this file resolves no modules.
+   *  Optional so a hand-built `PublicDivision` in an existing test still
+   *  type-checks — every real query that builds one now selects it. */
+  config?: unknown;
 }
 
 export interface PublicFixture {
@@ -451,7 +461,7 @@ export async function getPublicCompetition(
                -- these (see PublicDivision's own doc comment) — a cheap
                -- primary-key join to the base table rather than widening
                -- that view for every other consumer of it.
-               dv.youth, dv.player_name_display
+               dv.youth, dv.player_name_display, dv.config
         from public_divisions_v d
         left join sports s on s.key = d.sport_key
         join divisions dv on dv.id = d.id
