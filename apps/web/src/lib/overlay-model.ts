@@ -75,8 +75,31 @@ export interface OverlayDetailLine {
 
 export interface OverlayModel {
   live: boolean;
+  /** The "decided" LED/result treatment applies — covers BOTH a plain
+   *  decided/finalized fixture AND a void status carrying a real verdict
+   *  (a forfeit, a DLS or leader-awarded abandon). `_THEMES.md` §3/§4's
+   *  first two "Decided / void" rows share this one boolean; only the
+   *  status WORD in `header.context` distinguishes them. */
   decided: boolean;
-  header: { context: string; clock?: string };
+  /** Fix round 3, F1/F3 — `_THEMES.md` §3/§4's THIRD case: the fixture has
+   *  ended with no verdict at all (a null outcome, a `no_result` kind, or
+   *  `cancelled`, which never carries one). Both sides drop to 50% ink, no
+   *  side carries the LED, and the detail band does not render — mutually
+   *  exclusive with `decided`. */
+  voided: boolean;
+  header: {
+    /** The word beside the dot: "Live" while playing, the decided/void
+     *  status label once ended, or the scheduled start label / "Not
+     *  started" fallback. Always present. */
+    context: string;
+    /** Fix round 3, F4 — the context LINE below it (`_THEMES.md` §3's
+     *  "context line Geist 21/500 ink 70%"): the period/set label while
+     *  live ("H1", "Set 1"). Absent for cricket/generic (no periods or
+     *  sets) and for every non-live state — `overlay-bar.tsx` renders it
+     *  only when set. */
+    period?: string;
+    clock?: string;
+  };
   sides: [OverlaySide, OverlaySide];
   cells: OverlayCell[];
   detail: OverlayDetailLine[];
@@ -141,10 +164,72 @@ export function splitLine(line: string): { big: string; sub?: string } {
   return sub ? { big: line.slice(0, at), sub } : { big: line.slice(0, at) };
 }
 
-function headerContext(input: OverlayModelInput, decided: boolean): string {
-  const { data, msg, sportKey, startLabel } = input;
-  if (decided) return msg("overlay.header.ended");
+/**
+ * Fix round 3, F1/F2 — the console's own "cancelled | abandoned | forfeited"
+ * (`VOID_STATUSES`, `components/v2/stages-panel.tsx`), held as a LOCAL
+ * literal rather than an import: `stages-panel.tsx` is a "use client"
+ * competition-desk panel, and dragging its dependencies into the overlay's
+ * OBS bundle is the exact cost `use-overlay-clock.ts`'s `NO_CLOCK_STATUSES`
+ * already declines to pay (same reasoning, same shape). Exported so
+ * `overlay-model.test.ts` can prove this equal to the real export — the
+ * same shape `use-overlay-clock.test.ts` uses for its own local copy.
+ */
+export const OVERLAY_VOID_STATUSES = new Set(["cancelled", "abandoned", "forfeited"]);
+
+/** Every status `_THEMES.md` §3/§4's "Decided / void" row treats as the
+ *  match having ended — `decided`/`finalized` plus the three void statuses.
+ *  Deliberately NOT `scheduled`: that state has its own header branch. */
+const ENDED_STATUSES = new Set(["decided", "finalized", ...OVERLAY_VOID_STATUSES]);
+
+/**
+ * Fix round 3, F1 — the two-conjunct predicate `_THEMES.md` §3 pins verbatim
+ * from `V355__division_results_abandoned_outcome.sql`: `outcome is not null
+ * and outcome->>'kind' <> 'no_result'`. A win, an award, a draw and a tie are
+ * all real verdicts (the migration's own words); only `no_result` — a
+ * cricket abandon's own outcome shape — is not. Do NOT simplify to
+ * `outcome != null` alone: `renderDecidedOutcome`/`resultMsg` both return
+ * null for a `no_result` kind anyway, so keying on non-null alone would show
+ * a decided frame (LED, "Final") around an empty result sentence.
+ */
+function hasVerdict(outcome: OverlayLiveData["outcome"]): boolean {
+  return outcome != null && typeof outcome.kind === "string" && outcome.kind !== "no_result";
+}
+
+/**
+ * Fix round 3, F1/F2/F7 — the word that replaces the live dot once a fixture
+ * has ended, whichever of `_THEMES.md` §3's three end cases applies: "Final"
+ * for a plain decided/finalized fixture (still `overlay.header.ended` — see
+ * F7's own note: the key is used nowhere else, so its VALUE moves from
+ * "Ended" to "Final" in the dictionaries rather than minting a second key),
+ * else the void status's own new `overlay.status.*` word. Never `resultMsg`
+ * and never `fixtureStatusLabel` — both explicitly ruled out by §3's i18n
+ * note; these are new keys, deriving their SET from `VOID_STATUSES` above,
+ * not a second hand-typed list.
+ */
+function statusLabel(msg: OverlayMsg, status: string): string {
+  if (status === "cancelled") return msg("overlay.status.cancelled");
+  if (status === "abandoned") return msg("overlay.status.abandoned");
+  if (status === "forfeited") return msg("overlay.status.forfeited");
+  return msg("overlay.header.ended");
+}
+
+function headerContext(input: OverlayModelInput, ended: boolean): string {
+  const { data, msg, startLabel } = input;
+  if (ended) return statusLabel(msg, data.status);
   if (data.status === "scheduled") return startLabel ?? msg("overlay.header.notStarted");
+  return msg("overlay.header.live");
+}
+
+/** Fix round 3, F4 — the context LINE under "Live" (`_THEMES.md` §3's own
+ *  second line), split out of the old `headerContext` so the status word
+ *  above it can always say "Live" rather than a period/set label crowding
+ *  it out. Undefined once ended (P8's already-correct decided render shows
+ *  no second line) or scheduled, and for a sport with neither a period nor
+ *  a set breakdown (cricket, generic) — an absent line is invisible, not a
+ *  gap the sheet asks this fix round to close. */
+function headerPeriod(input: OverlayModelInput, ended: boolean): string | undefined {
+  const { data, msg, sportKey } = input;
+  if (ended || data.status === "scheduled") return undefined;
   const periods = periodBreakdown(data.summary);
   if (periods && periods.length > 0) return periods[periods.length - 1]!.phase;
   const breakdown = setBreakdown(data.summary, sportKey);
@@ -157,7 +242,7 @@ function headerContext(input: OverlayModelInput, decided: boolean): string {
     // tabletennis header that could never say "Game".
     return breakdown.unit === "game" ? msg("overlay.header.game", { n }) : msg("overlay.header.set", { n });
   }
-  return msg("overlay.header.live");
+  return undefined;
 }
 
 function cellsOf(input: OverlayModelInput): OverlayCell[] {
@@ -274,10 +359,16 @@ function detailOf(input: OverlayModelInput, codes: [string, string], live: boole
   return lines;
 }
 
-/** Which entrant carries the LED bar: the winner once decided, else the side
- *  batting, else the side serving, else nobody. */
-function ledEntrantId(input: OverlayModelInput, decided: boolean): string | null {
+/** Which entrant carries the LED bar: the winner once decided (or void with
+ *  a verdict), else the side batting, else the side serving, else nobody.
+ *  Fix round 3, F1/F3 — `ended` guards the fall-through: without it, a
+ *  match that ended with NO verdict (`voided`) could still show a stale LED
+ *  on whichever side a frozen `summary` happened to record as batting or
+ *  serving at the moment of abandonment, contradicting §3's "no LED
+ *  anywhere" for that case. */
+function ledEntrantId(input: OverlayModelInput, decided: boolean, ended: boolean): string | null {
   if (decided) return input.data.outcome?.winner ?? null;
+  if (ended) return null;
   const batting = battingEntrantId(input.data.summary);
   if (batting) return batting;
   const serving = servingSide(input.data.summary);
@@ -287,10 +378,21 @@ function ledEntrantId(input: OverlayModelInput, decided: boolean): string | null
 
 export function overlayModel(input: OverlayModelInput): OverlayModel {
   const { data, msg, sides } = input;
-  const decided = data.status === "decided" || data.status === "finalized";
+  // Fix round 3, F1 — the OLD predicate here was `data.status === "decided"
+  // || data.status === "finalized"`, exactly the trap `_THEMES.md` §3 names:
+  // a match that ended via `core.abandon`/`core.forfeit` never carries
+  // status "decided", so it fell through to the LIVE branch below and
+  // rendered "Live" on air. `ended` first decides WHETHER the match is over
+  // (status alone — the fold's own authority, `fixtureStatusFromFold`);
+  // `verdict` then decides WHICH of the three end cases applies, off the
+  // OUTCOME column, never the status.
+  const ended = ENDED_STATUSES.has(data.status);
+  const verdict = hasVerdict(data.outcome);
+  const decided = ended && verdict;
+  const voided = ended && !verdict;
   const live = data.status === "in_play";
   const codes: [string, string] = [shortCode(sides[0]), shortCode(sides[1])];
-  const led = ledEntrantId(input, decided);
+  const led = ledEntrantId(input, decided, ended);
   const serving = servingSide(data.summary);
   // Kernel perSide order is [home, away]; a payload with anything else is a
   // payload this projection cannot place, so it falls to the em-dash state
@@ -311,31 +413,42 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     };
   }) as [OverlaySide, OverlaySide];
 
-  const need = decided ? null : chaseNeed(data.summary);
+  // Fix round 3, F1 — gated on `ended` (was `decided`): a void-no-verdict
+  // frame has no chase and no clock either, not only a plain-decided one.
+  const need = ended ? null : chaseNeed(data.summary);
   // Owner answer 12: both halves of `_THEMES.md` §3's line when the format
   // declares a quota, the runs-only key when it does not. Two keys rather than
   // one with an empty `{balls}` — a dangling "off" is worse than a short line.
   const balls = need === null ? null : chaseBalls(data.cricket);
   // The clock is the STAGE's timer (use-overlay-clock.ts), formatted before it
   // reaches this pure model; decided frames show none (amended 2026-09-07).
-  const clock = decided ? null : input.clockLabel;
+  const clock = ended ? null : input.clockLabel;
   const result = renderDecidedOutcome(
     data.outcome,
     { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
     input.decidedTemplates,
     shootoutScoreFromDetail(data.summary?.detail),
   );
+  // Fix round 3, F1/F3 — a void-no-verdict frame renders NO detail band at
+  // all (`_THEMES.md` §3/§4): `chase`/`result` are already null by
+  // construction for this branch (see `hasVerdict`'s doc comment), but a
+  // discipline line recorded BEFORE the match was voided would otherwise
+  // survive in `detail` and render a band the sheet says must be absent.
+  const detail = voided ? [] : detailOf(input, codes, live);
+  const period = headerPeriod(input, ended);
 
   return {
     live,
     decided,
+    voided,
     header: {
-      context: headerContext(input, decided),
+      context: headerContext(input, ended),
+      ...(period === undefined ? {} : { period }),
       ...(clock === null ? {} : { clock }),
     },
     sides: overlaySides,
     cells: cellsOf(input),
-    detail: detailOf(input, codes, live),
+    detail,
     ...(need === null
       ? {}
       : {

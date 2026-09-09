@@ -245,13 +245,150 @@ describe("overlayModel — decided", () => {
     ], "decided", { kind: "win", winner: "H", method: "regulation" });
     const model = project("football", data);
     expect(model.decided).toBe(true);
+    expect(model.voided, "a plain decided fixture is never voided").toBe(false);
     expect(model.live).toBe(false);
+    expect(model.header.context, "the status word — 'Final', not 'Ended' (F7)").toBe("overlay.header.ended");
     expect(model.result, "the ONE decided-sentence authority, renderDecidedOutcome").toBe(
       "WIN Milton Keynes Rovers REG",
     );
     expect(model.chase).toBeUndefined();
     expect(model.sides[0].led, "the winner keeps the LED").toBe(true);
     expect(model.sides[1].led).toBe(false);
+  });
+});
+
+describe("overlayModel — the decided/void three-case split (fix round 3, F1)", () => {
+  // RE-PIN: `VOID_STATUSES` (stages-panel.tsx) is the console's own authority
+  // for "cancelled | abandoned | forfeited" — `overlay-model.ts` keeps a LOCAL
+  // literal (bundle-weight reasoning, same as `use-overlay-clock.ts`'s
+  // `NO_CLOCK_STATUSES`), proven equal here rather than imported.
+  it("OVERLAY_VOID_STATUSES equals the console's own VOID_STATUSES", async () => {
+    const { OVERLAY_VOID_STATUSES } = await import("@/lib/overlay-model");
+    const { VOID_STATUSES } = await import("@/components/v2/stages-panel");
+    expect(OVERLAY_VOID_STATUSES).toEqual(VOID_STATUSES);
+  });
+
+  // §3/§4's own two-conjunct predicate, `V355__division_results_abandoned_
+  // outcome.sql`'s: `outcome is not null and outcome->>'kind' <> 'no_result'`.
+  // Every case below is driven from a REAL outcome shape (never a
+  // hand-written `decided` boolean) — `outcome` is the fixtures-table column
+  // the projection reads verbatim, the same posture the pre-existing
+  // "decided" describe block above already takes (folding the SUMMARY
+  // through the real engine, since `outcome` itself is not a fold output).
+  it("void carrying a verdict (forfeit, kind:'award'): the DECIDED treatment, with the status word instead of 'Final'", () => {
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ], "forfeited", { kind: "award", winner: "H", method: "regulation" });
+    const model = project("football", data);
+    expect(model.decided, "a real verdict on a void status still gets the decided treatment").toBe(true);
+    expect(model.voided).toBe(false);
+    expect(model.header.context, "the status word, NOT 'Final'").toBe("overlay.status.forfeited");
+    expect(model.sides[0].led, "the winner keeps the LED even though the status is void").toBe(true);
+    expect(model.sides[1].led).toBe(false);
+    expect(model.result, "the footer/band sentence — already correct (P8) — must still render").toBeDefined();
+  });
+
+  it("void, no verdict (cricket abandon → a no_result OUTCOME): both sides ink-50%, no LED, no band", () => {
+    // V355's own warning: a cricket abandon folds to a no_result OUTCOME —
+    // the column is non-null, the verdict is "nothing happened". This is the
+    // case `outcome != null` alone would misclassify as decided.
+    const data = payload("cricket", [
+      ["cricket.toss", { wonBy: "H", elected: "bat" }],
+      ["core.start", {}],
+      CRICKET_BALL(0, 1, 4),
+    ], "abandoned", { kind: "no_result" });
+    const model = project("cricket", data);
+    expect(model.decided).toBe(false);
+    expect(model.voided, "outcome is present but carries no verdict").toBe(true);
+    expect(model.header.context).toBe("overlay.status.abandoned");
+    expect(model.sides[0].led).toBe(false);
+    expect(model.sides[1].led).toBe(false);
+    expect(model.result).toBeUndefined();
+    expect(model.detail, "no detail band for a void-no-verdict frame").toEqual([]);
+  });
+
+  it("void, no verdict, null outcome (the observed live bug): an abandoned match must NOT say 'Live'", () => {
+    // The exact case the visual pass caught live: a real abandoned football
+    // fixture with `outcome: null` rendered the word "Live" at full ink.
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ], "abandoned", null);
+    const model = project("football", data);
+    expect(model.decided).toBe(false);
+    expect(model.voided).toBe(true);
+    expect(model.header.context, "must be the status word, never 'overlay.header.live'").toBe(
+      "overlay.status.abandoned",
+    );
+    expect(model.sides[0].led).toBe(false);
+    expect(model.sides[1].led).toBe(false);
+  });
+
+  it("status 'decided' with a null outcome: ended but no verdict — 'Final', not the winner treatment", () => {
+    const data = payload("tennis", [["core.start", {}]], "decided", null);
+    const model = project("tennis", data);
+    expect(model.decided, "no outcome to name a winner from").toBe(false);
+    expect(model.voided).toBe(true);
+    expect(model.header.context, "still 'Final' — the status itself is 'decided'").toBe("overlay.header.ended");
+    expect(model.sides[0].led).toBe(false);
+    expect(model.sides[1].led).toBe(false);
+  });
+
+  it("a void-no-verdict frame does not leak a stale LED from a frozen batting/serving side", () => {
+    // Differential case for `ledEntrantId`'s `ended` guard: without it, this
+    // payload's own OPEN (not closed) innings would hand `battingEntrantId`
+    // a truthy id and light an LED on an abandoned match with no verdict.
+    const data: OverlayLiveData = {
+      status: "abandoned",
+      summary: {
+        headline: "180/8 (20) — 40/2 (8)",
+        perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "40/2 (8)" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, closed: true },
+            { entrantId: "A", runs: 40, wickets: 2, legalBalls: 48, closed: false },
+          ],
+        },
+      },
+      outcome: { kind: "no_result" },
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    const model = project("cricket", data);
+    expect(model.voided).toBe(true);
+    expect(
+      model.sides.map((s) => s.led),
+      "the ended guard must win over the open-innings fallback",
+    ).toEqual([false, false]);
+  });
+
+  it("a live fixture is never treated as decided even if a stray outcome is present — `ended` gates `verdict`, not the reverse", () => {
+    // Kills a `decided = verdict` (or `ended || verdict`) mutant: dropping the
+    // `ended` conjunct would let a malformed/stale in-flight payload light the
+    // decided/LED treatment on air mid-match.
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ], "in_play", { kind: "win", winner: "H" });
+    const model = project("football", data);
+    expect(model.decided, "in_play is not in ENDED_STATUSES, whatever the outcome column says").toBe(false);
+    expect(model.voided).toBe(false);
+    expect(model.header.context).toBe("overlay.header.live");
+  });
+
+  it("a voided frame clears a REAL discipline line, not only an absent one", () => {
+    // Kills a `detail: voided ? [] : detailOf(...)` guard removed entirely:
+    // icehockey's period kernel DOES populate `summary().detail.discipline`,
+    // so an unguarded `detailOf` would render a card line on a match with no
+    // verdict at all — exactly the "no detail band" case §3/§4 forbid.
+    const data = payload("icehockey", [
+      ["core.start", {}],
+      ["icehockey.suspension.start", { by: "H", class: "minor" }],
+    ], "abandoned", null);
+    const model = project("icehockey", data);
+    expect(model.voided).toBe(true);
+    expect(model.detail, "no detail band on a void-no-verdict frame, even with a real discipline entry").toEqual([]);
   });
 });
 
@@ -353,9 +490,13 @@ describe("overlayModel — the football family's clock", () => {
     };
     const model = project("football", data, null, "12:41");
     expect(model.header.clock).toBe("12:41");
-    expect(model.header.context, "the phase is the context; the clock is its own cell").toBe("H2");
+    // Fix round 3, F4 — split: the FIRST line always says "Live" while
+    // playing (never the phase), and the phase is now its own context LINE.
+    expect(model.header.context, "the live/status word — never the phase").toBe("overlay.header.live");
+    expect(model.header.period, "the phase is its own context line").toBe("H2");
     const done = project("football", { ...data, status: "decided", outcome: { kind: "win", winner: "H" } }, null, "90:00");
     expect(done.header.clock, "no clock on a decided frame, whatever the stage hands in").toBeUndefined();
+    expect(done.header.period, "no second line once ended (P8's already-correct decided render)").toBeUndefined();
   });
 
   it("leaves the clock absent when the stage has nothing to show, and for a sport with none", () => {
@@ -373,6 +514,13 @@ describe("overlayModel — the football family's clock", () => {
     expect(project("football", unstamped, null, null).header.clock).toBeUndefined();
     const badminton = payload("badminton", [["core.start", {}], ["badminton.rally", { wonBy: "H" }]], "in_play");
     expect(project("badminton", badminton).header.clock).toBeUndefined();
+    // Fix round 3, F4 — badminton DOES have a context line (its game/set
+    // breakdown); a sport with neither periods nor sets (generic) has none —
+    // an absent line, not a fallback to "Live" repeated on two lines.
+    expect(project("badminton", badminton).header.period).toBeDefined();
+    const generic = payload("generic", [["core.start", {}]], "in_play");
+    expect(project("generic", generic).header.context).toBe("overlay.header.live");
+    expect(project("generic", generic).header.period).toBeUndefined();
   });
 });
 

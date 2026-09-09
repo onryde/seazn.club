@@ -15,7 +15,8 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
     <div className="ovl-bug">
       <div className="ovl-bug-header">
         {model.live ? <span data-testid="ovl-live-dot" className="ovl-live-dot" /> : null}
-        <span className="ovl-bug-context">{model.header.context}</span>
+        <span className="ovl-bug-status">{model.header.context}</span>
+        {model.header.period ? <span className="ovl-bug-context">{model.header.period}</span> : null}
         {model.header.clock ? (
           <span className="ovl-bug-brand ovl-display" style={{ color: "var(--sport-led)" }}>
             {model.header.clock}
@@ -30,7 +31,7 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
           <div
             key={side.short + row}
             data-testid={row === 0 ? "ovl-side-home" : "ovl-side-away"}
-            className={`ovl-bug-row ovl-display${side.led ? " ovl-side-led" : ""}`}
+            className={`ovl-bug-row ovl-display${side.led ? " ovl-side-led" : ""}${model.voided ? " ovl-voided" : ""}`}
           >
             {side.led ? <span data-testid="ovl-led" className="ovl-led" /> : null}
             <span className="ovl-bug-code">{side.short}</span>

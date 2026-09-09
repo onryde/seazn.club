@@ -1376,6 +1376,22 @@ body {
 .ovl-divider { width: 1.5px; background: rgba(255, 255, 255, 0.14); }
 .ovl-clock-cell { display: flex; align-items: center; padding: 0 33px;
                   font-size: 60px; font-weight: 700; color: var(--sport-led); }
+/* Fix round 3, F6 — the between-cells LED count (`_THEMES.md` §3's rows for
+   tennis/badminton/tabletennis/volleyball, e.g. "games-won cell LED
+   ('1 : 0')"). Same slot football/hockey/icehockey's `.ovl-clock-cell`
+   occupies (never both at once — `overlay-bar.tsx` renders exactly one). */
+.ovl-cells-led { display: flex; align-items: center; padding: 0 33px;
+                 font-size: 60px; font-weight: 700; color: var(--sport-led); }
+/* Fix round 3, F5 — the bar's per-side set/game cells, moved out of the live
+   cell's context line (F4/F5) and into the team cell, the bug's own
+   `.ovl-bug-cells`/`.ovl-bug-cell-current` pattern. `_THEMES.md` §3's default
+   size is tennis's own "51/600, current 700 ink 100%"; volleyball and the
+   badminton/tabletennis pair override it below with their own rows' numbers. */
+.ovl-bar-cells { display: flex; gap: 12px; font-size: 51px; font-weight: 600;
+                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+.ovl-bar-cell-current { font-weight: 700; color: var(--sport-ink); }
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cells { font-size: 45px; }
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cell-current { font-size: 54px; }
 .ovl-brand { display: flex; align-items: center; padding: 0 33px;
              background: var(--sport-board-2); font-size: 30px; font-weight: 600;
              letter-spacing: 0.08em;
@@ -1396,6 +1412,12 @@ body {
                   padding: 0 21px; background: var(--sport-board-2);
                   font-size: 21px; font-weight: 600; }
 .ovl-bug-header .ovl-live-dot { width: 13.5px; height: 13.5px; }
+/* Fix round 3, F4 — the status/live word, split out of `.ovl-bug-context`
+   (§4: "'Live' Geist 21/600, context Geist 19.5/500") so the two can sit
+   side by side in the header's own flex row. Inherits `.ovl-bug-header`'s
+   21px/600 by default; declared explicitly so it does not drift if that
+   rule's own font properties ever change. */
+.ovl-bug-status { font-size: 21px; font-weight: 600; }
 .ovl-bug-context { font-size: 19.5px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
 .ovl-bug-brand { margin-left: auto; font-size: 24px; font-weight: 600;
@@ -1418,6 +1440,13 @@ body {
 .ovl-side-led { background: var(--sport-board-2); }
 .ovl-side-led .ovl-team-score,
 .ovl-side-led .ovl-bug-score { color: var(--sport-led); }
+/* Fix round 3, F1/F3 — the third "Decided / void" case (`_THEMES.md` §3/§4):
+   a fixture that ended with NO verdict drops both sides to 50% ink, no LED
+   anywhere (`model.voided`, applied to `.ovl-team-cell`/`.ovl-bug-row`).
+   Cascades into `.ovl-team-name`/`.ovl-team-score`/`.ovl-bug-code`/
+   `.ovl-bug-score`, none of which sets its own colour; `.ovl-team-meta`/
+   `.ovl-bug-meta` keep their own explicit alpha (a more specific rule wins). */
+.ovl-voided { color: color-mix(in srgb, var(--sport-ink) 50%, transparent); }
 .ovl-led { position: absolute; background: var(--sport-led);
            transition: transform 200ms ease-in-out; }
 .ovl-bar .ovl-led { left: 0; right: 0; bottom: 0; height: 8px; }

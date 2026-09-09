@@ -83,7 +83,8 @@ describe("the discipline chip class exists in source, per _THEMES.md §3/§4 (IM
 const BASE_MODEL: OverlayModel = {
   live: true,
   decided: false,
-  header: { context: "2nd half" },
+  voided: false,
+  header: { context: "Live", period: "2nd half" },
   sides: [
     { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
     { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
