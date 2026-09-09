@@ -165,27 +165,82 @@ export interface PanelDef {
 export const OVERLAY_PANELS: Record<string, PanelDef>;
 ```
 
+A panel receives the same contract a theme does, minus the slots it cannot fill:
+
+```ts
+export interface OverlayPanelProps {
+  model: OverlayModel;
+  msg: OverlayMsg;
+  sportKey: string;
+  brand: OverlayBrand;
+}
+```
+
+**Deliberately the same `msg` instance the stage builds for `overlayModel` and
+for the theme** — one dictionary channel, not a third. W1 Task 5f established
+this shape when it widened the theme props; a panel that resolved its own
+dictionary would be a second authority for the same copy.
+
 Panels register against a **slot name, never a theme id**, so a panel works with
 bar, bug, slate, bottle and every theme not yet written — including in the Tier B
 cloud compositor, per the programme invariant.
 
 ### 4.4 Brand (axis 3)
 
-Branding needs **no new mechanism**. It is:
+**Owner requirement, 2026-09-09: "we must able to replace our logo easily", and
+the format is "transprent svg".** So the club mark is a first-class replaceable
+asset, not a build-time constant — and that is what makes the brand mark the
+right first panel (§8) rather than merely a tidy-up.
 
-1. **Tokens** — more custom properties on the overlay root, exactly how
-   `sportThemeStyle(sportKey)` already sets the seven `--sport-*` properties.
-   Club colours resolve server-side and ride the same channel.
-2. **Assets** — a `brand` field on the stage props (mark URL, club name),
-   reaching themes and panels through the §4.2 contract that W1 Task 5f already
-   widened for `msg`/`sportKey`.
+**Easily means data, not code.** Replacing a logo must be an org-settings
+change that takes effect on the next poll — no deploy, no theme edit, no code
+path per club.
 
-Contrast is not optional here: `_THEMES.md` §2 requires every new
-ink-on-background pair to meet 4.5:1 (text) and 3:1 (graphical). **A
-club-supplied colour cannot be trusted to clear either.** The brand seam must
-either constrain club colour to roles that are contrast-checked at resolve time,
-or keep club colour off text entirely. Decide when built; recorded here so it is
-not discovered by a customer.
+**There is already exactly one authority for this and the panel must reuse it.**
+`resolveLogoUrl(logo_storage_path, logo_url)`
+(`server/public-site/data.ts:402`) resolves `organizations.logo_storage_path`
+ahead of `logo_url`, and the surrounding query already gates both in SQL:
+
+```sql
+case when org_has_feature(o.id, 'branding') then o.logo_url end as logo_url,
+case when org_has_feature(o.id, 'branding') then o.logo_storage_path end as logo_storage_path
+```
+
+The overlay must **not** grow a second resolver or a second gate. A club without
+the `branding` entitlement resolves to `null` and the panel falls back to the
+`seazn` mark — the fallback is the existing behaviour, so the panel's default
+path is also its unbranded path.
+
+**SVG, and specifically `<img>` — never inline `<svg>`.** Transparent SVG is the
+right format here: it scales losslessly under the stage's
+`transform: scale(...)`, and transparency is mandatory because the mark sits on
+the sport's own `board-2` band rather than on white. But an SVG is a document,
+and a club-uploaded one can carry script. Referencing it through `<img src>`
+does not execute embedded script; inlining it does. **This is a hard rule, not a
+preference** — the overlay is served from our origin and a stored-XSS here would
+run in a page that other clubs' operators open.
+
+Three consequences to settle when built, recorded now rather than discovered by
+a customer:
+
+1. **Legibility is the club's problem but our failure.** A dark mark on a dark
+   `board-2` disappears. `_THEMES.md` §2's floors (4.5:1 text, 3:1 graphical)
+   cannot be enforced against arbitrary artwork. Options are a constrained
+   plate behind the mark, or a documented "supply a light-on-transparent mark"
+   rule with a preview in the panel that shows it against all eleven palettes.
+   Prefer the plate: it is enforceable, and a rule nobody reads is not a control.
+2. **A broken or slow asset must never blank the frame.** The mark is on a live
+   broadcast. Failure falls back to the `seazn` mark, the same as unbranded.
+3. **CSP and the image host.** `proxy.ts`'s CSP governs what the overlay may
+   load. Storage-served marks need an allowance; that file is on W1's
+   do-not-touch list and this change is not W1, but the wave that builds this
+   owns the CSP edit and its own test.
+
+**Colour tokens are the second half of axis 3 and are NOT settled.** Club
+colours would ride the same channel `sportThemeStyle(sportKey)` uses — more
+custom properties on the root — but a club-supplied colour cannot be trusted to
+clear §2's floors either, and unlike a logo it can land on text. §9 keeps this
+open; the logo ships without it.
 
 ## 5. Visibility
 
@@ -267,13 +322,32 @@ opt-in and the default path on day one, with no new feature and no new copy.
 Deferred with named gaps: takeover panels (no consumer yet), `timer` and
 `control` triggers (§5), club branding assets (§4.4, needs the contrast ruling).
 
-## 9. Open questions for the owner
+## 9. Owner answers, and what is still open
 
-1. **Club branding vs contrast (§4.4).** Constrain club colour to
-   contrast-checked roles, or keep it off text? Affects what can be sold.
-2. **Is the brand mark replaceable?** If a club can replace `seazn` with its own
-   mark, that is a pricing and attribution decision, not a technical one.
-3. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
+**Answered 2026-09-09:**
+
+- **The mark is replaceable, and the format is transparent SVG** (§4.4). It
+  reuses the existing `resolveLogoUrl` + `branding` entitlement rather than a
+  second path, and is referenced through `<img src>` so a club-uploaded SVG
+  cannot execute script.
+- **No multi-fixture designs** — `sides` stays a pair (§2).
+- **Approach B**, resolved into B-for-anchored / C-for-takeover (§3).
+
+**Still open:**
+
+1. **Club COLOUR vs contrast (§4.4).** The logo ships without it. Colour tokens
+   can land on text, where `_THEMES.md` §2's 4.5:1 floor applies and arbitrary
+   club colour cannot be trusted to clear it. Constrain club colour to
+   contrast-checked roles, or keep it off text entirely? This decides what can
+   be sold as "your colours".
+2. **Legibility treatment for the mark (§4.4.1).** A plate behind the logo
+   (enforceable) or a documented light-on-transparent rule (not enforceable).
+   Author's recommendation: the plate.
+3. **Attribution.** If a club replaces `seazn` with its own mark, does the
+   `seazn` mark disappear entirely, or move? That is pricing and brand policy,
+   not engineering — but the panel's placement rules differ depending on whether
+   two marks can be on screen at once.
+4. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
    is R2's; `_THEMES.md` §4a treats it as registry entry three; W1 built it on
    2026-09-09 under "fix all". The tree and the programme design now disagree
    and one of them needs correcting.
