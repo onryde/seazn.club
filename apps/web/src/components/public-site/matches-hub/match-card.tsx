@@ -5,13 +5,23 @@
 // (`competition-hub-schema.ts`'s header comment: "every number in it is
 // already FORMATTED and every name already RESOLVED before it is put here").
 //
-// Task 7 dispatch ruling 5 — `roundLabel` is null whenever the round has no
-// role beyond its number (schema comment, `:86-89`), which is the COMMON
-// case. Rendering `[stageName, roundLabel].filter(Boolean).join(" · ")`
-// verbatim would silently drop the round on most fixtures and leave
-// `matchesHub.round` ("Round {round}") — just translated into four
-// languages — with no consumer at all. So: render `roundLabel` when present,
-// and `t(dict, "matchesHub.round", { round: roundNo })` when it is null.
+// The `roundLabel ?? t(dict, "matchesHub.round", …)` fallback below is a
+// SAFETY NET for a data fault, not the common path. An earlier version of this
+// comment said the opposite, on the strength of the schema's own wording at
+// `competition-hub-schema.ts:86-89`; the code says otherwise, and the code
+// wins. `roundRoleLabel` (`lib/round-role-label.ts:21-53`) returns a string for
+// EVERY role kind — `plain_round` included, as `bracket.round.plain`
+// ("Round {n}") — and `roundRoleFor` always returns a role. So a fixture with a
+// stage always arrives with its label already resolved by the builder.
+//
+// What actually makes it null is a missing STAGE: `competition-hub.ts:501,515`
+// hangs both fields off the same `stage`, as `stageName: stage?.name ?? ""` and
+// `roundLabel: stage ? roundRoleLabel(…) : null`. So when this fires,
+// `stageName` is "" too and the card shows the round on its own.
+//
+// It is kept rather than deleted because on that fault the round would
+// otherwise vanish from the card silently, and a spectator would have no way
+// to tell which round they were looking at.
 //
 // W3's poster icon has no DOM in W2 (design ruling R4: no "coming soon").
 import Link from "next/link";

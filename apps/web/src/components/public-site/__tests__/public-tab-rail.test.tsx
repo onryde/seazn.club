@@ -45,6 +45,16 @@ describe("PublicTabRail", () => {
     // The positive pair: the INACTIVE tab is out of the tab order entirely,
     // which is the half that makes it a single stop rather than none.
     expect(h).toMatch(/tabindex="-1"[^>]*data-testid="mh-tab-overview"[^>]*aria-selected="false"/);
+
+    // And `aria-controls` on the ACTIVE tab only. The panel container renders
+    // just the active panel, so any other tab's `aria-controls` would name an
+    // element that is not in the document — W1 shipped exactly that and its
+    // whole-branch review removed it. Asserting only the positive left the
+    // rule undefended: emitting `aria-controls` on every tab survived both
+    // tests in this file until this line.
+    expect(h.match(/aria-controls=/g)?.length).toBe(1);
+    expect(h).not.toMatch(/data-testid="mh-tab-overview"[^>]*aria-controls=/);
+    expect(h).not.toMatch(/aria-controls=[^>]*data-testid="mh-tab-overview"/);
   });
 
   it("renders the real label text, not a bare id or dictionary key (RENDERED COPY, not just a testid)", () => {

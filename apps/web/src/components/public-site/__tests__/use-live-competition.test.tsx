@@ -31,6 +31,59 @@ vi.mock("../competition-hub-data", () => ({
   fetchCompetitionHub: vi.fn(),
 }));
 
+// One fake Supabase client for the realtime branch. `channel()` records the
+// name it was asked for and hands back a chainable stub whose `on()` calls
+// capture the handlers, so a test can FIRE a broadcast rather than assert that
+// a listener was merely registered — registering a handler nothing ever calls
+// is the shape this repo keeps shipping.
+const rt = vi.hoisted(() => {
+  interface FakeChannel {
+    name: string;
+    handlers: Record<string, () => void>;
+    unsubscribed: number;
+    on: (kind: string, opts: { event: string }, fn: () => void) => FakeChannel;
+    subscribe: (cb: (status: string) => void) => FakeChannel;
+    unsubscribe: () => void;
+  }
+  const channels: FakeChannel[] = [];
+  let status = "SUBSCRIBED";
+  const channel = (name: string): FakeChannel => {
+    const ch: FakeChannel = {
+      name,
+      handlers: {},
+      unsubscribed: 0,
+      on(_kind, opts, fn) {
+        ch.handlers[opts.event] = fn;
+        return ch;
+      },
+      subscribe(cb) {
+        cb(status);
+        return ch;
+      },
+      unsubscribe() {
+        ch.unsubscribed += 1;
+      },
+    };
+    channels.push(ch);
+    return ch;
+  };
+  return {
+    channels,
+    channel,
+    reset: (nextStatus = "SUBSCRIBED") => {
+      channels.length = 0;
+      status = nextStatus;
+    },
+    setStatus: (s: string) => {
+      status = s;
+    },
+  };
+});
+
+vi.mock("@/lib/supabase-browser", () => ({
+  supabaseBrowser: () => ({ channel: rt.channel }),
+}));
+
 import { fetchCompetitionHub } from "../competition-hub-data";
 import {
   HUB_IDLE_POLL_MS,
@@ -59,9 +112,14 @@ function baseHeader(overrides: Partial<MatchCentreHeaderT> = {}): MatchCentreHea
   };
 }
 
-function matchWith(bucket: MatchBucketSchemaT, live: string, divisionId = "d1"): HubMatchT {
+function matchWith(
+  bucket: MatchBucketSchemaT,
+  live: string,
+  divisionId = "d1",
+  fixtureId = "f1",
+): HubMatchT {
   return {
-    fixtureId: "f1",
+    fixtureId,
     divisionId,
     divisionSlug: "div-a",
     divisionName: "Division A",
@@ -82,7 +140,14 @@ function matchWith(bucket: MatchBucketSchemaT, live: string, divisionId = "d1"):
 }
 
 function docWith(
-  opts: { live?: string; pts?: string; bucket?: MatchBucketSchemaT; divisionId?: string } = {},
+  opts: {
+    live?: string;
+    pts?: string;
+    bucket?: MatchBucketSchemaT;
+    divisionId?: string;
+    /** Whole-list override, for the multi-division realtime cases. */
+    matches?: HubMatchT[];
+  } = {},
 ): CompetitionHubDocT {
   return {
     competitionId: "c1",
@@ -95,7 +160,7 @@ function docWith(
     locale: "en",
     generatedAt: "2026-09-05T12:00:00.000Z",
     divisions: [],
-    matches: [matchWith(opts.bucket ?? "live", opts.live ?? "1-0", opts.divisionId)],
+    matches: opts.matches ?? [matchWith(opts.bucket ?? "live", opts.live ?? "1-0", opts.divisionId)],
     tables: [
       {
         id: "t1",
@@ -209,5 +274,148 @@ describe("useLiveCompetition", () => {
   it("HUB_POLL_MS equals W1's POLL_MS — one poll cadence for the whole surface", async () => {
     const { POLL_MS } = await import("../match-centre/use-live-fixture");
     expect(HUB_POLL_MS).toBe(POLL_MS);
+  });
+
+  // The cadence test above mounts two SEPARATE hooks, one per state, so it can
+  // only witness the delay each was BORN with. Dropping `hasLive` from the
+  // poll effect's dependency list left it green: an instance that starts live
+  // and goes idle would have kept polling every 15s forever, and nothing said
+  // so. A transition needs ONE instance driven across the boundary.
+  it("re-arms the interval when the live set flips on a live instance (both directions)", async () => {
+    const spy = vi.spyOn(global, "setInterval");
+
+    // live → idle
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(docWith({ bucket: "completed" }));
+    mount("o", "c", docWith({ bucket: "live" }), false);
+    expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+    expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_IDLE_POLL_MS);
+
+    // idle → live, the direction a spectator actually cares about: a fixture
+    // starts between ticks and the page must speed up on its own.
+    spy.mockClear();
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(docWith({ bucket: "live" }));
+    mount("o", "c", docWith({ bucket: "completed" }), false);
+    expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_IDLE_POLL_MS);
+    await vi.advanceTimersByTimeAsync(HUB_IDLE_POLL_MS);
+    expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
+
+    spy.mockRestore();
+  });
+});
+
+// The realtime branch had NO test at all: deleting the unsubscribe in the
+// cleanup left the suite green. It is the half of the transport a spectator
+// notices most — a score that lands in under a second instead of within
+// fifteen — and the half nothing else covers.
+describe("useLiveCompetition realtime", () => {
+  const ENV = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://proj.supabase.co";
+    rt.reset();
+  });
+  afterEach(() => {
+    if (ENV === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = ENV;
+  });
+
+  const twoLiveDivisions = () =>
+    docWith({
+      matches: [
+        matchWith("live", "1-0", "d1", "f1"),
+        matchWith("live", "0-0", "d2", "f2"),
+        matchWith("upcoming", "", "d3", "f3"),
+      ],
+    });
+
+  it("subscribes ONE channel per division that has a live match, and none for a division that does not", async () => {
+    mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0); // the client is imported dynamically
+
+    expect(rt.channels.map((c) => c.name).sort()).toEqual(["division:d1", "division:d2"]);
+    // d3 has only an upcoming match — a channel for it would be a subscription
+    // nothing can ever push to.
+    expect(rt.channels.some((c) => c.name === "division:d3")).toBe(false);
+  });
+
+  it("both broadcast events reach the debounced refresh, and rapid pushes collapse into ONE fetch", async () => {
+    mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(twoLiveDivisions());
+
+    const ch = rt.channels[0]!;
+    expect(Object.keys(ch.handlers).sort()).toEqual(["schedule_changed", "state_changed"]);
+
+    ch.handlers.state_changed!();
+    ch.handlers.schedule_changed!();
+    ch.handlers.state_changed!();
+    expect(fetchCompetitionHub).not.toHaveBeenCalled(); // still inside the 250ms window
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(fetchCompetitionHub).toHaveBeenCalledTimes(1);
+  });
+
+  it("every channel is unsubscribed on unmount", async () => {
+    const hook = mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels).toHaveLength(2);
+    expect(rt.channels.every((c) => c.unsubscribed === 0)).toBe(true);
+
+    hook.unmount();
+    expect(rt.channels.every((c) => c.unsubscribed === 1)).toBe(true);
+  });
+
+  // Driven by a BROADCAST, not a poll tick. Once a channel reports SUBSCRIBED
+  // the polling effect returns early, so there is no interval to advance —
+  // the first version of this test drove the change through a tick that never
+  // fires and read the resulting no-op as a missing unsubscribe.
+  async function pushAndSettle(ch: (typeof rt.channels)[number]) {
+    ch.handlers.state_changed!();
+    await vi.advanceTimersByTimeAsync(250); // the debounce, then the refresh
+    await vi.advanceTimersByTimeAsync(0); // the new effect's dynamic import
+  }
+
+  it("when the live division set CHANGES the old channels are torn down and the new set subscribed", async () => {
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(
+      docWith({ matches: [matchWith("live", "2-0", "d2", "f2")] }),
+    );
+    mount("o", "c", docWith({ matches: [matchWith("live", "1-0", "d1", "f1")] }), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1"]);
+
+    await pushAndSettle(rt.channels[0]!);
+
+    expect(rt.channels[0]!.unsubscribed).toBe(1); // d1 let go
+    expect(rt.channels.map((c) => c.name)).toEqual(["division:d1", "division:d2"]);
+    expect(rt.channels[1]!.unsubscribed).toBe(0); // d2 still open
+  });
+
+  it("an unchanged live set across a refresh does NOT resubscribe (the string key, not the array)", async () => {
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(twoLiveDivisions());
+    mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels).toHaveLength(2);
+
+    // `doc.matches` gets a fresh array identity on every refresh. Keying the
+    // effect on it would tear down and resubscribe both channels each time,
+    // which on a busy division is a websocket churning once a second.
+    await pushAndSettle(rt.channels[0]!);
+    expect(rt.channels).toHaveLength(2);
+    expect(rt.channels.every((c) => c.unsubscribed === 0)).toBe(true);
+  });
+
+  it("realtime={false} subscribes nothing and the transport stays 'poll' (positive pair with the cases above)", async () => {
+    const hook = mount("o", "c", twoLiveDivisions(), false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels).toHaveLength(0);
+    expect(hook.current.transport).toBe("poll");
+  });
+
+  it("a channel that never reaches SUBSCRIBED leaves the transport polling", async () => {
+    rt.reset("CHANNEL_ERROR");
+    const hook = mount("o", "c", twoLiveDivisions(), true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rt.channels).toHaveLength(2);
+    expect(hook.current.transport).toBe("poll");
   });
 });

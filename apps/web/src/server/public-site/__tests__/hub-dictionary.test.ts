@@ -133,3 +133,34 @@ describe("the share keys that live in both dictionaries stay identical", () => {
     });
   }
 });
+
+// The SAME story for the round label, found later and by a different route.
+//
+// `MatchCard` falls back to `matchesHub.round` when the hub document arrives
+// without a resolved `roundLabel`. The builder resolves that label through
+// `roundRoleLabel`, whose `plain_round` arm reads `bracket.round.plain` in
+// ui.json — so a spectator can meet the same round, phrased twice, depending
+// only on whether the fixture's stage row was reachable. They must agree.
+//
+// The placeholder NAMES differ by accident of history (`{n}` in the older key,
+// `{round}` in the newer), so the comparison normalises the placeholder rather
+// than the sentence. Comparing raw strings would red on a difference nobody
+// can see, which is how a guard gets deleted instead of fixed.
+describe("the round label reads the same whether the builder or the card supplies it", () => {
+  const norm = (s: string) => s.replace(/\{\w+\}/g, "{}");
+
+  for (const [locale, [pub, ui]] of Object.entries({
+    en: [en, uiEn],
+    es: [es, uiEs],
+    fr: [fr, uiFr],
+    nl: [nl, uiNl],
+  })) {
+    it(`${locale}: matchesHub.round matches bracket.round.plain`, () => {
+      const card = (pub as Record<string, string>)["matchesHub.round"];
+      const builder = (ui as Record<string, string>)["bracket.round.plain"];
+      expect(card, `${locale} matchesHub.round missing`).toBeTruthy();
+      expect(builder, `${locale} bracket.round.plain missing`).toBeTruthy();
+      expect(norm(card), `${locale} round label`).toBe(norm(builder));
+    });
+  }
+});
