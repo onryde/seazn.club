@@ -407,8 +407,20 @@ jobs:
       # which is the opposite of its purpose. Same pattern as ci.yml's smoke
       # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
+      # These three jobs' `runs-on` is variable-driven —
+      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
+      # the runner that was actually chosen rather than assume one. E2E_RUNNER
+      # is UNSET today, which means every leg lands on stock ubuntu-latest
+      # while these steps asked for Blacksmith's builder. Blacksmith's actions
+      # are a fork of docker/*, so the stock pair is the like-for-like
+      # substitute; the `with:` block is identical on both paths on purpose.
       - name: Setup Blacksmith Builder
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Set up Docker Buildx (stock runner)
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/setup-buildx-action@v3
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -425,8 +437,27 @@ jobs:
       # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
         id: image
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         background: true
         uses: useblacksmith/build-push-action@v2
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+
+      # The stock-runner twin. No `background:` — that key is a Blacksmith
+      # runner extension, not documented GitHub Actions (this file's own note
+      # above records it as measured here rather than specified), so it is not
+      # relied on where Blacksmith is not the runner. The cost is that this
+      # build is serial with what follows it on a stock runner; correctness
+      # first, and the whole point of E2E_RUNNER is that the fast path is the
+      # Blacksmith one above.
+      - name: Build the placement service image (stock runner)
+        id: image_stock
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile
@@ -820,8 +851,20 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
+      # These three jobs' `runs-on` is variable-driven —
+      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
+      # the runner that was actually chosen rather than assume one. E2E_RUNNER
+      # is UNSET today, which means every leg lands on stock ubuntu-latest
+      # while these steps asked for Blacksmith's builder. Blacksmith's actions
+      # are a fork of docker/*, so the stock pair is the like-for-like
+      # substitute; the `with:` block is identical on both paths on purpose.
       - name: Setup Blacksmith Builder
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Set up Docker Buildx (stock runner)
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/setup-buildx-action@v3
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -838,8 +881,27 @@ jobs:
       # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
         id: image
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         background: true
         uses: useblacksmith/build-push-action@v2
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+
+      # The stock-runner twin. No `background:` — that key is a Blacksmith
+      # runner extension, not documented GitHub Actions (this file's own note
+      # above records it as measured here rather than specified), so it is not
+      # relied on where Blacksmith is not the runner. The cost is that this
+      # build is serial with what follows it on a stock runner; correctness
+      # first, and the whole point of E2E_RUNNER is that the fast path is the
+      # Blacksmith one above.
+      - name: Build the placement service image (stock runner)
+        id: image_stock
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile
@@ -1110,8 +1172,20 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
+      # These three jobs' `runs-on` is variable-driven —
+      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
+      # the runner that was actually chosen rather than assume one. E2E_RUNNER
+      # is UNSET today, which means every leg lands on stock ubuntu-latest
+      # while these steps asked for Blacksmith's builder. Blacksmith's actions
+      # are a fork of docker/*, so the stock pair is the like-for-like
+      # substitute; the `with:` block is identical on both paths on purpose.
       - name: Setup Blacksmith Builder
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         uses: useblacksmith/setup-docker-builder@v1
+
+      - name: Set up Docker Buildx (stock runner)
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/setup-buildx-action@v3
       #
       # Backgrounded, alongside the production build above. `background:` on a
       # `uses:` step is NOT documented anywhere — it was measured on this repo
@@ -1128,8 +1202,27 @@ jobs:
       # image in the local daemon, which is a side effect, not an output.
       - name: Build the placement service image
         id: image
+        if: contains(vars.E2E_RUNNER, 'blacksmith')
         background: true
         uses: useblacksmith/build-push-action@v2
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+
+      # The stock-runner twin. No `background:` — that key is a Blacksmith
+      # runner extension, not documented GitHub Actions (this file's own note
+      # above records it as measured here rather than specified), so it is not
+      # relied on where Blacksmith is not the runner. The cost is that this
+      # build is serial with what follows it on a stock runner; correctness
+      # first, and the whole point of E2E_RUNNER is that the fast path is the
+      # Blacksmith one above.
+      - name: Build the placement service image (stock runner)
+        id: image_stock
+        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile
