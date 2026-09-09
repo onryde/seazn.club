@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { seedOrg, startedDivisionWithFixture, setupDivisionWithFixture } from "./_rig";
 import { setFixtureStreamUrl } from "../fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -56,5 +56,30 @@ describe.skipIf(!HAS_DB)("setFixtureStreamUrl", () => {
     const [row] = await sql<{ stream_url: string | null }[]>`
       select stream_url from fixtures where id = ${fixtureId}`;
     expect(row?.stream_url, "a refused link must leave the column untouched").toBeNull();
+  });
+
+  // Review finding: V401's own stated purpose ("an unreleased division's
+  // stream link must not leak ahead of its schedule") had zero test
+  // coverage — both tests above use startedDivisionWithFixture, never a
+  // 'setup'-status division, so the view's `case when d.status = 'setup'
+  // then null else f.stream_url end` redaction was asserted nowhere.
+  it("redacts the link on the PUBLIC view while the division is still in setup, though the base table keeps the real value", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await setupDivisionWithFixture(auth);
+    const url = "https://youtu.be/abc123";
+
+    const saved = await setFixtureStreamUrl(auth, fixtureId, url);
+    expect(saved).toEqual({ id: fixtureId, stream_url: url });
+
+    const [base] = await sql<{ stream_url: string | null }[]>`
+      select stream_url from fixtures where id = ${fixtureId}`;
+    expect(base?.stream_url, "the base table always holds the real value").toBe(url);
+
+    const [view] = await sql<{ stream_url: string | null }[]>`
+      select stream_url from public_fixtures_v where id = ${fixtureId}`;
+    expect(
+      view?.stream_url,
+      "an unreleased ('setup') division's link must not leak ahead of its schedule",
+    ).toBeNull();
   });
 });
