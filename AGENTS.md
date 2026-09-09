@@ -300,6 +300,16 @@ or `fixture-console.tsx` at a phone width. Not derivable from the code:
 
 ## Standing project rules
 
+- **Reach for the standard design pattern when a real, present need matches
+  one** (not a hypothetical future one) — e.g. a strategy/lookup table over a
+  growing if/else chain of sport rules, a builder where a constructor already
+  takes 5+ optional args, an adapter at a genuine external-boundary seam. This
+  does NOT override the anti-abstraction rule above (three similar lines still
+  beats a premature abstraction) — it only says: when the abstraction is
+  already earned by present, real duplication or a real boundary, use the
+  named pattern instead of a bespoke one-off shape, so the next reader
+  recognizes it. Don't introduce a pattern to preempt a need that hasn't
+  shown up yet.
 - **Read `docs/superpowers/RULES.md` first.** Owner's full standing
   policy — skills to actually use (not just cite), TS7/Node26, agent
   topology (Scout/Implementer/Reviewer — models and effort live in
