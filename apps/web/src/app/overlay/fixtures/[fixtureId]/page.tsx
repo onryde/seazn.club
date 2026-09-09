@@ -17,6 +17,7 @@ import { overlayStartLabel } from "@/lib/overlay-model";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { resolveTheme } from "@/components/overlay/theme-registry";
+import { resolveDelayMs } from "@/lib/overlay-delay";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -47,7 +48,7 @@ export async function generateStaticParams() {
 }
 
 type Params = { fixtureId: string };
-type Query = { style?: string; lang?: string };
+type Query = { style?: string; lang?: string; delay?: string };
 
 export default async function OverlayPage({
   params,
@@ -57,7 +58,16 @@ export default async function OverlayPage({
   searchParams: Promise<Query>;
 }) {
   const { fixtureId } = await params;
-  const { style, lang } = await searchParams;
+  const { style, lang, delay } = await searchParams;
+
+  // Task 5d — closes the delay-compensation seam: an unparseable or
+  // out-of-range `?delay=` falls back to 0 (undelayed) rather than
+  // throwing, the same stance `resolveTheme` below documents for `?style=`
+  // ("A 404 or an exception here would take a club off air over a query
+  // string"). Resolved HERE, server-side, beside `style`/`lang` — never on
+  // the client — for the same reason those two are (this route's own
+  // `dynamic = "force-dynamic"` comment above).
+  const delayMs = resolveDelayMs(delay);
 
   const slugs = await publicFixtureSlugs(fixtureId);
   if (!slugs) notFound();
@@ -123,6 +133,7 @@ export default async function OverlayPage({
       startLabel={startLabel}
       dict={dict}
       decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
+      delayMs={delayMs}
       fit
     />
   );

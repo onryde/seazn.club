@@ -36,6 +36,12 @@ export interface OverlayStageProps {
    *  island carries only the active locale. */
   dict: Record<string, string>;
   decidedTemplates: DecidedOutcomeTemplates;
+  /** Presentation delay in ms — Task 5d's `?delay=`, already parsed and
+   *  bounded server-side by `resolveDelayMs` (`lib/overlay-delay.ts`) before
+   *  it ever reaches this prop; the stage passes it straight through to
+   *  `useLiveFixture`, never re-validates it. `undefined`/0 behaves exactly
+   *  like every pre-Task-5d caller (no delay). */
+  delayMs?: number;
   /** True on the overlay route: fill the viewport. False in the console
    *  preview, which sets its own scale on the wrapper. */
   fit?: boolean;
@@ -44,9 +50,12 @@ export interface OverlayStageProps {
 export function OverlayStage(props: OverlayStageProps) {
   // One transport, two payloads (Task 1): the overlay endpoint is this
   // stage's fetcher; `MatchCentre` keeps the public JSON. `presentationNowOffsetMs`
-  // is 0 until R2 passes `delayMs` — the clock subtracts it either way.
+  // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
+  // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
+  // subtracts it either way.
   const { data, presentationNowOffsetMs } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
+    delayMs: props.delayMs,
   });
   // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
   // the clock TICKS). Formatted here, handed to the pure model as a string.
