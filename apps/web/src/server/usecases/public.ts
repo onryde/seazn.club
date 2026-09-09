@@ -24,6 +24,7 @@ import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
+import { log } from "@/server/logger";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -172,6 +173,22 @@ export async function publicCompetitionHub(
     async () => {
       const doc = await loadCompetitionHub(orgSlug, slug);
       if (!doc) throw new HttpError(404, "competition not found");
+      // Final-review fix F3 — `isValid` below only checks what comes BACK
+      // from Redis on a HIT. Without this, a freshly built document that
+      // fails `CompetitionHubDoc` is served and CACHED anyway, and every
+      // subsequent read within the TTL re-fails the same `isValid` check,
+      // pays a full rebuild, and re-writes the same bad entry — a permanent
+      // silent cache miss with nothing in the logs to say why. This does not
+      // throw: a hard failure is worse on a public page than an unvalidated
+      // document, which is what this endpoint served before the check
+      // existed at all.
+      const parsed = CompetitionHubDoc.safeParse(doc);
+      if (!parsed.success) {
+        log.error(
+          { competitionId: full.id, orgSlug, slug, issues: parsed.error.issues },
+          "publicCompetitionHub: freshly built document failed CompetitionHubDoc — serving and caching it anyway",
+        );
+      }
       return doc;
     },
     (hit) => CompetitionHubDoc.safeParse(hit).success,
