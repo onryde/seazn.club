@@ -30,11 +30,16 @@ ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ARG NEXT_PUBLIC_SENTRY_DSN
 ARG NEXT_PUBLIC_BASE_URL
+# e2e-only: scorepad soft-commit hold, tuned short so Playwright doesn't pay
+# the production hold cost per tap (see AGENTS.md class 20). Empty/unset in
+# prod and staging builds, where the app falls back to its own default.
+ARG NEXT_PUBLIC_SCOREPAD_HOLD_MS
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 ENV NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=$NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
 ENV NEXT_PUBLIC_BASE_URL=$NEXT_PUBLIC_BASE_URL
+ENV NEXT_PUBLIC_SCOREPAD_HOLD_MS=$NEXT_PUBLIC_SCOREPAD_HOLD_MS
 
 # Sentry source-map upload during `next build` (next.config.js). ORG/PROJECT
 # come from fly.toml [build.args]; AUTH_TOKEN is passed via `fly deploy
