@@ -160,9 +160,7 @@ function cellsOf(input: OverlayModelInput): OverlayCell[] {
  *
  * NO PERSON NAME is rendered here. `disciplineList` entries carry an optional
  * `person`, but a name on air needs the consent resolver (R17) and that is
- * W2's work; the class and the side are what W1 shows. Cricket's band is
- * empty in W1 by spec §2 — and comes out empty here anyway, since cricket
- * declares neither serve, strength nor discipline.
+ * W2's work; the class and the side are what W1 shows.
  */
 function detailOf(input: OverlayModelInput, codes: [string, string], live: boolean): string[] {
   const lines: string[] = [];
@@ -244,7 +242,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     },
     sides: overlaySides,
     cells: cellsOf(input),
-    detail: input.sportKey === "cricket" ? [] : detailOf(input, codes, live),
+    detail: detailOf(input, codes, live),
     ...(need === null
       ? {}
       : {
