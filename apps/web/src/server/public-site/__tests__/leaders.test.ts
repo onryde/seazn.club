@@ -14,7 +14,7 @@
 // deliberately does NOT call `registerBuiltins` at module scope: a second
 // registration throws MODULE_DUPLICATE, and a module-scope throw collects zero
 // tests while the run still reads green.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveLatestModule } from "@/server/engine-db";
 import { labelPlayerStats } from "@/server/player-stats";
@@ -572,14 +572,46 @@ describe("toLeaderInputRows", () => {
     expect(out!.badgeUrl).toBe("https://cdn/b.png");
   });
 
+  // `publicStorageUrl` (lib/storage-url.ts) reads NEXT_PUBLIC_SUPABASE_URL and
+  // returns "" when it is unset. A worktree symlinks .env.local and vitest
+  // LOADS it, so locally the variable is always there and this case passed on
+  // ambient state; CI's unit job has no .env.local and the same assertion got
+  // "". Both arms are now stubbed explicitly, so the test states which
+  // environment it is describing instead of inheriting one.
   it("the badge falls back to the linked team's logo, as a resolved public URL", () => {
-    const [out] = toLeaderInputRows(
-      [snapshot({ badge_url: null, team_logo_path: "teams/x.png" })],
-      OPEN_DIVISION,
-      new Map([["e1", "Blazers"]]),
-    );
-    expect(out!.badgeUrl).not.toBeNull();
-    expect(out!.badgeUrl).toContain("teams/x.png");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://proj.supabase.co");
+    try {
+      const [out] = toLeaderInputRows(
+        [snapshot({ badge_url: null, team_logo_path: "teams/x.png" })],
+        OPEN_DIVISION,
+        new Map([["e1", "Blazers"]]),
+      );
+      // The WHOLE url, not a substring: "contains teams/x.png" also passes on a
+      // bare path with no origin, which is the shape a missing env produces.
+      expect(out!.badgeUrl).toBe(
+        "https://proj.supabase.co/storage/v1/object/public/assets/teams/x.png",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("with no storage origin configured the badge is EMPTY, not a bare path", () => {
+    // Pins the deployment-shaped hazard rather than hiding it: without the
+    // public env the shared resolver yields "", so a consumer must treat an
+    // empty badge like a missing one. An earlier version of the test above
+    // could not tell these two apart.
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
+    try {
+      const [out] = toLeaderInputRows(
+        [snapshot({ badge_url: null, team_logo_path: "teams/x.png" })],
+        OPEN_DIVISION,
+        new Map([["e1", "Blazers"]]),
+      );
+      expect(out!.badgeUrl).toBe("");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("each row is folded against ITS OWN division's policy, not the first one", () => {
