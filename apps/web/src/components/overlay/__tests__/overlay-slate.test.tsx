@@ -315,6 +315,24 @@ describe("OverlaySlate — the composited scorebug resolves per sport", () => {
     expect(rootsFor("football")).not.toContain("ovl-bar");
   });
 
+  it("the composited scorebug receives the SAME msg and sportKey the slate got — pass-through, not a fresh channel", () => {
+    // The composited theme must be indistinguishable from the same theme
+    // served directly under `?style=bar`/`?style=bug`; §3's bar and §4's bug
+    // happen not to READ msg today, so this binds on the element's props
+    // rather than on rendered text (which would be vacuous for them).
+    const msg = msgOf("en");
+    const island = renderIsland(
+      OverlaySlate,
+      { model: { ...BASE_MODEL, live: true }, tick: [true, false] as [boolean, boolean], msg, sportKey: "cricket" },
+      expand,
+    );
+    const scorebug = island.tree().find((el) => COMPOSITABLE.has(el.type as never));
+    expect(scorebug, "the composited scorebug element").toBeDefined();
+    expect(propsOf(scorebug!).msg, "same msg instance").toBe(msg);
+    expect(propsOf(scorebug!).sportKey).toBe("cricket");
+    expect(propsOf(scorebug!).tick).toEqual([true, false]);
+  });
+
   it("the composited scorebug receives THIS model and tick, not a stale/default one", () => {
     const a = render({ ...BASE_MODEL, live: true }).tree();
     const b = render({
