@@ -3,7 +3,7 @@
 One page to sequence ACROSS programmes. Session content lives in each
 programme's own `_INDEX.md` + prompts — never duplicated here. Update
 this file whenever a programme's status or a cross-gate changes.
-Last updated: 2026-09-06 (spectator surface row — W0 closed, W1 in its gate).
+Last updated: 2026-09-09 (bench row — B05 merged #754, B06 next).
 
 ## The four active programmes
 
@@ -12,7 +12,7 @@ Last updated: 2026-09-06 (spectator surface row — W0 closed, W1 in its gate).
 | ScoringPad v2 (#407) | `../2026-08-06-scoringpad-v2-prompts/_INDEX.md` | S1–S13, L1–L3 | S1–S9 done; S10 in flight; S11–S13, L-lane open |
 | Release-2 scheduling | `../2026-08-12-release2-prompts/_INDEX.md` | C0–C8 | C0 done; C1 in flight; C2–C8 open |
 | Product portfolio (D1–D7) | `portfolio-prompts/_INDEX.md` | P1–P11 | authored; build-gated per session (owner green-light) |
-| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B04 all merged** (B04 = #731 `6e70c7270`, 2026-09-06); **B05 next**, ungated but needs an owner green-light; B16 still gated (B03r, B05, B06) |
+| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B05 all merged** (B05 = #754 `c28c46752`, 2026-09-08); **B06 (pilot) next**, ungated but needs an owner green-light; B16's only remaining gate is B06. B05 deferred **T6 (people layer)** and **T7 (report sections + provenance %)** by name — owed before B18 |
 | Registration redesign | `../2026-08-16-registration-redesign-prompts/_INDEX.md` | RS001–RS011 | RS001–RS006 merged; RS007–RS011 + RS010 open |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 | Spectator surface (`/shared`) | `../2026-09-04-spectator-prompts/_INDEX.md` | W0–W5 | owner-requested 2026-09-04 (green-lit by the request); W0 CLOSED (Option A everywhere); W1 (match centre) executing on `feat/spectator-surface` — all tasks built and reviewed, the gate and the whole-branch review remaining, no PR until the owner asks; W2–W4 sequential after it, W5 designed after W4; no cross-programme gate — reads the engine, touches no organiser surface |
@@ -74,6 +74,13 @@ P8–P10 (release-2 C-chain), P11 (S13), all B (S13+C8).
 - Release-2 + ScoringPad: listed in their own indexes.
 
 ## Routed in from entitlements v18 W2 — 2026-09-05: the bench baseline moved to `enterprise`
+
+**CLOSED 2026-09-08 as B05's T0** (`599ca30fd`, merged in #754). The recommendation
+below was taken as written: candidates filtered to `is_public = true`, ranked
+least-privileged-first off the live matrix, and the fixtures re-derived from the
+migration deltas so the next plan change moves them instead of passing through.
+Kept in full below because the failure shape — a unit fixture holding a catalog the
+migrations deleted, so no test could witness the drift — is the reusable part.
 
 **Not fixed by that wave.** The cause is its migration; the chooser and its fixtures
 belong to this programme, and changing them mid-flight without their tests would be

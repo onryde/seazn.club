@@ -650,3 +650,48 @@ was intended.
 Until then the engine delta is a proven PIPELINE — it computes, it renders, and
 it survives a leg whose divisions resolve different engines — carrying a number
 that is not yet a measurement.
+
+## 17. Appendix — product findings surfaced by the B05 build and its live run (no issues filed)
+
+§15 is B04's set, §16 B04's first live run. These are B05's, same policy — no
+GitHub issues (`RULES.md:98`, `_RULES.md:11`, §7). Running record with the
+evidence: `../B05-review-findings-2026-09-08.md`. Re-verified against `main`
+`f33b73507` when this section was written.
+
+1. **There is no champion concept on the wire.** `champion|winner_entrant|
+   division_winner` across `apps/web/src/server` and `apps/web/src/app/api/v1`
+   returns zero code hits — only marketing copy. "Who won" is expressible only
+   as `rank: 1` in a final stage's standings, or `finalRanks[0]` in a
+   `complete` response. The bench's champion oracle therefore cross-checks the
+   two rather than reading a field.
+
+2. **`finalRanks` is unreadable after the fact.** `usecases/history.ts:383`
+   selects `seq, type, actor_id, created_at from division_events` and **not**
+   `payload`, so the ranks a completion computed cannot be re-read by any
+   client that missed the response. B05's runner captures them at the moment
+   it advances; a UI that assumes it can fetch them later cannot.
+
+3. **`event-import.ts` cannot be imported by any non-Next consumer.** Its
+   first line is `import "server-only"` — a webpack alias with no package
+   behind it — so `IMPORT_CAPS` had to be hand-mirrored in the bench with a
+   text-diff guard rather than imported. The same is true of
+   `lib/schedule-board.ts` (via `@/lib/zoned-datetime`) for the two publish
+   refusal codes. Any script, worker or test harness outside the Next build
+   hits this; the mirror-plus-guard is the workaround, not a fix.
+
+4. **A11y, found while verifying the French refusal copy in a browser and not
+   owned by any bench wave:** the page renders French while
+   `document.documentElement.lang` stays `"en"`. `apps/web/src/app/layout.tsx:55`
+   hardcodes `lang="en"`, and `resolve-locale.ts:18`'s own header states the
+   static root layout deliberately does not call it — so the resolved locale
+   never reaches the `<html>` tag. A screen reader pronounces French copy with
+   English rules. Fixing it means giving the root layout a locale it can only
+   get dynamically, which is exactly what that comment declines to do; hence
+   recorded rather than patched here.
+
+**Closed rather than carried:** "a confirmed ban does not keep a player off a
+team sheet" was a §17 candidate until the owner ruled it should block. It
+shipped as #753 `088c5436f` — `gateLineupSuspensions`, 422 `SUSPENDED_PLAYER`,
+overridable with a reason against a `suspension.overridden` ledger row, behind
+the paid `discipline.enforced` flag so an org that never bought discipline sees
+no change.
