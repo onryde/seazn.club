@@ -15,10 +15,13 @@ export const POLL_MS = 15_000;
  *  buffer, built here so the seam is real from W1; with it absent the hook is
  *  byte-identical to the spectator-W1 version.
  *
- *  `fetcher` must be STABLE across renders (a module-level function such as
- *  `fetchOverlayFixture`, or a `useCallback`). It is a dependency of `refresh`,
- *  which is a dependency of the poll effect — an inline arrow would re-arm the
- *  interval every render and the poll would never fire. */
+ *  `fetcher` does NOT have to be referentially stable: it is held in a ref and
+ *  re-pointed every render, so `refresh` keeps one identity for the life of the
+ *  hook. It used to be a `useCallback` dependency of `refresh`, which is itself
+ *  a dependency of the poll effect — a caller minting an inline arrow therefore
+ *  cleared and re-armed the POLL_MS interval on EVERY render, and a component
+ *  that re-renders faster than POLL_MS would never poll at all. Silent, and
+ *  invisible to a props-stable test harness. */
 export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
   fetcher?: (fixtureId: string) => Promise<T>;
   /** Present snapshots no sooner than `delayMs` after they were received. */
@@ -42,6 +45,20 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   options: UseLiveFixtureOptions<T> = {},
 ): UseLiveFixtureResult<T> {
   const fetcher = options.fetcher ?? (fetchLiveFixture as (id: string) => Promise<T>);
+  // Held in a ref so `refresh` — and therefore the poll effect that depends on
+  // it — keeps ONE identity however often the caller re-mints its fetcher.
+  //
+  // Re-pointed in an effect, not in the render body: a render-phase ref write
+  // is exactly what `react-hooks/refs` refuses (it is unsound under concurrent
+  // rendering), and it buys nothing here. `useRef`'s initial value already
+  // covers the first render, and an effect commits immediately after its
+  // render — so the only window in which a poll would see the PREVIOUS
+  // render's fetcher is between a re-render and its own commit, which a
+  // POLL_MS tick would have to land inside.
+  const fetcherRef = useRef(fetcher);
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  });
   const delayMs = options.delayMs ?? 0;
   const [data, setData] = useState<T>(initial);
   // The delay buffer: snapshots RECEIVED, waiting to be PRESENTED. Empty and
@@ -68,7 +85,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetcher(fixtureId);
+      const next = await fetcherRef.current(fixtureId);
       if (!mountedRef.current) return;
       if (delayMs <= 0) {
         setData(next);
@@ -78,7 +95,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     } catch {
       // transient — keep the last known data (never throw to the UI)
     }
-  }, [fixtureId, fetcher, delayMs]);
+  }, [fixtureId, delayMs]);
 
   const live = data.status === "in_play" || data.status === "scheduled";
 

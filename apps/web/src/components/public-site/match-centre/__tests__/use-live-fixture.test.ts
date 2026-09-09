@@ -37,11 +37,18 @@ function mount(
     props.onReady(result);
     return null;
   }
-  const island = renderIsland(Probe, { fixtureId, initial, realtime, options, onReady: (r) => (latest = r) });
+  const onReady = (r: UseLiveFixtureResult) => (latest = r);
+  const island = renderIsland(Probe, { fixtureId, initial, realtime, options, onReady });
   return {
     get current() {
       return latest;
     },
+    /** Re-render with a DIFFERENT options object — what a caller that mints its
+     *  `fetcher` inline does on every one of its own renders. Everything else
+     *  about the island is held identical, so the only thing that moved is the
+     *  option. */
+    rerender: (next?: UseLiveFixtureOptions<LiveFixtureData>) =>
+      island.rerender({ fixtureId, initial, realtime, options: next, onReady }),
     unmount: () => island.unmount(),
   };
 }
@@ -138,6 +145,28 @@ describe("useLiveFixture", () => {
     expect(own).toHaveBeenCalledWith("fx-1");
     expect(fetchLiveFixture).not.toHaveBeenCalled();
     expect(hook.current.data.summary?.headline).toBe("own:fx-1");
+  });
+
+  // Review fix round 1 (Important) — `fetcher` referential stability was
+  // DOCUMENTED and unenforced. `refresh` used to list it as a `useCallback`
+  // dependency, so a caller minting an inline arrow handed the poll effect a
+  // new `refresh` every render, which cleared and re-armed the 15 s interval
+  // every render — a poll that can starve for ever, silently. It is held in a
+  // ref now, re-pointed in the render body. This is the case that pins both
+  // halves; without `hook.rerender` no test in this file could see it at all,
+  // because `renderIsland` holds ONE props object for the island's life.
+  it("a fetcher whose identity changes every render does NOT re-arm the poll — the newest one is called on the ORIGINAL schedule", async () => {
+    const a = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "a" } }) as LiveFixtureData);
+    const b = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "b" } }) as LiveFixtureData);
+    const hook = mount("fx-1", scheduled, false, { fetcher: a });
+
+    await vi.advanceTimersByTimeAsync(POLL_MS - 1000); // t = 14 000 — no tick yet
+    hook.rerender({ fetcher: b }); // a new options object AND a new fetcher identity
+    await vi.advanceTimersByTimeAsync(1000); // t = 15 000 — the ORIGINAL interval's first tick
+
+    expect(b, "the interval was never cleared, so it fired on its own schedule").toHaveBeenCalledWith("fx-1");
+    expect(a, "the ref is re-pointed every render, so the stale fetcher is never called").not.toHaveBeenCalled();
+    expect(hook.current.data.summary?.headline).toBe("b");
   });
 
   it("without options arms ONLY the poll timer — no drain timer (the positive pair for the delay cases)", () => {
