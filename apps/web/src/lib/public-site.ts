@@ -412,6 +412,80 @@ export function disciplineLabel(classKey: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+/**
+ * The entrant currently batting: the last innings on the public summary that
+ * has not closed. Cricket's `summary().detail.innings[]` is the only shape in
+ * the engine with this field set (`sports/cricket/cricket.ts:3306-3316`), so
+ * every other sport returns null by construction rather than by a sport check.
+ *
+ * This is the FIRST authority for "who is in" on the public payload — nothing
+ * else derives it — and it lives here, beside `servingSide`, so the overlay
+ * and any later spectator surface read one implementation (R5).
+ */
+export function battingEntrantId(summary: unknown): string | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const last = raw[raw.length - 1];
+  if (typeof last !== "object" || last === null) return null;
+  const { entrantId, closed } = last as Record<string, unknown>;
+  if (closed === true) return null;
+  return typeof entrantId === "string" ? entrantId : null;
+}
+
+/**
+ * Runs still needed by the side batting second, or null when there is no chase
+ * in progress. A revised target (DLS, `detail.target`) REPLACES the first
+ * innings' total; without one the target is that total plus one.
+ *
+ * The BALLS half of "Need 45 off 45" is `chaseBalls` below, kept separate so a
+ * format with no quota still gets its runs line.
+ */
+export function chaseNeed(summary: unknown): number | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const first = raw[raw.length - 2];
+  const current = raw[raw.length - 1];
+  if (typeof first !== "object" || first === null) return null;
+  if (typeof current !== "object" || current === null) return null;
+  if ((current as Record<string, unknown>).closed === true) return null;
+  const chased = (current as Record<string, unknown>).runs;
+  if (typeof chased !== "number") return null;
+  const revised = (detail as { target?: unknown }).target;
+  if (typeof revised === "number") return Math.max(0, revised - chased);
+  const set = (first as Record<string, unknown>).runs;
+  if (typeof set !== "number") return null;
+  return Math.max(0, set + 1 - chased);
+}
+
+/**
+ * Balls still available to the side batting second, or null.
+ *
+ * The denominator of the line `_THEMES.md` §3 draws — "Need 45 off 45". Both
+ * numbers come from the SAME innings entry the overlay endpoint projects off
+ * the folded state (Task 0, design §3.2: `OverlayLiveData.cricket.innings[]`),
+ * so a DLS revision moves them together and nothing here re-derives a quota
+ * from a format name. Whether a chase is in progress is `chaseNeed`'s
+ * decision over the summary; the model calls this only when it is.
+ *
+ * `null`, never a guess, where the format declares no quota (`ballsLimit:
+ * null` — timed and unlimited formats, cricket.ts:440): the bar then renders
+ * the runs-only line, which is correct rather than short.
+ */
+export function chaseBalls(
+  cricket: { innings: { legalBalls: number; ballsLimit: number | null }[] } | null | undefined,
+): number | null {
+  if (!cricket || !Array.isArray(cricket.innings) || cricket.innings.length < 2) return null;
+  const current = cricket.innings[cricket.innings.length - 1]!;
+  if (typeof current.ballsLimit !== "number" || typeof current.legalBalls !== "number") return null;
+  return Math.max(0, current.ballsLimit - current.legalBalls);
+}
+
 // ---------------------------------------------------------------------------
 // Row normalization + spectator vocabulary
 // ---------------------------------------------------------------------------
