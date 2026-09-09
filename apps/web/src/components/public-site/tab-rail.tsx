@@ -58,8 +58,15 @@ export function PublicTabRail<Id extends string>({
     // Wrapper verbatim from `tabs.tsx:18`.
     <div className="sticky top-[54px] z-30 -mx-4 bg-canvas/90 px-4 py-2 backdrop-blur">
       <div
+        // NO `tabIndex` on the tablist. W1's whole-branch review found and
+        // fixed exactly this on `match-centre/tab-rail.tsx:38-49`: a rail with
+        // its own `tabIndex={0}` plus one focusable button per tab costs a
+        // keyboard user N+1 tab stops before they reach the content. The APG
+        // tabs pattern puts exactly ONE stop on the rail — the SELECTED tab —
+        // and moves between tabs with the arrow keys, which `handleKeyDown`
+        // already implements. `onKeyDown` stays here regardless: the event
+        // bubbles up from the focused button.
         role="tablist"
-        tabIndex={0}
         aria-label={ariaLabel}
         className="flex gap-1 overflow-x-auto"
         onKeyDown={handleKeyDown}
@@ -80,6 +87,12 @@ export function PublicTabRail<Id extends string>({
               // other tab's `aria-controls` would name an element that is
               // not in the document.
               aria-controls={isActive ? `${testidPrefix}-tab-panel-${tab.id}` : undefined}
+              // Roving tabindex — the selected tab is the rail's single tab
+              // stop. Placed BEFORE `data-testid`, matching `TabRail`, because
+              // the pill-class assertions capture the attributes that FOLLOW
+              // `data-testid`, and an attribute wedged in between reds a test
+              // about something else entirely.
+              tabIndex={isActive ? 0 : -1}
               data-testid={`${testidPrefix}-tab-${tab.id}`}
               aria-selected={isActive}
               onClick={() => onChange(tab.id)}

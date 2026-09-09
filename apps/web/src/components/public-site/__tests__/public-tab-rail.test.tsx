@@ -20,7 +20,7 @@ const tabs = [
 ];
 
 describe("PublicTabRail", () => {
-  it("tablist is focusable and named; one role=tab per tab with the prefix's testids; the active tab is aria-selected (positive pair on an inactive one)", () => {
+  it("the tablist is NAMED but not itself focusable; the SELECTED tab is the rail's single tab stop and the inactive one is out of the tab order (positive pair); one role=tab per tab with the prefix's testids", () => {
     const h = renderToStaticMarkup(
       <PublicTabRail
         tabs={tabs}
@@ -30,12 +30,21 @@ describe("PublicTabRail", () => {
         testidPrefix="mh"
       />,
     );
-    expect(h).toMatch(/role="tablist"[^>]*tabindex="0"[^>]*aria-label="Competition sections"/);
+    // ROVING TABINDEX, not a focusable tablist. The brief specified
+    // `tabIndex={0}` on the container, which is the shape W1's whole-branch
+    // review already removed from `match-centre/tab-rail.tsx` — a rail with
+    // its own tab stop plus one per button costs a keyboard user N+1 stops
+    // before the content. Folding this rail onto W1's (Task 19) would have
+    // propagated the regression back INTO the match centre.
+    expect(h).toMatch(/role="tablist"[^>]*aria-label="Competition sections"/);
+    expect(h).not.toMatch(/role="tablist"[^>]*tabindex=/);
     expect(h.match(/role="tab"/g)?.length).toBe(2);
     expect(h).toMatch(
-      /id="mh-tab-matches"[^>]*aria-controls="mh-tab-panel-matches"[^>]*data-testid="mh-tab-matches"[^>]*aria-selected="true"/,
+      /id="mh-tab-matches"[^>]*aria-controls="mh-tab-panel-matches"[^>]*tabindex="0"[^>]*data-testid="mh-tab-matches"[^>]*aria-selected="true"/,
     );
-    expect(h).toMatch(/data-testid="mh-tab-overview"[^>]*aria-selected="false"/);
+    // The positive pair: the INACTIVE tab is out of the tab order entirely,
+    // which is the half that makes it a single stop rather than none.
+    expect(h).toMatch(/tabindex="-1"[^>]*data-testid="mh-tab-overview"[^>]*aria-selected="false"/);
   });
 
   it("renders the real label text, not a bare id or dictionary key (RENDERED COPY, not just a testid)", () => {
