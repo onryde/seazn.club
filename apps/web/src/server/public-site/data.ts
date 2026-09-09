@@ -49,6 +49,24 @@ const normalizeFixture = <T extends { scheduled_at: unknown }>(f: T): T => ({
 });
 
 /**
+ * Final-review fix F1 — the same timestamptz normalisation as
+ * {@link normalizeFixture}, for `public_standings_v.updated_at`.
+ *
+ * `db.ts`'s date-type override only patches OID 1082 (`date`); postgres.js's
+ * default handler still owns OID 1184 (`timestamptz`) and parses it to a JS
+ * `Date` (`mergeUserTypes` merges by OID). `PublicStandings.updated_at` is
+ * declared `string`, and `competition-hub.ts:591` forwards this field
+ * unchanged into `TableView.updatedAt` (`z.string()`) — so without this, the
+ * declaration is a lie and the hub document fails schema validation. NOT
+ * NULL at the schema (`V218__standings_snapshots.sql`), so the non-null
+ * assertion matches the column's own constraint rather than assuming it.
+ */
+const normalizeStandings = (s: PublicStandings): PublicStandings => ({
+  ...s,
+  updated_at: isoDateTime(s.updated_at)!,
+});
+
+/**
  * P9 cutover: `venue_name`/`court_name` DERIVED from `venues`/`courts` via
  * `fixtures.venue_id`/`court_id`. `public_fixtures_v` (db/migration) is a
  * hand-maintained column list that has not been extended with the two id
@@ -671,9 +689,11 @@ export async function getPublicDivision(
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const fixtures = await withCourtVenueNames(rawFixtures);
-      const standings = await sql<PublicStandings[]>`
+      const standings = (
+        await sql<PublicStandings[]>`
         select stage_id, pool_id, rows, updated_at
-        from public_standings_v where division_id = ${division.id}`;
+        from public_standings_v where division_id = ${division.id}`
+      ).map(normalizeStandings);
       const rawEntrants = await sql<PublicEntrant[]>`
         select id, division_id, kind, display_name, seed, status, members,
                team_display, badge_url
