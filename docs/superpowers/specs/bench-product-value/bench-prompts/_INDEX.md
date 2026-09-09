@@ -34,8 +34,8 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B03 | `B03-seeding-layer.md` | org/comp/divisions/persons/officials/plans/claims | B02 | **MERGED #711 `3cfac6332` 2026-09-03** |
 | B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | **MERGED #713 `310eb22ac` 2026-09-04** — paid path proven live (2 × 100 USD destination charges, webhook accepted); bench 721/721 |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | **MERGED #731 `6e70c7270` 2026-09-06** — 1187/1187, tsc 0, eslint 0; three live legs at one SHA, all green. Four defects found by RUNNING it, each past a green suite (see the status log). Design: `../designs/2026-09-05-b04-scheduling-layer-design.md`. Product findings: bench design **§15**. Run results and the engine delta's limits: bench design **§16**. `../B04-handoff-2026-09-05.md` is HISTORICAL — it describes a mid-wave state, do not follow it. |
-| B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | **UNGATED 2026-09-06** — B04 (#731) merged; verify by SHA on main, not from this row. Still needs an explicit owner green-light per the creative-only ruling (`_MASTER.md`). |
-| B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | TODO |
+| B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | **MERGED #754 `c28c46752` 2026-09-08** — 1397/1397, `typecheck:scripts` 0, eslint 0; three live runs, both `_RULES.md` §2 legs green, 33 oracles / 31 with a subject / 0 FAIL. **T6 (people layer) and T7 (report sections + provenance %) NOT built** — deferred by name, plumbing in place; see the status log. Design: `../designs/2026-09-07-b05-simulation-layer-design.md`. Findings: `../B05-review-findings-2026-09-08.md`. Product findings: bench design **§17**. |
+| B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | **UNGATED 2026-09-08** — B05 (#754) merged; verify by SHA on main, not from this row. Needs an explicit owner green-light per the creative-only ruling (`_MASTER.md`). **Carries B05's T6 gap**: its sheet asks for "claims for 3 stars" and "news drafts on finals" oracles, and the people layer that accepts `pc_` claims and reads drafts was NOT built — B06 either lands T6 first or drops those two as §7A adaptations and records it. |
 | B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06 | TODO |
 | B08 | `B08-pack-cricket.md` | suite 1 (T20WC24 + CT25) — volume monster | B06 | TODO |
 | B09 | `B09-pack-football.md` | suite 2 (Euro24 + WEuro25, decided B00) | B06 | TODO |
@@ -45,7 +45,7 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B13 | `B13-pack-tabletennis.md` | suite 6 (WTTC 25) | B06 | TODO |
 | B14 | `B14-pack-volleyball.md` | suite 7 (Paris 24 M+W) | B06 | TODO |
 | B15 | `B15-pack-hockey-icehockey.md` | suites 8 (Paris 24) + 9 (IIHF 25) | B06 | TODO |
-| B16 | `B16-pack-club-open.md` | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO (gated) |
+| B16 | `B16-pack-club-open.md` | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO — **B03r and B05 both merged; B06 is the only gate left** |
 | B17 | `B17-disruption-suite.md` | suite 12: blackout→reflow, walkover, correction | B15 | TODO |
 | B18 | `B18-full-run-closeout.md` (amend) | all suites, perf baseline, report, docs, memory; + one `--entry registration` pass ("Registration at volume" baseline, report-only) | all | TODO |
 
@@ -106,6 +106,74 @@ fall back from, is live — no B-prompt needs its fallback path.
 ## Status log
 
 (append as sessions run)
+
+- 2026-09-08 — **B05 MERGED, PR #754 `c28c46752`.** Simulation layer: the
+  bench now plays the matches. `simulate.ts` (single-event fold, strictly
+  sequential `expected_seq`), `import.ts` (chunked against the product's own
+  `IMPORT_CAPS`), `advance.ts` (`propose → assert → confirm → generate →
+  complete`), `oracle.ts` (eight comparators), plus division START and a
+  rebuilt `plan.ts` chooser, wired through `suites/tiny.ts` and `report.ts`.
+  Both write paths are split across divisions so neither can go inert. Gates
+  at merge: **1397/1397**, 0 failed suites, `typecheck:scripts` 0, eslint 0
+  bytes. Three green live runs (the last on the rebased tree against a v400
+  DB) and both `_RULES.md` §2 legs — placement up/`optimized` and placement
+  down/`greedy` (`solver_unavailable`) — same verdicts either way, which is
+  what CI will see since smoke has no placement container. Oracles: 33 total,
+  31 with a subject, 31 PASS, 0 FAIL, 2 NO SUBJECT. Throughput on `_tiny`:
+  single-POST 9 events @ **28/s**, import 84 events in 2 chunks @ **112/s**
+  (not the B06 baseline — that is measured on a real pack).
+
+  **Five briefed premises were false**, each recorded rather than worked
+  around (`../B05-repins-2026-09-07.md`): `finalRanks` crosses the wire ONCE
+  in the `complete` response and can never be re-read (`GET /history` does not
+  select `payload`) and is emitted for every stage kind, not just
+  ladder/bracket; there is no champion field anywhere; advancement lives in
+  `usecases/stages.ts`, not `stage-seeding.ts`, and all four routes are
+  `/api/v1`-reachable, so the bench-as-organizer fallback is dead;
+  `import.events` HAS `plan_entitlements` rows since V396 (B00's "no row yet"
+  was stale); and **nothing had ever started the division** — both write paths
+  refuse `setup`/`scheduled`, so every fold this wave built would have 409'd
+  on contact with a real server, invisible to a fake with no phase gate
+  (ruling D9 covers the start and its refusal policy).
+
+  **T0 caught the bench measuring nothing a customer can buy.** After V393
+  deleted `pro_plus`, `chooseGrantingPlanForCapabilities` was landing the
+  bench org on `enterprise` — `is_public = false`, unlimited caps — and the
+  unit fixtures injected a catalog still naming `pro_plus`, so they could not
+  witness it. Candidates are now filtered to `is_public = true` and ranked
+  least-privileged-first off the live matrix, with the fixtures derived from
+  the migration deltas. This closes the item `_MASTER.md` routed in from
+  entitlements v18 W2.
+
+  **Two defects the live run found that 1,397 passing unit tests could not:**
+  the standings comparator failed on metrics the pack never DECLARED (any pack
+  omitting an optional metrics map could never pass — fixed in the comparator,
+  not by making `_tiny` declare everything, which would have hidden it); and a
+  **PASS over zero comparisons** — `tie-order cascade … (0 checked, 0 skipped)`
+  printed green on two divisions. NO SUBJECT is now a third verdict, counted
+  separately, never reading as PASS and never reddening a run.
+
+  **Deferred by name, not omitted: T6 (people layer** — officials assign,
+  claim accept via magic link, news drafts) **and T7 (report sections,
+  provenance %)**. The pack subjects and oracle plumbing they need are in
+  place. Whoever picks them up should re-read this row first — they are owed
+  before B18's closeout. **They are not free of B06, either**: B06's suite
+  sheet asks for a "claims for 3 stars" oracle and "news drafts on finals",
+  and both belong to T6 — the pilot must either land T6 first or drop the two
+  as §7A adaptations and record the drop. Nothing else in B06 needs T6/T7.
+
+  Shipped alongside, in its own PR: **#753 `088c5436f`, the team-sheet
+  suspension gate** (`gateLineupSuspensions`, 422 `SUSPENDED_PLAYER`,
+  overridable with a reason against a `suspension.overridden` ledger row,
+  behind the paid `discipline.enforced` flag). The bench's suspension-carry
+  oracle asserts that 422 on a LIVE run; the unit suite does not depend on it.
+  A decided fixture refuses earlier ("lineup is locked once a fixture is
+  decided"), so the gate has to be driven on a SCHEDULED fixture — worth
+  knowing before someone concludes it does not fire. Three product findings
+  went to bench design **§17**; one a11y finding (the page renders French
+  while `document.documentElement.lang` stays `"en"` — the static root layout
+  never calls `resolve-locale.ts`) is recorded there too, unowned by any
+  bench wave.
 
 - 2026-09-06 — **B04 MERGED, PR #731 `6e70c7270`.** Scheduling layer:
   `board.ts`, `schedule.ts`, `checker.ts` (eight rules recomputed
