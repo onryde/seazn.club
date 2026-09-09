@@ -39,18 +39,23 @@ const moduleFor = (key: string) => {
  *  instead of freezing yesterday's constants. */
 const cfgFor = (key: string) => moduleFor(key).configSchema.parse(SIM_CONFIGS[key] ?? {});
 
-/** Folds `stream` through the real module and returns what foldFixture would. */
+const WALL = "2026-09-07T14:00:00.000Z";
+
+/** Folds `stream` through the real module and returns what foldFixture would.
+ *  A stream entry may carry its OWN `recordedAt` as a third slot — without
+ *  that, every envelope shares one wall time and the anchor-pairing bug of
+ *  review finding I2 is unwitnessable (any envelope gives the same answer). */
 function folded(
   key: string,
-  stream: readonly (readonly [string, unknown])[],
-  recordedAt = "2026-09-07T14:00:00.000Z",
+  stream: readonly (readonly [string, unknown, string?])[],
+  recordedAt = WALL,
 ): FoldedFixture {
   const mod = moduleFor(key);
   const cfg = cfgFor(key);
   const lineups = defaultLineupPair(mod.positions);
-  const events: EventEnvelope[] = stream.map(([type, p], i) => ({
+  const events: EventEnvelope[] = stream.map(([type, p, at], i) => ({
     ...makeEnvelope(i, { type, payload: p } as never),
-    recordedAt,
+    recordedAt: at ?? recordedAt,
   }));
   const state = foldMatch(mod as never, cfg as never, lineups, events);
   const m = mod as unknown as {
@@ -147,6 +152,31 @@ describe("projectOverlayLiveData", () => {
     ]);
     const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
     expect(out.clock, "a stale clock on air is worse than no clock").toBeUndefined();
+  });
+
+  it("football: an UNSTAMPED event after the stamped one does not drag the anchor forward", () => {
+    // Review 2026-09-09 (I2). `applyEvent` only writes `asOf` for an event
+    // carrying an `at` (football.ts:2522), so this card leaves `asOf` at the
+    // goal's 761 while being the chronologically last envelope. Anchoring on
+    // the last envelope would pair 761 with the CARD's wall time, 90 s later —
+    // and the stage's `anchorSeconds + (now - anchorAtWallMs)` would jump
+    // BACKWARD by 90 s the moment the card was recorded.
+    const goalWall = "2026-09-07T14:00:00.000Z";
+    const cardWall = "2026-09-07T14:01:30.000Z";
+    const f = folded("football", [
+      ["core.start", {}, goalWall],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }, goalWall],
+      ["football.card", { by: "A", color: "yellow" }, cardWall],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
+    expect(out.clock).toEqual({
+      phase: "H1",
+      anchorSeconds: 761,
+      anchorAtWallMs: Date.parse(goalWall),
+    });
+    // The assertion that actually witnesses the regression: the wrong answer
+    // is a DIFFERENT constant, not a missing field.
+    expect(out.clock!.anchorAtWallMs).not.toBe(Date.parse(cardWall));
   });
 
   it("football: a stream nothing stamped carries no clock", () => {

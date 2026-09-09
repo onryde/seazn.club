@@ -12,6 +12,7 @@ import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
 import { resolveVenueTz } from "@/lib/tz";
+import { venueTzRow } from "@/server/venue-tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
 // The DB-touching "matches" counter — NOT the pure module above (same name,
@@ -789,15 +790,15 @@ export async function getPublicFixture(
         select org_has_feature(${shell.org.id}, 'realtime', ${shell.competition.id})
                as realtime`;
       // Task 9 — the division's own tz override (V305 venue lane; org
-      // timezone is `shell.org`'s own row, read separately below since
-      // `PublicOrg` does not carry it — see `resolveVenueTz`'s doc comment
-      // for why venue tz is never inherited from a personal/browser lane).
-      const [tzRow] = await sql<{ division_tz: string | null; org_tz: string | null }[]>`
-        select ss.tz as division_tz, o.timezone as org_tz
-        from divisions d
-        left join schedule_settings ss on ss.division_id = d.id
-        left join organizations o on o.id = d.org_id
-        where d.id = ${division.id}`;
+      // timezone is `shell.org`'s own row, read separately since `PublicOrg`
+      // does not carry it — see `resolveVenueTz`'s doc comment for why venue
+      // tz is never inherited from a personal/browser lane).
+      //
+      // Review 2026-09-09 (I3): the join itself now lives in `server/venue-tz.ts`,
+      // the single authority for WHICH columns the venue lane reads. The raw
+      // pair is still needed here (not just the resolved zone) because
+      // `loadMatchCentre` takes `orgTz` and `division.tz` separately.
+      const tzRow = await venueTzRow(division.id);
       const [stageRow] = await sql<{ name: string }[]>`
         select name from stages where id = ${fixture.stage_id}`;
       const locale = toLocale(shell.org.default_locale);
