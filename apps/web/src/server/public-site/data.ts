@@ -11,6 +11,7 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
+import { resolveVenueTz } from "@/lib/tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
 // The DB-touching "matches" counter — NOT the pure module above (same name,
@@ -747,6 +748,12 @@ export async function getPublicFixture(
    *  `publicFixture`) uses, so the page's first paint and every subsequent
    *  poll (Task 10's client hook) render the exact same document shape. */
   matchCentre: MatchCentreDocT;
+  /** Stream overlay Task 0 (owner answer 12) — the VENUE lane's IANA zone
+   *  (V305), so a pre-match overlay prints a start time the club's own
+   *  audience recognises instead of UTC. A raw zone, never a pre-formatted
+   *  label: the label is formatted by the server component that already holds
+   *  the locale (`overlayStartLabel`, Task 2), so `?lang=` can re-render it. */
+  venueTz: string;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -815,6 +822,17 @@ export async function getPublicFixture(
         entrantNames: Object.fromEntries(names.map((n) => [n.id, n.display_name])),
         realtime: rt?.realtime === true,
         matchCentre,
+        // Stream overlay Task 0 — "one zone per fixture", resolved through the
+        // TS authority `resolveVenueTz` (lib/tz.ts:44) off the SAME `tzRow`
+        // Task 9 already reads above, rather than a second query or a second
+        // `coalesce(ss.tz, o.timezone, 'UTC')` SQL mirror. (getPublicDivision
+        // splices that mirror inline only because a string helper cannot go
+        // into a postgres.js tagged template; here both columns are in hand.)
+        //
+        // NEVER `pickTimezone` and never the `seazn_tz` cookie: a London-based
+        // organiser can run an event in Malaga, and the overlay is watched by
+        // an audience in neither.
+        venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
       };
     },
     ["pub-fixture", fixtureId],

@@ -1,0 +1,241 @@
+// `projectOverlayLiveData` — the folded state → the overlay's wire contract
+// (design §3.2). Every case folds a SHORT REAL ledger through the REAL module
+// (`foldMatch`, packages/engine/src/core/events.ts, with
+// `defaultLineupPair`/`makeEnvelope` from `@seazn/engine/testkit`) — the same
+// builder Task 2's overlay-model.test.ts uses — so the two numbers the
+// overlay needs are read off the state the ENGINE produced, never off a
+// hand-typed object that happens to have the right keys.
+//
+// Pure: no DB. `FoldedFixture` is assembled from the fold's own outputs.
+//
+// RE-PINNED against the tree 2026-09-09 (the brief's stream shapes were a
+// hypothesis; four of them were wrong and are corrected here, each noted at
+// its use site): `FootballPeriod` is `{ phase, addedMinutes?, at? }` not
+// `{ to, at }` (football.ts:264-283); `CricketClose.reason` has no
+// "declared" member (cricket.ts:249-253); `cricket.toss` must PRECEDE
+// `core.start` ("toss must precede core.start", cricket.ts:3511); and
+// `closeOpenInnings` throws `no innings in progress` (cricket.ts:951) unless
+// a delivery has actually opened one.
+import { describe, expect, it } from "vitest";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
+import { projectOverlayLiveData } from "../project";
+import type { FoldedFixture } from "@/server/engine-db/fold";
+
+const moduleFor = (key: string) => {
+  const m = builtinModules.find((mod) => mod.key === key);
+  if (!m) throw new Error(`no builtin module for "${key}"`);
+  return m;
+};
+
+/** The raw config every builtin module is exercised under across this repo.
+ *  `parse({})` is NOT universal — `generic`'s schema requires `resultMode` and
+ *  `allowDraws` with no defaults, so the brief's `configSchema.parse({})`
+ *  threw a ZodError on the all-sports sweep. `SIM_CONFIGS`
+ *  (`@seazn/engine/testkit`, simulation.ts:91) is the engine's OWN declaration
+ *  of a valid raw config per module — the same one chaos.test.ts and
+ *  stoppages.test.ts use — so the numbers this file asserts move with it
+ *  instead of freezing yesterday's constants. */
+const cfgFor = (key: string) => moduleFor(key).configSchema.parse(SIM_CONFIGS[key] ?? {});
+
+/** Folds `stream` through the real module and returns what foldFixture would. */
+function folded(
+  key: string,
+  stream: readonly (readonly [string, unknown])[],
+  recordedAt = "2026-09-07T14:00:00.000Z",
+): FoldedFixture {
+  const mod = moduleFor(key);
+  const cfg = cfgFor(key);
+  const lineups = defaultLineupPair(mod.positions);
+  const events: EventEnvelope[] = stream.map(([type, p], i) => ({
+    ...makeEnvelope(i, { type, payload: p } as never),
+    recordedAt,
+  }));
+  const state = foldMatch(mod as never, cfg as never, lineups, events);
+  const m = mod as unknown as {
+    summary: (s: unknown) => FoldedFixture["summary"];
+    outcome?: (s: unknown) => FoldedFixture["outcome"];
+  };
+  return {
+    fixtureId: "fx-1",
+    lastSeq: events.length,
+    state,
+    summary: m.summary(state),
+    outcome: m.outcome ? m.outcome(state) : null,
+    active: events,
+  };
+}
+
+const ROW = (last_seq: number | null, status = "in_play") => ({
+  status,
+  summary: { headline: "x" },
+  outcome: null,
+  last_seq,
+});
+
+/** The testkit's HOME entrant id. `CricketToss` (cricket.ts:240) is
+ *  `strictObject { wonBy: EntrantId, elected: "bat"|"bowl" }`, and `EntrantId`
+ *  is a bare non-empty string (core/types.ts:10) — so a wrong value is
+ *  ACCEPTED by the schema and only refused by `sideOf`. Read it off
+ *  `defaultLineupPair` rather than typing "H". */
+const HOME_ID: string = (
+  defaultLineupPair(moduleFor("cricket").positions) as { home: { entrantId: string } }
+).home.entrantId;
+
+/** Deliveries. A read fold is NON-strict (`foldFixture` passes no options), so
+ *  over/ballInOver, the bowler quota and striker rotation are all tolerant —
+ *  only "bowler is in the fielding lineup" (cricket.ts:1298) is unconditional.
+ *  The rotation below is still written honestly so the stream is a real card. */
+const ball = (
+  over: number,
+  ballInOver: number,
+  striker: string,
+  nonStriker: string,
+  bowler: string,
+  runs: number,
+  boundary?: 4 | 6,
+) =>
+  [
+    "cricket.ball",
+    {
+      over,
+      ballInOver,
+      striker,
+      nonStriker,
+      bowler,
+      runs: { bat: runs },
+      ...(boundary ? { boundary } : {}),
+    },
+  ] as const;
+
+describe("projectOverlayLiveData", () => {
+  it("carries the row's snapshot fields and the venue zone, and lastSeq from the ROW (one authority: match_states)", () => {
+    const out = projectOverlayLiveData({ row: ROW(7), folded: null, venueTz: "Asia/Kolkata" });
+    expect(out.status).toBe("in_play");
+    expect(out.summary).toEqual({ headline: "x" });
+    expect(out.outcome).toBeNull();
+    expect(out.lastSeq).toBe(7);
+    expect(out.venueTz).toBe("Asia/Kolkata");
+    expect(out.clock).toBeUndefined();
+    expect(out.cricket).toBeUndefined();
+  });
+
+  it("football: a stamped goal in a running half anchors the clock at the stamp, on the last event's wall time", () => {
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+    expect(out.clock).toEqual({
+      phase: "H1",
+      anchorSeconds: 761,
+      anchorAtWallMs: Date.parse("2026-09-07T14:00:00.000Z"),
+    });
+    expect(out.cricket).toBeUndefined();
+  });
+
+  it("football: between periods the clock is ABSENT (the stage holds the last value), never a stale stamp", () => {
+    // H1's closing whistle carries an H1 stamp; `applyPeriod`'s "HT" arm then
+    // pushes `state.phase` to "H2" (football.ts:1548-1551) while `asOf` stays
+    // at the whistle's own H1 stamp (:2525) — so the stamp names a phase the
+    // match has left, which is exactly the guard `footballPosition` applies.
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+      ["football.period", { phase: "HT", at: { period: "H1", elapsed: 2700 } }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(3), folded: f, venueTz: "UTC" });
+    expect(out.clock, "a stale clock on air is worse than no clock").toBeUndefined();
+  });
+
+  it("football: a stream nothing stamped carries no clock", () => {
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ]);
+    expect(projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
+  it("cricket: every innings' runs, wickets, legalBalls and ballsLimit, from the state — the quota derived from the cfg, never typed here", () => {
+    const quota = (cfgFor("cricket") as { ballsPerInnings: number }).ballsPerInnings;
+    const f = folded("cricket", [
+      // The toss comes FIRST: `applyToss` refuses any phase but "pre".
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
+      ["core.start", {}],
+      ball(0, 1, "H-p1", "H-p2", "A-p1", 4, 4),
+      ball(0, 2, "H-p1", "H-p2", "A-p1", 0),
+      ball(0, 3, "H-p1", "H-p2", "A-p1", 1),
+      ball(0, 4, "H-p2", "H-p1", "A-p1", 6, 6),
+      ball(0, 5, "H-p2", "H-p1", "A-p1", 0),
+      ball(0, 6, "H-p2", "H-p1", "A-p1", 2),
+      // No `reason: "declared"` — `CricketClose.reason` is a closed enum that
+      // does not contain it (declaring is its own event, and is two-innings
+      // only). The bare close is the honest "innings over" marker here.
+      ["cricket.innings.close", {}],
+      ball(0, 1, "A-p1", "A-p2", "H-p1", 1),
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(f.lastSeq), folded: f, venueTz: "UTC" });
+    expect(out.cricket).toBeDefined();
+    expect(out.cricket!.innings).toHaveLength(2);
+    expect(out.cricket!.innings[0]).toMatchObject({
+      runs: 13,
+      wickets: 0,
+      legalBalls: 6,
+      ballsLimit: quota,
+    });
+    expect(out.cricket!.innings[1]).toMatchObject({
+      runs: 1,
+      wickets: 0,
+      legalBalls: 1,
+      ballsLimit: quota,
+    });
+    // The number the chase line renders — and it differs from the runs, so a
+    // transposed pair cannot pass.
+    expect(out.cricket!.innings[1]!.ballsLimit! - out.cricket!.innings[1]!.legalBalls).toBe(
+      quota - 1,
+    );
+    expect(out.clock).toBeUndefined();
+  });
+
+  it("cricket: a DLS revision moves ballsLimit with the target (the case that makes it a live number)", () => {
+    // `CricketRevise` (cricket.ts:259-266) is `strictObject { oversPerSide?,
+    // target? }` with a refine — there is no `ballsLimit` and no `source`.
+    // The limit the engine derives is `oversPerSide × cfg.ballsPerOver`
+    // (cricket.ts:1025) — read from the module's own config, never the
+    // literal 60. Both innings must EXIST for the revise to land on the
+    // second, and an innings is created by its first delivery
+    // (`createInnings`, cricket.ts:796) — hence one ball on each side.
+    const f = folded("cricket", [
+      ["cricket.toss", { wonBy: HOME_ID, elected: "bat" }],
+      ["core.start", {}],
+      ball(0, 1, "H-p1", "H-p2", "A-p1", 4, 4),
+      ["cricket.innings.close", {}],
+      ball(0, 1, "A-p1", "A-p2", "H-p1", 1),
+      ["cricket.revise", { oversPerSide: 10, target: 91 }],
+    ]);
+    const bpo = (cfgFor("cricket") as { ballsPerOver: number }).ballsPerOver;
+    const out = projectOverlayLiveData({ row: ROW(f.lastSeq), folded: f, venueTz: "UTC" });
+    expect(out.cricket!.innings[1]!.ballsLimit).toBe(10 * bpo);
+    expect(out.cricket!.innings[1]!.ballsLimit).not.toBe(out.cricket!.innings[0]!.ballsLimit);
+  });
+
+  it("every other sport: neither clock nor cricket, by shape, not by a sport-key branch", () => {
+    // Derived from `builtinModules`, not a hand-typed list: the brief named
+    // seven of the nine non-football/cricket modules and silently dropped
+    // `icehockey` and `hockey` — the two that, being period sports, are the
+    // most likely to grow a `phase`/`asOf` pair and land in `clockOf`.
+    const others = builtinModules
+      .map((m) => m.key)
+      .filter((key) => key !== "football" && key !== "cricket");
+    expect(others.length, "a new sport must join this sweep by construction").toBe(
+      builtinModules.length - 2,
+    );
+    for (const key of others) {
+      const f = folded(key, [["core.start", {}]]);
+      const out = projectOverlayLiveData({ row: ROW(1), folded: f, venueTz: "UTC" });
+      expect(out.clock, key).toBeUndefined();
+      expect(out.cricket, key).toBeUndefined();
+    }
+  });
+});
