@@ -89,6 +89,7 @@ const BASE_MODEL: OverlayModel = {
     { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
     { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
   ],
+  cellsKind: "none",
   cells: [],
   detail: [],
 };

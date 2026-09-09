@@ -58,6 +58,28 @@ export interface OverlayCell {
 }
 
 /**
+ * Fix round 4 (visual-pass-task5.md R1/R2/R3) — `cellsOf()` has always
+ * returned TWO different kinds of thing under `OverlayModel.cells`: a
+ * set/game breakdown (tennis/badminton/tabletennis/volleyball — `_THEMES.md`
+ * §3/§4's "sets as cells" / "games as cells" rows, WITH a between-cells LED
+ * cell) and a period breakdown (football/hockey/icehockey's own periods,
+ * folded in here because `cellsOf` used to be the only place that
+ * distinguished them). §3/§4 give the football family NO cell group and NO
+ * between-cells LED at all — the team cell is `score / meta none` plus a
+ * separate clock cell. Round 3 rendered `model.cells` for every sport
+ * (R1/R3) and gated the between-cells LED on `!model.header.clock` (R2),
+ * which is wrong whenever a football fold carries no clock — the exact state
+ * that defeated it live. The kind was always known inside `cellsOf` and was
+ * being thrown away; this field is that kind, made explicit so a renderer
+ * gates the cell group AND the between-cells LED on it directly, never on
+ * the incidental presence of a clock. `cells` itself is UNCHANGED — still
+ * populated for `"periods"` — so every existing model-level assertion about
+ * `model.cells` (`overlay-model.test.ts`'s football case) keeps holding; only
+ * the renderers' gate moves off `cells.length`/`header.clock` and onto this.
+ */
+export type OverlayCellsKind = "sets" | "periods" | "none";
+
+/**
  * One line of the bar's detail band / the bug's footer (review round 1,
  * CRITICAL+IMPORTANT findings against T1's card-chip closure). Was a bare
  * `string`; `tone` is additive so the serve sentence and the `matchStrength`
@@ -101,6 +123,10 @@ export interface OverlayModel {
     clock?: string;
   };
   sides: [OverlaySide, OverlaySide];
+  /** Which kind of breakdown `cells` holds — see `OverlayCellsKind`'s own
+   *  comment. A renderer must gate the cell group AND the between-cells LED
+   *  on this, never on `cells.length` alone or on `header.clock`. */
+  cellsKind: OverlayCellsKind;
   cells: OverlayCell[];
   detail: OverlayDetailLine[];
   chase?: string;
@@ -245,14 +271,19 @@ function headerPeriod(input: OverlayModelInput, ended: boolean): string | undefi
   return undefined;
 }
 
-function cellsOf(input: OverlayModelInput): OverlayCell[] {
+function cellsOf(input: OverlayModelInput): { kind: OverlayCellsKind; cells: OverlayCell[] } {
   const breakdown = setBreakdown(input.data.summary, input.sportKey);
   if (breakdown) {
-    return breakdown.sets.map((s, i) => ({ key: String(i + 1), value: `${s.home}–${s.away}` }));
+    return {
+      kind: "sets",
+      cells: breakdown.sets.map((s, i) => ({ key: String(i + 1), value: `${s.home}–${s.away}` })),
+    };
   }
   const periods = periodBreakdown(input.data.summary);
-  if (periods) return periods.map((p) => ({ key: p.phase, value: `${p.home}–${p.away}` }));
-  return [];
+  if (periods) {
+    return { kind: "periods", cells: periods.map((p) => ({ key: p.phase, value: `${p.home}–${p.away}` })) };
+  }
+  return { kind: "none", cells: [] };
 }
 
 /**
@@ -436,6 +467,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // survive in `detail` and render a band the sheet says must be absent.
   const detail = voided ? [] : detailOf(input, codes, live);
   const period = headerPeriod(input, ended);
+  const cellsResult = cellsOf(input);
 
   return {
     live,
@@ -447,7 +479,8 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
       ...(clock === null ? {} : { clock }),
     },
     sides: overlaySides,
-    cells: cellsOf(input),
+    cellsKind: cellsResult.kind,
+    cells: cellsResult.cells,
     detail,
     ...(need === null
       ? {}

@@ -15,12 +15,15 @@ const halfOf = (value: string, row: 0 | 1): string => {
 };
 
 export function OverlayBar({ model, tick }: { model: OverlayModel; tick: [boolean, boolean] }) {
-  // Fix round 3, F6 — the between-cells LED count (`_THEMES.md` §3's
-  // "games-won cell LED" / tennis's points cell): only for the sport
-  // families that have both a cell breakdown AND no clock cell of their own
-  // (tennis/badminton/tabletennis/volleyball) — football/hockey/icehockey
-  // already occupy this slot with `header.clock`.
-  const betweenLed = model.cells.length > 0 && !model.header.clock;
+  // Fix round 4, R2 (was F6, round 3, which is the regression this
+  // corrects) — the between-cells LED count (`_THEMES.md` §3's "games-won
+  // cell LED" / tennis's points cell) belongs ONLY to the set/game sports
+  // (tennis/badminton/tabletennis/volleyball). Gated on `cellsKind` — NOT
+  // on `!model.header.clock` — because `clockOf` only ever returns a clock
+  // when the engine snapshot's phase matches, so a great many football
+  // folds carry no clock at all; the old guard fell through for exactly
+  // that state and gave football the racket sports' cell.
+  const betweenLed = model.cellsKind === "sets";
   return (
     <div className="ovl-bar">
       <div className="ovl-bar-main">
@@ -41,7 +44,7 @@ export function OverlayBar({ model, tick }: { model: OverlayModel; tick: [boolea
             >
               {side.serving ? <span className="ovl-serve-dot" /> : null}
               <span className="ovl-team-name">{side.name}</span>
-              {model.cells.length > 0 ? (
+              {model.cellsKind === "sets" ? (
                 <span data-testid="ovl-cells" className="ovl-bar-cells">
                   {model.cells.map((cell, i) => (
                     <span

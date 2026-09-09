@@ -36,7 +36,7 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
             {side.led ? <span data-testid="ovl-led" className="ovl-led" /> : null}
             <span className="ovl-bug-code">{side.short}</span>
             {side.serving ? <span className="ovl-serve-dot" /> : null}
-            {model.cells.length > 0 ? (
+            {model.cellsKind === "sets" ? (
               <span data-testid="ovl-cells" className="ovl-bug-cells">
                 {model.cells.map((cell, i) => (
                   <span key={cell.key} className={i === model.cells.length - 1 ? "ovl-bug-cell-current" : undefined}>
@@ -51,7 +51,10 @@ export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolea
             >
               {side.big}
             </span>
-            <span className="ovl-bug-meta">{side.sub ?? ""}</span>
+            {/* Fix round 4, R4 (F8's twin, unfixed in round 3) — an empty
+                meta span still reserves width 78 + gap 18 in every row;
+                football has no meta per §4 and must not pay for it. */}
+            {side.sub ? <span className="ovl-bug-meta">{side.sub}</span> : null}
           </div>
         );
       })}

@@ -22,6 +22,7 @@ const BASE_MODEL: OverlayModel = {
     { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
     { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
   ],
+  cellsKind: "none",
   cells: [],
   detail: [],
 };
@@ -92,6 +93,7 @@ describe("OverlayBug — the header splits into a status word and a context line
 describe("OverlayBar — per-side set/game cells move into the team cell, not the context line (F5)", () => {
   const WITH_CELLS: OverlayModel = {
     ...BASE_MODEL,
+    cellsKind: "sets",
     cells: [
       { key: "1", value: "21–15" },
       { key: "2", value: "18–21" },
@@ -133,31 +135,35 @@ describe("OverlayBar — per-side set/game cells move into the team cell, not th
   });
 });
 
-describe("OverlayBar — the between-cells LED count (F6)", () => {
+describe("OverlayBar — the between-cells LED count (F6, corrected round 4 — gated on cellsKind, not on the clock)", () => {
   const WITH_CELLS_NO_CLOCK: OverlayModel = {
     ...BASE_MODEL,
+    cellsKind: "sets",
     cells: [{ key: "1", value: "1–0" }],
     header: { context: "overlay.header.live" },
   };
 
-  it("renders sides[0].big : sides[1].big in LED once cells exist and there is no clock cell", () => {
+  it("renders sides[0].big : sides[1].big in LED when cellsKind is \"sets\" and there is no clock cell", () => {
     const tree = walk(OverlayBar({ model: WITH_CELLS_NO_CLOCK, tick: [false, false] }));
     const led = tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display");
     expect(led, "the between-cells LED element must mount").toBeDefined();
     expect(textOf(led!).replace(/\s+/g, " ")).toBe("2 : 1");
   });
 
-  it("the positive/negative pair — a clock cell (football family) suppresses the between-cells LED", () => {
+  it("round 4, R2 — a clock cell does NOT suppress the between-cells LED when cellsKind is \"sets\": the gate is the breakdown kind, never the clock", () => {
     const withClock: OverlayModel = {
       ...WITH_CELLS_NO_CLOCK,
       header: { context: "overlay.header.live", clock: "12:41" },
     };
     const tree = walk(OverlayBar({ model: withClock, tick: [false, false] }));
-    expect(tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display")).toBeUndefined();
+    expect(
+      tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display"),
+      "the LED still renders — a set-sport carrying a clock is a synthetic case, but it proves the guard reads cellsKind, not header.clock",
+    ).toBeDefined();
     expect(tree.find((el) => classesOf(el) === "ovl-clock-cell ovl-display")).toBeDefined();
   });
 
-  it("no between-cells LED when there are no cells at all (cricket/generic)", () => {
+  it("no between-cells LED when there are no cells at all (cricket/generic, cellsKind \"none\")", () => {
     const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false] }));
     expect(tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display")).toBeUndefined();
   });

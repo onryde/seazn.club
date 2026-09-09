@@ -131,6 +131,7 @@ describe("overlayModel — the empty case first", () => {
     expect(model.sides[1].big).toBe("—");
     expect(model.sides[0].led).toBe(false);
     expect(model.sides[1].led).toBe(false);
+    expect(model.cellsKind, "no summary at all — the breakdown kind is \"none\"").toBe("none");
     expect(model.cells).toEqual([]);
     expect(model.detail).toEqual([]);
     expect(model.result).toBeUndefined();
@@ -152,6 +153,7 @@ describe("overlayModel — every skin key projects without throwing", () => {
       const model = project(key, { status: "scheduled", summary: null, outcome: null });
       expect(model.sides.length, key).toBe(2);
       expect(model.sides[0].short, key).toBe("MIL");
+      expect(model.cellsKind, key).toBe("none");
       expect(model.cells, key).toEqual([]);
     }
   });
@@ -205,6 +207,7 @@ describe("overlayModel — led and serving truth table", () => {
     for (const key of ["boardgame", "carrom", "generic"]) {
       const data = payload(key, [["core.start", {}]], "in_play");
       const model = project(key, data);
+      expect(model.cellsKind, key).toBe("none");
       expect(model.cells, key).toEqual([]);
       expect(model.detail, key).toEqual([]);
     }
@@ -212,24 +215,26 @@ describe("overlayModel — led and serving truth table", () => {
 });
 
 describe("overlayModel — cells", () => {
-  it("badminton renders one cell per game, in order, home–away", () => {
+  it("badminton renders one cell per game, in order, home–away, and cellsKind is \"sets\"", () => {
     const data = payload("badminton", [
       ["core.start", {}],
       ...Array.from({ length: 21 }, () => ["badminton.rally", { wonBy: "H" }] as const),
     ], "in_play");
     const model = project("badminton", data);
+    expect(model.cellsKind, "a set/game breakdown, never \"periods\"").toBe("sets");
     expect(model.cells.length, "one closed game").toBeGreaterThanOrEqual(1);
     expect(model.cells[0].key).toBe("1");
     expect(model.cells[0].value).toMatch(/^\d+–\d+$/);
   });
 
-  it("football renders one cell per period once periods exist", () => {
+  it("football renders one cell per period once periods exist, and cellsKind is \"periods\" — round 4, R1/R2's root cause: this is NOT the \"sets\" kind, so a renderer must not treat it as one", () => {
     const data = payload("football", [
       ["core.start", {}],
       ["football.goal", { by: "H" }],
       ["football.period", { phase: "HT" }],
     ], "in_play");
     const model = project("football", data);
+    expect(model.cellsKind).toBe("periods");
     // Anti-vacuity (AGENTS.md #3): without this, an empty `cells` would pass
     // the loop below by running it zero times.
     expect(model.cells.length, "H1 (with the goal) plus the pushed H2").toBeGreaterThan(0);
