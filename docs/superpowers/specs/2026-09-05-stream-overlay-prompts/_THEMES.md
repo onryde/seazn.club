@@ -476,6 +476,13 @@ the labels they belong to.
 Three cards in a hockey match is an ordinary state, so this is not an edge case.
 Two rules follow.
 
+0. **The footer is a start-aligned list with `gap: 18`, not `space-between`**
+   (added 2026-09-10 when Task 8 pointed out the interaction). `space-between`
+   made sense for a footer that never had a capped list in it; with two entries
+   on one nowrap line it pushes them to the **outer edges of a 480 px tile**, so
+   two related cards read as two unrelated things. A gap keeps them a list, and
+   matches §3's detail band, which is already a gap-separated list. Where a
+   chase or result line is present it leads the row.
 1. **A corner bug is not a log.** The bug shows at most the **two most recent**
    detail entries, on one line, `white-space: nowrap`; §3's bar keeps the full
    list, because it has 1776 px and a dedicated 51 px band and the bug has
@@ -483,7 +490,10 @@ Two rules follow.
    already says.
 2. **An entry is one unit.** Chip, label and separator must not be separable by
    wrapping — `display: contents` on the group is what allowed it, and the group
-   needs to be a real box.
+   needs to be a real box. **`className="contents"` is on the per-entry span in
+   BOTH renderers** (`overlay-bar.tsx:97` and `overlay-bug.tsx:84`), so this half
+   of the ruling touches both files even though only the bug misbehaves today —
+   the bar is wide enough to hide the same latent bug.
 
 **The tile must not grow instead.** An OBS operator positions the bug against
 their camera framing; a graphic that changes height on air moves into the shot.
