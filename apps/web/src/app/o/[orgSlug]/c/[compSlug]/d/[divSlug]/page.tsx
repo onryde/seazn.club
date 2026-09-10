@@ -414,22 +414,32 @@ export default async function DivisionPage({
   // Sliced to that prefix, so the flight carries ~20 strings and not the whole
   // public catalogue.
   //
-  // Skipped off the fixtures tab and for a viewer who cannot edit — neither
-  // can reach a panel, and this is two queries plus a dictionary load.
-  const streamPanel =
-    tab === "fixtures" && editable
-      ? {
-          entitled: await hasFeature(auth.orgId, "streaming.overlay", competition.id),
-          relayEntitled: await hasFeature(auth.orgId, "streaming.relay", competition.id),
-          sportKey: division.sport_key,
-          overlayDict: Object.fromEntries(
-            Object.entries(await getDictionary(locale, "public")).filter(([k]) =>
-              k.startsWith("overlay."),
-            ),
-          ) as Record<string, string>,
-          viewerPlan,
-        }
-      : undefined;
+  // Everything after the FIRST read is behind `streamEntitled`. Streaming is
+  // a dark rollout — `streaming.overlay` is granted by no plan today
+  // (`lib/feature-copy.ts`) — so on every division page that currently exists
+  // this costs exactly one entitlement query and neither the second read, the
+  // `public` dictionary import, nor a byte of it on the RSC flight. Skipped
+  // entirely off the fixtures tab and for a viewer who cannot edit: neither
+  // can reach a panel at all.
+  const streamOffered = tab === "fixtures" && editable;
+  const streamEntitled =
+    streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
+  const streamPanel = streamOffered
+    ? {
+        entitled: streamEntitled,
+        relayEntitled:
+          streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id)),
+        sportKey: division.sport_key,
+        overlayDict: streamEntitled
+          ? (Object.fromEntries(
+              Object.entries(await getDictionary(locale, "public")).filter(([k]) =>
+                k.startsWith("overlay."),
+              ),
+            ) as Record<string, string>)
+          : {},
+        viewerPlan,
+      }
+    : undefined;
 
   return (
     <>
