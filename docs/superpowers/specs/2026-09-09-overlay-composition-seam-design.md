@@ -337,6 +337,64 @@ second.** Every gap this programme has hit — football's discipline chips, the
 serve dot, tennis's live game points, slate's signal-lost state — was a data gap
 wearing a rendering gap's clothes.
 
+### 5.2 Should streaming require band 3? — findings, and a recommendation NOT to
+
+Owner proposal, 2026-09-10: require the top fidelity band for a live stream,
+*"otherwise we can block the livestream option"*. (Asked as "Band 4"; the scale
+is closed at 0–3 by the v2 ruling, so the top band is **3 — `detail`**.)
+
+**This is recorded as a PROPOSAL with an author's recommendation against it. It
+is NOT a ruling, and the decision is open.**
+
+The instinct is sound: a band-0 stream produces a nearly empty overlay, and that
+reflects on us rather than on the club. Three findings argue for a different
+remedy.
+
+**1. The band is derived, not chosen — so there is nothing to gate on.**
+`effectiveBand` (`server/public-site/match-centre.ts:867`) scans the ledger and
+takes the **maximum** band of any event type recorded so far. Nothing is stored:
+no `fidelity` or `band` column exists anywhere in the schema (checked
+`information_schema.columns`, 2026-09-10).
+
+**2. Before the match there is no band at all.** `effectiveBand` returns `null`
+for an empty ledger, and the comment is explicit that this is "a genuinely empty
+ledger", not a zero. So a gate evaluated when the organiser presses "go live"
+reads `null` — the one moment it would need a number.
+
+**3. It is a maximum, not a floor.** One detailed event lifts the whole match to
+band 3 while everything around it stays coarse; `band` starts at 0 and "only
+ever rises". As a gate it is satisfied by a single tap and therefore says almost
+nothing about what the overlay will actually have to show.
+
+**And it reverses a shipped decision.** `sport/module.ts:90-95` states that since
+entitlements v18 (2026-09) the band "is a UX filter only… **No band is paywalled
+and nothing in `apps/web` reads an entitlement from it**", and
+`server/usecases/event-import.ts:243` records that the previous fidelity-band
+gate (`requiredFeatureForEvent`) "is deleted". Re-introducing one re-paywalls
+something deliberately un-paywalled weeks earlier.
+
+**Recommendation: show the consequence, do not block it.** Put the trade in the
+organiser panel, where it is actionable:
+
+> Scoring at "result" — your stream will show the score only. Score ball-by-ball
+> to show the bowler and this over.
+
+Owner value: the pull toward richer scoring without losing a stream, without a
+support queue of "why won't it let me go live", and without reversing v18. A club
+that wants only the score on screen is still a satisfied customer — that is
+exactly what the competitor's basic ticker is (§1).
+
+It also composes with §5.1: a panel whose data is absent simply does not fire.
+**The overlay degrades by showing less, never by refusing to start** — which
+matters more here than anywhere else in the product, because the failure mode is
+a club that cannot go live in front of an audience.
+
+If a hard gate is wanted anyway, the only implementable form is **post-hoc**:
+let the stream start, then warn once N events have landed and the derived band
+is still 0. Recorded so the shape is known; still not recommended, because it
+punishes the club for a choice the *scorer* made, and on a matchday those are
+frequently different people on different devices.
+
 ## 6. Testing
 
 Standard for this repo — all four types, every change shipping a test that fails
@@ -422,7 +480,13 @@ Deferred with named gaps: takeover panels (no consumer yet), `timer` and
 
 **Still open:**
 
-1. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
+1. **Does streaming require fidelity band 3? (§5.2)** Owner proposed it
+   2026-09-10; the author recommends **not** gating, and recommends showing the
+   consequence in the panel instead. Three findings sit behind that: the band is
+   derived rather than chosen, it reads `null` before the first event, and it is
+   a maximum satisfied by one tap — plus re-gating reverses entitlements v18.
+   **No decision taken.**
+2. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
    is R2's; `_THEMES.md` §4a treats it as registry entry three; W1 built it on
    2026-09-09 under "fix all". The tree and the programme design now disagree
    and one of them needs correcting.
