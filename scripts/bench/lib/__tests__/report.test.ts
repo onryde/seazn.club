@@ -344,6 +344,36 @@ function reportWithOracles(oracles: BenchReportType["suites"][number]["oracles"]
   return { ...base, suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), oracles }] };
 }
 
+describe("B06a T5 — provenance", () => {
+  it("renders the counts behind the percentage, not a bare number", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          provenancePct: 75,
+          provenance: { total: 8, real: 6, reconstructed: 2, synthetic: 0, realPct: 75 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Provenance"));
+    // The denominator is the point: "75% real" alone hides whether that is
+    // 6 of 8 or 3 of 4, and design §4's honesty clause is about how much of a
+    // suite was reconstructed.
+    expect(line).toContain("75% real (6/8 streams; 2 reconstructed)");
+  });
+
+  it("falls back to the bare percentage for a report written before the breakdown existed", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), provenancePct: 40 }],
+    });
+    expect(md.split("\n").find((l) => l.includes("Provenance"))).toContain("40% real");
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(

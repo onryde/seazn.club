@@ -123,6 +123,7 @@ import {
   type PackStream,
 } from "../pack-schema.ts";
 import { bootRegistry, resolveDivisionCfg } from "../validate-pack.ts";
+import { computeProvenance } from "../provenance.ts";
 // The engine's own outcome union: a specials standings claim derives the
 // fixture delta from the PRODUCT's folded outcome, parsed rather than cast.
 import { MatchOutcome } from "@seazn/engine/core";
@@ -4226,6 +4227,7 @@ export async function runPackSuite(
   // Warnings are REPORTED, never gated on. Stage 0 names what it does not
   // derive offline; that is a fact the report has to carry, and a gate that
   // read it would red `_tiny` on every run for saying something true.
+  const provenance = computeProvenance(pack);
   const gate = errors.length === 0 ? "green" : "red";
   return {
     suite: suiteKey,
@@ -4238,6 +4240,11 @@ export async function runPackSuite(
       status: solver?.status,
     },
     conflictCount,
+    // B06a task 5 — the honesty number design §4 asks every suite to publish.
+    // The field has existed since B01 with no writer, so every report before
+    // this one carried it undefined.
+    provenancePct: provenance.realPct,
+    provenance,
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),

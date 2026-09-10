@@ -8,6 +8,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { renderProvenance } from "./provenance.ts";
 import { SUITE_13_KEY, type CliEntryFlag } from "./register.ts";
 /** TYPE-ONLY, so nothing here adds a runtime edge to the scheduling layer —
  *  these exist purely so the enums below cannot drift from the vocabularies
@@ -652,7 +653,21 @@ export const SuiteReport = z.object({
   conflictCount: z.number().optional(),
   believabilityMetrics: z.record(z.string(), z.number()).optional(),
   oracles: z.array(OracleResult).optional(),
+  /** B01 declared this and nothing wrote it until B06a. Kept alongside the
+   *  fuller `provenance` breakdown below so an older report still parses. */
   provenancePct: z.number().optional(),
+  /** B06a task 5 — the counts behind the percentage, so a reader can see
+   *  "6/8, 2 reconstructed" rather than a bare number whose denominator is
+   *  invisible. */
+  provenance: z
+    .object({
+      total: z.number(),
+      real: z.number(),
+      reconstructed: z.number(),
+      synthetic: z.number(),
+      realPct: z.number(),
+    })
+    .optional(),
   claims: z.object({ total: z.number(), accepted: z.number() }).optional(),
   officials: z.object({ assigned: z.number(), conflicts: z.number() }).optional(),
   news: z.object({ drafted: z.number(), published: z.number() }).optional(),
@@ -932,6 +947,8 @@ function renderSuitesSection(report: BenchReport): string {
       );
     }
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
+    if (suite.provenance !== undefined) lines.push(`- Provenance: ${renderProvenance(suite.provenance)}`);
+    else if (suite.provenancePct !== undefined) lines.push(`- Provenance: ${suite.provenancePct}% real`);
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
       for (const o of suite.oracles) {
