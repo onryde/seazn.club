@@ -19,26 +19,35 @@
 // 12. No test below pretends to cover it.
 //
 // ---------------------------------------------------------------------------
-// Mutants killed (the sweep's kill list is in `task-9-report.md`)
+// Mutants killed — 24 run, 24 killed; the full kill list with killers per
+// mutant is in `task-9-report.md` §Fix round 1.
 // ---------------------------------------------------------------------------
 //  (a) the tab-level empty guard removed → the EMPTY test.
 //  (b) grouping collapsed to one group / one group per TABLE → the heading
 //      inventory.
 //  (c) grouping by adjacent RUN instead of by divisionId → the interleaved
 //      document.
-//  (d) heading renders the slug instead of the division name → the heading
-//      value.
-//  (e) `md:grid-cols-2` unconditional, and never → the two-up pair, both arms
+//  (d) group order, and order WITHIN a group, reversed → the `indexOf` pairs.
+//  (e) heading renders the slug instead of the division name, or drops back to
+//      the caption's own `text-lg` → the heading value and its class tokens.
+//  (f) `md:grid-cols-2` unconditional, and never → the two-up pair, both arms
 //      read off ONE document.
-//  (f) the champion strip rendered per TABLE → the one-strip count.
-//  (g) the champion named from the first row instead of the crowned one → the
-//      champion whose group table has them SECOND.
-//  (h) the champion strip rendered with no champion → its negative pair.
-//  (i) `showFullLink` dropped, or every link bound to the first view's href →
-//      the per-table link values.
-//  (j) document order sorted / reversed → the three `indexOf` comparisons.
-//  (k) `min-w-0` dropped from the root or the grid cell → the two class
-//      assertions.
+//  (g) THE CROWN, four ways, and the first of them is why this file has a
+//      three-division champion document (review F1): sourced from the whole
+//      DOCUMENT rather than the group's own views; sourced from the group's
+//      first table only; taken as the first ROW; rendered per TABLE. Each
+//      names a different entrant or a different number of strips, and the
+//      strip inventory plus the per-group name assertions separate all four.
+//  (h) the strip rendered for every division, or its testid hardcoded to one
+//      → the strip inventory and the uncrowned division's group.
+//  (i) `showFullLink={false}`, or every link bound to the first view's href →
+//      the per-table link values. NOTE `showFullLink` restates the child's
+//      default, so DELETING the prop is a no-op, not a survivor — see the
+//      comment at the call site.
+//  (j) the view rendered twice, or the testid prefix taken from the division
+//      → the table COUNT and the per-view ids.
+//  (k) `min-w-0` dropped from the root or any grid cell → the class
+//      assertions, which read every cell rather than the first.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
@@ -60,7 +69,7 @@ const dict = en as Dict;
  *   • by division slug → premier, sunday-league
  *
  * all three differ from the order below, which is the one the builder emits
- * (`competition-hub.ts:565-568` — live stage before complete, then `seq`).
+ * (`competition-hub.ts:567-570` — live stage before complete, then `seq`).
  *
  * The two divisions also differ in TABLE COUNT, one and two, which is what
  * makes both arms of the `md:grid-cols-2` rule readable off a single render.
@@ -118,11 +127,16 @@ describe("TableTab", () => {
 
   // -------------------------------------------- (b) one table view per table
 
-  it("one StandingsTableView per table view, in DOCUMENT order, each under its own `mh-table-<id>` prefix", () => {
+  it("one StandingsTableView per table view — three views, three tables — in DOCUMENT order, each under its own `mh-table-<id>` prefix", () => {
     const h = render();
     for (const id of ["sunday-super", "sunday-group", "premier-league"]) {
       expect(h, id).toContain(`data-testid="mh-table-${id}"`);
     }
+    // ONE per view, which the containment checks above cannot say (review F5):
+    // rendering every view twice passes all of them. `StandingsTableView`'s
+    // root is `<section data-testid={testid}>`, and this tab's own division
+    // wrapper is a `<section>` with no testid, so the count is the tables'.
+    expect(h.match(/<section data-testid="mh-table-/g) ?? []).toHaveLength(3);
     // Document order, which is none of the sort orders a mutant would reach
     // for — see the fixture's own note.
     expect(h.indexOf(`data-testid="mh-table-sunday-super"`)).toBeLessThan(
@@ -139,8 +153,18 @@ describe("TableTab", () => {
     expect(h).toContain(`data-testid="mh-table-sunday-group-row-alpha"`);
   });
 
-  it("each table's Full-division link points at ITS OWN division's standings tab", () => {
+  it("each table's Full-division link carries ITS OWN view's fullHref — what the link IS, not where a spectator lands", () => {
     const h = render();
+    // The title used to say the link "points at its own division's standings
+    // TAB", which is a claim about an outcome and it is false today (review
+    // G1): `components/public-site/tabs.tsx:15` is `useState(0)` and reads no
+    // query parameter, while the builder emits `?tab=standings`
+    // (`competition-hub.ts:584`) — so the spectator arrives on Schedule. The
+    // href is what this component is answerable for; the destination is the
+    // division page's, and it is recorded for the owner rather than patched
+    // here (that route is `revalidate = 30`, so reading `searchParams` trades
+    // the public surface's caching for a tab default — a design call).
+    //
     // Three links, two hrefs: the two sunday tables share a division and
     // therefore a target, premier's differs. That is what makes a mutant
     // binding every link to the first view's href visible — an assertion set
@@ -232,8 +256,17 @@ describe("TableTab", () => {
    *
    * Two of the three tables carry the crown, because the builder passes ONE
    * `championId` per division to every table it publishes for it
-   * (`competition-hub.ts:563,576` → `standings-view.ts:181`) — so a per-table
+   * (`competition-hub.ts:562,590` → `standings-view.ts:181`) — so a per-table
    * strip prints the same champion twice for one title.
+   *
+   * Round 1, review F1: it took two MORE divisions to witness the decision this
+   * document exists for. With one division, the crown could be sourced from
+   * `doc.tables` instead of from the group's own views and all eleven tests
+   * stayed green — a competition with one division finished would then print
+   * that champion above EVERY division's tables. So `premier` is crowned too,
+   * with a DIFFERENT entrant (pairwise-distinct, or a strip cannot be caught
+   * naming another division's champion), and `juniors` is not crowned at all —
+   * the arm that proves a crown is not simply printed for every group.
    */
   const championDoc = hubDoc({
     tables: [
@@ -249,13 +282,24 @@ describe("TableTab", () => {
         caption: "Super Eight",
         rows: [tableRow("blue-blazers", 1, { champion: true }), tableRow("wanderers", 2)],
       }),
+      tableView("pl", "premier", {
+        caption: "League",
+        rows: [tableRow("city", 1, { champion: true }), tableRow("rangers", 2)],
+      }),
+      tableView("jl", "juniors", {
+        caption: "League",
+        rows: [tableRow("colts", 1), tableRow("cubs", 2)],
+      }),
     ],
   });
 
-  it("a champion is named ONCE for the division, above its tables, and it is the crowned row's name — not the first row's", () => {
+  it("a champion is named ONCE for the division, above its tables, and it is that DIVISION's crowned row — not the first row's, not another division's", () => {
     const h = render(championDoc);
+    // One strip per CROWNED division, in document order. A list, so both
+    // "a strip for the uncrowned division too" and "one strip for the whole
+    // document" are visible; `juniors` is absent because nobody has won it.
     const strips = [...h.matchAll(/data-testid="(mh-table-champion-[a-z0-9-]+)"/g)].map((x) => x[1]);
-    expect(strips).toEqual(["mh-table-champion-sunday-league"]);
+    expect(strips).toEqual(["mh-table-champion-sunday-league", "mh-table-champion-premier"]);
 
     const strip = h.slice(
       h.indexOf(`data-testid="mh-table-champion-sunday-league"`),
@@ -265,6 +309,18 @@ describe("TableTab", () => {
     expect(strip).toContain("Blue Blazers"); // the CROWNED row of the DIVISION
     expect(strip).not.toContain("Wanderers"); // the first row of the first table
     expect(strip).not.toContain("Athletic"); // the first row of the table they are in
+
+    // Review F1 — the group boundary itself. Each strip names ITS OWN
+    // division's champion, so a crown sourced from `doc.tables` rather than
+    // from the group's views prints Blue Blazers over Premier as well, and
+    // this is what says so. The whole group is read, not just the strip: the
+    // wrong name would be inside it either way.
+    const premier = groupHtml(h, "premier");
+    expect(premier).toContain("City");
+    expect(premier).not.toContain("Blue Blazers");
+    // And the division nobody has won gets no crown, in a document that has
+    // two — the positive-and-negative pair on one render.
+    expect(groupHtml(h, "juniors")).not.toContain(`data-testid="mh-table-champion-`);
 
     // "Above the table" is the brief's word for it, and it is also below the
     // heading it belongs to — the crown names a DIVISION's champion.
@@ -282,15 +338,26 @@ describe("TableTab", () => {
     // "true" or "false". So "the document contains no data-champion" passes
     // vacuously on both states, and React serialises an omitted prop as
     // `"$undefined"` — the value is the assertion, anchored on `="`.
-    expect(h).toMatch(/data-testid="mh-table-gb-row-blue-blazers"[^>]*data-champion="true"/);
-    expect(h).toMatch(/data-testid="mh-table-gb-row-athletic"[^>]*data-champion="false"/);
-    // The same entrant, crowned again in the stage table — two rows, two ids,
-    // which is what the `testid` prefix exists for.
-    expect(h).toMatch(/data-testid="mh-table-se-row-blue-blazers"[^>]*data-champion="true"/);
-    // And the table they are NOT in carries no crowned row at all.
-    expect(groupHtml(h, "sunday-league")).toMatch(
-      /data-testid="mh-table-ga-row-wanderers"[^>]*data-champion="false"/,
-    );
+    //
+    // EVERY row, not a sample of them (review F5): the title says "every other
+    // row" and a two-row sample cannot say it. The same entrant is crowned in
+    // two tables — two rows, two ids, which is what the `testid` prefix exists
+    // for — and the two divisions' crowns are on different entrants.
+    const crowns = [
+      ...h.matchAll(/data-testid="(mh-table-[a-z0-9-]+-row-[a-z0-9-]+)"[^>]*data-champion="(\w+)"/g),
+    ];
+    expect(Object.fromEntries(crowns.map((x) => [x[1], x[2]]))).toEqual({
+      "mh-table-ga-row-wanderers": "false",
+      "mh-table-ga-row-rovers": "false",
+      "mh-table-gb-row-athletic": "false",
+      "mh-table-gb-row-blue-blazers": "true",
+      "mh-table-se-row-blue-blazers": "true",
+      "mh-table-se-row-wanderers": "false",
+      "mh-table-pl-row-city": "true",
+      "mh-table-pl-row-rangers": "false",
+      "mh-table-jl-row-colts": "false",
+      "mh-table-jl-row-cubs": "false",
+    });
   });
 
   it("a division with no champion gets no crown at all, and its rows say so (the negative pair, on the canonical document)", () => {
@@ -325,8 +392,17 @@ describe("TableTab", () => {
     // column. The root's copy is for the mount site: Task 11/12 puts this
     // component inside a layout nobody has written, and a flex or grid parent
     // breaks the chain ABOVE here (Task 8, review P3).
-    const h = render();
+    const h = render(championDoc);
     expect(h).toMatch(/^<div class="min-w-0 /);
+    // EVERY cell, not the first one (review F5): this document has five tables
+    // across three divisions, so a `min-w-0` that only reached the head of a
+    // group — or only the first group — is visible here.
+    const cells = [...h.matchAll(/<li class="([^"]*)"/g)].map((x) => x[1]!);
+    expect(cells).toHaveLength(5); // every table sits in one, and nothing else emits an <li>
+    for (const cls of cells) expect(cls.split(" ")).toContain("min-w-0");
+    // And it is the GRID ITEM that carries it — `min-width: auto` is a
+    // property of the item, so the same class on a wrapper inside the cell
+    // would not do the job.
     expect(h).toMatch(/<ul class="[^"]*grid[^"]*"><li class="[^"]*min-w-0/);
   });
 

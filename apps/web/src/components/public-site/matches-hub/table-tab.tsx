@@ -87,7 +87,7 @@ export function TableTab({ doc, dict }: TableTabProps) {
         // ONE crown per division, not one per table. `divisionChampion`
         // (`server/public-site/champion.ts`) crowns a DIVISION, and the builder
         // hands that single `championId` to every table it publishes for it
-        // (`competition-hub.ts:563,576`), so the crowned row appears in the
+        // (`competition-hub.ts:562,590`), so the crowned row appears in the
         // group table AND the super-eight table of the same division — a
         // per-table strip would print the same champion twice for one title.
         //
@@ -118,10 +118,10 @@ export function TableTab({ doc, dict }: TableTabProps) {
               </h2>
               {champion ? (
                 // Gold is fixed podium vocabulary, deliberately outside the org
-                // theme — the same rule `standings-table-view.tsx:120-125`
+                // theme — the same rule `standings-table-view.tsx:110-118`
                 // states for its medal chips, so a red-branded org still reads
                 // gold as first place. The division page's own banner
-                // (`[divisionSlug]/page.tsx:133-147`) is the loud version of
+                // (`[divisionSlug]/page.tsx:133-148`) is the loud version of
                 // this; on a tab that may carry six divisions it is a strip.
                 <p
                   data-testid={`mh-table-champion-${first.divisionSlug}`}
@@ -152,6 +152,14 @@ export function TableTab({ doc, dict }: TableTabProps) {
                     view={view}
                     dict={dict}
                     testid={`mh-table-${view.id}`}
+                    // Restates the child's own default
+                    // (`standings-table-view.tsx:159` is `showFullLink = true`),
+                    // so deleting it changes nothing — recorded because a kill
+                    // list that shows `showFullLink={false}` dying would
+                    // otherwise read as evidence the PROP is load-bearing
+                    // (review F6). It is here because the brief names it and
+                    // because the Overview tab's teaser will pass the opposite,
+                    // which makes the intent worth stating at both call sites.
                     showFullLink
                   />
                 </li>

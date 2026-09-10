@@ -142,7 +142,18 @@ export function division(slug: string): HubDivisionT {
  *  competition (a season whose results were entered in bulk), and deriving its
  *  `divisions` from the matches alone published one with a table for a
  *  division it did not list. Task 8's documents are unaffected — none of them
- *  carries a table, and the two that pass `divisions` explicitly still win. */
+ *  carries a table, and the two that pass `divisions` explicitly still win.
+ *
+ *  It is a FIDELITY CONVENTION, not something the schema enforces, and review
+ *  F2 is right that this file's "the real schema refuses a drifted fixture"
+ *  claim does not extend to it: `CompetitionHubDoc`'s only `superRefine`
+ *  checks `tabs`, nothing cross-checks a table's `divisionSlug` against
+ *  `divisions`, and `use-live-competition.test.tsx` parses a document with
+ *  `divisions: []` beside a table today. So NO test currently reds if this
+ *  widening is reverted, and the assertion is owed by the first suite that
+ *  reads `doc.divisions` alongside `doc.tables` — Task 11's, which renders the
+ *  tab rail and the division headings from the same document. Recorded here
+ *  rather than covered by a test invented for the fixture's own sake. */
 function divisionsFor(
   matches: readonly HubMatchT[],
   tables: readonly TableViewT[],
@@ -223,8 +234,21 @@ export function tableView(
     columns: [...COMPACT_COLUMNS],
     rows: [tableRow("alpha", 1), tableRow("beta", 2)],
     updatedAt: "2026-09-05T12:00:00.000Z",
-    // What `competition-hub.ts:579` builds: the division's own page, on its
-    // standings tab. Carried BY the view, so nothing downstream re-derives it.
+    // The division's own page, on its standings tab — carried BY the view, so
+    // nothing downstream re-derives it.
+    //
+    // NOT byte-identical to what the builder emits, and the first version of
+    // this comment claimed it was (review F4). `competition-hub.ts:584` builds
+    // `${divHref}?tab=standings` where `divHref` is `${base}/${d.slug}` and
+    // `base` is `/shared/${org}/${comp}` (`:372`, `:440`) — so production
+    // hrefs carry a `/shared` prefix these fixtures do not. That is this
+    // file's inherited convention rather than Task 9's invention (`m()` and
+    // `division()` above, and `server/public-site/__tests__/_hub-doc.ts`, all
+    // drop it), so it is left alone here rather than diverged from in one
+    // factory. The consequence is bounded and worth stating: an exact-href
+    // assertion against this fixture round-trips a fixture literal, not a
+    // production URL. It still separates one view's href from another's, which
+    // is what those assertions are for.
     fullHref: `/${ORG}/${COMP}/${divisionSlug}?tab=standings`,
     ...over,
   };
