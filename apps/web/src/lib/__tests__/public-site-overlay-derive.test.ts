@@ -12,7 +12,7 @@
 // invented here; the clock is not a reader at all (it is the stage's timer).
 import { describe, expect, it } from "vitest";
 import { battingEntrantId, chaseBalls, chaseNeed } from "@/lib/public-site";
-import { formatClock } from "@/lib/overlay-model";
+import { formatClock, formatClockCapped } from "@/lib/overlay-model";
 
 const innings = (entrantId: string, runs: number, closed: boolean) => ({
   entrantId, runs, wickets: 2, legalBalls: 60, ballsLimit: 120, declared: false, closed,
@@ -98,5 +98,43 @@ describe("formatClock (overlay-model.ts)", () => {
   it("floors fractional seconds and clamps negatives to zero", () => {
     expect(formatClock(59.9)).toBe("00:59");
     expect(formatClock(-3)).toBe("00:00");
+  });
+});
+
+// F16 (product ruling 2026-09-10, `_THEMES.md` §3): "the clock never shows an
+// implausible number". Driven live, a fixture left `in_play` displayed
+// `1205:25` — twenty hours — because the clock ticks from the fold's anchor
+// with no relation to the period's declared length. This is the SPELLING half
+// of the fix: past the period's nominal length the cell shows the broadcast
+// convention (`45+`) instead of counting on. The ADVANCING half is the hook's
+// (use-overlay-clock.ts), which is where the no-nominal fallback holds.
+describe("formatClockCapped (overlay-model.ts)", () => {
+  it("spells the running clock exactly as formatClock up to the nominal length", () => {
+    expect(formatClockCapped(761, 2700)).toBe("12:41");
+    expect(formatClockCapped(761, 2700)).toBe(formatClock(761));
+    // The whistle minute itself is a real reading, so the bound is INCLUSIVE —
+    // a 45:00 that flipped to "45+" would lose the one value the ceiling is
+    // named after.
+    expect(formatClockCapped(2700, 2700)).toBe("45:00");
+  });
+
+  it("shows `<minutes>+` past it — one second over, and twenty hours over", () => {
+    expect(formatClockCapped(2701, 2700)).toBe("45+");
+    // The live defect, at the number it actually displayed.
+    expect(formatClockCapped(72_325, 2700), "the 1205:25 case").toBe("45+");
+    // A DIFFERENT period length gives a different label, so this cannot be
+    // passing on a hardcoded 45 (AGENTS.md #19).
+    expect(formatClockCapped(1201, 1200), "a 20-minute ice-hockey period").toBe("20+");
+    expect(formatClockCapped(901, 900), "a 15-minute extra-time half").toBe("15+");
+  });
+
+  it("floors a nominal that is not a whole number of minutes", () => {
+    expect(formatClockCapped(1250, 1250)).toBe("20:50");
+    expect(formatClockCapped(1251, 1250)).toBe("20+");
+  });
+
+  it("is unbounded with NO nominal — the hold is the hook's job, not the spelling's", () => {
+    expect(formatClockCapped(72_325, undefined)).toBe("1205:25");
+    expect(formatClockCapped(761, undefined)).toBe(formatClock(761));
   });
 });

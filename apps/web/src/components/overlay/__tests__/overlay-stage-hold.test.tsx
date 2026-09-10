@@ -60,7 +60,12 @@ function baseProps(delayMs: number | undefined): OverlayStageProps {
     outcome: null,
     lastSeq: 1,
     venueTz: "UTC",
-    clock: { phase: "H1", anchorSeconds: 0, anchorAtWallMs: ANCHOR_MS },
+    // `nominalSeconds` (F16) is what makes the clock ADVANCE at all: with no
+    // declared period length the hook holds at the anchor rather than ticking
+    // against a bound it does not have, and the two readings below would both
+    // be 00:00. `project.ts` emits it for both clock-bearing kernels, so this
+    // is the production shape, not a prop added to satisfy the test.
+    clock: { phase: "H1", anchorSeconds: 0, anchorAtWallMs: ANCHOR_MS, nominalSeconds: 45 * 60 },
   };
   return {
     fixtureId: "f1",

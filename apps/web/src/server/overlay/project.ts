@@ -51,10 +51,64 @@ function anchorWallMs(
   return undefined;
 }
 
+const minutesAt = (holder: unknown, key: string): number | undefined => {
+  if (typeof holder !== "object" || holder === null) return undefined;
+  const value = (holder as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+};
+
+/**
+ * F16 (product ruling 2026-09-10, `_THEMES.md` §3) — the NOMINAL length of
+ * `phase`, in seconds, so the stage has a ceiling to hold the clock against.
+ * Driven live, a fixture left `in_play` displayed `1205:25`.
+ *
+ * THE LENGTH IS KNOWABLE, and by shape rather than by sport key: both
+ * clock-bearing kernels carry their resolved cfg ON THE STATE
+ * (`FootballState.cfg`, football.ts:564; `PeriodState.cfg`,
+ * period/kernel.ts:530), and both fix every phase length with REQUIRED
+ * scalars — `halfMinutes` / `extraTime.halfMinutes` (football.ts:773-788) and
+ * `periods.minutes` / `overtime.minutes` (period/kernel.ts:760-772). Football's
+ * `halfMinutes` covers its four quarters too ("the length of one play period,
+ * not literally half", S5/#431).
+ *
+ * ONE KNOWN DIVERGENCE FROM THE ENGINE, deliberate and recorded: `phaseLengths`
+ * also honours `cfg.periodSeconds`, the optional per-label override that exists
+ * for periods of UNEQUAL length (and which LOSES to the scalar when it is
+ * uniform). Resolving it correctly needs each kernel's own phase-group lists,
+ * and the engine exports neither `phaseLengths` nor `otLabels`; `packages/engine`
+ * is out of scope for this programme. A competition that declares unequal
+ * periods therefore gets the group's scalar as its ceiling — the same number
+ * every other phase in that group uses, never an absurd one — which is what
+ * this ceiling exists to guarantee. Wiring the override belongs with an engine
+ * export of `phaseLengths`, not with a second copy of it here.
+ *
+ * The overtime group is recognised by the LABEL both kernels generate for it —
+ * football's `ET_H1`/`ET_H2` (football.ts:695-702) and the period kernel's
+ * `OT`/`OT1..OTk` (period/kernel.ts:631-639). No regulation label either kernel
+ * produces (`H1`/`H2`, `Q1..Q4`, `P1..Pn`) begins with those.
+ */
+function nominalSecondsOf(state: unknown, phase: string): number | undefined {
+  if (typeof state !== "object" || state === null) return undefined;
+  const cfg = (state as { cfg?: unknown }).cfg;
+  if (typeof cfg !== "object" || cfg === null) return undefined;
+  const c = cfg as Record<string, unknown>;
+  const minutes = /^(ET_|OT)/.test(phase)
+    ? // football's extra time, then the period kernel's overtime
+      (minutesAt(c.extraTime, "halfMinutes") ?? minutesAt(c.overtime, "minutes"))
+    : // football's halves/quarters, then the period kernel's regulation periods
+      (minutesAt(c, "halfMinutes") ?? minutesAt(c.periods, "minutes"));
+  return minutes === undefined ? undefined : Math.round(minutes * 60);
+}
+
 /** The period family's clock stamp, present only while it is CURRENT. The
  *  guard `asOf.period === phase` is footballPosition's own
  *  (football.ts:730-741): a stamp from a phase the match has left is no
- *  clock, not a wrong one. */
+ *  clock, not a wrong one.
+ *
+ *  `nominalSeconds` is ABSENT rather than guessed when the state declares no
+ *  readable cfg — see `nominalSecondsOf`. Absent is not "no clock": the anchor
+ *  is still a recorded fact, and the stage holds it rather than ticking past a
+ *  bound it does not have. */
 function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
   if (typeof state !== "object" || state === null) return undefined;
   const s = state as { phase?: unknown; asOf?: unknown };
@@ -64,7 +118,13 @@ function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveDa
   if (asOf.period !== s.phase || typeof asOf.elapsed !== "number") return undefined;
   const wall = anchorWallMs(active, asOf);
   if (wall === undefined) return undefined;
-  return { phase: s.phase, anchorSeconds: asOf.elapsed, anchorAtWallMs: wall };
+  const nominalSeconds = nominalSecondsOf(state, s.phase);
+  return {
+    phase: s.phase,
+    anchorSeconds: asOf.elapsed,
+    anchorAtWallMs: wall,
+    ...(nominalSeconds === undefined ? {} : { nominalSeconds }),
+  };
 }
 
 /** Cricket's innings, by shape: an `innings[]` whose entries carry the four

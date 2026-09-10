@@ -59,7 +59,12 @@ export interface LiveFixtureData {
 export interface OverlayLiveData extends LiveFixtureData {
   lastSeq: number | null;
   venueTz: string;
-  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number };
+  /** `nominalSeconds` — F16: the phase's declared length, from the cfg the
+   *  fixture was folded under (`server/overlay/project.ts`'s
+   *  `nominalSecondsOf`). The stage shows `45+` past it instead of counting on;
+   *  ABSENT when the state declares no readable length, and the stage then
+   *  HOLDS at the anchor rather than ticking without a bound. */
+  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number; nominalSeconds?: number };
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
   };

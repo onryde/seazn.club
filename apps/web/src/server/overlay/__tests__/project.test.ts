@@ -72,6 +72,26 @@ function folded(
   };
 }
 
+/** A FoldedFixture whose STATE is written here rather than folded — used only
+ *  where a real fold cannot reach the state cheaply (an extra-time phase needs
+ *  a whole drawn match) or where the point IS a state the engine never
+ *  produces (a clock-bearing state with no cfg). The envelope carries the
+ *  matching stamp so `anchorWallMs` resolves it exactly as it would a real one. */
+function handMade(state: { cfg?: unknown; phase: string; asOf: { period: string; elapsed: number } }): FoldedFixture {
+  const envelope = {
+    ...makeEnvelope(0, { type: "core.start", payload: { at: state.asOf } } as never),
+    recordedAt: WALL,
+  };
+  return {
+    fixtureId: "fx-hand",
+    lastSeq: 1,
+    state,
+    summary: { headline: "x" } as FoldedFixture["summary"],
+    outcome: null,
+    active: [envelope],
+  };
+}
+
 const ROW = (last_seq: number | null, status = "in_play") => ({
   status,
   summary: { headline: "x" },
@@ -136,6 +156,10 @@ describe("projectOverlayLiveData", () => {
       phase: "H1",
       anchorSeconds: 761,
       anchorAtWallMs: Date.parse("2026-09-07T14:00:00.000Z"),
+      // F16 — the half's nominal length, from the cfg the fixture was folded
+      // under. Derived from the module's OWN parsed config, never the literal
+      // 45: the ceiling has to move when the competition's does.
+      nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
     });
     expect(out.cricket).toBeUndefined();
   });
@@ -173,6 +197,7 @@ describe("projectOverlayLiveData", () => {
       phase: "H1",
       anchorSeconds: 761,
       anchorAtWallMs: Date.parse(goalWall),
+      nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
     });
     // The assertion that actually witnesses the regression: the wrong answer
     // is a DIFFERENT constant, not a missing field.
@@ -185,6 +210,106 @@ describe("projectOverlayLiveData", () => {
       ["football.goal", { by: "H" }],
     ]);
     expect(projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // F16 — the period's nominal length, so the stage has a ceiling to hold the
+  // clock against (product ruling 2026-09-10, `_THEMES.md` §3). Driven live, a
+  // fixture left `in_play` displayed `1205:25`.
+  //
+  // The length IS knowable, which the brief left open: BOTH clock-bearing
+  // kernels carry their resolved cfg ON THE STATE — `FootballState.cfg`
+  // (football.ts:564) and `PeriodState.cfg` (period/kernel.ts:530) — and both
+  // derive every phase length from REQUIRED scalars: `cfg.halfMinutes` /
+  // `cfg.extraTime.halfMinutes` (football.ts:773-788) and
+  // `cfg.periods.minutes` / `cfg.overtime.minutes` (period/kernel.ts:760-772).
+  // So this reads the state's own cfg by SHAPE, exactly as `clockOf` and
+  // `cricketOf` read the rest of it, and every number below is derived from the
+  // module's own parsed config rather than typed in.
+  // -------------------------------------------------------------------------
+  it("football: the nominal comes from the cfg's own halfMinutes, not a hardcoded 45", () => {
+    const halfMinutes = (cfgFor("football") as { halfMinutes: number }).halfMinutes;
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H", at: { period: "H1", elapsed: 761 } }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+    expect(out.clock!.nominalSeconds).toBe(halfMinutes * 60);
+    // The witness that it is READ and not defaulted: fold the SAME stream under
+    // a competition that plays 30-minute halves — the module's own schema parses
+    // it, so this is a real cfg, not an invented one — and the ceiling moves.
+    const mod = moduleFor("football");
+    const shortCfg = mod.configSchema.parse({ halfMinutes: 30 }) as { halfMinutes: number };
+    expect(shortCfg.halfMinutes, "the schema ignored the override").toBe(30);
+    const shortState = { ...(f.state as object), cfg: shortCfg };
+    const short = projectOverlayLiveData({ row: ROW(2), folded: { ...f, state: shortState }, venueTz: "UTC" });
+    expect(short.clock!.nominalSeconds).toBe(30 * 60);
+    expect(short.clock!.nominalSeconds).not.toBe(out.clock!.nominalSeconds);
+  });
+
+  it.each(["hockey", "icehockey"])(
+    "%s: the nominal comes from the period kernel's own periods.minutes",
+    (key) => {
+      const minutes = (cfgFor(key) as { periods: { minutes: number } }).periods.minutes;
+      const phase = (cfgFor(key) as { periods: { count: number } }).periods.count === 4 ? "Q1" : "P1";
+      const f = folded(key, [
+        ["core.start", {}],
+        [`${key}.goal`, { by: "H", at: { period: phase, elapsed: 300 } }],
+      ]);
+      const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+      expect(out.clock, `${key} produced no clock at all`).toBeDefined();
+      expect(out.clock!.phase).toBe(phase);
+      expect(out.clock!.nominalSeconds).toBe(minutes * 60);
+    },
+  );
+
+  it("an overtime phase takes the OVERTIME scalar, not the regulation one", () => {
+    // Reaching ET/OT through a real fold means playing a whole drawn match, so
+    // the STATE here is assembled by hand — but the cfg is the module's own
+    // parsed config, which is where both numbers come from, and the two are
+    // asserted DIFFERENT so neither can be passing on the other's value.
+    const football = moduleFor("football").configSchema.parse({
+      halfMinutes: 45,
+      extraTime: { enabled: true, halfMinutes: 15 },
+    }) as { halfMinutes: number; extraTime: { halfMinutes: number } };
+    expect(football.extraTime.halfMinutes).not.toBe(football.halfMinutes);
+    const et = projectOverlayLiveData({
+      row: ROW(1),
+      folded: handMade({ cfg: football, phase: "ET_H1", asOf: { period: "ET_H1", elapsed: 120 } }),
+      venueTz: "UTC",
+    });
+    expect(et.clock!.nominalSeconds).toBe(football.extraTime.halfMinutes * 60);
+    expect(et.clock!.nominalSeconds).not.toBe(football.halfMinutes * 60);
+
+    const ice = moduleFor("icehockey").configSchema.parse({}) as {
+      periods: { minutes: number };
+      overtime: { minutes: number } | null;
+    };
+    expect(ice.overtime, "icehockey's preset no longer declares an overtime — re-pin this case").not.toBeNull();
+    expect(ice.overtime!.minutes).not.toBe(ice.periods.minutes);
+    const ot = projectOverlayLiveData({
+      row: ROW(1),
+      folded: handMade({ cfg: ice, phase: "OT", asOf: { period: "OT", elapsed: 60 } }),
+      venueTz: "UTC",
+    });
+    expect(ot.clock!.nominalSeconds).toBe(ice.overtime!.minutes * 60);
+    expect(ot.clock!.nominalSeconds).not.toBe(ice.periods.minutes * 60);
+  });
+
+  it("a state carrying no readable cfg still carries its clock — WITHOUT a ceiling", () => {
+    // The documented fallback, and the reason the stage HOLDS rather than
+    // ticking when this field is absent. Unreachable for the two kernels that
+    // produce a clock today (both carry `state.cfg`, asserted above); it exists
+    // so a twelfth sport that grows `phase`/`asOf` without a recognisable cfg
+    // cannot silently start counting to 1205:25.
+    const out = projectOverlayLiveData({
+      row: ROW(1),
+      folded: handMade({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }),
+      venueTz: "UTC",
+    });
+    expect(out.clock, "the clock itself must survive — this is a missing ceiling, not a missing clock").toBeDefined();
+    expect(out.clock!.anchorSeconds).toBe(761);
+    expect(out.clock!.nominalSeconds).toBeUndefined();
   });
 
   it("cricket: every innings' runs, wickets, legalBalls and ballsLimit, from the state — the quota derived from the cfg, never typed here", () => {

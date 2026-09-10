@@ -634,3 +634,26 @@ export function formatClock(seconds: number): string {
   const ss = s % 60;
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
+
+/**
+ * The same digit, but never past the period's declared length: `45+`, `90+`,
+ * `20+` — broadcast's own convention for "we are in added time" (F16, product
+ * ruling 2026-09-10, `_THEMES.md` §3). Driven live, a fixture left `in_play`
+ * displayed `1205:25` — twenty hours — because the cell ticks from the fold's
+ * anchor with no relation to the period's length.
+ *
+ * The bound is INCLUSIVE: `45:00` is a real reading and the one the ceiling is
+ * named after, so only a value strictly past it takes the `+` form.
+ *
+ * `nominalSeconds` undefined means "no declared length", and this stays
+ * UNBOUNDED there rather than inventing a ceiling — holding the display is the
+ * stage's job (`use-overlay-clock.ts`), which is the only place that knows the
+ * anchor the value came from. `formatClock` remains the spelling for every
+ * number this one does not cap, so the two can never disagree about a digit.
+ */
+export function formatClockCapped(seconds: number, nominalSeconds?: number): string {
+  if (nominalSeconds !== undefined && Number.isFinite(nominalSeconds) && seconds > nominalSeconds) {
+    return `${Math.floor(Math.max(0, nominalSeconds) / 60)}+`;
+  }
+  return formatClock(seconds);
+}
