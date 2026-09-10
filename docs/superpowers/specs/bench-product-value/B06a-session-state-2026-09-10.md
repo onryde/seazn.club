@@ -19,8 +19,8 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | 3 — `compareMatches` | **COMMITTED** `bffb3fabe` |
 | 4 — `compareSpecials` | **COMMITTED** `04f302798` |
 | 5 — provenance writer | **COMMITTED** `aadfcf30a` |
-| 6 — claim accept (§9 P2) | **NEXT** |
-| 7 — news drafts + publish (§9 P6) | not started |
+| 6 — claim accept (§9 P2) | **COMMITTED** `1e1289c06`, `ae2d6f914`, `8da28fd25`, `734f16dbe` |
+| 7 — news drafts + publish (§9 P6) | **NEXT** — routes being re-pinned |
 | 8 — doc corrections | not started |
 | 9 — live run, both placement legs | not started — **needs a local env; orchestrator only, never a subagent (600s watchdog)** |
 
@@ -34,6 +34,7 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | after task 3 | 39 | 1420/1420 | 0 |
 | after task 4 | 40 | 1430/1430 | 0 |
 | after task 5 | 41 | 1438/1438 | 0 |
+| after task 6 | 42 | 1457/1457 | 0 |
 
 Gate command (the apps/web suite and `turbo` never see `scripts/bench`):
 
@@ -88,7 +89,44 @@ generates one case per bench MODULE, so each new `lib/**.ts` file adds one.
 10. **Process:** `git checkout <file>` to strip a debug line also reverted that
     file's uncommitted wiring. Remove debug lines surgically.
 
-## Resuming task 6 (claim accept)
+## Task 6 findings (these belong in the PR body, after the ten above)
+
+11. **Every one of the plan's four task-6 route facts was wrong.** The claim
+    token is shown ONCE on the mint response's `claim_url` and the read-back
+    GET omits it, so `seed.ts` could not accept what it had just minted — the
+    accept flow was not merely unbuilt, it was UNREACHABLE, which is how it
+    stayed owed for three waves. Accept takes no body, requires a session, and
+    matches the SIGNED-IN email (403 CLAIM_EMAIL_MISMATCH), so it is one
+    sign-in per invitee. `GET /persons/{id}/claim-invites` is `getOpenClaim`,
+    `where claimed_at is null` — an accepted invite reads back as `null`, so
+    the plan's "assert claimed_at != null" would have asserted against a row
+    the route refuses to return. And `/api/claims/*` is the non-v1 envelope,
+    which DROPS the error `code`: `CLAIM_INVALID` never crosses the wire, so
+    asserting it would have been an assertion that could never fail.
+12. **The plan's "replace the unclaimed assertion" premise was false.** That
+    assertion reads a seed-time snapshot and proves SEEDING never accepts;
+    acceptance later in the run does not falsify it. Kept, with the
+    post-acceptance assertions added beside it.
+13. **A `no_subject` oracle carrying `passed: false` destroys the whole run
+    report.** `OracleResult`'s `superRefine` requires
+    `passed === (verdict !== "fail")` and `writeReport` parses before writing,
+    so the first pack with no claim invites would have thrown inside the report
+    writer and left NO report on disk. Invisible to every suite-level test:
+    they all call the runner, none call `writeReport`. Found in review, and now
+    guarded by parsing every oracle the runner pushes.
+14. **A fifth suite-level fake existed.** `tiny-suite.test.ts` — shared by the
+    scheduling and registration suites via `makeFakeServer` — modelled the
+    claim-invite mint with no secret at all. Only found because `seed.ts` was
+    changed to REFUSE a secretless mint instead of dropping it.
+15. **`report.claims` had a field and no writer since B01**, exactly like
+    `provenancePct` before T5.
+
+Mutation sweep, 8 mutants, 8 killed, each with a named killer: the negative
+case hardcoded, `limit` ignored, `tamperToken` inert, the vacuity conjunct
+dropped, the untouched-invite re-read deleted, the stats comparison deleted,
+the naive session latch re-injected, and `passed` hardcoded past its verdict.
+
+## Task 6, as built (superseded — kept for the route facts)
 
 Routes are pinned in the plan, in-task, and are NOT all under `/api/v1`:
 `GET /api/claims/{token}` → `POST /api/auth/magic-link` →
