@@ -377,6 +377,21 @@ export interface DisciplineEntry {
   classKey: string;
 }
 
+/**
+ * The cards this fixture has shown, or `null` for "no discipline data".
+ *
+ * A MALFORMED ROW IS SKIPPED, NOT FATAL (product ruling 2026-09-10, F14 —
+ * `_THEMES.md` §2a). This used to `return null` on the first entry it could
+ * not parse, throwing away the rows it had already accepted: one bad row from
+ * the engine showed NO cards at all, which on screen is indistinguishable from
+ * a clean match. Showing two of three cards is strictly better than showing
+ * none and looking correct.
+ *
+ * `null` stays reserved for "nothing to show" — no `discipline` key, an empty
+ * list, or a list whose every row is unreadable. It is not merely a nicer
+ * empty array: `live-score.tsx:175/351` gates the whole discipline panel on
+ * `discipline !== null`, so `[]` paints a heading with no rows under it.
+ */
 export function disciplineList(summary: unknown): DisciplineEntry[] | null {
   if (typeof summary !== "object" || summary === null) return null;
   const detail = (summary as { detail?: unknown }).detail;
@@ -385,16 +400,16 @@ export function disciplineList(summary: unknown): DisciplineEntry[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const rows: DisciplineEntry[] = [];
   for (const entry of raw) {
-    if (typeof entry !== "object" || entry === null) return null;
+    if (typeof entry !== "object" || entry === null) continue;
     const { side, person, classKey } = entry as Record<string, unknown>;
-    if ((side !== "home" && side !== "away") || typeof classKey !== "string") return null;
+    if ((side !== "home" && side !== "away") || typeof classKey !== "string") continue;
     rows.push({
       side,
       classKey,
       ...(typeof person === "string" ? { person } : {}),
     });
   }
-  return rows;
+  return rows.length > 0 ? rows : null;
 }
 
 /** Which side is serving (nested kernel, rally fidelity) — null otherwise. */
