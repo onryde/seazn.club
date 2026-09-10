@@ -343,8 +343,10 @@ Owner proposal, 2026-09-10: require the top fidelity band for a live stream,
 *"otherwise we can block the livestream option"*. (Asked as "Band 4"; the scale
 is closed at 0–3 by the v2 ruling, so the top band is **3 — `detail`**.)
 
-**This is recorded as a PROPOSAL with an author's recommendation against it. It
-is NOT a ruling, and the decision is open.**
+**DECIDED 2026-09-10 — the owner applied the recommendation: do NOT block.**
+*"hope that you are applying rec to not block"*. Streaming is never gated on
+fidelity; the panel shows the consequence instead. The findings below are the
+reasoning, kept because the proposal is a natural one to make again.
 
 The instinct is sound: a band-0 stream produces a nearly empty overlay, and that
 reflects on us rather than on the club. Three findings argue for a different
@@ -477,16 +479,20 @@ Deferred with named gaps: takeover panels (no consumer yet), `timer` and
   a live broadcast is our failure regardless of who supplied the artwork.
 - **The seazn watermark always shows, always right; a club mark never displaces
   it** (owner: "no, watermark should be alway right"). Two slots — §4.2, §4.4.
+- **Streaming is NEVER gated on fidelity band** (owner applied the
+  recommendation, 2026-09-10). The panel shows the consequence of the current
+  scoring detail; it does not block the stream. §5.2.
+
+  **Not W1, and not a one-liner.** The consequence line needs the derived band,
+  which `effectiveBand` computes server-side from the ledger — so it must be
+  threaded to the client panel as a prop, and it is **meaningless before the
+  first event** (`null`, §5.2 finding 2). Deliberately NOT added to Task 6
+  mid-flight: that panel's brief is the OBS tab plus the §5.3 gate, and this
+  needs its own copy in four locales. Owed, and recorded here so it is not lost.
 
 **Still open:**
 
-1. **Does streaming require fidelity band 3? (§5.2)** Owner proposed it
-   2026-09-10; the author recommends **not** gating, and recommends showing the
-   consequence in the panel instead. Three findings sit behind that: the band is
-   derived rather than chosen, it reads `null` before the first event, and it is
-   a maximum satisfied by one tap — plus re-gating reverses entitlements v18.
-   **No decision taken.**
-2. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
+1. **Slate's home.** `2026-09-07-streaming-programme-design.md` §3.5 says slate
    is R2's; `_THEMES.md` §4a treats it as registry entry three; W1 built it on
    2026-09-09 under "fix all". The tree and the programme design now disagree
    and one of them needs correcting.
