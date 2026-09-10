@@ -1232,6 +1232,45 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     });
   });
 
+  it("B06a T7 — a run that publishes EVERY draft reds: the draft state is then unproven", async () => {
+    // What stays draft is half of what this step proves. A run that published
+    // everything has demonstrated that publishing works and NOTHING about the
+    // draft state it was supposed to leave behind — so the oracle fails even
+    // though every named fixture published successfully.
+    const { transport, sql } = fakeServer({ newsRoutes: { keepOnlyLastDraft: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const publishOracle = (report.oracles ?? []).find(
+      (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+    );
+    expect(publishOracle).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(publishOracle?.detail).toContain("NOTHING stayed draft");
+    expect(report.news).toMatchObject({ drafted: 1, published: 1 });
+    expect(report.gate).toBe("red");
+    // Drafting itself still worked — one knob, one red.
+    expect((report.oracles ?? []).find((o) => o.name === "news: folding drafted posts")).toMatchObject({
+      verdict: "pass",
+    });
+  });
+
   it("B06a T7 — a product that drafts nothing reports NO SUBJECT, never a pass", async () => {
     // Five preconditions can each legitimately produce zero drafts
     // (`org-posts.ts:479-485`), so zero must never read as a working news

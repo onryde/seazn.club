@@ -61,6 +61,14 @@ export interface NewsRoutesOptions {
   /** Draft nothing at all, however many fixtures decide: the legitimate-zero
    *  case the five preconditions make reachable. */
   readonly draftNothing?: boolean;
+  /**
+   * Keep only the most recently drafted post, so the run ends up publishing
+   * EVERY draft it can see. `stillDraft` falls to 0 and the publish oracle
+   * must fail — a run that published everything has not proven the draft
+   * state exists at all. Without this knob that conjunct is untestable and
+   * a mutant deleting it survives; it did.
+   */
+  readonly keepOnlyLastDraft?: boolean;
 }
 
 export interface NewsRoutesWorld {
@@ -89,6 +97,7 @@ export function makeNewsRoutesWorld(opts: NewsRoutesInput): NewsRoutesWorld {
     if (draftedFixtures.has(fixtureId)) return;
     draftedFixtures.add(fixtureId);
     const id = `post-${++counter}`;
+    if (opts.keepOnlyLastDraft === true) rows.clear();
     rows.set(id, {
       id,
       org_id: "org-fixed",
