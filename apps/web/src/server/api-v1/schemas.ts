@@ -970,19 +970,91 @@ export const ProgressionSchema = z
   });
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 
+/**
+ * A stage's `config`, with the KEY SET closed.
+ *
+ * `CreateStage` below has been `.strict()` since F2 Task 5, but `config` was
+ * `z.record(z.string(), z.unknown())` — so the very bug that strictness was
+ * added to stop survived one level down. A misspelled `byes`, `slotOrder` or
+ * `legs` inside `config` parsed fine, was stored, was never read by anything,
+ * and the product then seeded its own draw and returned 201. No error, no log.
+ * The organiser sees a draw they did not ask for and has nothing to go on.
+ *
+ * Two deliberate halves:
+ *
+ * KEYS are closed. That is the defect, and only `.strictObject` fixes it.
+ * Every key below has a real reader; omitting one would make it permanently
+ * unreachable, because `CreateStage` is the ONLY client write path (there is
+ * no PatchStage/UpdateStage) and the server's own later writes —
+ * `config.ladder_order` at `usecases/stages.ts:3385`, and `qualified` /
+ * `cross_feeds` / `rank_overrides` / `carry_deltas` / `rngSeed` — round-trip
+ * through rows this schema has to be a superset of. The list was derived by
+ * enumerating every reader and every writer, not typed from memory.
+ *
+ * VALUES are typed only where THIS file is the authority. `points` belongs to
+ * the engine's `PointsRule`, `shootout`/`extraTime` to each sport module's
+ * `configSchema` (`packages/engine/src/sport/module.ts`), and `cross_feeds` /
+ * `placements` / `rank_overrides` / `carry_deltas` to the usecases that read
+ * them. Restating those shapes here would create a second copy of a fact that
+ * already has an owner — which is exactly how two shapes of one fact drift
+ * apart, and exactly why `scripts/bench/lib/pack-schema.ts:456` deliberately
+ * declined to copy this vocabulary. `z.unknown()` means "this key is real,
+ * its shape is someone else's to enforce".
+ *
+ * Net effect for the bench: a pack no longer needs its own copy of this
+ * vocabulary to catch a typo, because the product now rejects one at the
+ * door — which is the guarantee `pack-schema.ts` wanted and could not give
+ * itself.
+ */
+export const StageConfig = z
+  .strictObject({
+    // League / group shape.
+    legs: z.number().int().min(1).max(8).optional(),
+    pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
+    // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
+    // `null` for an empty slot — the two fields §18.2 was raised about.
+    thirdPlace: z.boolean().optional(),
+    byes: z.array(z.string()).optional(),
+    slotOrder: z.array(z.number().int().nullable()).optional(),
+    bracketReset: z.boolean().optional(),
+    // Americano / Mexicano.
+    mode: z.enum(["americano", "mexicano"]).optional(),
+    courtCount: z.number().int().min(1).optional(),
+    // Swiss (also `rounds`).
+    rounds: z.number().int().min(1).optional(),
+    chess: z.boolean().optional(),
+    // Ladder.
+    challengeRange: z.number().int().min(1).optional(),
+    ladder_order: z.array(z.string()).optional(),
+    // Seeding / standings, any kind.
+    qualified: z.array(z.string()).optional(),
+    h2h_scope: z.literal("overall").optional(),
+    rngSeed: z.number().optional(),
+    // Shapes owned elsewhere — key allowed, value left to its own authority.
+    points: z.unknown().optional(),
+    carry_deltas: z.unknown().optional(),
+    rank_overrides: z.unknown().optional(),
+    cross_feeds: z.unknown().optional(),
+    placements: z.unknown().optional(),
+    shootout: z.unknown().optional(),
+    extraTime: z.unknown().optional(),
+  })
+  .default({});
+
 // F2 Task 5 — .strict(): before this, an unknown key (the old
 // .qualification/.seeding shape, or any typo) parsed successfully with the
 // key silently STRIPPED — stages-panel.tsx's live "Add stage" POST
 // (qualification: {topN}) created a stage with progression: null, returned
 // 201, and generated nobody. No error, no log, ever. Strict converts that
 // whole class of bug from silent to loud: the same POST now 400s, naming the
-// offending key (zod's unrecognized_keys issue).
+// offending key (zod's unrecognized_keys issue). `config` carries the same
+// guarantee one level down since 2026-09-10 — see StageConfig above.
 export const CreateStage = z
   .object({
     seq: z.number().int().min(1),
     kind: StageKind,
     name: z.string().min(1).max(200),
-    config: z.record(z.string(), z.unknown()).default({}),
+    config: StageConfig,
     progression: ProgressionSchema.nullish(),
   })
   .strict();

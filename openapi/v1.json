@@ -18540,10 +18540,106 @@
                       "config": {
                         "default": {},
                         "type": "object",
-                        "propertyNames": {
-                          "type": "string"
+                        "properties": {
+                          "legs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "pools": {
+                            "type": "object",
+                            "properties": {
+                              "count": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "count"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "thirdPlace": {
+                            "type": "boolean"
+                          },
+                          "byes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "slotOrder": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "bracketReset": {
+                            "type": "boolean"
+                          },
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "americano",
+                              "mexicano"
+                            ]
+                          },
+                          "courtCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "rounds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "chess": {
+                            "type": "boolean"
+                          },
+                          "challengeRange": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "ladder_order": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "qualified": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "h2h_scope": {
+                            "type": "string",
+                            "const": "overall"
+                          },
+                          "rngSeed": {
+                            "type": "number"
+                          },
+                          "points": {},
+                          "carry_deltas": {},
+                          "rank_overrides": {},
+                          "cross_feeds": {},
+                          "placements": {},
+                          "shootout": {},
+                          "extraTime": {}
                         },
-                        "additionalProperties": {}
+                        "additionalProperties": false
                       },
                       "progression": {
                         "anyOf": [
@@ -18833,10 +18929,106 @@
                         "config": {
                           "default": {},
                           "type": "object",
-                          "propertyNames": {
-                            "type": "string"
+                          "properties": {
+                            "legs": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 8
+                            },
+                            "pools": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "thirdPlace": {
+                              "type": "boolean"
+                            },
+                            "byes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "slotOrder": {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "bracketReset": {
+                              "type": "boolean"
+                            },
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "americano",
+                                "mexicano"
+                              ]
+                            },
+                            "courtCount": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "rounds": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "chess": {
+                              "type": "boolean"
+                            },
+                            "challengeRange": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "ladder_order": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "qualified": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "h2h_scope": {
+                              "type": "string",
+                              "const": "overall"
+                            },
+                            "rngSeed": {
+                              "type": "number"
+                            },
+                            "points": {},
+                            "carry_deltas": {},
+                            "rank_overrides": {},
+                            "cross_feeds": {},
+                            "placements": {},
+                            "shootout": {},
+                            "extraTime": {}
                           },
-                          "additionalProperties": {}
+                          "additionalProperties": false
                         },
                         "progression": {
                           "anyOf": [
@@ -19099,7 +19291,16 @@
                 "seq": 1,
                 "kind": "league",
                 "name": "example",
-                "config": {}
+                "config": {
+                  "legs": 1,
+                  "pools": {
+                    "count": 1
+                  },
+                  "thirdPlace": true,
+                  "byes": [
+                    "example"
+                  ]
+                }
               }
             }
           }
@@ -19543,10 +19744,106 @@
                       "config": {
                         "default": {},
                         "type": "object",
-                        "propertyNames": {
-                          "type": "string"
+                        "properties": {
+                          "legs": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 8
+                          },
+                          "pools": {
+                            "type": "object",
+                            "properties": {
+                              "count": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "count"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "thirdPlace": {
+                            "type": "boolean"
+                          },
+                          "byes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "slotOrder": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "bracketReset": {
+                            "type": "boolean"
+                          },
+                          "mode": {
+                            "type": "string",
+                            "enum": [
+                              "americano",
+                              "mexicano"
+                            ]
+                          },
+                          "courtCount": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "rounds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "chess": {
+                            "type": "boolean"
+                          },
+                          "challengeRange": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "ladder_order": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "qualified": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "h2h_scope": {
+                            "type": "string",
+                            "const": "overall"
+                          },
+                          "rngSeed": {
+                            "type": "number"
+                          },
+                          "points": {},
+                          "carry_deltas": {},
+                          "rank_overrides": {},
+                          "cross_feeds": {},
+                          "placements": {},
+                          "shootout": {},
+                          "extraTime": {}
                         },
-                        "additionalProperties": {}
+                        "additionalProperties": false
                       },
                       "progression": {
                         "anyOf": [
@@ -19836,10 +20133,106 @@
                         "config": {
                           "default": {},
                           "type": "object",
-                          "propertyNames": {
-                            "type": "string"
+                          "properties": {
+                            "legs": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 8
+                            },
+                            "pools": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "count"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "thirdPlace": {
+                              "type": "boolean"
+                            },
+                            "byes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "slotOrder": {
+                              "type": "array",
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "bracketReset": {
+                              "type": "boolean"
+                            },
+                            "mode": {
+                              "type": "string",
+                              "enum": [
+                                "americano",
+                                "mexicano"
+                              ]
+                            },
+                            "courtCount": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "rounds": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "chess": {
+                              "type": "boolean"
+                            },
+                            "challengeRange": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            "ladder_order": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "qualified": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "h2h_scope": {
+                              "type": "string",
+                              "const": "overall"
+                            },
+                            "rngSeed": {
+                              "type": "number"
+                            },
+                            "points": {},
+                            "carry_deltas": {},
+                            "rank_overrides": {},
+                            "cross_feeds": {},
+                            "placements": {},
+                            "shootout": {},
+                            "extraTime": {}
                           },
-                          "additionalProperties": {}
+                          "additionalProperties": false
                         },
                         "progression": {
                           "anyOf": [
@@ -20102,7 +20495,16 @@
                 "seq": 1,
                 "kind": "league",
                 "name": "example",
-                "config": {}
+                "config": {
+                  "legs": 1,
+                  "pools": {
+                    "count": 1
+                  },
+                  "thirdPlace": true,
+                  "byes": [
+                    "example"
+                  ]
+                }
               }
             }
           }
