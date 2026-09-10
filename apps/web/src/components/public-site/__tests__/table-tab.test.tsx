@@ -189,6 +189,13 @@ describe("TableTab", () => {
     expect(headings(h)).toEqual(["sunday-league", "premier"]);
     expect(h).toMatch(/data-testid="mh-table-division-sunday-league"[^>]*>Sunday League</);
     expect(h).toMatch(/data-testid="mh-table-division-premier"[^>]*>Premier</);
+    // Re-review NEW-2 — the LEVEL, not just the text. `<h2>` is the rank a
+    // division heading has to hold: the tab panel is a section of the hub page
+    // and `StandingsTableView`'s own caption sits below this. Swapping it to
+    // `<h3>` survived every other assertion here, and a heading level is
+    // markup, so it is pinnable now rather than at the post-mount leg.
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-division-sunday-league"/);
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-division-premier"/);
 
     // The heading has to outrank the table caption directly below it at EVERY
     // width, not only from `md`: `StandingsTableView`'s caption is
@@ -316,8 +323,18 @@ describe("TableTab", () => {
     // this is what says so. The whole group is read, not just the strip: the
     // wrong name would be inside it either way.
     const premier = groupHtml(h, "premier");
-    expect(premier).toContain("City");
     expect(premier).not.toContain("Blue Blazers");
+    // Re-review NEW-1 — sliced to the STRIP, not read off the whole group.
+    // `groupHtml` contains premier's own table, whose rows already say "City",
+    // so a `toContain("City")` on the group passed even with the strip's name
+    // blanked for every division but the first. The strip has to be asked
+    // directly, exactly as sunday-league's is above.
+    const premierStrip = premier.slice(
+      premier.indexOf(`data-testid="mh-table-champion-premier"`),
+      premier.indexOf(`data-testid="mh-table-pl"`),
+    );
+    expect(premierStrip).toContain("Champion");
+    expect(premierStrip).toContain("City");
     // And the division nobody has won gets no crown, in a document that has
     // two — the positive-and-negative pair on one render.
     expect(groupHtml(h, "juniors")).not.toContain(`data-testid="mh-table-champion-`);
