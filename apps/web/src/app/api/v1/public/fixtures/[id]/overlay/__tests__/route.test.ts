@@ -81,7 +81,11 @@ async function seedFixture(opts: {
   const division = await createDivision(auth, competition.id, {
     name: "Open",
     sport_key: sportKey,
-    variant_key: sportKey === "football" ? "std" : "score",
+    // `11-a-side` is football's own declared variant (spec 04 §1.1,
+    // `football.ts:2407`). This read `"std"`, which no sport declares — it
+    // only ever resolved against a local database polluted by earlier test
+    // runs, and 422'd on CI's clean one. `generic.score` IS declared.
+    variant_key: sportKey === "football" ? "11-a-side" : "score",
     config: sportKey === "football" ? {} : GENERIC_CONFIG,
   });
   // Football is a team sport — `createEntrants` refuses 'individual' there.
