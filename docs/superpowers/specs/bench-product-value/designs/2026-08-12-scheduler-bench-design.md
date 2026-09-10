@@ -695,3 +695,102 @@ shipped as #753 `088c5436f` — `gateLineupSuspensions`, 422 `SUSPENDED_PLAYER`,
 overridable with a reason against a `suspension.overridden` ledger row, behind
 the paid `discipline.enforced` flag so an org that never bought discipline sees
 no change.
+
+## 18. Appendix — product findings surfaced by the B06a build (no issues filed)
+
+Every line below was found by BUILDING against the product, and every one is
+pinned to a read of the tree rather than to a grep. Nothing here is filed;
+this appendix is the record, and the owner decides what becomes a ticket.
+
+### 18.1 A conditional authentication bypass (owner-approved for a fix, 2026-09-10)
+
+`apps/web/src/app/api/auth/magic-link/route.ts:44`:
+
+```ts
+if (!sent || process.env.NODE_ENV !== "production") devLink = link;
+```
+
+`sendMagicLinkEmail` passes `transactional: true`, so the suppression branch is
+bypassed — but `send()` (`lib/email.ts:118-156`) still returns `false` when
+`RESEND_API_KEY` is unset, when Resend answers non-2xx (429, quota, unverified
+domain), or when the fetch throws. On any of those **in production**, the
+response body carries a live sign-in link for whatever address was posted, and
+`components/auth-form.tsx:35` renders it on screen. An email-delivery failure
+becomes account access; a provider outage becomes a window across the user base.
+
+It is **not** a one-line delete. `next start` runs as production, and six call
+sites depend on that arm to test without email: `scripts/smoke.ts` (three),
+`scripts/smoke-sports.ts:901`, `scripts/bench/lib/http.ts:80`, and
+`scripts/bench/lib/drivers/browser.ts:83`. The agreed shape is an explicit
+opt-in flag the local/CI recipe sets and production never does — replacing an
+implicit failure-mode with a deliberate one. Its own PR, after B06a's T7.
+
+### 18.2 A stage's `config` is unvalidated inside a strict envelope
+
+`CreateStage` (`api-v1/schemas.ts:975-983`) is `.strict()` — an unrecognised
+TOP-LEVEL key 400s, and the comment above it explains exactly why that
+strictness was added (a `qualification: {topN}` typo created a stage with
+`progression: null`, returned 201, and generated nobody). But `config` itself
+is `z.record(z.string(), z.unknown())`, so the same class of bug survives one
+level down: a misspelled `byes` or `slotOrder` inside `config` is accepted,
+silently dropped, and the product seeds its own draw. The bench cannot tell
+that apart from a draw it asked for.
+
+A separate, owner-approved PR types those two fields.
+
+### 18.3 The claim invite was unreachable, not merely unbuilt
+
+The one-time claim secret is returned ONCE, on the mint response's `claim_url`
+(`app/api/v1/persons/[id]/claim-invites/route.ts:24-25`), and the read-back
+`GET .../claim-invites` deliberately omits it. So a driver that minted an
+invite had no way to accept the invite it had just minted. That is why B03 §5's
+"the accept flow is B05's, seeding only mints invites" survived three waves
+without anyone noticing it could not be discharged from where it stood — and
+why "a `person_claims` row exists" had been standing in for "a human can get
+into their profile" the whole time. B06a T6 captures the secret at mint.
+
+Two adjacent facts, both of which the bench had to be corrected to respect:
+`GET /persons/{id}/claim-invites` is `getOpenClaim`
+(`usecases/person-claims.ts:200-208`), whose WHERE clause carries
+`claimed_at is null` — an accepted invite reads back as `null`, not as a row
+with a timestamp. And `/api/claims/*` runs on the non-v1 envelope
+(`lib/http.ts:113-121`) which drops the `code`, so the four distinct
+`CLAIM_INVALID`/`CLAIM_EXPIRED`/`CLAIM_REVOKED`/`CLAIM_CLAIMED` codes never
+cross the wire to an API client. **Not a customer-facing defect** — the claim
+page (`app/claim/[token]/page.tsx:43`) calls the usecase directly and renders
+distinct copy per code — but it does mean an API consumer can only see status.
+
+### 18.4 Turning news drafting on requires an entitlement, and there is no second chance
+
+Drafting is a side effect of FOLDING (`refreshNews`, `scoring.ts:132` and
+`event-import.ts:435`), gated on five conditions in order: the event decides or
+voids (`scoring.ts:129`), `divisions.auto_posts` is true (`:353-356`, re-read
+at `org-posts.ts:479`), the org holds `news.auto` (`:480`), and the fixture's
+status is decided/finalized/forfeited (`:483-485`). Miss any one and the
+product drafts nothing and reports nothing about why.
+
+`auto_posts` IS settable over the API, but `PATCH /divisions/{id}` refuses to
+set it TRUE without `news.auto` (`usecases/divisions.ts:652-654`). Because
+drafting happens during the fold, an org that discovers the refusal afterwards
+cannot recover — the events are already folded and re-folding them is not
+something a bench (or a customer) may do. Any surface that offers auto-posting
+should therefore surface the entitlement requirement BEFORE scoring starts,
+not at the moment the toggle is flipped.
+
+### 18.5 `GET /orgs/{id}/posts?status=` ignores a value it does not recognise
+
+`app/api/v1/orgs/[id]/posts/route.ts:19` passes `status` through only when it
+matches `draft|published|archived` and otherwise drops the filter, returning
+every post with a 200. A client with a typo gets a superset and no signal. The
+strict-envelope reasoning at `schemas.ts:971-974` argues the opposite way for
+`CreateStage`; this route predates that argument.
+
+### 18.6 The fire-once publish effect is analytics-only
+
+`shouldFirePostPublished` (`usecases/org-posts.ts:317-318`) guards a PostHog
+`captureServer` call and nothing else — no table row, no outbox entry, no
+webhook, no email. "Published exactly once" is therefore not observable by any
+API client, and the bench asserts the predicate by proxy instead:
+`published_at` is assigned only when it was null (`:276,282`), so a second
+publish must not move it. Worth knowing before anyone builds a feature that
+assumes a publish transition is observable downstream.

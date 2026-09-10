@@ -344,6 +344,87 @@ function reportWithOracles(oracles: BenchReportType["suites"][number]["oracles"]
   return { ...base, suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), oracles }] };
 }
 
+describe("B06a T5 — provenance", () => {
+  it("renders the counts behind the percentage, not a bare number", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          provenancePct: 75,
+          provenance: { total: 8, real: 6, reconstructed: 2, synthetic: 0, realPct: 75 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Provenance"));
+    // The denominator is the point: "75% real" alone hides whether that is
+    // 6 of 8 or 3 of 4, and design §4's honesty clause is about how much of a
+    // suite was reconstructed.
+    expect(line).toContain("75% real (6/8 streams; 2 reconstructed)");
+  });
+
+  it("falls back to the bare percentage for a report written before the breakdown existed", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), provenancePct: 40 }],
+    });
+    expect(md.split("\n").find((l) => l.includes("Provenance"))).toContain("40% real");
+  });
+});
+
+describe("B06a T6 — claims", () => {
+  it("renders the accepted count over the minted total, never a bare percentage", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          claims: { total: 4, accepted: 2 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Claims:"));
+    // Both numbers. The denominator is what makes a shortfall visible: "2
+    // accepted" alone cannot be told apart from "2 minted, 2 accepted", and
+    // this suite deliberately leaves invites unclaimed so the gap is real.
+    expect(line).toContain("2/4 invites accepted");
+  });
+
+  it("omits the line entirely for a run that never reached the claim step", () => {
+    // Not "0/0". A rendered zero reads as "this suite minted invites and
+    // nobody could use them", which is a finding; a run that never got there
+    // has said nothing at all and must not be mistaken for one that did.
+    const base = fullReport();
+    const { claims: _dropped, ...suiteWithoutClaims } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutClaims] });
+    expect(md.split("\n").some((l) => l.includes("Claims:"))).toBe(false);
+  });
+});
+
+describe("B06a T7 — news", () => {
+  it("renders published over drafted, so a run that published everything is visible", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), news: { drafted: 8, published: 1 } }],
+    });
+    const line = md.split("\n").find((l) => l.includes("News:"));
+    // Both numbers. What stayed DRAFT is half of what the news step proves,
+    // and a bare "1 published" cannot tell 1-of-8 from 1-of-1.
+    expect(line).toContain("1/8 drafted posts published");
+  });
+
+  it("omits the line for a run that never reached the news step", () => {
+    const base = fullReport();
+    const { news: _dropped, ...suiteWithoutNews } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutNews] });
+    expect(md.split("\n").some((l) => l.includes("News:"))).toBe(false);
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(

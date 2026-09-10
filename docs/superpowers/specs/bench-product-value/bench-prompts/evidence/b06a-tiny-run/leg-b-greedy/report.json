@@ -1,0 +1,885 @@
+{
+  "runId": "9f3924a8e0959e00aa7b038676916161a5e663be",
+  "startedAt": "2026-09-10T19:18:51.925Z",
+  "finishedAt": "2026-09-10T19:19:10.732Z",
+  "engine": "greedy",
+  "base": "http://localhost:3374",
+  "preflight": {
+    "ok": true,
+    "refusals": [],
+    "placement": {
+      "status": "absent",
+      "detail": "placement channel to localhost:50302 did not reach READY within 3s (Failed to connect before the deadline)."
+    }
+  },
+  "suites": [
+    {
+      "suite": "_tiny",
+      "gate": "green",
+      "timings": {
+        "seedMs": 5534,
+        "scheduleMs": 981,
+        "simMs": 471,
+        "importMs": 1198
+      },
+      "keep": false,
+      "solver": {
+        "engine": "greedy",
+        "requestedEngine": "greedy",
+        "status": "solver_unavailable"
+      },
+      "conflictCount": 0,
+      "oracles": [
+        {
+          "name": "entitlement-gate: revise_no_target_community",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: revise_with_target_community",
+          "passed": true,
+          "detail": "not refused for payment (status 201) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: revise_dls_off_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: other_event_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: gated_feature_refusal_names_its_key",
+          "passed": true,
+          "detail": "refused as expected: 402 PAYMENT_REQUIRED, feature_key \"officials.auto\""
+        },
+        {
+          "name": "entitlement-gate: revise_no_target_after_plan",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
+          "passed": true,
+          "detail": "plan_entitlements grants cricket.dls on \"community\" — scoring is free, as ruled (V390__scoring_free.sql; V393__entitlements_v18.sql:63-70)"
+        },
+        {
+          "name": "officials: claim invite unclaimed (off-dee)",
+          "passed": true,
+          "detail": "claim 71827739-854a-4e17-ba45-e72dce13593c for person 396b3c27-07ca-49ac-befc-2f5f32387780 is minted and unclaimed"
+        },
+        {
+          "name": "officials: claim invite unclaimed (off-eli)",
+          "passed": true,
+          "detail": "claim 36f523cb-0e62-4f0c-a2f4-d8eacddca803 for person 11a4f822-a400-4ea6-82d8-887fdac8cea6 is minted and unclaimed"
+        },
+        {
+          "name": "officials: auto-assign reaches the auto-needing official(s) after scheduling",
+          "passed": true,
+          "detail": "3 proposed, 3 applied across 3 fixture(s)"
+        },
+        {
+          "name": "player-stats: baseline",
+          "passed": true,
+          "detail": "2 roster read(s), 0 division row(s), 0 public row(s) — empty rows is the correct baseline (B03 folds no score events; see lib/stats.ts's header comment)"
+        },
+        {
+          "name": "oracle: d-tiebreak discipline enforced at the team sheet (p-hotel)",
+          "passed": true,
+          "detail": "naming the ACTIVE-suspended \"p-hotel\" on \"rr-r3-c1\" was REFUSED with 422 SUSPENDED_PLAYER, and the ELIGIBLE team-mate \"p-foxtrot\" alone was ACCEPTED on that same sheet — the gate refuses the banned player, not everybody"
+        },
+        {
+          "name": "oracle: d-tiebreak discipline carry (p-hotel)",
+          "passed": true,
+          "detail": "the ban confirmed through POST /divisions/{id}/suspensions + PATCH {kind:\"confirm\"} is ACTIVE over 1 match(es), stamped on entrant \"e-foxtrot\", and \"p-hotel\" is off the team sheet of rr-r3-c1 while still on 1 fixture(s) the pack does NOT name — and the ELIGIBLE team-mate \"p-foxtrot\" holds no ban and is on all 2 sheet(s)"
+        },
+        {
+          "name": "advance: s-playoff seed proposal qualifiers",
+          "passed": true,
+          "detail": "proposal qualifiers [dee2903c-a913-4acc-8223-58eac3b20c5f, 10737905-9064-44e5-a16d-b9af810b30c4] match the pack's expected order"
+        },
+        {
+          "name": "advance: s-playoff finalRanks",
+          "passed": true,
+          "detail": "captured finalRanks [dee2903c-a913-4acc-8223-58eac3b20c5f, 10737905-9064-44e5-a16d-b9af810b30c4] match the pack's expected order",
+          "subject": true
+        },
+        {
+          "name": "oracle: s-playoff rank crossing (captured vs standings)",
+          "passed": true,
+          "detail": "captured finalRanks and the re-read standings agree: [dee2903c-a913-4acc-8223-58eac3b20c5f, 10737905-9064-44e5-a16d-b9af810b30c4]",
+          "subject": true
+        },
+        {
+          "name": "oracle: s-playoff standings rank vs expected.finalRanks",
+          "passed": true,
+          "detail": "re-read standings [dee2903c-a913-4acc-8223-58eac3b20c5f, 10737905-9064-44e5-a16d-b9af810b30c4] match the pack's expected order",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny champion",
+          "passed": true,
+          "detail": "champion dee2903c-a913-4acc-8223-58eac3b20c5f matches the pack's expected champion"
+        },
+        {
+          "name": "oracle: d-tiny per-match results",
+          "passed": true,
+          "detail": "4 checked, 0 mismatched (r1: 2/2, r2: 1/1, r3: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-badminton per-match results",
+          "passed": true,
+          "detail": "1 checked, 0 mismatched (r1: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak per-match results",
+          "passed": true,
+          "detail": "3 checked, 0 mismatched (r1: 1/1, r2: 1/1, r3: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny/s-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-league\" match the pack's expected.tables row — live rows also carry metric(s) this pack does not declare (not gated): dee2903c-a913-4acc-8223-58eac3b20c5f: {\"for\":5,\"diff\":2,\"against\":3}; 10737905-9064-44e5-a16d-b9af810b30c4: {\"for\":3,\"diff\":-2,\"against\":5}"
+        },
+        {
+          "name": "oracle: d-tiny/s-league tie-order cascade",
+          "passed": true,
+          "detail": "no two rows in \"s-league\" are tied on points that cascade [points,diff] could decide — this oracle has NO SUBJECT and compared nothing (0 checked, 0 skipped)",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "oracle: d-badminton/s-badminton-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-badminton-league\" match the pack's expected.tables row — live rows also carry metric(s) this pack does not declare (not gated): 2550ef8e-b6d2-4515-b4be-759a96a681b4: {\"sets_won\":2,\"sets_lost\":0,\"points_won\":42,\"points_lost\":33}; 46347f43-40bf-4be5-9f51-ac2bdcc6a98b: {\"sets_won\":0,\"sets_lost\":2,\"points_won\":33,\"points_lost\":42}"
+        },
+        {
+          "name": "oracle: d-badminton/s-badminton-league tie-order cascade",
+          "passed": true,
+          "detail": "no two rows in \"s-badminton-league\" are tied on points that cascade [points,wins,set_ratio,point_ratio,h2h_points] could decide — this oracle has NO SUBJECT and compared nothing (0 checked, 0 skipped)",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "oracle: d-tiebreak/s-tiebreak-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-tiebreak-league\" match the pack's expected.tables row"
+        },
+        {
+          "name": "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
+          "passed": true,
+          "detail": "live order agrees with cascade [points,diff,for] on every tied pair (1 checked, 0 skipped)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: specials",
+          "passed": true,
+          "detail": "1 special(s), 5 claim(s) checked, 0 failed, 0 unsupported",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiny person cards (scores)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-tiny\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny leaderboard (points)",
+          "passed": true,
+          "detail": "live leaderboard \"points\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiny person cards (points)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"points\" count on their own /persons/{id}/stats card for \"d-tiny\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiebreak person cards (scores)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-tiebreak\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak leaderboard (points)",
+          "passed": true,
+          "detail": "live leaderboard \"points\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiebreak person cards (points)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"points\" count on their own /persons/{id}/stats card for \"d-tiebreak\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: p-ana career rollup",
+          "passed": true,
+          "detail": "the live ?group=sport rollup carries all 2 of this person's expected.careers metric(s), each in exactly one sport"
+        },
+        {
+          "name": "people: claim invites accepted",
+          "passed": true,
+          "detail": "2/2 invites accepted by the invited address",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an invalid claim token is refused",
+          "passed": true,
+          "detail": "a same-shape, same-length token that was never minted drew HTTP 401",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an accepted invite is closed",
+          "passed": true,
+          "detail": "all 2 accepted invites no longer read back as open",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: invites past the limit stay unclaimed",
+          "passed": true,
+          "detail": "2 invite(s) were never touched and still read back as open",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: a claimed profile still reports the same stats",
+          "passed": true,
+          "detail": "2 claimed profile(s) report the same divisions and stats as before acceptance",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: folding drafted posts",
+          "passed": true,
+          "detail": "15 draft(s) exist for this run's competition after the folds",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: the named fixtures publish and the rest stay draft",
+          "passed": true,
+          "detail": "1/1 named fixture(s) published, 14 post(s) still draft",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: a republish does not move published_at",
+          "passed": true,
+          "detail": "publishing an already-published post left published_at where it was",
+          "verdict": "pass",
+          "subject": true
+        }
+      ],
+      "provenancePct": 75,
+      "provenance": {
+        "total": 8,
+        "real": 6,
+        "reconstructed": 2,
+        "synthetic": 0,
+        "realPct": 75
+      },
+      "claims": {
+        "total": 4,
+        "accepted": 2
+      },
+      "news": {
+        "drafted": 15,
+        "published": 1
+      },
+      "warnings": [
+        "leaderboards.not_derived @ expected.leaderboards: 4 declared expected.leaderboards entries are NOT checked offline: the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a parallel implementation rather than a check. Owed to the seeded HTTP run (B05)",
+        "champions.not_derived @ expected.champions: 1 declared expected.champions entry is NOT checked offline: a champion is the product's stage-completion and progression answer, not the fold's. Owed to the seeded HTTP run (B05)",
+        "finalRanks.not_derived @ expected.finalRanks: 1 declared expected.finalRanks entry is NOT checked offline: a stage's placement order is the product's progression answer, exactly like a champion — a bracket writes a `placementTable`-wrapped row (usecases/stages.ts:2400) that stage 0 has no fixture rows to reproduce. The REFS and the order's internal consistency are checked at parse (PackSchema), including against a sibling expected.tables row where the stage has one. Owed to the seeded HTTP run (B05)",
+        "careers.not_derived @ expected.careers: 2 declared expected.careers entries are NOT checked offline: a career rollup spans divisions and rides the same player-stats fold as a leaderboard, which needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140). Summing the per-division leaderboards here would compute one expected value out of others. Owed to the seeded HTTP run (B05)",
+        "suspensions.not_derived @ expected.suspensions: 1 declared expected.suspensions entry is NOT checked offline: a discipline carry-over spans fixtures, and stage 0 folds each fixture on its own. Owed to the seeded HTTP run (B05)",
+        "_tiny: division \"d-tiny\" declares 2 stages and only \"s-league\" is scheduled — B04 drives one stage per division"
+      ],
+      "registration": [
+        {
+          "divisionRef": "d-registration",
+          "entries": 2,
+          "entrants": 2,
+          "waitlisted": 0,
+          "rejectedEligibility": 0,
+          "rejectedManual": 0,
+          "paidCents": 0,
+          "organiserForceEligibilityProven": false,
+          "funnelWallMs": 4572
+        }
+      ],
+      "scheduling": [
+        {
+          "divisionRef": "d-tiny",
+          "requestedEngine": "greedy",
+          "actualEngine": "greedy",
+          "solverStatus": "solver_unavailable",
+          "mode": "build",
+          "budgetExpired": true,
+          "tiersCompleted": 0,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 1410,
+            "worstIdleGapMinutes": 1305,
+            "courtImbalanceMinutes": 30,
+            "placed": 3,
+            "total": 3
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 215,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-tiny, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 51
+              },
+              {
+                "key": "courtBalance",
+                "score": 92
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 100
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        },
+        {
+          "divisionRef": "d-badminton",
+          "requestedEngine": "greedy",
+          "actualEngine": "greedy",
+          "solverStatus": "solver_unavailable",
+          "mode": "build",
+          "budgetExpired": true,
+          "tiersCompleted": 0,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 30,
+            "worstIdleGapMinutes": 0,
+            "courtImbalanceMinutes": 30,
+            "placed": 1,
+            "total": 1
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 117,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 1 — court double-booking",
+                "reason": "no two placed fixtures share a court to compare for overlap"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 1 — court double-booking",
+                "reason": "no two placed fixtures share a court to compare for overlap"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-badminton, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 100
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        },
+        {
+          "divisionRef": "d-tiebreak",
+          "requestedEngine": "greedy",
+          "actualEngine": "greedy",
+          "solverStatus": "solver_unavailable",
+          "mode": "build",
+          "budgetExpired": true,
+          "tiersCompleted": 0,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 90,
+            "worstIdleGapMinutes": 30,
+            "courtImbalanceMinutes": 90,
+            "placed": 3,
+            "total": 3
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 126,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 4 — day caps",
+                "reason": "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 4 — day caps",
+                "reason": "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-tiebreak, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 67
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        }
+      ],
+      "engineDelta": {
+        "delta": {
+          "greedy": {
+            "runId": "9f3924a8e0959e00aa7b038676916161a5e663be",
+            "requestedEngine": "greedy",
+            "engine": "greedy",
+            "divisions": [
+              {
+                "divisionRef": "d-tiny",
+                "actualEngine": "greedy",
+                "metrics": {
+                  "makespanMinutes": 1410,
+                  "worstIdleGapMinutes": 1305,
+                  "courtImbalanceMinutes": 30,
+                  "placed": 3,
+                  "total": 3
+                },
+                "solverStatus": "solver_unavailable",
+                "mode": "build",
+                "budgetExpired": true,
+                "tiersCompleted": 0,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 215,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              },
+              {
+                "divisionRef": "d-badminton",
+                "actualEngine": "greedy",
+                "metrics": {
+                  "makespanMinutes": 30,
+                  "worstIdleGapMinutes": 0,
+                  "courtImbalanceMinutes": 30,
+                  "placed": 1,
+                  "total": 1
+                },
+                "solverStatus": "solver_unavailable",
+                "mode": "build",
+                "budgetExpired": true,
+                "tiersCompleted": 0,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 117,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              },
+              {
+                "divisionRef": "d-tiebreak",
+                "actualEngine": "greedy",
+                "metrics": {
+                  "makespanMinutes": 90,
+                  "worstIdleGapMinutes": 30,
+                  "courtImbalanceMinutes": 90,
+                  "placed": 3,
+                  "total": 3
+                },
+                "solverStatus": "solver_unavailable",
+                "mode": "build",
+                "budgetExpired": true,
+                "tiersCompleted": 0,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 126,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              }
+            ]
+          },
+          "optimized": {
+            "runId": "9f3924a8e0959e00aa7b038676916161a5e663be",
+            "requestedEngine": "optimized",
+            "divisions": [
+              {
+                "divisionRef": "d-tiny",
+                "actualEngine": "optimized",
+                "metrics": {
+                  "makespanMinutes": 1470,
+                  "worstIdleGapMinutes": 1350,
+                  "courtImbalanceMinutes": 30,
+                  "placed": 3,
+                  "total": 3
+                },
+                "solverStatus": "ok",
+                "mode": "build",
+                "budgetExpired": false,
+                "tiersCompleted": 6,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 237,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              },
+              {
+                "divisionRef": "d-badminton",
+                "actualEngine": "greedy",
+                "metrics": {
+                  "makespanMinutes": 30,
+                  "worstIdleGapMinutes": 0,
+                  "courtImbalanceMinutes": 30,
+                  "placed": 1,
+                  "total": 1
+                },
+                "solverStatus": "already_optimal",
+                "mode": "build",
+                "budgetExpired": false,
+                "tiersCompleted": 6,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 145,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              },
+              {
+                "divisionRef": "d-tiebreak",
+                "actualEngine": "optimized",
+                "metrics": {
+                  "makespanMinutes": 90,
+                  "worstIdleGapMinutes": 30,
+                  "courtImbalanceMinutes": 30,
+                  "placed": 3,
+                  "total": 3
+                },
+                "solverStatus": "ok",
+                "mode": "build",
+                "budgetExpired": false,
+                "tiersCompleted": 6,
+                "tiersTotal": 6,
+                "blockingCount": 0,
+                "unplacedCount": 0,
+                "wallMs": 151,
+                "verdict": {
+                  "red": false,
+                  "reasons": []
+                }
+              }
+            ]
+          },
+          "makespanDeltaMinutes": -60,
+          "courtImbalanceDeltaMinutes": 60,
+          "comparedDivisionRefs": [
+            "d-tiny",
+            "d-badminton",
+            "d-tiebreak"
+          ]
+        }
+      },
+      "divisionStart": [
+        {
+          "divisionRef": "d-tiny",
+          "acknowledgedWarnings": true,
+          "warnings": [
+            {
+              "fixtureId": "03964b6b-ade4-4491-9fb6-0658507f91f3",
+              "blocking": false
+            }
+          ],
+          "confirmedStatus": "active",
+          "started": true
+        },
+        {
+          "divisionRef": "d-badminton",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        },
+        {
+          "divisionRef": "d-tiebreak",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        }
+      ],
+      "simulation": {
+        "eventsSent": 9,
+        "wallMs": 471,
+        "eventsPerSecond": 19.108280254777068
+      },
+      "importSimulation": {
+        "eventsSent": 84,
+        "wallMs": 1198,
+        "eventsPerSecond": 70.11686143572621,
+        "chunks": 2
+      }
+    }
+  ],
+  "gate": "green"
+}

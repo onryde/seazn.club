@@ -31,14 +31,20 @@ import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import { makeDisciplineRoutesWorld, type SuspensionRowLike } from "./_discipline-routes.ts";
 import type { DivisionCardSource, DivisionPlayerStatsLike } from "./_oracle-routes.ts";
+import { makeClaimRoutesWorld, type ClaimRoutesOptions } from "./_claim-routes.ts";
+import { makeNewsRoutesWorld, type NewsRoutesOptions } from "./_news-routes.ts";
 import {
   makeOracleRoutesWorld,
   personCareerStatsFromDivisions,
   personStatsFromDivisions,
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
+  echoExpectedBoard,
+  TINY_SPECIAL_STATE,
+  echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { OracleResult } from "../report.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -55,6 +61,14 @@ function slug(s: string): string {
 function fakeServer(
   opts: {
     conflictAt?: { extKey: string; expectedSeq: number };
+    /** B06a T6 — knobs for the shared claim rail (`_claim-routes.ts`). */
+    claimRoutes?: ClaimRoutesOptions;
+    /** B06a T7 — knobs for the shared news rail (`_news-routes.ts`). */
+    newsRoutes?: NewsRoutesOptions;
+    /** B06a T6 — `GET /persons/{id}/stats` answers DIFFERENT numbers once a
+     *  claim has been accepted. Reds the claimed-profile oracle and nothing
+     *  else, same one-knob-one-oracle discipline as the three above. */
+    statsChangeAfterClaim?: boolean;
     /** B05 T3 regression — the seed-proposal answers with the WRONG order
      *  (reversed), so D7's assertion should red and neither confirm,
      *  generate nor the playoff's own stream fold should ever be attempted. */
@@ -149,7 +163,6 @@ function fakeServer(
   const phase = makeDivisionPhaseWorld();
   const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
-  const claimInvites = new Map<string, unknown>();
   // B05 T4b — D6's OWN mis-attribution regression, run through the WIRED
   // leaderboard oracle rather than only a unit fixture: this fake TALLIES
   // real `generic.score` events as they land on `/fixtures/{id}/events`
@@ -267,7 +280,29 @@ function fakeServer(
       : {}),
   });
 
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
+  // now: the runner accepts the pack's player invites after the fold on every
+  // `sql`-passing run. Constructed BEFORE the oracle world because
+  // `statsChangeAfterClaim` below has to ask it whether anything has been
+  // accepted yet.
+  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
+
+  // B06a T7 — the news rail. Drafting is a SIDE EFFECT of folding in the real
+  // product, not a route anyone calls, so this world OBSERVES the fold calls
+  // this fake already answers rather than waiting to be told. See
+  // `_news-routes.ts`.
+  let competitionId: string | undefined;
+  const news = makeNewsRoutesWorld({
+    ...(opts.newsRoutes ?? {}),
+    divisionOfFixture: (fixtureId) => fixtureDivisionId.get(fixtureId),
+    competitionOfDivision: () => competitionId,
+  });
+
   const oracleRoutes = makeOracleRoutesWorld({
+    // `_tiny` declares one special; without a folded state its
+    // `phase` claim reads as absent and reds every run in this file.
+    getFixtureModuleState: () => TINY_SPECIAL_STATE,
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       if (divisionId === undefined) return undefined;
@@ -299,10 +334,18 @@ function fakeServer(
     // fault, which is exactly the "two guards covering for each other" shape
     // this task is required not to ship. Each of the three knobs below reds
     // its own oracle and no other.
-    getPersonStats: (personId) =>
-      opts.emptyPersonDivisions === true
-        ? { divisions: [] }
-        : personStatsFromDivisions(personId, divisionCardSources()),
+    getPersonStats: (personId) => {
+      if (opts.emptyPersonDivisions === true) return { divisions: [] };
+      const wire = personStatsFromDivisions(personId, divisionCardSources());
+      // B06a T6 — the fourth knob: a profile whose numbers CHANGE the moment
+      // it is claimed. Nothing else in this file can witness the
+      // claimed-profile oracle actually comparing its before and after reads,
+      // and a comparison nothing can falsify is decoration.
+      if (opts.statsChangeAfterClaim !== true || claims.acceptedTokens().length === 0) return wire;
+      return {
+        divisions: wire.divisions.map((d) => ({ ...d, stats: { ...d.stats, claimed_bonus: 99 } })),
+      };
+    },
     getPersonCareerStats: (personId) =>
       opts.emptyCareerSports === true
         ? { sports: [] }
@@ -344,7 +387,13 @@ function fakeServer(
       if (method === "POST" && routePath === "/api/v1/competitions") {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
+      const divisionsMatch = /^\/api\/v1\/competitions\/([^/]+)\/divisions$/.exec(routePath);
+      if (method === "POST" && divisionsMatch !== null) {
+        // B06a T7 — the competition every post this run drafts belongs to.
+        // Read off the wire, never guessed: the posts list route carries no
+        // competition filter at all, so the runner filters client-side and a
+        // post with the wrong id would simply vanish from every count.
+        competitionId = divisionsMatch[1]!;
         const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         if (b.name !== undefined) divisionNameById.set(id, b.name);
@@ -433,14 +482,12 @@ function fakeServer(
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
-      const inviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
-      if (method === "POST" && inviteMatch) {
-        const officialId = inviteMatch[1]!;
-        const personId = `invited-${officialId}`;
-        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return { person_id: personId } as T;
-      }
+      // B06a T6 — the officials invite, the person claim-invite mint and its
+      // read-back all live in `_claim-routes.ts` now: all four fakes carried
+      // byte-identical copies of them, and the mint has to hand back a
+      // `claim_url` for the accept step to have a token at all.
+      const claimRouted = claims.handleRequest(method, routePath, body);
+      if (claimRouted !== undefined) return claimRouted.value as T;
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
@@ -451,16 +498,6 @@ function fakeServer(
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        const row = { person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return row as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        return (claimInvites.get(personId) ?? null) as T;
       }
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
         // B05 T2.5 — `status` is D9's own RE-READ; `slug` is unrelated
@@ -477,6 +514,17 @@ function fakeServer(
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B06a T7 — watch the folds (drafting is their side effect), then the
+      // three news routes. Both before anything below: a fold that reached the
+      // events handler without being observed drafts nothing, and the whole
+      // step then reports a legitimate-looking zero.
+      news.observe(method, path, body);
+      const newsRouted = news.handle(method, path, body);
+      if (newsRouted !== undefined) return newsRouted;
+      // B06a T6 — claim acceptance (see `_claim-routes.ts`). Checked here for
+      // the same reason `/start` is: nothing below can answer it.
+      const claimAccepted = claims.handle(method, path);
+      if (claimAccepted !== undefined) return claimAccepted;
       // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
@@ -621,6 +669,16 @@ function fakeServer(
       if (featureKey === "officials.auto") {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
+      // B06a T7 — `news.auto` on the plan this run buys. Without it the
+      // enable step correctly REFUSES (`PATCH /divisions/{id}` would answer
+      // 402, `usecases/divisions.ts:652-654`) and the whole news step reports
+      // no subject — which is what this fake did before the row existed.
+      if (featureKey === "news.auto") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
+        ] satisfies PlanEntitlementRow[];
+      }
       if (featureKey === "stats.player") {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
@@ -703,6 +761,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");
@@ -799,12 +859,34 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // exactly this entry — the wiring regression this task owes.
       "oracle: d-tiebreak discipline enforced at the team sheet (p-hotel)",
       "oracle: d-tiebreak discipline carry (p-hotel)",
+      // B06a task 3 — one per division that declares `expected.matches`, in
+      // pack order, BEFORE the tables loop. Under this file's injected
+      // `echoExpectedBoard` these three are vacuous by construction (the board
+      // is the pack's own expectation handed back), so their presence and
+      // ORDER is all this assertion claims; that they can fail is proven in
+      // `oracle-matches.test.ts` and by the wrong-board wiring test.
+      // B06a T9 — the advancement trio now leads the outcome oracles instead
+      // of trailing them, and the ORDER is the assertion. Advancement used to
+      // run last, so the per-match oracle below compared `_tiny`'s playoff
+      // fixture while it was still `scheduled` and the first live run reported
+      // `expected decided, got scheduled` against a product that was correct.
+      // Fold everything, then assert. If these three drift back below the
+      // per-match rows, that defect is back.
+      "oracle: s-playoff rank crossing (captured vs standings)",
+      "oracle: s-playoff standings rank vs expected.finalRanks",
+      "oracle: d-tiny champion",
+      "oracle: d-tiny per-match results",
+      "oracle: d-badminton per-match results",
+      "oracle: d-tiebreak per-match results",
       "oracle: d-tiny/s-league standings table",
       "oracle: d-tiny/s-league tie-order cascade",
       "oracle: d-badminton/s-badminton-league standings table",
       "oracle: d-badminton/s-badminton-league tie-order cascade",
       "oracle: d-tiebreak/s-tiebreak-league standings table",
       "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
+      // B06a task 4 — one row for the whole pack, after the tables loop
+      // (a standings claim reads rows that loop has already fetched).
+      "oracle: specials",
       "oracle: d-tiny leaderboard (scores)",
       "oracle: d-tiny person cards (scores)",
       "oracle: d-tiny leaderboard (points)",
@@ -814,13 +896,11 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiebreak leaderboard (points)",
       "oracle: d-tiebreak person cards (points)",
       "oracle: p-ana career rollup",
-      "oracle: s-playoff rank crossing (captured vs standings)",
-      "oracle: s-playoff standings rank vs expected.finalRanks",
-      "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
       true, true, true, true, true, true, true, true, true, true,
       true, true, true, true, true, true, true, true, true, true,
+      true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
     // present-and-skipped — the whole point of an ordering-differential
@@ -873,8 +953,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // had and gains the derived verdict — no oracle's verdict is changed by
     // this task except the cascade's.
     expect(
-      oracleEvents.filter((e) => e.kind !== "tie_order_cascade").every((e) => e.passed === true && e.verdict === "pass"),
-    ).toBe(true);
+      oracleEvents.filter((e) => e.kind !== "tie_order_cascade" && !(e.passed === true && e.verdict === "pass")),
+    ).toEqual([]);
     // Exactly one event per emitting oracle — a dropped emitter shrinks this
     // and is not hidden by the two `every()` assertions above, which an empty
     // or short list satisfies vacuously.
@@ -886,21 +966,104 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // the report's own list, and this length check could not see it because
     // both sides of it excluded the same two rows. The set spans both
     // prefixes now.
+    //
+    // B06a task 6 widened it again, for the same reason: the claim-acceptance
+    // rows carry the `people:` prefix and every one of them emits, so a set
+    // that stopped at `oracle:`/`advance:` would count four fewer report rows
+    // than log events and this length check would red on a correct run.
     const emittingOracles = (report.oracles ?? []).filter(
-      (o) => o.name.startsWith("oracle:") || o.name.startsWith("advance:"),
+      (o) =>
+        o.name.startsWith("oracle:") ||
+        o.name.startsWith("advance:") ||
+        o.name.startsWith("people:") ||
+        o.name.startsWith("news:"),
     );
-    // The two `advance:` rows are genuinely in this run, or the widened
-    // count below would be the same number it always was.
-    expect(emittingOracles.length).toBe(runtimeOracles.length + 2);
+    const peopleOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("people:"));
+    const newsOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("news:"));
+    // B06a task 7. Pinned by NAME and VERDICT, because a no-subject news row is
+    // `passed: true` on the wire and a suite that drafted nothing would look
+    // identical to one that drafted and published correctly.
+    expect(newsOracles.map((o) => [o.name.replace("news: ", ""), o.verdict])).toEqual([
+      ["folding drafted posts", "pass"],
+      ["the named fixtures publish and the rest stay draft", "pass"],
+      ["a republish does not move published_at", "pass"],
+    ]);
+    expect(report.news?.published).toBeGreaterThan(0);
+    expect(report.news!.drafted).toBeGreaterThan(report.news!.published);
+    // The two `advance:` rows and the four `people:` ones are genuinely in
+    // this run, or the widened count below would be the same number it
+    // always was.
+    // Five, and the fifth is the tell: `people: an accepted invite is closed`
+    // is pushed ONLY when something was actually accepted, so a run where the
+    // claim step silently accepted nothing lands on four.
+    // B06a task 6, found in review — every oracle this runner pushes must
+    // PARSE its own schema. `OracleResult`'s `superRefine` (`report.ts:140-164`)
+    // requires `passed === (verdict !== "fail")` and forbids
+    // `no_subject` beside `subject: true`; `writeReport` (`:790`) parses
+    // before writing, so a row breaking either rule fails no assertion
+    // anywhere — it throws inside the report writer and the run ends with NO
+    // report on disk. Every suite-level test calls the runner and never
+    // `writeReport`, so this whole class was invisible to all of them.
+    //
+    // Deliberately per-ORACLE rather than `BenchReport.parse(report)`: the
+    // runner returns a partial report (`runId` and friends are added by
+    // `bench.ts`), so the whole-report parse would red on fields this layer
+    // does not own. Broad within its scope on purpose — it guards every
+    // oracle this runner will ever push, not only the ones below.
+    for (const o of report.oracles ?? []) {
+      expect(() => OracleResult.parse(o), `oracle "${o.name}" does not parse`).not.toThrow();
+    }
+
+    expect(peopleOracles.map((o) => o.name)).toEqual([
+      "people: claim invites accepted",
+      "people: an invalid claim token is refused",
+      "people: an accepted invite is closed",
+      "people: invites past the limit stay unclaimed",
+      "people: a claimed profile still reports the same stats",
+    ]);
+    expect(emittingOracles.length).toBe(runtimeOracles.length + 2 + peopleOracles.length + newsOracles.length);
+    // Every `people:` row a green run must PASS, and the last one is the
+    // load-bearing one: it is `pass` only when an accepted profile carried
+    // REAL numbers before acceptance (`comparedAny`), so a fake answering an
+    // empty division list would land it on `no_subject` here instead. The
+    // verdict is asserted, never inferred from `passed`, because a no-subject
+    // row is `passed: true` on the wire.
+    expect(peopleOracles.map((o) => [o.name.replace("people: ", ""), o.verdict])).toEqual([
+      ["claim invites accepted", "pass"],
+      ["an invalid claim token is refused", "pass"],
+      ["an accepted invite is closed", "pass"],
+      ["invites past the limit stay unclaimed", "pass"],
+      ["a claimed profile still reports the same stats", "pass"],
+    ]);
     expect(oracleEvents).toHaveLength(emittingOracles.length);
     // …and by KIND, so a mislabelled emitter cannot satisfy the count alone.
     expect(oracleEvents.filter((e) => e.kind === "seed_proposal_qualifiers")).toHaveLength(1);
     expect(oracleEvents.filter((e) => e.kind === "final_ranks")).toHaveLength(1);
+    expect(oracleEvents.filter((e) => e.kind.startsWith("claims_")).map((e) => e.kind).sort()).toEqual([
+      "claims_accepted",
+      "claims_accepted_closed",
+      "claims_invalid_token",
+      "claims_profile_stats",
+      "claims_untouched_open",
+    ]);
     // Every OTHER oracle's verdict is untouched by this change — either
     // absent (the pre-T6 shape) or an explicit pass, never no_subject.
-    expect(
-      runtimeOracles.filter((o) => !o.name.endsWith("tie-order cascade")).map((o) => o.verdict),
-    ).toEqual(new Array(runtimeOracles.length - cascades.length).fill(undefined));
+    // B06a task 3 widened the exempt set: the per-match rows carry an EXPLICIT
+    // verdict for the same reason the cascades do — they can legitimately have
+    // no subject (a division the pack declares no matches for), and B05's own
+    // ruling is that "no subject" must never read as a pass. The assertion's
+    // intent is unchanged: no OTHER oracle silently acquired one.
+    const perMatch = runtimeOracles.filter((o) => o.name.endsWith("per-match results"));
+    expect(perMatch.map((o) => o.verdict)).toEqual(new Array(perMatch.length).fill("pass"));
+    const specialsRow = runtimeOracles.filter((o) => o.name === "oracle: specials");
+    expect(specialsRow.map((o) => o.verdict)).toEqual(["pass"]);
+    const untouched = runtimeOracles.filter(
+      (o) =>
+        !o.name.endsWith("tie-order cascade") &&
+        !o.name.endsWith("per-match results") &&
+        o.name !== "oracle: specials",
+    );
+    expect(untouched.map((o) => o.verdict)).toEqual(new Array(untouched.length).fill(undefined));
 
     // B05 T6 fix 1 — the first LIVE run failed both metric-less tables on
     // nothing but a live `metrics` map the pack never declares. This fake now
@@ -1016,6 +1179,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     // The mutated pack still reaches the live run at all — stage 0 does NOT
@@ -1035,6 +1200,456 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
+  });
+
+  // B06a task 7 — the news rail's three DISCRIMINATING wiring tests. Each
+  // knob reds ONE oracle and no other: two guards covering for each other are
+  // each untested, so they are mutated one at a time.
+  it("B06a T7 — a republish that MOVES published_at reds the run", async () => {
+    // The fire-once proxy, and the only part of `shouldFirePostPublished` a
+    // client can see: its real effect is a PostHog call with no row, no
+    // outbox and no webhook, so nothing else in this bench could witness it.
+    const { transport, sql } = fakeServer({ newsRoutes: { republishBumpsTimestamp: true } });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const republish = (report.oracles ?? []).find((o) => o.name === "news: a republish does not move published_at");
+    expect(republish).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("moved published_at"))).toBe(true);
+    // The drafting and publishing oracles are untouched — one knob, one red.
+    expect((report.oracles ?? []).find((o) => o.name === "news: folding drafted posts")).toMatchObject({
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T7 — a run that publishes EVERY draft reds: the draft state is then unproven", async () => {
+    // What stays draft is half of what this step proves. A run that published
+    // everything has demonstrated that publishing works and NOTHING about the
+    // draft state it was supposed to leave behind — so the oracle fails even
+    // though every named fixture published successfully.
+    const { transport, sql } = fakeServer({ newsRoutes: { keepOnlyLastDraft: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const publishOracle = (report.oracles ?? []).find(
+      (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+    );
+    expect(publishOracle).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(publishOracle?.detail).toContain("NOTHING stayed draft");
+    expect(report.news).toMatchObject({ drafted: 1, published: 1 });
+    expect(report.gate).toBe("red");
+    // Drafting itself still worked — one knob, one red.
+    expect((report.oracles ?? []).find((o) => o.name === "news: folding drafted posts")).toMatchObject({
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T7 — a product that drafts nothing reports NO SUBJECT, never a pass", async () => {
+    // Five preconditions can each legitimately produce zero drafts
+    // (`org-posts.ts:479-485`), so zero must never read as a working news
+    // layer. It is also not an ERROR: the run says it proved nothing.
+    const { transport, sql } = fakeServer({ newsRoutes: { draftNothing: true } });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const drafted = (report.oracles ?? []).find((o) => o.name === "news: folding drafted posts");
+    expect(drafted).toMatchObject({ passed: true, verdict: "no_subject", subject: false });
+    expect(report.news).toMatchObject({ drafted: 0, published: 0 });
+    expect(
+      (report.warnings ?? []).some((w) => w.includes("drafted") && w.includes("no subject")),
+    ).toBe(true);
+    // A run that drafted nothing has not tested the fire-once predicate
+    // either, and must not claim it did.
+    expect((report.oracles ?? []).find((o) => o.name === "news: a republish does not move published_at")).toMatchObject(
+      { verdict: "no_subject", subject: false },
+    );
+    // Drafting nothing is not a FAILURE — the gate stays green and the run
+    // says what it could not prove.
+    expect(report.gate).toBe("green");
+  });
+
+  it("B06a T7 — an org that cannot buy news.auto never turns drafting on, and says so", async () => {
+    // `PATCH /divisions/{id}` refuses `auto_posts: true` without the
+    // entitlement (`usecases/divisions.ts:652-654`). Because drafting is a
+    // side effect of FOLDING there is no later moment at which the run could
+    // recover, so this has to be visible rather than inferred from an empty
+    // draft list much later.
+    const { transport, sql } = fakeServer({ newsRoutes: { newsAutoGranted: false } });
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    expect((report.errors ?? []).some((e) => e.includes("auto-posting could not be turned on"))).toBe(true);
+    expect(report.gate).toBe("red");
+    // Nothing downstream pretends: no news oracle is pushed at all, rather
+    // than three rows reporting on a step that never ran.
+    expect((report.oracles ?? []).filter((o) => o.name.startsWith("news:"))).toEqual([]);
+    expect(report.news).toBeUndefined();
+  });
+
+  // B06a task 6 — the claim rail's two DISCRIMINATING wiring tests.
+  //
+  // The green run above proves acceptance works. Neither of these can pass
+  // against a claim surface that waves everything through, which is exactly
+  // the failure the whole negative case exists for: a bench that only ever
+  // accepts VALID tokens has proven that the happy path works and nothing at
+  // all about whether the product checks the token.
+  it("B06a T6 — a claim surface that accepts an unminted token reds the run", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { acceptAnyToken: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const negative = (report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused");
+    expect(negative).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(negative?.detail).toContain("HTTP 200");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("not validating the token"))).toBe(true);
+    // The REAL acceptances still succeeded — the run reds on the negative case
+    // alone, so this is not a fake that simply broke everything.
+    expect((report.oracles ?? []).find((o) => o.name === "people: claim invites accepted")).toMatchObject({
+      passed: true,
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T6 — a claim surface that refuses a real invite reds the run and names the status", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { refuseWith: 409 } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const accepted = (report.oracles ?? []).find((o) => o.name === "people: claim invites accepted");
+    expect(accepted).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(accepted?.detail).toContain("HTTP 409");
+    expect(report.gate).toBe("red");
+    // And the negative case does NOT report a pass off the back of it: every
+    // acceptance failed, so a refusal of the tampered token proves the session
+    // was missing rather than that the token was checked. That is NO SUBJECT,
+    // not a failure — the claim surface here refuses everything, which is not
+    // evidence that it validates tokens, and calling it a token-validation
+    // defect would name a cause this run never established.
+    const negative = (report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused");
+    expect(negative).toMatchObject({ verdict: "no_subject", subject: false, passed: true });
+    expect(negative?.detail).toContain("accepted NO real invite");
+    // …and it contributes no error of its own: the run is red on the
+    // acceptances alone.
+    expect((report.errors ?? []).some((e) => e.includes("not validating the token"))).toBe(false);
+    // Nothing was accepted, so the "an accepted invite is closed" row is not
+    // pushed at all — a run that reported it here would be reporting on an
+    // empty set.
+    expect((report.oracles ?? []).some((o) => o.name === "people: an accepted invite is closed")).toBe(false);
+  });
+
+  it("B06a T6 — a claim surface that closes invites nobody touched reds the run", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { closeUntouched: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const untouched = (report.oracles ?? []).find((o) => o.name === "people: invites past the limit stay unclaimed");
+    expect(untouched).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(untouched?.detail).toContain("no longer open");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("nobody asked it to"))).toBe(true);
+    // The acceptances themselves still succeeded, so this reds on the
+    // untouched invites alone rather than on a broken claim surface.
+    expect((report.oracles ?? []).find((o) => o.name === "people: claim invites accepted")).toMatchObject({
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T6 — a profile whose stats CHANGE when it is claimed reds the run", async () => {
+    const { transport, sql } = fakeServer({ statsChangeAfterClaim: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const drift = (report.oracles ?? []).find(
+      (o) => o.name === "people: a claimed profile still reports the same stats",
+    );
+    expect(drift).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(drift?.detail).toContain("DIFFERENT stats");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("changed the stats it reports"))).toBe(true);
+  });
+
+  // B06a task 4 — the specials oracle's DISCRIMINATING wiring test, and the
+  // reason `echoSpecialSubjects` above is never evidence: it satisfies every
+  // claim by construction. This one hands back a subject that DISAGREES with
+  // the pack on one claim and asserts the run reds naming it.
+  it("B06a T4 — a special whose claim does NOT hold reds the run and names the claim", async () => {
+    const { transport, sql } = fakeServer();
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: ({ specials }) => {
+        const honest = echoSpecialSubjects({ specials });
+        // `_tiny`'s single special claims `state.phase === "done"`. Serve a
+        // fixture that is still live instead.
+        const tampered = new Map(honest);
+        for (const [key, subject] of honest) {
+          tampered.set(key, { ...subject, state: { ...(subject.state as object), phase: "live" } });
+        }
+        return tampered;
+      },
+    });
+
+    const specialsOracle = (report.oracles ?? []).find((o) => o.name === "oracle: specials");
+    expect(specialsOracle).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(report.gate).toBe("red");
+    const message = (report.errors ?? []).find((e) => e.includes("special claim failed"));
+    expect(message).toContain("state.phase");
+    expect(message).toContain("expected done");
+    expect(message).toContain("got live");
+    // The OTHER claims on that special still passed, so the failure is one
+    // claim rather than the whole subject being lost.
+    expect(specialsOracle?.detail).toContain("1 failed");
+  });
+
+  // B06a task 3 — the per-match oracle's DISCRIMINATING wiring test.
+  //
+  // Every other suite-level run in this file injects `echoExpectedBoard`,
+  // which hands the pack's own expectation back as the live board and makes
+  // the oracle vacuous by construction. That is fine for tests whose subject
+  // is something else, and worthless as evidence that the oracle works — so
+  // this one injects a board that DISAGREES and asserts the run reds with the
+  // fixture named. Delete the comparison from `run-suite.ts` and this is the
+  // test that goes green when it should not.
+  it("B06a T3 — a WRONG per-match outcome reds the run and names the fixture", async () => {
+    const { transport, sql } = fakeServer();
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      // One division's first declared match comes back with the winner and
+      // loser swapped; everything else echoes. A blanket wrong board would
+      // pass a comparator that ignored the pack entirely.
+      matchBoard: ({ divisionRef, expected }) => {
+        const rows = echoExpectedBoard({ expected });
+        if (divisionRef !== "d-tiny") return rows;
+        return rows.map((row, i) => {
+          const o = row.outcome as { kind?: string; winner?: string; loser?: string };
+          if (i !== 0 || o.kind !== "win") return row;
+          return { ...row, outcome: { ...o, winner: o.loser, loser: o.winner } };
+        });
+      },
+    });
+
+    const perMatch = (report.oracles ?? []).filter((o) => o.name.endsWith("per-match results"));
+    // Exactly the tampered division reds — not all three (the knob leaked)
+    // and not none (the comparison never ran).
+    expect(perMatch.map((o) => `${o.name}:${o.passed}`)).toEqual([
+      "oracle: d-tiny per-match results:false",
+      "oracle: d-badminton per-match results:true",
+      "oracle: d-tiebreak per-match results:true",
+    ]);
+    expect(report.gate).toBe("red");
+    const message = (report.errors ?? []).find((e) => e.includes("per-match mismatch"));
+    expect(message).toContain("d-tiny");
+    expect(message).toContain("winner");
+    // The subject count is reported, so a future change that quietly stops
+    // comparing shows up as a shrinking number rather than a silent pass.
+    expect(perMatch[0]?.detail).toContain("4 checked");
+  });
+
+  it("B06a T3 — stage 0 REFUSES a pack whose streams have no expected match", async () => {
+    // Why the per-match oracle has no `no_subject` branch, pinned rather than
+    // asserted in a comment. The mutation sweep found the first version of
+    // that branch unreachable; this is the guarantee that makes it so — a
+    // pack that replays a stream it declares no expected result for is
+    // refused OFFLINE, before anything is seeded.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      expected: { matches?: unknown[] };
+    };
+    if (raw.expected.matches === undefined || raw.expected.matches.length === 0) {
+      throw new Error("test fixture assumption broken: the committed pack declares no expected.matches");
+    }
+    raw.expected.matches = [];
+
+    const dir = await mkdtemp(join(tmpdir(), "b06a-t3-nomatches-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join(" ")).toContain("a replayed stream with no oracle asserts nothing");
+    // Refused OFFLINE: nothing was seeded, so no oracle ran at all.
+    expect(report.oracles ?? []).toHaveLength(0);
   });
 
   // B05 T4b — `compareStandings`'s empty-case discipline ("an empty rows
@@ -1065,6 +1680,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const tableOracles = (report.oracles ?? []).filter((o) => o.name.endsWith("standings table"));
@@ -1112,6 +1729,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const leaderboardOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle: d-tiny leaderboard"));
@@ -1150,6 +1769,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1193,6 +1814,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1243,6 +1866,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1277,6 +1902,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1313,6 +1940,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1352,6 +1981,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1396,6 +2027,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1464,6 +2097,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1532,6 +2167,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const cascades = (report.oracles ?? []).filter((o) => o.name.endsWith("tie-order cascade"));
@@ -1585,6 +2222,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1642,6 +2281,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1684,6 +2325,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");

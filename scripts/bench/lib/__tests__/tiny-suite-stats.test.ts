@@ -29,6 +29,8 @@ import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import type { DivisionCardSource } from "./_oracle-routes.ts";
+import { makeClaimRoutesWorld } from "./_claim-routes.ts";
+import { makeNewsRoutesWorld, type NewsRoutesOptions } from "./_news-routes.ts";
 import { makeDisciplineRoutesWorld } from "./_discipline-routes.ts";
 import {
   makeOracleRoutesWorld,
@@ -36,6 +38,9 @@ import {
   personStatsFromDivisions,
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
+  echoExpectedBoard,
+  TINY_SPECIAL_STATE,
+  echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
@@ -51,7 +56,11 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-function fakeServer(opts: { statsPlayerGranted: boolean }): {
+function fakeServer(opts: {
+  /** B06a T7 — knobs for the shared news rail (`_news-routes.ts`). */
+  newsRoutes?: NewsRoutesOptions;
+  statsPlayerGranted: boolean;
+}): {
   transport: ProbeTransport;
   sql: PlanSql;
   calls: RecordedCall[];
@@ -78,7 +87,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   const divisionSportById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
-  const claimInvites = new Map<string, unknown>();
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
@@ -135,6 +143,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   });
 
   const oracleRoutes = makeOracleRoutesWorld({
+    // `_tiny` declares one special; without a folded state its
+    // `phase` claim reads as absent and reds every run in this file.
+    getFixtureModuleState: () => TINY_SPECIAL_STATE,
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
@@ -150,6 +161,23 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
     // per-division sources (see `_oracle-routes.ts`).
     getPersonStats: (personId) => personStatsFromDivisions(personId, divisionCardSources()),
     getPersonCareerStats: (personId) => personCareerStatsFromDivisions(personId, divisionCardSources()),
+  });
+
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
+  // now: the runner accepts the pack's player invites after the fold on every
+  // `sql`-passing run.
+  const claims = makeClaimRoutesWorld();
+
+  // B06a T7 — the news rail. Drafting is a SIDE EFFECT of folding in the real
+  // product, not a route anyone calls, so this world OBSERVES the fold calls
+  // this fake already answers rather than waiting to be told. See
+  // `_news-routes.ts`.
+  let competitionId: string | undefined;
+  const news = makeNewsRoutesWorld({
+    ...(opts.newsRoutes ?? {}),
+    divisionOfFixture: (fixtureId) => fixtureDivisionId.get(fixtureId),
+    competitionOfDivision: () => competitionId,
   });
 
   const transport: ProbeTransport = {
@@ -184,7 +212,13 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (method === "POST" && routePath === "/api/v1/competitions") {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
+      const divisionsMatch = /^\/api\/v1\/competitions\/([^/]+)\/divisions$/.exec(routePath);
+      if (method === "POST" && divisionsMatch !== null) {
+        // B06a T7 — the competition every post this run drafts belongs to.
+        // Read off the wire, never guessed: the posts list route carries no
+        // competition filter at all, so the runner filters client-side and a
+        // post with the wrong id would simply vanish from every count.
+        competitionId = divisionsMatch[1]!;
         const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         if (b.name !== undefined) divisionNameById.set(id, b.name);
@@ -266,14 +300,12 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
-      const inviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
-      if (method === "POST" && inviteMatch) {
-        const officialId = inviteMatch[1]!;
-        const personId = `invited-${officialId}`;
-        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return { person_id: personId } as T;
-      }
+      // B06a T6 — the officials invite, the person claim-invite mint and its
+      // read-back all live in `_claim-routes.ts` now: all four fakes carried
+      // byte-identical copies of them, and the mint has to hand back a
+      // `claim_url` for the accept step to have a token at all.
+      const claimRouted = claims.handleRequest(method, routePath, body);
+      if (claimRouted !== undefined) return claimRouted.value as T;
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
@@ -285,16 +317,6 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        const row = { person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return row as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        return (claimInvites.get(personId) ?? null) as T;
       }
       // B03 T6b — the stats baseline's own routes.
       const personStatsMatch = /^\/api\/v1\/persons\/[^/]+\/stats$/.test(routePath);
@@ -325,6 +347,17 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B06a T7 — watch the folds (drafting is their side effect), then the
+      // three news routes. Both before anything below: a fold that reached the
+      // events handler without being observed drafts nothing, and the whole
+      // step then reports a legitimate-looking zero.
+      news.observe(method, path, body);
+      const newsRouted = news.handle(method, path, body);
+      if (newsRouted !== undefined) return newsRouted;
+      // B06a T6 — claim acceptance (see `_claim-routes.ts`). Checked here for
+      // the same reason `/start` is: nothing below can answer it.
+      const claimAccepted = claims.handle(method, path);
+      if (claimAccepted !== undefined) return claimAccepted;
       // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
@@ -411,6 +444,16 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
       if (featureKey === "officials.auto") {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
       }
+      // B06a T7 — `news.auto` on the plan this run buys. Without it the
+      // enable step correctly REFUSES (`PATCH /divisions/{id}` would answer
+      // 402, `usecases/divisions.ts:652-654`) and the whole news step reports
+      // no subject — which is what this fake did before the row existed.
+      if (featureKey === "news.auto") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
+        ] satisfies PlanEntitlementRow[];
+      }
       if (featureKey === "stats.player") {
         return [
           { plan_key: "community", bool_value: false },
@@ -476,6 +519,8 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");
@@ -532,6 +577,8 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");

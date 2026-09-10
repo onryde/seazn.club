@@ -15,7 +15,7 @@ import { parseArgs, promisify } from "node:util";
 import { createRealPreflightProbes, runPreflight, type PreflightResult } from "./lib/env.ts";
 import { log, suiteLogger } from "./lib/log.ts";
 import { gateOf, resolveRunId, writeReport, type BenchReport, type SuiteReport } from "./lib/report.ts";
-import { runTinySuite } from "./lib/suites/tiny.ts";
+import { lookupSuite, suiteKeys } from "./lib/suites/registry.ts";
 import { createRealPlanSql, type PlanSql } from "./lib/plan.ts";
 import type { SeedTransport } from "./lib/seed.ts";
 import type { ProbeTransport } from "./lib/dls-gate.ts";
@@ -26,7 +26,11 @@ const execFileAsync = promisify(execFile);
 const ENGINES = ["optimized", "greedy", "both"] as const;
 type Engine = (typeof ENGINES)[number];
 
-const KNOWN_SUITES = ["_tiny"] as const;
+/* B06a: derived from the registry, never a second literal. A key listed here
+ * but absent from `SUITE_REGISTRY` used to pass argument validation and then
+ * die inside `runSuite` AFTER pre-flight had run; the two lists cannot
+ * disagree now because there is only one. */
+const KNOWN_SUITES: readonly string[] = suiteKeys();
 
 // B03r task 6: `--entry admin|registration` (design §3) — the CLI's own
 // narrower vocabulary; `register.ts`'s `resolveEntryMode` is what turns
@@ -102,7 +106,7 @@ export function parseCliArgs(argv: string[]): BenchConfig {
   }
 
   const suites = values.suite;
-  const unknown = suites.filter((s) => !(KNOWN_SUITES as readonly string[]).includes(s));
+  const unknown = suites.filter((s) => !KNOWN_SUITES.includes(s));
   if (unknown.length > 0) {
     // Validated up front, not inside the run loop: a typo in one of several
     // --suite flags must never lose already-completed earlier suites'
@@ -173,38 +177,41 @@ export async function runSuite(
   transport?: SeedTransport,
   probeTransport?: ProbeTransport,
 ): Promise<SuiteReport> {
-  if (key === "_tiny") {
-    return runTinySuite({
-      base: config.base,
-      /* B04: `--engine` is an ASSERTION, not a selector (design §2.1/§1.1 —
-       * `AutoScheduleRequest` has no engine field, so nothing in the product
-       * can be asked for one). `runTinySuite` forwards it into
-       * `runScheduleLayer`, whose `readSolver` compares it against the engine
-       * the response says actually ran and errors on a mismatch; `both`
-       * asserts nothing and nothing else is relaxed. The old "not honoured"
-       * log line is gone with the walk that emitted it. */
-      engine: config.engine,
-      keep: config.keep,
-      log: suiteLogger("_tiny"),
-      sql,
-      /* Where `engine-<engine>.json` goes, and under which run id — the same
-       * pair `writeReport` uses below, so the two legs of one commit land in
-       * one directory and the delta has both files to read. */
-      reportDir: config.reportDir,
-      runId,
-      /* The whole point of `--entry`. Parsed into `BenchConfig` by task 6 and
-       * consumed by `runTinySuite`'s `resolveEntryMode` since task 9 — but
-       * unforwarded until now, which made the flag inert end to end: every run
-       * took each division's own declared `entry` no matter what the CLI said,
-       * and `report.entryMode` stayed undefined so "Registration at volume"
-       * could never render. Both halves existed, were typed, and were unit
-       * green. Nothing joined them. */
-      ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
-      ...(transport === undefined ? {} : { transport }),
-      ...(probeTransport === undefined ? {} : { probeTransport }),
-    });
+  const definition = lookupSuite(key);
+  if (definition === undefined) {
+    throw new Error(`unknown suite "${key}" — known suites: ${suiteKeys().join(", ")}`);
   }
-  throw new Error(`unknown suite "${key}" — only "_tiny" exists until B02+ lands real packs`);
+  return definition.run({
+    base: config.base,
+    /* B04: `--engine` is an ASSERTION, not a selector (design §2.1/§1.1 —
+     * `AutoScheduleRequest` has no engine field, so nothing in the product
+     * can be asked for one). `runTinySuite` forwards it into
+     * `runScheduleLayer`, whose `readSolver` compares it against the engine
+     * the response says actually ran and errors on a mismatch; `both`
+     * asserts nothing and nothing else is relaxed. The old "not honoured"
+     * log line is gone with the walk that emitted it. */
+    engine: config.engine,
+    keep: config.keep,
+    /* Keyed on the suite being run, not on "_tiny" — a hardcoded logger name
+     * would file suite 11's lines under the proof suite. */
+    log: suiteLogger(key),
+    sql,
+    /* Where `engine-<engine>.json` goes, and under which run id — the same
+     * pair `writeReport` uses below, so the two legs of one commit land in
+     * one directory and the delta has both files to read. */
+    reportDir: config.reportDir,
+    runId,
+    /* The whole point of `--entry`. Parsed into `BenchConfig` by task 6 and
+     * consumed by `runTinySuite`'s `resolveEntryMode` since task 9 — but
+     * unforwarded until now, which made the flag inert end to end: every run
+     * took each division's own declared `entry` no matter what the CLI said,
+     * and `report.entryMode` stayed undefined so "Registration at volume"
+     * could never render. Both halves existed, were typed, and were unit
+     * green. Nothing joined them. */
+    ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
+    ...(transport === undefined ? {} : { transport }),
+    ...(probeTransport === undefined ? {} : { probeTransport }),
+  });
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {

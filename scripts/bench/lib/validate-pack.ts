@@ -309,7 +309,10 @@ const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set([
  * first. Any OTHER registry error is a real bug and is rethrown.
  */
 let booted = false;
-function bootRegistry(): typeof registry {
+/** Exported for B06a task 4: the runtime specials oracle resolves a
+ *  sport module the same way stage 0 does, rather than booting a second
+ *  registry with its own idea of which builtins are registered. */
+export function bootRegistry(): typeof registry {
   if (booted) return registry;
   try {
     registerBuiltins(registry);

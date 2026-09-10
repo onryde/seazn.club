@@ -432,6 +432,13 @@ export interface DlsGateProbeResult {
   /** Whether the chosen plan grants `stats.player`, from the SAME selection as
    *  `officialsAutoGranted` — not a second read tested against the winner. */
   readonly statsPlayerGranted: boolean;
+  /** Whether the chosen plan grants `news.auto`, from the same selection.
+   *  Without it `PATCH /divisions/{id}` refuses `auto_posts: true`
+   *  (`usecases/divisions.ts:652-654`), nothing drafts, and — because
+   *  drafting is a side effect of FOLDING — there is no later point at which
+   *  the run could recover. A run that finds this false must report the news
+   *  step as having no subject rather than as passing on zero posts. */
+  readonly newsAutoGranted: boolean;
   /**
    * THE PROMISE, at the matrix (this file's header, point 2): whether
    * `plan_entitlements` still carries an explicit `bool_value = true` row for
@@ -560,6 +567,16 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   // for some features, hope on another"), reintroduced one capability over from
   // the fix.
   const statsRows = await sql.entitlementRows("stats.player");
+  // B06a T7 — `news.auto` joins the SELECTION for the same reason
+  // `stats.player` did, and it matters more here than for any of the three
+  // above: `PATCH /divisions/{id}` REFUSES to set `auto_posts: true` without
+  // it (`usecases/divisions.ts:652-654`), so a run that provisioned a plan
+  // lacking it cannot even turn drafting on — and drafting is a side effect
+  // of folding, so there is no later moment to notice. Read from the LIVE
+  // catalog, never from the migrations: V295 seeded it, V393 flipped
+  // `community` on, and V396 flipped `community` back off, so the deltas alone
+  // are three answers to one question.
+  const newsRows = await sql.entitlementRows("news.auto");
 
   // THE PROMISE, at the matrix — read, never assumed, and never a constant.
   const dlsFreeOnCommunityPlan = planGrants(dlsRows, FREE_PLAN_KEY);
@@ -573,6 +590,7 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     ["cricket.dls", dlsRows],
     ["officials.auto", autoRows],
     ["stats.player", statsRows],
+    ["news.auto", newsRows],
   ]);
   let gatedFeature: ProvocableGatedFeature | undefined;
   for (const candidate of PROVOCABLE_GATED_FEATURES) {
@@ -595,13 +613,14 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   }
 
   // ---- the plan flip ----
-  const candidatePlanKeys = [...new Set([...dlsRows, ...autoRows, ...statsRows].map((r) => r.plan_key))];
+  const candidatePlanKeys = [...new Set([...dlsRows, ...autoRows, ...statsRows, ...newsRows].map((r) => r.plan_key))];
   const candidates = await sql.planCandidateInfo(candidatePlanKeys);
   const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities(
     [
       { featureKey: "cricket.dls", rows: dlsRows },
       { featureKey: "officials.auto", rows: autoRows },
       { featureKey: "stats.player", rows: statsRows },
+      { featureKey: "news.auto", rows: newsRows },
     ],
     candidates,
   );
@@ -617,12 +636,14 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
 
   const officialsAutoGranted = !unsatisfiedCapabilities.includes("officials.auto");
   const statsPlayerGranted = !unsatisfiedCapabilities.includes("stats.player");
+  const newsAutoGranted = !unsatisfiedCapabilities.includes("news.auto");
 
   return {
     orgId,
     provisionedPlan,
     officialsAutoGranted,
     statsPlayerGranted,
+    newsAutoGranted,
     unsatisfiedCapabilities,
     dlsFreeOnCommunityPlan,
     gatedFeatureProbed: gatedFeature?.featureKey ?? null,

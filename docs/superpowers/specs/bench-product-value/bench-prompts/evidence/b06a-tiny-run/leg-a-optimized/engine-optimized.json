@@ -1,0 +1,75 @@
+{
+  "runId": "9f3924a8e0959e00aa7b038676916161a5e663be",
+  "requestedEngine": "optimized",
+  "divisions": [
+    {
+      "divisionRef": "d-tiny",
+      "actualEngine": "optimized",
+      "metrics": {
+        "makespanMinutes": 1470,
+        "worstIdleGapMinutes": 1350,
+        "courtImbalanceMinutes": 30,
+        "placed": 3,
+        "total": 3
+      },
+      "solverStatus": "ok",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 237,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    },
+    {
+      "divisionRef": "d-badminton",
+      "actualEngine": "greedy",
+      "metrics": {
+        "makespanMinutes": 30,
+        "worstIdleGapMinutes": 0,
+        "courtImbalanceMinutes": 30,
+        "placed": 1,
+        "total": 1
+      },
+      "solverStatus": "already_optimal",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 145,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    },
+    {
+      "divisionRef": "d-tiebreak",
+      "actualEngine": "optimized",
+      "metrics": {
+        "makespanMinutes": 90,
+        "worstIdleGapMinutes": 30,
+        "courtImbalanceMinutes": 30,
+        "placed": 3,
+        "total": 3
+      },
+      "solverStatus": "ok",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 151,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    }
+  ]
+}
