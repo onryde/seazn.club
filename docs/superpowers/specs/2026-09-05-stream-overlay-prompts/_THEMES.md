@@ -121,6 +121,43 @@ A caveat rather than a rewrite: §8's `copy button` row still carries Tailwind
 
 The slab's `dismissal` pair is per-sport and lives in §5.
 
+### 2a. Card classes → chip tone, per period-kernel sport
+
+**Every card class gets a chip** (product ruling, 2026-09-10, closing F13). Only
+hockey and icehockey reach these — they are the two `makePeriodModule` sports,
+and football's own entries are unreachable (it is not a period-kernel sport).
+
+Before this ruling `DISCIPLINE_CLASS_TONE` declared **five of icehockey's seven
+classes as UNCOLOURED** — `bench_minor`, `double_minor`, `major`, `misconduct`,
+`game_misconduct` rendered no chip at all, while a 2-minute `minor` rendered
+one. That is backwards on a broadcast: the more serious the offence, the less
+visible the graphic. It was also settled in code rather than here, which is why
+this section now exists.
+
+| Sport | Class | Tone | Why |
+|---|---|---|---|
+| hockey | `green` | advisory | the sport's own three-card ladder, unchanged |
+| hockey | `yellow` | caution | |
+| hockey | `red` | dismissal | |
+| icehockey | `minor`, `bench_minor`, `double_minor` | **caution** | the lesser-penalty family — a time penalty the side serves and returns from |
+| icehockey | `major`, `misconduct`, `game_misconduct`, `match` | **dismissal** | the serious family — ejection or a period-length penalty |
+
+Two tiers for icehockey, not three: the sport has no green-card equivalent, so
+`advisory` stays unused there rather than being invented for symmetry.
+
+Contrast is already satisfied — §2's table gives icehockey `caution` **11.24**
+and `dismissal` **6.53** on its own `board-2`, both clear of the 3:1 graphical
+floor unaided, and every chip additionally carries the `--sport-ink` hairline.
+
+**A malformed discipline row must not erase the others** (same ruling, closing
+F14). `disciplineList` previously returned `null` on the first entry it could
+not parse, discarding rows it had already accepted — so one bad row from the
+engine showed **no cards at all**, indistinguishable on screen from a clean
+match. Skip the bad row, keep the good ones; reserve `null` for "no discipline
+data at all". Showing two of three cards is strictly better than showing none
+and looking correct, and this is the failure class where an over-refusing guard
+silently dropped a wave's headline stat.
+
 **The overlay's graphical pairs — floor 3:1, not 4.5.** The card chips and the
 live dot are shapes, not words, so they answer to WCAG 1.4.11 at 3:1. §3
 explains why the boundary is an `--sport-ink` hairline rather than the `board`
@@ -162,7 +199,7 @@ Anchored bottom, full width. Two stacked bands, one shadow, radius 6 px.
 ```
 inset:            left 72   right 72   bottom 54
 main band:        height 126   background board   ink
-  live cell:      min-width 225, padding 0 33, background board-2
+  live cell:      min-width 225, MAX-WIDTH 480, padding 0 33, background board-2
                   dot 15 (#ef4444) + 1-px --sport-ink hairline (see below)
                   "Live" Geist 24/600 letter-spacing .02em
                   context line Geist 21/500 ink 70 %      e.g. "T20, 2nd innings"
@@ -179,6 +216,30 @@ detail band:      height 51, padding 0 33, gap 33, background board @ 90 %
                   emphasis item Geist 600 ink 100 % (chase line)
                   striker/server marker: 10.5 px LED dot before the name
 ```
+
+**The live cell has a MAX-WIDTH of 480** (product ruling, 2026-09-10). Measured
+in a browser at 1920×1080: the cell has `min-width: 225` and the team cells are
+`flex: 1 1 auto`, so the cell grows with its context line — 225 px at "RIV won",
+**312 px** at "Riverside won by 44 runs", **610 px** at a full-name result
+sentence, taking each team cell down to 509 px. It never wraps and never
+overflows the page, so this is a balance question rather than a defect: **a
+scorebug's job is the score, and its caption must never dominate the frame.**
+480 clears the reachable worst case (§3's decided context line is the SHORT form
+— today a three-letter code plus a margin, ~312 px) while capping a long one, so
+nothing reachable changes and the score can never be squeezed below half the bar
+by data that arrives later. Past the cap the line clips; team names still never
+truncate (§1's ladder is unchanged and applies to names, not to this line).
+
+**The clock never shows an implausible number** (product ruling, 2026-09-10,
+closing F16). Driven live, a fixture left `in_play` displayed **`1205:25`** —
+twenty hours — because the clock ticks from the fold's anchor with no upper
+bound and no relation to the period's declared length. A club that starts a
+match and never ends it is ordinary, and this is the one element on screen that
+keeps moving, so an absurd value is both the most visible defect and the most
+likely. Where the period's expected length is knowable from the sport config,
+show the broadcast convention past it (`45+`, `90+`, `Q1+`); where it is not,
+hold the clock at that ceiling rather than counting past it. The live dot and
+the period label carry liveness — the clock does not have to.
 
 **The hairline is `--sport-ink`, not `--sport-board`, and it — not the fill —
 is what satisfies WCAG 1.4.11 here.**
