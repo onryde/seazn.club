@@ -153,3 +153,33 @@ HTTP-observable. Assert the predicate by proxy: a second publish must not move
 `divisions.auto_posts` and `hasFeature("news.auto")`, or `drafted` is
 legitimately 0 and the step proves nothing. A local server posts to LIVE
 PostHog, so do not loop the publish step.
+
+## QUEUED — owner-approved, to start after T7 (2026-09-10)
+
+**The magic-link dev arm is a conditional authentication bypass.**
+`apps/web/src/app/api/auth/magic-link/route.ts:44`:
+
+```ts
+if (!sent || process.env.NODE_ENV !== "production") devLink = link;
+```
+
+`sendMagicLinkEmail` passes `transactional: true`, so suppression is bypassed,
+but `send()` (`lib/email.ts:118-156`) still returns `false` when
+`RESEND_API_KEY` is unset, when Resend answers non-2xx (429, quota, unverified
+domain), or when the fetch throws. On any of those IN PRODUCTION the response
+body carries a live sign-in link for whatever address was posted, and
+`components/auth-form.tsx:35` renders it on screen. An email-delivery failure
+becomes account access; a Resend outage becomes a window across the user base.
+
+**Not a one-line delete.** `next start` runs as production, and six call sites
+depend on that arm to test without email: `scripts/smoke.ts` (three), 
+`scripts/smoke-sports.ts:901`, `scripts/bench/lib/http.ts:80`,
+`scripts/bench/lib/drivers/browser.ts:83`. Deleting it reds smoke, e2e and this
+bench. The shape agreed with the owner is an explicit opt-in — an env flag the
+local/CI recipe sets and production never does — replacing an implicit
+failure-mode with a deliberate one. Its own PR, its own gate run, after T7.
+
+**Withdrawn, do NOT file:** the `/api/claims/*` envelope dropping the `CLAIM_*`
+code is not a customer-facing defect. `app/claim/[token]/page.tsx:43` calls
+`resolveClaimToken` directly as a server component and renders distinct copy
+per code (`:18`, `:22`). It only constrains what the BENCH can assert.
