@@ -9,7 +9,7 @@ record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
 
 | task | state |
 |---|---|
-| 1 — suite registry | **COMMITTED** `2e0c4ba` region (see `git log`) |
+| 1 — suite registry | **COMMITTED** `bf9853b94` |
 | 2 — extract the runner | **COMMITTED** `3acc0ace9` |
 | 3 — `compareMatches` | IN FLIGHT |
 | 4 — `compareSpecials` | not started |
