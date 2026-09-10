@@ -5,7 +5,7 @@
 // useT()/usePlural()/useLocale() instead of taking dozens of per-string props.
 // Only the ACTIVE locale's dict crosses the RSC boundary (a plain object) — no
 // multi-locale bundle bloat, no server-only import in client code.
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { DEFAULT_LOCALE, type Dict, type Locale } from "@/lib/i18n-constants";
 import { plural as pluralRuntime, t as tRuntime, type TKey } from "@/lib/i18n-runtime";
 import { messages, type MessageKey } from "@/lib/messages";
@@ -24,6 +24,24 @@ export function DictProvider({
   children: ReactNode;
 }) {
   const value = useMemo<DictContextValue>(() => ({ dict, locale }), [dict, locale]);
+  // `<html lang>` is rendered "en" by the static root layout and is the one
+  // attribute a nested layout cannot correct server-side — only the root
+  // renders <html>, and reading the locale there would opt the whole app into
+  // dynamic rendering (resolve-locale.ts:17-18). A screen reader was therefore
+  // pronouncing French, Spanish and Dutch copy with English rules everywhere
+  // outside [lang]/(marketing), which was the only tree correcting it.
+  //
+  // This provider is the right place: it is already a client component, it
+  // already holds the SERVER-resolved locale, and every localized surface
+  // mounts one. Several may mount per page (island subtrees) — they all carry
+  // the same resolved locale, so the write is idempotent, and the guard below
+  // makes a repeat a no-op. `<HtmlLang>` in the root layout is the weaker
+  // cookie-based fallback for trees with no provider at all.
+  useEffect(() => {
+    if (locale && document.documentElement.lang !== locale) {
+      document.documentElement.lang = locale;
+    }
+  }, [locale]);
   return <DictContext.Provider value={value}>{children}</DictContext.Provider>;
 }
 

@@ -651,7 +651,24 @@ Until then the engine delta is a proven PIPELINE — it computes, it renders, an
 it survives a leg whose divisions resolve different engines — carrying a number
 that is not yet a measurement.
 
-## 17. Appendix — product findings surfaced by the B05 build and its live run (no issues filed)
+## 17. Appendix — product findings surfaced by the B05 build and its live run
+
+**Worked through on 2026-09-10.** Two of the four turned out not to be defects;
+the other two are fixed. Verified against the tree rather than taken at face
+value — the same pass that found §18.5 understated and §18.6 overstated.
+
+| § | Verdict | Where it landed |
+|---|---|---|
+| 17.1 | **Not a defect** — a design fact. "No champion on the wire" is accurate, but adding a `champion` field is new product surface, not a bug fix. The bench already cross-checks `rank: 1` against `finalRanks[0]`. | no change |
+| 17.2 | **Overstated.** The ranks ARE re-readable. `engine-db/competition.ts:499` persists `placementTable(finalRanks).rows` into `standings_snapshots`, and `getStandings` (`usecases/stages.ts:2796-2802`) serves exactly that from `GET /stages/{id}/standings`. What is true is narrower: `divisionHistory` (`history.ts:383`) selects no `payload`, so the LEDGER is metadata-only — deliberately. Exposing every event payload there is a data-exposure decision, not a fix. | record corrected |
+| 17.3 | **Fixed**, and the finding's conclusion was too pessimistic. It treated the workspace boundary as the obstacle; `tsconfig.scripts.json:29` already maps `@/*` and `openapi-gen.ts` already imports apps/web at runtime. The only obstacle was one `server-only` line. | #768 |
+| 17.4 | **Fixed** as far as it can be without an owner-level trade. | #769 |
+
+17.4's residue, stated plainly: the correction is client-side, so a screen
+reader reading before hydration — and no-JS entirely — still gets `en`. Closing
+that means an `async` root layout calling `resolveLocale()`, which opts the
+WHOLE app into dynamic rendering and gives up ISR on the highest-traffic
+surface. That is an owner decision, not something to slip into an a11y fix.
 
 §15 is B04's set, §16 B04's first live run. These are B05's, same policy — no
 GitHub issues (`RULES.md:98`, `_RULES.md:11`, §7). Running record with the

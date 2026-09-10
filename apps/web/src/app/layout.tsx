@@ -6,6 +6,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import { AnalyticsBootstrap } from "@/components/analytics-bootstrap";
 import { CookieConsent } from "@/components/cookie-consent";
 import { ConfirmProvider } from "@/components/ui/confirm-provider";
+import { HtmlLang } from "@/components/i18n/html-lang";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({
@@ -51,11 +52,21 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
+    // Server-rendered as "en" because this layout is deliberately static —
+    // reading the locale here needs cookies()/headers() and would opt the whole
+    // app into dynamic rendering (resolve-locale.ts:17-18). <HtmlLang> below
+    // corrects it after hydration; trees that already know their locale
+    // server-side pass it down explicitly.
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${barlowCondensed.variable} h-full antialiased`}
     >
       <body className="min-h-full font-sans">
+        {/* A screen reader was pronouncing French, Spanish and Dutch copy with
+            English rules on every tree outside [lang]/(marketing), which was
+            the only place mounting this. Cookie-driven here; authoritative
+            where a layout passes `lang`. */}
+        <HtmlLang />
         {/* Confirmation dialogs everywhere (v3/03 §3) — console and public
             trees both have destructive actions. */}
         <ConfirmProvider>{children}</ConfirmProvider>
