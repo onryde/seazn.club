@@ -1,0 +1,828 @@
+<title>Seazn Relay Signal Path</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+  :root {
+    --ground:      #E7EAE9;
+    --surface:     #F3F5F4;
+    --surface-2:   #DCE1E0;
+    --ink:         #14191A;
+    --ink-2:       #4C5658;
+    --ink-3:       #6E7A7B;
+    --rule:        #C3CCCB;
+    --rule-soft:   #D5DCDB;
+    --accent:      #0E6360;
+    --accent-soft: #0E636014;
+    --signal:      #B93A22;
+    --signal-soft: #B93A2214;
+    --warn:        #8A5A06;
+    --warn-soft:   #8A5A0614;
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #101415;
+      --surface:     #171D1E;
+      --surface-2:   #212829;
+      --ink:         #E3E8E7;
+      --ink-2:       #A2AFAF;
+      --ink-3:       #7E8B8B;
+      --rule:        #2E3839;
+      --rule-soft:   #232B2C;
+      --accent:      #4FB5AE;
+      --accent-soft: #4FB5AE1A;
+      --signal:      #E4795E;
+      --signal-soft: #E4795E1A;
+      --warn:        #D9A85A;
+      --warn-soft:   #D9A85A1A;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #101415;
+    --surface:     #171D1E;
+    --surface-2:   #212829;
+    --ink:         #E3E8E7;
+    --ink-2:       #A2AFAF;
+    --ink-3:       #7E8B8B;
+    --rule:        #2E3839;
+    --rule-soft:   #232B2C;
+    --accent:      #4FB5AE;
+    --accent-soft: #4FB5AE1A;
+    --signal:      #E4795E;
+    --signal-soft: #E4795E1A;
+    --warn:        #D9A85A;
+    --warn-soft:   #D9A85A1A;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1060px;
+    margin-inline: auto;
+    padding-inline: clamp(16px, 4.5vw, 52px);
+    padding-block: clamp(32px, 6vw, 68px) 80px;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { display: grid; gap: 18px; padding-bottom: 26px; border-bottom: 2px solid var(--ink); }
+
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(30px, 5.4vw, 46px);
+    line-height: 1.04;
+    letter-spacing: -0.022em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    margin: 0;
+    max-width: 62ch;
+    font-size: 18px;
+    color: var(--ink-2);
+  }
+
+  .settled {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-top: 8px;
+  }
+  .settled div { background: var(--surface); padding: 11px 13px; display: grid; gap: 3px; }
+  .settled dt {
+    font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.11em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .settled dd { margin: 0; font-family: var(--f-display); font-weight: 600; font-size: 14.5px; }
+  .settled dd.open { color: var(--warn); }
+
+  /* ---------- sections with role rail ---------- */
+
+  section { padding-block: 44px; border-bottom: 1px solid var(--rule-soft); }
+  section:last-of-type { border-bottom: 0; }
+
+  .rail {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding-top: 7px;
+  }
+
+  h2 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: clamp(21px, 3vw, 27px);
+    letter-spacing: -0.014em;
+    line-height: 1.18;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: 16px;
+    margin: 26px 0 8px;
+  }
+
+  p { margin: 0 0 14px; max-width: 68ch; }
+  p:last-child { margin-bottom: 0; }
+
+  @media (min-width: 900px) {
+    section { display: grid; grid-template-columns: 92px minmax(0, 1fr); column-gap: 30px; }
+    section > .rail { grid-column: 1; }
+    section > :not(.rail) { grid-column: 2; }
+  }
+  @media (max-width: 899px) {
+    .rail { margin-bottom: 12px; }
+  }
+
+  /* ---------- figures ---------- */
+
+  figure { margin: 6px 0 22px; }
+  .fig-frame {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    padding: 20px 18px 14px;
+    overflow-x: auto;
+  }
+  .fig-frame svg { display: block; width: 100%; min-width: 640px; max-width: 100%; height: auto; color: var(--ink-2); }
+  figcaption {
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--ink-3);
+    margin-top: 9px;
+    max-width: 76ch;
+  }
+  .svg-box  { fill: var(--surface); stroke: var(--ink-2); stroke-width: 1.2; }
+  .svg-box-2{ fill: var(--surface-2); stroke: var(--rule); stroke-width: 1; }
+  .svg-t    { font-family: "Archivo", sans-serif; font-size: 13px; font-weight: 600; fill: var(--ink); }
+  .svg-s    { font-family: "Archivo", sans-serif; font-size: 11.5px; fill: var(--ink-2); }
+  .svg-m    { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; fill: var(--ink-3); }
+  .svg-tier { font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: 0.13em; fill: var(--ink-3); }
+  .svg-line { stroke: var(--ink-2); stroke-width: 1.4; fill: none; }
+  .svg-sig  { stroke: var(--signal); stroke-width: 2.4; fill: none; }
+  .svg-sig-t{ font-family: "IBM Plex Mono", monospace; font-size: 11px; fill: var(--signal); }
+  .svg-dash { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+
+  /* ---------- code ---------- */
+
+  pre {
+    font-family: var(--f-mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 16px;
+  }
+  code { font-family: var(--f-mono); font-size: 0.88em; }
+  p code, li code, td code { background: var(--accent-soft); padding: 0.1em 0.34em; border-radius: 2px; }
+
+  /* ---------- callout ---------- */
+
+  .callout {
+    background: var(--signal-soft);
+    border-left: 3px solid var(--signal);
+    padding: 15px 17px;
+    margin: 4px 0 18px;
+  }
+  .callout p { max-width: 64ch; margin-bottom: 8px; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout-label {
+    font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.13em;
+    text-transform: uppercase; color: var(--signal); display: block; margin-bottom: 6px;
+  }
+
+  /* ---------- register ---------- */
+
+  .grp { margin-bottom: 34px; }
+  .grp:last-child { margin-bottom: 0; }
+  .grp-head {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    padding-bottom: 7px; margin-bottom: 0;
+    border-bottom: 1px solid var(--ink-2);
+  }
+  .grp-head h3 { margin: 0; font-size: 15px; }
+  .grp-head .n {
+    font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .grp-note { font-size: 14.5px; color: var(--ink-2); margin: 10px 0 4px; max-width: 66ch; }
+
+  .row {
+    display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
+    column-gap: 16px; row-gap: 6px;
+    padding: 15px 0;
+    border-bottom: 1px solid var(--rule-soft);
+    align-items: start;
+  }
+  .row:last-child { border-bottom: 0; }
+  .row .id {
+    font-family: var(--f-mono); font-size: 12px; font-weight: 500;
+    color: var(--ink-3); padding-top: 2px; font-variant-numeric: tabular-nums;
+  }
+  .row .body { min-width: 0; }
+  .row .body p { margin: 0; max-width: 64ch; }
+  .row .body .claim {
+    font-family: var(--f-display); font-weight: 600; font-size: 15.5px;
+    line-height: 1.34; margin-bottom: 5px; text-wrap: balance;
+  }
+  .row .body .why { font-size: 14.5px; line-height: 1.5; color: var(--ink-2); }
+  .row .body .where {
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-3);
+    margin-top: 6px;
+  }
+  .row .chip { justify-self: end; margin-top: 3px; }
+  @media (max-width: 620px) {
+    .row { grid-template-columns: 46px minmax(0, 1fr); }
+    .row .chip { grid-column: 2; justify-self: start; margin-top: 8px; }
+  }
+
+  .chip {
+    display: inline-block; font-family: var(--f-mono); font-size: 10px;
+    letter-spacing: 0.07em; text-transform: uppercase;
+    border: 1px solid var(--signal); color: var(--signal);
+    padding: 2px 6px; border-radius: 2px; white-space: nowrap;
+  }
+  .chip.w { border-color: var(--warn); color: var(--warn); }
+  .chip.a { border-color: var(--accent); color: var(--accent); }
+
+  ul { margin: 0 0 14px; padding-left: 20px; max-width: 68ch; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--accent); }
+
+  strong { font-weight: 600; }
+  a { color: var(--accent); }
+  a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  footer {
+    margin-top: 46px; padding-top: 18px; border-top: 1px solid var(--rule);
+    font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); line-height: 1.7;
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Streaming programme &middot; R2 compositor</p>
+    <h1>Seazn Relay Signal Path</h1>
+    <p class="standfirst">The three tiers and the one render path they share, where the picture and the sound go, why the encoder never restarts &mdash; and a register of twenty-two findings across R2, &sect;7, the capture app and multi-camera.</p>
+    <dl class="settled">
+      <div><dt>Front door</dt><dd>Cloudflare Stream</dd></div>
+      <div><dt>Compute</dt><dd>Fly Machines &middot; lhr</dd></div>
+      <div><dt>Contribution</dt><dd>SRT, RTMPS fallback</dd></div>
+      <div><dt>Compositor</dt><dd>B3 &middot; browser</dd></div>
+      <div><dt>Destination</dt><dd>RTMPS</dd></div>
+    </dl>
+  </header>
+
+  <section>
+    <p class="rail">Tiers</p>
+    <div>
+      <h2>Three products, one render path</h2>
+
+      <figure>
+        <div class="fig-frame">
+          <svg viewBox="0 0 760 292" role="img" aria-label="The overlay route feeds two of the three tiers. Tier A is the club's own OBS browser source and encoder, using no seazn infrastructure. Tier B composited is the Fly Machine's Chromium. Tier B passthrough starts at the phone and Cloudflare instead and never touches the overlay route, so it carries no graphics. All three end at YouTube.">
+            <defs>
+              <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+              </marker>
+            </defs>
+
+            <rect class="svg-box" x="16" y="62" width="196" height="108" rx="3"></rect>
+            <text class="svg-m" x="114" y="104" text-anchor="middle">/overlay/fixtures/[id]</text>
+            <text class="svg-s" x="114" y="128" text-anchor="middle">the one render path</text>
+
+            <rect class="svg-box-2" x="16" y="210" width="196" height="54" rx="3"></rect>
+            <text class="svg-s" x="114" y="242" text-anchor="middle">Phone &rarr; Cloudflare</text>
+
+            <text class="svg-tier" x="290" y="44">TIER A &middot; CLUB'S OWN KIT</text>
+            <line class="svg-line" x1="214" y1="80" x2="286" y2="80" marker-end="url(#ar2)"></line>
+            <rect class="svg-box" x="290" y="52" width="250" height="56" rx="3"></rect>
+            <text class="svg-s" x="415" y="76" text-anchor="middle">OBS browser source</text>
+            <text class="svg-m" x="415" y="94" text-anchor="middle">club's laptop and encoder</text>
+
+            <text class="svg-tier" x="290" y="116">TIER B &middot; COMPOSITED</text>
+            <line class="svg-line" x1="214" y1="152" x2="286" y2="152" marker-end="url(#ar2)"></line>
+            <rect class="svg-box" x="290" y="124" width="250" height="56" rx="3"></rect>
+            <text class="svg-s" x="415" y="148" text-anchor="middle">Fly Machine &middot; Chromium :99</text>
+            <text class="svg-m" x="415" y="166" text-anchor="middle">rented browser and encoder</text>
+
+            <text class="svg-tier" x="290" y="202">TIER B &middot; PASSTHROUGH</text>
+            <line class="svg-dash" x1="214" y1="237" x2="286" y2="237" marker-end="url(#ar2)"></line>
+            <rect class="svg-box-2" x="290" y="210" width="250" height="54" rx="3"></rect>
+            <text class="svg-s" x="415" y="234" text-anchor="middle">Cloudflare simulcast</text>
+            <text class="svg-m" x="415" y="252" text-anchor="middle">clean feed &mdash; no graphics</text>
+
+            <polyline class="svg-line" points="542,80 590,80 590,140 616,140" marker-end="url(#ar2)"></polyline>
+            <line class="svg-line" x1="542" y1="152" x2="616" y2="152" marker-end="url(#ar2)"></line>
+            <polyline class="svg-dash" points="542,237 590,237 590,176 616,176" marker-end="url(#ar2)"></polyline>
+
+            <rect class="svg-box" x="620" y="118" width="112" height="76" rx="3"></rect>
+            <text class="svg-t" x="676" y="152" text-anchor="middle">YouTube</text>
+            <text class="svg-m" x="676" y="170" text-anchor="middle">RTMPS</text>
+          </svg>
+        </div>
+        <figcaption>Tier B composited is Tier A with the browser and the encoder rented. Passthrough is the dashed path &mdash; it never reaches the overlay route, which is why it carries no score.</figcaption>
+      </figure>
+
+      <p>The invariant is load-bearing rather than tidy: because both graphics tiers consume the same route, a club moving between them sees identical output. That is also why the browser-as-compositor shape (B3) was right and not merely what <code>x11grab</code> forced &mdash; the composited tier is you running the club's OBS browser source for them.</p>
+
+      <p><strong>The tiers are different customers, not different quality.</strong> Tier A needs a laptop, OBS, an operator and a wired uplink, and in exchange gives the club multi-camera switching, scenes, audio mixing and replays natively. Tier B needs a phone and nobody. A club with kit gets a better production out of Tier A than the compositor will ever hand them.</p>
+
+      <p><code>delayMs</code> is a Tier B concept only. In Tier A the picture is local and instant while the score arrives over realtime, so the score trails play harmlessly. In Tier B the picture is delayed by the whole SRT &rarr; Cloudflare &rarr; WHEP chain while the score stays realtime-fast, so without the seam it would run <em>ahead</em> of play and spoil a wicket. Tier A's equivalent trap is Q3: a club holding <code>streaming.overlay</code> without <code>realtime</code> polls at fifteen seconds, with no compositor in between to mask it.</p>
+
+      <p>A fourth shape exists that no tier covers: the phone publishes to Cloudflare and the <em>club's</em> OBS pulls it back over SRT or RTMPS playback, compositing locally. That serves a club with a laptop that wants the phone as its camera, and it costs no Machine.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Path</p>
+    <div>
+      <h2>Inside the composited tier</h2>
+
+      <figure>
+        <div class="fig-frame">
+          <svg viewBox="0 0 920 400" role="img" aria-label="Signal path: the phone pushes SRT or RTMPS to a Cloudflare Stream live input, which branches two ways — a passthrough tier that simulcasts RTMPS straight to YouTube with no compute, and a composited tier that feeds WHEP into a per-session Fly Machine where Chromium renders the overlay page over the video, x11grab and pulse capture the composite, and ffmpeg pushes RTMPS to YouTube.">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+              </marker>
+              <marker id="ars" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+                <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--signal)"></path>
+              </marker>
+            </defs>
+
+            <rect class="svg-box" x="14" y="192" width="104" height="58" rx="3"></rect>
+            <text class="svg-t" x="66" y="216" text-anchor="middle">Phone</text>
+            <text class="svg-m" x="66" y="234" text-anchor="middle">capture app</text>
+
+            <line class="svg-line" x1="120" y1="221" x2="186" y2="221" marker-end="url(#ar)"></line>
+            <text class="svg-m" x="153" y="212" text-anchor="middle">SRT / RTMPS</text>
+
+            <rect class="svg-box" x="190" y="150" width="164" height="140" rx="3"></rect>
+            <text class="svg-t" x="272" y="184" text-anchor="middle">Cloudflare Stream</text>
+            <text class="svg-s" x="272" y="204" text-anchor="middle">live input</text>
+            <text class="svg-m" x="272" y="232" text-anchor="middle">timeoutSeconds hold</text>
+            <text class="svg-m" x="272" y="252" text-anchor="middle">anycast ingest</text>
+
+            <text class="svg-tier" x="378" y="182">PASSTHROUGH</text>
+            <line class="svg-line" x1="356" y1="190" x2="820" y2="190" marker-end="url(#ar)"></line>
+            <text class="svg-m" x="600" y="182" text-anchor="middle">RTMPS simulcast &middot; no Machine &middot; &pound;0.14</text>
+
+            <line class="svg-line" x1="356" y1="252" x2="422" y2="252" marker-end="url(#ar)"></line>
+            <text class="svg-m" x="389" y="244" text-anchor="middle">WHEP</text>
+
+            <rect class="svg-box" x="426" y="212" width="346" height="172" rx="3"></rect>
+            <text class="svg-tier" x="440" y="232">COMPOSITED &middot; FLY MACHINE &middot; AUTO_DESTROY</text>
+
+            <rect class="svg-box-2" x="444" y="242" width="310" height="38" rx="2"></rect>
+            <text class="svg-s" x="599" y="266" text-anchor="middle">Chromium :99 &middot; video under OverlayStage</text>
+
+            <rect class="svg-box-2" x="444" y="288" width="310" height="38" rx="2"></rect>
+            <text class="svg-s" x="599" y="312" text-anchor="middle">x11grab 30 fps + pulse 48 kHz</text>
+
+            <rect class="svg-box-2" x="444" y="334" width="310" height="38" rx="2"></rect>
+            <text class="svg-s" x="599" y="358" text-anchor="middle">x264 3000k &middot; g60 &middot; bf2 &rarr; FLV</text>
+
+            <polyline class="svg-sig" points="772,353 796,353 796,244 818,244" marker-end="url(#ars)"></polyline>
+            <text class="svg-sig-t" x="804" y="300">RTMPS</text>
+
+            <rect class="svg-box" x="822" y="166" width="86" height="112" rx="3"></rect>
+            <text class="svg-t" x="865" y="212" text-anchor="middle">YouTube</text>
+            <text class="svg-m" x="865" y="230" text-anchor="middle">destination</text>
+          </svg>
+        </div>
+        <figcaption>Both tiers enter through the same live input, so the credentials handed to the phone never change with the tier. Only the composited branch costs a Machine.</figcaption>
+      </figure>
+
+      <p>The invariant holds because the video lives <em>inside</em> the page: Chromium renders <code>/overlay/fixtures/[id]/relay</code> with the WHEP element under an unmodified <code>OverlayStage</code>, and <code>x11grab</code> takes the composite. Every score pixel on every tier comes from one route. That shape is also forced &mdash; <code>x11grab</code> is RGB only, so overlay capture with alpha was never available.</p>
+
+      <p>The encode line is binding verbatim:</p>
+
+      <pre>-f x11grab -framerate 30 -i :99 -f pulse -i default -c:v libx264 -preset veryfast
+-b:v 3000k -maxrate 3000k -bufsize 6000k -g 60 -bf 2 -pix_fmt yuv420p
+-c:a aac -b:a 128k -ar 48000 -f flv &lt;rtmps&gt;</pre>
+
+      <p>The Machine is created per session over the Machines REST API in <code>lhr</code> and never moves: Cloudflare's ingest is anycast, so the phone already reaches a nearby PoP and relocating the compositor buys nothing.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Failure</p>
+    <div>
+      <h2>Why the encoder never restarts</h2>
+
+      <figure>
+        <div class="fig-frame">
+          <svg viewBox="0 0 880 262" role="img" aria-label="Timeline of a phone drop across three lanes. The phone-to-Cloudflare lane has a gap. The Cloudflare live input lane stays unbroken through the timeoutSeconds hold, keeping the same video id. The Fly-to-YouTube RTMPS lane is unbroken throughout, carrying slate frames from eight seconds after the drop until the phone resumes.">
+            <rect x="350" y="44" width="250" height="178" fill="var(--accent-soft)"></rect>
+            <line class="svg-dash" x1="350" y1="44" x2="350" y2="222"></line>
+            <line class="svg-dash" x1="600" y1="44" x2="600" y2="222"></line>
+            <text class="svg-m" x="350" y="36" text-anchor="middle">drop</text>
+            <text class="svg-m" x="600" y="36" text-anchor="middle">resume</text>
+
+            <text class="svg-m" x="118" y="74" text-anchor="end">Phone &rarr; CF</text>
+            <line class="svg-line" x1="130" y1="70" x2="350" y2="70" stroke-width="2"></line>
+            <line class="svg-line" x1="600" y1="70" x2="850" y2="70" stroke-width="2"></line>
+            <text class="svg-s" x="475" y="66" text-anchor="middle">cellular gap</text>
+
+            <text class="svg-m" x="118" y="144" text-anchor="end">CF live input</text>
+            <line class="svg-line" x1="130" y1="140" x2="850" y2="140" stroke-width="2"></line>
+            <text class="svg-s" x="475" y="132" text-anchor="middle">held for timeoutSeconds &mdash; same video id</text>
+
+            <text class="svg-m" x="118" y="209" text-anchor="end">Fly &rarr; YouTube</text>
+            <line class="svg-sig" x1="130" y1="205" x2="850" y2="205"></line>
+            <line class="svg-sig" x1="420" y1="197" x2="420" y2="213" stroke-width="1.4"></line>
+            <text class="svg-sig-t" x="426" y="193">slate from +8 s</text>
+            <text class="svg-sig-t" x="475" y="230" text-anchor="middle">RTMPS connection unbroken</text>
+          </svg>
+        </div>
+        <figcaption>The red lane never breaks. YouTube observes one continuous connection across the drop, so an in-window resume produces no new broadcast and no lost viewers.</figcaption>
+      </figure>
+
+      <p>This is the property the front door exists for. The phone drops, Cloudflare holds the input, the <code>video</code> element goes <code>stalled</code>, the page swaps to the slate at eight seconds, and ffmpeg keeps encoding the same X display at the same 30&nbsp;fps throughout. Nothing downstream learns that the camera went away.</p>
+
+      <p>It also explains the supporting reasons in their real order of weight: anycast ingest puts the first hop near the phone rather than in London; the passthrough tier can exist at all because it needs no Machine; Machine lifecycle decouples from the phone, so a retry is invisible; and a public listener with a routable port, auth and DoS exposure is a service Cloudflare already operates.</p>
+
+      <p>Two things this property is <em>not</em> free of. It rests on an undocumented Cloudflare behaviour (<strong>U1</strong>), and &ldquo;the encoder never restarts&rdquo; is a property of the compositor rather than of Cloudflare &mdash; plain ffmpeg exits on input EOF, so the slate has to live on the input side of the capture, which the browser-as-compositor shape gives you by construction.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Audio</p>
+    <div>
+      <h2>Sound takes the same trip as the picture</h2>
+
+      <pre>phone mic &rarr; AAC &rarr; SRT/RTMPS &rarr; Cloudflare &rarr; <strong>Opus</strong> (WHEP)
+  &rarr; Chromium decodes to PCM &rarr; PulseAudio null sink
+  &rarr; -f pulse -i default &rarr; <strong>AAC</strong> 128k / 48 kHz &rarr; FLV &rarr; YouTube</pre>
+
+      <p>There is no separate audio path and no passthrough: the sound is decoded inside the browser and re-encoded by the same ffmpeg process that encodes the screen. Two consequences are good and two are findings.</p>
+
+      <h3>Silence is continuous, which is the point</h3>
+      <p>A null sink emits samples whether or not anything is playing. During a phone drop the audio input never starves and the muxer holds, so the connection stays healthy on both tracks. This is the audio half of &ldquo;the encoder never restarts&rdquo;, and it works by construction rather than by handling.</p>
+
+      <h3>One A/V clock is a correct claim</h3>
+      <p>A null sink has no hardware clock &mdash; it runs on the system timer, the same reference <code>x11grab</code> polls against. The two captures cannot drift apart the way two physical devices would. The clap burst in the soak is the right signal to prove it; it just has no assertion reading it (<strong>T2</strong>).</p>
+
+      <h3>Two lossy generations in transit</h3>
+      <p>AAC on the phone, Opus for WebRTC, AAC on the way out. At 128k for crowd noise and commentary this is inaudible, but it is the reason not to skimp on the phone's audio bitrate &mdash; nothing downstream can recover what the first encode discards. There is also no normalisation anywhere in the chain, so a hot or quiet microphone reaches YouTube as-is.</p>
+
+      <h3>Two independent ways to ship silence</h3>
+      <p><strong>D1</strong> and <strong>D2</strong> both produce a stream with an audio track containing nothing, from different causes. Fix them together: if only one is fixed, the level assertion added for <strong>T1</strong> still fails and it will read as the first fix not working.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Protocol</p>
+    <div>
+      <h2>SRT or RTMPS on the first hop</h2>
+
+      <p>Cloudflare's live input exposes both endpoints, so this choice touches the first hop only &mdash; the hold, the WHEP pull, the compositor and the YouTube leg are identical either way.</p>
+
+      <p><strong>The constraint dissolved when the plugin did.</strong> The reason to consider RTMPS-only was that HaishinKit.kt ships no SRT module, so a third-party Flutter plugin could not reach SRT on Android at any price. Owning the binding over StreamPack removes that: <code>streampack-srt</code> and HaishinKit.swift's <code>SRTHaishinKit</code> both ship SRT, so both protocols are reachable on both platforms from day one. The extra cost is roughly a dependency and an endpoint class per platform.</p>
+
+      <p><strong>What SRT buys here is not latency.</strong> YouTube's own 15&ndash;40&nbsp;s dominates the budget, so nothing in this chain is latency-constrained. SRT buys loss recovery on the cellular uplink at a wet ground, which is where the drops actually come from. RTMP is TCP: under sustained loss it retransmits, collapses its congestion window, backs the encoder's send buffer up and eventually disconnects &mdash; with no <code>latency</code> dial to tune.</p>
+
+      <p><strong>Recommendation: SRT primary, RTMPS automatic fallback.</strong> SRT is UDP, and some venue wifi and corporate networks drop it, so SRT-only is fragile in exactly the places a club will stream from. Try SRT with a generous buffer (2000&nbsp;ms &mdash; you have the headroom), fall back to RTMPS on failure. It mirrors the WHEP&rarr;LL-HLS ladder the relay page already runs, and both engines support both, so the fallback is configuration rather than architecture.</p>
+
+      <p>This makes <strong>C1</strong> mandatory rather than defensive &mdash; the capture credentials now genuinely carry two shapes &mdash; and largely settles <strong>T5</strong>, since the soak's SRT leg becomes the production primary.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Multi-cam</p>
+    <div>
+      <h2>What several cameras would cost</h2>
+
+      <p><strong>The compositor does not change.</strong> The relay page holds N <code>video</code> elements instead of one &mdash; switcher, picture-in-picture, a 2&times;2 tile &mdash; and it is all DOM and CSS. <code>x11grab</code> still grabs one 1280&times;720 screen, one ffmpeg, one Machine, one RTMPS out. A keyed-overlay compositor would have needed a real vision mixer here; B3 needs a layout change.</p>
+
+      <h3>Per-source delay has a proper mechanism</h3>
+      <p>A live <code>video</code> element cannot be held back arbitrarily, but WebRTC exposes the right knob: <code>RTCRtpReceiver.jitterBufferTarget</code> (Chrome's <code>playoutDelayHint</code>) raises a receiver's target playout delay in milliseconds. Measure each source's <code>measuredLatencyMs</code>, set every receiver to <code>max(latency) + margin</code> so all sources present at one common wall-clock time, then hold the score against that time with the single <code>delayMs</code> R2 already builds. The operator nudge layers on per source, and D3's snap-on-transport-change rule applies per source too.</p>
+
+      <h3>Cross-source sync needs NTP, and has a floor without it</h3>
+      <p>Two phones have independent clocks and no genlock. Even with transport latency perfectly equalised their <em>capture instants</em> differ, so a cut mid-delivery jumps. Broadcast solves this with PTP; handsets cannot. The workable answer is for each phone to report an <strong>NTP-synced capture timestamp</strong> through the session API, folded into that source's playout target &mdash; handset NTP lands within tens of milliseconds, which reads clean on a cut. Without it, accept 100&ndash;300&nbsp;ms of cross-source error and never cut during a delivery.</p>
+
+      <h3>Switching rides a channel you already have</h3>
+      <p>The relay page subscribes to Supabase realtime for scores. A camera cut can ride the same channel &mdash; sub-second, no new transport, and it lands as fast as a goal does. The 15&nbsp;s heartbeat is far too slow to carry a switch, and does not need to.</p>
+
+      <p>The rest is logged as <strong>M1&ndash;M4</strong>. The short version: R2 should ship single-camera and prove the soak, but the two artefacts already open &mdash; the QR contract and the session data model &mdash; are far cheaper to shape one-to-many now than to migrate later.</p>
+    </div>
+  </section>
+
+  <section>
+    <p class="rail">Register</p>
+    <div>
+      <h2>Findings and gaps</h2>
+      <p>Twenty-two items against R2's prompt, &sect;7 of the design, the capture app and multi-camera. Grouped by kind. Nothing in D&ndash;C moves R2's shape; P belongs to R3 and M to a wave not yet written, both listed here because several of their rows constrain artefacts open right now. Each is a recommendation, not a ruling.</p>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Defects</h3>
+          <span class="n">D1&ndash;D5 &middot; wrong as specified</span>
+        </div>
+
+        <div class="row">
+          <div class="id">D1</div>
+          <div class="body">
+            <p class="claim"><code>muted</code> on the relay video element silences the broadcast</p>
+            <p class="why">A muted media element sends nothing to the audio device, so <code>-f pulse -i default</code> encodes silence. &sect;7.3 never specifies <code>muted</code> and &sect;7.2 calls the null sink &ldquo;one A/V clock&rdquo; &mdash; the attribute is prompt-versus-design drift, and <code>--autoplay-policy=no-user-gesture-required</code> is already set, so it is not buying autoplay either.</p>
+            <p class="where">R2 scope 1 &middot; contradicts &sect;7.2</p>
+          </div>
+          <span class="chip">Ships silent</span>
+        </div>
+
+        <div class="row">
+          <div class="id">D2</div>
+          <div class="body">
+            <p class="claim">The Pulse default source is never pointed at the null sink's monitor</p>
+            <p class="why">Loading <code>module-null-sink</code> without <code>set-default-source &lt;sink&gt;.monitor</code> leaves <code>-i default</code> resolving to nothing: ffmpeg either errors at start or captures silence. &sect;7.2 names the sink but not the monitor.</p>
+            <p class="where">&sect;7.2 container boot &middot; Dockerfile</p>
+          </div>
+          <span class="chip">Ships silent</span>
+        </div>
+
+        <div class="row">
+          <div class="id">D3</div>
+          <div class="body">
+            <p class="claim">The <code>delayMs</code> ramp cannot cross a WHEP&rarr;LL-HLS transition</p>
+            <p class="why">The ladder falls back after 5&nbsp;s, roughly a 0.5&nbsp;s&rarr;6&nbsp;s step. At &le;&nbsp;250&nbsp;ms per 15&nbsp;s beat that is 22 beats. The score runs ahead of the picture for about five and a half minutes, at exactly the moment the transport degrades. The ramp is right for drift and wrong for a discontinuity &mdash; snap, then resume EWMA.</p>
+            <p class="where">R2 scope 4 &middot; &sect;3.3</p>
+          </div>
+          <span class="chip">~5.5 min</span>
+        </div>
+
+        <div class="row">
+          <div class="id">D4</div>
+          <div class="body">
+            <p class="claim">The Machine restart policy is not pinned to <code>no</code></p>
+            <p class="why">With any other policy a non-zero exit restarts the Machine in place <em>and</em> R1's sweep creates a replacement. Two compositors, one session, one stream key &mdash; YouTube receiving two encoders is visible corruption rather than a clean failure, and the soak's Machine-kill check may pass straight through it.</p>
+            <p class="where">&sect;7.1 &middot; runner-fly.ts &middot; sharpens R0 watch 4</p>
+          </div>
+          <span class="chip">Double encode</span>
+        </div>
+
+        <div class="row">
+          <div class="id">D5</div>
+          <div class="body">
+            <p class="claim"><code>x11grab</code> samples on a clock Chromium does not share</p>
+            <p class="why">The grabber polls the framebuffer at 30&nbsp;fps while Chromium paints on its own schedule under SwiftShader. The two clocks beat, producing periodic duplicate and dropped frames. Judder shows on pans, which football and cricket cameras do continuously. R0 watch 1 asks whether capture works at 720p, which is a question about capture, not smoothness.</p>
+            <p class="where">&sect;7.2 &middot; R0 watch 1</p>
+          </div>
+          <span class="chip">Judder</span>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Test gaps</h3>
+          <span class="n">T1&ndash;T5 &middot; assertions that do not prove their claim</span>
+        </div>
+        <p class="grp-note">The checklist's own rule &mdash; &ldquo;a comment in code is a HYPOTHESIS, not evidence&rdquo; &mdash; applies to acceptance criteria too. Each of these names a subject without testing it.</p>
+
+        <div class="row">
+          <div class="id">T1</div>
+          <div class="body">
+            <p class="claim">The smoke asserts an audio <em>stream</em>, not audio</p>
+            <p class="why"><code>ffprobe</code> reports a 48&nbsp;kHz AAC stream over two hours of silence, so the check passes under both D1 and D2. Replace presence with a level floor &mdash; <code>astats</code> or <code>volumedetect</code>.</p>
+            <p class="where">R2 acceptance &middot; smoke</p>
+          </div>
+          <span class="chip w">No level check</span>
+        </div>
+
+        <div class="row">
+          <div class="id">T2</div>
+          <div class="body">
+            <p class="claim">The clap burst has no consumer</p>
+            <p class="why">The soak generates the standard A/V-sync test signal alongside <code>testsrc2</code> and then names no assertion reading it. The signal is right; it needs a sync row with a millisecond budget.</p>
+            <p class="where">R2 scope 7</p>
+          </div>
+          <span class="chip w">Unasserted</span>
+        </div>
+
+        <div class="row">
+          <div class="id">T3</div>
+          <div class="body">
+            <p class="claim"><code>delayMs</code> convergence is never exercised</p>
+            <p class="why">The alignment e2e pins <code>delayMs = 3000</code> statically. Mutant (a) kills a dropped clock offset; nothing in the killer list kills &ldquo;ramp too slow&rdquo;, which is D3. Add a controller unit with a step-input row and a bounded time-to-converge.</p>
+            <p class="where">R2 scope 4 &middot; mutant list</p>
+          </div>
+          <span class="chip w">Untested path</span>
+        </div>
+
+        <div class="row">
+          <div class="id">T4</div>
+          <div class="body">
+            <p class="claim">Frame timing has no assertion</p>
+            <p class="why">A flat drop-frame trend and drift under 100&nbsp;ms/h both stay clean through a duplicated frame every few seconds, so neither catches D5. The source clock burned in for R0's latency method already gives you the mechanism &mdash; burn a frame ordinal beside it and assert the decoded sequence has no repeats or gaps.</p>
+            <p class="where">R2 scope 7</p>
+          </div>
+          <span class="chip w">Blind to D5</span>
+        </div>
+
+        <div class="row">
+          <div class="id">T5</div>
+          <div class="body">
+            <p class="claim">The soak covers the primary leg but not the fallback</p>
+            <p class="why">Scope 7 drives synthetic SRT and asserts &ldquo;a mid-match SRT kill &rarr; slate &le;&nbsp;10&nbsp;s &rarr; seamless resume&rdquo;, which matches production now that SRT is primary. What it does not cover is the RTMPS fallback path, whose failure shape is different &mdash; TCP stalls and backs up before it disconnects, so the slate fires later and less cleanly than an SRT drop. Add a fallback run, or accept that the fallback's slate timing is unproven.</p>
+            <p class="where">R2 scope 7 &middot; largely settled by the protocol call</p>
+          </div>
+          <span class="chip w">Fallback unproven</span>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Unverified</h3>
+          <span class="n">U1 &middot; load-bearing and undocumented</span>
+        </div>
+
+        <div class="row">
+          <div class="id">U1</div>
+          <div class="body">
+            <p class="claim">Nobody knows what the playback side sees during the hold</p>
+            <p class="why">Cloudflare documents <code>timeoutSeconds</code> as governing when a disconnect creates a <em>new video</em>, and the Stream Live write-up describes a volatile/committed state split so broadcasters can resume after a blip. Neither says whether the WHEP or RTMPS <em>playback</em> connection stays open and starves, or closes. The whole composited tier's no-restart property rests on this.</p>
+            <p class="why" style="margin-top:8px">Ten-minute experiment: attach a player to the playback URL, kill the encoder, watch thirty seconds. If the pull closes, the slate must be driven by reconnect logic rather than by frame starvation &mdash; same outcome, different code, and much harder to retrofit once R2 has hardened.</p>
+            <p class="where">&sect;7.4 &middot; blocks nothing, invalidates much</p>
+          </div>
+          <span class="chip a">Test first</span>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Contract</h3>
+          <span class="n">C1&ndash;C2 &middot; contract and port shape</span>
+        </div>
+
+        <div class="row">
+          <div class="id">C1</div>
+          <div class="body">
+            <p class="claim">QR contract v1 cannot express two credential shapes</p>
+            <p class="why">&sect;7.6 fixes it as &ldquo;the only R3 fact fixed here&rdquo;. SRT is three fields; RTMPS is two. With SRT primary and RTMPS as the automatic fallback the app needs <em>both</em> sets in hand at scan time &mdash; it cannot re-scan a QR code when UDP turns out to be blocked at the ground. So this is no longer a defensive discriminator: v1 must carry both credential sets and say which is preferred, or the fallback cannot happen without a round trip the phone may not have connectivity for.</p>
+            <p class="where">&sect;7.6 &middot; docs/contracts/capture-qr.v1.json</p>
+          </div>
+          <span class="chip">Blocks fallback</span>
+        </div>
+
+        <div class="row">
+          <div class="id">C2</div>
+          <div class="body">
+            <p class="claim">The front-door port hides the endpoint but not the semantics</p>
+            <p class="why">Keeping the credential fields opaque so &ldquo;a front-door swap never breaks deployed phones&rdquo; is right. But &ldquo;holds the input for N seconds after disconnect&rdquo; is now a behavioural clause in that port's contract. A swap to a front door without a hold would silently delete the no-restart property while every field still validates and every deployed phone still connects. Write the window into the interface definition, not just the fields.</p>
+            <p class="where">&sect;7.1 RunnerProvider &middot; the SRT field triple</p>
+          </div>
+          <span class="chip a">Widen the port</span>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Capture app</h3>
+          <span class="n">P1&ndash;P5 &middot; R3 scope, constrains R2</span>
+        </div>
+        <p class="grp-note">The app owns its binding: HaishinKit.swift on iOS, StreamPack on Android, React Native shell. No third-party streaming plugin &mdash; <code>haishin_kit</code> was ruled out on its own maintainer's advice and its Android engine has no SRT. These are the risks that survive that decision, and P1 changes what the soak should prove.</p>
+
+        <div class="row">
+          <div class="id">P1</div>
+          <div class="body">
+            <p class="claim">iOS drops the camera when backgrounded; Android does not</p>
+            <p class="why">Android keeps publishing behind a foreground service with the right <code>foregroundServiceType</code>. iOS will not keep the camera running in the background at all. Over three hours the operator's phone will lock, take a call, or get switched away from &mdash; so on iOS the slate and reconnect path stops being an edge case and becomes a normal operating mode. Either the app prevents idle lock and warns the operator, or &sect;7.4's choreography runs many times per match.</p>
+            <p class="where">R3 scope &middot; interacts with &sect;7.4 and the soak</p>
+          </div>
+          <span class="chip">Not write-once</span>
+        </div>
+
+        <div class="row">
+          <div class="id">P2</div>
+          <div class="body">
+            <p class="claim">The publish loop must live in native code, not in JavaScript</p>
+            <p class="why">If the JS layer supervises the session, a stalled JS thread or a backgrounded app takes the stream with it. Native must own connect, publish, reconnect and protocol fallback, reporting upward at about 1&nbsp;Hz; JS drives the UI and nothing else. This is a design rule rather than a defect, recorded because it is cheap to honour up front and expensive to retrofit &mdash; and because it is the reason React Native's performance profile is not a risk to the video path.</p>
+            <p class="where">R3 native module boundary</p>
+          </div>
+          <span class="chip a">Design rule</span>
+        </div>
+
+        <div class="row">
+          <div class="id">P3</div>
+          <div class="body">
+            <p class="claim">Thermal and battery behaviour over a full match is unvalidated</p>
+            <p class="why">Sustained encode plus radio for three hours throttles most handsets long before charge runs out, and no phone streams an ODI on battery regardless. The app should assume mains or a large PD bank, and 720p30 at the current 3000k is the right ceiling &mdash; but none of this has been measured on the handsets clubs actually own. Framework-independent: Flutter or native would face the identical curve.</p>
+            <p class="where">R3 scope &middot; device matrix</p>
+          </div>
+          <span class="chip w">Unmeasured</span>
+        </div>
+
+        <div class="row">
+          <div class="id">P4</div>
+          <div class="body">
+            <p class="claim">Landscape capture is a known trap in this problem space</p>
+            <p class="why">The one issue ever filed against HaishinKit.dart was #160, &ldquo;preview and outgoing stream remain portrait when device is landscape&rdquo; &mdash; which suggests orientation handling is a genuine trap in these engines rather than one plugin's slip. A tripod at a ground shoots landscape, so this is the only orientation that matters. Prove preview orientation, encoded orientation and rotation metadata separately; they fail independently.</p>
+            <p class="where">R3 scope &middot; precedent: HaishinKit.dart #160</p>
+          </div>
+          <span class="chip w">Prove separately</span>
+        </div>
+
+        <div class="row">
+          <div class="id">P5</div>
+          <div class="body">
+            <p class="claim">No device spike has been run against the chosen engines</p>
+            <p class="why">One afternoon before R3 commits: StreamPack on a real Android handset and HaishinKit.swift on a real iPhone, landscape, publishing three hours into a real Cloudflare input, with the screen locking part-way. Settles P1, P3 and P4 together, and gives the binding estimate a floor. Runs in parallel with R2 &mdash; the soak drives a synthetic source and needs no phone, so nothing here is on R2's critical path.</p>
+            <p class="where">Blocks the R3 estimate, nothing in R2</p>
+          </div>
+          <span class="chip a">Do first</span>
+        </div>
+      </div>
+
+      <div class="grp">
+        <div class="grp-head">
+          <h3>Multi-camera</h3>
+          <span class="n">M1&ndash;M4 &middot; own wave, two decisions due now</span>
+        </div>
+        <p class="grp-note">Not an R2 amendment &mdash; R2 ships single-camera. But M3 and M4 affect artefacts being written this month, so they cannot wait for the wave that owns them.</p>
+
+        <div class="row">
+          <div class="id">M1</div>
+          <div class="body">
+            <p class="claim">N&times; WHEP decode under SwiftShader has never been benched</p>
+            <p class="why">R0 sized the Machine for one software-decoded 720p WebRTC stream. Four, plus page compositing, may not fit an economic guest. The broadcast answer is program-plus-preview &mdash; keep two receivers hot, the rest cold, and accept 1&ndash;2&nbsp;s of WHEP renegotiation when a third is pulled up. That is a bench question of exactly R0's shape and belongs before any multi-cam spec.</p>
+            <p class="where">R0 memo scope &middot; &sect;7.2 guest sizing</p>
+          </div>
+          <span class="chip w">Bench first</span>
+        </div>
+
+        <div class="row">
+          <div class="id">M2</div>
+          <div class="body">
+            <p class="claim">Cross-source capture sync has no mechanism at all</p>
+            <p class="why">Equalising transport latency with <code>jitterBufferTarget</code> aligns <em>arrival</em>, not <em>capture</em>. Independent handset clocks with no genlock mean a cut mid-delivery jumps. Each phone must report an NTP-synced capture timestamp through the session API, folded into its playout target. Handset NTP is accurate to tens of milliseconds; without it the floor is 100&ndash;300&nbsp;ms of visible error.</p>
+            <p class="where">R3 capture app &middot; session API &middot; new field</p>
+          </div>
+          <span class="chip">NTP required</span>
+        </div>
+
+        <div class="row">
+          <div class="id">M3</div>
+          <div class="body">
+            <p class="claim">The session data model is one-to-one and multi-cam is one-to-many</p>
+            <p class="why">Today: one session, one live input, one Machine. Multi-cam: one broadcast, N inputs, one Machine. That reshapes the state machine, credits, the Phone tab, and the QR contract &mdash; which is already being reopened for C1's dual credentials. Add the slot concept while it is open; migrating a shipped one-to-one model later is far more expensive.</p>
+            <p class="where">R1 session model &middot; &sect;7.6 &middot; shares a window with C1</p>
+          </div>
+          <span class="chip">Reshape now</span>
+        </div>
+
+        <div class="row">
+          <div class="id">M4</div>
+          <div class="body">
+            <p class="claim">Multi-camera may belong to Tier A, not Tier B</p>
+            <p class="why">OBS already does multi-camera switching, scenes, audio mixing and replay natively and free. A club with a laptop gets a better production from Tier A today than a multi-cam wave would deliver in Tier B. That may be the honest line between the tiers rather than a gap to close &mdash; and it is a product ruling, not an engineering one, so it should be taken before anyone estimates M1.</p>
+            <p class="where">Product &middot; decide before speccing the wave</p>
+          </div>
+          <span class="chip a">Product call</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Read: R2-compositor.md &middot; _OPEN-QUESTIONS.md &middot; 2026-09-07-streaming-programme-design.md &sect;7.1&ndash;7.6 &middot; Cloudflare Stream Live docs &middot; HaishinKit.dart README, CHANGELOG, podspec, Package.swift, build.gradle and issue #160 &middot; HaishinKit.kt and StreamPack module manifests &middot; pub.dev/packages/haishin_kit.<br>
+    Compiled 10 September 2026. Not checked against the R0 memo, &sect;3.3, &sect;6.4 or _RULES.md, none of which were read.
+  </footer>
+
+</div>
