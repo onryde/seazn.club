@@ -300,6 +300,17 @@ export interface DivisionFixtureLike {
   readonly outcome: unknown;
 }
 
+/** B06a task 4 — the folded state `_tiny`'s single special claims against
+ *  (`{on:"state", path:"phase", equals:"done"}`).
+ *
+ *  Handing this to a fake world makes the SPECIALS oracle vacuous there, the
+ *  same way `echoExpectedBoard` makes the per-match oracle vacuous: the fake
+ *  answers exactly what the pack asserts. That is fine for a test whose
+ *  subject is the import path or the plan chooser, and it is never evidence
+ *  that the specials oracle works — `oracle-specials.test.ts` and the
+ *  wrong-state wiring test carry that. */
+export const TINY_SPECIAL_STATE: Readonly<Record<string, unknown>> = { phase: "done" };
+
 export interface OracleRoutesWorld {
   /** `raw()`'s own handler for the three oracle routes — `undefined` for
    *  any other method/path, so a caller chains it before its own branches. */
@@ -335,6 +346,14 @@ export function makeOracleRoutesWorld(input: {
    *  expected row declares `perSide`. `undefined` means "no summary yet",
    *  which compares as `(absent)` against every declared line. */
   getFixtureSummary?(fixtureId: string): { readonly perSide: readonly { entrantId: string; line: string }[] } | undefined;
+  /** B06a task 4 — the module's folded State, which a special's dotted `state`
+   *  claim indexes into. `undefined` serves `null`, which the comparator then
+   *  reports as `(absent)` against every claim rather than as a pass. */
+  getFixtureModuleState?(fixtureId: string): unknown;
+  /** B06a task 4 — the module's folded State, which a special's dotted `state`
+   *  claim indexes into. `undefined` serves `null`, which the comparator then
+   *  reports as `(absent)` against every claim rather than as a pass. */
+  getFixtureModuleState?(fixtureId: string): unknown;
   /** T5b — `GET /persons/{id}/stats?group=sport`'s response. A SEPARATE
    *  callback from `getPersonStats`, never the same one filtered: the whole
    *  point of the career oracle is that the rollup is a different read of the
@@ -361,7 +380,15 @@ export function makeOracleRoutesWorld(input: {
         const summary = input.getFixtureSummary?.(fixtureId);
         return {
           status: 200,
-          json: { ok: true, data: { status: "decided", last_seq: 0, summary: summary ?? null } },
+          json: {
+            ok: true,
+            data: {
+              status: "decided",
+              last_seq: 0,
+              summary: summary ?? null,
+              state: input.getFixtureModuleState?.(fixtureId) ?? null,
+            },
+          },
         };
       }
 
@@ -469,4 +496,47 @@ export function echoExpectedBoard(args: {
     outcome: e.outcome,
     ...(e.perSide === undefined ? {} : { perSide: e.perSide }),
   }));
+}
+
+/** B06a task 4 — specials subjects satisfying whatever the pack claims.
+ *
+ *  Vacuous by construction, exactly like `echoExpectedBoard`, and for the same
+ *  reason: a suite-level fake would otherwise owe a folded state its sport
+ *  module accepts, purely so an unrelated test can stay green. The specials
+ *  oracle's real coverage is `oracle-specials.test.ts` and the wiring test
+ *  that injects a subject which DISAGREES. */
+export function echoSpecialSubjects(args: {
+  readonly specials: readonly {
+    readonly divisionRef: string;
+    readonly fixtureExtKey: string;
+    readonly claims: readonly Record<string, unknown>[];
+  }[];
+}): ReadonlyMap<string, { outcome: unknown; state: unknown; standings: ReadonlyMap<string, Record<string, number>> }> {
+  const out = new Map<
+    string,
+    { outcome: unknown; state: unknown; standings: ReadonlyMap<string, Record<string, number>> }
+  >();
+  for (const sp of args.specials) {
+    const outcome: Record<string, unknown> = {};
+    const state: Record<string, unknown> = {};
+    const standings = new Map<string, Record<string, number>>();
+    for (const claim of sp.claims) {
+      if (claim.on === "outcome") {
+        for (const field of ["kind", "method", "winner", "loser"]) {
+          if (claim[field] !== undefined) outcome[field] = claim[field];
+        }
+      } else if (claim.on === "state") {
+        // Only flat paths are echoed; a dotted claim would need a nested
+        // object, and no committed pack declares one.
+        state[String(claim.path)] = claim.equals;
+      } else if (claim.on === "standings") {
+        const entrant = String(claim.entrant);
+        const row = standings.get(entrant) ?? {};
+        row[String(claim.field)] = Number(claim.equals);
+        standings.set(entrant, row);
+      }
+    }
+    out.set(`${sp.divisionRef}/${sp.fixtureExtKey}`, { outcome, state, standings });
+  }
+  return out;
 }

@@ -48,6 +48,10 @@
 // `unknown` (see that comparator's own note).
 import { MatchOutcome, ScoreSummary } from "@seazn/engine/core";
 import { raw, type RawResult, type Session } from "./http.ts";
+// The dotted-path reader stage 0 already uses for the same claims — it
+// indexes ARRAYS as well as objects, which a second copy of it here did
+// not, and one authority per fact is the point.
+import { resolveStatePath } from "./validate-pack.ts";
 
 // ---------------------------------------------------------------------------
 // Transport — same narrow, injected, defaulted-to-the-real-thing shape every
@@ -1415,4 +1419,170 @@ export async function fetchFixtureSideLines(
   const parsed = ScoreSummary.safeParse(state.summary);
   if (!parsed.success) return undefined;
   return parsed.data.perSide.map((side) => ({ entrant: side.entrantId, line: side.line }));
+}
+
+// ---------------------------------------------------------------------------
+// 10 — Specials (design §8; B06a task 4)
+// ---------------------------------------------------------------------------
+// The second `expected` field PackSchema declared and nothing compared at run
+// time. A special is a fixture plus a list of typed CLAIMS — the folded
+// outcome, a dotted path into the module's own state, or a standings cell —
+// and every mechanic the bench exists to witness rides this one shape: a super
+// over, a shootout, a DLS revision, a retirement, an expedite.
+//
+// A claim this runner cannot evaluate is UNSUPPORTED, never satisfied. Failing
+// closed is the whole point: a pack author who writes an assertion nothing
+// makes must not get a green run for it.
+
+/** Entrant refs already resolved to ids by the caller. */
+export type ResolvedSpecialClaim =
+  | { readonly on: "outcome"; readonly kind?: string; readonly method?: string; readonly winner?: string; readonly loser?: string }
+  | { readonly on: "state"; readonly path: string; readonly equals: unknown }
+  | { readonly on: "standings"; readonly entrant: string; readonly field: string; readonly equals: number }
+  | { readonly on: "squads"; readonly entrant: string; readonly field: string; readonly exemption?: string; readonly equals: number };
+
+export interface ResolvedSpecial {
+  readonly kind: string;
+  readonly divisionRef: string;
+  readonly fixtureExtKey: string;
+  readonly claims: readonly ResolvedSpecialClaim[];
+}
+
+/** Everything one special's claims can be checked against, gathered by the
+ *  caller: the fixture's folded outcome and state, and its stage's standings
+ *  rows keyed by entrant id. */
+export interface SpecialSubject {
+  readonly outcome: unknown;
+  readonly state: unknown;
+  readonly standings: ReadonlyMap<string, Record<string, number>>;
+}
+
+export interface SpecialFailure {
+  readonly fixtureExtKey: string;
+  /** `outcome.winner`, `state.sets.0.tiebreak`, `standings.<id>.won`, or
+   *  `(subject)` when the fixture itself was never found. */
+  readonly claim: string;
+  readonly expected: string;
+  readonly actual: string;
+}
+
+export interface SpecialsComparison {
+  /** How many SPECIALS were declared. */
+  readonly specials: number;
+  /** How many CLAIMS were actually evaluated — the number that shrinks if a
+   *  future change quietly stops checking. */
+  readonly checked: number;
+  readonly failures: readonly SpecialFailure[];
+  readonly unsupported: readonly { readonly fixtureExtKey: string; readonly on: string }[];
+}
+
+function show(value: unknown): string {
+  if (value === undefined) return "(absent)";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+export function compareSpecials(
+  expected: readonly ResolvedSpecial[],
+  subjects: ReadonlyMap<string, SpecialSubject>,
+): SpecialsComparison {
+  const failures: SpecialFailure[] = [];
+  const unsupported: { fixtureExtKey: string; on: string }[] = [];
+  let checked = 0;
+
+  for (const s of expected) {
+    const subject = subjects.get(`${s.divisionRef}/${s.fixtureExtKey}`);
+    if (subject === undefined) {
+      // Never "absent, therefore skipped": a declared special whose fixture the
+      // run never produced is precisely the defect this oracle exists for.
+      failures.push({
+        fixtureExtKey: s.fixtureExtKey,
+        claim: "(subject)",
+        expected: `${s.kind} on ${s.divisionRef}/${s.fixtureExtKey}`,
+        actual: "(absent)",
+      });
+      continue;
+    }
+
+    for (const claim of s.claims) {
+      if (claim.on === "outcome") {
+        const parsed = MatchOutcome.safeParse(subject.outcome);
+        const got = parsed.success ? (parsed.data as Record<string, unknown>) : undefined;
+        for (const field of ["kind", "method", "winner", "loser"] as const) {
+          const want = claim[field];
+          if (want === undefined) continue;
+          checked += 1;
+          const actual = got?.[field];
+          if (actual !== want) {
+            failures.push({
+              fixtureExtKey: s.fixtureExtKey,
+              claim: `outcome.${field}`,
+              expected: show(want),
+              actual: show(actual),
+            });
+          }
+        }
+        continue;
+      }
+
+      if (claim.on === "state") {
+        checked += 1;
+        const { found, value } = resolveStatePath(subject.state, claim.path);
+        const matched = found && JSON.stringify(value) === JSON.stringify(claim.equals);
+        if (!matched) {
+          failures.push({
+            fixtureExtKey: s.fixtureExtKey,
+            claim: `state.${claim.path}`,
+            expected: show(claim.equals),
+            actual: found ? show(value) : "(absent)",
+          });
+        }
+        continue;
+      }
+
+      if (claim.on === "standings") {
+        checked += 1;
+        const row = subject.standings.get(claim.entrant);
+        const actual = row?.[claim.field];
+        if (actual !== claim.equals) {
+          failures.push({
+            fixtureExtKey: s.fixtureExtKey,
+            claim: `standings.${claim.entrant}.${claim.field}`,
+            expected: show(claim.equals),
+            actual: show(actual),
+          });
+        }
+        continue;
+      }
+
+      // `squads` — no live source is wired. Recorded, never satisfied.
+      unsupported.push({ fixtureExtKey: s.fixtureExtKey, on: claim.on });
+    }
+  }
+
+  return { specials: expected.length, checked, failures, unsupported };
+}
+
+/** The folded module state for one fixture, for a special's `state` claims.
+ *
+ *  `GET /api/v1/fixtures/{id}/state` returns `{status, last_seq, summary,
+ *  state}` — `state` is the module's own folded State, which is what a dotted
+ *  claim path indexes into. `null` when nothing has been folded yet, which the
+ *  comparator then reports as `(absent)` against every claim rather than as a
+ *  pass. */
+export async function fetchFixtureModuleState(
+  base: string,
+  session: Session,
+  fixtureId: string,
+  transport?: OracleTransport,
+): Promise<unknown> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/fixtures/${fixtureId}/state`;
+  const result = await t.raw(base, session, path, "GET");
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: fixture state refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  return dataOf<{ readonly state: unknown }>(result, path, "fixture state").state;
 }

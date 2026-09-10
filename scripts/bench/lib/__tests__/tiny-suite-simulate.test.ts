@@ -38,6 +38,8 @@ import {
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
   echoExpectedBoard,
+  TINY_SPECIAL_STATE,
+  echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
@@ -269,6 +271,9 @@ function fakeServer(
   });
 
   const oracleRoutes = makeOracleRoutesWorld({
+    // `_tiny` declares one special; without a folded state its
+    // `phase` claim reads as absent and reds every run in this file.
+    getFixtureModuleState: () => TINY_SPECIAL_STATE,
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       if (divisionId === undefined) return undefined;
@@ -705,6 +710,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");
@@ -816,6 +822,9 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-badminton/s-badminton-league tie-order cascade",
       "oracle: d-tiebreak/s-tiebreak-league standings table",
       "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
+      // B06a task 4 — one row for the whole pack, after the tables loop
+      // (a standings claim reads rows that loop has already fetched).
+      "oracle: specials",
       "oracle: d-tiny leaderboard (scores)",
       "oracle: d-tiny person cards (scores)",
       "oracle: d-tiny leaderboard (points)",
@@ -832,7 +841,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
       true, true, true, true, true, true, true, true, true, true,
       true, true, true, true, true, true, true, true, true, true,
-      true, true, true,
+      true, true, true, true,
     ]);
     // The genuinely tied pair (echo/golf) was actually CHECKED, not merely
     // present-and-skipped — the whole point of an ordering-differential
@@ -917,8 +926,13 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // intent is unchanged: no OTHER oracle silently acquired one.
     const perMatch = runtimeOracles.filter((o) => o.name.endsWith("per-match results"));
     expect(perMatch.map((o) => o.verdict)).toEqual(new Array(perMatch.length).fill("pass"));
+    const specialsRow = runtimeOracles.filter((o) => o.name === "oracle: specials");
+    expect(specialsRow.map((o) => o.verdict)).toEqual(["pass"]);
     const untouched = runtimeOracles.filter(
-      (o) => !o.name.endsWith("tie-order cascade") && !o.name.endsWith("per-match results"),
+      (o) =>
+        !o.name.endsWith("tie-order cascade") &&
+        !o.name.endsWith("per-match results") &&
+        o.name !== "oracle: specials",
     );
     expect(untouched.map((o) => o.verdict)).toEqual(new Array(untouched.length).fill(undefined));
 
@@ -1037,6 +1051,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     // The mutated pack still reaches the live run at all — stage 0 does NOT
@@ -1056,6 +1071,53 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
+  });
+
+  // B06a task 4 — the specials oracle's DISCRIMINATING wiring test, and the
+  // reason `echoSpecialSubjects` above is never evidence: it satisfies every
+  // claim by construction. This one hands back a subject that DISAGREES with
+  // the pack on one claim and asserts the run reds naming it.
+  it("B06a T4 — a special whose claim does NOT hold reds the run and names the claim", async () => {
+    const { transport, sql } = fakeServer();
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: ({ specials }) => {
+        const honest = echoSpecialSubjects({ specials });
+        // `_tiny`'s single special claims `state.phase === "done"`. Serve a
+        // fixture that is still live instead.
+        const tampered = new Map(honest);
+        for (const [key, subject] of honest) {
+          tampered.set(key, { ...subject, state: { ...(subject.state as object), phase: "live" } });
+        }
+        return tampered;
+      },
+    });
+
+    const specialsOracle = (report.oracles ?? []).find((o) => o.name === "oracle: specials");
+    expect(specialsOracle).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(report.gate).toBe("red");
+    const message = (report.errors ?? []).find((e) => e.includes("special claim failed"));
+    expect(message).toContain("state.phase");
+    expect(message).toContain("expected done");
+    expect(message).toContain("got live");
+    // The OTHER claims on that special still passed, so the failure is one
+    // claim rather than the whole subject being lost.
+    expect(specialsOracle?.detail).toContain("1 failed");
   });
 
   // B06a task 3 — the per-match oracle's DISCRIMINATING wiring test.
@@ -1151,6 +1213,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1188,6 +1251,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const tableOracles = (report.oracles ?? []).filter((o) => o.name.endsWith("standings table"));
@@ -1236,6 +1300,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const leaderboardOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle: d-tiny leaderboard"));
@@ -1275,6 +1340,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1319,6 +1385,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1370,6 +1437,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1405,6 +1473,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1442,6 +1511,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1482,6 +1552,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1527,6 +1598,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1596,6 +1668,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const oracles = report.oracles ?? [];
@@ -1665,6 +1738,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     const cascades = (report.oracles ?? []).filter((o) => o.name.endsWith("tie-order cascade"));
@@ -1719,6 +1793,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1777,6 +1852,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");
@@ -1820,6 +1896,7 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("red");

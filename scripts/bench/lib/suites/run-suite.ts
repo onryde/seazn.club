@@ -118,9 +118,14 @@ import {
   type Pack,
   type PackDivision,
   type PackExpectedMatch,
+  type PackClaim,
   type PackExpectedOutcome,
   type PackStream,
 } from "../pack-schema.ts";
+import { bootRegistry, resolveDivisionCfg } from "../validate-pack.ts";
+// The engine's own outcome union: a specials standings claim derives the
+// fixture delta from the PRODUCT's folded outcome, parsed rather than cast.
+import { MatchOutcome } from "@seazn/engine/core";
 // B04 — the five modules this suite wires together. Each is CLOSED and owns
 // one layer: `schedule.ts` drives the seven steps, `checker.ts` recomputes the
 // rules independently of the product, `certificate.ts` runs §6.3's protocol,
@@ -226,10 +231,15 @@ import {
   type PersonStatsWire,
   type SuspensionFixtureSheet,
   compareMatches,
+  compareSpecials,
   fetchDivisionFixtures,
+  fetchFixtureModuleState,
   fetchFixtureSideLines,
   type ActualMatchRow,
   type ExpectedMatchRow,
+  type ResolvedSpecial,
+  type ResolvedSpecialClaim,
+  type SpecialSubject,
 } from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
@@ -604,6 +614,15 @@ export interface PackSuiteInput {
     readonly divisionRef: string;
     readonly expected: readonly ExpectedMatchRow[];
   }) => readonly ActualMatchRow[] | Promise<readonly ActualMatchRow[]>;
+  /** B06a task 4 — the specials oracle's subjects, injectable for the same
+   *  reason `matchBoard` is, and for one more: a standings claim's subject is
+   *  the fixture's own `StandingsDelta`, which the ENGINE derives from the
+   *  product's folded state. A fake world would therefore have to produce a
+   *  state its sport module accepts, which is a far larger fiction than the
+   *  test needs. Unset in production. */
+  specialSubjects?: (args: {
+    readonly specials: readonly ResolvedSpecial[];
+  }) => ReadonlyMap<string, SpecialSubject> | Promise<ReadonlyMap<string, SpecialSubject>>;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -1362,6 +1381,84 @@ function resolveExpectedOutcome(
   if (loser === undefined) unresolved.push(outcome.loser);
   if (winner === undefined || loser === undefined) return undefined;
   return { kind: "win", winner, loser, ...(outcome.method === undefined ? {} : { method: outcome.method }) };
+}
+
+/** A special's claims carry PACK refs; `compareSpecials` takes resolved ids. */
+function resolveSpecialClaim(
+  claim: PackClaim,
+  entrantIdByRef: ReadonlyMap<string, string>,
+  unresolved: string[],
+): ResolvedSpecialClaim {
+  if (claim.on === "state") return claim;
+  if (claim.on === "outcome") {
+    const mapRef = (ref: string | undefined): string | undefined => {
+      if (ref === undefined) return undefined;
+      const id = entrantIdByRef.get(ref);
+      if (id === undefined) unresolved.push(ref);
+      return id;
+    };
+    return {
+      on: "outcome",
+      ...(claim.kind === undefined ? {} : { kind: claim.kind }),
+      ...(claim.method === undefined ? {} : { method: claim.method }),
+      ...(claim.winner === undefined ? {} : { winner: mapRef(claim.winner) }),
+      ...(claim.loser === undefined ? {} : { loser: mapRef(claim.loser) }),
+    };
+  }
+  const id = entrantIdByRef.get(claim.entrant);
+  if (id === undefined) unresolved.push(claim.entrant);
+  return { ...claim, entrant: id ?? claim.entrant };
+}
+
+/** The fixture's own `StandingsDelta` pair, keyed by entrant id.
+ *
+ *  Returns an EMPTY map when the module, cfg or fold cannot be resolved, which
+ *  `compareSpecials` then reports as a failed claim naming the missing cell —
+ *  never as a pass. Every such case also pushes a warning saying why. */
+function specialStandingsDelta(
+  pack: Pack,
+  divisionRef: string,
+  outcome: unknown,
+  state: unknown,
+  warnings: string[],
+): ReadonlyMap<string, Record<string, number>> {
+  const empty = new Map<string, Record<string, number>>();
+  const division = pack.divisions.find((d) => d.ref === divisionRef);
+  if (division === undefined) return empty;
+  const parsedOutcome = MatchOutcome.safeParse(outcome);
+  if (!parsedOutcome.success || state === null || state === undefined) {
+    warnings.push(
+      `oracle: special standings claim in "${divisionRef}" has no folded outcome/state to derive a delta from`,
+    );
+    return empty;
+  }
+  let sportModule;
+  try {
+    sportModule = bootRegistry().get(division.sportKey, division.moduleVersion);
+  } catch {
+    warnings.push(`oracle: no engine module "${division.sportKey}@${division.moduleVersion}" for a specials claim`);
+    return empty;
+  }
+  const resolvedCfg = resolveDivisionCfg(sportModule, division);
+  if (!resolvedCfg.ok) {
+    warnings.push(`oracle: division "${divisionRef}" cfg could not be resolved for a specials claim`);
+    return empty;
+  }
+  const stageKind = division.stages[0]?.kind;
+  if (stageKind === undefined) return empty;
+  try {
+    const pair = sportModule.standingsDelta(parsedOutcome.data, resolvedCfg.cfg, { kind: stageKind }, state);
+    return new Map(pair.map((delta) => [delta.entrantId, delta as unknown as Record<string, number>]));
+  } catch (err) {
+    // Fails closed: an empty map makes every standings claim report its
+    // cell as absent, which reds. The warning says why, so the red is
+    // diagnosable rather than mysterious.
+    warnings.push(
+      `oracle: ${division.sportKey} could not derive a standings delta for a specials claim in "${divisionRef}" — ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+    return empty;
+  }
 }
 
 export async function runPackSuite(
@@ -2993,6 +3090,11 @@ export async function runPackSuite(
       // declares `perSide` — a 95-match suite must not pay 95 extra round
       // trips to compare scorelines no pack declared.
       const matchesByDivision = new Map<string, PackExpectedMatch[]>();
+      // Captured as the per-match oracle goes, and read by the specials block
+      // below: an outcome claim asserts the same folded outcome the per-match
+      // oracle just compared, so a second fetch would be a second source of
+      // truth for one fact.
+      const boardByDivision = new Map<string, readonly ActualMatchRow[]>();
       for (const m of pack.expected.matches) {
         const list = matchesByDivision.get(m.divisionRef) ?? [];
         list.push(m);
@@ -3031,6 +3133,7 @@ export async function runPackSuite(
         }
         if (input.matchBoard !== undefined) {
           const injected = await input.matchBoard({ divisionRef, expected: expectedRows });
+          boardByDivision.set(divisionRef, injected);
           reportMatchOracle(divisionRef, expectedRows, injected);
           continue;
         }
@@ -3056,9 +3159,11 @@ export async function runPackSuite(
             ...(perSide === undefined ? {} : { perSide }),
           });
         }
+        boardByDivision.set(divisionRef, actualRows);
         reportMatchOracle(divisionRef, expectedRows, actualRows);
       }
 
+      const standingsByDivision = new Map<string, ReadonlyMap<string, Record<string, number>>>();
       for (const table of pack.expected.tables) {
         const tableStageId = seeded.stageIdByRef.get(table.stageRef);
         if (tableStageId === undefined) {
@@ -3100,6 +3205,12 @@ export async function runPackSuite(
         // into) still reds via `actual.length === expected.length`, never a
         // vacuous pass.
         const standingsWire = await fetchStandings(base, s, tableStageId, table.poolKey, input.oracleTransport);
+        // Kept for the specials block below — a standings claim reads the same
+        // rows this table oracle just compared, never a second fetch.
+        standingsByDivision.set(
+          table.divisionRef,
+          new Map(standingsWire.rows.map((row) => [row.entrantId, row as unknown as Record<string, number>])),
+        );
         const tableCheck = compareStandings(expectedRows, standingsWire.rows);
         // B05 T6 fix 1 — a metric the pack does NOT declare is not a failure
         // (`compareMetrics`), but it is not nothing either: the live rows'
@@ -3198,6 +3309,92 @@ export async function runPackSuite(
           }
         }
       }
+
+      // B06a task 4 — specials. Every mechanic the bench exists to witness (a
+      // super over, a shootout, a DLS revision, a retirement) is declared as a
+      // fixture plus typed claims, and none of them were compared at run time.
+      //
+      // Subjects are assembled from what the run ALREADY fetched: the outcome
+      // from the per-match board above, the standings from the table oracle's
+      // own rows. Only the folded state costs a request, one per special, and
+      // packs declare few.
+      if (pack.expected.specials.length > 0) {
+        const specialSubjects = new Map<string, SpecialSubject>();
+        const resolvedSpecials: ResolvedSpecial[] = [];
+        const unresolvedSpecialRefs: string[] = [];
+        for (const sp of pack.expected.specials) {
+          if (input.specialSubjects !== undefined) {
+            resolvedSpecials.push({
+              kind: sp.kind,
+              divisionRef: sp.divisionRef,
+              fixtureExtKey: sp.fixtureExtKey,
+              claims: sp.claims.map((claim) => resolveSpecialClaim(claim, seeded.entrantIdByRef, unresolvedSpecialRefs)),
+            });
+            continue;
+          }
+          const specialKey = `${sp.divisionRef}/${sp.fixtureExtKey}`;
+          const specialFixtureId = seeded.fixtureIdByKey.get(fixtureKey(sp.divisionRef, sp.fixtureExtKey));
+          const specialOutcome = boardByDivision
+            .get(sp.divisionRef)
+            ?.find((row) => row.extKey === sp.fixtureExtKey)?.outcome;
+          if (specialFixtureId !== undefined) {
+            const specialState = await fetchFixtureModuleState(base, s, specialFixtureId, input.oracleTransport);
+            specialSubjects.set(specialKey, {
+              outcome: specialOutcome,
+              state: specialState,
+              // NOT the cumulative table: `PackClaim`'s own doc is explicit
+              // that a standings claim reads THIS fixture's `StandingsDelta`,
+              // because a special names one fixture and conflating the two
+              // would make a claim mean different things in a one-round and a
+              // six-round stage. The delta is computed by the ENGINE from the
+              // PRODUCT's own folded outcome and state — the product supplies
+              // the facts, the engine supplies the arithmetic.
+              standings: specialStandingsDelta(pack, sp.divisionRef, specialOutcome, specialState, warnings),
+            });
+          }
+          resolvedSpecials.push({
+            kind: sp.kind,
+            divisionRef: sp.divisionRef,
+            fixtureExtKey: sp.fixtureExtKey,
+            claims: sp.claims.map((claim) => resolveSpecialClaim(claim, seeded.entrantIdByRef, unresolvedSpecialRefs)),
+          });
+        }
+        if (unresolvedSpecialRefs.length > 0) {
+          errors.push(
+            `oracle: expected.specials names entrant ref(s) with no resolved id: ${unresolvedSpecialRefs.join(", ")}`,
+          );
+        }
+        const injectedSubjects =
+          input.specialSubjects === undefined
+            ? undefined
+            : await input.specialSubjects({ specials: resolvedSpecials });
+        const specialCheck = compareSpecials(resolvedSpecials, injectedSubjects ?? specialSubjects);
+        const specialsClean = specialCheck.failures.length === 0 && specialCheck.unsupported.length === 0;
+        const specialsVerdict = specialCheck.checked === 0 ? "no_subject" : specialsClean ? "pass" : "fail";
+        oracles.push({
+          name: "oracle: specials",
+          passed: specialsClean,
+          subject: specialCheck.checked > 0,
+          verdict: specialsVerdict,
+          detail:
+            `${specialCheck.specials} special(s), ${specialCheck.checked} claim(s) checked, ` +
+            `${specialCheck.failures.length} failed, ${specialCheck.unsupported.length} unsupported`,
+        });
+        log.info(oracleLogFields("specials", specialsVerdict), "oracle_checked");
+        for (const f of specialCheck.failures) {
+          errors.push(
+            `oracle: special claim failed on fixture "${f.fixtureExtKey}" — ${f.claim}: ` +
+              `expected ${f.expected}, got ${f.actual}`,
+          );
+        }
+        for (const u of specialCheck.unsupported) {
+          // Never silent: a claim nothing evaluates is an assertion the pack
+          // author believes is being made.
+          errors.push(
+            `oracle: special claim on "${u.on}" (fixture "${u.fixtureExtKey}") cannot be evaluated by this runner`,
+          );
+        }
+      }
     }
 
     // B05 T4b — the leaderboard comparator (design §8, oracle.ts's
@@ -3215,6 +3412,7 @@ export async function runPackSuite(
       // every board they are named on: `p-ana` is on all four of `_tiny`'s
       // boards and is fetched once.
       const personStatsCache = new Map<string, PersonStatsWire>();
+
       for (const board of pack.expected.leaderboards) {
         const leaderboardDivisionId = seeded.divisionIdByRef.get(board.divisionRef);
         if (leaderboardDivisionId === undefined) {

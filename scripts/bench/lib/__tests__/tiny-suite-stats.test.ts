@@ -37,6 +37,8 @@ import {
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
   echoExpectedBoard,
+  TINY_SPECIAL_STATE,
+  echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
@@ -136,6 +138,9 @@ function fakeServer(opts: { statsPlayerGranted: boolean }): {
   });
 
   const oracleRoutes = makeOracleRoutesWorld({
+    // `_tiny` declares one special; without a folded state its
+    // `phase` claim reads as absent and reds every run in this file.
+    getFixtureModuleState: () => TINY_SPECIAL_STATE,
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
@@ -478,6 +483,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");
@@ -535,6 +541,7 @@ describe("runTinySuite — B03 T6b player-stats baseline wiring", () => {
       advanceTransport: transport,
       oracleTransport: transport,
       matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
     });
 
     expect(report.gate).toBe("green");
