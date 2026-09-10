@@ -1731,6 +1731,7 @@ export type DictionaryKey =
   | "divset.news.off"
   | "divset.news.on"
   | "divset.news.saved"
+  | "divset.news.timing"
   | "divset.news.title"
   | "divset.news.toggle"
   | "divset.notice.formatChanged"

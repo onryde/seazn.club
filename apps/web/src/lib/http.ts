@@ -96,9 +96,9 @@ function handlerInner<T>(fn: () => Promise<T>) {
         // the client render a contextual paywall (<UpgradeGate>). `extra`
         // merges in machine-readable hints — e.g. a purchase offer (v17 gap
         // #293). NOTE this is the ONLY branch in this file that forwards
-        // `extra`: the generic HttpError branch below returns a bare
-        // { ok, error } and drops both `code` and `extra` (only the /api/v1
-        // envelope keeps those). Do not read this as a file-wide convention.
+        // `extra`: the generic HttpError branch below forwards
+        // `code` when one was set but still drops `extra` (only the /api/v1
+        // envelope keeps `extra`). Do not read this as a file-wide convention.
         return NextResponse.json(
           {
             ok: false,
@@ -116,8 +116,18 @@ function handlerInner<T>(fn: () => Promise<T>) {
           Sentry.captureException(err);
           log.error({ err, status: err.status, code: err.code }, "handler: HttpError reached 500");
         }
+        // `code` is forwarded when the thrower set one; `extra` still is not
+        // (see the 402 branch above). Throwers that bother to pass a code mean
+        // it to be acted on: /api/claims/[token] documents CLAIM_INVALID /
+        // CLAIM_EXPIRED / CLAIM_REVOKED / CLAIM_CLAIMED as the four states a
+        // client distinguishes, and until this line they were built by
+        // `person-claims.ts` and then dropped here, so no HTTP client could
+        // tell "expired" from "already claimed" — only the /claim page could,
+        // because it calls the usecase directly and never crosses this
+        // envelope. Omitted entirely when undefined, so the shape is unchanged
+        // for the throwers that pass no code.
         return NextResponse.json(
-          { ok: false, error: err.message },
+          { ok: false, error: err.message, ...(err.code ? { code: err.code } : {}) },
           { status: err.status },
         );
       }

@@ -3233,6 +3233,7 @@
   "divset.news.on": "On",
   "divset.news.off": "Off",
   "divset.news.note": "Drafts wait in your News tab for review — nothing publishes automatically.",
+  "divset.news.timing": "Drafts are written as results are scored — switching this on later will not create posts for fixtures already played. Turn it on before play starts.",
   "divset.news.saved": "News setting saved",
   "board.ai.trace.aria.schedule": "Schedule verification trace",
   "board.ai.trace.aria.officials": "Officials verification trace",

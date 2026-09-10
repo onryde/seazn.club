@@ -3233,6 +3233,7 @@
   "divset.news.on": "Aan",
   "divset.news.off": "Uit",
   "divset.news.note": "Concepten wachten op je controle in het tabblad Nieuws — er wordt niets automatisch gepubliceerd.",
+  "divset.news.timing": "Concepten worden geschreven zodra resultaten worden ingevoerd: dit later inschakelen maakt geen berichten voor wedstrijden die al gespeeld zijn. Zet het aan voordat het spelen begint.",
   "divset.news.saved": "Nieuwsinstelling opgeslagen",
   "board.ai.trace.aria.schedule": "Verificatiespoor van het schema",
   "board.ai.trace.aria.officials": "Verificatiespoor van officials",

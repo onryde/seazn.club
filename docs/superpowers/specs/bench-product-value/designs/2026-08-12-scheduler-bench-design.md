@@ -696,11 +696,31 @@ overridable with a reason against a `suspension.overridden` ledger row, behind
 the paid `discipline.enforced` flag so an org that never bought discipline sees
 no change.
 
-## 18. Appendix — product findings surfaced by the B06a build (no issues filed)
+## 18. Appendix — product findings surfaced by the B06a build
 
 Every line below was found by BUILDING against the product, and every one is
-pinned to a read of the tree rather than to a grep. Nothing here is filed;
-this appendix is the record, and the owner decides what becomes a ticket.
+pinned to a read of the tree rather than to a grep.
+
+**All six were fixed on 2026-09-10** on the owner's instruction, in four PRs.
+No issues were filed; the PRs are the record.
+
+| § | Fix | PR |
+|---|---|---|
+| 18.1 | `lib/dev-links.ts` — the send outcome no longer decides exposure; `AUTH_DEV_LINKS=1` is an explicit opt-in for production-mode harnesses | #763 |
+| 18.2 | `StageConfig` — key set closed, values left to their owning authority | #765 |
+| 18.3 | `lib/http.ts` forwards `code` on the non-v1 envelope | #766 |
+| 18.4 | `divset.news.timing` warning in `division-settings.tsx`, both branches | #766 |
+| 18.5 | `assertOneOf` in `http.ts`; posts AND suspensions 400 an unrecognised `?status=` | #764 |
+| 18.6 | divergence pinned from both ends in `org-posts.test.ts` | #766 |
+
+Two corrections to what is written below, found while fixing them. **18.5
+understated its reach**: `GET /divisions/{id}/suspensions` carried the
+byte-identical defect and is not mentioned. Three of the five enum query params
+in the v1 API were already correct — these two were what an earlier pass
+(RS005 W1b) missed. **18.6 overstated its**: `published_at` IS exposed
+(`api-v1/posts.ts:23`) and IS stamped once, so first publication is observable
+by an API client; what is not observable is each publish TRANSITION, and the
+real hazard is that the two definitions disagree on archive→republish.
 
 ### 18.1 A conditional authentication bypass (owner-approved for a fix, 2026-09-10)
 
@@ -736,7 +756,15 @@ level down: a misspelled `byes` or `slotOrder` inside `config` is accepted,
 silently dropped, and the product seeds its own draw. The bench cannot tell
 that apart from a draw it asked for.
 
-A separate, owner-approved PR types those two fields.
+FIXED in #765, and wider than "those two fields": typing only `byes` and
+`slotOrder` would catch a wrong TYPE on two keys and not the misspelling this
+finding is about, which only a closed key set catches. `StageConfig` closes all
+22 keys (derived by enumerating every reader and writer — `CreateStage` is the
+only client write path, so an omitted key becomes unreachable) while leaving
+values owned by the engine or a sport module unvalidated. That also settles the
+bench's position rather than colliding with it: `pack-schema.ts:456` kept stage
+config opaque to avoid a second copy of this vocabulary, and a strict product
+gives it that validation without the copy.
 
 ### 18.3 The claim invite was unreachable, not merely unbuilt
 
