@@ -20,8 +20,8 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | 4 — `compareSpecials` | **COMMITTED** `04f302798` |
 | 5 — provenance writer | **COMMITTED** `aadfcf30a` |
 | 6 — claim accept (§9 P2) | **COMMITTED** `1e1289c06`, `ae2d6f914`, `8da28fd25`, `734f16dbe` |
-| 7 — news drafts + publish (§9 P6) | **NEXT** — routes being re-pinned |
-| 8 — doc corrections | not started |
+| 7 — news drafts + publish (§9 P6) | **COMMITTED** `5196b5408`, `69e846945`, `e90218292` |
+| 8 — doc corrections | **NEXT** |
 | 9 — live run, both placement legs | not started — **needs a local env; orchestrator only, never a subagent (600s watchdog)** |
 
 ## Gate numbers, in order, so a regression is visible
@@ -35,6 +35,7 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | after task 4 | 40 | 1430/1430 | 0 |
 | after task 5 | 41 | 1438/1438 | 0 |
 | after task 6 | 42 | 1457/1457 | 0 |
+| after task 7 | 42 | 1474/1474 | 0 |
 
 Gate command (the apps/web suite and `turbo` never see `scripts/bench`):
 
@@ -153,6 +154,46 @@ HTTP-observable. Assert the predicate by proxy: a second publish must not move
 `divisions.auto_posts` and `hasFeature("news.auto")`, or `drafted` is
 legitimately 0 and the step proves nothing. A local server posts to LIVE
 PostHog, so do not loop the publish step.
+
+## Task 7 findings (PR body, after the fifteen above)
+
+16. **The plan claimed two preconditions for drafting; there are five**, in
+    order — the event decides or voids (`scoring.ts:129`), `auto_posts` is true
+    (`:353-356`, re-read `org-posts.ts:479`), the org holds `news.auto`
+    (`:480`), and the fixture is decided/finalized/forfeited (`:483-485`). Miss
+    one and the product drafts nothing and says nothing about why.
+17. **`PATCH /divisions/{id}` refuses `auto_posts: true` without `news.auto`**
+    (`usecases/divisions.ts:652-654`), and drafting is a side effect of
+    FOLDING, so a run that met that refusal later could not recover. The enable
+    step therefore runs after seeding and BEFORE the first fold, and
+    `news.auto` joins the plan SELECTION rather than being tested against a
+    plan already chosen — B03 review F1(a)'s bug, one capability over. Read
+    from the LIVE catalog: V295 seeded it, V393 flipped `community` on, V396
+    flipped it back off, so the migrations alone give three answers.
+18. **`GET /orgs/{id}/posts?status=` silently ignores an unrecognised status**
+    (`route.ts:19`) instead of answering 400 — a typo returns every post and a
+    caller trusting the filter counts published rows as drafts.
+19. **A post carries no fixture id on the wire**, but `auto_source` does
+    (`org-posts.ts:509-510`) — the only reason publishing NAMED fixtures works.
+20. **The fire-once effect is analytics-only.** `shouldFirePostPublished`
+    (`:317-318`) fires a PostHog `captureServer` call and nothing else — no
+    row, no outbox, no webhook — so it is asserted BY PROXY: `published_at` is
+    assigned only when null (`:276,282`), so a republish must not move it.
+21. **Two placement facts, each worth a red.** The news step must run LAST
+    (before the advancement block it reported "no draft for fx-8" on a run
+    where the product was correct — `_tiny`'s playoff folds there). And
+    `seeded.fixtureIdByKey` is keyed by `fixtureKey()`
+    (`JSON.stringify([divisionRef, extKey])`) — a hand-built delimiter key
+    misses EVERY entry SILENTLY, leaving two oracles reporting no subject,
+    which reads exactly like a suite that legitimately drafted nothing.
+
+Mutation sweep, 5 mutants: N2/N4/N6 killed first pass; **N3 and N5 SURVIVED**
+and were decoration — the status-filter guard had a fake that honoured the
+filter itself, and the "rest stay draft" conjunct had no case where the run
+published everything. Both closed with a knob, then killed.
+
+**Process error, twice now:** `git checkout -- scripts/bench` to revert a
+mutant ALSO reverts uncommitted work in that tree. Commit before sweeping.
 
 ## QUEUED — owner-approved, to start after T7 (2026-09-10)
 
