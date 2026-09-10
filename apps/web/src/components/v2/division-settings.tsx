@@ -1054,6 +1054,16 @@ export function DivisionSettings({
         ) : (
           <UpgradeGate feature="news.auto" viewerPlan={viewerPlan} />
         )}
+        {/* Shown in BOTH branches, deliberately. Drafting is a side effect of
+            FOLDING a result (`refreshNews`, usecases/scoring.ts:132), so an org
+            that turns this on after play has started gets nothing for what is
+            already scored, and re-folding is not something anyone may do to
+            recover. The org that most needs the warning is the one still
+            looking at the UpgradeGate — it has to know the entitlement matters
+            BEFORE scoring, not at the moment it flips the toggle. */}
+        <p className="text-[11px] text-amber-700" data-testid="auto-posts-timing">
+          {msg("divset.news.timing")}
+        </p>
         <p className="text-[11px] text-slate-400">{msg("divset.news.note")}</p>
       </Group>
 

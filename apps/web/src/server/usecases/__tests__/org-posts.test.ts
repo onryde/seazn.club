@@ -20,6 +20,7 @@ import {
   publicPosts,
   publicPost,
   draftPostsForDecidedFixture,
+  shouldFirePostPublished,
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
 import { putLineup, getLineup } from "../fixtures";
@@ -225,6 +226,45 @@ describe.skipIf(!HAS_DB)("org-posts CRUD", () => {
     });
     expect(renamed.title).toBe("Totally New Headline");
     expect(renamed.slug).toBe("opening-weekend");
+  });
+
+  it("a republish from archived does NOT move published_at, though analytics counts it", async () => {
+    // Two answers to "was this published", and they disagree on exactly one
+    // path — deliberately, but nothing said so until this test.
+    //
+    // `shouldFirePostPublished("archived", "publish")` is TRUE, so PostHog
+    // records a second post_published. `published_at` is stamped only while
+    // `neverPublished` (org-posts.ts, the `action === "publish"` branch), so
+    // it does NOT move. Analytics counts publish TRANSITIONS; `published_at`
+    // records FIRST publication and is frozen because the slug is frozen to it.
+    //
+    // Both are right for their own question. The hazard is a downstream
+    // feature picking one while meaning the other — a digest keyed on
+    // `published_at` silently skips a republished post, and a count keyed on
+    // the event double-counts it. `published_at` is the only one an API client
+    // can see at all (`api-v1/posts.ts:23`); the event reaches PostHog and
+    // nothing else — no row, no outbox, no webhook.
+    const ctx = await seedOrg();
+    const post = await createPost(ctx.auth, ctx.orgId, { title: "Fixture Notice" });
+
+    const first = await updatePost(ctx.auth, post.id, { action: "publish" });
+    expect(first.publishedAt).not.toBeNull();
+    const stampedAt = first.publishedAt;
+
+    const archived = await updatePost(ctx.auth, post.id, { action: "archive" });
+    expect(archived.status).toBe("archived");
+    expect(archived.publishedAt).toEqual(stampedAt); // archiving does not clear it
+
+    const republished = await updatePost(ctx.auth, post.id, { action: "publish" });
+    expect(republished.status).toBe("published");
+    // The assertion that matters: the stamp is the FIRST publication, not the
+    // latest one. If this ever reds, decide which of the two definitions the
+    // product means before changing it — the slug freeze reads the same field.
+    expect(republished.publishedAt).toEqual(stampedAt);
+
+    // And the analytics side of the same transition, so the divergence is
+    // pinned from both ends rather than asserted about one of them.
+    expect(shouldFirePostPublished("archived", "publish")).toBe(true);
   });
 
   it("regenerates the slug on a title edit while still a draft", async () => {

@@ -3233,6 +3233,7 @@
   "divset.news.on": "Activado",
   "divset.news.off": "Desactivado",
   "divset.news.note": "Los borradores esperan tu revisión en la pestaña Noticias — nada se publica automáticamente.",
+  "divset.news.timing": "Los borradores se escriben a medida que se registran los resultados: activarlo más tarde no creará publicaciones para los partidos ya jugados. Actívalo antes de empezar.",
   "divset.news.saved": "Ajuste de noticias guardado",
   "board.ai.trace.aria.schedule": "Traza de verificación del calendario",
   "board.ai.trace.aria.officials": "Traza de verificación de oficiales",
