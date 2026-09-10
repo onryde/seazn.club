@@ -1,9 +1,14 @@
 # B06a — session state (live, rewritten at each task boundary)
 
 Worktree `.claude/worktrees/bench-b06a`, branch `feat/bench-b06a-framework`,
-cut from `8f3e3d655`. Plan:
-`docs/superpowers/plans/2026-09-09-bench-b06a-suite-framework.md`. Design of
-record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
+cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
+
+- Plan (nine tasks, with the test code and the pinned routes for T6/T7):
+  `docs/superpowers/plans/2026-09-09-bench-b06a-suite-framework.md`
+- Design of record, owner decisions D1–D8:
+  `designs/2026-09-09-b06-pack-pilot-design.md`
+- B06b (the darts pack) is a SEPARATE later wave. PackSchema freezes when
+  **B06b** merges, not this one.
 
 ## Where the wave is
 
@@ -13,11 +18,11 @@ record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
 | 2 — extract the runner | **COMMITTED** `3acc0ace9` |
 | 3 — `compareMatches` | **COMMITTED** `bffb3fabe` |
 | 4 — `compareSpecials` | **COMMITTED** `04f302798` |
-| 5 — provenance writer | IN FLIGHT |
-| 6 — claim accept | not started |
-| 7 — news | not started |
+| 5 — provenance writer | **COMMITTED** `aadfcf30a` |
+| 6 — claim accept (§9 P2) | **NEXT** |
+| 7 — news drafts + publish (§9 P6) | not started |
 | 8 — doc corrections | not started |
-| 9 — live run (orchestrator only) | not started |
+| 9 — live run, both placement legs | not started — **needs a local env; orchestrator only, never a subagent (600s watchdog)** |
 
 ## Gate numbers, in order, so a regression is visible
 
@@ -28,54 +33,85 @@ record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
 | after task 2 | 38 | 1408/1408 | 0 |
 | after task 3 | 39 | 1420/1420 | 0 |
 | after task 4 | 40 | 1430/1430 | 0 |
+| after task 5 | 41 | 1438/1438 | 0 |
 
-Gate command (the apps/web suite and turbo never see `scripts/bench`):
+Gate command (the apps/web suite and `turbo` never see `scripts/bench`):
 
 ```
 ./packages/engine/node_modules/.bin/vitest run --reporter=json \
   --outputFile=/tmp/b06a.json --testTimeout=30000 scripts/bench
 ```
 
-Counts rise by more than the tests written because
-`strip-types-loadable.test.ts` generates one case per bench MODULE — a new
-`lib/**.ts` file adds a case. Task 1 added 5 written + 2 generated; task 2
-added 3 written + 1 generated (`run-suite.ts`).
+Then `npm run typecheck:scripts` (expect 0) and
+`rtk proxy npm run lint:scripts` (expect no `✖`).
 
-## Findings this wave (for the PR body)
+**Counts rise by more than the tests written**: `strip-types-loadable.test.ts`
+generates one case per bench MODULE, so each new `lib/**.ts` file adds one.
 
-1. **The plan's task-2 premise was false.** It said the DLS probe, registration
-   drivers, discipline subject and cross-division court probe were
-   `_tiny`-specific and needed hook extraction. Grepping the 2,480-line `try`
-   block for a hardcoded pack ref returns **comments only** — all four are
-   already pack-driven. The only suite-specific content was 3 report fields
-   holding `"_tiny"` and 50 `"tiny: "` log prefixes. Extraction became a move
-   plus one parameter; no probe machinery was built.
+## Findings so far (these belong in the PR body)
+
+1. **The plan's task-2 premise was false.** The DLS probe, registration drivers,
+   discipline subject and cross-division court probe were briefed as
+   `_tiny`-specific and needing hooks. All four are already pack-driven —
+   grepping the 2,480-line `try` block for a hardcoded pack ref returns comments
+   only. The extraction became a file move plus one parameter.
 2. **The registry broke two existing mocks.** `vi.mock("../suites/tiny.ts")`
    returning only `runTinySuite` fails COLLECTION once `registry.ts` also
    imports `TINY_PACK_PATH` — which reads as a lost suite, not a failed test.
-   Both mocks now return the extra export.
-3. **The runner used to default a missing `packPath` to `TINY_PACK_PATH`.** A
-   suite that forgot to pass one would have folded the proof pack while
-   reporting its own name. `runPackSuite` now takes it from the definition and
-   has no `_tiny` fallback; `run-suite.test.ts` mutation-proves both.
-
+3. **The runner used to default a missing `packPath` to `TINY_PACK_PATH`** — a
+   suite that forgot to pass one would fold the proof pack while reporting its
+   own name. Gone; both halves mutation-proved.
 4. **A new HTTP read costs every suite-level fake a route it does not model.**
-   Task 3 hit it with the fixtures board; task 4 hit it again with folded state,
-   where the fake would additionally have owed a state its sport module accepts.
-   Both are solved with injectable seams (`matchBoard`, `specialSubjects`) whose
-   echo helpers are VACUOUS by construction and say so — with the real coverage
-   in the comparator unit tests plus one wrong-data wiring test each.
-5. **`expected.specials` standings claims read the fixture's own
-   `StandingsDelta`,** not the cumulative table — `_tiny` says `won: 1` where its
-   table says 2, and the pack is right. Derived by the engine from the PRODUCT's
-   folded state, guarded so an unrecognised shape reds rather than throws.
-6. **A `squads` claim has no live source** and is reported UNSUPPORTED (reds),
+   Task 3 (fixtures board) and task 4 (folded state) both hit it; task 4 would
+   additionally have owed a state its sport module accepts. Solved with
+   injectable seams — `input.matchBoard`, `input.specialSubjects` — whose echo
+   helpers are VACUOUS by construction and say so in their doc comments. The
+   real coverage is the comparator unit tests plus one wrong-data wiring test
+   each.
+5. **The `no_subject` branch in `compareMatches` was unreachable** and survived
+   mutation. Cause: the loop only visits divisions the pack declares matches
+   for, and stage 0 already REFUSES a pack whose stream has no expected match
+   ("a replayed stream with no oracle asserts nothing"). Branch deleted; a test
+   pins the refusal instead.
+6. **A specials standings claim reads that fixture's own `StandingsDelta`,**
+   not the cumulative table — `_tiny` claims `won: 1` where its table says 2,
+   and the pack is right. Derived by the ENGINE from the PRODUCT's folded
+   outcome and state, guarded so an unrecognised state shape reds as an absent
+   cell rather than throwing.
+7. **A `squads` claim has no live source** — reported UNSUPPORTED and reds,
    never silently satisfied.
-7. **Process:** `git checkout <file>` to remove a debug line also reverted that
-   file's uncommitted wiring. Remove debug lines surgically.
+8. **I duplicated `resolveStatePath`** (`validate-pack.ts:580`, since B02) with
+   a worse copy that did not index arrays. Replaced; one authority per fact.
+9. **`provenancePct` had a field and no writer since B01.** Now written, with
+   the COUNTS beside it, and `total` is the stream count so an unknown
+   provenance value shows as a gap rather than a flattering denominator.
+10. **Process:** `git checkout <file>` to strip a debug line also reverted that
+    file's uncommitted wiring. Remove debug lines surgically.
 
-## What a fresh session should do first
+## Resuming task 6 (claim accept)
 
-Read the plan, then `git log --oneline origin/main..HEAD` in the worktree — the
-commit messages carry each task's reasoning. Re-run the gate command above and
-confirm 38 files before trusting any count.
+Routes are pinned in the plan, in-task, and are NOT all under `/api/v1`:
+`GET /api/claims/{token}` → `POST /api/auth/magic-link` →
+`POST /api/auth/magic-link/consume` → `POST /api/claims/{token}/accept`;
+refusals `401 CLAIM_INVALID | CLAIM_EXPIRED | CLAIM_REVOKED`,
+`409 CLAIM_CLAIMED`. Claimed stats: `GET /api/v1/persons/{id}/stats`
+(`?group=sport` for career) — that route does NOT mask names, so do not assert
+masking on it.
+
+`_tiny` seeds invites (`lib/seed-plan.ts:313-334`) and the runner currently
+asserts they stay UNCLAIMED — that assertion must be REPLACED by the
+post-acceptance one, never deleted.
+
+Expect the same fake-world tax as tasks 3 and 4: the suite-level worlds will owe
+the claim routes, and the honest answer is another injectable seam plus a
+discriminating wiring test, not a fake that satisfies itself.
+
+## Task 7 note that changes an assertion
+
+`shouldFirePostPublished` (`org-posts.ts:100`) fires a PostHog `captureServer`
+call — **no table row, no outbox** — so "observed exactly once" is NOT
+HTTP-observable. Assert the predicate by proxy: a second publish must not move
+`published_at`. Drafting is automatic inside the scoring path and needs BOTH
+`divisions.auto_posts` and `hasFeature("news.auto")`, or `drafted` is
+legitimately 0 and the step proves nothing. A local server posts to LIVE
+PostHog, so do not loop the publish step.
