@@ -4,7 +4,7 @@
 // test proves only that the list matches itself.
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 const SRC = join(__dirname, "..", "..");
 const DICT = join(SRC, "dictionaries");
@@ -16,6 +16,11 @@ const SCAN_DIRS = [
   join(SRC, "lib"),
   join(SRC, "app", "overlay"),
   join(SRC, "app", "(public)"),
+  // Review MINOR 7b (2026-09-10) — the overlay route resolves its dictionary
+  // SERVER-side and `src/server/overlay/**` is its loader, so a server module
+  // is as much a reader of this copy as a component is. Without this entry a
+  // key read only from there was reported as an orphan.
+  join(SRC, "server"),
 ];
 
 function files(dir: string): string[] {
@@ -56,11 +61,73 @@ function files(dir: string): string[] {
  * The un-wiring mutant survived on exactly that. A comment is documentation,
  * never a reader.
  *
- * The `//` arm ignores a match preceded by `:` so `https://…` inside a string
- * does not truncate the rest of its line.
+ * A CHARACTER SCAN, NOT TWO REGEXES (review MINOR 7a, 2026-09-10). The
+ * previous pair stripped block comments and line comments unconditionally, so
+ * a scanned file carrying either opener INSIDE A STRING LITERAL lost real code
+ * from that point on — every key below it silently stopped being a reader, which reads
+ * downstream as a mysterious false orphan rather than as a parser fault. The
+ * `//` arm's `[^:]` guard covered exactly one instance of that (`https://…`)
+ * and nothing else: `"/*"`, `"a // b"`, a Windows path, an `ical` `//` — none.
+ * String literals are now copied through verbatim.
+ *
+ * THE QUOTE ARM IS DELIBERATELY CONSERVATIVE. A regex literal may carry an
+ * unpaired quote (`/['"]/`), and treating that as the start of a string would
+ * swallow the rest of the file into "a literal" — over-inclusive, which here
+ * means a key named in a COMMENT could count as a reader and an orphan could
+ * escape. That is the failure direction this gate cannot afford, so `'` and
+ * `"` open a literal only when they CLOSE on the same line; an unpaired one
+ * falls through as an ordinary character and the old behaviour applies to the
+ * rest of that line. Backticks may legitimately span lines and are not
+ * line-bounded.
  */
 export function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i]!;
+    const next = source[i + 1];
+    if (c === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      const end = source.indexOf("\n", i);
+      // Keep the newline: the `//` arm must end the LINE, not join it to the
+      // next one (a key on the following line is a real reader).
+      i = end === -1 ? source.length : end;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const close = closingQuote(source, i);
+      if (close !== -1) {
+        out += source.slice(i, close + 1);
+        i = close + 1;
+        continue;
+      }
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+/** Index of the quote that closes the literal opened at `open`, honouring
+ *  backslash escapes — or -1 if it does not close (and, for `'` and `"`, if it
+ *  does not close before the end of the line: see `stripComments`). */
+function closingQuote(source: string, open: number): number {
+  const quote = source[open]!;
+  const lineBounded = quote !== "`";
+  for (let i = open + 1; i < source.length; i++) {
+    const ch = source[i]!;
+    if (ch === "\\") {
+      i += 1;
+      continue;
+    }
+    if (lineBounded && ch === "\n") return -1;
+    if (ch === quote) return i;
+  }
+  return -1;
 }
 
 /** Every string literal in the source that looks like one of this wave's keys.
@@ -175,6 +242,20 @@ describe("overlay + panel copy is complete in every locale", () => {
     );
   });
 
+  it("scans src/server — a key resolved from a server module is a reader, not an orphan", () => {
+    // Review MINOR 7b (2026-09-10). `SCAN_DIRS` omitted `src/server`, so an
+    // `overlay.*` / `stream.*` key resolved from a server module read as an
+    // ORPHAN here — and the two ways to satisfy this gate then are to excuse a
+    // live key in `KNOWN_ORPHANS` or to delete copy that is actually on air.
+    // Not hypothetical for this wave: `src/server/overlay/**` is the overlay
+    // route's own loader, and the route resolves its dictionary server-side.
+    expect(SCAN_DIRS.map((d) => relative(SRC, d))).toContain("server");
+    // The positive pair, and it carries the weight: `files()` returns [] for a
+    // directory that is not there, so a mistyped path would satisfy the line
+    // above while scanning nothing at all.
+    expect(files(join(SRC, "server")).length, "src/server scanned no files").toBeGreaterThan(50);
+  });
+
   it("finds the keys at all — a scan that matched nothing would pass vacuously", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
     // RE-PIN (2026-09-10, task 6): the panel has landed, so the floor moves
@@ -268,6 +349,45 @@ describe("overlay + panel copy is complete in every locale", () => {
       stripComments('const u = "https://example.test/x"; const k = "overlay.brand";'),
       "a URL's // must not eat the rest of the line",
     ).toContain("overlay.brand");
+  });
+
+  it("a comment opener INSIDE a string literal is not a comment (review MINOR 7a)", () => {
+    // The old two-regex form stripped both openers unconditionally, so a
+    // scanned file containing either inside a string lost every key BELOW it
+    // and the gate reported a false orphan — loud, but pointing at the
+    // dictionary rather than at the parser.
+    expect(
+      stripComments('const glob = "/*"; const k = "overlay.brand";'),
+      "a block-comment opener in a string ate the rest of the file",
+    ).toContain("overlay.brand");
+    expect(
+      stripComments('const sep = "a // b"; const k = "overlay.brand";'),
+      "a line-comment opener in a string ate the rest of the line",
+    ).toContain("overlay.brand");
+    expect(
+      stripComments("const t = `a // b`;\nconst k = \"overlay.brand\";"),
+      "the same inside a template literal",
+    ).toContain("overlay.brand");
+    expect(
+      stripComments('const esc = "he said \\" // still a string"; const k = "overlay.brand";'),
+      "an escaped quote does not close the literal early",
+    ).toContain("overlay.brand");
+  });
+
+  it("an UNPAIRED quote falls through rather than swallowing the file — the safe direction", () => {
+    // A regex literal can carry one (`/['"]/`). Treating it as a string opener
+    // would copy everything after it verbatim, comments included, and a key
+    // named only in a comment would then count as a reader — an orphan escapes,
+    // which is the one failure this gate exists to prevent. So an unpaired
+    // `'`/`"` is an ordinary character and the comment stripping still applies.
+    // The key below is single-quoted ON PURPOSE: it gives the regex's unpaired
+    // `'` something to pair WITH, so a quote arm that is not line-bounded
+    // copies the comment between them through verbatim and this reds. Without
+    // that second quote the scan runs off the end and the mutant survives.
+    const source = "const re = /['\"]/;\n// see `overlay.brand` in the sheet\nconst k = 'stream.tab.bar';";
+    const stripped = stripComments(source);
+    expect(stripped.includes("overlay.brand"), "the comment must still be stripped").toBe(false);
+    expect(stripped, "and real code below it survives").toContain("stream.tab.bar");
   });
 
   it("no locale carries an overlay/stream key en has dropped", () => {
