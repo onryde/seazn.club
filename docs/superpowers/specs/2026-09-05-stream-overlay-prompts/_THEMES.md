@@ -433,8 +433,43 @@ row ×2:           height 90, padding 0 24, gap 18
                   meta  Barlow 30/500 ink 65 % width 78 right-aligned (overs)
 side in play:     row background board-2 + inset-left bar 8 px LED, score colour LED
 footer:           height 45, padding 0 24, Geist 21/500 ink 85 %, space-between
+                  AT MOST 2 detail entries, most recent last, ONE line, nowrap
                   emphasis Geist 600 ink 100 % (chase line)
 ```
+
+**The footer holds AT MOST TWO entries, on one line, and never wraps** (product
+ruling, 2026-09-10, on a defect the Task 8 hockey seed PHOTOGRAPHED — the first
+time three card chips had ever rendered anywhere).
+
+What the picture showed at 1920: `.ovl-bug-footer` is a 45 px
+`justify-content: space-between` row inside a 480 px tile with
+`overflow: hidden`. With `11v8` plus three card entries the row wrapped, and the
+tile's bottom edge **cut "AWA Red" in half**. Worse, each entry is wrapped in
+`className="contents"` — and `display: contents` puts a chip, its label and its
+separator directly into the flex container, so they wrap **independently**: the
+`·` separators landed on the clipped second line as stray dots, detached from
+the labels they belong to.
+
+Three cards in a hockey match is an ordinary state, so this is not an edge case.
+Two rules follow.
+
+1. **A corner bug is not a log.** The bug shows at most the **two most recent**
+   detail entries, on one line, `white-space: nowrap`; §3's bar keeps the full
+   list, because it has 1776 px and a dedicated 51 px band and the bug has
+   neither. Where a chase or result line is present it takes priority, as §4
+   already says.
+2. **An entry is one unit.** Chip, label and separator must not be separable by
+   wrapping — `display: contents` on the group is what allowed it, and the group
+   needs to be a real box.
+
+**The tile must not grow instead.** An OBS operator positions the bug against
+their camera framing; a graphic that changes height on air moves into the shot.
+Clip deliberately, never reflow.
+
+**The visual gate could not have caught this and still cannot.** `expectNoClip`
+compares `scrollWidth` with `clientWidth`, which sees horizontal overflow only —
+a **vertical** clip is invisible to it. Any check for this class has to measure
+against the container's bottom edge.
 
 The bug's card chips and its live dot carry the **1-px `--sport-ink` hairline**
 on the same terms as §3's — same reasoning, same measurements, same reason not
@@ -635,10 +670,24 @@ The panel follows `embed-snippet.tsx` and `.card` / `.btn` in `globals.css`.
 | heading | `text-sm font-semibold text-slate-700` with a 16 px lucide `Video` icon `text-purple-500`, stroke 1.75 |
 | explainer | `text-xs text-slate-500` |
 | style tabs | `rounded-md px-2.5 py-1 text-xs font-medium`; selected `bg-purple-100 text-purple-800`; idle `text-slate-500 hover:bg-purple-50 hover:text-purple-700`; `role="tab"` `aria-selected` |
-| live preview | the real `<OverlayStage>` at `scale(640/1920)` inside a **360 px** tall strip on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)`, `transform-origin: top left` (matching `.ovl-canvas`'s own) |
+| live preview | the real `<OverlayStage>` scaled **to the strip's own width** — `scale(w/1920)` for the measured container width `w`, in a strip `w × 1080/1920` tall — on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)`, `transform-origin: top left` (matching `.ovl-canvas`'s own) |
 
-**The strip was 96 px and that number could not work** (owner ruling **360 px**,
-2026-09-10, on the W1 Task 6 finding). At `scale(640/1920)` = 1/3, a 96 px strip
+**Second correction, same day: a FIXED scale cannot work either, and the 360 px
+ruling below fixed only the vertical half.** `scale(640/1920)` paints a 640 CSS
+px canvas however wide the strip actually is, inside a `w-full overflow-hidden`
+box. The panel is ~296 px wide at a 320 px viewport, so **about a third of the
+frame was visible**, and §3's bar — which spans x≈24→616 in canvas px and is
+**cricket's default theme** — had its score cells cropped off the right edge,
+with nothing to scroll to reach them. Same defect as the 96 px one, one axis
+over, missed because the first ruling reasoned about height alone.
+
+The durable fix is to stop pinning a magic number in *either* axis: **scale to
+the container**, so the whole 1920×1080 canvas is visible at every width, which
+is the entire point of a preview. At a 640 px strip this still resolves to
+`640/1920`, so nothing changes on desktop — it simply stops being a constant.
+
+**The strip was 96 px and that number could not work either** (owner ruling
+**360 px**, 2026-09-10, on the W1 Task 6 finding). At `scale(640/1920)` = 1/3, a 96 px strip
 shows the top **288** of the canvas's 1080 authored px. §4's bug is anchored
 `top: 54`, so it lands at y 18–79 scaled and is visible. **§3's bar is anchored
 `bottom: 54`, which lands at y ≈ 279–342 scaled — entirely below a 96 px
