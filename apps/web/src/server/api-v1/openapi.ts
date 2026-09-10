@@ -367,7 +367,7 @@ export const ROUTES: RouteSpec[] = [
   // Discipline & suspensions (SPEC-1, PROMPT-78)
   { path: "/divisions/{id}/discipline-rules", method: "get", summary: "Discipline rules + enabled flag (null when the sport has no card model); Pro `discipline.enforced`", tag: "discipline", response: S.DisciplineRulesResponse, errors: [402] },
   { path: "/divisions/{id}/discipline-rules", method: "put", summary: "Upsert discipline rules; colours validated against the sport module", tag: "discipline", request: S.PutDisciplineRules, response: S.DisciplineRulesResponse, errors: [402, 422] },
-  { path: "/divisions/{id}/suspensions", method: "get", summary: "List suspensions in the division, optional ?status= filter", tag: "discipline", response: z.array(S.Suspension), errors: [402], query: { status: { schema: { type: "string", enum: ["pending", "active", "served", "waived"] } } } },
+  { path: "/divisions/{id}/suspensions", method: "get", summary: "List suspensions in the division, optional ?status= filter", tag: "discipline", response: z.array(S.Suspension), errors: [402], query: { status: { schema: { type: "string", enum: S.SuspensionStatus.options } } } },
   { path: "/divisions/{id}/suspensions", method: "post", summary: "Record a manual suspension (pending until confirmed)", tag: "discipline", request: S.CreateSuspension, response: S.Suspension, status: 201, errors: [402] },
   { path: "/suspensions/{id}", method: "patch", summary: "Confirm (→ active), waive or adjust a suspension", tag: "discipline", request: S.DecideSuspension, response: S.Suspension, errors: [402] },
   // Official marks & match reports (SPEC-3, PROMPT-80)
@@ -383,7 +383,7 @@ export const ROUTES: RouteSpec[] = [
   // decided-seam result/round_recap auto-drafts land on the score write, not
   // through the API. The weekly digest (P3/D7) IS reachable through the API
   // (console button + stg cron) — same news.auto entitlement.
-  { path: "/orgs/{id}/posts", method: "get", summary: "Org news feed (console; free), optional ?status= filter", tag: "news", response: z.array(S.OrgPost), query: { status: { schema: { type: "string", enum: ["draft", "published", "archived"] } } } },
+  { path: "/orgs/{id}/posts", method: "get", summary: "Org news feed (console; free), optional ?status= filter", tag: "news", response: z.array(S.OrgPost), query: { status: { schema: { type: "string", enum: S.PostStatus.options } } } },
   { path: "/orgs/{id}/posts", method: "post", summary: "Compose a post (draft; free on every plan)", tag: "news", request: S.CreatePost, response: S.OrgPost, status: 201, errors: [404] },
   { path: "/orgs/{id}/posts/digest", method: "post", summary: "Generate a weekly digest draft (standings movement, stat leaders, next 7 days, claimed-player highlight); Pro news.auto", tag: "news", response: S.OrgPost, status: 201, errors: [402, 404] },
   { path: "/posts/{id}", method: "get", summary: "Get a post (console; free)", tag: "news", response: S.OrgPost, errors: [404] },

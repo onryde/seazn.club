@@ -14,6 +14,7 @@ import {
   decodeCursor,
   listQuery,
   page,
+  assertOneOf,
 } from "../http";
 
 // Only `captureException` is used by the kernel; the spy is what proves a 422
@@ -231,6 +232,47 @@ describe("parseBody", () => {
   it("400s malformed JSON", async () => {
     const req = new Request("http://x/", { method: "POST", body: "{nope" });
     await expect(parseBody(req, schema)).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe("assertOneOf", () => {
+  const STATUSES = ["draft", "published", "archived"] as const;
+
+  it("accepts a member and accepts null (absent = no filter)", () => {
+    expect(() => assertOneOf("published", STATUSES, "status")).not.toThrow();
+    expect(() => assertOneOf(null, STATUSES, "status")).not.toThrow();
+  });
+
+  it("400s a near-miss instead of silently dropping the filter", () => {
+    // The whole point. `?status=publish` used to fall through to `undefined`
+    // on the posts and suspensions routes, which returned EVERY row while the
+    // caller believed they had filtered — drafts served as published.
+    expect(() => assertOneOf("publish", STATUSES, "status")).toThrowError(HttpError);
+    let status = 0;
+    try {
+      assertOneOf("publish", STATUSES, "status");
+    } catch (e) {
+      status = (e as HttpError).status;
+    }
+    expect(status).toBe(400);
+  });
+
+  it("names the field and every accepted value, so the 400 is actionable", () => {
+    expect(() => assertOneOf("nope", STATUSES, "status")).toThrowError(
+      "status must be one of draft, published, archived",
+    );
+  });
+
+  it("400s an empty value — `?status=` is a member check like any other", () => {
+    // Deliberate, and matches what the registration list has always done:
+    // only an ABSENT param means "no filter". Asserted so a future reader
+    // does not quietly re-add the `raw && ...` short-circuit that treated an
+    // empty string as absent.
+    expect(() => assertOneOf("", STATUSES, "status")).toThrowError(HttpError);
+  });
+
+  it("is case-sensitive — `Published` is not `published`", () => {
+    expect(() => assertOneOf("Published", STATUSES, "status")).toThrowError(HttpError);
   });
 });
 

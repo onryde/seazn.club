@@ -259,6 +259,40 @@ export async function parseBody<T>(req: Request, schema: ZodType<T>): Promise<T>
   return schema.parse(raw);
 }
 
+/**
+ * Assert a query param is a member of its declared enum, 400ing when it is not.
+ *
+ * The alternative — the shape this replaced on two routes — is
+ *
+ *     const status = raw && STATUSES.has(raw) ? (raw as Status) : undefined;
+ *
+ * which answers `?status=publish` (a typo for "published") with an UNFILTERED
+ * list. That is the worst of the three possible behaviours: the caller asked
+ * for published posts, believes the filter was applied, and is handed drafts.
+ * A 400 naming the accepted values is the only answer that cannot be
+ * misread. `listQuery` above already 400s an unparseable `?limit=`, and
+ * `/public/discovery` and `/divisions/{id}/registrations` already 400 their
+ * own status enums — this is that rule with one home instead of four copies.
+ *
+ * `null` (absent) means no filter and is always allowed. An EMPTY value
+ * (`?status=`) is a member check like any other and therefore 400s, matching
+ * what the registration list has always done.
+ *
+ * Pass the zod schema's own `.options` rather than a hand-written list, so a
+ * new member flows here without an edit. The assertion signature is what lets
+ * the caller drop the `as Status` cast — that cast is how an unvalidated
+ * string reached a typed parameter in the first place.
+ */
+export function assertOneOf<T extends string>(
+  value: string | null,
+  options: readonly T[],
+  field: string,
+): asserts value is T | null {
+  if (value !== null && !(options as readonly string[]).includes(value)) {
+    throw new HttpError(400, `${field} must be one of ${options.join(", ")}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Cursor pagination (doc 08 §1): ?cursor=&limit=, opaque base64url cursor over
 // the keyset (created_at, id). No X-Total-Count by design (expensive).

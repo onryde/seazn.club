@@ -1,12 +1,10 @@
-import { v1, reply, parseBody } from "@/server/api-v1/http";
+import { v1, reply, parseBody, assertOneOf } from "@/server/api-v1/http";
 import { requireOrgAuth, assertUuid } from "@/server/api-v1/auth";
-import { CreatePost } from "@/server/api-v1/schemas";
+import { CreatePost, PostStatus } from "@/server/api-v1/schemas";
 import { toApiPost } from "@/server/api-v1/posts";
-import { listPosts, createPost, type PostStatus } from "@/server/usecases/org-posts";
+import { listPosts, createPost } from "@/server/usecases/org-posts";
 
 type Ctx = { params: Promise<{ id: string }> };
-
-const STATUSES = new Set(["draft", "published", "archived"]);
 
 /** Org news feed (console): all posts, optional ?status= filter. Free — manual
  *  posts are ungated on every plan (SPEC-2 PLG thesis). */
@@ -15,9 +13,14 @@ export async function GET(req: Request, { params }: Ctx) {
     const { id } = await params;
     assertUuid(id, "organization");
     const auth = await requireOrgAuth(req, id, "read");
-    const raw = new URL(req.url).searchParams.get("status");
-    const status = raw && STATUSES.has(raw) ? (raw as PostStatus) : undefined;
-    return (await listPosts(auth, id, status)).map(toApiPost);
+    // An unrecognised ?status= is a 400, not an unfiltered list: answering
+    // `?status=publish` with every post — drafts included — while the caller
+    // believes they filtered to published is a silent data leak into a console
+    // view. Members come from the zod enum openapi.ts publishes for this
+    // param, so the three lists cannot drift apart.
+    const status = new URL(req.url).searchParams.get("status");
+    assertOneOf(status, PostStatus.options, "status");
+    return (await listPosts(auth, id, status ?? undefined)).map(toApiPost);
   });
 }
 
