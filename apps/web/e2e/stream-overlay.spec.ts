@@ -444,15 +444,315 @@ test.describe("§4's corner bug and its footer", () => {
           overflowY: getComputedStyle(tile).overflowY,
         };
       });
-      // A tile that clips horizontally is fine — a name is allowed to be cut.
-      // Content taller than the box it is drawn in is a line the viewer simply
-      // never sees, and the tile is the only thing that could have told them.
+      // VERTICAL only. §4 as corrected 2026-09-10 no longer allows a
+      // horizontal clip either ("overflowing text ELLIPSES; it never clips and
+      // never wraps") — that half is `.ovl-detail-label`'s, and the describe
+      // below measures it at a non-English locale. This probe stays what it
+      // was: content taller than the box it is drawn in is a line the viewer
+      // simply never sees, and the tile is the only thing that could tell them.
       expect(
         overflow.scrollHeight - overflow.clientHeight,
         `the bug tile clips ${overflow.scrollHeight - overflow.clientHeight}px of its own footer (overflow-y: ${overflow.overflowY})`,
       ).toBeLessThanOrEqual(1);
     } finally {
       await page.context().close();
+    }
+  });
+});
+
+// ===========================================================================
+// §4 as corrected — the footer ELLIPSES, AT A NON-ENGLISH LOCALE
+//
+// Every visual row and every browser assertion in this suite ran in English
+// until this test, which is why a Spanish card label overflowing the tile was
+// invisible to all of it: an English-only suite cannot witness this class at
+// all. `overlay.detail.card` is `"{side} {card}"` in every locale and es/fr/nl
+// carry real translations since `e00bba49f`.
+//
+// WHAT THIS MEASURES AND WHAT IT DOES NOT, stated rather than implied.
+// Measured in Chromium against the real stylesheet and this exact hockey seed
+// (green/yellow/red, so the footer's two most recent are yellow + red):
+// the es pair "AWA Tarjeta amarilla" / "AWA Tarjeta roja" runs about 3 px past
+// its share of a 480 px tile — so the ellipsis DOES bite here, but only just,
+// and removing it produces no tile overhang on this seed. The 170-px overflow
+// the ruling was written for needs icehockey's `gameMisconduct` / `match`
+// classes ("AWA Wangedrag in de wedstrijd" measures 299 px against 229 px of
+// room, and 18 px of tile overhang without the guard), and NO fixture this rig
+// can seed produces them. So the discriminating assertions below are the
+// COMPUTED properties — each dies to its own mutant, whatever the font metrics
+// happen to be on the runner — plus the locale differential. The tile
+// invariants are the sheet's rule and are asserted, but they do not
+// discriminate on this seed and are not claimed to.
+// ===========================================================================
+
+interface FooterProbe {
+  tileWidth: number;
+  overhang: number;
+  vclip: number;
+  entryMinWidths: string[];
+  chipShrinks: string[];
+  labels: {
+    text: string;
+    scrollWidth: number;
+    clientWidth: number;
+    textOverflow: string;
+    overflowX: string;
+    minWidth: string;
+  }[];
+}
+
+async function readBugFooter(page: Page, fixtureId: string, lang: string): Promise<FooterProbe> {
+  await page.goto(`/overlay/fixtures/${fixtureId}?style=bug&lang=${lang}`);
+  await expect(page.locator('[data-testid="ovl-detail"]')).toHaveCount(1);
+  return page.evaluate(() => {
+    const tile = document.querySelector<HTMLElement>(".ovl-bug");
+    if (!tile) throw new Error("no .ovl-bug on the page");
+    const read = (sel: string, prop: "minWidth" | "flexShrink") =>
+      [...document.querySelectorAll<HTMLElement>(sel)].map((el) => getComputedStyle(el)[prop]);
+    return {
+      tileWidth: tile.getBoundingClientRect().width,
+      overhang: tile.scrollWidth - tile.clientWidth,
+      vclip: tile.scrollHeight - tile.clientHeight,
+      entryMinWidths: read(".ovl-bug-footer .ovl-detail-entry", "minWidth"),
+      chipShrinks: read(".ovl-bug-footer .ovl-chip", "flexShrink"),
+      labels: [...document.querySelectorAll<HTMLElement>(".ovl-bug-footer .ovl-detail-label")].map(
+        (l) => {
+          const cs = getComputedStyle(l);
+          return {
+            text: l.textContent ?? "",
+            scrollWidth: l.scrollWidth,
+            clientWidth: l.clientWidth,
+            textOverflow: cs.textOverflow,
+            overflowX: cs.overflowX,
+            minWidth: cs.minWidth,
+          };
+        },
+      ),
+    };
+  });
+}
+
+test.describe("§4's footer at a non-English locale", () => {
+  test("the card labels ellipse instead of reaching the tile, and es really is longer than en", async ({
+    browser,
+  }) => {
+    const page = await anonPage(browser);
+    try {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      const es = await readBugFooter(page, rig.fixtureId, "es");
+      const en = await readBugFooter(page, rig.fixtureId, "en");
+
+      // PREMISE first, or everything below is satisfied by an empty footer.
+      expect(es.labels.length, "the es broadcast renders §4's two capped entries").toBe(2);
+      expect(en.labels.length).toBe(2);
+      expect(
+        es.labels.map((l) => l.text),
+        "es must not fall back to the English dictionary — that is the blindness this test exists for",
+      ).not.toEqual(en.labels.map((l) => l.text));
+
+      // THE MECHANISM, one assertion per property. `text-overflow` paints
+      // nothing without a non-visible `overflow`, and a flex item will not
+      // shrink below its content while `min-width` is `auto` — so all three
+      // have to be in effect, not merely declared, and each of the three has
+      // its own mutant.
+      for (const label of es.labels) {
+        expect(label.textOverflow, `${label.text}: §4 binds an ellipsis, not a clip`).toBe(
+          "ellipsis",
+        );
+        expect(label.overflowX, `${label.text}: an ellipsis needs a clipped box to sit in`).toBe(
+          "hidden",
+        );
+        expect(label.minWidth, `${label.text}: min-width:auto refuses to shrink`).toBe("0px");
+      }
+      // The chain either side of the label: the entry gives, the chip does not
+      // (a shrinking chip is a card with no colour). Counted against what is
+      // ACTUALLY on the row rather than against a literal 2 — a green card is a
+      // 2-minute suspension and a yellow a 5-minute one, so a slow runner can
+      // legitimately reach this test with the strength line back in the pair.
+      expect(es.entryMinWidths.length, "one guard per entry").toBe(es.labels.length);
+      for (const mw of es.entryMinWidths) {
+        expect(mw, "an entry that cannot shrink pushes the row out").toBe("0px");
+      }
+      expect(es.chipShrinks.length, "at least one card chip must be on the row").toBeGreaterThan(0);
+      for (const fs of es.chipShrinks) expect(fs, "a shrinking chip is a card with no colour").toBe("0");
+
+      // THE DIFFERENTIAL that makes this a locale test and not a second copy
+      // of the English one: the Spanish labels are measurably wider, in the
+      // same font, on the same tile.
+      const width = (p: FooterProbe) => p.labels.reduce((n, l) => n + l.scrollWidth, 0);
+      expect(
+        width(es),
+        `es labels ${width(es)}px vs en ${width(en)}px — if these are equal the es dictionary is not reaching the overlay`,
+      ).toBeGreaterThan(width(en));
+
+      // THE SHEET'S INVARIANT. Not the discriminating assertion on this seed
+      // (see the block comment above), but it is what §4 binds and it is what
+      // will bite first when a longer sport reaches this route.
+      expect(es.tileWidth, "the tile must never grow — an OBS operator frames it").toBe(480);
+      expect(
+        es.overhang,
+        `the es footer overhangs the tile by ${es.overhang}px; §4 says nothing may`,
+      ).toBeLessThanOrEqual(1);
+      expect(es.vclip, `and clips ${es.vclip}px of it vertically`).toBeLessThanOrEqual(1);
+    } finally {
+      await page.context().close();
+    }
+  });
+});
+
+// ===========================================================================
+// THE SCORE — the one thing this feature exists to put on air, and until now
+// no browser and no HTTP test ever read one off this route. Every assertion in
+// this file was satisfied by ANY score, a blank one included (AGENTS.md 19 at
+// feature scale): `overlay-stage.tsx` has a hold branch that deliberately
+// paints an empty canvas, and `use-live-fixture`'s `data` can hold a value the
+// consumer must not paint.
+//
+// 2–1 rather than 1–0: a wrong answer that happened to be a constant, or a
+// renderer that painted the home value into both rows, passes 1–0 and 0–0 far
+// too easily. The baseline is read BEFORE the goals so the expectation is a
+// real differential — one fixture, one URL, three events.
+// ===========================================================================
+
+test.describe("the overlay puts the right score on air", () => {
+  test("the big numbers follow the ledger, in BOTH themes", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    const page = await anonPage(browser);
+    try {
+      await signInAs(ownerPage, rig.ownerEmail);
+
+      const scoreOn = async (style: "bar" | "bug") => {
+        await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=${style}`);
+        await expect(page.locator('[data-testid="ovl-root"]')).toHaveCount(1);
+        return {
+          home: await page.locator('[data-testid="ovl-big-home"]').innerText(),
+          away: await page.locator('[data-testid="ovl-big-away"]').innerText(),
+        };
+      };
+
+      expect(await scoreOn("bug"), "a goalless fixture is the baseline, not the answer").toEqual({
+        home: "0",
+        away: "0",
+      });
+
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId });
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+
+      // A poll with a reload, not a bare assertion: the public row this route
+      // reads is `unstable_cache`-wrapped, so the first load after a write can
+      // legitimately still be serving the old snapshot.
+      for (const style of ["bug", "bar"] as const) {
+        await expect
+          .poll(async () => JSON.stringify(await scoreOn(style)), {
+            message: `${style}: the overlay must show 2-1 once the ledger does`,
+            timeout: 60_000,
+            intervals: [2_000],
+          })
+          .toBe(JSON.stringify({ home: "2", away: "1" }));
+      }
+    } finally {
+      await owner.close();
+      await page.context().close();
+    }
+  });
+});
+
+// ===========================================================================
+// §8's PREVIEW — the organiser console, in a browser for the first time.
+//
+// The panel shipped `scale(640/1920)`, a constant, inside a `w-full` strip:
+// at a 320 px viewport the panel is ~296 px wide and painted a 640 px canvas
+// into it, so about a third of the frame showed and §3's bar — cricket's
+// DEFAULT theme — lost its score cells off the right edge with nothing to
+// scroll to. §8's second correction binds `scale(w/1920)` for the measured
+// strip width `w`. Node cannot see that: `apps/web` vitest is
+// `environment: "node"`, so `fixture-stream-panel.test.tsx` can pin the pure
+// function and the props but never the paint. This is the only thing that can.
+//
+// The panel is opened ONCE, at 1280, and the viewport is then narrowed: the
+// toggle is a phone-folded control at 320 (AGENTS.md 22) and clicking it there
+// is a different test's problem. React state survives a resize.
+// ===========================================================================
+
+test.describe("§8's live preview", () => {
+  test("the canvas scales to the strip at every width, not to a constant", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    try {
+      await signInAs(page, rig.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=fixtures`);
+
+      const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
+      await expect(toggle, "the rig's org holds streaming.overlay, so the row offers the panel").toHaveCount(1);
+      await toggle.click();
+      await expect(page.locator('[data-testid="stream-preview"]')).toHaveCount(1);
+
+      const measure = () =>
+        page.evaluate(() => {
+          const strip = document.querySelector<HTMLElement>('[data-testid="stream-preview"]');
+          const canvas = document.querySelector<HTMLElement>(
+            '[data-testid="stream-preview-canvas"]',
+          );
+          if (!strip || !canvas) return null;
+          const c = canvas.getBoundingClientRect();
+          return {
+            stripW: strip.clientWidth,
+            stripH: strip.clientHeight,
+            canvasW: c.width,
+            canvasH: c.height,
+          };
+        });
+
+      const widths: { viewport: number; strip: number; canvas: number }[] = [];
+      for (const w of [1280, 768, 320]) {
+        await page.setViewportSize({ width: w, height: 900 });
+        // The observer fires on the frame AFTER a resize, so the first read at
+        // a new width can legitimately still be the previous scale.
+        await expect
+          .poll(
+            async () => {
+              const b = await measure();
+              return b !== null && b.stripW > 0 && Math.abs(b.canvasW - b.stripW) <= 1.5;
+            },
+            {
+              message: `at ${w}: the painted canvas must settle to the strip's own width`,
+              timeout: 15_000,
+              intervals: [250],
+            },
+          )
+          .toBe(true);
+
+        const box = await measure();
+        expect(box, `the preview left the DOM at ${w}`).not.toBeNull();
+        // The whole authored canvas, at every width: painted size = the box it
+        // is painted into. A CONSTANT scale satisfies this at one width only,
+        // which is exactly the defect.
+        expect(
+          Math.abs(box!.canvasW - box!.stripW),
+          `at ${w}: a ${box!.canvasW}px canvas in a ${box!.stripW}px strip`,
+        ).toBeLessThanOrEqual(1.5);
+        expect(
+          Math.abs(box!.canvasH - box!.stripH),
+          `at ${w}: a ${box!.canvasH}px canvas in a ${box!.stripH}px strip, vertically`,
+        ).toBeLessThanOrEqual(1.5);
+        expect(box!.canvasW, "§8 caps the strip at 640").toBeLessThanOrEqual(641);
+        widths.push({ viewport: w, strip: box!.stripW, canvas: box!.canvasW });
+      }
+
+      // The differential. Without it "canvas == strip" could in principle be
+      // met by a panel that never changed size at all.
+      const at = (v: number) => widths.find((r) => r.viewport === v)!;
+      expect(
+        at(320).canvas,
+        `the strip is ${at(320).strip}px at a 320 viewport and ${at(1280).strip}px at 1280 — the canvas must follow`,
+      ).toBeLessThan(at(1280).canvas);
+    } finally {
+      await owner.close();
     }
   });
 });
