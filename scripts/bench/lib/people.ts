@@ -77,14 +77,16 @@ export interface ClaimAcceptanceResult {
   readonly skipped: number;
   /**
    * The deliberate negative case. True only when a tampered token drew a 401
-   * IN A RUN THAT ALSO ACCEPTED SOMETHING — because `requireUser()` refuses
-   * before the token is ever resolved, a 401 from a run where every acceptance
-   * failed is the missing session, not token validation, and reporting it as
-   * proof would be exactly the vacuous pass this case exists to prevent.
+   * ON A SESSION THIS RUN PROVED WORKS — one that had already accepted a real
+   * invite. `requireUser()` refuses before the token is ever resolved, so a 401
+   * on any other session is the missing login rather than token validation, and
+   * reporting it as proof would be exactly the vacuous pass this case exists to
+   * prevent. The probe still RUNS on an unproven session, so
+   * `invalidTokenStatus` can say what happened; it just is not evidence.
    */
   readonly invalidTokenRefused: boolean;
   /** What the tampered token actually drew, so a report can show it. `null`
-   *  when no attempt was made (a pack that declares no invites). */
+   *  only when no attempt was made at all — a pack that declares no invites. */
   readonly invalidTokenStatus: number | null;
 }
 
@@ -137,7 +139,16 @@ export async function acceptClaimInvites(args: {
   const targets = invites.slice(0, Math.max(0, limit));
   const acceptedPersonIds: string[] = [];
   const rejected: ClaimRejection[] = [];
-  let firstSession: Session | undefined;
+  // Two sessions, and the distinction IS the negative case. `probeSession` is
+  // latched only from an acceptance that SUCCEEDED, so it is a login this run
+  // proved works; `fallbackSession` is merely the first one it signed in with.
+  // The tampered probe prefers the proven session and falls back to the other
+  // so the report can still say what a never-minted token drew — but only a
+  // probe sent on the PROVEN session counts as evidence, because
+  // `requireUser()` refuses before the token is ever resolved and a 401 on an
+  // unauthenticated session says nothing about token validation.
+  let probeSession: Session | undefined;
+  let fallbackSession: Session | undefined;
 
   for (const inv of targets) {
     // A fresh session per invitee — the product matches the SIGNED-IN email
@@ -146,9 +157,10 @@ export async function acceptClaimInvites(args: {
     // this loop must not paper over it.
     const s = newSession();
     await transport.signIn(base, s, inv.email);
-    firstSession ??= s;
+    fallbackSession ??= s;
     const res = await transport.raw(base, s, `/api/claims/${inv.token}/accept`, "POST");
     if (isAccepted(res.status)) {
+      probeSession ??= s;
       const data = res.json.data as { person_id?: string } | undefined;
       acceptedPersonIds.push(data?.person_id ?? inv.personId);
     } else {
@@ -161,10 +173,11 @@ export async function acceptClaimInvites(args: {
   }
 
   let invalidTokenStatus: number | null = null;
-  if (targets.length > 0 && firstSession !== undefined) {
+  const probeOn = probeSession ?? fallbackSession;
+  if (targets.length > 0 && probeOn !== undefined) {
     const res = await transport.raw(
       base,
-      firstSession,
+      probeOn,
       `/api/claims/${tamperToken(targets[0].token)}/accept`,
       "POST",
     );
@@ -177,7 +190,7 @@ export async function acceptClaimInvites(args: {
     acceptedPersonIds,
     rejected,
     skipped: invites.length - targets.length,
-    invalidTokenRefused: invalidTokenStatus === 401 && acceptedPersonIds.length > 0,
+    invalidTokenRefused: invalidTokenStatus === 401 && probeSession !== undefined,
     invalidTokenStatus,
   };
 }

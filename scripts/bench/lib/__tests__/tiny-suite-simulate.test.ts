@@ -43,6 +43,7 @@ import {
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { OracleResult } from "../report.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -936,6 +937,24 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // Five, and the fifth is the tell: `people: an accepted invite is closed`
     // is pushed ONLY when something was actually accepted, so a run where the
     // claim step silently accepted nothing lands on four.
+    // B06a task 6, found in review — every oracle this runner pushes must
+    // PARSE its own schema. `OracleResult`'s `superRefine` (`report.ts:140-164`)
+    // requires `passed === (verdict !== "fail")` and forbids
+    // `no_subject` beside `subject: true`; `writeReport` (`:790`) parses
+    // before writing, so a row breaking either rule fails no assertion
+    // anywhere — it throws inside the report writer and the run ends with NO
+    // report on disk. Every suite-level test calls the runner and never
+    // `writeReport`, so this whole class was invisible to all of them.
+    //
+    // Deliberately per-ORACLE rather than `BenchReport.parse(report)`: the
+    // runner returns a partial report (`runId` and friends are added by
+    // `bench.ts`), so the whole-report parse would red on fields this layer
+    // does not own. Broad within its scope on purpose — it guards every
+    // oracle this runner will ever push, not only the ones below.
+    for (const o of report.oracles ?? []) {
+      expect(() => OracleResult.parse(o), `oracle "${o.name}" does not parse`).not.toThrow();
+    }
+
     expect(peopleOracles.map((o) => o.name)).toEqual([
       "people: claim invites accepted",
       "people: an invalid claim token is refused",
@@ -1193,11 +1212,17 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(accepted?.detail).toContain("HTTP 409");
     expect(report.gate).toBe("red");
     // And the negative case does NOT report a pass off the back of it: every
-    // acceptance failed, so a refusal of the tampered token proves nothing
-    // about token validation. `invalidTokenRefused` stays false.
-    expect((report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused")).toMatchObject({
-      passed: false,
-    });
+    // acceptance failed, so a refusal of the tampered token proves the session
+    // was missing rather than that the token was checked. That is NO SUBJECT,
+    // not a failure — the claim surface here refuses everything, which is not
+    // evidence that it validates tokens, and calling it a token-validation
+    // defect would name a cause this run never established.
+    const negative = (report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused");
+    expect(negative).toMatchObject({ verdict: "no_subject", subject: false, passed: true });
+    expect(negative?.detail).toContain("accepted NO real invite");
+    // …and it contributes no error of its own: the run is red on the
+    // acceptances alone.
+    expect((report.errors ?? []).some((e) => e.includes("not validating the token"))).toBe(false);
     // Nothing was accepted, so the "an accepted invite is closed" row is not
     // pushed at all — a run that reported it here would be reporting on an
     // empty set.

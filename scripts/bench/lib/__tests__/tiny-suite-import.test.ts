@@ -29,7 +29,7 @@ import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import type { DivisionCardSource } from "./_oracle-routes.ts";
-import { makeClaimRoutesWorld, type ClaimRoutesOptions } from "./_claim-routes.ts";
+import { makeClaimRoutesWorld } from "./_claim-routes.ts";
 import { makeDisciplineRoutesWorld } from "./_discipline-routes.ts";
 import {
   makeOracleRoutesWorld,
@@ -57,8 +57,6 @@ function slug(s: string): string {
 
 function fakeServer(opts: {
   refuseImportWith?: { status: number; code: string; message: string };
-  /** B06a T6 — knobs for the shared claim rail (`_claim-routes.ts`). */
-  claimRoutes?: ClaimRoutesOptions;
 } = {}): {
   transport: ProbeTransport;
   sql: PlanSql;
@@ -169,7 +167,7 @@ function fakeServer(opts: {
   // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
   // now: the runner accepts the pack's player invites after the fold on every
   // `sql`-passing run.
-  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
+  const claims = makeClaimRoutesWorld();
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {

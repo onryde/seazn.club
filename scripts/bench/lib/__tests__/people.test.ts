@@ -51,7 +51,18 @@ const THREE = [invite(1), invite(2), invite(3)];
  * that hands it a wrong token or a wrong session gets a refusal it did not
  * ask for. That is the whole reason this file can prove anything.
  */
-function claimWorld(opts: { readonly known?: readonly MintedInvite[]; readonly acceptStatus?: number } = {}): {
+function claimWorld(
+  opts: {
+    readonly known?: readonly MintedInvite[];
+    readonly acceptStatus?: number;
+    /** Sign-in silently produces NO session for these addresses — the shape a
+     *  failed magic-link round trip takes on the wire, and the one that makes
+     *  `requireUser()`'s 401 indistinguishable from a token refusal. */
+    readonly signInFailsFor?: readonly string[];
+    /** The claim surface waves through any token a signed-in caller sends. */
+    readonly acceptAnyToken?: boolean;
+  } = {},
+): {
   transport: ProbeTransport;
   calls: string[];
 } {
@@ -61,7 +72,7 @@ function claimWorld(opts: { readonly known?: readonly MintedInvite[]; readonly a
   const calls: string[] = [];
   const transport: ProbeTransport = {
     async signIn(_base, s, email) {
-      emailBySession.set(s, email);
+      if (opts.signInFailsFor?.includes(email) !== true) emailBySession.set(s, email);
       calls.push(`SIGNIN ${email}`);
       return { has_org: false, org_id: "org-claimant", redirect: "/" };
     },
@@ -79,7 +90,13 @@ function claimWorld(opts: { readonly known?: readonly MintedInvite[]; readonly a
       // exactly the confusion the negative case must not be satisfied by.
       if (signedInAs === undefined) return refuse(401, "not signed in");
       const found = known.get(token);
-      if (found === undefined) return refuse(401, "This claim link is not valid");
+      if (found === undefined) {
+        if (opts.acceptAnyToken !== true) return refuse(401, "This claim link is not valid");
+        return {
+          status: 200,
+          json: { ok: true, data: { person_id: "unminted-person" } } as RawJson,
+        };
+      }
       if (claimed.has(token)) return refuse(409, "This profile has already been claimed");
       if (found.email.toLowerCase() !== signedInAs.toLowerCase()) {
         return refuse(403, `This invite was sent to ${found.email}`);
@@ -168,6 +185,36 @@ describe("acceptClaimInvites", () => {
     // negative case exists to avoid.
     const r = await acceptClaimInvites({ base: BASE, invites: THREE, limit: 3, transport: refusingWorld(401) });
     expect(r).toMatchObject({ accepted: 0, invalidTokenRefused: false });
+  });
+
+  it("probes with a session it PROVED works, not merely the first one it opened", async () => {
+    // The review scenario, and the one a naive latch gets wrong: invitee 1's
+    // sign-in silently produces no session, invitee 2's works. The claim
+    // surface here waves through ANY token from a signed-in caller, so the
+    // honest answer is `invalidTokenRefused: false`.
+    //
+    // A run that latched the probe session before knowing the acceptance
+    // result would send the tampered token on invitee 1's UNAUTHENTICATED
+    // session, draw `requireUser()`'s 401, and — with invitee 2's success
+    // satisfying an `accepted > 0` guard — report the negative case as PROVEN.
+    // That is the vacuous pass arriving by the back door.
+    const { transport } = claimWorld({
+      signInFailsFor: ["claimant1@example.com"],
+      acceptAnyToken: true,
+    });
+    const r = await acceptClaimInvites({ base: BASE, invites: [invite(1), invite(2)], limit: 2, transport });
+    expect(r.accepted).toBe(1);
+    expect(r.acceptedPersonIds).toEqual(["person-2"]);
+    expect(r.rejected[0]).toMatchObject({ person: "p-1", status: 401 });
+    expect(r).toMatchObject({ invalidTokenRefused: false, invalidTokenStatus: 200 });
+  });
+
+  it("still REPORTS what a tampered token drew when nothing was accepted, without calling it proof", async () => {
+    // The probe falls back to an unproven session so the report is not blank,
+    // but `invalidTokenRefused` stays false: a refusal on a session this run
+    // never proved says nothing about whether the token was checked.
+    const r = await acceptClaimInvites({ base: BASE, invites: THREE, limit: 3, transport: refusingWorld(409) });
+    expect(r).toMatchObject({ accepted: 0, invalidTokenStatus: 409, invalidTokenRefused: false });
   });
 
   it("reds when a tampered token is ACCEPTED", async () => {

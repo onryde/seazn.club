@@ -777,10 +777,10 @@ interface ClaimInviteMint {
 }
 
 /** `/claim/{secret}` (`lib/routes.ts:77`) — the secret is the last segment.
- *  Returns `null` for a response with no usable `claim_url`, so a product
- *  that stopped returning one shows up as an invite that cannot be accepted
- *  rather than as a token of `"undefined"` drawing a mystery 401. */
-export function claimSecretFromUrl(claimUrl: string | undefined): string | null {
+ *  Returns `null` for a response with no usable `claim_url`; every caller
+ *  REFUSES on that rather than dropping the invite, because a silently
+ *  shorter `mintedInvites` still reports "N/N invites accepted" green. */
+function claimSecretFromUrl(claimUrl: string | undefined): string | null {
   if (typeof claimUrl !== "string" || claimUrl.length === 0) return null;
   const segment = claimUrl.split("?")[0].split("/").filter((p) => p.length > 0).pop();
   return segment === undefined || segment.length === 0 ? null : segment;
@@ -1050,15 +1050,19 @@ export async function seedOfficialsAndClaims(
       // own step, deliberately after the fold so a claimed profile's stats can
       // be compared with what the leaderboard already proved.
       const secret = claimSecretFromUrl(minted?.claim_url);
-      if (secret !== null) {
-        playerMints.set(c.personRef, {
-          ref: c.personRef,
-          kind: "player",
-          personId,
-          email: c.email,
-          token: secret,
-        });
+      if (secret === null) {
+        throw new Error(
+          `claim invite for person ref "${c.personRef}" was minted with no usable claim_url — ` +
+            "the one-time secret is shown once and nothing downstream can accept this invite",
+        );
       }
+      playerMints.set(c.personRef, {
+        ref: c.personRef,
+        kind: "player",
+        personId,
+        email: c.email,
+        token: secret,
+      });
     }),
   );
 
@@ -1093,15 +1097,19 @@ export async function seedOfficialsAndClaims(
       );
       officialClaimInviteByRef.set(o.ref, read);
       const secret = claimSecretFromUrl(minted?.claim_url);
-      if (secret !== null) {
-        officialMints.set(o.ref, {
-          ref: o.ref,
-          kind: "official",
-          personId: minted.person_id,
-          email: inviteEmail,
-          token: secret,
-        });
+      if (secret === null) {
+        throw new Error(
+          `official "${o.ref}"'s claim invite was minted with no usable claim_url — ` +
+            "the one-time secret is shown once and nothing downstream can accept this invite",
+        );
       }
+      officialMints.set(o.ref, {
+        ref: o.ref,
+        kind: "official",
+        personId: minted.person_id,
+        email: inviteEmail,
+        token: secret,
+      });
     }),
   );
 

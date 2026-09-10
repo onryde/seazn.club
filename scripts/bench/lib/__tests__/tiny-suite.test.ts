@@ -50,6 +50,7 @@ import {
 } from "../suites/tiny.ts";
 import type { Pack } from "../pack-schema.ts";
 import { makeScheduleWorld, type FakeScheduleOptions, type FakeScheduleWorld } from "./_schedule-routes.ts";
+import { makeClaimRoutesWorld } from "./_claim-routes.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "../../../..");
@@ -552,7 +553,13 @@ export function makeFakeServer(
   const schedule = makeScheduleWorld(opts.schedule ?? {});
   const registrationRowsByDivisionId = new Map<string, unknown[]>();
   const fixtureOfficials = new Map<string, unknown[]>();
-  const claimInvites = new Map<string, unknown>();
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back), shared with the four other suite-level fakes. This transport
+  // carries no `raw`, and every test here runs without `sql`, so the accept
+  // route is never reached from it — the mint's `claim_url` is what these
+  // tests need, because `seed.ts` now REFUSES a mint that carries no usable
+  // secret rather than dropping the invite from `mintedInvites`.
+  const claims = makeClaimRoutesWorld();
   const orgByEmail = new Map<string, string>();
   const orgBySession = new WeakMap<Session, string>();
   let orgCounter = 0;
@@ -697,17 +704,13 @@ export function makeFakeServer(
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
-      // B03 T6b — the official's OWN claim invite, same shared claim-invite
-      // map as the pack's player invites below (a distinct GET, never this
-      // POST's own echo, is what the driver trusts either way).
-      const officialInviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
-      if (method === "POST" && officialInviteMatch) {
-        const officialId = officialInviteMatch[1]!;
-        const personId = `invited-${officialId}`;
-        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return { person_id: personId } as T;
-      }
+      // B06a T6 — the official's OWN claim invite, the pack's player invites
+      // and the read-back all live in `_claim-routes.ts` now. This fake and
+      // the four beside it carried byte-identical copies, and the mint has to
+      // hand back a `claim_url` or nothing downstream can accept the invite
+      // (`seed.ts` refuses a secretless mint rather than dropping it).
+      const claimRouted = claims.handleRequest(method, routePath, body);
+      if (claimRouted !== undefined) return claimRouted.value as T;
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
@@ -722,16 +725,6 @@ export function makeFakeServer(
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        const row = { person_id: personId, token: `pc_${personId}`, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return row as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        return (claimInvites.get(personId) ?? null) as T;
       }
       // B03r tasks 9+10 — `runTinySuite`'s registration wiring reads final
       // rows back through this route (register.ts's `fetchFinalRows`). A

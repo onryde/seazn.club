@@ -80,8 +80,11 @@ export interface ClaimRoutesOptions {
   readonly closeUntouched?: boolean;
 }
 
-/** Mirrors `mintClaimSecret` (`person-claims.ts:31-33`): the `pc_` prefix and
- *  a body long enough that `tamperToken`'s rotation cannot land on a sibling. */
+/** Mirrors `mintClaimSecret` (`person-claims.ts:31-33`): a `pc_` prefix and a
+ *  base64url-safe body. Collision with a sibling is impossible regardless of
+ *  length — `tamperToken` (`people.ts`) rotates EVERY character after the
+ *  prefix and is injective, so two distinct secrets cannot tamper to the same
+ *  string. Length here is realism, not safety. */
 function secretFor(personId: string, n: number): string {
   return `pc_${personId.replace(/[^A-Za-z0-9]/g, "")}claimsecret${n}`;
 }
