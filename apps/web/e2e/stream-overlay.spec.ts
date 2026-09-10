@@ -189,15 +189,36 @@ for (const style of ["bar", "bug"] as const) {
         await page.setViewportSize({ width: 1920, height: 1080 });
         await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=${style}`);
         const chips = page.locator('[data-testid="ovl-chip"]');
-        // Three cards on the ledger, three chips on air. This is the half of
-        // the obligation that had never rendered for anyone before this seed.
-        await expect(chips, `${style}: one chip per card on the ledger`).toHaveCount(
-          HOCKEY_CARD_TONES.length,
-        );
+        // HOW MANY CHIPS IS PER THEME, and that is a product ruling rather than
+        // an accident (`_THEMES.md` §4, 2026-09-10): §3's bar carries the WHOLE
+        // detail list in its own 51 px band, while §4's bug caps its footer at
+        // the two most recent entries — "a corner bug is not a log". So the bug
+        // draws a SUFFIX of what the bar draws.
+        //
+        // The bug's number is NOT retyped here. `bug-footer-cap.test.tsx` pins
+        // the cap; what only a browser can say is that the cap BITES on a real
+        // ledger and that it keeps the NEWEST cards — a `slice(2)` instead of a
+        // `slice(-2)` would still draw two bordered chips and satisfy every
+        // per-chip assertion below.
+        const rendered = await chips.count();
+        if (style === "bar") {
+          expect(rendered, "the bar shows one chip per card on the ledger").toBe(
+            HOCKEY_CARD_TONES.length,
+          );
+        } else {
+          expect(rendered, "the bug must still show cards").toBeGreaterThan(0);
+          expect(
+            rendered,
+            `the bug's footer cap must BITE on ${HOCKEY_CARD_TONES.length} cards — it drew ${rendered}`,
+          ).toBeLessThan(HOCKEY_CARD_TONES.length);
+        }
+        // The TAIL, so the tones assert which cards survived the cap and not
+        // merely how many did.
+        const expectedTones = HOCKEY_CARD_TONES.slice(-rendered);
         const ink = await resolveInk(page, '[data-testid="ovl-chip"]');
 
         const fills: string[] = [];
-        for (const [i, { classKey, tone }] of HOCKEY_CARD_TONES.entries()) {
+        for (const [i, { classKey, tone }] of expectedTones.entries()) {
           const b = await borderOf(page, '[data-testid="ovl-chip"]', i);
           expect(b.widths, `${style}: ${classKey} chip border widths`).toEqual([
             "1px",
@@ -227,8 +248,8 @@ for (const style of ["bar", "bug"] as const) {
         }
         expect(
           new Set(fills).size,
-          `${style}: the three tones must be three colours, not one repeated (${fills.join(", ")})`,
-        ).toBe(HOCKEY_CARD_TONES.length);
+          `${style}: every tone drawn must be its own colour, not one repeated (${fills.join(", ")})`,
+        ).toBe(rendered);
       } finally {
         await page.context().close();
       }

@@ -1101,3 +1101,40 @@ are proved by `overlay-tokens.ts`'s contrast sweep and by nothing painted.
 `inspected: 0`, which the runbook calls a finding rather than a pass. Nothing
 here exercises `?delay=` (Task 5d) or the slate (Task 5e). And the gate still
 photographs no CRICKET overlay, so §3's chase line remains unphotographed.
+
+### 2026-09-10 (later) — two corrections after the footer fix landed
+
+**The e2e suite only authenticates against `localhost`, never `127.0.0.1`.**
+Measured on one server, one commit, one token: signing in at
+`http://localhost:3303` lands on `/onboarding` and sets `seazn_session` +
+`seazn_org` (**both `secure=true`, domain `localhost`**), and `/api/users/me`
+answers 200. The identical flow at `http://127.0.0.1:3303` stays on
+`/magic-link`, sets **no cookies at all**, and answers 401. The session cookies
+carry `Secure` because `lib/auth.ts:73,172` sets
+`secure: process.env.NODE_ENV === "production"` and the standalone prod server
+runs `NODE_ENV=production`; a browser stores a `Secure` cookie from
+`http://localhost` and not from `http://127.0.0.1`. The symptom is a **401 on
+the first authenticated write after sign-in**, several frames from the cause —
+`seedRosteredFixture: person "…" → 401`.
+
+This is repo-wide, not this spec's: every spec that signs in is affected, and
+`e2e/.auth/pro.json`'s cookies are domain-scoped to `localhost`, so even a
+valid storage state does not authenticate a `127.0.0.1` context. **Use
+`PLAYWRIGHT_BASE="$SMOKE_BASE"`** — `seazn-env env --label ovl` already emits
+`http://localhost:3303`.
+
+**The chip-count assertion was coupled to the pre-fix footer.** The §4 fix caps
+the bug's footer at the two most recent entries (`overlay-bug.tsx`'s
+`slice(-2)`), so the bug now draws 2 chips where the bar draws 3, and the
+hairline test reddened on `toHaveCount(3)`. Corrected without weakening it: the
+bar is still held to one chip per card, the bug is held to a count that is
+**greater than zero and strictly fewer than the bar's** (the cap must BITE on a
+real ledger), and the tones are taken from the **tail** of the seeded list — so
+a `slice(2)` in place of `slice(-2)` would draw two bordered chips, satisfy
+every per-chip assertion, and still red. The cap's NUMBER stays pinned by
+`bug-footer-cap.test.tsx`; the browser asserts what only a browser can.
+
+Re-verified on the rebuilt server at `e00bba49f`: **13 passed**
+(`stream-overlay.spec.ts` whole file) and **8 passed** (`capture.spec.ts`, all
+three groups). The `test.fail()` this task left behind did its job — the fix
+round deleted one line and changed no assertion.
