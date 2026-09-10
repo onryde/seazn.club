@@ -40,6 +40,12 @@ that seeds `delayMs`.
   (SRT in, WHEP/LL-HLS out).
 - 2026-09-07, decision G → *"all ok"*: 720p30 only at launch; 1080p is a
   post-R0 price note, not a bench cell.
+- 2026-09-10, ruling R-B (recorded in `_WAVE-2026-09-10-r2-prep.md`; a
+  recorded ruling, not a verbatim quote): multi-camera is wanted LATER with the
+  seams shaped NOW — boundaries that cannot be refactored unilaterally get
+  shaped for N today. **M1 lands in this bench as rows rather than a wave of its
+  own**, because R0 is already sizing the guest for 1x and the compute answer
+  gates every later multi-cam estimate.
 - `RULES.md` checklist: "Recommendation states the OWNER's value/cost" —
   the memo's verdict is a recommendation with £/match attached.
 
@@ -65,11 +71,41 @@ that seeds `delayMs`.
    (`POST /v1/apps/<bench app>/machines`, `region`, `config.guest`,
    `config.auto_destroy: true`) — the create/stop/delete calls themselves are
    part of the measurement (create-to-first-frame seconds per size).
+   **Multi-camera decode rows (M1, ruling R-B) — beside the 1x cells, not
+   instead of them**: `{ 2, 4 }` concurrent WHEP receivers on ONE relay page at
+   BOTH guest sizes (the same 720p30 source pulled N times, page compositing
+   live, scorebug ticking), 20 min per cell — this sizes COMPUTE, it does not
+   soak, so it does not buy four more 3 h runs. Record per receiver: decoded
+   fps and dropped frames; and per cell: total CPU % trend, RSS, and whether the
+   OUTPUT still holds 30 fps under scope 5's bars. Do not extrapolate 2x from
+   1x — decode, compositing and page memory do not scale at one rate; the memo
+   reports the measured curve.
+   *Rationale (state it in the memo, it is why the rows exist):* R0 sizes the
+   guest for ONE software-decoded 720p WebRTC stream. Multi-camera later means N
+   receivers PLUS page compositing on the SAME Machine, so if N does not fit an
+   economic guest then "the interfaces make it easy to extend" is false at the
+   COMPUTE layer however clean the interfaces are. Standing this bench up again
+   later costs the bench; one extra row now costs a row.
+   *The shape these rows justify or rule out — record it either way:* the
+   broadcast fallback is **program-plus-preview** — two receivers hot, the rest
+   cold, accepting 1–2 s of WHEP renegotiation when a third is pulled up. If 4x
+   holds the bars at an economic size, the fallback is unnecessary and multi-cam
+   may keep every source hot; if only 2x holds, program-plus-preview is the
+   design multi-cam MUST adopt and the memo says so; if 2x fails, multi-camera
+   does not fit this compositor at all, which is a product finding for the owner
+   (and speaks to M4).
 4. **Record per cell**: sustained fps and CPU % trend (1-min samples);
    dropped frames (ffmpeg `-progress` `drop_frames`); A/V drift at 0 / 90 /
    180 min (clap-sync on a destination capture); tick smoothness in the
    OUTPUT (frame-step a 10 s capture at each hour; count duplicate/skipped
-   frames across one tick); pull-leg latency per path — WHEP AND LL-HLS —
+   frames across one tick); **frame timing (D5)** — burn a monotonic frame
+   ordinal into the source beside the clock, decode a 10 s window of the OUTPUT
+   at 0 / 90 / 180 min and read the ordinal sequence: report duplicated frames
+   and gaps per minute and the longest clean run between anomalies, over content
+   that PANS continuously (a horizontal scroll across the full frame, not
+   `testsrc2` alone — judder shows on pans, which football and cricket cameras
+   do continuously). The row is a measurement of the decoded sequence, never
+   "video appeared"; pull-leg latency per path — WHEP AND LL-HLS —
    measured as wall-clock delta between the source clock burned into
    `testsrc2` and the composited output; any Fly host event (Machine
    restart, migration notice, `fly machine status` events); egress bytes
@@ -78,7 +114,13 @@ that seeds `delayMs`.
    dashboard field or API response the §6.5 guard will poll, its exact path
    and refresh cadence.
 5. **Verdict lines**, one per cell: PASS/FAIL against CPU < 80 % sustained,
-   drift < 100 ms/h, 30 fps held (no minute below 29.5); the Machine size
+   drift < 100 ms/h, 30 fps held (no minute below 29.5); **frame timing (D5):
+   zero duplicated frames and zero gaps in each 10 s ordinal window** — a held
+   30 fps AVERAGE and a flat drop-frame trend both survive a duplicate every few
+   seconds, so this bar is separate and is the one that answers smoothness; an
+   **N verdict for the M1 rows** (the largest N holding these same bars at an
+   economic size, and whether program-plus-preview is therefore required); the
+   Machine size
    recommendation R2 wires as default with £/3 h from the account's rate
    card; B3 vs B2 verdict (B2 stays the documented fallback ONLY if B3 fails
    at both sizes); the 1080p / next-size-up price note for the owner's later
@@ -128,7 +170,10 @@ CUSTOMER: "Verify visually, always" (the composited screenshots).
 ## Verify
 
 There is no repo command. The orchestrator checks: the memo file exists at
-the path above; each of the four cells has a verdict line; the teardown
+the path above; each of the four soak cells AND each of the four M1 decode
+cells (`{ 2, 4 }` receivers × both sizes) has a verdict line, and the frame-
+timing bar (D5) is reported per cell as its own line rather than folded into
+fps; the teardown
 table shows zero Machines and zero live inputs; the appendix is marked
 THROWAWAY. Final message under 15 lines — cell verdicts, Machine size
 recommendation, WHEP vs LL-HLS latency, cost per 3 h, blockers.
@@ -157,3 +202,13 @@ recommendation, WHEP vs LL-HLS latency, cost per 3 h, blockers.
 5. That the storage-headroom figure is readable by API at all — if only the
    dashboard shows it, that is a finding for §6.5's guard (poll cadence
    becomes a manual runbook step until Cloudflare exposes it).
+6. **That a held 30 fps means SMOOTH motion (D5).** Watch 1 asks whether
+   capture WORKS at 720p — a question about capture, not about smoothness.
+   `x11grab` polls `:99` on a 30 fps clock while Chromium paints on its own
+   schedule under SwiftShader; the two clocks beat, and the periodic duplicate
+   and dropped frames that result pass both the fps bar and the drop-frame
+   trend. Settled ONLY by scope 4's frame-ordinal row on panning content, never
+   inferred from fps, and never from "the picture looked fine".
+7. That N-way WHEP decode scales linearly from the 1x cell (M1) — 2x and 4x are
+   measured cells, not arithmetic; if a cell cannot run, the memo says which and
+   why, and program-plus-preview stays unruled rather than assumed.

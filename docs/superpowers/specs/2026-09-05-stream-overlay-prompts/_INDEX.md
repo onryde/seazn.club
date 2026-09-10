@@ -55,6 +55,7 @@ Waves:
 | T1a | theme design — slate (§4a), Phone tab (§8a), credits card (§8b), decided/void rows, the derived slab ink (§5) and the §2 contrast rows, all into `_THEMES.md` | **done 2026-09-08.** Owner picked **1A · 2A · 3A · 4A · 5C**, plus a separate addendum ruling: the red-card chip and the live dot take a 1-px `--sport-ink` hairline | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 #752 | `_RULES.md` §Merge gates 1–8; owner per-screen sign-off on the five picks — asked per artboard, five verdicts |
 | T1b | visual gate harness — `lib/contrast.ts`, `components/overlay/overlay-tokens.ts` + the eleven-sport contrast sweep, `e2e/visual/{manifest.ts,manifest.json,seeds.ts,asserts.ts,capture.spec.ts}`, `visualSeedRoutesSuite` in `scripts/smoke.ts`, `docs/runbooks/visual-gate.md`, `overflowingIn` moved to `e2e/helpers.ts`, and the D4 `min-w-0` fix in `court-card.tsx` | **done 2026-09-08.** Manifest ships **two groups, six rows**: `public-fixture` → `fixture-320`, `fixture-320-zoom125`, `fixture-768` (backdrop `dark`), `fixture-1280`; `embed-standings` → `standings-768`, `standings-320`. Six PNGs, all hashes distinct | `plans/2026-09-07-streaming-t1.md` | `T1-theme-and-visual-gate.md` | PR-T1 #752 | `_RULES.md` §Merge gates 1–8. **The plan's "six deliberately red contrast tests as the PR's open finding" did NOT ship** — pick 5C lands the suite green with hockey's 4.46 pinned two-sided. RP owed: `lib/contrast.ts` is a donor tidy — `scorepad/v3/__tests__/contrast.test.ts` still carries its own copy of the same formula, and `scorepad/**` is off-limits to this programme |
 | W2 | `OverlayMoment` + per-sport allowlist, FIFO slab (4 s hold, reduced-motion instant), consent on names, cricket batter/bowler line; source = spectator W1's model or the `score_events` fallback | Prompt written; plan in flight; blocked on spectator W1 merge + RE-PIN | `plans/2026-09-05-stream-overlay-w2-moments.md` | `W2-moments.md` | — | As W1, plus task-zero RE-PIN table in the PR |
+| R2-prep | Documentation wave (no product code): fold the 22-row relay signal-path register into its owning documents before R2 starts — D1–D5, T1–T5, U1, C1–C2, M1–M4, P1–P5, plus six extras E1–E6 found while pinning it; owner rulings R-A and R-B taken during it | **Opened 2026-09-10**, branch `feat/stream-r2-prep` | — (docs wave; no plan file) | `_WAVE-2026-09-10-r2-prep.md` | — | Every register row lands in a named document or is recorded as a finding against the register; nothing is silently dropped. Per-row map: "## 2026-09-10 — wave R2-prep" below |
 
 ## Owner rulings
 
@@ -1192,3 +1193,237 @@ entitlement grant.
 - `stream-overlay-w2-moments.md` plans `overlay.moment.penaltyClass.*` with the
   same ten English words as `overlay.card.*` — it should **reuse** those keys
   rather than mint a second set.
+
+## 2026-09-10 — wave R2-prep (branch `feat/stream-r2-prep`)
+
+Opened 2026-09-10, documentation only. Register of record:
+`_FINDINGS-2026-09-10-relay-signal-path.html` (22 rows: D1–D5, T1–T5, U1,
+C1–C2, P1–P5, M1–M4), committed beside the wave brief
+`_WAVE-2026-09-10-r2-prep.md`.
+
+**Why the wave exists at all.** R0, R1 and R2 all have prompts and no plans, and
+none has started — no compositor code exists in the tree (no `x11grab`, no
+`module-null-sink`, no `runner-fly.ts`). So every D row is a prompt edit costing
+minutes rather than a defect costing a wave. That window closes the moment R2
+starts.
+
+### Owner rulings 2026-09-10 (R2-prep wave)
+
+Rulings BY THE OWNER, taken 2026-09-10. Everything else recorded in this section
+is a **recommendation** or a **finding** and is labelled as one. The two are not
+interchangeable, and neither is carried to a peer session as the other.
+
+24. **R-A — the QR contract carries BOTH credential shapes.** The capture QR
+    payload v1 carries the SRT triple *and* the RTMPS pair, plus a `preferred`
+    discriminator and a `slot`. The primary/fallback **ORDERING is DEFERRED to
+    R3**, informed by P5's device spike — ordering is a config line in an app
+    nobody has written, whereas the contract is a cross-repo boundary that costs
+    two repos to change. Supporting fact:
+    `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
+    response, so both shapes are already in hand at provision time; design §7.6
+    carries only SRT out of a payload that already had both. Closes register row
+    **C1**; NARROWS **T5** rather than closing it (the fallback leg is recorded
+    as unproven, with the reason, in R2's acceptance).
+25. **R-B — multi-camera is WANTED, later, with the seams shaped now.** Not
+    parked, not built. The line: a boundary that **cannot be refactored
+    unilaterally** gets shaped for N today — the **session model** (changing it
+    later is a migration), the **cross-repo QR contract** (a second repo), the
+    **provider port** `RunnerProvider` (a provider seam). Everything
+    **in-process** explicitly does **NOT**: relay page layout, switching,
+    per-source `jitterBufferTarget`, cross-source NTP — pre-building those is
+    the speculative generality `AGENTS.md` forbids. Closes register row **M4**.
+
+    **The modelling decision that makes R-B cheap: N inputs under ONE session,
+    not N sessions.** That keeps `fixture_stream_sessions_one_active` correct as
+    written (design §6.1), keeps credits and the state machine per-broadcast,
+    and keeps §7.4's "one Machine, no fan-in" true.
+
+    **Consequences.** **M3 becomes MANDATORY** — extract `fixture_stream_inputs`
+    (`session_id`, `slot smallint`, the ingest columns that sit on the session
+    row today, `created_at`); R1 and R2 write exactly one row at slot 0, and
+    multi-cam later INSERTS rows instead of migrating a shipped table. An
+    `inputs jsonb` column is **rejected**: no constraints, and this repo has
+    already been bitten by jsonb coercion reading a written value back as
+    something else. **M1 returns as ONE ROW in R0's bench rather than a wave** —
+    if N-way WHEP decode does not fit an economic guest, "easy to extend" is
+    false at the compute layer however clean the interfaces are, and R0 is
+    already sizing that guest for 1x. **M2 stays deferred as mechanism** — see
+    below.
+
+Both rulings are struck through in `_OPEN-QUESTIONS.md` as **Q18** (R-A) and
+**Q19** (R-B), per this programme's convention that an answered question moves
+here with its date.
+
+### The fold map — every register row and where it went
+
+So that every one of the 22 rows is auditable, and a row that is NOT in a
+document is visible as such. Destinations are from the wave brief; the rows
+marked *finding* did not survive re-pinning and are recorded rather than folded.
+
+| id | destination | edit |
+|---|---|---|
+| D1 | `R2-compositor.md:74-76` | drop `muted` from the video element |
+| D1 | design §7.3 | specify the element's attributes — §7.3 specifies none, which is how the drift got in |
+| D2 | design §7.2 | name `module-null-sink` AND `set-default-source <sink>.monitor` |
+| D3 | `R2-compositor.md` scope 4, design §3.3 | snap on transport change, resume EWMA after |
+| D4 | design §7.1, R2 scope 5 | pin the Machine restart policy to `no` |
+| D5 | design §7.2, `R0-bench.md` | the x11grab/Chromium clock beat; R0 watch 1 asks whether capture WORKS, not whether it is smooth |
+| T1 | R2 acceptance | a level floor (`astats`/`volumedetect`), not stream presence |
+| T2 | R2 scope 7 | an assertion that reads the clap burst, with a millisecond budget |
+| T3 | R2 scope 4 + mutants | controller unit, step input, bounded time-to-converge |
+| T4 | R2 scope 7 | burn a frame ordinal; assert the decoded sequence has no repeats or gaps |
+| T5 | R2 scope 7 | narrowed by R-A: record the fallback leg as unproven, and why |
+| U1 | design §7.4, `_OPEN-QUESTIONS.md` **Q17** | BLOCKED on the Cloudflare account; until the spike runs, stated as load-bearing and unobserved |
+| C1 | design §7.6 | dual credentials + `preferred` + `slot` — CLOSED by ruling 24 (R-A) |
+| C2 | design §7.1 | write `RunnerProvider` down; the hold window as a BEHAVIOURAL clause, not just fields |
+| M1 | `R0-bench.md` | 2x and 4x WHEP decode beside the 1x guest sizing |
+| M2 | this file, below | DEFERRED; the mechanism owed when multi-cam is specced |
+| M3 | design §6.1, `R1-relay-core.md` | extract `fixture_stream_inputs` |
+| M4 | `_OPEN-QUESTIONS.md` **Q19**, ruling 25 above | RULED — R-B |
+| P1–P5 | this file, below | the capture repo's inheritance; two rows constrain work in THIS repo |
+| E1–E6 | see the wave brief | six extras found while pinning the register; E2 folded into `_STATE.md`, E3 corrected below |
+
+### M2 — DEFERRED: cross-source capture sync has no mechanism at all
+
+**Deferred, and owed when multi-camera is specced.** Not a defect in R2, which
+ships single-camera; recorded here because it is the one multi-cam row that
+ruling 25 does *not* shape a seam for, and a later wave will otherwise re-derive
+it from scratch.
+
+Each phone must report an **NTP-synced CAPTURE timestamp through the session
+API**, folded into its playout target. Equalising transport latency with
+`jitterBufferTarget` aligns **ARRIVAL**, not **CAPTURE**: independent handset
+clocks with no genlock mean a cut taken mid-delivery jumps. Handset NTP is
+accurate to tens of milliseconds; **without this mechanism the floor is 100–300
+ms of visible error**, which is the difference between a cut and a glitch.
+
+Consistent with ruling 25's line: the timestamp FIELD is a cross-repo session-API
+boundary and would be shaped now if it were free, but the playout-target folding
+is in-process and is explicitly not pre-built.
+
+### P1–P5 — the capture repo's inheritance, recorded here because two rows constrain THIS repo
+
+R3's native capture apps live in their own spec in the capture repo (ruling 18).
+The app owns its binding — HaishinKit.swift on iOS, StreamPack on Android, a
+React Native shell; no third-party streaming plugin (`haishin_kit` was ruled out
+on its own maintainer's advice, and its Android engine has no SRT). These are the
+risks that survive that decision. **Two of them are not the capture repo's
+problem alone:**
+
+- **P5 — no device spike has been run against the chosen engines. STARTABLE NOW,
+  and it touches nothing in R2.** One afternoon before R3 commits: StreamPack on
+  a real Android handset and HaishinKit.swift on a real iPhone, landscape,
+  publishing three hours into a real Cloudflare input, with the screen locking
+  part-way. It settles P1, P3 and P4 together and gives the binding estimate a
+  floor. **It blocks the R3 estimate and nothing else** — R2's soak drives a
+  synthetic source and needs no phone, so P5 runs in parallel with R2 rather
+  than on its critical path. (It does share R0/R1/U1's one blocker: a real
+  Cloudflare input needs the account.)
+- **P1 — iOS drops the camera when backgrounded; Android does not. This changes
+  what R2's SOAK should prove.** Android keeps publishing behind a foreground
+  service with the right `foregroundServiceType`; iOS will not keep the camera
+  running in the background at all. Over three hours the operator's phone **will**
+  lock, take a call, or be switched away from — so on iOS the slate-and-reconnect
+  path stops being an edge case and becomes **normal operating mode**. Either the
+  app prevents idle lock and warns the operator, or design §7.4's choreography
+  runs many times per match. A soak written as "prove the slate covers a rare
+  blip" is therefore written against the wrong hypothesis.
+
+The other three, for completeness, are R3-scoped and constrain nothing here:
+**P2** the publish loop must live in native code, not JavaScript (a stalled JS
+thread or a backgrounded app must not take the stream with it; native owns
+connect, publish, reconnect and protocol fallback, reporting upward at ~1 Hz).
+**P3** thermal and battery behaviour over a full match is unvalidated — assume
+mains or a large PD bank; 720p30 at 3000k is the right ceiling but has not been
+measured on the handsets clubs own. **P4** landscape capture is a known trap in
+this problem space (HaishinKit.dart issue #160: preview and outgoing stream
+remained portrait in landscape) — prove preview orientation, encoded orientation
+and rotation metadata **separately**; they fail independently.
+
+### E3 CORRECTION — the organiser-panel blocker, re-pinned 2026-09-10
+
+The "W1 closing: what is OWED to the next wave" section above records this
+blocker in terms of `canEdit` (via `editable`) alone. **Re-pinned against this
+tree, the gate is FOUR conditions across TWO files, and the recorded mechanism is
+one of three competing accounts.** All anchors below were opened and read on
+2026-09-10, not grepped.
+
+**The gate.** `apps/web/src/components/v2/desk/run-sheet-row.tsx:386` — note the
+`desk/` segment, which the wave brief's path omits:
+
+```
+const showStream = canEdit && stream !== undefined && stream.entitled;
+```
+
+The middle condition is **not free**. `stream` is `undefined` unless the division
+page passes it, and `d/[divSlug]/page.tsx:424` reads
+`const streamOffered = tab === "fixtures" && editable;` with `:427` building the
+object only when `streamOffered`. `editable` is itself `:259`
+`canEdit && !billingFrozen`. So reaching the panel needs: the fixtures tab, an
+org that is not billing-frozen, a session that can edit, **and** the entitlement.
+
+**The entitlement half — the recorded reason is wrong, and the fix already
+exists.** `stream.entitled` is `:426`
+`hasFeature(auth.orgId, "streaming.overlay", competition.id)`. It is not a PLAN
+read at all: `streaming.overlay` is granted by no plan on any tier, so no
+plan-setting helper could ever satisfy it — which makes "the plan-setting helper
+is group-scoped, not org-scoped" true of that helper but beside the point.
+`e2e/overlay-kit.ts:240-241` already ships the right tool, ORG-scoped and lifting
+exactly the key the gate reads:
+`setBoolEntitlementOverrideSql(orgId, "streaming.overlay", true)`. **A panel rig
+calls `grantOverlay(orgId)`; the entitlement half is solved.**
+
+**The `canEdit` half — three accounts, and only one has an observation behind
+it.** Recorded so the next session does not pick one and build a rig on it:
+
+1. *This file's W1-closing section:* the SQL-minted org is never selected as the
+   session's ACTIVE org, so sign-in lands on `/onboarding` and `canEdit` is
+   false. Its evidence is an observation — `run-sheet-edit-time` is absent too,
+   and that control has nothing to do with streaming. **This is the only one of
+   the three with a measurement behind it.**
+2. *The wave brief's account:* "the browser arrives as `AUTH_STATE`, a different
+   user in the shared Pro org". **False as written for `seedOverlayFixture`:**
+   `overlay-kit.ts:164` is `await signInAs(page, ownerEmail)`, and the docblock
+   at `:135-137` states "`page` is left SIGNED IN as the rig's owner". The mint
+   block the brief cites as `:151-159` is `:149-162` (four inserts inside
+   `withDb`); the drift is one line at each end.
+3. *The AUTH_STATE hazard, which is real but arrives differently:* the same
+   docblock tells callers the overlay route is anonymous and "every assertion
+   should open its own context", and a bare `browser.newContext()` inherits the
+   project `storageState` — the shared Pro org, a different user against the
+   minted org. A panel assertion written the way the overlay assertions are
+   written lands in exactly this hole.
+
+**Recommendation (mine, not a ruling): drive the panel once by hand before
+writing the rig.** Which of the three is live is settled by loading
+`?tab=fixtures` as the minted owner and looking, not by reading any of them. A
+read is not a run.
+
+**And the brief's conclusion stands, for a reason worth writing down.** Fixing
+`canEdit` alone leaves the panel invisible with **no distinct empty state to say
+why**: a false `stream.entitled` and an absent `stream` both collapse to
+`showStream === false` at `:386`, so the DOM cannot tell a test which of the four
+conditions failed. A rig that gets three of four right reports the same nothing
+as a rig that gets none.
+
+**One brief claim narrowed, not corrected:** `fixture-stream-panel.tsx` has one
+reference under `apps/web/e2e` — a COMMENT at `stream-overlay.spec.ts:672`
+naming the unit-test file. The W1-closing section's phrasing, "zero **browser**
+references", is the accurate one and stands: nothing renders it.
+
+### What this wave does NOT do
+
+- It writes **no product code**. The organiser-panel e2e (G1) is the only code
+  task the wave brief carries, and it is tracked separately.
+- It does **not** answer U1 — blocked on the Cloudflare account, an owner
+  action. See `_OPEN-QUESTIONS.md` Q17.
+- It does **not** renumber the design's migrations. E1 (design §5.1's `V401` and
+  §6.1's `V402` are both taken on `main`) is recorded in `_STATE.md` against the
+  standing RULE — read the tail of `db/migration/deltas`, never carry a number
+  forward from a document.
+- The remaining extras **E4** (design §6.1 says RLS is enabled on "all three
+  tables" and defines two), **E5** (§6.3 returns `503 storage_exhausted` while
+  §6.4 lists it as a `failed(reason)` state — they disagree on whether that
+  condition ever creates a row) and **E6** (§9a makes ports-and-adapters binding
+  while `RunnerProvider` is named and never defined) belong to the design of
+  record and are folded there, not here.

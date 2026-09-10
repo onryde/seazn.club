@@ -12,6 +12,12 @@ log with the date and the owner's words, and are struck through here.
 Ordering: Q1–Q4 change what a viewer sees and should be answered before W1
 starts. Q5–Q9 can be answered during W1. Q10–Q13 are W2 or later.
 
+**Q17–Q19 were added 2026-09-10 and belong to the RELAY tier (R0/R1/R2), not
+to the overlay waves.** They come from the relay signal-path register
+`_FINDINGS-2026-09-10-relay-signal-path.html` and each carries its register id
+so the row is auditable back to it. They sit after Q13, ahead of the struck
+Q14, because two of the three are already ruled and only Q17 is live.
+
 ---
 
 ## ~~Q1~~ ANSWERED 2026-09-06 — "we can add it as required"
@@ -325,6 +331,109 @@ problem this design does not: the video is delayed five to thirty seconds
 behind our sub-second score, so the page would spoil the wicket before the
 viewer sees it. Solving that needs a per-stream delay setting and event
 buffering. Worth doing, worth doing separately.
+
+---
+
+## Q17 (register U1). What does the PLAYBACK side see while a Cloudflare live input is disconnected?
+
+**What.** Nobody knows. Cloudflare documents `timeoutSeconds` as governing when
+a disconnect starts a new recorded **video**, and it is nested under
+`recording`; neither it nor the Stream Live write-up says whether the WHEP or
+RTMPS **playback** connection stays open and starves, or closes, while the input
+is away. The whole composited tier's "the encoder never restarts" property rests
+on the answer, so this is load-bearing and, today, unobserved.
+
+**The experiment** (ten minutes, once there is an account): attach a player to
+the playback URL, kill the encoder, watch thirty seconds.
+
+**Why it must be answered BEFORE R2 and not during it.** If the pull CLOSES, the
+slate has to be driven by reconnect logic rather than by frame starvation — the
+same outcome for a viewer, different code, and much harder to retrofit once R2
+has hardened around the starvation shape.
+
+**Status: BLOCKED, on an owner action.** The code tree references **no
+Cloudflare env var at all**: `CF_ACCOUNT_ID` and `CF_API_TOKEN` appear only in
+`README.md:164-165`, as prerequisites, and nowhere under `apps/`, `packages/` or
+`scripts/` (verified 2026-09-10). Provisioning a Cloudflare account and a
+Stream-scoped API token is an owner action, and until it happens this question is
+unanswerable by anyone — including by reading the docs, because `timeoutSeconds`
+does not describe playback.
+
+**Recommendation (mine, a recommendation and not a ruling): provision the
+account and run this spike before R2's plan is written.** It is the cheapest
+experiment in the programme and it decides the shape of R2's central mechanism.
+Until it is run, design §7.4's no-restart choreography is to be stated as
+**load-bearing and unobserved**, never as a proven property.
+
+**Blocks:** design §7.4's text, and it shares its single owner action with R0
+and R1 — see `_STATE.md`, "one owner action gates three items".
+
+---
+
+## ~~Q18~~ (register C1) RULED 2026-09-10 — the QR contract carries BOTH credential shapes
+
+**Owner ruling R-A, taken 2026-09-10** (recorded as ruling 24 in `_INDEX.md`).
+The capture QR payload v1 carries the SRT triple **and** the RTMPS pair, plus a
+`preferred` discriminator and a `slot`.
+
+**Why it is mandatory rather than defensive.** SRT is three fields, RTMPS is
+two. With SRT primary and RTMPS the automatic fallback, the app needs both sets
+in hand at scan time — it cannot re-scan a QR code when UDP turns out to be
+blocked at the ground, on a phone that may not have the connectivity to ask for
+anything. Supporting fact: `stream.liveInputs.create()` returns
+`{ uid, rtmps, srt, webRTC }` in ONE response, so both shapes are already in
+hand at provision time; design §7.6 carries only SRT out of a payload that
+already had both.
+
+**Deferred by the same ruling: the primary/fallback ORDERING goes to R3**,
+informed by P5's device spike. Ordering is a config line in an app nobody has
+written; the contract is a cross-repo boundary that costs two repos to change.
+
+**Consequence:** register row **T5** (the RTMPS fallback leg is unproven) is
+NARROWED, not closed — R2's acceptance records the fallback leg as unproven and
+says why, instead of letting the soak's SRT leg read as coverage of both.
+
+---
+
+## ~~Q19~~ (register M4) RULED 2026-09-10 — multi-camera is WANTED, later, with the seams shaped now
+
+**Owner ruling R-B, taken 2026-09-10** (recorded as ruling 25 in `_INDEX.md`).
+The question raised was whether multi-camera belongs to Tier A rather than being
+a Tier B gap to close — OBS already does switching, scenes, audio mixing and
+replay natively and free, so a club with a laptop gets a better production from
+Tier A today than a multi-cam wave would deliver in Tier B. Ruled: **multi-camera
+is wanted. Not parked, not built now, and the seams are shaped today.**
+
+**The line drawn.** A boundary that **cannot be refactored unilaterally** gets
+shaped for N **today**:
+
+- the **session model** — changing it later is a migration;
+- the **cross-repo QR contract** — changing it later costs a second repo;
+- the **provider port** (`RunnerProvider`) — a provider seam.
+
+Everything **in-process** explicitly does **NOT**: the relay page layout,
+switching, per-source `jitterBufferTarget`, cross-source NTP. Pre-building those
+is exactly the speculative generality `AGENTS.md` forbids.
+
+**The modelling decision that makes the ruling cheap: N inputs under ONE
+session, not N sessions.** That keeps `fixture_stream_sessions_one_active`
+correct as written, keeps credits and the state machine per-broadcast, and keeps
+"one Machine, no fan-in" true.
+
+**Consequences, all three recorded in `_INDEX.md`:**
+
+- **M3 becomes MANDATORY** — extract `fixture_stream_inputs` (`session_id`,
+  `slot smallint`, the ingest columns that sit on the session row today,
+  `created_at`). R1 and R2 write exactly one row at slot 0; multi-cam later
+  INSERTS rows instead of migrating a shipped table. An `inputs jsonb` column is
+  **rejected**: no constraints, and this repo has already been bitten by jsonb
+  coercion reading a written value back as something else.
+- **M1 returns as ONE ROW in R0's bench, not as a wave.** If N-way WHEP decode
+  does not fit an economic guest then "easy to extend" is false at the compute
+  layer however clean the interfaces are — and R0 is already sizing that guest
+  for 1x, so the extra row is nearly free.
+- **M2 stays DEFERRED as mechanism** — cross-source capture sync has none at
+  all. Recorded in `_INDEX.md`; owed when multi-cam is specced.
 
 ---
 
