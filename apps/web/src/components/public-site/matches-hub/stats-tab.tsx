@@ -98,11 +98,21 @@ export function StatsTab({ doc, dict }: StatsTabProps) {
   // the document must satisfy — so what this catches is a direct render and a
   // `?tab=stats` deep link that outlived its data. A blank panel reads as a
   // broken page; a sentence reads as an empty one.
+  //
+  // The panel ROOT is inside this branch too (review F6). Both merged siblings
+  // return a bare `<p>` for their empty state, so `mh-matches` / `mh-table`
+  // simply do not exist there — except neither of them has a root testid in
+  // either state, so there is no parity to keep, and the brief mandates a
+  // `TabPanel`-style root here. A handle that vanishes on one arm is not a
+  // handle: Task 12 would write `[data-testid="mh-stats"]` and get a locator
+  // that resolves on a populated competition and not on an empty one.
   if (doc.leaders.length === 0) {
     return (
-      <p data-testid="mh-leaders-empty" className="py-8 text-center text-sm text-ink-muted">
-        {t(dict, "leaders.empty")}
-      </p>
+      <div data-testid="mh-stats" className="min-w-0">
+        <p data-testid="mh-leaders-empty" className="py-8 text-center text-sm text-ink-muted">
+          {t(dict, "leaders.empty")}
+        </p>
+      </div>
     );
   }
 

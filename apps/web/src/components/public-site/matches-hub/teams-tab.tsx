@@ -51,18 +51,45 @@ const LIGHT_INK = "#ffffff";
 const DARK_INK = "#0f172a";
 
 /**
+ * Every value CSS will actually paint as a colour here, and nothing else.
+ *
+ * NOT the same rule as `lib/contrast.ts`'s: `expandHex` (`contrast.ts:18`) is
+ * `hex.trim().replace(/^#/, "")` — it strips an OPTIONAL leading hash BEFORE
+ * validating the character set — so `"123456"` measures perfectly well there.
+ * It is not a CSS colour. `style="background:123456"` is a declaration the
+ * browser DROPS, which leaves the tile transparent and paints white initials on
+ * the card's white ground: invisible, and invisible only for the entrants whose
+ * colour came in without a hash. Review F1.
+ *
+ * That value is reachable rather than theoretical — `colour` is
+ * `team_display_v.colors.home_primary` (`competition-hub.ts:335-338`) and the
+ * v1 API takes `colors` as an unvalidated `z.record(z.string(), z.string())` on
+ * both write paths (`server/api-v1/schemas.ts:3169`, `:3180`). The club-hub
+ * picker is an `<input type="color">`; the API is not.
+ *
+ * So the gate is on what goes into the STYLE, not on what `expandHex` will
+ * tolerate, and the hash is ADDED rather than demanded: a bare `"123456"` is
+ * unambiguously six hex digits, and rendering the club's actual navy beats
+ * degrading it to grey over a punctuation mark. `components/v2/club-hub/
+ * kit-style.ts:7` takes the stricter line (`/^#[0-9a-f]{6}$/i`, refuse) for a
+ * value it round-trips through a form; this one only has to paint.
+ */
+const CSS_HEX = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
  * How to paint an entrant's monogram tile, or null to leave it neutral.
  *
  * TWO reasons this is a function and not `style={{ background: colour }}`,
  * which is what the brief asked for:
  *
  * 1. `entrants.colour` is free text (`TeamCard.colour` is
- *    `z.string().nullable()`), and `lib/contrast.ts`'s `expandHex` THROWS on
- *    anything that is not a hex colour — measured: `relativeLuminance("puce")`
- *    raises `not a hex colour: puce`. An unguarded call would take the whole
- *    spectator page down for one bad value typed into a form years ago.
- *    Anything unmeasurable therefore falls back to the neutral tile, and
- *    nothing unmeasurable ever reaches `style`.
+ *    `z.string().nullable()`), and a bad value has two distinct ways to hurt:
+ *    `lib/contrast.ts`'s `expandHex` THROWS on anything outside its charset —
+ *    measured: `relativeLuminance("puce")` raises `not a hex colour: puce`,
+ *    which would take the whole spectator page down — and anything CSS cannot
+ *    parse paints nothing at all, which is the quieter, worse one (see
+ *    `CSS_HEX` above). One gate closes both: nothing that fails it reaches
+ *    either `contrastRatio` or `style`.
  * 2. A fixed ink is wrong for half the colour wheel. White on `#123456` is
  *    12.7:1; white on a club's yellow `#ffdd00` is 1.3:1, which is not text.
  *    The ink is picked by the WCAG ratio itself rather than by a luminance
@@ -72,16 +99,36 @@ const DARK_INK = "#0f172a";
  *
  * Returned as a pair rather than as two calls, so the background a ratio was
  * computed against and the ink it chose cannot come apart.
+ *
+ * ONE GATE, NOT TWO. Round 1 wrapped the ratio in a `try`/`catch` as well, and
+ * the fix round's own sweep showed the pair covering for each other exactly as
+ * AGENTS.md 3 describes: with the `catch` present, dropping `CSS_HEX`'s charset
+ * survived (everything it then let through threw and was swallowed), and with
+ * the charset present, dropping the `catch` survived (nothing could throw). Two
+ * guards, neither killable. So the `catch` is gone and `CSS_HEX` is the single
+ * rule — it is the one that belongs here, because what this function owes is a
+ * string CSS will paint, not a string `contrast.ts` will measure.
+ *
+ * What the `catch` was insurance against — `lib/contrast.ts` NARROWING its
+ * accepted set under us, which would put a throw in a public page render — is
+ * now an assertion instead of dead code: the suite calls `contrastRatio` itself
+ * on every colour this gate accepts and requires it not to throw. That reds if
+ * the two rules ever diverge, which the `catch` never would have.
  */
 export function monogramInk(colour: string | null): { bg: string; ink: string } | null {
   if (!colour) return null;
-  try {
-    const ink =
-      contrastRatio(colour, LIGHT_INK) >= contrastRatio(colour, DARK_INK) ? LIGHT_INK : DARK_INK;
-    return { bg: colour, ink };
-  } catch {
-    return null;
-  }
+  const raw = colour.trim();
+  if (!CSS_HEX.test(raw)) return null;
+  // The ratio is measured against the NORMALISED value, not the raw input. The
+  // two agree today (`expandHex` strips the hash it needs, so a mutant reading
+  // `raw` here is equivalent — recorded rather than papered over with a
+  // contrived test), and measuring what is actually painted is the invariant
+  // worth stating.
+  const bg = raw.startsWith("#") ? raw : `#${raw}`;
+  return {
+    bg,
+    ink: contrastRatio(bg, LIGHT_INK) >= contrastRatio(bg, DARK_INK) ? LIGHT_INK : DARK_INK,
+  };
 }
 
 // One geometry for all three crest arms — a badge, a painted monogram and a
@@ -146,11 +193,17 @@ export function TeamsTab({ doc, dict }: TeamsTabProps) {
   // oddly here and the owner may prefer a `teams.empty`; that is a
   // four-dictionary addition plus a `gen-keys` regeneration, recorded in the
   // task report rather than taken unilaterally.
+  //
+  // The panel ROOT is inside this branch too — same reasoning as
+  // `stats-tab.tsx`'s (review F6): a testid that exists only on the populated
+  // arm is not a panel handle.
   if (doc.teams.length === 0) {
     return (
-      <p data-testid="mh-teams-empty" className="py-8 text-center text-sm text-ink-muted">
-        {t(dict, "division.entrantsEmpty")}
-      </p>
+      <div data-testid="mh-teams" className="min-w-0">
+        <p data-testid="mh-teams-empty" className="py-8 text-center text-sm text-ink-muted">
+          {t(dict, "division.entrantsEmpty")}
+        </p>
+      </div>
     );
   }
 

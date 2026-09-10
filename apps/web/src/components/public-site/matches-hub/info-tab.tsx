@@ -22,6 +22,16 @@ export interface InfoTabProps {
    * The VIEWER's locale, used for exactly one thing: `Intl.ListFormat` on the
    * venue list. It is deliberately NOT threaded into the dates — see
    * `competitionDateLine`.
+   *
+   * ⚠️ THREE LANGUAGES CAN MEET IN ONE PANEL, and Task 11 owns the decision
+   * (review F9). `competition-hub.ts:368` builds the whole document in the
+   * ORG's `default_locale`, so every pre-resolved string in it — the board
+   * labels on the Stats tab, `divisionName` everywhere — is org-language. This
+   * prop is the viewer's, and drives the venue conjunction. The dates are
+   * en-GB in all four. A Spanish viewer of an English org therefore reads
+   * Spanish chrome, English board labels and English dates on one screen. That
+   * is the shipped behaviour of the merged document, not a choice this file
+   * makes; what Task 11 decides is which dict it hands down here.
    */
   locale: Locale;
   /** The competition's own prose. The page renders it (`renderProse` +
@@ -108,9 +118,23 @@ export function competitionDateLine(info: {
  * list breaks the alignment silently, renaming every link after its neighbour.
  *
  * So the join is STRUCTURAL: the division whose own href this `.ics` hangs off.
- * The position is the fallback, and the position's own index the fallback after
- * that — a testid still has to be unique even on a document where neither
- * matches. Both fallbacks are covered by the suite, so neither is dead code.
+ * The fallback is the entry's own INDEX, which is unique by construction.
+ *
+ * It used to fall back to `divisions[index]?.slug` first, and review F2 is
+ * right that that rung was worse than nothing. It breaks the very invariant
+ * this function's testid exists to hold, on exactly the document it was written
+ * for: with `divisions = [premier, sunday-league]` and
+ * `calendars = [{unmatched}, premier's]`, entry 0 falls to `divisions[0].slug`
+ * and entry 1 matches `premier` structurally, so BOTH links render
+ * `mh-info-calendar-premier` — the duplicate locator the Stats row testid was
+ * deviated from the brief to avoid, reintroduced two files later. And a
+ * filtered calendar list, the case the rung was insurance against, is precisely
+ * what produces an unmatched entry beside a matched one.
+ *
+ * `String(index)` is a worse LABEL and a correct id, which is the right trade
+ * for a testid: it is only ever read by a test or a locator, it is unique by
+ * construction, and it appears only on a document the builder cannot currently
+ * produce.
  */
 export function calendarSlug(
   calendar: { href: string },
@@ -118,13 +142,23 @@ export function calendarSlug(
   divisions: readonly { slug: string; href: string }[],
 ): string {
   const matched = divisions.find((d) => calendar.href === `${d.href}/calendar.ics`);
-  return matched?.slug ?? divisions[index]?.slug ?? String(index);
+  return matched?.slug ?? String(index);
 }
 
 // One class for every link on the tab, so the 44px tap target cannot be
 // present on three of them and missing on the fourth.
 const LINK_CLASS =
   "inline-flex min-h-11 min-w-0 items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 text-sm font-medium text-ink transition hover:border-accent hover:text-accent-strong";
+// RANK IS NOT SIZE (review F10). This class sits on a `<dt>` for the two
+// label/value rows, and on an `<h2>` for the calendar and share sections — the
+// same rank the Stats and Teams tabs give their division headings at
+// `text-xl md:text-2xl`. That looks inconsistent and is not: those sections are
+// this panel's top-level divisions of content, exactly as a division heading is
+// on those tabs, and an 11px label that heads a list of links is still the
+// heading of that list. Demoting them to `<h3>` to match their type size would
+// put a level skip under the page `<h1>` Task 11 supplies, with no `<h2>` on
+// this tab at all. The suite pins the level so the choice is a decision rather
+// than an accident.
 const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
 const VALUE_CLASS = "mt-0.5 text-sm text-ink";
 

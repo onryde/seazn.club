@@ -14,7 +14,10 @@
 // painted tile, and whether a two-up grid actually reflows are the post-mount
 // visual/e2e leg's after Task 12. No test below pretends to cover them.
 //
-// FOUR PLACES THE BRIEF WAS WRONG OR SILENT, each written up where it bites:
+// SIX PLACES THE BRIEF WAS WRONG OR SILENT, each written up where it bites.
+// Items 5 and 6 were shipped in round 1 without being declared, and review F7
+// and F8 are right that a deviation nobody wrote down is one Task 12 discovers
+// by writing the wrong locator:
 //
 //  1. The Info tab's dates are formatted in UTC, not in a competition zone.
 //     `HubInfo.startsOn`/`endsOn` are CALENDAR DATES and the schema says so
@@ -32,6 +35,13 @@
 //     is the same duplicate-id defect Task 9's `mh-table-{id}-row-{entrantId}`
 //     exists to avoid. Scoped to the board here, and the row inventory below
 //     asserts uniqueness rather than assuming it.
+//  5. The brief makes the leader's NAME the link ("name (a `Link` to
+//     `personHref` when non-null, plain text otherwise)"); the whole ROW is the
+//     link, so the tap target is 44px rather than one line of text high. Task
+//     12 must not write a name-scoped anchor locator — the `<a>` is the row.
+//  6. The brief's Teams card says "seed chip when `seed`". Shipped as
+//     `seed !== null`, which keeps the chip for a zero-seeded entrant; the
+//     literal truthiness silently drops it. Tested both ways below.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
@@ -39,6 +49,7 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
+import { contrastRatio } from "@/lib/contrast";
 import type { Dict } from "@/lib/i18n-constants";
 import { deriveHubTabs } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
@@ -72,6 +83,18 @@ const rootClasses = (h: string, testid: string): string[] =>
     .match(/class="([^"]*)"/)?.[1]
     ?.split(" ") ?? [];
 
+/** The opening tag of the element INSIDE a row that carries its geometry — a
+ *  `<Link>` when the leader has a player page, a `<div>` when not. The row
+ *  `<li>` itself carries only `min-w-0`, so the first `class="…"` after the
+ *  testid is the wrong element; this skips past the `<li …>` tag first. Reading
+ *  the tag WHOLE is what lets the tap target and the href be asserted on the
+ *  same element rather than merely both present somewhere in the row. */
+const rowBodyTag = (h: string, testid: string): string => {
+  const row = rowHtml(h, testid);
+  const at = row.indexOf("<", row.indexOf(">") + 1);
+  return row.slice(at, row.indexOf(">", at) + 1);
+};
+
 /** One `<li>`'s markup, from its testid to the first `</li>` after it. Review
  *  F4 of Task 9: a negative assertion read off the whole document — or even
  *  off the whole group — passes on markup that merely says the same thing
@@ -99,6 +122,11 @@ describe("StatsTab", () => {
    *    `p2` is MASKED (a consent fold), `p4` has no public player page
    *    (`publicProfile` false), and `p1`/`p3`/`p5` have both. The negative
    *    assertion therefore has two positives beside it, not one;
+   *  • `p6` has NO ENTRANT (review F4). `leaders.ts:311` emits
+   *    `entrantName: null` for a leader whose row carries no `entrant_id`, and
+   *    `hub-fixtures.tsx` defaults every row to "Blue Blazers", so both the
+   *    entrant line's conditional and `EntityLogo`'s `entrantName ?? person`
+   *    fallback had a live production arm no fixture reached;
    *  • sunday-league publishes two boards and premier one, so both arms of the
    *    two-up rule read off a single render (Task 9's shape).
    */
@@ -121,6 +149,10 @@ describe("StatsTab", () => {
           value: "19",
         }),
         leader("p4", "Dara Quinn", null, { entrantName: "Wanderers", value: "11" }),
+        leader("p6", "Femi Adeyemi", "/riverside/autumn-cup/players/p6", {
+          entrantName: null,
+          value: "7",
+        }),
       ]),
       board("premier", "wickets", [
         leader("p5", "Elif Demir", "/riverside/autumn-cup/players/p5", {
@@ -130,6 +162,14 @@ describe("StatsTab", () => {
       ]),
     ],
   });
+
+  /** The entrant line's exact class attribute. A class string is a coupling and
+   *  normally the wrong thing to assert on — but "there is no second line under
+   *  the name" has no testid, no text and no tag of its own to anchor on, and
+   *  the alternative (counting `<span>`s) is a worse coupling to the same
+   *  markup. The rank span's own `text-xs text-ink-muted` sits inside a
+   *  different, longer class string, so this cannot match it by accident. */
+  const ENTRANT_LINE_CLASS = 'class="min-w-0 truncate text-xs text-ink-muted"';
 
   const render = (d: CompetitionHubDocT = statsDoc, dd: Dict = dict) =>
     renderToStaticMarkup(<StatsTab doc={d} dict={dd} />);
@@ -141,6 +181,10 @@ describe("StatsTab", () => {
     expect(h).toContain("No stats yet"); // the dictionary's copy, not the key
     expect(h).not.toContain(`data-testid="mh-stats-division-`);
     expect(h).not.toContain("<ol");
+    // Review F6 — the PANEL ROOT survives the empty arm. A handle that exists
+    // only on a populated competition is not a handle, and Task 12 would write
+    // `[data-testid="mh-stats"]` expecting one.
+    expect(rootClasses(h, "mh-stats")).toContain("min-w-0");
 
     // The same pairing Task 9 makes for its own empty arm: this sentence is
     // UNREACHABLE through the hub, because `deriveHubTabs` offers no Stats tab
@@ -197,6 +241,7 @@ describe("StatsTab", () => {
       "mh-leaders-sunday-league-runs-row-p3",
       "mh-leaders-sunday-league-sixes-row-p1",
       "mh-leaders-sunday-league-sixes-row-p4",
+      "mh-leaders-sunday-league-sixes-row-p6",
       "mh-leaders-premier-wickets-row-p5",
     ]);
     // THE deviation from the brief, asserted rather than argued: `p1` is on two
@@ -268,6 +313,51 @@ describe("StatsTab", () => {
     // (`leaders.ts:172-186`), so the masked label is the point, not the absence.
     expect(rowHtml(h, "mh-leaders-sunday-league-runs-row-p2")).toContain(">B. R.<");
     expect(rowHtml(h, "mh-leaders-sunday-league-sixes-row-p4")).toContain(">Dara Quinn<");
+
+    // Review F3 — the 44px tap target, which had NO assertion at all while both
+    // sibling tabs asserted theirs. When the row is a link, the row IS the tap
+    // target, so the bar belongs on the element carrying the href. Read over
+    // BOTH arms and over two divisions: linked and unlinked share `ROW_CLASS`,
+    // so a mutant stripping it from the constant has to die on either.
+    for (const id of [
+      "mh-leaders-sunday-league-runs-row-p1", // linked
+      "mh-leaders-premier-wickets-row-p5", // linked, another division
+      "mh-leaders-sunday-league-runs-row-p2", // not linked — same geometry
+    ]) {
+      const tag = rowBodyTag(h, id);
+      expect(tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [], id).toContain("min-h-11");
+      expect(tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [], id).toContain("min-w-0");
+    }
+    // And on the SAME element as the href, for the two linked ones — a 44px box
+    // beside the link rather than around it is not a tap target.
+    expect(rowBodyTag(h, "mh-leaders-sunday-league-runs-row-p1")).toContain("href=");
+    expect(rowBodyTag(h, "mh-leaders-premier-wickets-row-p5")).toContain("href=");
+    expect(rowBodyTag(h, "mh-leaders-sunday-league-runs-row-p2")).not.toContain("href=");
+  });
+
+  it("a leader with NO entrant shows no entrant line, and takes the crest's initials from the PERSON instead", () => {
+    // Review F4. `leaders.ts:311` is `row.entrant_id === null ? null : …`, so a
+    // null `entrantName` is production, not a contrivance — and `badgeUrl` on a
+    // leader row is the ENTRANT's (`leaders.ts:314-317`, `resolveEntrantBadge`),
+    // which is why the initials under it must be the entrant's when there is
+    // one. Both arms were unwitnessed: the fixture defaulted every row to an
+    // entrant, so `name={row.entrantName ?? row.person.name}` could be reduced
+    // to `row.person.name` with 31/31 still green.
+    const h = render();
+    const withEntrant = rowHtml(h, "mh-leaders-sunday-league-runs-row-p1");
+    // "Blue Blazers" → BB, not "Arjun Mehta" → AM.
+    expect(withEntrant).toContain(">BB<");
+    expect(withEntrant).not.toContain(">AM<");
+    expect(withEntrant).toContain(ENTRANT_LINE_CLASS);
+
+    const without = rowHtml(h, "mh-leaders-sunday-league-sixes-row-p6");
+    // "Femi Adeyemi" → FA, the fallback arm.
+    expect(without).toContain(">FA<");
+    // …and no entrant line under the name, rather than an empty one.
+    expect(without).not.toContain(ENTRANT_LINE_CLASS);
+    // The positive half of that: the row still renders, with its name and value.
+    expect(without).toContain(">Femi Adeyemi<");
+    expect(without).toContain(">7<");
   });
 
   it("a MASKED person is never linked, even on a document that offers a href — the safeguarding arm the builder's own rule cannot enforce here", () => {
@@ -378,6 +468,8 @@ describe("TeamsTab", () => {
     expect(h).toContain(`data-testid="mh-teams-empty"`);
     expect(h).toContain("No entrants yet");
     expect(h).not.toContain(`data-testid="mh-teams-division-`);
+    // Review F6, as for Stats: the panel root survives the empty arm.
+    expect(rootClasses(h, "mh-teams")).toContain("min-w-0");
     expect(empty.tabs).not.toContain("teams");
     expect(teamsDoc.tabs).toContain("teams"); // the positive pair
     expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 0 })).not.toContain("teams");
@@ -425,6 +517,19 @@ describe("TeamsTab", () => {
     expect(e3).toContain(">AA<");
     expect(e3).not.toContain("<img");
     expect(e3).not.toContain("style="); // no colour → no inline paint at all
+
+    // Review F5 — every crest is `aria-hidden`, on all three arms. The entrant's
+    // NAME is beside it, so a crest that announced itself would read the same
+    // team twice ("RC Rochford Ramblers CC"), which is the double-read
+    // `teams-tab.tsx`'s own comment exists to prevent. React serialises a bare
+    // `aria-hidden` as `aria-hidden="true"`, so the value is the assertion.
+    for (const [id, cardHtml] of [
+      ["e1 (badge)", e1],
+      ["e2 (painted)", e2],
+      ["e3 (neutral)", e3],
+    ] as const) {
+      expect(cardHtml, id).toContain('aria-hidden="true"');
+    }
   });
 
   it("the monogram's INK is derived from the tile's own colour, so a light team colour does not print white on yellow", () => {
@@ -450,6 +555,56 @@ describe("TeamsTab", () => {
     expect(monogramInk("#ffdd00")).toEqual({ bg: "#ffdd00", ink: "#0f172a" });
     // Three-digit hex is a colour too (`expandHex` accepts `#abc`).
     expect(monogramInk("#fff")).toEqual({ bg: "#fff", ink: "#0f172a" });
+  });
+
+  it("a colour with NO hash is normalised before it reaches `style` — measuring it is not the same as painting it", () => {
+    // Review F1, and the half the first round missed. `contrast.ts:18` is
+    // `hex.trim().replace(/^#/, "")` — the hash is OPTIONAL there — so
+    // "123456" measures as dark navy and picks white ink, while
+    // `style="background:123456"` is a declaration the browser DROPS. The tile
+    // paints transparent and the monogram is white initials on the card's white
+    // ground: invisible, and invisible only for the entrants whose colour
+    // arrived without a hash. `server/api-v1/schemas.ts:3169,3180` take club
+    // `colors` as an unvalidated `z.record(z.string(), z.string())`, so that is
+    // a value the product accepts today.
+    expect(monogramInk("123456")).toEqual({ bg: "#123456", ink: "#ffffff" });
+    expect(monogramInk("ffdd00")).toEqual({ bg: "#ffdd00", ink: "#0f172a" });
+    expect(monogramInk("  #123456  ")).toEqual({ bg: "#123456", ink: "#ffffff" });
+    // Still refused: the charset and the length are the gate, the hash is not.
+    expect(monogramInk("#12345")).toBeNull();
+    expect(monogramInk("1234567")).toBeNull();
+    expect(monogramInk("#12345g")).toBeNull();
+    expect(monogramInk("rebeccapurple")).toBeNull();
+
+    // TWO INVARIANTS over the whole table at once, not a sample of either.
+    //
+    // (a) whatever the gate lets through is a string CSS paints. A widened gate
+    //     reds here rather than shipping a blank tile.
+    // (b) whatever the gate lets through is a string `lib/contrast.ts` MEASURES
+    //     without throwing. This is the assertion that replaced the round-1
+    //     `try`/`catch`: the catch and the gate's charset clause were covering
+    //     for each other and neither was killable (AGENTS.md 3), so the belt is
+    //     now a test. `contrast.ts` belongs to the overlay wave and is moving;
+    //     the day it narrows its accepted set, this reds instead of putting a
+    //     500 on every public competition page.
+    for (const raw of [
+      "#123456", "123456", "  #ffdd00 ", "#fff", "fff", "#FFDD00", "FFF",
+      "puce", "", "#12345", "1234567", "#12345g", "rgb(1,2,3)", "rebeccapurple",
+    ]) {
+      const paint = monogramInk(raw);
+      if (!paint) continue;
+      expect(paint.bg, raw).toMatch(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i);
+      expect(() => contrastRatio(paint.bg, "#ffffff"), raw).not.toThrow();
+    }
+
+    // And through the component, which is where it would have been visible:
+    // the style attribute carries a `#`, on a document whose colour has none.
+    const h = render(
+      hubDoc({ teams: [team("e9", "Hashless Harriers", null, "123456")] }),
+    );
+    expect(rowHtml(h, "mh-team-e9")).toContain("background:#123456");
+    expect(rowHtml(h, "mh-team-e9")).not.toContain("background:123456");
+    expect(rowHtml(h, "mh-team-e9")).toContain(">HH<");
   });
 
   it("every card links to ITS OWN division's entrants tab, and the card is the 44px tap target", () => {
@@ -500,6 +655,11 @@ describe("TeamsTab", () => {
     expect(name!.split(" ")).toContain("truncate");
     expect(name!.split(" ")).toContain("min-w-0");
     expect(tagOf(h, "mh-team-e1").match(/class="([^"]*)"/)?.[1]?.split(" ")).toContain("min-w-0");
+    // Review F5 — and the `title`, which is the only way the ellipsised half of
+    // a truncated name is reachable at all. It goes with `truncate`: dropping
+    // it makes the longest names unreadable on a pointer with nothing else red.
+    expect(h).toContain('title="Southend Blue Blazers"');
+    expect(h).toContain('title="Rochford Ramblers CC"');
   });
 
   it("every string the tab owns comes from the dictionary — the seed chip and the empty sentence, in Spanish", () => {
@@ -669,14 +829,20 @@ describe("InfoTab", () => {
     // times to a screen reader.
     expect(h).toContain("Add to calendar");
     expect(rowHtml(h, "mh-info-calendar-sunday-league")).toContain("Sunday League");
+    // Review F10 — the heading LEVEL, which nothing pinned: swapping it to
+    // `<h3>` survived the whole suite. It is an `<h2>` at 11px, the same rank
+    // the Stats and Teams tabs give a division heading at `text-xl`, because
+    // rank is not size: this is a top-level section of the panel, and demoting
+    // it would leave this tab with no `<h2>` at all under Task 11's page `<h1>`.
+    expect(h).toMatch(/<h2[^>]*>Add to calendar<\/h2>/);
 
     const none = render(hubDoc({ divisions: infoDivisions, info: info({ calendars: [] }) }));
     expect(none).not.toContain(`data-testid="mh-info-calendars"`);
     expect(none).not.toContain("Add to calendar");
   });
 
-  it("calendarSlug falls back to the array position when no division's href matches, and to the index itself when there is no division there", () => {
-    // The fallback exists because `HubCalendar` carries no slug and nothing
+  it("calendarSlug falls back to the entry's own INDEX when no division's href matches — never to the division at that position, which collides", () => {
+    // The fallback exists because a calendar entry carries no slug and nothing
     // enforces the alignment the builder happens to have today
     // (`competition-hub.ts:663-666` maps straight off `hubDivisions`). Shipped
     // with a test so it is not dead code: a builder that filtered its calendar
@@ -685,14 +851,46 @@ describe("InfoTab", () => {
     expect(calendarSlug({ href: "/riverside/autumn-cup/premier/calendar.ics" }, 1, divisions)).toBe(
       "premier",
     );
-    // Position, when the href matches nothing.
-    expect(calendarSlug({ href: "/somewhere/else.ics" }, 1, divisions)).toBe("sunday-league");
-    // …and the index itself, when there is not even a division at that
-    // position — the testid still has to be unique, which `String(i)` is.
+    // The index, not `divisions[index].slug`. Review F2: the positional rung
+    // was worse than nothing, because it collides with a STRUCTURAL match on
+    // the very document it was written for — a filtered calendar list is
+    // exactly what puts an unmatched entry beside a matched one.
+    expect(calendarSlug({ href: "/somewhere/else.ics" }, 1, divisions)).toBe("1");
     expect(calendarSlug({ href: "/somewhere/else.ics" }, 5, divisions)).toBe("5");
 
-    // Through the component, so the fallback is not merely unit-tested: a
-    // calendar entry whose href belongs to no division still gets a link.
+    // The collision itself, as a uniqueness assertion rather than a value one:
+    // entry 0 matches nothing, entry 1 matches `premier`. Under the old rung
+    // both rendered `mh-info-calendar-premier` — the duplicate locator the
+    // Stats row testid was deviated from the brief to avoid.
+    const mixed = [{ href: "/moved/premier.ics" }, calendarFor("premier")];
+    const slugs = mixed.map((cal, i) => calendarSlug(cal, i, divisions));
+    expect(slugs).toEqual(["0", "premier"]);
+    expect(new Set(slugs).size).toBe(slugs.length);
+
+    // …and through the component, on the same shape, so the invariant is held
+    // where the testids are actually emitted.
+    const filtered = render(
+      hubDoc({
+        divisions,
+        info: info({
+          calendars: [
+            { divisionName: "Moved", href: "/moved/premier.ics" },
+            calendarFor("premier"),
+          ],
+        }),
+      }),
+    );
+    const ids = [...filtered.matchAll(/data-testid="(mh-info-calendar-[a-z0-9-]+)"/g)].map(
+      (x) => x[1]!,
+    );
+    expect(ids).toEqual(["mh-info-calendar-0", "mh-info-calendar-premier"]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(tagOf(filtered, "mh-info-calendar-0")).toContain(`href="/moved/premier.ics"`);
+    expect(tagOf(filtered, "mh-info-calendar-premier")).toContain(
+      `href="/riverside/autumn-cup/premier/calendar.ics"`,
+    );
+
+    // Every entry unmatched: still one link each, still unique.
     const stray = render(
       hubDoc({
         divisions: [division("premier")],
@@ -706,7 +904,7 @@ describe("InfoTab", () => {
     );
     expect(
       [...stray.matchAll(/data-testid="(mh-info-calendar-[a-z0-9-]+)"/g)].map((x) => x[1]),
-    ).toEqual(["mh-info-calendar-premier", "mh-info-calendar-1"]);
+    ).toEqual(["mh-info-calendar-0", "mh-info-calendar-1"]);
     expect(tagOf(stray, "mh-info-calendar-1")).toContain(`href="/moved/ghost.ics"`);
   });
 
@@ -731,7 +929,9 @@ describe("InfoTab", () => {
     expect(withSlots).toContain(`data-testid="probe-description"`);
     expect(withSlots).toContain(`data-testid="mh-info-share"`);
     expect(withSlots).toContain(`data-testid="probe-share"`);
-    expect(withSlots).toContain("Share this competition"); // the share row's own heading
+    // The share row's own heading, and its level — same rank rule as the
+    // calendar heading above (review F10).
+    expect(withSlots).toMatch(/<h2[^>]*>Share this competition<\/h2>/);
     expect(withSlots).toContain(`data-testid="mh-info-sponsors"`);
     expect(withSlots).toContain(`data-testid="probe-sponsors"`);
 
