@@ -1470,6 +1470,13 @@ export async function runPackSuite(
 ): Promise<SuiteReport> {
   const { suiteKey, packPath: definitionPackPath } = opts;
   const { base, engine, keep, log } = input;
+  // B06a T6 — `report.claims` has been declared since B01 (`report.ts:671`)
+  // and nothing ever wrote it, exactly as `provenancePct` had not been written
+  // until T5. Now that invites are actually accepted there is a real pair of
+  // numbers to publish, and a report that says how many invites a run minted
+  // without saying how many a human could use is the same silence this whole
+  // task exists to break.
+  let claimsSummary: { total: number; accepted: number } | undefined;
   const t = input.transport ?? defaultTransport;
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -3898,6 +3905,7 @@ export async function runPackSuite(
           );
         }
 
+        claimsSummary = { total: minted.length, accepted: claims.accepted };
         log.info(
           {
             attempted: claims.attempted,
@@ -4533,6 +4541,10 @@ export async function runPackSuite(
     // fired, because nothing else in the run can see it.
     ...(crossDivisionClashes.length > 0 ? { crossDivisionCourtClashes: crossDivisionClashes } : {}),
     ...(divisionStart === undefined || divisionStart.length === 0 ? {} : { divisionStart }),
+    // `total` is every invite this run MINTED, not the subset it attempted —
+    // a denominator that shrank to the attempted count would flatter the
+    // number the same way a provenance total taken from known buckets would.
+    ...(claimsSummary === undefined ? {} : { claims: claimsSummary }),
     ...(simulation === undefined ? {} : { simulation }),
     ...(importSimulation === undefined ? {} : { importSimulation }),
   };

@@ -949,6 +949,13 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
     if (suite.provenance !== undefined) lines.push(`- Provenance: ${renderProvenance(suite.provenance)}`);
     else if (suite.provenancePct !== undefined) lines.push(`- Provenance: ${suite.provenancePct}% real`);
+    // B06a T6 — declared since B01 and written by nothing until claims were
+    // actually accepted. Both numbers, never a bare percentage: a report that
+    // says invites were minted without saying how many a human could use is
+    // the silence this task exists to break.
+    if (suite.claims !== undefined) {
+      lines.push(`- Claims: ${suite.claims.accepted}/${suite.claims.total} invites accepted`);
+    }
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
       for (const o of suite.oracles) {

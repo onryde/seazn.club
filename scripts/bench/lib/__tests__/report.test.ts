@@ -374,6 +374,36 @@ describe("B06a T5 — provenance", () => {
   });
 });
 
+describe("B06a T6 — claims", () => {
+  it("renders the accepted count over the minted total, never a bare percentage", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          claims: { total: 4, accepted: 2 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Claims:"));
+    // Both numbers. The denominator is what makes a shortfall visible: "2
+    // accepted" alone cannot be told apart from "2 minted, 2 accepted", and
+    // this suite deliberately leaves invites unclaimed so the gap is real.
+    expect(line).toContain("2/4 invites accepted");
+  });
+
+  it("omits the line entirely for a run that never reached the claim step", () => {
+    // Not "0/0". A rendered zero reads as "this suite minted invites and
+    // nobody could use them", which is a finding; a run that never got there
+    // has said nothing at all and must not be mistaken for one that did.
+    const base = fullReport();
+    const { claims: _dropped, ...suiteWithoutClaims } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutClaims] });
+    expect(md.split("\n").some((l) => l.includes("Claims:"))).toBe(false);
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(
