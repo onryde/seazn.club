@@ -1138,3 +1138,57 @@ Re-verified on the rebuilt server at `e00bba49f`: **13 passed**
 (`stream-overlay.spec.ts` whole file) and **8 passed** (`capture.spec.ts`, all
 three groups). The `test.fail()` this task left behind did its job — the fix
 round deleted one line and changed no assertion.
+
+## 2026-09-10 — W1 closing: what is OWED to the next wave
+
+Recorded here, in the tracked corpus, because `.superpowers/` is **gitignored**
+(`.gitignore:59`) — the wave's `progress.md`, briefs and review findings die with
+the worktree, so anything that must survive belongs in this file.
+
+**Owner decision, 2026-09-10: the organiser panel's e2e goes in the NEXT wave.**
+The panel (`components/v2/fixture-stream-panel.tsx`, ~509 lines) has **zero
+browser references anywhere in `apps/web/e2e`** and **has never been rendered by
+anyone at any width** — it ships on unit tests and a mutation sweep alone. It
+does not block the merge: it is a new surface behind `streaming.overlay`, which
+`V402` denies on every plan, so nothing regresses if it is imperfect. It is the
+**first item of the next wave**, not a discovery for a later one.
+
+Why nobody caught it: **it fell in the gap between two task briefs.** Task 6's
+said "No e2e specs — Task 8 owns them"; Task 8's named the overlay route, smoke,
+the visual gate and the index, and never named the panel. Both agents did exactly
+as instructed. AGENTS.md's own "defect in the gap between two individually-correct
+changes".
+
+And a second reason it cannot be tested today: **`e2e/overlay-kit.ts` mints its
+org by raw SQL for the OVERLAY ROUTE, which is anonymous.** The console panel
+needs `editable = canEdit && !billingFrozen` (`d/[divSlug]/page.tsx:259`), and
+the SQL-minted org is never selected as the session's active org — sign-in lands
+on `/onboarding` and `canEdit` is false. Proof it is the rig and not the product:
+**`run-sheet-edit-time` is absent too**, and that control has nothing to do with
+streaming. A panel e2e therefore needs a fully-onboarded seeded org, not just an
+entitlement grant.
+
+**Also owed, same wave or sooner:**
+- **`expectNoClip` is blind to VERTICAL clipping** — it compares `scrollWidth`
+  with `clientWidth` only, so every vertical clip in the product is invisible to
+  the visual gate. That is how §4's clipped footer shipped. Fixing it touches
+  `e2e/visual/asserts.ts` + `capture.spec.ts`, both read-only for W1.
+- **The e2e suite is ENGLISH-ONLY**, which is why a Spanish card label
+  overflowing a 480 px tile by ~170 px was invisible to every visual row and
+  browser assertion in it.
+- `?delay=` leaves the overlay blank for `delayMs` after each load; the clean fix
+  is a server-side fold as-of `now − delayMs`, which needs a payload timestamp
+  `OverlayLiveData` does not carry.
+- Slate renders **two** `seazn` marks — §4a specifies slate's own AND the
+  composited scorebug's and never reconciled them. The `brand` slot in
+  `2026-09-09-overlay-composition-seam-design.md` is the designed fix.
+- The console panel's stream-link input does not pre-fill (`FixtureRow` lacks
+  `stream_url`).
+- The design of record still documents the **2-arg** `hasFeature` (§3.1, §3.8)
+  that would deny an `event_pass_l` buyer; the code correctly uses the 3-arg
+  competition-scoped form at every call site.
+- The fr/es/nl penalty wordings in `overlay.card.*` are the implementer's own
+  sport terminology and want a native speaker's pass.
+- `stream-overlay-w2-moments.md` plans `overlay.moment.penaltyClass.*` with the
+  same ten English words as `overlay.card.*` — it should **reuse** those keys
+  rather than mint a second set.
