@@ -366,7 +366,12 @@ export function LiveScoreBody({
                         : "bg-amber-400"
                   }`}
                 />
-                <span className="font-medium">{disciplineLabel(entry.classKey)}</span>
+                {/* Review MINOR 9 — the heading above this list was localised
+                    and the rows under it were not, so a French match page read
+                    "Discipline · Bench minor". Same reader as the overlay. */}
+                <span className="font-medium">
+                  {disciplineLabel(entry.classKey, (key) => t(activeDict, key))}
+                </span>
                 <span className="text-zinc-500">
                   — {entrantNames[sideIds[entry.side === "home" ? 0 : 1]!] ?? "—"}
                 </span>

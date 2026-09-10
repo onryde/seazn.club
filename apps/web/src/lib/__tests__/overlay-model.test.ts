@@ -36,6 +36,7 @@ import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { V3_SKINS } from "@/components/v2/scorepad/v3/registry";
+import { DISCIPLINE_LABEL_KEYS } from "@/lib/public-site";
 import {
   DISCIPLINE_CLASS_TONE,
   disciplineTone,
@@ -1016,6 +1017,34 @@ describe("DISCIPLINE_CLASS_TONE is §2a's table, class by class (F13)", () => {
   // the ones such a case would not name.
   it.each(sheetClassTones())("$sport $classKey → $tone", ({ classKey, tone }) => {
     expect(disciplineTone(classKey)).toBe(tone);
+  });
+
+  // Review MINOR 9 — §2a's OTHER ruling about these same ten classes: the
+  // LABEL is owed in four locales, keyed off the class rather than off the
+  // derived English, "so a future class is a missing key rather than a
+  // silently-anglicised label". This is the test that makes that true: the
+  // class list is parsed from §2a's own table, so a row added to the sheet
+  // reds here until its key exists, and the anglicised label never ships.
+  it("every class §2a's table names has a label key, and the map names no other (MINOR 9)", () => {
+    const declared = [...new Set(sheetClassTones().map((r) => r.classKey))].sort();
+    expect(declared.length, "the sheet parsed no classes — this check would be vacuous").toBe(10);
+    expect(Object.keys(DISCIPLINE_LABEL_KEYS).sort()).toEqual(declared);
+  });
+
+  it("the model resolves the card label through msg, never as a typed English word", () => {
+    // `keyMsg` returns the key it was handed, so a label that came from the
+    // class key instead of the dictionary shows up as prose among keys.
+    const data = payload("icehockey", [
+      ["core.start", {}],
+      ["icehockey.suspension.start", { by: "H", class: "bench_minor" }],
+    ], "in_play");
+    const model = project("icehockey", data);
+    const card = model.detail.find((l) => l.text.startsWith("overlay.detail.card"));
+    expect(card, "no card line — the discipline entry itself is missing").toBeDefined();
+    expect(card!.text, "the label reached the wire as English, not as a key").toContain(
+      "card=overlay.card.benchMinor",
+    );
+    expect(card!.text).not.toContain("Bench minor");
   });
 
   // The tone has to survive the REAL fold, not just the lookup table — the

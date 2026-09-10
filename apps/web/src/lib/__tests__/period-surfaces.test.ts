@@ -3,6 +3,7 @@
 // without its extractor — the scorebug and /live wall read these.
 import { describe, expect, it } from "vitest";
 import {
+  DISCIPLINE_LABEL_KEYS,
   disciplineLabel,
   disciplineList,
   matchStrength,
@@ -10,6 +11,12 @@ import {
   servingSide,
   setBreakdown,
 } from "../public-site";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 
 const periodSummary = {
   headline: "2 — 1 · P3",
@@ -51,7 +58,105 @@ describe("period-kernel public surfaces", () => {
       { side: "away", classKey: "minor", person: "p9" },
       { side: "home", classKey: "yellow" },
     ]);
-    expect(disciplineLabel("double_minor")).toBe("Double minor");
+    expect(disciplineLabel("double_minor", (k) => t(en as Dict, k))).toBe("Double minor");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review MINOR 9 (product ruling 2026-09-10, `_THEMES.md` §2a): THE CARD LABEL
+// IS OWED IN FOUR LOCALES. `disciplineLabel` used to build it from the class
+// key — `replace(/_/g," ")` plus title case — so a French, Spanish or Dutch
+// stream rendered "Bench minor" and "Game misconduct" in English on air. F13
+// did not introduce it (those lines already rendered) but it made five more
+// classes visually prominent on a broadcast.
+//
+// EVERY CASE BELOW IS NON-ENGLISH ON PURPOSE. An English-only test cannot
+// witness an anglicised label — it passes whether the label came from the
+// dictionary or from the class key — which is precisely how this shipped past
+// the four-locale rule.
+// ---------------------------------------------------------------------------
+const LOCALES = { en, fr, es, nl } as Record<string, unknown>;
+
+/** What the pre-ruling implementation produced: the class key, underscores to
+ *  spaces, first letter upper-cased. Kept here so the English arm can be held
+ *  byte-identical rather than described as "unchanged". */
+const anglicised = (classKey: string): string => {
+  const label = classKey.replace(/_/g, " ");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+};
+
+describe("disciplineLabel is dictionary copy, not the class key in English (MINOR 9)", () => {
+  const classes = Object.keys(DISCIPLINE_LABEL_KEYS);
+
+  it("covers §2a's ten classes and nothing invented", () => {
+    // The empty case FIRST: an empty map answers every `it.each` below
+    // vacuously. The membership itself is derived from the sheet in
+    // `overlay-model.test.ts` (which already parses §2a); this is the floor.
+    expect(classes.length, "the key map is empty — every sweep below is vacuous").toBe(10);
+    expect([...classes].sort()).toEqual([
+      "bench_minor",
+      "double_minor",
+      "game_misconduct",
+      "green",
+      "major",
+      "match",
+      "minor",
+      "misconduct",
+      "red",
+      "yellow",
+    ]);
+  });
+
+  for (const locale of ["fr", "es", "nl"]) {
+    it(`${locale}: every class resolves to that locale's own words`, () => {
+      const dict = LOCALES[locale] as Dict;
+      const english = en as Record<string, string>;
+      for (const classKey of classes) {
+        const label = disciplineLabel(classKey, (k) => t(dict, k));
+        const key = DISCIPLINE_LABEL_KEYS[classKey]!;
+        expect(label, `${locale} ${classKey} fell through to the key — copy missing`).not.toBe(key);
+        expect(label, `${locale} ${classKey} is still the anglicised class key`).not.toBe(
+          anglicised(classKey),
+        );
+        expect(label, `${locale} ${classKey} is not this locale's declared copy`).toBe(
+          (dict as Record<string, string>)[key],
+        );
+        // The differential that makes the assertion above non-vacuous: the
+        // locale's word must actually DIFFER from English, or a dictionary
+        // that merely copied the English through would pass everything here.
+        expect(label, `${locale} ${classKey} is byte-identical to English`).not.toBe(english[key]);
+      }
+    });
+  }
+
+  it("en is byte-identical to what the class-key derivation produced — English output does not move", () => {
+    // The ruling is about the other three locales. Changing the English words
+    // as a side effect would be an unasked-for copy change on a live
+    // broadcast graphic, so this pins them.
+    for (const classKey of classes) {
+      expect(disciplineLabel(classKey, (k) => t(en as Dict, k)), classKey).toBe(anglicised(classKey));
+    }
+  });
+
+  it("an UNDECLARED class still renders something readable rather than a raw key", () => {
+    // The last-resort arm. §2a's intent is that a future class is a MISSING
+    // KEY rather than a silently-anglicised label, and the completeness test
+    // in `overlay-model.test.ts` is what enforces that: it reds the moment
+    // §2a gains a row without a key. What must never happen on air is
+    // `overlay.card.whatever` in the graphic, so the fallback stays.
+    const msg = (k: string) => t(fr as Dict, k);
+    expect(disciplineLabel("no_such_class", msg)).toBe("No such class");
+    expect(disciplineLabel("no_such_class", msg)).not.toContain("overlay.card");
+  });
+
+  it("the resolver is actually CALLED — a mutant that ignored it would pass an English-only test", () => {
+    const seen: string[] = [];
+    disciplineLabel("bench_minor", (k) => {
+      seen.push(k);
+      return "SENTINEL";
+    });
+    expect(seen).toEqual(["overlay.card.benchMinor"]);
+    expect(disciplineLabel("bench_minor", () => "SENTINEL")).toBe("SENTINEL");
   });
 });
 

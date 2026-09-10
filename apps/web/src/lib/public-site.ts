@@ -421,8 +421,65 @@ export function servingSide(summary: unknown): "home" | "away" | null {
   return serving === "home" || serving === "away" ? serving : null;
 }
 
-/** Human label for a discipline class key: "double_minor" → "Double minor". */
-export function disciplineLabel(classKey: string): string {
+/**
+ * The dictionary key for each discipline class's on-air label — `_THEMES.md`
+ * §2a's ten classes (product ruling 2026-09-10, review MINOR 9).
+ *
+ * KEYED OFF THE CLASS, NEVER OFF THE DERIVED ENGLISH. `disciplineLabel` used
+ * to build the label from the class key itself (`replace(/_/g," ")` plus title
+ * case), so a French, Spanish or Dutch stream rendered "Bench minor" and "Game
+ * misconduct" in English — on the overlay AND on the public match page, which
+ * share this reader. F13 did not introduce that; it made five more of these
+ * classes visually prominent on a broadcast, which is what turned an old
+ * omission into a live one.
+ *
+ * A STATIC MAP, not `` `overlay.card.${classKey}` ``, for two reasons. The
+ * dictionary gate (`lib/__tests__/overlay-dict-coverage.test.ts`) scans for
+ * key LITERALS; a template literal would instead register `overlay.card.` as a
+ * dynamic prefix and excuse every key under it from the orphan check, turning
+ * the gate off for exactly the keys it was added for. And the membership is
+ * then a fact this file states, which `overlay-model.test.ts` holds against
+ * §2a's own table in both directions — so a class the sheet adds reds until
+ * its key exists, which is what "a future class is a missing key rather than a
+ * silently-anglicised label" has to mean in practice.
+ *
+ * `second_yellow` is deliberately absent: it is in `DISCIPLINE_CLASS_TONE` as
+ * forward-compatible dead code (football is not a period-kernel sport, so
+ * `disciplineList` never yields it) and §2a's table does not name it. It falls
+ * through to the derivation below like any undeclared class.
+ */
+export const DISCIPLINE_LABEL_KEYS: Readonly<Record<string, string>> = {
+  // hockey — the sport's own three-card ladder
+  green: "overlay.card.green",
+  yellow: "overlay.card.yellow",
+  red: "overlay.card.red",
+  // icehockey — the lesser-penalty family, then the serious one
+  minor: "overlay.card.minor",
+  bench_minor: "overlay.card.benchMinor",
+  double_minor: "overlay.card.doubleMinor",
+  major: "overlay.card.major",
+  misconduct: "overlay.card.misconduct",
+  game_misconduct: "overlay.card.gameMisconduct",
+  match: "overlay.card.match",
+};
+
+/**
+ * Human label for a discipline class key, resolved through the caller's
+ * dictionary: `"double_minor"` → "Double minor" / "Double mineure" / …
+ *
+ * `msg` is REQUIRED rather than optional on purpose — an optional resolver
+ * would let a new call site fall back to English silently, which is the defect
+ * this signature exists to close. Both call sites already have one in hand:
+ * `overlay-model.ts` passes `input.msg`, `live-score.tsx` its `activeDict`.
+ *
+ * A class no key names falls back to the old derivation rather than putting a
+ * raw `overlay.card.…` key on a broadcast graphic. That arm should be
+ * unreachable for anything §2a declares, and the test that keeps it so is the
+ * both-directions check in `overlay-model.test.ts`, not this function.
+ */
+export function disciplineLabel(classKey: string, msg: (key: string) => string): string {
+  const key = DISCIPLINE_LABEL_KEYS[classKey];
+  if (key) return msg(key);
   const label = classKey.replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
 }

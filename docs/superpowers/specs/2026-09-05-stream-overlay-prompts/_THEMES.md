@@ -145,12 +145,13 @@ this section now exists.
 Two tiers for icehockey, not three: the sport has no green-card equivalent, so
 `advisory` stays unused there rather than being invented for symmetry.
 
-**The card LABEL is owed in four locales, and today is not** (product ruling,
-2026-09-10, on review MINOR 9). `public-site.ts:425-428` builds the label from
+**The card LABEL is owed in four locales — DONE 2026-09-10** (product ruling,
+2026-09-10, on review MINOR 9). `disciplineLabel` used to build the label from
 the class key — `classKey.replace(/_/g, " ")` plus title case — so a French,
-Spanish or Dutch stream renders **"Bench minor"**, **"Game misconduct"** in
-English. The repo's standing rule is unambiguous: any user-facing string lands
-in all four dictionaries and is never hardcoded English.
+Spanish or Dutch stream rendered **"Bench minor"**, **"Game misconduct"** in
+English, on the overlay AND on the public match page (`live-score.tsx`), which
+share that reader. The repo's standing rule is unambiguous: any user-facing
+string lands in all four dictionaries and is never hardcoded English.
 
 F13 did not introduce this — those lines already rendered — but it **made five
 more classes visually prominent on a broadcast**, so the ruling that fixed one
@@ -158,6 +159,23 @@ defect amplified another. Ten keys (`green`, `yellow`, `red`, `minor`,
 `bench_minor`, `double_minor`, `major`, `misconduct`, `game_misconduct`,
 `match`) × four locales, keyed off the class rather than off the derived English,
 so a new class is a missing key rather than a silently-anglicised label.
+
+As shipped: `DISCIPLINE_LABEL_KEYS` (`public-site.ts`) maps those ten classes
+to `overlay.card.*`, and `disciplineLabel(classKey, msg)` takes a REQUIRED
+resolver so a new call site cannot fall back to English by omission. The map is
+a static literal rather than `` `overlay.card.${classKey}` `` because the
+dictionary gate scans for key LITERALS — a template literal would register
+`overlay.card.` as a dynamic prefix and excuse every key under it from the
+orphan check, turning the gate off for exactly the keys it was added for.
+`overlay-model.test.ts` holds the map against THIS TABLE in both directions, so
+a class added to the row above reds until its key exists; that check is what
+makes "a missing key rather than a silently-anglicised label" true, since the
+function itself still falls back to the derivation rather than putting a raw
+`overlay.card.…` on a broadcast graphic. `second_yellow` is deliberately absent
+— it is unreachable dead code in `DISCIPLINE_CLASS_TONE` (football is not a
+period-kernel sport) and this table does not name it. The English strings are
+byte-identical to what the derivation produced, so only fr/es/nl moved; the
+three non-English wordings are sport terminology and are worth a native pass.
 
 Contrast is already satisfied — §2's table gives icehockey `caution` **11.24**
 and `dismissal` **6.53** on its own `board-2`, both clear of the 3:1 graphical

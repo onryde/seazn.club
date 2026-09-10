@@ -415,7 +415,10 @@ function detailOf(input: OverlayModelInput, codes: [string, string], live: boole
     lines.push({
       text: input.msg("overlay.detail.card", {
         side: entry.side === "home" ? codes[0] : codes[1],
-        card: disciplineLabel(entry.classKey),
+        // Review MINOR 9 — the label is dictionary copy, resolved through the
+        // SAME `msg` as the sentence it sits inside. It used to be the class
+        // key title-cased, so a French stream read "{side} Bench minor".
+        card: disciplineLabel(entry.classKey, input.msg),
       }),
       tone: disciplineTone(entry.classKey),
     });
