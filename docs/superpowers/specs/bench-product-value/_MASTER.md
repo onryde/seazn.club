@@ -3,7 +3,7 @@
 One page to sequence ACROSS programmes. Session content lives in each
 programme's own `_INDEX.md` + prompts — never duplicated here. Update
 this file whenever a programme's status or a cross-gate changes.
-Last updated: 2026-09-09 (bench row — B05 merged #754, B06 next).
+Last updated: 2026-09-10 (bench row — B06 split into B06a framework / B06b pack; B06a in flight).
 
 ## The four active programmes
 
@@ -12,7 +12,7 @@ Last updated: 2026-09-09 (bench row — B05 merged #754, B06 next).
 | ScoringPad v2 (#407) | `../2026-08-06-scoringpad-v2-prompts/_INDEX.md` | S1–S13, L1–L3 | S1–S9 done; S10 in flight; S11–S13, L-lane open |
 | Release-2 scheduling | `../2026-08-12-release2-prompts/_INDEX.md` | C0–C8 | C0 done; C1 in flight; C2–C8 open |
 | Product portfolio (D1–D7) | `portfolio-prompts/_INDEX.md` | P1–P11 | authored; build-gated per session (owner green-light) |
-| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B05 all merged** (B05 = #754 `c28c46752`, 2026-09-08); **B06 (pilot) next**, ungated but needs an owner green-light; B16's only remaining gate is B06. B05 deferred **T6 (people layer)** and **T7 (report sections + provenance %)** by name — owed before B18 |
+| Scheduler bench | `bench-prompts/_INDEX.md` | B00–B18 (+B03r, B16) | gate open; **B00–B05 all merged** (B05 = #754 `c28c46752`, 2026-09-08). **B06 is now two waves**: B06a (framework — registry, extracted runner, two comparators, provenance writer, claim acceptance, news) is **IN FLIGHT** on `feat/bench-b06a-framework`; B06b (the darts pack) follows and still needs an owner green-light. **PackSchema freezes at B06b's merge, not B06a's.** B16's only remaining gate is B06b. B05's deferred **T6 (people layer)** and **T7 (report sections + provenance %)** are both DISCHARGED by B06a — claims are accepted, news is drafted and published, and `provenancePct`/`claims`/`news` all have writers |
 | Registration redesign | `../2026-08-16-registration-redesign-prompts/_INDEX.md` | RS001–RS011 | RS001–RS006 merged; RS007–RS011 + RS010 open |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 | Spectator surface (`/shared`) | `../2026-09-04-spectator-prompts/_INDEX.md` | W0–W5 | owner-requested 2026-09-04 (green-lit by the request); W0 CLOSED (Option A everywhere); W1 (match centre) executing on `feat/spectator-surface` — all tasks built and reviewed, the gate and the whole-branch review remaining, no PR until the owner asks; W2–W4 sequential after it, W5 designed after W4; no cross-programme gate — reads the engine, touches no organiser surface |

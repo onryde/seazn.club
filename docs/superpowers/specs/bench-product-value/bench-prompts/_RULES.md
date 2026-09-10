@@ -49,10 +49,29 @@ no placement container BY DESIGN). `PLACEMENT_SERVICE_HOST` overrides
 - **Stage-0 before HTTP, always**: a pack whose streams don't fold to its
   own expected results must die in seconds offline, not minutes into a
   seeded run.
-- **Entitlements**: deep tiers 422 without the right plan
-  (`requiredFeatureForEvent`; `cricket.ball` → `scoring.ball_by_ball`).
-  Seeding sets each org's plan via the smoke `setPlan` SQL precedent.
-  B00 re-verifies the plan→feature map (bench spec risk 8).
+- **Entitlements** (rewritten B06a, 2026-09-10 — the old bullet described a
+  gate the product no longer has). Entitlements v18 W1 DELETED the
+  fidelity-band gate and its three keys
+  (`scoring.match_timeline`/`scoring.ball_by_ball`/`scoring.rally_by_rally`);
+  `apps/web/src/server/usecases/fidelity.ts:1-9` records the deletion, and
+  `requiredFeatureForEvent` now survives only in comments and test names —
+  there is no implementation left to provoke. **Scoring detail is free on
+  every plan.** The only gate remaining at the scoring door is DLS:
+  `scoring.ts:271-273` calls `requireFeature(orgId, "cricket.dls")` when
+  `requiresDlsEntitlement` (`:300`) says so, and `event-import.ts:243` carries
+  the same note for the import path.
+  Consequences for a pack session, both of them things a suite must DO rather
+  than skip: a suite whose sport has no paid gate satisfies this acceptance
+  item by RECORDING that fact, never by faking a 422 against a key nothing
+  sells. And the key a suite provokes must be DERIVED from the live catalog
+  (`lib/dls-gate.ts`'s `PROVOCABLE_GATED_FEATURES` walk), never typed in — the
+  migrations disagree with themselves (`news.auto` alone was seeded false by
+  V295, flipped true by V393, and flipped back by V396), so only a live read
+  is an answer.
+  Seeding still sets each org's plan via the smoke `setPlan` SQL precedent,
+  and every capability a run WANTS belongs in the plan SELECTION rather than
+  being tested against a plan already chosen — B03 review F1(a), re-learned
+  once per capability since (`officials.auto`, `stats.player`, `news.auto`).
 - **Event throughput**: measured in B06 (pilot), revisited in B08
   (cricket, the volume monster). A batch endpoint is D6/P11 — if it has
   shipped, the bench MAY use it for seeding speed but MUST keep one

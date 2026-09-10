@@ -18,9 +18,11 @@ citation is stale by design; that is what B00 exists for.
 ## Order
 
 ```
-B00 → B01 → B02 → B03 → B03r → B04 → B05 → B06(pilot) → B07..B16 → B17 → B18
-                          ▲                    └ B07–B16 parallel-safe (worktrees,
-                   RS010 merged                  disjoint pack files, schema frozen)
+B00 → B01 → B02 → B03 → B03r → B04 → B05 → B06a → B06b → B07..B16 → B17 → B18
+                          ▲                     (fw)  (pack) └ B07–B16 parallel-safe
+                   RS010 merged                                 (worktrees, disjoint
+                                                                pack files, schema
+                                                                frozen at B06b)
 ```
 
 B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
@@ -35,17 +37,18 @@ B03/B04/B05 are sequential (shared `scripts/bench/lib/`). B17 needs B15
 | B03r | `B03r-registration-layer.md` | registration entry path: `--entry` flag, http+browser drivers, PackSchema `registration` block, Stripe test-mode payer, funnel oracle | B03 + **RS007–RS011, RS010 merged** | **MERGED #713 `310eb22ac` 2026-09-04** — paid path proven live (2 × 100 USD destination charges, webhook accepted); bench 721/721 |
 | B04 | `B04-scheduling-layer.md` | config apply, auto/validate, checker, certificate, metrics | B03 | **MERGED #731 `6e70c7270` 2026-09-06** — 1187/1187, tsc 0, eslint 0; three live legs at one SHA, all green. Four defects found by RUNNING it, each past a green suite (see the status log). Design: `../designs/2026-09-05-b04-scheduling-layer-design.md`. Product findings: bench design **§15**. Run results and the engine delta's limits: bench design **§16**. `../B04-handoff-2026-09-05.md` is HISTORICAL — it describes a mid-wave state, do not follow it. |
 | B05 | `B05-simulation-layer.md` | event loop, advancement, oracles, people-layer steps | B04 | **MERGED #754 `c28c46752` 2026-09-08** — 1397/1397, `typecheck:scripts` 0, eslint 0; three live runs, both `_RULES.md` §2 legs green, 33 oracles / 31 with a subject / 0 FAIL. **T6 (people layer) and T7 (report sections + provenance %) NOT built** — deferred by name, plumbing in place; see the status log. Design: `../designs/2026-09-07-b05-simulation-layer-design.md`. Findings: `../B05-review-findings-2026-09-08.md`. Product findings: bench design **§17**. |
-| B06 | `B06-pack-darts-pilot.md` | suite 11 (PDC) — pilot proves the playbook | B05 | **UNGATED 2026-09-08** — B05 (#754) merged; verify by SHA on main, not from this row. Needs an explicit owner green-light per the creative-only ruling (`_MASTER.md`). **Carries B05's T6 gap**: its sheet asks for "claims for 3 stars" and "news drafts on finals" oracles, and the people layer that accepts `pc_` claims and reads drafts was NOT built — B06 either lands T6 first or drops those two as §7A adaptations and records it. |
-| B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06 | TODO |
-| B08 | `B08-pack-cricket.md` | suite 1 (T20WC24 + CT25) — volume monster | B06 | TODO |
-| B09 | `B09-pack-football.md` | suite 2 (Euro24 + WEuro25, decided B00) | B06 | TODO |
-| B10 | `B10-pack-tennis.md` | suite 3 (Wimbledon 2025 ×2) | B06 | TODO |
-| B11 | `B11-pack-chess.md` | suite 4 (Candidates 24 + Grand Swiss 23) | B06 | TODO |
-| B12 | `B12-pack-badminton.md` | suite 5 (All England 25, MS + XD) | B06 | TODO |
-| B13 | `B13-pack-tabletennis.md` | suite 6 (WTTC 25) | B06 | TODO |
-| B14 | `B14-pack-volleyball.md` | suite 7 (Paris 24 M+W) | B06 | TODO |
-| B15 | `B15-pack-hockey-icehockey.md` | suites 8 (Paris 24) + 9 (IIHF 25) | B06 | TODO |
-| B16 | `B16-pack-club-open.md` | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06 | TODO — **B03r and B05 both merged; B06 is the only gate left** |
+| B06a | `B06a-suite-framework.md` (built from the plan, no prompt sheet) | the FRAMEWORK the pilot needs: suite registry, extracted runner, per-match + specials comparators, provenance writer, claim ACCEPTANCE, news drafting/publication | B05 | **IN FLIGHT 2026-09-10** — tasks 1–7 committed on `feat/bench-b06a-framework`, 1474/1474 green. T8 docs, T9 live run remain. Closes B05's T6 gap: the people layer that accepts `pc_` claims and drives news drafts is BUILT. |
+| B06b | `B06-pack-darts-pilot.md` | suite 11 (PDC) — the pack, and the pilot that proves the playbook | B06a | TODO — needs an explicit owner green-light per the creative-only ruling (`_MASTER.md`). **PackSchema freezes when THIS wave merges, not B06a.** |
+| B07 | `B07-pack-carrom.md` | suite 10 (ICF) — thin-data resilience | B06b | TODO |
+| B08 | `B08-pack-cricket.md` | suite 1 (T20WC24 + CT25) — volume monster | B06b | TODO |
+| B09 | `B09-pack-football.md` | suite 2 (Euro24 + WEuro25, decided B00) | B06b | TODO |
+| B10 | `B10-pack-tennis.md` | suite 3 (Wimbledon 2025 ×2) | B06b | TODO |
+| B11 | `B11-pack-chess.md` | suite 4 (Candidates 24 + Grand Swiss 23) | B06b | TODO |
+| B12 | `B12-pack-badminton.md` | suite 5 (All England 25, MS + XD) | B06b | TODO |
+| B13 | `B13-pack-tabletennis.md` | suite 6 (WTTC 25) | B06b | TODO |
+| B14 | `B14-pack-volleyball.md` | suite 7 (Paris 24 M+W) | B06b | TODO |
+| B15 | `B15-pack-hockey-icehockey.md` | suites 8 (Paris 24) + 9 (IIHF 25) | B06b | TODO |
+| B16 | `B16-pack-club-open.md` | suite 13 "Club Open" — customer journey, UI-first: signup → comp → restricted divisions → register/pay/join/consent → approve/promote → fixtures → **pad-tapped play** → results | B03r, B05, B06b | TODO — **B03r and B05 both merged; B06b (the darts pack) is the only gate left.** B06a is framework only and does not gate this row — but B16 inherits its people layer, so a claim/news step that reds here is B06a's contract, not this wave's. |
 | B17 | `B17-disruption-suite.md` | suite 12: blackout→reflow, walkover, correction | B15 | TODO |
 | B18 | `B18-full-run-closeout.md` (amend) | all suites, perf baseline, report, docs, memory; + one `--entry registration` pass ("Registration at volume" baseline, report-only) | all | TODO |
 
@@ -106,6 +109,34 @@ fall back from, is live — no B-prompt needs its fallback path.
 ## Status log
 
 (append as sessions run)
+
+- 2026-09-10 — **B06a IN FLIGHT**, branch `feat/bench-b06a-framework`, not
+  pushed. B06 split: B06a is the FRAMEWORK, B06b is the darts pack, and
+  **PackSchema freezes at B06b's merge, not this one.** Tasks 1–7 committed,
+  `scripts/bench` 1474/1474 with 0 failed suites, tsc 0, lint 0. Shipped: a
+  suite registry (a pack is an entry, not a branch); the pipeline extracted
+  out of `tiny.ts` into `run-suite.ts`; `compareMatches` and `compareSpecials`
+  (both `expected.matches` and `expected.specials` had been declared and
+  compared by NOTHING); writers for `provenancePct`, `claims` and `news`, all
+  three of which had been fields with no writer since B01; claim ACCEPTANCE
+  through the real invitee flow; and news drafting, publication and the
+  fire-once proxy. **B05's deferred T6 and T7 are discharged.**
+
+  What this wave is really a record of: **every route fact the plan pinned for
+  tasks 6 and 7 was wrong** — 4 of 4, then 5 of 5. The one that matters most is
+  that the claim accept flow was not merely unbuilt but UNREACHABLE (the
+  one-time secret is returned once, on the mint response, and the read-back
+  omits it), which is how B03 §5's "seeding only mints invites" survived three
+  waves unchallenged. Six product findings are recorded in design §18,
+  including a conditional authentication bypass in the magic-link route that
+  the owner has approved for its own PR.
+
+  Also learned twice, and now written down: a `no_subject` oracle carrying
+  `passed: false` does not fail an assertion — it throws inside `writeReport`
+  and the run ends with NO report on disk, invisible to all 42 test files
+  because every one calls the runner and none calls the writer. And four
+  mutants across T6/T7 SURVIVED their first sweep because their tests drove
+  fakes that satisfied the very guard under test.
 
 - 2026-09-08 — **B05 MERGED, PR #754 `c28c46752`.** Simulation layer: the
   bench now plays the matches. `simulate.ts` (single-event fold, strictly

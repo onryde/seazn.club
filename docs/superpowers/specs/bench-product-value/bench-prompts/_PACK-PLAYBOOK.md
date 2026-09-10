@@ -50,12 +50,27 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
 - [ ] Suite run green end-to-end locally: seed → schedule (zero blocking
       conflicts, independent checker clean, certificate check per §6.3)
       → simulate → oracles (champion, tables, leaders, suspensions,
-      specials) → people-layer steps (officials, claims, coach lanes,
-      news) — as wired in B03–B05
-- [ ] Entitlement: suite org's plan unlocks its deepest tier (422 test
-      proves the gate exists, then provisioning clears it)
+      specials) → people-layer steps — naming what is actually WIRED, as of
+      B06a:
+      - officials: rostered, blackouts honoured, manual + auto assignment
+        (B03, B04)
+      - claims: invites minted (B03) AND **accepted** through the real
+        invitee flow, with an invalid token proven refused (B06a T6)
+      - news: drafting turned on before the folds, named fixtures published,
+        the rest proven still draft, republish proven inert (B06a T7)
+      - coach lanes: **NOT WIRED — deferred, no step exists.** Named here so
+        a pack session records the gap rather than assuming it is covered
+- [ ] Entitlement: recorded, not faked. Entitlements v18 W1 deleted the
+      fidelity-band gate, so **most suites have no paid scoring tier to
+      unlock** — see `_RULES.md` §3. A suite whose sport IS gated provokes
+      the refusal with a key DERIVED from the live catalog and then clears
+      it by provisioning; a suite whose sport is not gated satisfies this
+      item by saying so in the report
 - [ ] Report committed under the PR (json+md), timings present,
-      NOT asserted
+      NOT asserted. Throughput figures in a pack report are a **FLOOR**, not
+      a measurement: they are whatever that pack's stream volume happened to
+      exercise on one machine. B08 (cricket, the volume monster) owns the
+      real measurement — do not quote a pack's number as a capacity claim
 - [ ] Unit/regression for any new reconstruction generator or oracle
       differ added for this sport (bench lib tests, CI-safe)
 
