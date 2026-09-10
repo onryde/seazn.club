@@ -27,6 +27,8 @@ import {
   FixtureStreamPanel,
   FixtureStreamToggle,
   CREDIT_PACKS,
+  PREVIEW_SCALE,
+  PREVIEW_STRIP_PX,
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
@@ -190,7 +192,7 @@ describe("the strip OPENS on the sport's own default, not merely on something", 
 describe("the preview is the real stage, seeded from the row", () => {
   it("renders <OverlayStage> inside the strip, on the row's own fixture", () => {
     const tree = open().tree();
-    expect(byTestId(tree, "stream-preview"), "the 96px strip").toBeDefined();
+    expect(byTestId(tree, "stream-preview"), "the 360px strip").toBeDefined();
     const stage = stageOf(tree);
     expect(propsOf(stage).fixtureId).toBe(FIXTURE.id);
     expect(propsOf(stage).fit, "the console preview scales its own wrapper").toBeFalsy();
@@ -206,6 +208,31 @@ describe("the preview is the real stage, seeded from the row", () => {
     const stage = stageOf(open().tree());
     const sides = propsOf(stage).sides as { id: string; name: string }[];
     expect(sides.map((s) => s.name)).toEqual([ENTRANTS.e1, ENTRANTS.e2]);
+  });
+
+  // Owner ruling 2026-09-10 (_THEMES.md §8, amended): the strip is 360px, not
+  // 96px. At `scale(640/1920)` = 1/3 a 96px strip showed the top 288 of the
+  // canvas's 1080 authored px. §4's bug is anchored `top: 54` and survived
+  // that; §3's bar is anchored `bottom: 54` — y ≈ 279–342 scaled — and fell
+  // entirely outside it, so selecting *Broadcast bar* previewed as an empty
+  // green rectangle. Cricket's own default IS `bar` (`defaultThemeFor`), so
+  // cricket organisers met the empty rectangle first.
+  it("the strip shows the WHOLE authored canvas — 1080px at the sheet's scale, not a window onto its top", () => {
+    // Derived, never a second number typed here: the height in AUTHORED px is
+    // what decides whether a bottom-anchored theme is inside the strip, and it
+    // moves if either the strip or the scale moves.
+    expect(PREVIEW_STRIP_PX / PREVIEW_SCALE, "authored px visible").toBe(1080);
+    expect(PREVIEW_SCALE, "§8's scale is unchanged — the OBS-link copy rests on it").toBe(640 / 1920);
+    expect(PREVIEW_STRIP_PX, "the owner's number").toBe(360);
+  });
+
+  it("that height is what the strip actually renders at — not a constant nothing reads", () => {
+    const strip = byTestId(open().tree(), "stream-preview");
+    const style = propsOf(strip!).style as { height?: unknown };
+    expect(style.height).toBe(PREVIEW_STRIP_PX);
+    // A leftover Tailwind height would win or fight with it; there must be one
+    // authority for this box's height.
+    expect(String(propsOf(strip!).className), "no h-24 (96px) left behind").not.toMatch(/\bh-\d/);
   });
 });
 

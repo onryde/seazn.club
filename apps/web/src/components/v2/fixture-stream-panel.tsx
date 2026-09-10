@@ -43,7 +43,24 @@ import { streamUrlSchema } from "@/lib/stream-url";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
 /** §8: the real stage at `scale(640/1920)`. Written as the sheet writes it. */
-const PREVIEW_SCALE = 640 / 1920;
+export const PREVIEW_SCALE = 640 / 1920;
+
+/**
+ * §8, amended by owner ruling 2026-09-10: the strip is **360 px**, not the 96
+ * it shipped as. The whole 1080-px authored canvas at `PREVIEW_SCALE`, derived
+ * rather than typed, so it cannot drift from the scale.
+ *
+ * Why the first number could not work: at 1/3 scale a 96 px strip showed the
+ * top **288** of 1080 authored px. §4's bug is anchored `top: 54` → y 18–79
+ * scaled, comfortably inside. §3's bar is anchored `bottom: 54` → y ≈ 279–342
+ * scaled, entirely BELOW a 96 px strip, so choosing *Broadcast bar* previewed
+ * as an empty green rectangle — and cricket's own default is `bar`
+ * (`defaultThemeFor`), so cricket organisers met the empty rectangle first.
+ *
+ * The SCALE is deliberately unchanged: §8's OBS-link copy and this panel's
+ * width maths both rest on it. Only the window onto the canvas grew.
+ */
+export const PREVIEW_STRIP_PX = 1080 * PREVIEW_SCALE;
 
 /**
  * §8b, picked option A ("Three tiles", owner 2026-09-08). SANDBOX PLACEHOLDERS
@@ -322,15 +339,18 @@ export function FixtureStreamPanel({
             ))}
           </div>
 
-          {/* §8: a 96px strip on the green-field stand-in. `overflow-hidden`
-              clips whatever the scale does not fit — see the report's finding
-              about §3's bar, which is authored at the BOTTOM of the 1080px
-              canvas and therefore falls outside a 96px window at this scale. */}
+          {/* §8: the strip on the green-field stand-in, `PREVIEW_STRIP_PX`
+              tall — the WHOLE authored canvas at `PREVIEW_SCALE`, so a
+              bottom-anchored theme (§3's bar) is inside it. The height is an
+              inline value, not a Tailwind `h-*`, so there is exactly one
+              authority for it and it is derived from the scale beside it.
+              `overflow-hidden` still clips: the wrapper below is a full
+              1920×1080 box and the strip is only as wide as the card. */}
           <div
             data-testid="stream-preview"
             aria-hidden
-            className="relative mt-3 h-24 w-full overflow-hidden rounded-lg border border-purple-100"
-            style={{ background: "linear-gradient(180deg, #3d7a3a, #2e6a2d)" }}
+            className="relative mt-3 w-full overflow-hidden rounded-lg border border-purple-100"
+            style={{ height: PREVIEW_STRIP_PX, background: "linear-gradient(180deg, #3d7a3a, #2e6a2d)" }}
           >
             <div
               className="absolute left-0 top-0"
