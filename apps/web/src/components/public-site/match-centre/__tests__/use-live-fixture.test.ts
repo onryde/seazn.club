@@ -23,7 +23,7 @@ vi.mock("../../live-score-data", async () => {
 });
 
 import { fetchLiveFixture } from "../../live-score-data";
-import { POLL_MS, useLiveFixture } from "../use-live-fixture";
+import { DRAIN_MS, POLL_MS, useLiveFixture } from "../use-live-fixture";
 
 function mount(
   fixtureId: string,
@@ -334,5 +334,64 @@ describe("useLiveFixture", () => {
     hook.rerender({ fetcher, delayMs: 10_000 }); // re-arms the drain
     await vi.advanceTimersByTimeAsync(10_000); // t = 28 000 — when a re-seed would land
     expect(hook.current.data.summary?.headline, "never winds back to the load-time score").toBe("3 — 1");
+  });
+
+  // ---- Review MINOR 4/MINOR 1 (2026-09-10): the 0 → N transition ----
+  //
+  // The once-guard above only covers N → M, because the drain effect returned
+  // at its `delayMs <= 0` line BEFORE `seededRef` was set. A hook that mounted
+  // undelayed and later received a non-zero `delayMs` therefore seeded the
+  // MOUNT-TIME document and presented it `delayMs` later — the very wind-back
+  // the guard's own comment names, through the one door it left open.
+  //
+  // Unreachable in production today (`?delay=` is resolved server-side and
+  // `fixture-stream-panel.tsx` remounts the island by `key`), so this is a
+  // latent trap rather than a live defect — and a latent trap in a hook that
+  // is now shared with the public match centre.
+  it("delayMs 0 → N: the undelayed pass counts as seeded — no wind-back to the mount-time score", async () => {
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher }); // no delay: live
+    await vi.advanceTimersByTimeAsync(POLL_MS); // t = 15 000, presented immediately
+    expect(hook.current.data.summary?.headline, "undelayed: the poll paints at once").toBe("3 — 1");
+
+    hook.rerender({ fetcher, delayMs: 10_000 }); // arms the drain for the first time
+    await vi.advanceTimersByTimeAsync(10_000); // t = 25 000 — when a seed would mature
+    expect(
+      hook.current.data.summary?.headline,
+      "the mount-time document was presented 25 s ago and must not come back",
+    ).toBe("3 — 1");
+  });
+
+  // ---- Review MINOR 2: the cold start is NOT "exactly delayMs" ----
+  //
+  // The drain runs on a fixed DRAIN_MS interval, so a snapshot received at t is
+  // presented at the first tick at or after t + delayMs: the bound is
+  // [delayMs, delayMs + DRAIN_MS), not delayMs. `resolveDelayMs` accepts any
+  // whole millisecond value in 0..300 000, so `?delay=250` really does hold for
+  // a full second — four times what the operator asked for, and an OBS
+  // operator times scene changes against that number.
+  //
+  // The expected instants below are LITERAL, not `ceil(delayMs / DRAIN_MS)`:
+  // a formula derived from the constant moves with a mutant and proves nothing.
+  it.each([
+    [250, 1000, "a sub-second delay waits out a whole drain tick — 4x what was asked"],
+    [1000, 1000, "one whole tick: due and drained at the same instant"],
+    [1500, 2000, "rounded UP to the next tick, never down"],
+    [3000, 3000, "a multiple of the tick is the only case that IS exactly delayMs"],
+  ])("delayMs %i is presented at %i ms — %s", async (delayMs, presentedAt) => {
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher, delayMs });
+    await vi.advanceTimersByTimeAsync(presentedAt - 1);
+    expect(hook.current.awaitingDelay, `nothing is presented before ${presentedAt}`).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(hook.current.awaitingDelay, `presented at ${presentedAt}`).toBe(false);
+    expect(hook.current.data.summary?.headline).toBe("2 — 1");
+  });
+
+  it("the drain interval is 1 000 ms — the number the bound above is stated in", () => {
+    // Pinned by VALUE, once. Everything above is stated in literal instants, so
+    // this is the only place the constant is asserted — moving it moves four
+    // expectations and this line, which is the point.
+    expect(DRAIN_MS).toBe(1000);
   });
 });

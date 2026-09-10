@@ -56,6 +56,17 @@ export const DELAY_MAX_MS = 300_000;
  * | > `DELAY_MAX_MS`       | `DEFAULT_DELAY_MS` |
  * | in range, whole        | itself              |
  *
+ * A RESOLVED VALUE IS NOT A GUARANTEED WAIT (review MINOR 2, 2026-09-10).
+ * `useLiveFixture` drains its buffer on a fixed `DRAIN_MS` (1 000 ms) tick, so
+ * what a resolved `delayMs` buys is `[delayMs, delayMs + DRAIN_MS)` — every
+ * value in this table under a second holds for a full second, and `?delay=250`
+ * is four times what the operator typed. That is documented rather than
+ * rounded or refused here: an OBS operator plans scene timing against the
+ * number they typed, and rewriting 250 to 1 000 would replace one discrepancy
+ * with a second, invisible one. Sub-second is not a real use case — every
+ * genuine `?delay=` is seconds of broadcast latency — and if it becomes one
+ * the fix is a shorter `DRAIN_MS`, not a rounded `delayMs`.
+ *
  * `Number()`, not `parseFloat()`: `parseFloat` accepts a numeric PREFIX
  * (`"5000abc"` → 5000), which would silently honour a fat-fingered value a
  * broadcaster never intended; `Number()` requires the whole string to be

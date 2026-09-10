@@ -9,6 +9,12 @@ import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData } from
 
 export const POLL_MS = 15_000;
 
+/** How often the presentation buffer is drained (review MINOR 2). It is a
+ *  FIXED tick, not a per-snapshot timer, so a snapshot received at `t` is
+ *  presented at the first tick at or after `t + delayMs` — the cold start is
+ *  bounded by `[delayMs, delayMs + DRAIN_MS)`, never "exactly delayMs". */
+export const DRAIN_MS = 1000;
+
 /** Stream overlay W1 (design §3.3): the ONE transport now serves two payloads
  *  — the public fixture JSON (`MatchCentre`, the default) and the overlay
  *  endpoint (`OverlayStage`, via `fetcher`). `delayMs` is R2's presentation
@@ -26,7 +32,10 @@ export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
   fetcher?: (fixtureId: string) => Promise<T>;
   /** Present snapshots no sooner than `delayMs` after they were received —
    *  `initial` included (I1, 2026-09-10), which is why a delayed hook presents
-   *  nothing at all for its first `delayMs`. See `awaitingDelay`. */
+   *  nothing at all for its first `delayMs`. See `awaitingDelay`.
+   *
+   *  NO SOONER, not "exactly": the drain is a fixed `DRAIN_MS` tick, so the
+   *  wait is in `[delayMs, delayMs + DRAIN_MS)` (review MINOR 2). */
   delayMs?: number;
 }
 
@@ -102,9 +111,25 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // failure. It is also paid only by an operator who explicitly typed
   // `?delay=`; without it this hook is byte-identical to the pre-fix version.
   //
-  // Seeding through the buffer rather than a separate timer is what bounds
-  // that cold start at exactly delayMs. Starting it at the first poll instead
-  // would have made it delayMs + POLL_MS.
+  // Seeding through the buffer rather than a separate timer is what keeps that
+  // cold start to one delay rather than two: starting it at the first poll
+  // would have made it delayMs + POLL_MS (15 s more).
+  //
+  // IT IS NOT "EXACTLY delayMs" (review MINOR 2, 2026-09-10 — an earlier
+  // revision of this comment and of `3e450e7d7`'s message both claimed it
+  // was). The drain is a FIXED DRAIN_MS tick, so the seed is presented at the
+  // first tick at or after delayMs: the bound is [delayMs, delayMs + DRAIN_MS)
+  // and only a delayMs that is a whole multiple of DRAIN_MS hits its own
+  // number. `resolveDelayMs` (`lib/overlay-delay.ts`) accepts any whole
+  // millisecond value in 0..300 000, so `?delay=250` really does hold for a
+  // full second — four times what the operator typed.
+  //
+  // Left as is rather than rounded or refused: an OBS operator plans scene
+  // timing against the number, and quietly rewriting 250 to 1 000 would be a
+  // second, invisible discrepancy on top of this one. A sub-second delay is
+  // also not a use case anyone has — every real `?delay=` is seconds of
+  // broadcast latency. If it ever becomes one, the fix is a shorter DRAIN_MS
+  // (the buffer is a list scan, not a cost), not a rounded delayMs.
   const seededRef = useRef(false);
   const [awaitingDelay, setAwaitingDelay] = useState(delayMs > 0);
   // NO `updatedAt` state here. The freshness line ("Updated 5s ago") derives
@@ -183,11 +208,22 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     };
   }, [fixtureId, realtime, live, refresh]);
 
-  // Drain the delay buffer once per second: present the newest snapshot whose
+  // Drain the delay buffer every DRAIN_MS: present the newest snapshot whose
   // receivedAt ≤ now − delayMs, drop everything older. One interval, armed only
   // while delayMs > 0 — the no-option path never creates it.
   useEffect(() => {
-    if (delayMs <= 0) return;
+    if (delayMs <= 0) {
+      // Review MINOR 2026-09-10 (MINOR 1) — AN UNDELAYED PASS COUNTS AS
+      // SEEDED. This early return used to sit above the once-guard, so a hook
+      // that mounted with no delay and later received a non-zero `delayMs`
+      // seeded the MOUNT-TIME document and presented it `delayMs` later,
+      // winding the overlay back to the page-load score: exactly the defect
+      // the guard below names, through the one transition it did not cover.
+      // While `delayMs` was 0 every snapshot — `initial` first — was presented
+      // the instant it arrived, so there is nothing left to mature.
+      seededRef.current = true;
+      return;
+    }
     // I1: `initial` is the first thing in the buffer, received at mount. Once
     // only — a `delayMs` that changed mid-life would otherwise re-seed a
     // document that is by then long stale.
@@ -205,7 +241,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
         bufferRef.current = buf.slice(idx + 1);
         setAwaitingDelay(false);
       }
-    }, 1000);
+    }, DRAIN_MS);
     return () => clearInterval(id);
   }, [delayMs]);
 
