@@ -282,9 +282,60 @@ type PanelTrigger =
   a field in a registry.
 
 **Stating the cost plainly:** the panel *seam* is cheap; individual panels are
-not equally cheap. A batting scorecard additionally needs per-player data, and
-`player_stat_snapshots` are lazily populated with no write hook. Do not read
-"panels are now possible" as "any panel is now a small job".
+not equally cheap. Do not read "panels are now possible" as "any panel is now a
+small job".
+
+### 5.1 Worked example — the end-of-over card
+
+Owner question, 2026-09-10: *"Do we display who is bowling, each ball and player
+stat end of the over for few seconds? or can we extend such as feature later
+on"*. It is the clearest case of the distinction above, so it is recorded here
+rather than rediscovered in W2.
+
+**Already specified.** `_THEMES.md` §3's cricket row splits it by wave:
+
+> **W2:** striker\* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"
+> **W1:** chase line "Need 45 off 45", CRR, RRR
+
+So W1 ships the chase line only, and the bowler/ball-by-ball content is W2's by
+design, not an omission.
+
+**The rendering is genuinely cheap.** "Appears at the end of the over, holds for
+a few seconds, retires itself" is an **anchored panel with a `data` trigger** —
+`{ on: "data", when: m => …over boundary… }`, one `OVERLAY_PANELS` entry and one
+component. No new theme, no route change, and it inherits every theme including
+ones not yet written. This is exactly what the seam is for.
+
+**The data is not there, and that is the whole cost.** Measured against the live
+endpoint for an in-play cricket fixture on 2026-09-10 —
+`GET /api/v1/public/fixtures/:id/overlay` returns, in full:
+
+```
+summary.detail.innings[] → runs, wickets, legalBalls, declared, closed, entrantId
+cricket.innings[]        → runs, wickets, legalBalls, ballsLimit
+```
+
+**No bowler. No striker. No per-ball log. No player identity of any kind.** The
+projection carries team-level innings figures and stops there, and `OverlayModel`
+has no field that could hold a player.
+
+So the order of work is fixed, and it is the reverse of how the feature reads:
+
+1. Promote per-player and per-ball facts into the projection — deliberately, one
+   at a time, keeping it theme-agnostic (§4.1). This is the expensive half.
+2. *Then* the panel is a registry entry.
+
+**One trap waiting at step 1:** `player_stat_snapshots` are **lazily populated
+with no write hook**, so "the per-player numbers are already in the database" is
+not true in the way it sounds. Whoever builds this must establish where the
+bowler's figures actually come from before promising the panel — the engine's
+folded state, or a snapshot that may not have been written yet, are different
+answers with different costs.
+
+Generalise from it: **for any proposed panel, price the DATA first and the panel
+second.** Every gap this programme has hit — football's discipline chips, the
+serve dot, tennis's live game points, slate's signal-lost state — was a data gap
+wearing a rendering gap's clothes.
 
 ## 6. Testing
 
