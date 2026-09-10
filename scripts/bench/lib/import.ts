@@ -11,38 +11,28 @@
 // exact failure class this wave exists to close.
 //
 // ---------------------------------------------------------------------------
-// `IMPORT_CAPS` — a HAND MIRROR, not an import
+// `IMPORT_CAPS` — the product's own constant, imported
 // ---------------------------------------------------------------------------
-// `apps/web/src/server/usecases/event-import.ts:39` declares the real
-// ceilings: `IMPORT_CAPS = { streams: 50, eventsPerFixture: 1_000,
-// eventsPerCall: 10_000 }` (R4 — a single huge stream is a hung request, not
-// a rejection, because `appendEventInTx` re-folds the whole prior stream on
-// every append).
+// This used to be a hand mirror, guarded by reading `event-import.ts` as TEXT
+// and regex-matching the literal out of it. The reason was real: that file
+// opens with `import "server-only"`, a Next BUILD-TIME webpack alias
+// (`node_modules/next/dist/build/create-compiler-aliases.js`) with no npm
+// package behind it, so importing it from here was a guaranteed
+// `ERR_MODULE_NOT_FOUND` at module load — neither this runtime (`node
+// --experimental-strip-types`, no bundler, no alias) nor scripts/bench's
+// vitest run can resolve it.
 //
-// That file cannot be imported from here. It opens with `import
-// "server-only"`, which is a Next.js BUILD-TIME webpack alias
-// (`node_modules/next/dist/build/create-compiler-aliases.js`), not a real npm
-// package — there is no `server-only` anywhere under this repo's
-// node_modules, confirmed directly (`node -e "require.resolve('server-only',
-// {paths:[...]})"` from inside `apps/web/src/server/usecases` throws
-// `MODULE_NOT_FOUND`). `apps/web/vitest.config.ts` says the same thing in its
-// own words — "'server-only' is a Next build-time marker, absent under
-// vitest" — and supplies a stub alias that exists ONLY inside apps/web's own
-// vitest config. Neither this file's runtime (`node --experimental-strip-
-// types`, no bundler, no alias) nor `scripts/bench`'s own vitest run
-// (packages/engine's binary, no apps/web config in scope) can resolve it, so
-// `import { IMPORT_CAPS } from "../../../apps/web/src/server/usecases/
-// event-import.ts"` would crash EVERY caller at module load — not a subtle
-// bug, a guaranteed `ERR_MODULE_NOT_FOUND` before a single test runs.
+// The caps now live in `usecases/import-caps.ts`, which imports NOTHING and is
+// free of `server-only` precisely so consumers outside Next's build can read
+// them. `event-import.ts` re-exports from there, so the product is unchanged.
+// A relative path, not `@/` — that alias still does not resolve here.
 //
-// This is the SAME constraint `validate-pack.ts`'s `STAGE_DECIDER_KEYS`
-// mirror already lives under (that file's own comment: "GLOBAL.md: `@/`
-// aliases do not resolve here and most of that tree is `server-only`"), and
-// the same fix: a HAND MIRROR here, checked against the real file as TEXT by
-// `__tests__/import.test.ts` ("the mirror is diffed against apps/web, not
-// itself" — `validate-pack.test.ts`'s own established pattern for
-// `STAGE_DECIDER_KEYS`), red on absence rather than silently drifting.
-export const IMPORT_CAPS = { streams: 50, eventsPerFixture: 1_000, eventsPerCall: 10_000 } as const;
+// This deletes a drift guard that a reformat of one line in apps/web would
+// have silently broken, and replaces "two copies checked against each other"
+// with one copy. Recorded as §17.3 of the bench design: the mirror was the
+// workaround, not the fix.
+export { IMPORT_CAPS } from "../../../apps/web/src/server/usecases/import-caps.ts";
+import { IMPORT_CAPS } from "../../../apps/web/src/server/usecases/import-caps.ts";
 
 import { BenchHttpError, raw, type RawResult, type Session } from "./http.ts";
 import { computeEventsPerSecond, resolvePayloadRefs } from "./simulate.ts";
