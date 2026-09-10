@@ -1415,6 +1415,20 @@ body {
                    color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
 .ovl-detail-sep { width: 1.5px; height: 24px; background: rgba(255, 255, 255, 0.2); }
 .ovl-detail-emphasis { font-weight: 600; color: var(--sport-ink); }
+/* `_THEMES.md` §4 rule 2 (product ruling 2026-09-10) — "an entry is one unit".
+   Both renderers wrapped each detail entry in `className="contents"`, and
+   `display: contents` hands separator, chip and label to the flex container as
+   three independent items: in the bug's 480px footer the `·` separators landed
+   on a clipped second line as stray dots, detached from their labels. A real
+   box keeps them together, and `nowrap` keeps the label itself from breaking
+   internally — a flex item's TEXT wraps even though the container does not.
+   The per-band gaps below reproduce each theme's existing spacing exactly
+   (§3's band is gap 33 and the flattened children inherited it; §4's footer had
+   no gap at all under `space-between`, and takes half the new 18px list gap so
+   an entry reads tighter than the list it sits in). */
+.ovl-detail-entry { display: inline-flex; align-items: center; white-space: nowrap; }
+.ovl-detail-band .ovl-detail-entry { gap: 33px; }
+.ovl-bug-footer .ovl-detail-entry { gap: 9px; }
 
 /* Theme B — corner bug (_THEMES.md §4) */
 .ovl-bug { position: absolute; left: 60px; top: 54px; width: 480px;
@@ -1431,7 +1445,17 @@ body {
    21px/600 by default; declared explicitly so it does not drift if that
    rule's own font properties ever change. */
 .ovl-bug-status { font-size: 21px; font-weight: 600; }
-.ovl-bug-context { font-size: 19.5px; font-weight: 500;
+/* `_THEMES.md` §4 (product ruling 2026-09-10) — "its context slot is guarded
+   like the bar's", the twin of `.ovl-context` above. About 291px ≈ 32
+   characters are free in this 48px header after the status word, the gaps and
+   the brand; a long decided sentence wrapped there and clipped, and fr/nl run
+   15-25% longer than English. `min-width: 0` is what lets a flex item shrink
+   below its content at all (`min-width: auto` is the default), and the three
+   together mean this line clips rather than growing the header. The renderer
+   ALSO drops the field once decided (`overlay-bug.tsx`) — one guard for the
+   sentence §4 sends to the footer, one for every other long label. */
+.ovl-bug-context { font-size: 19.5px; font-weight: 500; min-width: 0;
+                   white-space: nowrap; overflow: hidden;
                    color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
 .ovl-bug-brand { margin-left: auto; font-size: 24px; font-weight: 600;
                  letter-spacing: 0.08em;
@@ -1456,8 +1480,30 @@ body {
 .ovl-bug-score { margin-left: auto; font-size: 69px; font-weight: 700; line-height: 1; }
 .ovl-bug-meta { width: 78px; text-align: right; font-size: 30px; font-weight: 500;
                 color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
-.ovl-bug-footer { display: flex; align-items: center; justify-content: space-between;
+/* `_THEMES.md` §4 rule 0 (product ruling 2026-09-10) — a START-ALIGNED LIST
+   with gap 18, not `space-between`: with the two-entry cap the old rule pushed
+   two related cards to the outer edges of a 480px tile, where they read as two
+   unrelated things. `white-space: nowrap` is the fix for the photographed
+   defect — a flex container does not wrap, but its anonymous TEXT items wrap
+   internally, which is how "AWA Red" ended up on a second line that the tile's
+   `overflow: hidden` then cut through. The tile must NOT grow instead — an OBS
+   operator frames the bug against their camera, and a graphic that changes
+   height on air moves into the shot — so a line that does not fit is clipped,
+   by the TILE, deliberately.
+
+   NO `overflow: hidden` HERE, and that omission is load-bearing. An earlier
+   draft of this rule had it, which made the footer its own scroll container and
+   absorbed any future wrap before `.ovl-bug` could see it — measured in
+   Chromium on the real markup: with the footer absorbing, a defeated `nowrap`
+   left `.ovl-bug` at scrollHeight 273 = clientHeight 273 and the regression was
+   INVISIBLE; without it the same defeat reads 299 vs 273. `stream-overlay.spec.
+   ts`'s "the tile shows a footer it cannot hold, and does not clip it" measures
+   exactly that difference, so absorbing here would have silently blinded the
+   one test this defect has. The horizontal overhang a long locale can still
+   produce reaches `.ovl-bug` instead, which is where §4 wants it clipped. */
+.ovl-bug-footer { display: flex; align-items: center; justify-content: flex-start; gap: 18px;
                   height: 45px; padding: 0 24px; font-size: 21px; font-weight: 500;
+                  white-space: nowrap;
                   color: color-mix(in srgb, var(--sport-ink) 85%, transparent); }
 
 /* The side in play (both themes): board-2 ground, an LED bar, an LED score. */

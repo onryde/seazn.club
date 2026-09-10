@@ -93,8 +93,19 @@ export function OverlayBar({
           ) : model.chase ? (
             <span data-testid="ovl-chase" className="ovl-detail-emphasis">{model.chase}</span>
           ) : null}
+          {/* §4 rule 2 (product ruling 2026-09-10) — an entry is ONE UNIT.
+              `className="contents"` sat here as well as on the bug's footer,
+              and `display: contents` puts separator, chip and label straight
+              into the flex container as three independent items. Only the bug
+              misbehaves today (480px against this band's 1776px), but the
+              latent bug is identical and the ruling names both files: "the bar
+              and the bug are twins, and a composition guard added to one is
+              owed to the other in the same change". `.ovl-detail-entry` keeps
+              this band's own 33px spacing inside the box, so nothing here
+              moves. The bar keeps the FULL list — the two-entry cap is §4's
+              and belongs to the bug alone. */}
           {model.detail.map((line, i) => (
-            <span key={line.text + i} className="contents">
+            <span key={line.text + i} className="ovl-detail-entry">
               {i > 0 || model.chase || model.result ? <span className="ovl-detail-sep" /> : null}
               {line.tone ? (
                 <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />

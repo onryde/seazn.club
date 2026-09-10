@@ -103,9 +103,14 @@ function chipsIn(tree: ReturnType<typeof walk>) {
 }
 
 describe.each([
-  ["OverlayBar", OverlayBar],
-  ["OverlayBug", OverlayBug],
-] as const)("%s renders the chip for a toned line and nothing for an untoned one", (_name, Component) => {
+  // The third case below is per-theme: `_THEMES.md` §4 (product ruling
+  // 2026-09-10) caps the BUG's footer at the two most recent entries, so three
+  // toned lines reach the bug as two chips and the bar as three. The cap
+  // itself, and the bar/bug differential that proves it belongs to one theme,
+  // are `bug-footer-cap.test.tsx`'s subject.
+  ["OverlayBar", OverlayBar, ["ovl-chip ovl-chip-advisory", "ovl-chip ovl-chip-caution", "ovl-chip ovl-chip-dismissal"]],
+  ["OverlayBug", OverlayBug, ["ovl-chip ovl-chip-caution", "ovl-chip ovl-chip-dismissal"]],
+] as const)("%s renders the chip for a toned line and nothing for an untoned one", (_name, Component, expectedClasses) => {
   it("a toned detail line renders exactly one ovl-chip, coloured for its tone", () => {
     const model: OverlayModel = {
       ...BASE_MODEL,
@@ -126,7 +131,7 @@ describe.each([
     expect(chipsIn(tree).length, "an untoned line must render no chip at all").toBe(0);
   });
 
-  it("three different tones render three differently-coloured chips — not a constant class", () => {
+  it("different tones render differently-coloured chips — not a constant class", () => {
     const model: OverlayModel = {
       ...BASE_MODEL,
       detail: [
@@ -137,6 +142,6 @@ describe.each([
     };
     const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     const classes = chipsIn(tree).map((el) => propsOf(el).className);
-    expect(classes).toEqual(["ovl-chip ovl-chip-advisory", "ovl-chip ovl-chip-caution", "ovl-chip ovl-chip-dismissal"]);
+    expect(classes).toEqual(expectedClasses);
   });
 });

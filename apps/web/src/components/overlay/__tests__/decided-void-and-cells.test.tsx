@@ -250,33 +250,77 @@ describe("§3's decided/void context line reaches the rendered second line (I2)"
     return el === undefined ? undefined : textOf(el);
   };
 
-  describe.each([
-    ["OverlayBar", OverlayBar],
-    ["OverlayBug", OverlayBug],
-  ] as const)("%s", (_name, Component) => {
+  describe("OverlayBar", () => {
     it("live: the sport's own line", () => {
-      expect(contextLineOf(Component, modelFor("in_play", null))).toBe("H2");
+      expect(contextLineOf(OverlayBar, modelFor("in_play", null))).toBe("H2");
     });
 
     it("decided: the SHORT form of the result sentence, not the phase", () => {
-      const line = contextLineOf(Component, modelFor("decided", { kind: "win", winner: "H", method: "regulation" }));
+      const line = contextLineOf(OverlayBar, modelFor("decided", { kind: "win", winner: "H", method: "regulation" }));
       expect(line, "the winner reduced to the cell's short name").toBe("WIN MIL REG");
       expect(line, "the phase must not survive under the word 'Final'").not.toBe("H2");
     });
 
     it("void carrying a verdict: the same short form as decided", () => {
-      const line = contextLineOf(Component, modelFor("forfeited", { kind: "award", winner: "A", method: "regulation" }));
+      const line = contextLineOf(
+        OverlayBar,
+        modelFor("forfeited", { kind: "award", winner: "A", method: "regulation" }),
+      );
       expect(line).toBe("WIN NOR REG");
     });
 
     it("void, no verdict: the sport's own line SURVIVES — the regression this closes", () => {
       // Before I2 this rendered no second line at all: an abandoned match lost
       // the phase (or, for tennis, its "Set 3") the instant it ended.
-      expect(contextLineOf(Component, modelFor("abandoned", null))).toBe("H2");
+      expect(contextLineOf(OverlayBar, modelFor("abandoned", null))).toBe("H2");
     });
 
     it("the negative pair: a scheduled fixture renders no second line at all", () => {
-      expect(contextLineOf(Component, modelFor("scheduled", null))).toBeUndefined();
+      expect(contextLineOf(OverlayBar, modelFor("scheduled", null))).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // `_THEMES.md` §4 (product ruling 2026-09-10, review finding IMPORTANT 1).
+  // `header.period` is ONE field and BOTH themes read it, but §4 puts the
+  // bug's result in the FOOTER and specs its 48px header context at 19.5/500
+  // for "2nd half"-sized labels: "NOR won by 8 wickets with 12 balls
+  // remaining" wraps there and clips, and fr/nl run 15-25% longer. So the bug
+  // — and only the bug — ignores the field once `decided`. The four other
+  // cases are unchanged: this is a branch, not a removal.
+  // -------------------------------------------------------------------------
+  describe("OverlayBug — the same field, minus the decided sentence (§4)", () => {
+    it("live: the sport's own line, exactly as the bar shows it", () => {
+      expect(contextLineOf(OverlayBug, modelFor("in_play", null))).toBe("H2");
+    });
+
+    it("decided: the model still CARRIES the sentence and the bug drops it", () => {
+      const model = modelFor("decided", { kind: "win", winner: "H", method: "regulation" });
+      // The differential that stops this reading as "the projection stopped
+      // computing it": the field is populated, the bar renders it, the bug
+      // does not. Without all three, an empty `header.period` passes too.
+      expect(model.header.period, "the projection is unchanged").toBe("WIN MIL REG");
+      expect(contextLineOf(OverlayBar, model), "§3 still shows it").toBe("WIN MIL REG");
+      expect(contextLineOf(OverlayBug, model), "§4 puts the result in the footer instead").toBeUndefined();
+    });
+
+    it("void carrying a verdict: dropped too — `decided` covers both rows", () => {
+      const model = modelFor("forfeited", { kind: "award", winner: "A", method: "regulation" });
+      expect(model.decided, "a verdict-carrying void IS decided for §3/§4's purposes").toBe(true);
+      expect(model.header.period).toBe("WIN NOR REG");
+      expect(contextLineOf(OverlayBug, model)).toBeUndefined();
+    });
+
+    it("void, no verdict: the sport's own line SURVIVES in the bug as well", () => {
+      // NOT decided, so the branch above must not reach it — the header keeps
+      // the phase ("Set 3" for tennis) that I2 restored.
+      const model = modelFor("abandoned", null);
+      expect(model.decided).toBe(false);
+      expect(contextLineOf(OverlayBug, model)).toBe("H2");
+    });
+
+    it("the negative pair: a scheduled fixture renders no second line at all", () => {
+      expect(contextLineOf(OverlayBug, modelFor("scheduled", null))).toBeUndefined();
     });
   });
 });
