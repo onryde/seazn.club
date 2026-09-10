@@ -64,6 +64,19 @@ const dictOf = (locale: string, ns: string): Record<string, string> =>
   JSON.parse(readFileSync(join(DICT, locale, `${ns}.json`), "utf8"));
 
 describe("overlay + panel copy is complete in every locale", () => {
+  it("scans the SOURCE, not the generated key union", () => {
+    // The positive pair for the exclusion in `files()` above: without it this
+    // test's whole premise ("keys the source actually references") is false,
+    // because `lib/i18n-keys.ts` names every key in `en` as a literal — and
+    // nothing else here would notice, since a bigger referenced set still
+    // clears every floor and every "exists in this locale" check below.
+    const scanned = files(join(SRC, "lib"));
+    expect(scanned.length, "the lib scan found no files at all").toBeGreaterThan(10);
+    expect(scanned.filter((f) => f.endsWith("i18n-keys.ts")), "the generated union was scanned").toEqual(
+      [],
+    );
+  });
+
   it("finds the keys at all — a scan that matched nothing would pass vacuously", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
     // RE-PIN (2026-09-10, task 6): the panel has landed, so the floor moves

@@ -21,6 +21,11 @@ vi.mock("next/navigation", () => ({
 }));
 
 const TZ = "Europe/London";
+// DELIBERATELY different from `tz`. The row carries both zones and hands the
+// panel the VENUE one; with the two equal, a mutant that passes `orgTz`
+// instead would look identical (AGENTS.md class 7 — one sample is not a
+// parity sweep).
+const ORG_TZ = "UTC";
 const NOW_MS = Date.UTC(2026, 8, 10, 12, 0, 0);
 const ENTRANTS = { e1: "Alpha", e2: "Bravo" };
 
@@ -67,7 +72,7 @@ function row(options: { canEdit?: boolean; stream?: StreamPanelContext; fixture?
     fixture: options.fixture ?? fx(),
     href: "/f/1",
     tz: TZ,
-    orgTz: TZ,
+    orgTz: ORG_TZ,
     nowMs: NOW_MS,
     canEdit: options.canEdit ?? true,
     entrantNames: ENTRANTS,
@@ -113,7 +118,7 @@ describe("the stream toggle's gate — each conjunct on its own", () => {
       fixture: fx(),
       href: "/f/1",
       tz: TZ,
-      orgTz: TZ,
+      orgTz: ORG_TZ,
       nowMs: NOW_MS,
       canEdit: true,
       entrantNames: ENTRANTS,
@@ -135,6 +140,7 @@ describe("what the toggle opens", () => {
     expect(propsOf(find(island.tree(), FixtureStreamToggle)!).open).toBe(true);
     expect((propsOf(panel!).fixture as { id: string }).id).toBe("f1");
     expect(propsOf(panel!).tz, "the VENUE zone, the one the row prints in").toBe(TZ);
+    expect(propsOf(panel!).tz, "never the ORG zone").not.toBe(ORG_TZ);
     expect(propsOf(panel!).entrantNames).toBe(ENTRANTS);
     expect((propsOf(panel!).stream as StreamPanelContext).sportKey).toBe("football");
   });
