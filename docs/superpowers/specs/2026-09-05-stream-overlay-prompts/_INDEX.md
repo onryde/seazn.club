@@ -965,3 +965,139 @@ pixel is painted. The visual gate photographs `main` pages, not overlay pages,
 because no overlay page exists yet. And no migration, dictionary key or
 user-facing string was added, so none of the four-locale, OpenAPI or Flyway
 gates had anything to catch.
+
+## 2026-09-10 — W1 Task 8 (e2e, smoke, visual gate) — the hairline is DISCHARGED
+
+**T1's one handed-forward obligation is now executed rather than documented.**
+Two WCAG 1.4.11 findings — football's dismissal chip at 2.56:1 and hockey's live
+dot at 2.75:1, both under the 3:1 graphical floor — were closed as *covered by
+the 1-px `--sport-ink` hairline*. `apps/web` vitest is `environment: "node"`, so
+until this task no test in the repo could see that border and both closures
+rested on prose.
+
+### Inventory
+
+| File | What it is |
+|---|---|
+| `apps/web/e2e/stream-overlay.spec.ts` | NEW. 11 tests: the hairline (both themes × dot + three chip tones), the entitlement gate as a 404→200 differential, `?style=` fallback, `?lang=`, the canvas scale at four widths, no banner / no cookies, Task 7's link and its reload-for-Replay flip, and one recorded defect (below). Runs in `parallel` — a root spec joins the sharded remainder automatically, no config edit. |
+| `apps/web/e2e/overlay-kit.ts` | NEW. The seed, shared with the visual gate: a fresh org, a LIVE FIH hockey fixture, one card of every class, a `stream_url`, and the `streaming.overlay` grant. |
+| `apps/web/e2e/visual/manifest.json` | +1 group `stream-overlay`, 4 rows, 3 `mustDiffer` pairs. |
+| `apps/web/e2e/visual/manifest.ts` / `seeds.ts` | +1 seed kind `overlay-fixture` — one entry in each of `SEED_KINDS`/`SEED_PARAMS` plus one `seedFor` case, exactly as the runbook's step 2 says. |
+| `scripts/smoke.ts` | +`streamOverlaySuite` and its `setBoolEntitlement` SQL flip. Discharges the second handed-forward item: **`overlay-tokens.ts`'s owed smoke**. 12/12 checks. |
+
+### The measured values (this is the point of the task)
+
+Read in a real browser off the computed style, four sides at a time, against the
+RESOLVED custom property — never a hex literal, which passes for one sport and
+rots for the other ten the same CSS rule serves.
+
+| Element | Measured |
+|---|---|
+| `[data-testid=ovl-live-dot]`, §3 bar and §4 bug | `1px` / `solid` / `rgb(238, 246, 248)` on all four sides |
+| `[data-testid=ovl-chip]` × 3, both themes | same border; fills `rgb(61, 220, 132)` advisory, `rgb(255, 214, 10)` caution, `rgb(255, 90, 77)` dismissal |
+
+`rgb(238,246,248)` is `#eef6f8` — hockey's OWN ink, asserted `!==` the root
+default so the per-sport `sportThemeStyle` reaching the canvas is proved too.
+
+**The chips had never rendered for anyone** — not an implementer, not a
+reviewer, not the owner (F9). Football's three entries in
+`DISCIPLINE_CLASS_TONE` are unreachable by construction and no hockey fixture
+with cards existed. The seed here is the first execution of that path, and the
+three tones came out right first try.
+
+**Killers, 4 of 4** (injected in the live browser, not in the source, because
+the served bundle must not be rebuilt mid-wave): border removed → widths red;
+border colour changed → colour red; `.ovl-chip-advisory` repainted as caution →
+the tone-mapping assertion red with both values named; scale forced to 1 → red
+at 1280 but NOT at 1920, which is why the width list is enumerated.
+
+### FS-W1-8a — §4's corner bug CLIPS ITS OWN FOOTER, and only a picture says so
+
+With three cards the bug's footer wraps to a second line inside a 480 px tile
+whose `overflow: hidden` then cuts it: "AWA Red" sliced through, stray `·` dots
+along the bottom edge. **Measured: 9 px of the footer is clipped at 1920x1080**
+(`.ovl-bug` `scrollHeight - clientHeight`, `overflow-y: hidden`). Three cards in
+a hockey match is an ordinary state.
+
+**The visual gate cannot see it and could not have**: `expectNoClip` compares
+`scrollWidth` with `clientWidth`, so **every vertical clip in the product is
+invisible to the gate**, not merely this one. Scoped separately by the owner.
+
+Root cause is `className="contents"` on the per-entry span — `display: contents`
+puts chip, label and separator straight into the flex container, so an "entry"
+is not a box that can be kept together. **It is on BOTH twins**
+(`overlay-bar.tsx:97` and `overlay-bug.tsx:84`); the bar is merely wide enough
+to hide the same latent bug today.
+
+Owner ruling 2026-09-10 (`_THEMES.md` §4 — "the bug footer caps at two entries" and "the bug footer is a list, not a space-between row"; find them with `git log --oneline origin/main..feat/stream-overlay -- docs/.../_THEMES.md`, never by the shas, which a rebase moves): at most
+the two most recent entries, one nowrap line, start-aligned with `gap: 18` (not
+`space-between`, which pushes two related cards to opposite edges of the tile),
+and **the tile must not grow instead** — an OBS operator frames the bug against
+their camera. Not fixed here (`overlay-bug.tsx`/`globals.css` are outside Task
+8's file set). `stream-overlay.spec.ts` states the CORRECT behaviour behind
+`test.fail()`, so the run reds the day the page is fixed; **the fix round's last
+step is to delete that one line.**
+
+### Three premises that proved false
+
+- **"No helper under `apps/web/e2e` writes `org_entitlement_overrides`."**
+  There is one, exported and documented: `setBoolEntitlementOverrideSql`
+  (`helpers.ts:618`), the `bool_value` sibling of `setEntitlementOverrideSql`
+  (`:597`). A negative grep was relayed as an absence.
+- **F10, "`scrollWidth === clientWidth` is vacuous on the overlay route".** True
+  of a hand-written probe, and `globals.css:66-71` sets `html, body {
+  overflow-x: clip }` **app-wide** rather than on this route. But the gate's own
+  `expectNoHorizontalScroll` temporarily forces `overflow-x: visible` on both
+  before measuring, so it is NOT vacuous and the rows list it. The scale
+  assertion is still the one that carries the geometry, and it is what has the
+  killer.
+- **The brief's "grant `streaming.overlay` for the org it creates"** reads as
+  the shared Pro org. It must not be: the override is org-WIDE (`resolve()`
+  overlays it before the competition-pass arm), so granting there adds the OBS
+  panel to every division fixtures tab in the same Playwright job, where
+  `run-sheet`/`competition-desk` assert on those rows — and it makes
+  "unentitled ⇒ 404" vacuous for every later wave, which is exactly why T1's
+  visual pass deleted its own nine override rows. The kit mints its own org.
+
+### Two traps this seed hit, recorded so the next one does not
+
+- **`getPublicFixture` is `unstable_cache`'d at 30 s**, and the overlay route,
+  the public match page and the `PUT /stream` write all share that one row. A
+  `stream_url` written after the first read is invisible for half a minute; the
+  seed therefore writes it before anything reads. The same cache is why the
+  live→Replay flip is proved against a SECOND, freshly-loaded page before
+  anything is claimed about the first — otherwise "the open page still says
+  Watch live" passes because of the cache rather than because of the transport.
+- **`invalidateOrgEntitlements` borrows staff on the org's OWNER**, so it must
+  be called with that owner's session. A bare `browser.newContext()` inherits
+  `AUTH_STATE`, which flips the rig owner to staff and then calls the admin
+  route as somebody else: 401.
+
+### Gate numbers, measured on this tree
+
+- `e2e/stream-overlay.spec.ts` — **13 passed** (11 of them this file's, 2 the
+  `setup` project), whole file, `--project=parallel`, never a `-g` slice. The
+  file is `mode: "serial"`, so a red count from it is a FLOOR: re-run after each
+  fix until a full pass completes.
+- `e2e/visual/capture.spec.ts` — **8 passed**, all three groups. The new group's
+  four PNGs are 81502 / 70663 / 35965 / 91706 bytes with four distinct hashes.
+- `scripts/smoke.ts` — **1021 passed, 7 failed**, all twelve overlay checks
+  green. Five of the seven are the documented missing-`PLACEMENT_SERVICE_HOST`
+  signature (`seazn-local-env` §3b names exactly five). The sixth
+  (`billing-quantity`) fires at log line 65, BEFORE anything of this task runs.
+  The seventh (`staff_audit_log` chain) is an accumulated-DB condition:
+  `verify_staff_audit_log_chain()` already returns a broken row id against 1740
+  rows, and appending rows cannot break a chain — only a mid-chain delete can.
+- `visual-manifest.test.ts` 12/12, `tsc --noEmit` clean in both projects,
+  `eslint` clean, `git status --porcelain packages` empty at every gate.
+
+### What Task 8 does NOT prove
+
+The overlay is photographed and asserted **only for hockey**, because hockey is
+the only sport that reaches all three chip tones; the other ten sports' palettes
+are proved by `overlay-tokens.ts`'s contrast sweep and by nothing painted.
+`hit-targets` and `truncate-chain` are deliberately absent from the overlay rows
+— the route has no controls and no ellipsis, so both would report
+`inspected: 0`, which the runbook calls a finding rather than a pass. Nothing
+here exercises `?delay=` (Task 5d) or the slate (Task 5e). And the gate still
+photographs no CRICKET overlay, so §3's chase line remains unphotographed.

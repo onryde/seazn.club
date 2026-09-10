@@ -363,6 +363,77 @@ test.describe("the overlay route", () => {
 });
 
 // ===========================================================================
+// A RECORDED DEFECT, stated as the behaviour that SHOULD hold
+// ===========================================================================
+
+test.describe("§4's corner bug and its footer", () => {
+  test("the tile shows a footer it cannot hold, and does not clip it", async ({ browser }) => {
+    // `test.fail()` — this asserts the CORRECT behaviour and records that the
+    // product does not have it yet, so the run reds the day someone fixes the
+    // page. That is the `knownDefects` contract in Playwright's own vocabulary,
+    // and the reason this is not written the other way round: freezing the live
+    // bug as an expected value is AGENTS.md class 4, and it is how a defect
+    // survives two sign-offs.
+    //
+    // WHAT IS WRONG, found by looking at a picture and nothing else. With three
+    // cards on the ledger the bug's footer (`.ovl-bug-footer`, a 45 px
+    // `justify-content: space-between` flex row inside a 480 px tile) wraps to a
+    // second line, and `.ovl-bug`'s `overflow: hidden` cuts it in half: "AWA
+    // Red" is sliced through and the `·` separators leave stray dots along the
+    // tile's bottom edge. `className="contents"` on each entry's wrapper
+    // (`overlay-bug.tsx:84`) is what lets chip, label and separator wrap
+    // independently — `display: contents` puts all three straight into the flex
+    // container, so an "entry" is not a box that can be kept together.
+    //
+    // Owner ruling 2026-09-10 (`_THEMES.md` §4): the footer holds at most the
+    // two most recent entries, on ONE nowrap line, and the tile must NOT grow
+    // instead — an OBS operator frames the bug against their camera and a
+    // graphic that changes height on air moves into the shot.
+    //
+    // MEASURED, with `test.fail()` lifted for one run: the tile clips 9px of
+    // its own footer at 1920x1080 (`overflow-y: hidden`).
+    //
+    // NOT FIXED HERE: `overlay-bug.tsx` and `globals.css` are outside this
+    // task's file set. The fix round's LAST step is to delete the `test.fail()`
+    // line below.
+    //
+    // The visual gate cannot see this and could not have: `expectNoClip`
+    // compares `scrollWidth` with `clientWidth`, so every VERTICAL clip in the
+    // product is invisible to it.
+    //
+    // The PRECONDITIONS are held by normal tests, never by this one: under
+    // `test.fail()` a missing tile would read as the expected failure and mask
+    // itself. `bug: every card chip carries the hairline` above renders this
+    // exact page and this exact footer, and reds honestly if either is absent.
+    test.fail();
+    const page = await anonPage(browser);
+    try {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
+      await expect(page.locator('[data-testid="ovl-detail"]')).toHaveCount(1);
+      const overflow = await page.evaluate(() => {
+        const tile = document.querySelector<HTMLElement>(".ovl-bug");
+        if (!tile) throw new Error("no .ovl-bug on the page");
+        return {
+          scrollHeight: tile.scrollHeight,
+          clientHeight: tile.clientHeight,
+          overflowY: getComputedStyle(tile).overflowY,
+        };
+      });
+      // A tile that clips horizontally is fine — a name is allowed to be cut.
+      // Content taller than the box it is drawn in is a line the viewer simply
+      // never sees, and the tile is the only thing that could have told them.
+      expect(
+        overflow.scrollHeight - overflow.clientHeight,
+        `the bug tile clips ${overflow.scrollHeight - overflow.clientHeight}px of its own footer (overflow-y: ${overflow.overflowY})`,
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      await page.context().close();
+    }
+  });
+});
+
+// ===========================================================================
 // The public match page's link to the club's broadcast (Task 7)
 // ===========================================================================
 
