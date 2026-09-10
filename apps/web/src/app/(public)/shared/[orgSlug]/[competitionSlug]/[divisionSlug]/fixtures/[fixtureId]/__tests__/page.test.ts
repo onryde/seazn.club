@@ -405,3 +405,107 @@ describe("FixturePage — no hardcoded English leaks outside lang=en (Task 14)",
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Stream overlay W1, Task 7 — the public match page's link to the club's own
+// broadcast (design §3.9). The unit layer here is `environment: "node"`, so
+// these drive the REAL page component and read its REAL HTML: the seam that
+// matters is `getPublicFixture().fixture.stream_url` → an anchor on this page,
+// and a test of `streamLinkLabelKey` alone could not see whether anything
+// mounts it (recurring class 1, the inert seam).
+//
+// Two different URLs on purpose: an implementation that hardcoded one of them
+// would satisfy a single-sample test (rule 19 — "prefer at least one case
+// where the right answer differs from the wrong one's constant").
+// ---------------------------------------------------------------------------
+const TWITCH = "https://www.twitch.tv/seaznclub";
+const YOUTUBE = "https://www.youtube.com/live/abc123";
+
+const streamHtml = async (fixtureOver: Record<string, unknown>, locale = "en") =>
+  renderToStaticMarkup(
+    await render(
+      { home_entrant_id: "home", away_entrant_id: "away", ...fixtureOver },
+      cricketDocFor(fixtureOver.status === "in_play" ? "in_play" : "decided"),
+      { home: "Home XI", away: "Away XI" },
+      locale,
+    ),
+  );
+
+describe("FixturePage — the public stream link (stream overlay W1, §3.9)", () => {
+  it("a live fixture with a saved link renders it, opening at that exact URL", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: TWITCH });
+    expect(html).toContain('data-testid="public-stream-link"');
+    // The value, not merely the attribute: `href="` anchors it (a bare
+    // `data-*`/attribute probe passes against React's own `"$undefined"`).
+    expect(html).toContain(`href="${TWITCH}"`);
+    expect(html).toContain('target="_blank"');
+    // R16's second, independent guard: `target="_blank"` without `noopener`
+    // hands the opened tab a `window.opener` handle to this page, and the
+    // href is organiser-supplied.
+    expect(html).toMatch(/rel="[^"]*\bnoopener\b[^"]*"/);
+    expect(html).toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+  });
+
+  it("a DIFFERENT saved link opens at that one — the href is the fixture's, not a constant", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: YOUTUBE });
+    expect(html).toContain(`href="${YOUTUBE}"`);
+    expect(html).not.toContain(TWITCH);
+  });
+
+  it("the link sits under the headline and above the match centre, never inside it", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: TWITCH });
+    const link = html.indexOf('data-testid="public-stream-link"');
+    const headline = html.indexOf("<h1");
+    const centre = html.indexOf('data-testid="mc-court-card"');
+    expect(headline, "the headline is rendered at all").toBeGreaterThanOrEqual(0);
+    expect(centre, "the match centre is rendered at all").toBeGreaterThanOrEqual(0);
+    expect(link).toBeGreaterThan(headline);
+    expect(link).toBeLessThan(centre);
+  });
+
+  for (const status of ["scheduled", "in_play"] as const) {
+    it(`${status} reads "Watch live", never "Replay"`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+      expect(html).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+
+  for (const status of ["decided", "finalized"] as const) {
+    it(`${status} reads "Replay", never "Watch live"`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).toContain(`>${publicEn["overlay.replay"]}</a>`);
+      expect(html).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+    });
+  }
+
+  // The positive assertions above are each satisfied by "render the anchor
+  // always"; these two are the negative half of the pair.
+  it("no saved link renders NO anchor at all — not an empty or dead one", async () => {
+    const html = await streamHtml({ status: "in_play", stream_url: null });
+    expect(html).not.toContain("public-stream-link");
+    expect(html).not.toContain(publicEn["overlay.watchLive"] as string);
+  });
+
+  for (const status of ["cancelled", "abandoned", "forfeited"] as const) {
+    it(`a ${status} fixture shows no link even with one saved (§3.9 VOID_STATUSES)`, async () => {
+      const html = await streamHtml({ status, stream_url: TWITCH });
+      expect(html).not.toContain("public-stream-link");
+      expect(html).not.toContain(TWITCH);
+    });
+  }
+
+  // A key-existence check passes whether the label is wired or hardcoded
+  // English; only a locale differential can tell the two apart.
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`locale=${locale} labels the link from ITS OWN dictionary, not English`, async () => {
+      const dict = PUBLIC_DICTS[locale]!;
+      const live = await streamHtml({ status: "in_play", stream_url: TWITCH }, locale);
+      const ended = await streamHtml({ status: "decided", stream_url: TWITCH }, locale);
+      expect(live).toContain(`>${dict["overlay.watchLive"]}</a>`);
+      expect(ended).toContain(`>${dict["overlay.replay"]}</a>`);
+      expect(live).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
+      expect(ended).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+});

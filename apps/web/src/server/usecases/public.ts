@@ -460,12 +460,13 @@ export async function publicFixture(fixtureId: string): Promise<unknown> {
         | "outcome"
         | "summary"
         | "last_seq"
+        | "stream_url"
       >[]
     >`
       select id, division_id, stage_id, pool_id, round_no, seq_in_round, home_entrant_id,
              away_entrant_id, home_slot_label, away_slot_label,
              scheduled_at, venue, court_label, status, outcome,
-             summary, last_seq
+             summary, last_seq, stream_url
       from public_fixtures_v where id = ${fixtureId} limit 1`;
     if (!row) throw new HttpError(404, "fixture not found");
     // P9 cutover (finding #2): same treatment as publicSchedule above —

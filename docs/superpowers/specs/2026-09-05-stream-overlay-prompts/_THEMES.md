@@ -121,6 +121,75 @@ A caveat rather than a rewrite: §8's `copy button` row still carries Tailwind
 
 The slab's `dismissal` pair is per-sport and lives in §5.
 
+### 2a. Card classes → chip tone, per period-kernel sport
+
+**Every card class gets a chip** (product ruling, 2026-09-10, closing F13). Only
+hockey and icehockey reach these — they are the two `makePeriodModule` sports,
+and football's own entries are unreachable (it is not a period-kernel sport).
+
+Before this ruling `DISCIPLINE_CLASS_TONE` declared **five of icehockey's seven
+classes as UNCOLOURED** — `bench_minor`, `double_minor`, `major`, `misconduct`,
+`game_misconduct` rendered no chip at all, while a 2-minute `minor` rendered
+one. That is backwards on a broadcast: the more serious the offence, the less
+visible the graphic. It was also settled in code rather than here, which is why
+this section now exists.
+
+| Sport | Class | Tone | Why |
+|---|---|---|---|
+| hockey | `green` | advisory | the sport's own three-card ladder, unchanged |
+| hockey | `yellow` | caution | |
+| hockey | `red` | dismissal | |
+| icehockey | `minor`, `bench_minor`, `double_minor` | **caution** | the lesser-penalty family — a time penalty the side serves and returns from |
+| icehockey | `major`, `misconduct`, `game_misconduct`, `match` | **dismissal** | the serious family — ejection or a period-length penalty |
+
+Two tiers for icehockey, not three: the sport has no green-card equivalent, so
+`advisory` stays unused there rather than being invented for symmetry.
+
+**The card LABEL is owed in four locales — DONE 2026-09-10** (product ruling,
+2026-09-10, on review MINOR 9). `disciplineLabel` used to build the label from
+the class key — `classKey.replace(/_/g, " ")` plus title case — so a French,
+Spanish or Dutch stream rendered **"Bench minor"**, **"Game misconduct"** in
+English, on the overlay AND on the public match page (`live-score.tsx`), which
+share that reader. The repo's standing rule is unambiguous: any user-facing
+string lands in all four dictionaries and is never hardcoded English.
+
+F13 did not introduce this — those lines already rendered — but it **made five
+more classes visually prominent on a broadcast**, so the ruling that fixed one
+defect amplified another. Ten keys (`green`, `yellow`, `red`, `minor`,
+`bench_minor`, `double_minor`, `major`, `misconduct`, `game_misconduct`,
+`match`) × four locales, keyed off the class rather than off the derived English,
+so a new class is a missing key rather than a silently-anglicised label.
+
+As shipped: `DISCIPLINE_LABEL_KEYS` (`public-site.ts`) maps those ten classes
+to `overlay.card.*`, and `disciplineLabel(classKey, msg)` takes a REQUIRED
+resolver so a new call site cannot fall back to English by omission. The map is
+a static literal rather than `` `overlay.card.${classKey}` `` because the
+dictionary gate scans for key LITERALS — a template literal would register
+`overlay.card.` as a dynamic prefix and excuse every key under it from the
+orphan check, turning the gate off for exactly the keys it was added for.
+`overlay-model.test.ts` holds the map against THIS TABLE in both directions, so
+a class added to the row above reds until its key exists; that check is what
+makes "a missing key rather than a silently-anglicised label" true, since the
+function itself still falls back to the derivation rather than putting a raw
+`overlay.card.…` on a broadcast graphic. `second_yellow` is deliberately absent
+— it is unreachable dead code in `DISCIPLINE_CLASS_TONE` (football is not a
+period-kernel sport) and this table does not name it. The English strings are
+byte-identical to what the derivation produced, so only fr/es/nl moved; the
+three non-English wordings are sport terminology and are worth a native pass.
+
+Contrast is already satisfied — §2's table gives icehockey `caution` **11.24**
+and `dismissal` **6.53** on its own `board-2`, both clear of the 3:1 graphical
+floor unaided, and every chip additionally carries the `--sport-ink` hairline.
+
+**A malformed discipline row must not erase the others** (same ruling, closing
+F14). `disciplineList` previously returned `null` on the first entry it could
+not parse, discarding rows it had already accepted — so one bad row from the
+engine showed **no cards at all**, indistinguishable on screen from a clean
+match. Skip the bad row, keep the good ones; reserve `null` for "no discipline
+data at all". Showing two of three cards is strictly better than showing none
+and looking correct, and this is the failure class where an over-refusing guard
+silently dropped a wave's headline stat.
+
 **The overlay's graphical pairs — floor 3:1, not 4.5.** The card chips and the
 live dot are shapes, not words, so they answer to WCAG 1.4.11 at 3:1. §3
 explains why the boundary is an `--sport-ink` hairline rather than the `board`
@@ -162,7 +231,7 @@ Anchored bottom, full width. Two stacked bands, one shadow, radius 6 px.
 ```
 inset:            left 72   right 72   bottom 54
 main band:        height 126   background board   ink
-  live cell:      min-width 225, padding 0 33, background board-2
+  live cell:      min-width 225, MAX-WIDTH 480, padding 0 33, background board-2
                   dot 15 (#ef4444) + 1-px --sport-ink hairline (see below)
                   "Live" Geist 24/600 letter-spacing .02em
                   context line Geist 21/500 ink 70 %      e.g. "T20, 2nd innings"
@@ -179,6 +248,52 @@ detail band:      height 51, padding 0 33, gap 33, background board @ 90 %
                   emphasis item Geist 600 ink 100 % (chase line)
                   striker/server marker: 10.5 px LED dot before the name
 ```
+
+**The live cell has a MAX-WIDTH of 480** (product ruling, 2026-09-10). Measured
+in a browser at 1920×1080: the cell has `min-width: 225` and the team cells are
+`flex: 1 1 auto`, so the cell grows with its context line — 225 px at "RIV won",
+**312 px** at "Riverside won by 44 runs", **610 px** at a full-name result
+sentence, taking each team cell down to 509 px. It never wraps and never
+overflows the page, so this is a balance question rather than a defect: **a
+scorebug's job is the score, and its caption must never dominate the frame.**
+480 clears the reachable worst case (§3's decided context line is the SHORT form
+— today a three-letter code plus a margin, ~312 px) while capping a long one, so
+nothing reachable changes and the score can never be squeezed below half the bar
+by data that arrives later. Past the cap the line clips; team names still never
+truncate (§1's ladder is unchanged and applies to names, not to this line).
+
+**The clock never shows an implausible number** (product ruling, 2026-09-10,
+closing F16). Driven live, a fixture left `in_play` displayed **`1205:25`** —
+twenty hours — because the clock ticks from the fold's anchor with no upper
+bound and no relation to the period's declared length. A club that starts a
+match and never ends it is ordinary, and this is the one element on screen that
+keeps moving, so an absurd value is both the most visible defect and the most
+likely. Where the period's expected length is knowable from the sport config,
+show the broadcast convention past it — the **minutes** form, `45+` / `20+`.
+Where it is NOT knowable, **hold the clock at its last value** rather than
+counting past it.
+
+**Two corrections, same day.** This paragraph first read "`45+`, `90+`, `Q1+`".
+
+**`Q1+` cannot occur either, and was a third unimplementable reading of a binding
+sentence.** `formatClockCapped` emits the minutes form only, so a four-quarter
+period sport reads `12+`, never `Q1+`; `git grep -a "Q1+"` over the whole tree
+returns exactly one hit — this sheet. A requirement no brief ever picked up.
+Dropped rather than left, because a binding sentence naming an output the code
+cannot produce is worse than silence.
+
+**And the fallback clause said "hold at that ceiling", which cannot exist in that
+branch** — where the length is unknowable there IS no ceiling, and the code holds
+at the last value (`use-overlay-clock.ts:50`), which is the only sensible reading
+and is what shipped. Corrected to the shipped behaviour rather than left for the
+next wave to re-derive.
+
+**`90+` cannot occur.** `GameTime.elapsed` is **period-relative**, not
+cumulative, so a football second half past its nominal length reads **`45+`**,
+never `90+` — the clock restarts each period. Cumulative football minutes would
+be a different feature and are not specified here. Recorded rather than quietly
+swapped, because "90+" is the number a reader expects and would re-introduce. The live dot and
+the period label carry liveness — the clock does not have to.
 
 **The hairline is `--sport-ink`, not `--sport-board`, and it — not the fill —
 is what satisfies WCAG 1.4.11 here.**
@@ -229,7 +344,37 @@ Per-sport content of the bar (W1 unless marked W2):
 
 | Sport | Live cell context | Team cell score / meta | Between cells | Detail band |
 |---|---|---|---|---|
-| cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR |
+| cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR, **plus the revision marker below when the target was revised** |
+
+**The chase line names the method when the target was revised** (owner ruling,
+2026-09-10: *"add the DLS hint in W1"*). Without it a rain-revised chase shows
+new numbers with nothing to say why they moved, which on a broadcast reads as
+the scoreboard being wrong.
+
+The data already arrives — this is a read, not a new derivation. Cricket's
+`summary().detail` emits **`target` AND `targetSource`** together
+(`packages/engine/src/sports/cricket/cricket.ts:3678-3680`), and
+`projectOverlayLiveData` passes `summary` through whole (`server/overlay/project.ts`),
+so `targetSource` is already on the wire and simply has no reader.
+
+`targetSource` is `"dls" | "manual" | null`, so the marker has **three** cases
+and a manual revision must NOT be labelled DLS:
+
+| `targetSource` | Chase line |
+|---|---|
+| `"dls"` | the existing line + ` · DLS` |
+| `"manual"` | the existing line + ` · Revised` |
+| `null` | the existing line, unchanged |
+
+Two new `public.overlay.chase.*` keys in all four locales; the marker is
+appended by the projection (`overlayModel`), never assembled in a component, so
+both themes and every future theme inherit it. `DLS` is a proper noun and stays
+`DLS` in every locale; `Revised` translates.
+
+**Consistency note.** `resultMsg` already names the method at the END of a
+match — `cricket.ts:883` picks a `dls` suffix for the result sentence — so
+before this ruling the overlay explained a revised result and not a revised
+chase. This closes that asymmetry rather than opening a new surface.
 | football, hockey, icehockey | period ("2nd half") | `2` / none | divider; clock cell Barlow 60/700 LED before brand | scorers per side ("Okafor 23'"), card chips 13.5×18 radius 3 in caution / dismissal / advisory, each with a 1-px `--sport-ink` hairline (see below), with name and minute |
 | tennis | set + round ("Set 3, quarter-final") | sets as cells Barlow 51/600 ink 70 %, current set 700 ink 100 %; serve dot 13.5 LED before server's name | points cell Barlow 60/700 LED ("30 : 15") | "Novak serving", break points saved, format line |
 | badminton, tabletennis | game ("Game 2, men's doubles") | games as cells, current 700 ink 100 %; serve dot | games-won cell LED ("1 : 0") | who serves, previous game result, longest rally where the ledger has it |
@@ -334,9 +479,96 @@ row ×2:           height 90, padding 0 24, gap 18
                   score Barlow 69/700 line-height 1 tabular (margin-left auto)
                   meta  Barlow 30/500 ink 65 % width 78 right-aligned (overs)
 side in play:     row background board-2 + inset-left bar 8 px LED, score colour LED
-footer:           height 45, padding 0 24, Geist 21/500 ink 85 %, space-between
+footer:           height 45, padding 0 24, Geist 21/500 ink 85 %
+                  start-aligned, gap 18 (NOT space-between)
+                  AT MOST 2 detail entries, most recent last, ONE line, nowrap
+                  overflowing text ELLIPSES; it never clips and never wraps
                   emphasis Geist 600 ink 100 % (chase line)
 ```
+
+**The bug's header never carries the result sentence, and its context slot is
+guarded like the bar's** (product ruling, 2026-09-10, on review finding
+IMPORTANT 1).
+
+`header.period` carries the short result sentence once a fixture is decided, and
+**both themes read that field** — so it lands in the bug's header, where §4 puts
+the result in the **footer** and spec's the header context at 19.5/500 for
+"2nd half"-sized labels. Two things follow.
+
+1. **The bug ignores `header.period` when decided.** The result belongs in the
+   footer, as this section already says; the header keeps the status word.
+2. **`.ovl-bug-context` gets `min-width: 0; white-space: nowrap; overflow:
+   hidden`** regardless — the twin of the guard §3's `.ovl-context` already has.
+   Measured: about 291 px ≈ 32 characters are free in that header after "Final",
+   the gaps and "seazn". `MUM won by 44 runs (DLS)` fits; `NOR won by 8 wickets
+   with 12 balls remaining` wraps inside a fixed 48 px header and clips, and
+   French and Dutch run 15–25 % longer than English.
+
+**The lesson is the rule, not the fix: the bar and the bug are twins, and a
+composition guard added to one is owed to the other in the same change.** This
+is the second guard in one day that shipped on §3 and was missed on §4 — the
+480 px live-cell cap was the first.
+
+**The footer holds AT MOST TWO entries, on one line, and never wraps** (product
+ruling, 2026-09-10, on a defect the Task 8 hockey seed PHOTOGRAPHED — the first
+time three card chips had ever rendered anywhere).
+
+What the picture showed at 1920: `.ovl-bug-footer` is a 45 px
+`justify-content: space-between` row inside a 480 px tile with
+`overflow: hidden`. With `11v8` plus three card entries the row wrapped, and the
+tile's bottom edge **cut "AWA Red" in half**. Worse, each entry is wrapped in
+`className="contents"` — and `display: contents` puts a chip, its label and its
+separator directly into the flex container, so they wrap **independently**: the
+`·` separators landed on the clipped second line as stray dots, detached from
+the labels they belong to.
+
+Three cards in a hockey match is an ordinary state, so this is not an edge case.
+Two rules follow.
+
+0. **The footer is a start-aligned list with `gap: 18`, not `space-between`**
+   (added 2026-09-10 when Task 8 pointed out the interaction). `space-between`
+   made sense for a footer that never had a capped list in it; with two entries
+   on one nowrap line it pushes them to the **outer edges of a 480 px tile**, so
+   two related cards read as two unrelated things. A gap keeps them a list, and
+   matches §3's detail band, which is already a gap-separated list. Where a
+   chase or result line is present it leads the row.
+1. **A corner bug is not a log.** The bug shows at most the **two most recent**
+   detail entries, on one line, `white-space: nowrap`; §3's bar keeps the full
+   list, because it has 1776 px and a dedicated 51 px band and the bug has
+   neither. Where a chase or result line is present it takes priority, as §4
+   already says.
+2. **An entry is one unit.** Chip, label and separator must not be separable by
+   wrapping — `display: contents` on the group is what allowed it, and the group
+   needs to be a real box. **`className="contents"` is on the per-entry span in
+   BOTH renderers** (`overlay-bar.tsx:97` and `overlay-bug.tsx:84`), so this half
+   of the ruling touches both files even though only the bug misbehaves today —
+   the bar is wide enough to hide the same latent bug.
+
+**The tile must not grow instead.** An OBS operator positions the bug against
+their camera framing; a graphic that changes height on air moves into the shot.
+
+**Correction, 2026-09-10: "clip deliberately" was wrong, and the visual gate is
+right.** This paragraph first said to clip. But `expectNoClip` treats any
+`overflow-x: hidden` box with more than 1 px of overhang as a defect and offers
+no exempt path — and by this repo's own rule (AGENTS.md 23) an overflow is a
+feature only when the extra content is **REACHABLE**. On a broadcast graphic
+nothing is reachable: there is no scroll, no focus, no gesture. So a clipped
+footer is a defect by the project's own definition, and exempting the overlay
+rows would blind the gate for every future overlay row too.
+
+Measured: the capped English footer sits at exactly 480 px in a 480 px tile —
+on the boundary — and a longer locale measures **899–923 px**, which would land
+on `.ovl-bug` as a clip and red the gate.
+
+**So the content must FIT, not clip: the footer's text truncates with an
+ellipsis.** An ellipsis is intentional and reads as "there is more"; a
+mid-word cut reads as broken. Nothing overflows, the tile still never grows, and
+the gate stays honest for everyone after us.
+
+**The visual gate could not have caught this and still cannot.** `expectNoClip`
+compares `scrollWidth` with `clientWidth`, which sees horizontal overflow only —
+a **vertical** clip is invisible to it. Any check for this class has to measure
+against the container's bottom edge.
 
 The bug's card chips and its live dot carry the **1-px `--sport-ink` hairline**
 on the same terms as §3's — same reasoning, same measurements, same reason not
@@ -537,7 +769,40 @@ The panel follows `embed-snippet.tsx` and `.card` / `.btn` in `globals.css`.
 | heading | `text-sm font-semibold text-slate-700` with a 16 px lucide `Video` icon `text-purple-500`, stroke 1.75 |
 | explainer | `text-xs text-slate-500` |
 | style tabs | `rounded-md px-2.5 py-1 text-xs font-medium`; selected `bg-purple-100 text-purple-800`; idle `text-slate-500 hover:bg-purple-50 hover:text-purple-700`; `role="tab"` `aria-selected` |
-| live preview | the real `<OverlayStage>` at `scale(640/1920)` inside a 96 px tall strip on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)` |
+| live preview | the real `<OverlayStage>` scaled **to the strip's own width** — `scale(w/1920)` for the measured container width `w`, in a strip `w × 1080/1920` tall — on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)`, `transform-origin: top left` (matching `.ovl-canvas`'s own) |
+
+**Second correction, same day: a FIXED scale cannot work either, and the 360 px
+ruling below fixed only the vertical half.** `scale(640/1920)` paints a 640 CSS
+px canvas however wide the strip actually is, inside a `w-full overflow-hidden`
+box. The panel is ~296 px wide at a 320 px viewport, so **about a third of the
+frame was visible**, and §3's bar — which spans x≈24→616 in canvas px and is
+**cricket's default theme** — had its score cells cropped off the right edge,
+with nothing to scroll to reach them. Same defect as the 96 px one, one axis
+over, missed because the first ruling reasoned about height alone.
+
+The durable fix is to stop pinning a magic number in *either* axis: **scale to
+the container**, so the whole 1920×1080 canvas is visible at every width, which
+is the entire point of a preview. At a 640 px strip this still resolves to
+`640/1920`, so nothing changes on desktop — it simply stops being a constant.
+
+**The strip was 96 px and that number could not work either** (owner ruling
+**360 px**, 2026-09-10, on the W1 Task 6 finding). At `scale(640/1920)` = 1/3, a 96 px strip
+shows the top **288** of the canvas's 1080 authored px. §4's bug is anchored
+`top: 54`, so it lands at y 18–79 scaled and is visible. **§3's bar is anchored
+`bottom: 54`, which lands at y ≈ 279–342 scaled — entirely below a 96 px
+strip.** Selecting *Broadcast bar* therefore previewed as an empty green
+rectangle, and cricket's own default is `bar` (`defaultThemeFor`), so cricket
+organisers met it first.
+
+360 px is the smallest height that shows the whole 1080 px canvas at the scale
+this row already states (1080 ÷ 3 = 360), so the fix moves ONE number and leaves
+`scale(640/1920)` — which §8's own OBS-link copy and the panel's width maths both
+depend on — untouched. The alternative, keeping 96 px and raising the scale,
+would have shown a crop and made "the preview is the real `<OverlayStage>`" false.
+
+Recorded rather than silently corrected because the two numbers were internally
+inconsistent from the sheet's first draft, and a reader checking only one of them
+would reintroduce it.
 | overlay link field | `rounded-lg border border-purple-100 bg-slate-950 font-mono text-[11px] text-slate-100`, height 40, read-only, selects on focus |
 | copy button | `btn btn-ghost` = border `#e9d5ff`, text `#7e22ce`, 28 px inside the field at ≥ 768; full width 44 px below |
 | steps | `ol` `text-[13px] leading-relaxed text-slate-700`, numbered (it is a sequence) |

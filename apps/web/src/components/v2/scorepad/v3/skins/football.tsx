@@ -114,7 +114,16 @@ export const CARD_COLORS: readonly CardColor[] = ["yellow", "red", "second_yello
  * `Card` tile per side to keep the two lanes intact, so the colour step inside
  * `card-<side>` is now the only place a card colour can be shown at all.
  */
-const CARD_TONES: Readonly<Record<CardColor, readonly SportTone[]>> = {
+// Exported (review round 1, streaming overlay task 5): the stream overlay's
+// `overlay-model.ts` keeps its own `DISCIPLINE_CLASS_TONE` literal rather
+// than importing this "use client" skin (bundle weight — an OBS browser
+// source pulling in the pad's card-entry UI), and needs THIS export to prove
+// that literal never drifts from the real mapping
+// (`overlay-model.test.ts`'s "DISCIPLINE_CLASS_TONE mirrors the pad's own
+// per-sport tables"). Purely additive — no behaviour here changes; every
+// existing reference in this file still resolves to the same module-scope
+// binding.
+export const CARD_TONES: Readonly<Record<CardColor, readonly SportTone[]>> = {
   yellow: ["caution"],
   red: ["dismissal"],
   second_yellow: ["caution", "dismissal"],

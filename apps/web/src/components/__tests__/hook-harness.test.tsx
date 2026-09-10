@@ -9,7 +9,7 @@
 // looped for ever. Any assertion about how many times an island fetched, or
 // about state that an effect writes, was measuring the harness.
 import { describe, expect, it } from "vitest";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, walk } from "./_hook-harness";
 
@@ -566,5 +566,185 @@ describe("_hook-harness unmount (constraints-panel unmount-flush regression)", (
     island.unmount();
 
     expect(seenOnUnmount).toEqual(["second"]);
+  });
+});
+
+describe("_hook-harness useLayoutEffect (stream overlay W1 fix round, I1)", () => {
+  // Added for `OverlayStage`, whose canvas scale is a `useLayoutEffect`. With
+  // no slot for it the dispatcher hands back `undefined` and the component
+  // cannot be driven at all — which is why the overlay's DELAY behaviour could
+  // only be asserted through `renderToStaticMarkup`, one frozen instant with
+  // no effects and no timers, and a delay is a thing that happens over TIME.
+  it("runs on mount, and its cleanup runs on unmount", () => {
+    const log: string[] = [];
+    function Island() {
+      useLayoutEffect(() => {
+        log.push("run");
+        return () => {
+          log.push("cleanup");
+        };
+      }, []);
+      return <button type="button">hi</button>;
+    }
+
+    const island = renderIsland(Island, {});
+    expect(log, "a layout effect that never runs makes every assertion after it vacuous").toEqual([
+      "run",
+    ]);
+    island.unmount();
+    expect(log).toEqual(["run", "cleanup"]);
+  });
+
+  it("honours its deps — `[]` runs once across rerenders, a changed dep re-runs it", () => {
+    let empty = 0;
+    let keyed = 0;
+    function Island({ tag }: { tag: string }) {
+      useLayoutEffect(() => void (empty += 1), []);
+      useLayoutEffect(() => void (keyed += 1), [tag]);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    island.rerender({ tag: "b" });
+    island.rerender({ tag: "b" }); // unchanged dep — neither may re-run
+    expect([empty, keyed]).toEqual([1, 2]);
+  });
+
+  it("commits BEFORE the passive effects, the way React orders them", () => {
+    const order: string[] = [];
+    function Island() {
+      useEffect(() => void order.push("passive"), []);
+      useLayoutEffect(() => void order.push("layout"), []);
+      return <button type="button">hi</button>;
+    }
+
+    renderIsland(Island, {});
+    expect(order, "declaration order is not commit order").toEqual(["layout", "passive"]);
+  });
+
+  it("is keyed by its OWN call order — a passive effect between two of them does not shift the cells", () => {
+    // The bug a shared cell list would produce: `layoutEffects[1]` compared
+    // against a passive effect's deps, so one of them silently never re-runs.
+    const seen: string[] = [];
+    function Island({ tag }: { tag: string }) {
+      useLayoutEffect(() => void seen.push(`L1:${tag}`), [tag]);
+      // `[]` on purpose, and it is the whole point: the passive effect must
+      // NOT re-run on the rerender, so if the two lists shared cells one of
+      // the layout effects would inherit its "unchanged" verdict and go quiet.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      useEffect(() => void seen.push(`P:${tag}`), []);
+      useLayoutEffect(() => void seen.push(`L2:${tag}`), [tag]);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    island.rerender({ tag: "b" });
+    expect(seen).toEqual(["L1:a", "L2:a", "P:a", "L1:b", "L2:b"]);
+  });
+
+  it("a layout effect that sets state re-renders through the normal path", () => {
+    function Island() {
+      const [n, setN] = useState(0);
+      useLayoutEffect(() => {
+        if (n === 0) setN(1);
+      }, [n]);
+      return <button type="button">{String(n)}</button>;
+    }
+
+    const island = renderIsland(Island, {});
+    const button = island.tree().find((el) => el.type === "button");
+    expect(propsOf(button!).children).toBe("1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review MINOR 4 (2026-09-10) — the COMMIT PHASE is not re-entrant.
+//
+// `run()` used to capture both effect queues and then commit them; a setState
+// fired from a layout effect (the canonical measure→setState idiom) re-entered
+// `run()` synchronously from inside the layout commit, which rendered the next
+// pass and committed ITS passive queue — and the outer `commit()` then ran the
+// SUPERSEDED passive queue afterwards, calling each effect's cleanup + create a
+// second time and overwriting the deps the newer pass had just recorded.
+//
+// React does not do that: a setState raised during the commit phase is queued
+// and flushed once the whole commit (layout effects, then passive ones) has
+// finished. These tests pin the ORDER, not merely the final state — the final
+// state was already right while the effect bookkeeping was wrong, which is why
+// "a layout effect that sets state re-renders through the normal path" above
+// passed throughout.
+// ---------------------------------------------------------------------------
+describe("_hook-harness commit re-entrancy (review MINOR 4)", () => {
+  it("a setState from a LAYOUT effect does not make the passive queue run twice or land stale", () => {
+    const log: string[] = [];
+    function Island() {
+      const [n, setN] = useState(0);
+      useLayoutEffect(() => {
+        if (n === 0) setN(1);
+      }, [n]);
+      useEffect(() => {
+        log.push(`create:${n}`);
+        return () => void log.push(`cleanup:${n}`);
+      }, [n]);
+      return <button type="button">{String(n)}</button>;
+    }
+
+    renderIsland(Island, {});
+    // React's order. Before the fix this was ["create:1", "cleanup:1",
+    // "create:0"] — the n=1 effect torn down by the superseded n=0 queue, and
+    // the live cleanup left belonging to a render that no longer exists.
+    expect(log).toEqual(["create:0", "cleanup:0", "create:1"]);
+  });
+
+  it("the deps recorded for the passive effect are the SURVIVING pass's, so it does not re-run for ever", () => {
+    // The consequence of the stale write above, and the one a consumer would
+    // actually feel: `effects[i].deps` ended as the pre-setState pass's array,
+    // so the NEXT rerender compared against deps that were never really
+    // current and re-ran an effect whose dependency had not moved.
+    let runs = 0;
+    function Island({ tag }: { tag: string }) {
+      const [n, setN] = useState(0);
+      useLayoutEffect(() => {
+        if (n === 0) setN(1);
+      }, [n]);
+      useEffect(() => void (runs += 1), [n]);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    expect(runs, "n moved 0 → 1: one run per value").toBe(2);
+    island.rerender({ tag: "b" });
+    expect(runs, "n did not move on the rerender — the effect must stay put").toBe(2);
+  });
+
+  it("a setState from a PASSIVE effect is queued too, not re-entered mid-commit", () => {
+    // The same hazard pre-existed for passive→passive re-entry; the layout
+    // slot only widened it. Two passive effects, the FIRST of which sets
+    // state: the second must still commit under the pass that declared it.
+    const log: string[] = [];
+    function Island() {
+      const [n, setN] = useState(0);
+      useEffect(() => {
+        if (n === 0) setN(1);
+      }, [n]);
+      useEffect(() => {
+        log.push(`second:${n}`);
+        return () => void log.push(`second-cleanup:${n}`);
+      }, [n]);
+      return <button type="button">{String(n)}</button>;
+    }
+
+    renderIsland(Island, {});
+    expect(log).toEqual(["second:0", "second-cleanup:0", "second:1"]);
+  });
+
+  it("fails loudly rather than hanging when a commit-phase setState never converges", () => {
+    function Island() {
+      const [n, setN] = useState(0);
+      useLayoutEffect(() => void setN(n + 1), [n]);
+      return <button type="button">{String(n)}</button>;
+    }
+
+    expect(() => renderIsland(Island, {})).toThrow(/commit/i);
   });
 });

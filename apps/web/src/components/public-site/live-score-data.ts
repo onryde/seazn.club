@@ -46,6 +46,30 @@ export interface LiveFixtureData {
   match_centre?: MatchCentreDocT;
 }
 
+/** The overlay's one poll target (design §3.2). `status`/`summary`/`outcome`
+ *  are the SAME row `LiveFixtureData` reads (one authority: match_states);
+ *  `clock` and `cricket` are projected server-side off the folded state.
+ *  W2 reads `lastSeq` as its mount-seq.
+ *
+ *  `clock` is present only while the folded state's `asOf.period === phase`:
+ *  during a play phase it anchors the stage's 1 Hz tick, and at half-time /
+ *  full-time the field is ABSENT so the stage holds the last displayed value.
+ *  `anchorAtWallMs` is the wall time of the LAST active envelope, so a viewer
+ *  joining mid-half sees `anchorSeconds + (now − anchorAtWallMs)`. */
+export interface OverlayLiveData extends LiveFixtureData {
+  lastSeq: number | null;
+  venueTz: string;
+  /** `nominalSeconds` — F16: the phase's declared length, from the cfg the
+   *  fixture was folded under (`server/overlay/project.ts`'s
+   *  `nominalSecondsOf`). The stage shows `45+` past it instead of counting on;
+   *  ABSENT when the state declares no readable length, and the stage then
+   *  HOLDS at the anchor rather than ticking without a bound. */
+  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number; nominalSeconds?: number };
+  cricket?: {
+    innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
+  };
+}
+
 export interface PublicRealtimeToken {
   token: string;
   channel: string;
@@ -53,6 +77,10 @@ export interface PublicRealtimeToken {
 
 export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureData> {
   return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`);
+}
+
+export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData> {
+  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`);
 }
 
 export async function fetchPublicRealtimeToken(

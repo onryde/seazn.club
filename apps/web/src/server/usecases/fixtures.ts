@@ -7,6 +7,8 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { PatchFixture, PutLineup, ScheduleConflict } from "@/server/api-v1/schemas";
 import { type BoardFixtureRow, type FixtureRow } from "./stages";
+import { streamUrlSchema } from "@/lib/stream-url";
+import { fireDivisionRevalidate } from "../public-site/revalidate";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
@@ -173,6 +175,50 @@ export async function patchFixture(
       conflicts,
     };
   });
+}
+
+/** The row `PUT /fixtures/{id}/stream` returns and the panel reads back. */
+export interface FixtureStreamOut {
+  id: string;
+  stream_url: string | null;
+}
+
+/**
+ * Set or clear a fixture's public broadcast link (stream overlay W1).
+ *
+ * Validated HERE as well as at the route, against the SAME schema the panel
+ * uses (`@/lib/stream-url`, R16) — a usecase that trusts its caller is one
+ * `parseBody` refactor away from writing an unvalidated host into a public
+ * anchor. `withTenant` scopes the write; a fixture belonging to another org is
+ * simply not found, which is also the answer for an id that does not exist.
+ *
+ * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
+ * `broadcastRevalidate` — the latter is the peer primitive that helper calls
+ * internally. It is what busts the `["pub-fixture", fixtureId]` cache entry
+ * tagged `divisionTag(division.id)` (data.ts:742), which is the entry the
+ * public match page reads the link from.
+ */
+export async function setFixtureStreamUrl(
+  auth: AuthCtx,
+  id: string,
+  streamUrl: string | null,
+): Promise<FixtureStreamOut> {
+  rejectDeviceLink(auth);
+  const parsed = streamUrlSchema.safeParse(streamUrl);
+  if (!parsed.success) throw new HttpError(422, "invalid stream link");
+  const value = parsed.data;
+  const out = await withTenant(auth.orgId, async (tx) => {
+    const [row] = await tx<{ id: string; stream_url: string | null; division_id: string; competition_id: string }[]>`
+      update fixtures f
+         set stream_url = ${value}
+        from divisions d
+       where f.id = ${id} and d.id = f.division_id
+      returning f.id, f.stream_url, f.division_id, d.competition_id`;
+    if (!row) throw new HttpError(404, "fixture not found");
+    return row;
+  });
+  fireDivisionRevalidate(out.division_id, out.competition_id);
+  return { id: out.id, stream_url: out.stream_url };
 }
 
 export interface LineupOut {

@@ -11,6 +11,8 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime } from "@/lib/public-site";
+import { resolveVenueTz } from "@/lib/tz";
+import { venueTzRow } from "@/server/venue-tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
 import { labelPlayerStats, groupCareerStatsBySport, type CareerSportStats } from "@/server/player-stats";
 // The DB-touching "matches" counter — NOT the pure module above (same name,
@@ -296,6 +298,17 @@ export interface PublicFixture {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The club's own broadcast link (V401). Null unless an organiser saved one,
+   *  and null for a `setup` division — the view redacts it alongside the
+   *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
+   *  (R16); never an iframe, never fetched.
+   *
+   *  Optional, same convention (and reason) as lane/is_final/third_place/
+   *  conditional just above: pre-existing tests build a `PublicFixture`
+   *  literal by hand (schedule.test.tsx's `F()` helper and its four other
+   *  callers) that predates this field — `tsc --noEmit` reds five files if
+   *  this is made required, verified by trying it. */
+  stream_url?: string | null;
 }
 
 export interface PublicStage {
@@ -747,6 +760,12 @@ export async function getPublicFixture(
    *  `publicFixture`) uses, so the page's first paint and every subsequent
    *  poll (Task 10's client hook) render the exact same document shape. */
   matchCentre: MatchCentreDocT;
+  /** Stream overlay Task 0 (owner answer 12) — the VENUE lane's IANA zone
+   *  (V305), so a pre-match overlay prints a start time the club's own
+   *  audience recognises instead of UTC. A raw zone, never a pre-formatted
+   *  label: the label is formatted by the server component that already holds
+   *  the locale (`overlayStartLabel`, Task 2), so `?lang=` can re-render it. */
+  venueTz: string;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -761,7 +780,7 @@ export async function getPublicFixture(
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional
+               lane, is_final, third_place, conditional, stream_url
         from public_fixtures_v
         where id = ${fixtureId} and division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
@@ -782,15 +801,15 @@ export async function getPublicFixture(
         select org_has_feature(${shell.org.id}, 'realtime', ${shell.competition.id})
                as realtime`;
       // Task 9 — the division's own tz override (V305 venue lane; org
-      // timezone is `shell.org`'s own row, read separately below since
-      // `PublicOrg` does not carry it — see `resolveVenueTz`'s doc comment
-      // for why venue tz is never inherited from a personal/browser lane).
-      const [tzRow] = await sql<{ division_tz: string | null; org_tz: string | null }[]>`
-        select ss.tz as division_tz, o.timezone as org_tz
-        from divisions d
-        left join schedule_settings ss on ss.division_id = d.id
-        left join organizations o on o.id = d.org_id
-        where d.id = ${division.id}`;
+      // timezone is `shell.org`'s own row, read separately since `PublicOrg`
+      // does not carry it — see `resolveVenueTz`'s doc comment for why venue
+      // tz is never inherited from a personal/browser lane).
+      //
+      // Review 2026-09-09 (I3): the join itself now lives in `server/venue-tz.ts`,
+      // the single authority for WHICH columns the venue lane reads. The raw
+      // pair is still needed here (not just the resolved zone) because
+      // `loadMatchCentre` takes `orgTz` and `division.tz` separately.
+      const tzRow = await venueTzRow(division.id);
       const [stageRow] = await sql<{ name: string }[]>`
         select name from stages where id = ${fixture.stage_id}`;
       const locale = toLocale(shell.org.default_locale);
@@ -815,6 +834,17 @@ export async function getPublicFixture(
         entrantNames: Object.fromEntries(names.map((n) => [n.id, n.display_name])),
         realtime: rt?.realtime === true,
         matchCentre,
+        // Stream overlay Task 0 — "one zone per fixture", resolved through the
+        // TS authority `resolveVenueTz` (lib/tz.ts:44) off the SAME `tzRow`
+        // Task 9 already reads above, rather than a second query or a second
+        // `coalesce(ss.tz, o.timezone, 'UTC')` SQL mirror. (getPublicDivision
+        // splices that mirror inline only because a string helper cannot go
+        // into a postgres.js tagged template; here both columns are in hand.)
+        //
+        // NEVER `pickTimezone` and never the `seazn_tz` cookie: a London-based
+        // organiser can run an event in Malaga, and the overlay is watched by
+        // an audience in neither.
+        venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
       };
     },
     ["pub-fixture", fixtureId],
@@ -823,6 +853,31 @@ export async function getPublicFixture(
   if (!detail) return null;
 
   return { org: shell.org, competition: shell.competition, division, ...detail };
+}
+
+/**
+ * org / competition / division slugs for a fixture id.
+ *
+ * The stream-overlay URL carries only a fixture id, but `getPublicFixture`
+ * above is keyed on three slugs (and must stay that way — its cache key and
+ * its `divisionTag` are shared with the public match page). This resolves them
+ * through the SAME `public_*_v` views `fixtureRealtimeEligible` uses (`:1037`),
+ * so a fixture in a private competition is simply not found here, exactly as
+ * it is not found there. Null means 404 for the caller — never a partial.
+ */
+export async function publicFixtureSlugs(
+  fixtureId: string,
+): Promise<{ orgSlug: string; compSlug: string; divSlug: string } | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
+  const [row] = await sql<{ org_slug: string; comp_slug: string; div_slug: string }[]>`
+    select o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
+    from public_fixtures_v f
+    join public_divisions_v d on d.id = f.division_id
+    join public_competitions_v c on c.id = d.competition_id
+    join organizations o on o.id = c.org_id
+    where f.id = ${fixtureId} limit 1`;
+  if (!row) return null;
+  return { orgSlug: row.org_slug, compSlug: row.comp_slug, divSlug: row.div_slug };
 }
 
 /** PROMPT-65: per-division stat block on the player card. Free at every tier

@@ -377,6 +377,21 @@ export interface DisciplineEntry {
   classKey: string;
 }
 
+/**
+ * The cards this fixture has shown, or `null` for "no discipline data".
+ *
+ * A MALFORMED ROW IS SKIPPED, NOT FATAL (product ruling 2026-09-10, F14 —
+ * `_THEMES.md` §2a). This used to `return null` on the first entry it could
+ * not parse, throwing away the rows it had already accepted: one bad row from
+ * the engine showed NO cards at all, which on screen is indistinguishable from
+ * a clean match. Showing two of three cards is strictly better than showing
+ * none and looking correct.
+ *
+ * `null` stays reserved for "nothing to show" — no `discipline` key, an empty
+ * list, or a list whose every row is unreadable. It is not merely a nicer
+ * empty array: `live-score.tsx:175/351` gates the whole discipline panel on
+ * `discipline !== null`, so `[]` paints a heading with no rows under it.
+ */
 export function disciplineList(summary: unknown): DisciplineEntry[] | null {
   if (typeof summary !== "object" || summary === null) return null;
   const detail = (summary as { detail?: unknown }).detail;
@@ -385,16 +400,16 @@ export function disciplineList(summary: unknown): DisciplineEntry[] | null {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const rows: DisciplineEntry[] = [];
   for (const entry of raw) {
-    if (typeof entry !== "object" || entry === null) return null;
+    if (typeof entry !== "object" || entry === null) continue;
     const { side, person, classKey } = entry as Record<string, unknown>;
-    if ((side !== "home" && side !== "away") || typeof classKey !== "string") return null;
+    if ((side !== "home" && side !== "away") || typeof classKey !== "string") continue;
     rows.push({
       side,
       classKey,
       ...(typeof person === "string" ? { person } : {}),
     });
   }
-  return rows;
+  return rows.length > 0 ? rows : null;
 }
 
 /** Which side is serving (nested kernel, rally fidelity) — null otherwise. */
@@ -406,10 +421,167 @@ export function servingSide(summary: unknown): "home" | "away" | null {
   return serving === "home" || serving === "away" ? serving : null;
 }
 
-/** Human label for a discipline class key: "double_minor" → "Double minor". */
-export function disciplineLabel(classKey: string): string {
+/**
+ * The dictionary key for each discipline class's on-air label — `_THEMES.md`
+ * §2a's ten classes (product ruling 2026-09-10, review MINOR 9).
+ *
+ * KEYED OFF THE CLASS, NEVER OFF THE DERIVED ENGLISH. `disciplineLabel` used
+ * to build the label from the class key itself (`replace(/_/g," ")` plus title
+ * case), so a French, Spanish or Dutch stream rendered "Bench minor" and "Game
+ * misconduct" in English — on the overlay AND on the public match page, which
+ * share this reader. F13 did not introduce that; it made five more of these
+ * classes visually prominent on a broadcast, which is what turned an old
+ * omission into a live one.
+ *
+ * A STATIC MAP, not `` `overlay.card.${classKey}` ``, for two reasons. The
+ * dictionary gate (`lib/__tests__/overlay-dict-coverage.test.ts`) scans for
+ * key LITERALS; a template literal would instead register `overlay.card.` as a
+ * dynamic prefix and excuse every key under it from the orphan check, turning
+ * the gate off for exactly the keys it was added for. And the membership is
+ * then a fact this file states, which `overlay-model.test.ts` holds against
+ * §2a's own table in both directions — so a class the sheet adds reds until
+ * its key exists, which is what "a future class is a missing key rather than a
+ * silently-anglicised label" has to mean in practice.
+ *
+ * `second_yellow` is deliberately absent: it is in `DISCIPLINE_CLASS_TONE` as
+ * forward-compatible dead code (football is not a period-kernel sport, so
+ * `disciplineList` never yields it) and §2a's table does not name it. It falls
+ * through to the derivation below like any undeclared class.
+ */
+export const DISCIPLINE_LABEL_KEYS: Readonly<Record<string, string>> = {
+  // hockey — the sport's own three-card ladder
+  green: "overlay.card.green",
+  yellow: "overlay.card.yellow",
+  red: "overlay.card.red",
+  // icehockey — the lesser-penalty family, then the serious one
+  minor: "overlay.card.minor",
+  bench_minor: "overlay.card.benchMinor",
+  double_minor: "overlay.card.doubleMinor",
+  major: "overlay.card.major",
+  misconduct: "overlay.card.misconduct",
+  game_misconduct: "overlay.card.gameMisconduct",
+  match: "overlay.card.match",
+};
+
+/**
+ * Human label for a discipline class key, resolved through the caller's
+ * dictionary: `"double_minor"` → "Double minor" / "Double mineure" / …
+ *
+ * `msg` is REQUIRED rather than optional on purpose — an optional resolver
+ * would let a new call site fall back to English silently, which is the defect
+ * this signature exists to close. Both call sites already have one in hand:
+ * `overlay-model.ts` passes `input.msg`, `live-score.tsx` its `activeDict`.
+ *
+ * A class no key names falls back to the old derivation rather than putting a
+ * raw `overlay.card.…` key on a broadcast graphic. That arm should be
+ * unreachable for anything §2a declares, and the test that keeps it so is the
+ * both-directions check in `overlay-model.test.ts`, not this function.
+ */
+export function disciplineLabel(classKey: string, msg: (key: string) => string): string {
+  const key = DISCIPLINE_LABEL_KEYS[classKey];
+  if (key) return msg(key);
   const label = classKey.replace(/_/g, " ");
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/**
+ * The entrant currently batting: the last innings on the public summary that
+ * has not closed. Cricket's `summary().detail.innings[]` is the only shape in
+ * the engine with this field set (`sports/cricket/cricket.ts:3306-3316`), so
+ * every other sport returns null by construction rather than by a sport check.
+ *
+ * This is the FIRST authority for "who is in" on the public payload — nothing
+ * else derives it — and it lives here, beside `servingSide`, so the overlay
+ * and any later spectator surface read one implementation (R5).
+ */
+export function battingEntrantId(summary: unknown): string | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const last = raw[raw.length - 1];
+  if (typeof last !== "object" || last === null) return null;
+  const { entrantId, closed } = last as Record<string, unknown>;
+  if (closed === true) return null;
+  return typeof entrantId === "string" ? entrantId : null;
+}
+
+/**
+ * Runs still needed by the side batting second, or null when there is no chase
+ * in progress. A revised target (DLS, `detail.target`) REPLACES the first
+ * innings' total; without one the target is that total plus one.
+ *
+ * The BALLS half of "Need 45 off 45" is `chaseBalls` below, kept separate so a
+ * format with no quota still gets its runs line.
+ */
+export function chaseNeed(summary: unknown): number | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const first = raw[raw.length - 2];
+  const current = raw[raw.length - 1];
+  if (typeof first !== "object" || first === null) return null;
+  if (typeof current !== "object" || current === null) return null;
+  if ((current as Record<string, unknown>).closed === true) return null;
+  const chased = (current as Record<string, unknown>).runs;
+  if (typeof chased !== "number") return null;
+  const revised = (detail as { target?: unknown }).target;
+  if (typeof revised === "number") return Math.max(0, revised - chased);
+  const set = (first as Record<string, unknown>).runs;
+  if (typeof set !== "number") return null;
+  return Math.max(0, set + 1 - chased);
+}
+
+/**
+ * HOW a chase target was set, or null.
+ *
+ * `_THEMES.md` §3's cricket row (owner ruling 2026-09-10, "add the DLS hint in
+ * W1"): a rain-revised chase that shows new numbers with nothing to say why
+ * they moved reads, on a broadcast, as the scoreboard being wrong. The data
+ * already arrives — cricket's `summary().detail` emits `targetSource` beside
+ * `target` (`packages/engine/src/sports/cricket/cricket.ts:3678-3680`) and the
+ * overlay projection passes `summary` through whole — so this is a READER, not
+ * a derivation. Nothing here recomputes a target or infers a method.
+ *
+ * The engine's own type is `"dls" | "manual" | null`, THREE cases, and the two
+ * non-null ones are not interchangeable: labelling a manually-agreed target as
+ * DLS is a false claim about how it was set. So this names the two methods it
+ * knows rather than testing for non-null — an unknown token (a future VJD
+ * setting, a bespoke league rule) falls through to null and the line stays
+ * unmarked, which is short rather than wrong.
+ */
+export function chaseTargetSource(summary: unknown): "dls" | "manual" | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const source = (detail as { targetSource?: unknown }).targetSource;
+  return source === "dls" || source === "manual" ? source : null;
+}
+
+/**
+ * Balls still available to the side batting second, or null.
+ *
+ * The denominator of the line `_THEMES.md` §3 draws — "Need 45 off 45". Both
+ * numbers come from the SAME innings entry the overlay endpoint projects off
+ * the folded state (Task 0, design §3.2: `OverlayLiveData.cricket.innings[]`),
+ * so a DLS revision moves them together and nothing here re-derives a quota
+ * from a format name. Whether a chase is in progress is `chaseNeed`'s
+ * decision over the summary; the model calls this only when it is.
+ *
+ * `null`, never a guess, where the format declares no quota (`ballsLimit:
+ * null` — timed and unlimited formats, cricket.ts:440): the bar then renders
+ * the runs-only line, which is correct rather than short.
+ */
+export function chaseBalls(
+  cricket: { innings: { legalBalls: number; ballsLimit: number | null }[] } | null | undefined,
+): number | null {
+  if (!cricket || !Array.isArray(cricket.innings) || cricket.innings.length < 2) return null;
+  const current = cricket.innings[cricket.innings.length - 1]!;
+  if (typeof current.ballsLimit !== "number" || typeof current.legalBalls !== "number") return null;
+  return Math.max(0, current.ballsLimit - current.legalBalls);
 }
 
 // ---------------------------------------------------------------------------

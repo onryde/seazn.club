@@ -14,11 +14,15 @@ import { z } from "zod";
  *  module) so the manifest unit test needs nothing from `helpers.ts`;
  *  `seeds.ts` imports these and supplies the recipes. A later wave adds its
  *  kind to BOTH tables in this file and its recipe in `seeds.ts`. */
-export const SEED_KINDS = ["none", "public-fixture"] as const;
+export const SEED_KINDS = ["none", "public-fixture", "overlay-fixture"] as const;
 export type SeedKind = (typeof SEED_KINDS)[number];
 export const SEED_PARAMS: Record<SeedKind, readonly string[]> = {
   none: [],
   "public-fixture": ["orgSlug", "compSlug", "divSlug", "divisionId", "fixtureId"],
+  // W1-E. The overlay's own rows only need `fixtureId`, but the seed knows the
+  // public slugs too and declares them: a later wave photographing the match
+  // page beside the broadcast should not have to add a second kind for it.
+  "overlay-fixture": ["orgSlug", "compSlug", "divSlug", "divisionId", "fixtureId"],
 };
 
 export const VISUAL_CHECKS = [

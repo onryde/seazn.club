@@ -140,6 +140,136 @@ describe("LiveScoreBody — period/discipline headings are localised, not hardco
     expect(html).toContain(fr["matchCentre.discipline"] as string);
   });
 
+  // ---- Review MINOR 9, at the MATCH-CENTRE surface (2026-09-10) ----
+  //
+  // `_THEMES.md` §2a's label ruling is written for the overlay, but
+  // `disciplineLabel` is shared: the public match page's discipline panel
+  // rendered "Bench minor" / "Game misconduct" in English on a French, Spanish
+  // or Dutch page too. The heading above it was already localised, which made
+  // the untranslated row beneath it read as a bug rather than an omission.
+  //
+  // NON-ENGLISH ON PURPOSE, and on a class whose English is TWO WORDS: the
+  // one-word classes ("Minor", "Major") are the ones where a lazy translation
+  // is hardest to distinguish from the class key.
+  const withClasses = (classKeys: string[]) => ({
+    status: "in_play",
+    summary: {
+      headline: "2 – 1",
+      perSide: [
+        { entrantId: "home", line: "2" },
+        { entrantId: "away", line: "1" },
+      ],
+      detail: { discipline: classKeys.map((classKey) => ({ side: "home" as const, classKey })) },
+    },
+    outcome: null,
+  });
+
+  it("the card LABEL is localised too, not just the heading above it (MINOR 9)", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={withClasses(["bench_minor", "game_misconduct"])}
+        entrantNames={twoSideNames}
+        sportKey="icehockey"
+        decidedTemplates={emptyTemplates}
+        dict={fr as Dict}
+      />,
+    );
+    expect(html).toContain(fr["overlay.card.benchMinor"] as string);
+    expect(html).toContain(fr["overlay.card.gameMisconduct"] as string);
+    expect(html, "the anglicised class key is still on the page").not.toContain("Bench minor");
+    expect(html, "the anglicised class key is still on the page").not.toContain("Game misconduct");
+    expect(html, "the key leaked instead of its copy").not.toContain("overlay.card.");
+  });
+
+  it("the same labels in DUTCH — a second locale, so one lucky cognate cannot carry it", () => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={withClasses(["bench_minor", "game_misconduct"])}
+        entrantNames={twoSideNames}
+        sportKey="icehockey"
+        decidedTemplates={emptyTemplates}
+        dict={nl as Dict}
+      />,
+    );
+    expect(html).toContain(nl["overlay.card.benchMinor"] as string);
+    expect(html).toContain(nl["overlay.card.gameMisconduct"] as string);
+    expect(html).not.toContain("Bench minor");
+  });
+
+  // ---- Review MINOR 8: F14's blast radius reaches this surface ----
+  //
+  // `disciplineList` is read by the overlay AND by this panel, so F14's ruling
+  // ("a malformed row is skipped, not fatal") changed the match page too, from
+  // "one bad row hides every card" to "show the readable rows". Strictly
+  // better and exactly what §2a says — but no test asserted it HERE, and the
+  // panel is gated on `discipline !== null`, so this surface is where the old
+  // behaviour was visible as a whole missing panel.
+  it("one malformed discipline row does not erase the panel — the readable rows still render (MINOR 8)", () => {
+    const data = {
+      status: "in_play",
+      summary: {
+        headline: "2 – 1",
+        perSide: [
+          { entrantId: "home", line: "2" },
+          { entrantId: "away", line: "1" },
+        ],
+        detail: {
+          discipline: [
+            { side: "home" as const, classKey: "yellow" },
+            { side: "sideways", classKey: "yellow" }, // unreadable side
+            { side: "away" as const, classKey: 7 }, // unreadable class
+            { side: "away" as const, classKey: "red" },
+          ],
+        },
+      },
+      outcome: null,
+    };
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={data as never}
+        entrantNames={twoSideNames}
+        sportKey="icehockey"
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+      />,
+    );
+    expect(html, "the whole panel vanished on one bad row").toContain(
+      en["matchCentre.discipline"] as string,
+    );
+    expect(html).toContain(en["overlay.card.yellow"] as string);
+    expect(html).toContain(en["overlay.card.red"] as string);
+    // The other direction, or "skip the bad row" is satisfied by rendering
+    // every row regardless: exactly two rows survived, not four.
+    expect(html.split("Riverside FC").length - 1, "one row per READABLE entry").toBe(2);
+  });
+
+  it("a discipline list whose EVERY row is unreadable renders no panel at all — null still means 'nothing to show'", () => {
+    const data = {
+      status: "in_play",
+      summary: {
+        headline: "2 – 1",
+        perSide: [
+          { entrantId: "home", line: "2" },
+          { entrantId: "away", line: "1" },
+        ],
+        detail: { discipline: [{ side: "sideways", classKey: "yellow" }] },
+      },
+      outcome: null,
+    };
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={data as never}
+        entrantNames={twoSideNames}
+        sportKey="icehockey"
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+      />,
+    );
+    expect(html, "an empty array would paint a heading with no rows under it").not.toContain(
+      en["matchCentre.discipline"] as string,
+    );
+  });
+
   it("'Discipline' heading with the SPANISH dict reads 'Disciplina', never the English word", () => {
     const html = renderToStaticMarkup(
       <LiveScoreBody

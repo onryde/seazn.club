@@ -5,7 +5,7 @@
 import { Barlow_Condensed } from "next/font/google";
 
 export const barlowCondensed = Barlow_Condensed({
-  weight: ["600", "700"],
+  weight: ["600", "700", "800"], // 800: the stream overlay's W2 moment slab (_THEMES.md §1, RP8)
   subsets: ["latin"],
   variable: "--font-barlow",
 });

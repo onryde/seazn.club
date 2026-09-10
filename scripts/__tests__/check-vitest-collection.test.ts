@@ -75,6 +75,11 @@ const REST = [
   "src/server/public-site/__tests__/leaders.test.ts",
   "src/server/public-site/__tests__/public-leaders.test.ts",
   "src/server/public-site/__tests__/standings-view.test.ts",
+  // Stream overlay W1: the venue zone `getPublicFixture` now returns, which the
+  // overlay's start label is formatted in. Does not begin with "c", so it
+  // belongs here — and this gate reddened in CI the moment it landed, third
+  // wave running, which is the explicit list doing what its comments promise.
+  "src/server/public-site/__tests__/public-fixture-venue-tz.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

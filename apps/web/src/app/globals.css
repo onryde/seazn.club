@@ -1314,3 +1314,338 @@ body {
   border: 1px solid var(--sport-board);
   background-color: var(--pad-tone);
 }
+
+/* ─── Stream overlay (W1) ───────────────────────────────────────────────────
+   Authored at 1920×1080; the stage scales the whole canvas, so every value
+   here is the NATIVE one from _THEMES.md §3 and §4 and none of them are
+   responsive. Reads only the seven --sport-* tokens (§2), never a .pad-* rule
+   — the pad's classes carry pad layout, and sharing them would couple two
+   surfaces that are signed off separately.
+
+   RE-PIN (2026-09-09): appended at the END of the file rather than
+   immediately after the `:root { --sport-* }` block the brief named — that
+   block now sits at :1134 (moved by intervening commits since the brief's
+   line pin), and the plan's own intent was "append", not "insert mid-file". */
+.ovl-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: top left;
+  font-variant-numeric: tabular-nums;
+  color: var(--sport-ink);
+}
+.ovl-fit { position: fixed; inset: 0; overflow: hidden; }
+.ovl-display { font-family: var(--ps-font-display, var(--font-barlow), "Arial Narrow", system-ui, sans-serif); }
+.ovl-label { font-family: var(--font-geist-sans, system-ui, sans-serif); }
+
+/* Theme A — broadcast bar (_THEMES.md §3) */
+.ovl-bar { position: absolute; left: 72px; right: 72px; bottom: 54px;
+           border-radius: 6px; overflow: hidden;
+           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
+.ovl-bar-main { display: flex; align-items: stretch; height: 126px;
+                background: var(--sport-board); }
+/* MAX-WIDTH 480 (product ruling 2026-09-10, `_THEMES.md` §3). The cell has a
+   225 px floor and the team cells are `flex: 1 1 auto`, so it GREW with its
+   context line — 312 px at "Riverside won by 44 runs", 610 px at a full-name
+   result sentence, taking each team cell down to 509 px. It never wrapped and
+   never overflowed the page, so this is balance, not a defect: a scorebug's
+   job is the score, and its caption must never dominate the frame. 480 clears
+   the reachable worst case (§3's decided context line is the SHORT form) while
+   capping a long one, so nothing reachable moves. */
+.ovl-live-cell { display: flex; flex-direction: column; justify-content: center;
+                 gap: 3px; min-width: 225px; max-width: 480px; padding: 0 33px;
+                 background: var(--sport-board-2); }
+.ovl-live-row { display: flex; align-items: center; gap: 12px;
+                font-size: 24px; font-weight: 600; letter-spacing: 0.02em; }
+/* Review round 1, CRITICAL: `--sport-ink` 1-px hairline, not `--sport-board`
+   — `_THEMES.md` §2/§3, "the hairline… not the fill — is what satisfies WCAG
+   1.4.11 here". Without it hockey's live dot measures 2.75:1 on `board-2`,
+   under the 3:1 graphical floor; the overlay-tokens.ts `live-dot-on-board-2`
+   / `live-dot-on-board` exception rows were declared `covered` by this exact
+   hairline before it existed in CSS. `box-sizing: border-box` (Tailwind's
+   preflight, `@import "tailwindcss"` above) keeps the border INSIDE the
+   stated 15px/13.5px diameter — it does not grow the dot. Covers BOTH
+   locations (§3's live cell dot and §4's bug header dot, `_THEMES.md` §4
+   "same terms as §3's") in one declaration: `.ovl-bug-header .ovl-live-dot`
+   below only overrides size, never re-declares the border. */
+.ovl-live-dot { width: 15px; height: 15px; border-radius: 9999px;
+                border: 1px solid var(--sport-ink);
+                background: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.8); }
+/* "Past the cap the line clips" (§3). Without `nowrap` the 480 px cap above
+   turns a long caption into a two-line one inside a fixed 126 px band, which
+   trades one composition defect for another; `overflow: hidden` sits on the
+   line rather than on `.ovl-live-cell` so the live dot's 15 px glow
+   (`box-shadow`, which paints outside its box) is not clipped with it. */
+.ovl-context { font-size: 21px; font-weight: 500; white-space: nowrap; overflow: hidden;
+               color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+.ovl-team-cell { position: relative; display: flex; align-items: center; gap: 24px;
+                 flex: 1 1 auto; min-width: 0; padding: 0 42px; }
+.ovl-team-name { font-size: 45px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
+.ovl-team-score { margin-left: auto; font-size: 78px; font-weight: 700; line-height: 1; }
+.ovl-team-meta { width: 66px; font-size: 33px; font-weight: 500;
+                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+.ovl-divider { width: 1.5px; background: rgba(255, 255, 255, 0.14); }
+.ovl-clock-cell { display: flex; align-items: center; padding: 0 33px;
+                  font-size: 60px; font-weight: 700; color: var(--sport-led); }
+/* Fix round 3, F6 — the between-cells LED count (`_THEMES.md` §3's rows for
+   tennis/badminton/tabletennis/volleyball, e.g. "games-won cell LED
+   ('1 : 0')"). Same slot football/hockey/icehockey's `.ovl-clock-cell`
+   occupies (never both at once — `overlay-bar.tsx` renders exactly one). */
+.ovl-cells-led { display: flex; align-items: center; padding: 0 33px;
+                 font-size: 60px; font-weight: 700; color: var(--sport-led); }
+/* Fix round 3, F5 — the bar's per-side set/game cells, moved out of the live
+   cell's context line (F4/F5) and into the team cell, the bug's own
+   `.ovl-bug-cells`/`.ovl-bug-cell-current` pattern. `_THEMES.md` §3's default
+   size is tennis's own "51/600, current 700 ink 100%"; volleyball and the
+   badminton/tabletennis pair override it below with their own rows' numbers. */
+.ovl-bar-cells { display: flex; gap: 12px; font-size: 51px; font-weight: 600;
+                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+.ovl-bar-cell-current { font-weight: 700; color: var(--sport-ink); }
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cells { font-size: 45px; }
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cell-current { font-size: 54px; }
+.ovl-brand { display: flex; align-items: center; padding: 0 33px;
+             background: var(--sport-board-2); font-size: 30px; font-weight: 600;
+             letter-spacing: 0.08em;
+             color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+.ovl-detail-band { display: flex; align-items: center; gap: 33px; height: 51px;
+                   padding: 0 33px; font-size: 24px; font-weight: 500;
+                   background: color-mix(in srgb, var(--sport-board) 90%, transparent);
+                   color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
+/* `flex: none` because a 1.5px rule that shrinks is a rule that disappears:
+   once the entries below can shrink (see `.ovl-detail-label`), every flexible
+   item in the row is a candidate, and the separator has the least to give. */
+.ovl-detail-sep { flex: none; width: 1.5px; height: 24px; background: rgba(255, 255, 255, 0.2); }
+/* The chase/result sentence leads the row and is the longest single string
+   either theme carries ("NOR won by 8 wickets with 12 balls remaining"), so it
+   takes §4's ellipsis on the same terms as an entry's label. */
+.ovl-detail-emphasis { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                       font-weight: 600; color: var(--sport-ink); }
+/* `_THEMES.md` §4 rule 2 (product ruling 2026-09-10) — "an entry is one unit".
+   Both renderers wrapped each detail entry in `className="contents"`, and
+   `display: contents` hands separator, chip and label to the flex container as
+   three independent items: in the bug's 480px footer the `·` separators landed
+   on a clipped second line as stray dots, detached from their labels. A real
+   box keeps them together, and `nowrap` keeps the label itself from breaking
+   internally — a flex item's TEXT wraps even though the container does not.
+   The per-band gaps below reproduce each theme's existing spacing exactly
+   (§3's band is gap 33 and the flattened children inherited it; §4's footer had
+   no gap at all under `space-between`, and takes half the new 18px list gap so
+   an entry reads tighter than the list it sits in). */
+.ovl-detail-entry { display: inline-flex; align-items: center; white-space: nowrap;
+                    flex: 0 1 auto; min-width: 0; }
+.ovl-detail-band .ovl-detail-entry { gap: 33px; }
+.ovl-bug-footer .ovl-detail-entry { gap: 9px; }
+/* `_THEMES.md` §4, corrected 2026-09-10: "overflowing text ELLIPSES; it never
+   clips and never wraps". The earlier draft of §4 said the TILE should clip a
+   long line; that was withdrawn, because `expectNoClip` treats any
+   `overflow-x: hidden` box with more than 1px of overhang as a defect and
+   offers no exempt path, and by AGENTS.md 23 an overflow is a feature only
+   when the extra content is REACHABLE — on a broadcast graphic there is no
+   scroll, no focus and no gesture, so nothing is. The content must FIT.
+   Measured before this rule existed: the capped ENGLISH footer sits at exactly
+   480px in a 480px tile, and `?lang=es` on the same hockey seed pushes past it
+   ("AWA Tarjeta amarilla · AWA Tarjeta roja"; icehockey's `gameMisconduct` /
+   `match` classes are half again as long).
+
+   WHY THREE PROPERTIES AND WHY ON THE LABEL. `text-overflow` paints an
+   ellipsis only on a block container whose own inline content overflows, so it
+   has to sit on the text box itself — not on `.ovl-detail-entry`, whose
+   children are flex items rather than inline content, and not on the footer,
+   which must never become its own scroll container (see `.ovl-bug-footer`).
+   `min-width: 0` is what lets a flex item shrink below its content at all
+   (`min-width: auto` is the default) and is needed on the entry AND on the
+   label, or the chain refuses to give. The chip keeps `flex-shrink: 0`, so the
+   label is the only thing that yields and an entry never loses its tone.
+
+   The TILE still never grows — an OBS operator frames the bug against their
+   camera. Shrinking happens on the item; the box is unchanged. And this does
+   not blind the vertical probe `stream-overlay.spec.ts` runs on `.ovl-bug`: an
+   auto-height label whose text is made to wrap grows rather than clipping, so
+   a defeated `nowrap` still reaches the tile. */
+.ovl-detail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Theme B — corner bug (_THEMES.md §4) */
+.ovl-bug { position: absolute; left: 60px; top: 54px; width: 480px;
+           border-radius: 12px; overflow: hidden;
+           background: var(--sport-board);
+           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
+.ovl-bug-header { display: flex; align-items: center; gap: 12px; height: 48px;
+                  padding: 0 21px; background: var(--sport-board-2);
+                  font-size: 21px; font-weight: 600; }
+.ovl-bug-header .ovl-live-dot { width: 13.5px; height: 13.5px; }
+/* Fix round 3, F4 — the status/live word, split out of `.ovl-bug-context`
+   (§4: "'Live' Geist 21/600, context Geist 19.5/500") so the two can sit
+   side by side in the header's own flex row. Inherits `.ovl-bug-header`'s
+   21px/600 by default; declared explicitly so it does not drift if that
+   rule's own font properties ever change. */
+.ovl-bug-status { font-size: 21px; font-weight: 600; }
+/* `_THEMES.md` §4 (product ruling 2026-09-10) — "its context slot is guarded
+   like the bar's", the twin of `.ovl-context` above. About 291px ≈ 32
+   characters are free in this 48px header after the status word, the gaps and
+   the brand; a long decided sentence wrapped there and clipped, and fr/nl run
+   15-25% longer than English. `min-width: 0` is what lets a flex item shrink
+   below its content at all (`min-width: auto` is the default), and the three
+   together mean this line clips rather than growing the header. The renderer
+   ALSO drops the field once decided (`overlay-bug.tsx`) — one guard for the
+   sentence §4 sends to the footer, one for every other long label. */
+.ovl-bug-context { font-size: 19.5px; font-weight: 500; min-width: 0;
+                   white-space: nowrap; overflow: hidden;
+                   color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
+.ovl-bug-brand { margin-left: auto; font-size: 24px; font-weight: 600;
+                 letter-spacing: 0.08em;
+                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+/* Fix round 5, I3 — §4's header, right-hand slot: "brand Barlow 24/600 .08em
+   ink 70 % — football family: clock Barlow 33/700 LED instead". The clock had
+   been rendering through `.ovl-bug-brand` above with only `color` overridden
+   inline, so it shipped at 24/600 with the wordmark's .08em tracking applied
+   to tabular digits — 27 % small, a weight light, and jittering in width. Its
+   OWN token rather than a widening of the brand's: the two share the slot, not
+   the type. `letter-spacing` is deliberately absent (a clock is not tracked),
+   and the LED colour lives here rather than inline so §3's `.ovl-clock-cell`
+   and this one are the same kind of declaration. */
+.ovl-bug-clock { margin-left: auto; font-size: 33px; font-weight: 700;
+                 color: var(--sport-led); }
+.ovl-bug-row { position: relative; display: flex; align-items: center; gap: 18px;
+               height: 90px; padding: 0 24px; }
+.ovl-bug-code { width: 96px; font-size: 48px; font-weight: 600; }
+.ovl-bug-cells { display: flex; gap: 18px; font-size: 39px; font-weight: 600;
+                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+.ovl-bug-cell-current { font-weight: 700; color: var(--sport-ink); }
+.ovl-bug-score { margin-left: auto; font-size: 69px; font-weight: 700; line-height: 1; }
+.ovl-bug-meta { width: 78px; text-align: right; font-size: 30px; font-weight: 500;
+                color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
+/* `_THEMES.md` §4 rule 0 (product ruling 2026-09-10) — a START-ALIGNED LIST
+   with gap 18, not `space-between`: with the two-entry cap the old rule pushed
+   two related cards to the outer edges of a 480px tile, where they read as two
+   unrelated things. `white-space: nowrap` is the fix for the photographed
+   defect — a flex container does not wrap, but its anonymous TEXT items wrap
+   internally, which is how "AWA Red" ended up on a second line that the tile's
+   `overflow: hidden` then cut through. The tile must NOT grow instead — an OBS
+   operator frames the bug against their camera, and a graphic that changes
+   height on air moves into the shot — so a line that does not fit is ELLIPSED,
+   on `.ovl-detail-label`, and never reaches the tile at all (§4 as corrected
+   2026-09-10; the withdrawn draft of that paragraph said to clip here).
+
+   NO `overflow: hidden` HERE, and that omission is load-bearing. An earlier
+   draft of this rule had it, which made the footer its own scroll container and
+   absorbed any future wrap before `.ovl-bug` could see it — measured in
+   Chromium on the real markup: with the footer absorbing, a defeated `nowrap`
+   left `.ovl-bug` at scrollHeight 273 = clientHeight 273 and the regression was
+   INVISIBLE; without it the same defeat reads 299 vs 273. `stream-overlay.spec.
+   ts`'s "the tile shows a footer it cannot hold, and does not clip it" measures
+   exactly that difference, so absorbing here would have silently blinded the
+   one test this defect has. The HORIZONTAL overhang a long locale used to
+   produce is not clipped anywhere now: `.ovl-detail-label` ellipses it before
+   the tile can see it, per §4's 2026-09-10 correction. */
+.ovl-bug-footer { display: flex; align-items: center; justify-content: flex-start; gap: 18px;
+                  height: 45px; padding: 0 24px; font-size: 21px; font-weight: 500;
+                  white-space: nowrap;
+                  color: color-mix(in srgb, var(--sport-ink) 85%, transparent); }
+
+/* The side in play (both themes): board-2 ground, an LED bar, an LED score. */
+.ovl-side-led { background: var(--sport-board-2); }
+.ovl-side-led .ovl-team-score,
+.ovl-side-led .ovl-bug-score { color: var(--sport-led); }
+/* Fix round 3, F1/F3 — the third "Decided / void" case (`_THEMES.md` §3/§4):
+   a fixture that ended with NO verdict drops both sides to 50% ink, no LED
+   anywhere (`model.voided`, applied to `.ovl-team-cell`/`.ovl-bug-row`).
+   Cascades into `.ovl-team-name`/`.ovl-team-score`/`.ovl-bug-code`/
+   `.ovl-bug-score`, none of which sets its own colour; `.ovl-team-meta`/
+   `.ovl-bug-meta` keep their own explicit alpha (a more specific rule wins). */
+.ovl-voided { color: color-mix(in srgb, var(--sport-ink) 50%, transparent); }
+.ovl-led { position: absolute; background: var(--sport-led);
+           transition: transform 200ms ease-in-out; }
+.ovl-bar .ovl-led { left: 0; right: 0; bottom: 0; height: 8px; }
+.ovl-bug .ovl-led { left: 0; top: 0; bottom: 0; width: 8px; }
+.ovl-serve-dot { width: 10.5px; height: 10.5px; border-radius: 9999px;
+                 background: var(--sport-led); }
+
+/* Discipline card chip (both themes) — review round 1, IMPORTANT.
+   `_THEMES.md` §3 "card chips 13.5×18 radius 3 in caution / dismissal /
+   advisory" (football/hockey/icehockey rows) and §4's identical bug-row
+   chip, "the same terms as §3's" hairline. Painted by `overlay-model.ts`'s
+   `disciplineTone()` picking the tone per `OverlayDetailLine.tone`; the fill
+   is the overrides-only sport palette exactly like every other `--sport-*`
+   read here, and the hairline is the SAME `--sport-ink` graphical boundary
+   as the live dot, for the same reason (`overlay-tokens.ts`'s
+   `advisory-swatch-on-board(-2)` / `caution-swatch-on-board(-2)` /
+   `dismissal-swatch-on-board(-2)` roles size this pair at the 3:1 graphical
+   floor already; football's `dismissal` on `board-2` is 2.56:1 and hockey's
+   is not much better, so `caution`/`advisory` get the hairline as the
+   sheet's consistency choice and `dismissal` needs it outright). */
+.ovl-chip { display: inline-block; width: 13.5px; height: 18px; border-radius: 3px;
+            border: 1px solid var(--sport-ink); vertical-align: middle; flex-shrink: 0;
+            margin-right: 6px; }
+.ovl-chip-advisory { background: var(--sport-advisory); }
+.ovl-chip-caution { background: var(--sport-caution); }
+.ovl-chip-dismissal { background: var(--sport-dismissal); }
+
+/* Theme C — slate (_THEMES.md §4a). Full bleed, opaque, no inset/radius/
+   shadow ("it IS the frame"). `.ovl-slate`'s box is `inset: 0` inside
+   `.ovl-canvas`, which is itself `top:0; left:0; width:1920px; height:1080px`
+   — so it is PIXEL-IDENTICAL to the canvas's own box, and the `.ovl-bug`
+   overlay-slate.tsx nests inside it keeps its stated inset (left 60, top 54)
+   unchanged, exactly as §4a requires ("at its own inset, unchanged in every
+   value"). Radial highlight: color-mix(board-2 60%) centred 50%/40%, radius
+   900 — a single `background` shorthand, gradient over the opaque ground so
+   the ground itself never carries any transparency (the "one opaque theme"
+   property `_THEMES.md` §4a names). */
+.ovl-slate { position: absolute; inset: 0; overflow: hidden;
+             background:
+               radial-gradient(circle 900px at 50% 40%,
+                 color-mix(in srgb, var(--sport-board-2) 60%, transparent), transparent),
+               var(--sport-board); }
+.ovl-slate-brand { position: absolute; left: 72px; top: 54px;
+                    font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
+                    color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+.ovl-slate-content { position: absolute; inset: 0; display: flex; flex-direction: column;
+                      align-items: center; justify-content: center; text-align: center; }
+/* `text-transform: uppercase` rather than relying on the dictionary string
+   being typed upper case (§4a's own words) — deliberately, because the
+   headline text reaching this element today is `model.header.context`
+   ("Final", a start-time label), NOT the new `overlay.slate.*` keys
+   (overlay-slate.tsx's header, gap 1): those already-resolved strings are
+   normal case elsewhere (the bar/bug header uses them unchanged), so the
+   transform keeps the SLATE headline visually upper case regardless of which
+   source string it is standing in for, and becomes a harmless no-op the day
+   gap 1 closes and the dictionary's own upper-case string arrives here. */
+.ovl-slate-headline { font-size: 96px; font-weight: 800; letter-spacing: 0.02em;
+                       color: var(--sport-ink); text-transform: uppercase; }
+.ovl-slate-line { margin-top: 12px; font-size: 27px; font-weight: 500;
+                   color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+/* Warming's three dots sit UNDER the line (§4a); each --sport-led, 15px,
+   breathing on the same `ovl-breathe` keyframes the live dot already uses,
+   staggered 300ms per dot. */
+.ovl-slate-warming-dots { display: flex; align-items: center; justify-content: center;
+                           gap: 12px; margin-top: 12px; }
+.ovl-slate-warming-dots span { width: 15px; height: 15px; border-radius: 9999px;
+                                background: var(--sport-led);
+                                animation: ovl-breathe 2s ease-in-out infinite; }
+.ovl-slate-warming-dots span:nth-child(2) { animation-delay: 300ms; }
+.ovl-slate-warming-dots span:nth-child(3) { animation-delay: 600ms; }
+
+/* Motion — _THEMES.md §6, R13. transform/opacity only; nothing on mount. */
+@keyframes ovl-tick { 0% { transform: scale(1); } 45% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes ovl-breathe { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+/* §4a's own state-swap cross-fade: 250ms opacity only, applied by
+   overlay-slate.tsx toggling this class off a same-shape ref+effect+timeout
+   as overlay-stage.tsx's score tick (it cannot import that file's helper —
+   see overlay-slate.tsx's header, gap 1). */
+@keyframes ovl-slate-fade { from { opacity: 0; } to { opacity: 1; } }
+.ovl-slate-content.ovl-slate-fading { animation: ovl-slate-fade 250ms ease-in-out; }
+.ovl-tick { animation: ovl-tick 300ms ease-out; }
+.ovl-live-dot { animation: ovl-breathe 2s ease-in-out infinite; }
+.ovl-static .ovl-live-dot { animation: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .ovl-tick { animation: none; }
+  .ovl-live-dot { animation: none; opacity: 1; }
+  .ovl-led { transition: none; }
+  /* §4a: "the warming dots hold steady at opacity 1 and the cross-fade is
+     instant" — the dots stop breathing at full opacity, and the state-swap
+     class no longer transitions (nothing animates it, so the swap is instant
+     rather than eased over 250ms). */
+  .ovl-slate-warming-dots span { animation: none; opacity: 1; }
+  .ovl-slate-content.ovl-slate-fading { animation: none; }
+}

@@ -19,7 +19,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 `_THEMES.md` holds the same design as numbers.
 
 **Spec:** `docs/superpowers/specs/2026-09-07-streaming-programme-design.md` — the design of record (supersedes `2026-09-05-stream-overlay-design.md`, which stays for the canvas links). §3 is Tier A as this plan builds it; §3.2 the endpoint contract Task 0 now implements; §5.1/§5.3 the two keys and the Phone tab gate Task 4 and Task 6 read; §9a the patterns every task names; §13 the findings that moved this plan's pins.
-**AMENDED 2026-09-07 @ `fb99bbd4c`** (annotations "(re-pinned 2026-09-07 @ fb99bbd4c)" mark every moved pin): Task 0 is the overlay endpoint over `foldFixture` (zero engine edits); Task 1's hook is generic over `{ fetcher, delayMs? }`; Task 2's readers take the endpoint's shape and the clock is the STAGE's 1 Hz concern; migrations V400/V401 with BOTH keys; fonts reuse `lib/fonts.ts`; the panel mounts in `desk/run-sheet-row.tsx` with an OBS tab and a Phone tab; the visual gate is T1b's manifest; `WALKTHROUGH_SPECS` exists and is edited in Task 8 directly.
+**AMENDED 2026-09-07 @ `fb99bbd4c`** (annotations "(re-pinned 2026-09-07 @ fb99bbd4c)" mark every moved pin): Task 0 is the overlay endpoint over `foldFixture` (zero engine edits); Task 1's hook is generic over `{ fetcher, delayMs? }`; Task 2's readers take the endpoint's shape and the clock is the STAGE's 1 Hz concern; migrations V401/V402 with BOTH keys; fonts reuse `lib/fonts.ts`; the panel mounts in `desk/run-sheet-row.tsx` with an OBS tab and a Phone tab; the visual gate is T1b's manifest; `WALKTHROUGH_SPECS` exists and is edited in Task 8 directly.
 **Sibling plan (T1 — lands FIRST; this plan imports its `OVERLAY_TOKENS` from `overlay-tokens.ts`, extends its `contrast.test.ts`, appends to its manifest):** `docs/superpowers/plans/2026-09-07-streaming-t1.md`
 **Wave prompt (rulings win over this plan; task ORDER below wins):** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W1-step-one.md` (corrected in place by T1 Task 0)
 **Standing rules R1–R17:** `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_RULES.md`
@@ -31,7 +31,7 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 
 - `pnpm`, never `npm install` — `npm install` fails in this repo.
 - Every user-facing string lands in all four dictionaries (`apps/web/src/dictionaries/{en,fr,es,nl}/`), then `pnpm i18n:gen-keys` (`package.json:39`); `apps/web/src/lib/i18n-keys.ts` is GENERATED — never hand-edited (R14).
-- Migration numbering is flat across `db/migration/**` (`db/flyway.toml:6`). Highest on `main` at `fb99bbd4c` is **`V399__stats_player_career_split.sql`** (re-pinned 2026-09-07 @ fb99bbd4c — the 09-05 text said V391, the 09-06 documents V398; both were taken by the time they were read), so this plan uses **V400** (`stream_url`) and **V401** (`streaming_entitlements`, BOTH keys); run `ls db/migration/deltas | sort -V | tail -1` at Task 3 Step 6 and AMEND the unmerged files to the next free numbers rather than correcting forward (R10). Record the landed numbers in `_INDEX.md`.
+- Migration numbering is flat across `db/migration/**` (`db/flyway.toml:6`). Highest on `main` at `fb99bbd4c` is **`V399__stats_player_career_split.sql`** (re-pinned 2026-09-07 @ fb99bbd4c — the 09-05 text said V391, the 09-06 documents V398; both were taken by the time they were read), so this plan uses **V401** (`stream_url`) and **V402** (`streaming_entitlements`, BOTH keys); run `ls db/migration/deltas | sort -V | tail -1` at Task 3 Step 6 and AMEND the unmerged files to the next free numbers rather than correcting forward (R10). Record the landed numbers in `_INDEX.md`.
 - OpenAPI: the new route goes into `ROUTES` (`apps/web/src/server/api-v1/openapi.ts:57`, neighbour `PATCH /fixtures/{id}` at `:142`) in the same change, then `npm run openapi:gen` (`package.json:45`) and both generated files are committed. CI's drift check is a `ci.yml` step (`:94-98`), not a hook (R7).
 - Entitlement key `streaming.overlay` is granted by **no plan**, and is **NOT added to `ENTITLEMENT_DOMAINS`** (`apps/web/src/lib/entitlement-domains.ts:7`) — that omission is the mechanism that keeps it off `/pricing`, because `buildPricingSections` (`apps/web/src/lib/pricing-matrix.ts:264-265`) renders only listed keys (R1; pins re-verified 2026-09-08 @ b2244879f).
 - `create or replace view public_fixtures_v` may only APPEND, so `stream_url` is the LAST column of a FULL redefinition copied from `db/migration/deltas/V369__public_fixtures_round_role.sql:18` (R6). (Re-pinned 2026-09-07 @ fb99bbd4c: STILL V369 — `grep -al public_fixtures_v db/migration/deltas/*.sql | sort -V | tail -1` — the 09-07 design's RP3 "`V362:22`" is the 09-06 scout's stale pin, recorded as finding FS10 in `_INDEX.md`; this plan is right and the design's row is corrected there.)
@@ -78,8 +78,8 @@ club sets up" (the OBS flow), and "Organiser console: Stream this match" plus
 | `apps/web/src/lib/__tests__/overlay-model.test.ts` | Create | Eleven sports folded through real modules; empty / decided / led truth table. |
 | `apps/web/src/lib/stream-url.ts` | Create | `streamUrlSchema` — https + exact-hostname allowlist, `""` → `null`. |
 | `apps/web/src/lib/__tests__/stream-url.test.ts` | Create | Eleven accepted hosts (R16's ten plus `m.youtube.com`, owner answer 16 / Q5); the rejections named in the prompt, look-alike hosts included. |
-| `db/migration/deltas/V400__fixture_stream_url.sql` | Create (re-pinned 2026-09-07 @ fb99bbd4c; next free at rebase) | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
-| `db/migration/deltas/V401__streaming_entitlements.sql` | Create (re-pinned 2026-09-07) | BOTH keys — `streaming.overlay` and `streaming.relay` — `false` on every plan key (dark rollout, design §10.4; the GA flip to §5.1's split is a later migration). |
+| `db/migration/deltas/V401__fixture_stream_url.sql` | Create (re-pinned 2026-09-07 @ fb99bbd4c; next free at rebase) | Column + check + full `public_fixtures_v` redefinition with `stream_url` last. |
+| `db/migration/deltas/V402__streaming_entitlements.sql` | Create (re-pinned 2026-09-07) | BOTH keys — `streaming.overlay` and `streaming.relay` — `false` on every plan key (dark rollout, design §10.4; the GA flip to §5.1's split is a later migration). |
 | `apps/web/src/server/public-site/data.ts` | Modify (`PublicFixture` `:207`, the `getPublicFixture` SELECT `:722-729`, new export after the function's closing brace `:759`; re-pinned 2026-09-08 @ b2244879f) | `PublicFixture.stream_url`; the fixture SELECT gains it; `publicFixtureSlugs(fixtureId)`. |
 | `apps/web/src/server/usecases/public.ts` | Modify (`publicFixture` `:279`; `Pick<>` `:284-302`; SELECT `:304-308` — re-pinned 2026-09-08 @ b2244879f) | `publicFixture()`'s `Pick<>` and SELECT gain `stream_url`. |
 | `apps/web/src/server/api-v1/schemas.ts` | Modify (after `PatchFixture` — `export const PatchFixture = z` at `:1118`, its `export type` at `:1144` on b2244879f; the file is 4,600+ lines, anchor on the symbol — review 2026-09-08 finding 28) | `PutFixtureStream`, `FixtureStream`. |
@@ -1966,7 +1966,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 **Files:**
 - Create: `apps/web/src/lib/stream-url.ts`
 - Create (Test): `apps/web/src/lib/__tests__/stream-url.test.ts`
-- Create: `db/migration/deltas/V400__fixture_stream_url.sql`
+- Create: `db/migration/deltas/V401__fixture_stream_url.sql`
 - Modify: `apps/web/src/server/public-site/data.ts` — `PublicFixture` (`:207`), the `getPublicFixture` SELECT (`:722-729`) (re-pinned 2026-09-08 @ b2244879f)
 - Modify: `apps/web/src/server/usecases/public.ts` — `publicFixture()`'s `Pick<>` and SELECT (`:263-297`)
 - Modify: `apps/web/src/server/api-v1/schemas.ts` — after `PatchedFixture`'s neighbourhood, next to `PatchFixture` (`:1118-1144` on b2244879f)
@@ -1992,7 +1992,7 @@ export function overlayStartLabel(iso: string | null, locale: string, tz: string
 - E2E: `stream-overlay.spec.ts` › `the panel saves a valid link and refuses an invalid one without sending it` (403/422 on the wire).
 - Smoke: `streamOverlaySuite` › PUT valid → the public JSON carries it; invalid host → 422 (Task 8 Step 6).
 - Regression: `openapi-coverage.test.ts`, `key-scopes.test.ts`, `openapi-published.test.ts` (total-classification) green; `openapi:gen` no diff.
-- Checklist rows: "Negative assertion needs its positive pair" (eleven accepted beside thirteen rejected); "Report mutant KILLER LIST" (mutant (a): the eight hostname rows, five protocol rows survive by design); extra V400 mutant (Self-review).
+- Checklist rows: "Negative assertion needs its positive pair" (eleven accepted beside thirteen rejected); "Report mutant KILLER LIST" (mutant (a): the eight hostname rows, five protocol rows survive by design); extra V401 mutant (Self-review).
 
 - [ ] **Step 1: Write the failing validation test.** Create `apps/web/src/lib/__tests__/stream-url.test.ts`:
 
@@ -2153,11 +2153,11 @@ export const streamUrlSchema = z
 
 - [ ] **Step 5: Mutation check (a) — delete the hostname comparison.** Change `return ALLOWED.has(url.hostname);` to `return true;`, re-run Step 4. Expected red: EXACTLY the hostname rows and no others (review 2026-09-08 finding 37 — a test that dies under every mutant fakes kills): `https://evil.example/www.youtube.com`, `https://www.youtube.com.evil.example/`, `https://youtube.com.evil.example`, `https://notyoutube.com/x`, `https://m.youtube.com.evil.example/x`, `https://mm.youtube.com/x`, `https://youtube.com./x`, the Cyrillic homograph — eight rows, each `expected [Function] to throw an error`. The other five rejections (`javascript:`, `http://`, the leading space, the userinfo case, and any unparseable string) MUST STAY GREEN under this mutant: they are killed by the protocol/parse branch, not the hostname check, and a red there means the mutant was applied too widely. Restore and re-run to green. Record "mutant (a) killed by stream-url.test.ts › the eight hostname rows; survived by design on the five protocol/parse rows".
 
-- [ ] **Step 6: Write the migration.** Create `db/migration/deltas/V400__fixture_stream_url.sql` (renumber at rebase, R10):
+- [ ] **Step 6: Write the migration.** Create `db/migration/deltas/V401__fixture_stream_url.sql` (renumber at rebase, R10):
 
 ```sql
 -- =============================================================================
--- V400 — Stream overlay W1: the club's own broadcast link on a fixture.
+-- V401 — Stream overlay W1: the club's own broadcast link on a fixture.
 --
 -- A club streams the match to YouTube / Facebook / Twitch / Kick and pastes the
 -- link here; the public match page turns it into "Watch live" (and "Replay"
@@ -2203,7 +2203,7 @@ create or replace view public_fixtures_v as
 - [ ] **Step 8: Widen both hand-maintained column lists.** In `apps/web/src/server/public-site/data.ts`, add to `PublicFixture` (after `conditional`, the last field of the interface at `:207`ff):
 
 ```ts
-  /** The club's own broadcast link (V400). Null unless an organiser saved one,
+  /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
    *  (R16); never an iframe, never fetched. */
@@ -2273,7 +2273,7 @@ describe.skipIf(!HAS_DB)("setFixtureStreamUrl", () => {
 
     const [view] = await sql<{ stream_url: string | null }[]>`
       select stream_url from public_fixtures_v where id = ${fixtureId}`;
-    expect(view?.stream_url, "V400 appended the column to the view — this is the seam").toBe(url);
+    expect(view?.stream_url, "V401 appended the column to the view — this is the seam").toBe(url);
   });
 
   it("clears the link with null", async () => {
@@ -2406,16 +2406,16 @@ export async function PUT(req: Request, { params }: Ctx) {
   Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git status --porcelain apps/web/openapi` — expected: both files modified, and re-running `openapi:gen` leaves no further diff (CI's drift gate).
 
 - [ ] **Step 17: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V400__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/stream-url.ts apps/web/src/lib/__tests__/stream-url.test.ts db/migration/deltas/V401__fixture_stream_url.sql apps/web/src/server/public-site/data.ts apps/web/src/server/usecases/public.ts apps/web/src/server/api-v1/schemas.ts apps/web/src/server/usecases/fixtures.ts apps/web/src/server/usecases/__tests__/fixture-stream-url.test.ts apps/web/src/app/api/v1/fixtures/[id]/stream/route.ts apps/web/src/server/api-v1/openapi.ts apps/web/src/server/api-v1/key-scopes.ts apps/web/openapi/v1.json apps/web/openapi/v1.public.json`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V400 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(data): fixtures.stream_url, the exact-host allowlist and PUT /fixtures/{id}/stream" -m "V401 appends stream_url to public_fixtures_v (append-only, R6); both hand-maintained PublicFixture column lists gain it; the DB-backed usecase test proves the value reaches the public view rather than assuming it." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
 ### Task 4: The entitlement key
 
 **Files:**
-- Create: `db/migration/deltas/V401__streaming_entitlements.sql`
+- Create: `db/migration/deltas/V402__streaming_entitlements.sql`
 - Create (Test): `apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
 - **Not modified, deliberately:** `apps/web/src/lib/entitlement-domains.ts`, `apps/web/src/lib/pricing-matrix.ts`, every pricing dictionary key.
 
@@ -2469,7 +2469,7 @@ describe("streaming.overlay is unadvertised", () => {
 });
 
 describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
-  // Amended 2026-09-07 (design §5.1): V401 seeds BOTH keys, so the catalogue
+  // Amended 2026-09-07 (design §5.1): V402 seeds BOTH keys, so the catalogue
   // claim is made for both — a migration that forgot `streaming.relay` would
   // leave the Phone tab's gate with no row to flip at GA.
   it.each(["streaming.overlay", "streaming.relay"] as const)("carries a catalogue row for every plan for %s, all false", async (key) => {
@@ -2530,11 +2530,11 @@ describe.skipIf(!HAS_DB)("streaming.overlay resolves", () => {
 - [ ] **Step 2: Run it — expect red.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npx vitest run src/lib/__tests__/entitlement-streaming-overlay.test.ts --reporter=json --outputFile=/tmp/ovl-w1/t4-red.json`
   Expected: the two pure cases PASS (the key is genuinely absent from the domains list today), and `carries a catalogue row for every plan, all false` FAILS with `expected +0 to be 5` (or whatever `select count(*) from plans` returns) — the migration does not exist yet. `numFailedTests: 1`.
 
-- [ ] **Step 3: Write the migration.** Create `db/migration/deltas/V401__streaming_entitlements.sql` (renumber at rebase, R10):
+- [ ] **Step 3: Write the migration.** Create `db/migration/deltas/V402__streaming_entitlements.sql` (renumber at rebase, R10):
 
 ```sql
 -- =============================================================================
--- V401 — Streaming W1: the `streaming.overlay` and `streaming.relay` keys
+-- V402 — Streaming W1: the `streaming.overlay` and `streaming.relay` keys
 -- (design §5.1, re-pinned 2026-09-07 @ fb99bbd4c; the 09-05 plan wrote V393,
 -- which is the entitlements-v18 catalogue on main).
 --
@@ -2581,13 +2581,13 @@ on conflict (plan_key, feature_key) do update
 
 - [ ] **Step 5a: Mutation checks — two, each named (review 2026-09-08 finding 36).**
   1. `entitlement-domains.ts`: add `"streaming.overlay"` to any section's `features`. Re-run Step 4's command. Expected red: `is in NO ENTITLEMENT_DOMAINS section — that omission is what keeps it off /pricing`. Restore.
-  2. The catalogue half: `psql "<ovl url>" -c "delete from plan_entitlements where feature_key = 'streaming.relay'"` (Flyway will not re-run V401, so this simulates a migration that forgot the second key). Re-run Step 4's command. Expected red: `carries a catalogue row for every plan for streaming.relay, all false` — `expected 0 to be 5`. Restore by re-running V401's insert by hand (`psql -f db/migration/deltas/V401__streaming_entitlements.sql` — idempotent on conflict), re-run to green.
+  2. The catalogue half: `psql "<ovl url>" -c "delete from plan_entitlements where feature_key = 'streaming.relay'"` (Flyway will not re-run V402, so this simulates a migration that forgot the second key). Re-run Step 4's command. Expected red: `carries a catalogue row for every plan for streaming.relay, all false` — `expected 0 to be 5`. Restore by re-running V402's insert by hand (`psql -f db/migration/deltas/V402__streaming_entitlements.sql` — idempotent on conflict), re-run to green.
   Record both with their killers in the PR inventory.
 
 - [ ] **Step 6: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add db/migration/deltas/V401__streaming_entitlements.sql apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add db/migration/deltas/V402__streaming_entitlements.sql apps/web/src/lib/__tests__/entitlement-streaming-overlay.test.ts`
   then
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(entitlement): streaming.overlay and streaming.relay, denied on every plan" -m "V401 writes an explicit false for both keys on every plan key so /admin can see the features; neither key enters ENTITLEMENT_DOMAINS, which is what keeps them off /pricing while dark (design §10.4). The DB half proves the override flip in both directions." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(entitlement): streaming.overlay and streaming.relay, denied on every plan" -m "V402 writes an explicit false for both keys on every plan key so /admin can see the features; neither key enters ENTITLEMENT_DOMAINS, which is what keeps them off /pricing while dark (design §10.4). The DB half proves the override flip in both directions." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
 ---
 
@@ -5172,7 +5172,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 - [ ] **Step 9: Run the harness and read the pictures.** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label ovl > /dev/null 2>&1; echo "EXIT=$?"` then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && VISUAL_DIR=/tmp/ovl-w1/shots PLAYWRIGHT_BASE=<ovl base> E2E_PROD_TARGET=1 npx playwright test e2e/visual/capture.spec.ts --project=parallel --reporter=line > /tmp/ovl-w1/visual.log 2>&1; echo "EXIT=$?"; tail -6 /tmp/ovl-w1/visual.log; ls /tmp/ovl-w1/shots | wc -l`
   Expected: `4 passed` (the two T1 groups plus `overlay` and `console-panel`), 24 PNGs for this wave plus T1's six, every `mustDiffer` pair different, the `[control-set console-panel]` block printing the SAME list for 320 and 1280. Then OPEN every picture (the Read tool renders PNGs) and write one verdict line per screen into the PR inventory — alignment against `_THEMES.md` §3/§4 by `getComputedStyle` at 1920×1080 (the reviewer measures, the executor records), the 43-character name, LED position, legibility over the LIGHT and the DARK frame, the 404 and the "—" state, the panel at 320 with every control 44 px and the same set as 1280, and the 125 % row visibly larger at the same window. "CI green" is not a visual sign-off; the owner signs per screen.
 
-- [ ] **Step 10: Update `_INDEX.md`.** In `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`: flip the plan row to `done`, the PR1 row to `in flight`/`merged` with its number, record the LANDED migration numbers (V400/V393 or whatever the rebase gave them), and add the findings this wave produced — the `useLiveFixture` return-type conflict, `OverlayMsg` vs `MsgFn`, `decidedTemplates` as an input, `startLabel` formatted server-side in UTC (no public venue zone), watch-list 6 resolved to the three-letter fallback (`public_entrants_v` carries no `short_name`), `header.clock` empty in W1, the "Replay" label needing a reload, and whatever `--sport-*` contrast or `m.youtube.com` question the run raised.
+- [ ] **Step 10: Update `_INDEX.md`.** In `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`: flip the plan row to `done`, the PR1 row to `in flight`/`merged` with its number, record the LANDED migration numbers (V401/V393 or whatever the rebase gave them), and add the findings this wave produced — the `useLiveFixture` return-type conflict, `OverlayMsg` vs `MsgFn`, `decidedTemplates` as an input, `startLabel` formatted server-side in UTC (no public venue zone), watch-list 6 resolved to the three-letter fallback (`public_entrants_v` carries no `short_name`), `header.clock` empty in W1, the "Replay" label needing a reload, and whatever `--sport-*` contrast or `m.youtube.com` question the run raised.
 
 - [ ] **Step 11: Wave-boundary gate — the full suite, against the baseline.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=<the ovl url> DATABASE_SSL=disable npx vitest run --reporter=json --outputFile=/tmp/ovl-w1/full.json`
@@ -5186,7 +5186,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
   then
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git commit -m "overlay(tests): e2e both gate directions, smoke through the seam, and the visual gate" -m "The e2e drives a real cricket ledger and asserts the score moves without navigating; smoke proves the saved link reaches the public JSON; the capture harness asserts eight images that exist and differ." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01LJGBoVPAWczYB9c45TD1aw"`
 
-- [ ] **Step 13: Post-rebase (R11, R10) — amended 2026-09-07.** Desk W1 (#708) and desk W2 (#725) are MERGED; the live contention on `run-sheet-row.tsx` is **desk W3** (`feat/competition-desk-w3-band-and-phone`). Before opening PR1, `/usr/bin/git fetch origin main && /usr/bin/git log --oneline origin/main -- apps/web/src/components/v2/desk/run-sheet-row.tsx | head -3` — if W3 has landed, rebase on `main`, re-read the `data-testid="run-sheet-edit-time"` neighbourhood (grep the symbol; `:407` on b2244879f), and re-place Task 6's one conditional line; then in the SAME commit `ls db/migration/deltas | sort -V | tail -1` and renumber V400/V401 to the next free numbers if either was taken (a duplicate Flyway version survives a clean rebase — three times now). Re-run the WHOLE `mobile.spec.ts` at seven widths AFTER the rebase, not before, re-run Step 11's full gate, and re-run the visual harness (Step 9). e2e pre-merge: `workflow_dispatch pr=<n>` on `e2e.yml`.
+- [ ] **Step 13: Post-rebase (R11, R10) — amended 2026-09-07.** Desk W1 (#708) and desk W2 (#725) are MERGED; the live contention on `run-sheet-row.tsx` is **desk W3** (`feat/competition-desk-w3-band-and-phone`). Before opening PR1, `/usr/bin/git fetch origin main && /usr/bin/git log --oneline origin/main -- apps/web/src/components/v2/desk/run-sheet-row.tsx | head -3` — if W3 has landed, rebase on `main`, re-read the `data-testid="run-sheet-edit-time"` neighbourhood (grep the symbol; `:407` on b2244879f), and re-place Task 6's one conditional line; then in the SAME commit `ls db/migration/deltas | sort -V | tail -1` and renumber V401/V402 to the next free numbers if either was taken (a duplicate Flyway version survives a clean rebase — three times now). Re-run the WHOLE `mobile.spec.ts` at seven widths AFTER the rebase, not before, re-run Step 11's full gate, and re-run the visual harness (Step 9). e2e pre-merge: `workflow_dispatch pr=<n>` on `e2e.yml`.
 
 ---
 
@@ -5209,10 +5209,10 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | Spec §1 Overlay route (layout, page, canvas, stage) / prompt scope 5 | 5 |
 | Spec §2 Projection (`OverlayModel`, `overlayModel`) / prompt scope 2 | 2 |
 | Spec §3 Theme (`sportThemeStyle`, seven tokens, `.ovl-*`) / `_THEMES.md` §1–§4 | 5 |
-| Spec §4 Data (V400, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
+| Spec §4 Data (V401, view, `PublicFixture`, `PUT /stream`, OpenAPI) / prompt scope 3 | 3 |
 | Design §3.2 — the overlay endpoint, `OverlayLiveData` verbatim, fold cached on `last_seq`, zero engine edits (owner answers 12, 19; Q15 closed) | 0 (Steps 5–13), 1 (the generic fetcher), 8 (the endpoint e2e case) |
 | Design §3.3 — `useLiveFixture` generic over `{ fetcher, delayMs? }`, `presentationNowOffsetMs`, every 3-arg caller (`MatchCentre`) byte-identical | 1 (Steps 1–5, re-pinned 2026-09-08: the hook is widened in place) |
-| Design §5.1 / §5.3 — both keys `false` on five plans (V401); the Phone tab reads the gate from PR1 (D-W1-1) | 4, 6 (Step 3b) |
+| Design §5.1 / §5.3 — both keys `false` on five plans (V402); the Phone tab reads the gate from PR1 (D-W1-1) | 4, 6 (Step 3b) |
 | Design §4.2 / T1b — this wave adds manifest rows and one seed kind, never harness code | 8 (Steps 8a, 8b, 9) |
 | Spec §5 Entitlement (`streaming.overlay`, no plan, override row) / prompt scope 4 | 4 |
 | Spec §6 Organiser panel / prompt scope 6 / `_THEMES.md` §8 | 6 |
@@ -5252,7 +5252,7 @@ async function overlayFixture(page: Page): Promise<Record<string, string>> {
 | l | `theme-registry.ts` `resolveThemeFrom`: delete the `sports` filter — `if (requested && suits(requested, sportKey))` → `if (requested)` | `theme-registry.test.ts` › `falls back when the requested theme does not list the fixture's sport` — `expected 'bar' to be 'bug'`. **Only the PROBE registry can kill this**: both shipped themes are `sports: "all"`, so a test written against `OVERLAY_THEMES` alone would survive the mutation. A surviving (l) means the probe is wrong, not the code (Task 5 Step 6d) |
 | m | `theme-registry.ts` `resolveThemeFrom`: `return OVERLAY_THEMES[fallback];` → `throw new Error("unknown theme")` | `theme-registry.test.ts` › `falls back on an unknown or misspelt id, and never throws` — nine `not.toThrow()` failures. This is the mutant that stands for "an OBS browser source cannot be asked to fix a typo mid-match" (Task 5 Step 6d) |
 | n | `theme-registry.ts` `resolveTheme`: `defaultThemeFor(sportKey)` → `"bug"` | `theme-registry.test.ts` › `falls back to THE SPORT'S default, not to a hardcoded one` — `expected 'bug' to be 'bar'`. Without the cricket/football differential row this mutant survives every other assertion in the file |
-| extra | `V400`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
+| extra | `V401`: drop `stream_url` from the view redefinition | `fixture-stream-url.test.ts` › `writes the link … and it arrives on the PUBLIC view`, and smoke's `the saved link arrives on the PUBLIC fixture JSON (the seam)` |
 | extra | `entitlement-domains.ts`: add `"streaming.overlay"` to any section | `entitlement-streaming-overlay.test.ts` › `is in NO ENTITLEMENT_DOMAINS section` |
 | o | `run-sheet-row.tsx`: delete `streamingEntitled` from the toggle's condition (`canEdit && streamingEntitled` → `canEdit`) — design §10.2's ninth W1 mutant (review 2026-09-08 finding 34) | `run-sheet-row.test.tsx` › `is absent when the org is not entitled, on a DECIDED row` — `expected … not to contain 'data-testid="fixture-stream-toggle"'`; and `stream-overlay.spec.ts` › `a non-entitled org sees no stream toggle at all, and still sees the schedule one` (Task 6 Step 3a + Task 8) |
 | p | `run-sheet.tsx`: drop `streamingEntitled={streamingEntitled}` from the `settled` mount (`:428`) | `run-sheet-filters.test.tsx` › the mount-count case — `expected 2 to be 3`; and `stream-overlay.spec.ts` › `the panel opens on a DECIDED fixture in the settled lane` (Task 6 Step 4d, Task 8 Step 2b) |

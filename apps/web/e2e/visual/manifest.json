@@ -185,6 +185,111 @@
         ]
       ],
       "controlSetEqual": []
+    },
+    {
+      "id": "stream-overlay",
+      "seed": "overlay-fixture",
+      "rows": [
+        {
+          "id": "overlay-bar-1920",
+          "route": "/overlay/fixtures/{fixtureId}?style=bar",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "backdrop": "dark",
+          "awaitSelector": "[data-testid=ovl-chip]",
+          "controlRoot": null,
+          "checks": [
+            "no-horizontal-scroll",
+            "no-clip",
+            "rails-a11y"
+          ],
+          "exempt": {
+            "bleeds": [],
+            "inline": [],
+            "offscreen": []
+          }
+        },
+        {
+          "id": "overlay-bug-1920",
+          "route": "/overlay/fixtures/{fixtureId}?style=bug",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "backdrop": "dark",
+          "awaitSelector": "[data-testid=ovl-chip]",
+          "controlRoot": null,
+          "checks": [
+            "no-horizontal-scroll",
+            "no-clip",
+            "rails-a11y"
+          ],
+          "exempt": {
+            "bleeds": [],
+            "inline": [],
+            "offscreen": []
+          }
+        },
+        {
+          "id": "overlay-bar-768",
+          "route": "/overlay/fixtures/{fixtureId}?style=bar",
+          "viewport": {
+            "width": 768,
+            "height": 1024
+          },
+          "backdrop": "dark",
+          "awaitSelector": "[data-testid=ovl-chip]",
+          "controlRoot": null,
+          "checks": [
+            "no-horizontal-scroll",
+            "no-clip",
+            "rails-a11y"
+          ],
+          "exempt": {
+            "bleeds": [],
+            "inline": [],
+            "offscreen": []
+          }
+        },
+        {
+          "id": "overlay-bug-1920-light",
+          "route": "/overlay/fixtures/{fixtureId}?style=bug",
+          "viewport": {
+            "width": 1920,
+            "height": 1080
+          },
+          "backdrop": "light",
+          "awaitSelector": "[data-testid=ovl-chip]",
+          "controlRoot": null,
+          "checks": [
+            "no-horizontal-scroll",
+            "no-clip",
+            "rails-a11y"
+          ],
+          "exempt": {
+            "bleeds": [],
+            "inline": [],
+            "offscreen": []
+          }
+        }
+      ],
+      "mustDiffer": [
+        [
+          "overlay-bar-1920",
+          "overlay-bug-1920"
+        ],
+        [
+          "overlay-bar-1920",
+          "overlay-bar-768"
+        ],
+        [
+          "overlay-bug-1920",
+          "overlay-bug-1920-light"
+        ]
+      ],
+      "controlSetEqual": []
     }
   ]
 }

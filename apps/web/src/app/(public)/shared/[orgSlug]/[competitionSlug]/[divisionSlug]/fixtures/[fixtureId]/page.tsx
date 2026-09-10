@@ -25,6 +25,7 @@ import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { fixtureSubheading } from "./fixture-subheading";
 import { shareTextFor } from "./share-text";
+import { streamLinkLabelKey } from "./stream-link";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import type { Dict } from "@/lib/i18n-constants";
@@ -279,6 +280,48 @@ export default async function FixturePage({ params }: Props) {
           ].filter((part): part is string => Boolean(part));
           return subheadingParts.length > 0 ? (
             <p className="mb-4 text-sm text-ink-muted">{subheadingParts.join(" · ")}</p>
+          ) : null;
+        })()}
+
+        {/* Stream overlay W1 (design §3.9) — the club's own broadcast, under
+            the headline block and above the match centre. PLACEMENT ONLY:
+            spectator W1 owns this page's composition and moves the link into
+            its court header's action row (spec §7), so nothing here builds a
+            header of its own.
+
+            Three things are deliberate:
+            • `rel="noopener"` is not optional. The href is organiser-supplied,
+              and `target="_blank"` without it hands the opened tab a live
+              `window.opener` handle to this page. The host is already held to
+              R16's allowlist at save time (`usecases/fixtures.ts`); this is the
+              second, independent guard, on the read side. `noopener` ALONE,
+              not `noopener noreferrer` — the three documents that pin this
+              (design §3.9, W1-step-one item 7, and `PublicFixture.stream_url`'s
+              own doc comment in `server/public-site/data.ts`) all say
+              `noopener`, and the referrer is worth keeping: it is how the
+              club's own destination sees the traffic came from its seazn page.
+            • No `setup`-division check. `public_fixtures_v` redacts
+              `stream_url` to null in the VIEW (V401, `case when d.status =
+              'setup' …`), so a second check here would be a copy of a rule
+              that is already enforced one layer down.
+            • The label comes from `streamLinkLabelKey`, which returns null for
+              a void fixture — that is why this renders on the KEY and not on
+              `stream_url` alone (§3.9: nothing for cancelled/abandoned/
+              forfeited, whatever the organiser saved). */}
+        {(() => {
+          const labelKey = streamLinkLabelKey(fixture.status);
+          return fixture.stream_url && labelKey ? (
+            <p className="mb-4">
+              <a
+                data-testid="public-stream-link"
+                href={fixture.stream_url}
+                target="_blank"
+                rel="noopener"
+                className="inline-flex min-h-11 items-center rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink shadow-sm transition hover:opacity-90"
+              >
+                {t(dict, labelKey)}
+              </a>
+            </p>
           ) : null;
         })()}
 

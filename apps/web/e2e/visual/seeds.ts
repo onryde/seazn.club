@@ -13,6 +13,7 @@
 // provide fails in seconds, not in Playwright.
 import type { APIRequestContext, Page } from "@playwright/test";
 import { activeOrg, apiJson, seedRosteredFixture, TAG } from "../helpers";
+import { grantOverlay, seedOverlayFixture } from "../overlay-kit";
 import type { SeedKind } from "./manifest";
 
 // SEED_KINDS / SEED_PARAMS are declared in ./manifest (pure); this file holds
@@ -108,11 +109,43 @@ async function postEvent(
   }
 }
 
+/** A LIVE hockey fixture carrying one card of every class, in an org of its
+ *  own, entitled to `streaming.overlay` — the state the overlay route needs
+ *  before it will render anything at all.
+ *
+ *  The recipe itself lives in `e2e/overlay-kit.ts`, shared with
+ *  `stream-overlay.spec.ts`: both need exactly the same three things (a
+ *  period-kernel sport, all three chip tones, and the entitlement), and a
+ *  second copy here would drift the day the engine's card vocabulary moves.
+ *
+ *  TWO THINGS THIS SEED MUST DO OR THE ROWS PHOTOGRAPH THE WRONG PAGE.
+ *  The route is entitlement-gated and `streaming.overlay` is granted by NO
+ *  plan (V402, a dark rollout), so an ungranted org gets `notFound()` — and a
+ *  404 the manifest's `awaitSelector` would then fail on, which is the
+ *  awaitSelector doing its job. And the sport must be hockey: football is not
+ *  a period-kernel sport, so its `summary().detail` never carries
+ *  `discipline` and NO chip renders for it however many cards the ledger
+ *  holds (`overlay-model.ts`'s own note). Hockey alone reaches advisory,
+ *  caution and dismissal in one fixture. */
+async function overlayFixture(page: Page): Promise<Record<string, string>> {
+  const rig = await seedOverlayFixture(page);
+  await grantOverlay(rig.orgId);
+  return {
+    orgSlug: rig.orgSlug,
+    compSlug: rig.compSlug,
+    divSlug: rig.divSlug,
+    divisionId: rig.divisionId,
+    fixtureId: rig.fixtureId,
+  };
+}
+
 export async function seedFor(kind: SeedKind, page: Page): Promise<Record<string, string>> {
   switch (kind) {
     case "none":
       return {};
     case "public-fixture":
       return publicFixture(page);
+    case "overlay-fixture":
+      return overlayFixture(page);
   }
 }
