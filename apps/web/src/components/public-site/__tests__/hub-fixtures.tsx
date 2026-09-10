@@ -104,7 +104,10 @@ function divisionName(slug: string): string {
     .join(" ");
 }
 
-function division(slug: string): HubDivisionT {
+/** Exported so a test can hand `hubDoc` a division that NO fixture belongs to
+ *  — the hub document carries every division, including ones drawn but never
+ *  scheduled, and that is the shape behind review F2. */
+export function division(slug: string): HubDivisionT {
   return {
     id: `d-${slug}`,
     slug,

@@ -3,12 +3,15 @@
 // rail, a division rail, and the chosen list grouped by the day it is played
 // on AT THE VENUE.
 //
-// This component decides NOTHING about copy, order or bucketing. Every one of
-// those lives in `lib/matches-hub.ts` (`defaultMatchesFilter`, `sortHubMatches`,
-// `groupByDay`) so it can be enumerated by a pure suite; every string comes
-// from the dictionary through `t()`; every timestamp goes through
-// `format.ts` with the FIXTURE's own zone, never the viewer's. What is left
-// here is the wiring, and the product decisions written out at each one.
+// Copy, bucketing and ordering are NOT decided here: they live in
+// `lib/matches-hub.ts` (`defaultMatchesFilter`, `sortHubMatches`, `groupByDay`)
+// so a pure suite can enumerate them; every string comes from the dictionary
+// through `t()`; every timestamp goes through `format.ts` with the FIXTURE's
+// own zone, never the viewer's. Two things this file does decide, each written
+// out where it happens: it RECONCILES the spectator's remembered choice against
+// what is currently renderable (a chip that is gone cannot be un-pressed), and
+// it flips the day-group order for the completed bucket so a Results list opens
+// on the most recent day.
 import { useState, useSyncExternalStore } from "react";
 import { fmtDate, fmtZoneAbbrev } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
@@ -102,6 +105,40 @@ function readViewerZoneOnServer(): string | null {
   return null;
 }
 
+/**
+ * Whether a day group states the zone its times are in.
+ *
+ * EXPORTED and structurally typed on purpose (review F4): inlined in the JSX,
+ * the `viewerZone` arm was unkillable — `renderToStaticMarkup` takes the
+ * server snapshot, so every static-markup test renders the caption-shown arm
+ * and a mutant that deleted the comparison survived the whole suite. As three
+ * lines behind a name, every arm is witnessable with no DOM at all. What still
+ * needs a browser is only whether `useSyncExternalStore` returns the right
+ * zone, and that belongs to Task 11/12's e2e.
+ *
+ * Three reasons to say nothing, and the third is a correctness fix rather than
+ * a tidy-up (review P2):
+ *   • the unscheduled group has no instant — `fmtZoneAbbrev` falls back to
+ *     `new Date()` and would cheerfully print a zone for a fixture that has no
+ *     time to state one at;
+ *   • the group's fixtures DISAGREE about their zone. `DayGroup.tz` is the
+ *     FIRST item's zone and `lib/matches-hub.ts:120-123` says so in as many
+ *     words — "meaningful for the common case (one competition, one zone) and
+ *     only that". Two fixtures in different zones can share a day key, and
+ *     captioning that group "times in BST" over a card showing an IST kick-off
+ *     tells a spectator something false. Silence is the honest answer; each
+ *     card still carries its own time in its own zone;
+ *   • the viewer is already in that zone, where the caption is only noise.
+ */
+export function showZoneCaption(
+  group: { key: string; tz: string; items: readonly { tz: string }[] },
+  viewerZone: string | null,
+): boolean {
+  if (group.key === UNSCHEDULED_KEY) return false;
+  if (!group.items.every((item) => item.tz === group.tz)) return false;
+  return viewerZone !== group.tz;
+}
+
 /** Attribute ORDER is load-bearing and not cosmetic: the suite matches
  *  `data-testid="…"[^>]*aria-pressed="…"`, and `[^>]*` cannot cross the `>`
  *  that ends an opening tag — so an attribute that moves ahead of
@@ -137,7 +174,7 @@ export function MatchesTab({
   // up the ladder's answer, where a filter frozen at mount would sit on
   // `null` and show the empty-filter state beside a full rail.
   const [chosen, setChosen] = useState<MatchBucket | null>(initialFilter ?? null);
-  const [division, setDivision] = useState<string | null>(initialDivision ?? null);
+  const [chosenDivision, setDivision] = useState<string | null>(initialDivision ?? null);
 
   // The zone caption is DROPPED when the venue's zone is the viewer's own —
   // "times in BST" is noise to someone already in BST.
@@ -160,7 +197,20 @@ export function MatchesTab({
   const counts: BucketCounts = { live: 0, upcoming: 0, completed: 0 };
   for (const match of doc.matches) counts[match.bucket] += 1;
 
-  const filter = chosen ?? defaultMatchesFilter(counts);
+  // RECONCILED against what is renderable, not merely remembered (review F1).
+  // A chip exists only while its bucket has matches, so a chosen bucket that
+  // empties took its own chip with it and left the rail with NOTHING pressed
+  // above the empty-filter sentence. Two ways in, both real: `?filter=live` on
+  // a hub with no live match, and — the common one — a live match ENDING under
+  // a spectator who tapped Live, because `use-live-competition.ts` swaps the
+  // whole document on every tick (design R10). Falling back to the ladder moves
+  // the view on its own instead of stranding it.
+  //
+  // `counts[chosen] > 0` also catches an out-of-domain `?filter=` value that a
+  // Task 11/12 caller reads off a URL: `counts["nonsense"]` is `undefined`,
+  // `undefined > 0` is false, and the ladder answers.
+  const filter =
+    chosen !== null && counts[chosen] > 0 ? chosen : defaultMatchesFilter(counts);
 
   // The ABSOLUTE empty case, stated first and before any rail is built —
   // `defaultMatchesFilter`'s own rule, repeated here because it is the same
@@ -181,7 +231,30 @@ export function MatchesTab({
   // which also takes the redundant per-card chip with it below.
   const withMatches = new Set(doc.matches.map((match) => match.divisionSlug));
   const divisions = doc.divisions.filter((d) => withMatches.has(d.slug));
-  const showDivisionRail = divisions.length > 1;
+  // ONE expression of which chips exist, read by both the rail and the
+  // reconciliation below. Writing the two conditions separately gave the
+  // reconciliation a `showDivisionRail &&` conjunct that no test could kill,
+  // because with a single division, filtering by it removes nothing — an
+  // unkillable guard is decoration (AGENTS.md 3). Derived instead, the
+  // invariant "a chosen division always has a chip that can clear it" is
+  // structural rather than asserted twice.
+  const divisionChips = divisions.length > 1 ? divisions : [];
+  const showDivisionRail = divisionChips.length > 0;
+
+  // RECONCILED the same way as the filter, and this one is worse if it is not
+  // (review F2): a chosen division with no chip on screen has no ALL chip
+  // either, because suppressing the rail suppresses the way out of it. The
+  // spectator's only escape was editing the URL. Honouring the choice only
+  // while a chip that can clear it is rendered closes every route in at once:
+  //   • `?division=<slug>` naming a division the hub carries but no fixture
+  //     belongs to (the document carries every division — see above);
+  //   • a bare `?division=`, which `URLSearchParams.get` returns as `""` —
+  //     `?? null` kept that, and `""` matches no slug, so All rendered
+  //     UNPRESSED above an empty list. No division has slug `""`, so the same
+  //     `some()` folds it away without a separate truthiness clause;
+  //   • the live document dropping the chosen division's last fixture, or its
+  //     second-to-last, which pulls the whole rail.
+  const division = divisionChips.some((d) => d.slug === chosenDivision) ? chosenDivision : null;
   // The card's own division chip repeats what the rail already says once the
   // spectator has narrowed to a division — `MatchCard`'s `showDivision` exists
   // for exactly this caller.
@@ -193,10 +266,29 @@ export function MatchesTab({
         match.bucket === filter && (division === null || match.divisionSlug === division),
     ),
   );
-  const groups = groupByDay(shown);
+  // `sortHubMatches` reads completed newest-first and `groupByDay` then re-sorts
+  // the GROUPS ascending, so the intent survives inside a day and is inverted
+  // between days: a Results list opened on the competition's FIRST match day
+  // and a spectator scrolled to the bottom for last night. Controller ruling
+  // (review F9): reverse the dated groups for the completed bucket only.
+  // Deliberately done HERE and not in `groupByDay` — that helper is merged, is
+  // separately tested, and its ascending order is right for the other two
+  // buckets. Unscheduled stays last in both directions: it is not a day, so it
+  // has no place in a chronology.
+  const byDay = groupByDay(shown);
+  const groups =
+    filter === "completed"
+      ? [
+          ...byDay.filter((g) => g.key !== UNSCHEDULED_KEY).reverse(),
+          ...byDay.filter((g) => g.key === UNSCHEDULED_KEY),
+        ]
+      : byDay;
 
   return (
-    <div className="space-y-3">
+    // `min-w-0` on the root (review P3): everything below it is protected, but
+    // Task 11/12 mounts this component inside a layout nobody has written yet,
+    // and a flex or grid parent breaks the truncate chain ABOVE here.
+    <div className="min-w-0 space-y-3">
       <div
         data-testid="mh-filters"
         role="group"
@@ -225,7 +317,7 @@ export function MatchesTab({
           {chip("mh-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
             setDivision(null),
           )}
-          {divisions.map((d) =>
+          {divisionChips.map((d) =>
             chip(`mh-division-${d.slug}`, d.name, division === d.slug, () => setDivision(d.slug)),
           )}
         </div>
@@ -255,11 +347,7 @@ export function MatchesTab({
                         fmtDate(g.tz, first.scheduledAt, DAY_OPTS)
                       : t(dict, "matchesHub.unscheduled")}
                   </h3>
-                  {/* No caption on the unscheduled group: `fmtZoneAbbrev`
-                      falls back to `new Date()` when there is no instant, so
-                      it would cheerfully print a zone for a fixture that has
-                      no time to state one at. */}
-                  {dated && viewerZone !== g.tz ? (
+                  {showZoneCaption(g, viewerZone) ? (
                     <span className="text-xs text-ink-muted">
                       {t(dict, "matchesHub.timesIn", {
                         tz: fmtZoneAbbrev(g.tz, first.scheduledAt),
