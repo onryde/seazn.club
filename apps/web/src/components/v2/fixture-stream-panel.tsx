@@ -28,7 +28,7 @@
 //     overlay endpoint the stage itself polls. The seed is why a fixture whose
 //     public endpoint is unreachable still previews instead of showing an
 //     empty strip.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Check, Copy, Video } from "lucide-react";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
@@ -42,25 +42,51 @@ import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
-/** §8: the real stage at `scale(640/1920)`. Written as the sheet writes it. */
-export const PREVIEW_SCALE = 640 / 1920;
+/** The authored canvas every theme is drawn on — the OBS browser-source size
+ *  `overlay-stage.tsx` fixes and `_THEMES.md` measures every inset against. */
+export const CANVAS_W = 1920;
+export const CANVAS_H = 1080;
 
 /**
- * §8, amended by owner ruling 2026-09-10: the strip is **360 px**, not the 96
- * it shipped as. The whole 1080-px authored canvas at `PREVIEW_SCALE`, derived
- * rather than typed, so it cannot drift from the scale.
+ * §8's preview strip is capped at 640 CSS px wide, and that is the ONLY thing
+ * 640 still means here.
  *
- * Why the first number could not work: at 1/3 scale a 96 px strip showed the
- * top **288** of 1080 authored px. §4's bug is anchored `top: 54` → y 18–79
- * scaled, comfortably inside. §3's bar is anchored `bottom: 54` → y ≈ 279–342
- * scaled, entirely BELOW a 96 px strip, so choosing *Broadcast bar* previewed
- * as an empty green rectangle — and cricket's own default is `bar`
- * (`defaultThemeFor`), so cricket organisers met the empty rectangle first.
- *
- * The SCALE is deliberately unchanged: §8's OBS-link copy and this panel's
- * width maths both rest on it. Only the window onto the canvas grew.
+ * §8's OBS-link copy and this panel's width maths rest on a 640-px preview, so
+ * the strip does not grow past it on a wide console; below it the strip is
+ * whatever the card gives it, and the scale FOLLOWS (see `previewScaleFor`).
+ * The cap is what makes the sheet's "at a 640 px strip this still resolves to
+ * 640/1920, so nothing changes on desktop" true by construction rather than by
+ * luck about the card's width.
  */
-export const PREVIEW_STRIP_PX = 1080 * PREVIEW_SCALE;
+export const PREVIEW_MAX_W_PX = 640;
+
+/**
+ * §8, SECOND correction 2026-09-10: **scale to the container**, never to a
+ * constant — `scale(w/1920)` for the measured strip width `w`, in a strip
+ * `w × 1080/1920` tall.
+ *
+ * Why a fixed scale could not work, and why the 360-px ruling below fixed only
+ * half of it: `scale(640/1920)` paints a 640 CSS px canvas however wide the
+ * strip actually is. The panel is ~296 px wide at a 320 px viewport, so about a
+ * THIRD of the frame was visible, and §3's bar — which spans x ≈ 24→616 in
+ * canvas px and is **cricket's default theme** — had its score cells cropped
+ * off the right edge with nothing to scroll to reach them. Same defect as the
+ * 96-px strip, one axis over, missed because the first ruling reasoned about
+ * height alone.
+ *
+ * The earlier owner ruling (360 px, 2026-09-10, on the W1 Task 6 finding) is
+ * NOT lost: 360 is `PREVIEW_MAX_W_PX × 1080/1920`, so a 640-px strip is still
+ * 360 tall and still shows all 1080 authored px. It is now a consequence of the
+ * aspect ratio instead of a number of its own, which is the point — the whole
+ * canvas is visible at EVERY width, not just at the one that was measured.
+ *
+ * A pure function so the invariant is testable in `environment: "node"`, where
+ * there is no layout and nothing can be measured.
+ */
+export function previewScaleFor(stripWidth: number): number {
+  const w = Number.isFinite(stripWidth) && stripWidth > 0 ? stripWidth : PREVIEW_MAX_W_PX;
+  return Math.min(w, PREVIEW_MAX_W_PX) / CANVAS_W;
+}
 
 /**
  * §8b, picked option A ("Three tiles", owner 2026-09-08). SANDBOX PLACEHOLDERS
@@ -168,6 +194,13 @@ export function FixtureStreamPanel({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<OverlayLiveData | null>(null);
+  // §8's second correction: the preview scales to the STRIP'S OWN WIDTH, so
+  // that width has to be measured. `null` until the first observation, and
+  // `previewScaleFor` falls back to the cap — which is exactly the constant
+  // this panel used to ship, so the pre-measurement frame is never worse than
+  // the old behaviour.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const [stripWidth, setStripWidth] = useState<number | null>(null);
 
   // The browser's own origin, read as an EXTERNAL STORE rather than seeded
   // into state from an effect: `react-hooks/set-state-in-effect` refuses the
@@ -201,6 +234,28 @@ export function FixtureStreamPanel({
       cancelled = true;
     };
   }, [fixture.id]);
+
+  // Measure the strip, never the viewport: the panel sits in a card inside a
+  // run-sheet row, so the window's width says nothing useful about it.
+  //
+  // `ResizeObserver` fires an initial observation for every element it is given,
+  // so there is no synchronous `measure()` here — that would be a setState in an
+  // effect body, which `react-hooks/set-state-in-effect` refuses (see `origin`
+  // above for the same constraint). `tab` is the dependency because the strip
+  // only exists on the OBS tab: leaving it out attaches the observer to a node
+  // that is gone the moment an organiser opens Phone and comes back.
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (box) setStripWidth(box.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tab]);
+
+  const previewScale = previewScaleFor(stripWidth ?? PREVIEW_MAX_W_PX);
 
   const overlayUrl = `${origin}/overlay/fixtures/${fixture.id}?style=${style}`;
 
@@ -339,25 +394,32 @@ export function FixtureStreamPanel({
             ))}
           </div>
 
-          {/* §8: the strip on the green-field stand-in, `PREVIEW_STRIP_PX`
-              tall — the WHOLE authored canvas at `PREVIEW_SCALE`, so a
-              bottom-anchored theme (§3's bar) is inside it. The height is an
-              inline value, not a Tailwind `h-*`, so there is exactly one
-              authority for it and it is derived from the scale beside it.
-              `overflow-hidden` still clips: the wrapper below is a full
-              1920×1080 box and the strip is only as wide as the card. */}
+          {/* §8 as corrected: the strip is `w` wide and `w × 1080/1920` tall,
+              and the canvas below is scaled to the SAME `w`, so the whole
+              authored 1920×1080 frame is visible at every viewport instead of
+              at the one width somebody measured. The ratio is an
+              `aspect-ratio`, not a pixel height, so there is no second number
+              to drift: 640 → 360 falls out of it, which is the owner's own
+              strip figure. `overflow-hidden` is a backstop only now — the
+              canvas exactly fills the box, give or take the 1-px border. */}
           <div
+            ref={stripRef}
             data-testid="stream-preview"
             aria-hidden
             className="relative mt-3 w-full overflow-hidden rounded-lg border border-purple-100"
-            style={{ height: PREVIEW_STRIP_PX, background: "linear-gradient(180deg, #3d7a3a, #2e6a2d)" }}
+            style={{
+              maxWidth: PREVIEW_MAX_W_PX,
+              aspectRatio: `${CANVAS_W} / ${CANVAS_H}`,
+              background: "linear-gradient(180deg, #3d7a3a, #2e6a2d)",
+            }}
           >
             <div
+              data-testid="stream-preview-canvas"
               className="absolute left-0 top-0"
               style={{
-                width: 1920,
-                height: 1080,
-                transform: `scale(${PREVIEW_SCALE})`,
+                width: CANVAS_W,
+                height: CANVAS_H,
+                transform: `scale(${previewScale})`,
                 transformOrigin: "top left",
               }}
             >

@@ -26,9 +26,11 @@ import { messages } from "@/lib/messages";
 import {
   FixtureStreamPanel,
   FixtureStreamToggle,
+  CANVAS_H,
+  CANVAS_W,
   CREDIT_PACKS,
-  PREVIEW_SCALE,
-  PREVIEW_STRIP_PX,
+  PREVIEW_MAX_W_PX,
+  previewScaleFor,
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
@@ -109,6 +111,13 @@ const stageOf = (tree: ReactElement[]): ReactElement => {
   if (!stage) throw new Error("no <OverlayStage> in the panel — the preview is not the real stage");
   return stage;
 };
+
+/** The binding sheet itself — `live-cell-cap.test.ts`'s own path shape. */
+const SHEET_PATH = join(
+  __dirname,
+  "../../../../../..",
+  "docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md",
+);
 
 const DICT_DIR = join(__dirname, "..", "..", "..", "dictionaries");
 const uiDict = (locale: string): Record<string, string> =>
@@ -210,28 +219,85 @@ describe("the preview is the real stage, seeded from the row", () => {
     expect(sides.map((s) => s.name)).toEqual([ENTRANTS.e1, ENTRANTS.e2]);
   });
 
-  // Owner ruling 2026-09-10 (_THEMES.md §8, amended): the strip is 360px, not
-  // 96px. At `scale(640/1920)` = 1/3 a 96px strip showed the top 288 of the
-  // canvas's 1080 authored px. §4's bug is anchored `top: 54` and survived
-  // that; §3's bar is anchored `bottom: 54` — y ≈ 279–342 scaled — and fell
-  // entirely outside it, so selecting *Broadcast bar* previewed as an empty
-  // green rectangle. Cricket's own default IS `bar` (`defaultThemeFor`), so
-  // cricket organisers met the empty rectangle first.
-  it("the strip shows the WHOLE authored canvas — 1080px at the sheet's scale, not a window onto its top", () => {
-    // Derived, never a second number typed here: the height in AUTHORED px is
-    // what decides whether a bottom-anchored theme is inside the strip, and it
-    // moves if either the strip or the scale moves.
-    expect(PREVIEW_STRIP_PX / PREVIEW_SCALE, "authored px visible").toBe(1080);
-    expect(PREVIEW_SCALE, "§8's scale is unchanged — the OBS-link copy rests on it").toBe(640 / 1920);
-    expect(PREVIEW_STRIP_PX, "the owner's number").toBe(360);
+  // _THEMES.md §8, SECOND correction 2026-09-10: **scale to the container**.
+  // The first correction (owner ruling, 360px strip) fixed the vertical half
+  // only — at a FIXED `scale(640/1920)` the panel still painted a 640px canvas
+  // however wide the strip actually was, so at a 320px viewport (~296px panel)
+  // about a third of the frame was visible and §3's bar — cricket's default —
+  // had its score cells cropped off the right edge with nothing to scroll to.
+  //
+  // 360 is not lost: it is 640 × 1080/1920, so a capped 640px strip is still
+  // 360 tall. It is a consequence of the aspect ratio now instead of a number
+  // of its own.
+  //
+  // WHAT THIS FILE CANNOT SEE: node has no layout, so nothing here measures a
+  // strip or proves the observer fires. `previewScaleFor` is the pure half;
+  // `stream-overlay.spec.ts`'s "§8: the preview scales to the strip" opens the
+  // real console at three viewports and compares the painted canvas box with
+  // the strip's own.
+  it("the sheet binds a CONTAINER scale, not a constant", () => {
+    // Derived from `_THEMES.md`, so a further amendment moves this test rather
+    // than leaving it pinning a superseded value — which is exactly what the
+    // pair of assertions this replaced had become.
+    const sheet = readFileSync(SHEET_PATH, "utf8");
+    const row = sheet.split("\n").find((l) => l.includes("| live preview |"));
+    expect(row, "§8 no longer has a `live preview` row").toBeDefined();
+    expect(row!, "the sheet must still bind scale-to-container").toMatch(/scale\(w\/1920\)/);
   });
 
-  it("that height is what the strip actually renders at — not a constant nothing reads", () => {
-    const strip = byTestId(open().tree(), "stream-preview");
-    const style = propsOf(strip!).style as { height?: unknown };
-    expect(style.height).toBe(PREVIEW_STRIP_PX);
-    // A leftover Tailwind height would win or fight with it; there must be one
-    // authority for this box's height.
+  it("the whole authored canvas is visible at EVERY width, not just at one", () => {
+    // The invariant, stated the way the sheet states it: authored px across the
+    // strip = 1920 at any `w`. A constant satisfies this at exactly one width.
+    for (const w of [214, 296, 375, 512, PREVIEW_MAX_W_PX]) {
+      expect(w / previewScaleFor(w), `authored px across a ${w}px strip`).toBeCloseTo(CANVAS_W, 6);
+    }
+  });
+
+  it("the differential — a phone-width strip is NOT the desktop number", () => {
+    // The regression this exists for. `640/1920` is what shipped, and it is
+    // what a reverted implementation would return at 296 as well.
+    expect(previewScaleFor(296), "the defect: 296px of strip painting 640px of canvas").not.toBe(
+      PREVIEW_MAX_W_PX / CANVAS_W,
+    );
+    expect(previewScaleFor(296)).toBe(296 / CANVAS_W);
+    // ...and desktop is unchanged, which is what §8's OBS-link copy rests on.
+    expect(previewScaleFor(PREVIEW_MAX_W_PX)).toBe(PREVIEW_MAX_W_PX / CANVAS_W);
+    expect(PREVIEW_MAX_W_PX * (CANVAS_H / CANVAS_W), "the owner's 360px strip still falls out").toBe(
+      360,
+    );
+  });
+
+  it("the strip is capped at §8's 640, and a degenerate measurement falls back to it", () => {
+    expect(previewScaleFor(900), "a wide console must not inflate the graphic").toBe(
+      PREVIEW_MAX_W_PX / CANVAS_W,
+    );
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(previewScaleFor(bad), `${bad} must not paint a zero-scale canvas`).toBe(
+        PREVIEW_MAX_W_PX / CANVAS_W,
+      );
+    }
+  });
+
+  it("the strip is MEASURED and the canvas renders at that scale — not a constant nothing reads", () => {
+    const tree = open().tree();
+    const strip = byTestId(tree, "stream-preview");
+    const style = propsOf(strip!).style as Record<string, unknown>;
+    // The pinned pixel height is the thing the correction removed: the strip's
+    // height follows its own width now, so there is no second number to drift.
+    expect(style.height, "a pinned pixel height is a fixed scale wearing a hat").toBeUndefined();
+    expect(style.aspectRatio).toBe(`${CANVAS_W} / ${CANVAS_H}`);
+    expect(style.maxWidth).toBe(PREVIEW_MAX_W_PX);
+    // A ref on the strip is what makes the scale a MEASUREMENT. Without it
+    // nothing observes the box and `previewScaleFor` can only ever be handed
+    // its own fallback — the constant, back again, with a function around it.
+    expect(propsOf(strip!).ref, "nothing measures the strip").toBeDefined();
+    const canvas = byTestId(tree, "stream-preview-canvas");
+    const cstyle = propsOf(canvas!).style as Record<string, unknown>;
+    expect(cstyle.width).toBe(CANVAS_W);
+    expect(cstyle.height).toBe(CANVAS_H);
+    // Unmeasured (no layout here), so this is the fallback — but it must be
+    // the FUNCTION's fallback, not a literal beside it.
+    expect(cstyle.transform).toBe(`scale(${previewScaleFor(PREVIEW_MAX_W_PX)})`);
     expect(String(propsOf(strip!).className), "no h-24 (96px) left behind").not.toMatch(/\bh-\d/);
   });
 });
