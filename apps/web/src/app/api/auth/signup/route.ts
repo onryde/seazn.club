@@ -8,6 +8,7 @@ import { createVerificationToken } from "@/lib/verification";
 import { signupSchema } from "@/lib/types";
 import { rateLimit, AUTH_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
+import { mayExposeDevLink } from "@/lib/dev-links";
 
 /** Turn an email into a friendly default display name (the part before @). */
 function displayNameFromEmail(email: string): string {
@@ -53,10 +54,11 @@ export async function POST(req: Request) {
       needs_verification: true,
       email,
       email_sent: emailSent,
-      // Dev convenience so the flow is testable without a verified domain.
-      ...(process.env.NODE_ENV !== "production"
-        ? { verify_token: token, verify_url: link }
-        : {}),
+      // Already fails closed (no `!sent` arm), but routed through the same
+      // helper so there is ONE rule about who may see a credential rather
+      // than three routes each deciding for themselves — which is how the
+      // other two came to be wrong in the same way.
+      ...(mayExposeDevLink() ? { verify_token: token, verify_url: link } : {}),
     };
   });
 }

@@ -5,6 +5,7 @@ import { stampTermsAcceptance } from "@/lib/legal";
 import { sendMagicLinkEmail } from "@/lib/email";
 import { createLoginLink } from "@/lib/login-link";
 import { baseUrl } from "@/lib/oauth";
+import { mayExposeDevLink } from "@/lib/dev-links";
 import { z } from "zod";
 import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { headers } from "next/headers";
@@ -39,9 +40,12 @@ export async function POST(req: Request) {
       const token = await createLoginLink(userId);
       const nextQuery = next ? `&next=${encodeURIComponent(next)}` : "";
       const link = `${baseUrl(req)}/magic-link?token=${token}${nextQuery}`;
-      const sent = await sendMagicLinkEmail(email, link);
-      // Dev convenience so the flow is testable without a verified domain.
-      if (!sent || process.env.NODE_ENV !== "production") devLink = link;
+      // The send outcome deliberately does NOT decide exposure any more. It
+      // used to (`!sent || NODE_ENV !== "production"`), which meant a Resend
+      // failure in production returned a live sign-in link for whatever
+      // address was posted. See `lib/dev-links.ts` for the whole story.
+      await sendMagicLinkEmail(email, link);
+      if (mayExposeDevLink()) devLink = link;
     }
 
     return {

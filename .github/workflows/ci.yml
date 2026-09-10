@@ -1380,6 +1380,17 @@ jobs:
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+          # smoke signs in by reading `login_url` off the magic-link response,
+          # and this server runs as NODE_ENV=production. Production stopped
+          # exposing that link on a failed send — it used to, so a Resend
+          # outage handed out sign-in links — and a production-mode harness now
+          # opts in explicitly. On the SERVER for the same reason the placement
+          # vars above are: the route reads it server-side, so putting it on
+          # the "Run smoke test" step would leave every sign-in without a link
+          # and the whole suite failing at its first login.
+          # The e2e jobs do NOT set this; they mint tokens in the DB
+          # (E2E_PROD_TARGET) and skip the specs that assert link exposure.
+          AUTH_DEV_LINKS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
