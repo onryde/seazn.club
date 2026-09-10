@@ -461,8 +461,10 @@ row ×2:           height 90, padding 0 24, gap 18
                   score Barlow 69/700 line-height 1 tabular (margin-left auto)
                   meta  Barlow 30/500 ink 65 % width 78 right-aligned (overs)
 side in play:     row background board-2 + inset-left bar 8 px LED, score colour LED
-footer:           height 45, padding 0 24, Geist 21/500 ink 85 %, space-between
+footer:           height 45, padding 0 24, Geist 21/500 ink 85 %
+                  start-aligned, gap 18 (NOT space-between)
                   AT MOST 2 detail entries, most recent last, ONE line, nowrap
+                  overflowing text ELLIPSES; it never clips and never wraps
                   emphasis Geist 600 ink 100 % (chase line)
 ```
 
@@ -526,7 +528,24 @@ Two rules follow.
 
 **The tile must not grow instead.** An OBS operator positions the bug against
 their camera framing; a graphic that changes height on air moves into the shot.
-Clip deliberately, never reflow.
+
+**Correction, 2026-09-10: "clip deliberately" was wrong, and the visual gate is
+right.** This paragraph first said to clip. But `expectNoClip` treats any
+`overflow-x: hidden` box with more than 1 px of overhang as a defect and offers
+no exempt path — and by this repo's own rule (AGENTS.md 23) an overflow is a
+feature only when the extra content is **REACHABLE**. On a broadcast graphic
+nothing is reachable: there is no scroll, no focus, no gesture. So a clipped
+footer is a defect by the project's own definition, and exempting the overlay
+rows would blind the gate for every future overlay row too.
+
+Measured: the capped English footer sits at exactly 480 px in a 480 px tile —
+on the boundary — and a longer locale measures **899–923 px**, which would land
+on `.ovl-bug` as a clip and red the gate.
+
+**So the content must FIT, not clip: the footer's text truncates with an
+ellipsis.** An ellipsis is intentional and reads as "there is more"; a
+mid-word cut reads as broken. Nothing overflows, the tile still never grows, and
+the gate stays honest for everyone after us.
 
 **The visual gate could not have caught this and still cannot.** `expectNoClip`
 compares `scrollWidth` with `clientWidth`, which sees horizontal overflow only —
