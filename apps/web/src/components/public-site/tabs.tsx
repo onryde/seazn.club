@@ -14,9 +14,27 @@
 // DYNAMIC, trading the public surface's CDN caching for a tab default. Reading
 // it here costs a frame instead: the server always renders index 0, so
 // hydration cannot mismatch, and the effect below switches immediately after.
-// `useSearchParams` is deliberately NOT used — it would demand a Suspense
-// boundary around a statically generated page for no gain over
-// `window.location`.
+// THIS IS THE SECOND ANSWER IN THIS REPO TO THE SAME QUESTION, and the other
+// one came first. W1 hit exactly this wall on the fixture page and solved it in
+// `match-centre/match-centre-with-tab-param.tsx` — same diagnosis (that page is
+// ISR too, and reading `searchParams` on the server throws
+// `DYNAMIC_SERVER_USAGE` on every request), same conclusion (read it on the
+// client), different mechanism: `useSearchParams` inside a `<Suspense>` whose
+// fallback is the same component with `tabParam={null}`. It is in production
+// use at `fixtures/[fixtureId]/page.tsx:293`.
+//
+// The divergence here is deliberate, not ignorance of that file, and it buys
+// one thing: `useSearchParams` bails its calling subtree to CLIENT-SIDE
+// RENDERING up to the nearest boundary (its own docs say so, and a static build
+// without the boundary fails outright), whereas reading `window.location`
+// through `useSyncExternalStore` leaves the page fully static and additionally
+// survives Back/Forward via `popstate`. For a tab bar wrapping three
+// server-rendered panels that is worth having.
+//
+// But two mechanisms for one problem is a cost the next reader pays, and the
+// right end state is ONE — most likely a shared `useTabParam()` both call.
+// That means touching W1's merged match centre, which is not a thing to churn
+// mid-wave, so it is recorded as owed rather than done here.
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 interface Props {
