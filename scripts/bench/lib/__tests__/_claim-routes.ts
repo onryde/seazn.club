@@ -70,6 +70,14 @@ export interface ClaimRoutesOptions {
   readonly acceptAnyToken?: boolean;
   /** Refuse every acceptance with this status instead of accepting. */
   readonly refuseWith?: number;
+  /**
+   * On any successful acceptance, close EVERY minted claim — the over-broad
+   * accept (AGENTS.md failure class 13's mirror image: a guard that catches
+   * more than it was asked to). A run against this world must red the
+   * "invites past the limit stay unclaimed" oracle, and nothing else can
+   * witness that oracle actually re-reads the invites it left alone.
+   */
+  readonly closeUntouched?: boolean;
 }
 
 /** Mirrors `mintClaimSecret` (`person-claims.ts:31-33`): the `pc_` prefix and
@@ -143,7 +151,13 @@ export function makeClaimRoutesWorld(opts: ClaimRoutesOptions = {}): ClaimRoutes
       }
       if (row !== undefined) {
         accepted.add(token);
-        rowByPerson.set(row.person_id, { ...row, claimed_at: new Date().toISOString() });
+        const now = new Date().toISOString();
+        rowByPerson.set(row.person_id, { ...row, claimed_at: now });
+        if (opts.closeUntouched === true) {
+          for (const [personId, other] of rowByPerson) {
+            rowByPerson.set(personId, { ...other, claimed_at: other.claimed_at ?? now });
+          }
+        }
       }
       return {
         status: 200,

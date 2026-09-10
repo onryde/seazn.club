@@ -61,6 +61,10 @@ function fakeServer(
     conflictAt?: { extKey: string; expectedSeq: number };
     /** B06a T6 — knobs for the shared claim rail (`_claim-routes.ts`). */
     claimRoutes?: ClaimRoutesOptions;
+    /** B06a T6 — `GET /persons/{id}/stats` answers DIFFERENT numbers once a
+     *  claim has been accepted. Reds the claimed-profile oracle and nothing
+     *  else, same one-knob-one-oracle discipline as the three above. */
+    statsChangeAfterClaim?: boolean;
     /** B05 T3 regression — the seed-proposal answers with the WRONG order
      *  (reversed), so D7's assertion should red and neither confirm,
      *  generate nor the playoff's own stream fold should ever be attempted. */
@@ -272,6 +276,14 @@ function fakeServer(
       : {}),
   });
 
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
+  // now: the runner accepts the pack's player invites after the fold on every
+  // `sql`-passing run. Constructed BEFORE the oracle world because
+  // `statsChangeAfterClaim` below has to ask it whether anything has been
+  // accepted yet.
+  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
+
   const oracleRoutes = makeOracleRoutesWorld({
     // `_tiny` declares one special; without a folded state its
     // `phase` claim reads as absent and reds every run in this file.
@@ -307,21 +319,23 @@ function fakeServer(
     // fault, which is exactly the "two guards covering for each other" shape
     // this task is required not to ship. Each of the three knobs below reds
     // its own oracle and no other.
-    getPersonStats: (personId) =>
-      opts.emptyPersonDivisions === true
-        ? { divisions: [] }
-        : personStatsFromDivisions(personId, divisionCardSources()),
+    getPersonStats: (personId) => {
+      if (opts.emptyPersonDivisions === true) return { divisions: [] };
+      const wire = personStatsFromDivisions(personId, divisionCardSources());
+      // B06a T6 — the fourth knob: a profile whose numbers CHANGE the moment
+      // it is claimed. Nothing else in this file can witness the
+      // claimed-profile oracle actually comparing its before and after reads,
+      // and a comparison nothing can falsify is decoration.
+      if (opts.statsChangeAfterClaim !== true || claims.acceptedTokens().length === 0) return wire;
+      return {
+        divisions: wire.divisions.map((d) => ({ ...d, stats: { ...d.stats, claimed_bonus: 99 } })),
+      };
+    },
     getPersonCareerStats: (personId) =>
       opts.emptyCareerSports === true
         ? { sports: [] }
         : personCareerStatsFromDivisions(personId, divisionCardSources()),
   });
-
-  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
-  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
-  // now: the runner accepts the pack's player invites after the fold on every
-  // `sql`-passing run.
-  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
 
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
@@ -1188,6 +1202,71 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // pushed at all — a run that reported it here would be reporting on an
     // empty set.
     expect((report.oracles ?? []).some((o) => o.name === "people: an accepted invite is closed")).toBe(false);
+  });
+
+  it("B06a T6 — a claim surface that closes invites nobody touched reds the run", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { closeUntouched: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const untouched = (report.oracles ?? []).find((o) => o.name === "people: invites past the limit stay unclaimed");
+    expect(untouched).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(untouched?.detail).toContain("no longer open");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("nobody asked it to"))).toBe(true);
+    // The acceptances themselves still succeeded, so this reds on the
+    // untouched invites alone rather than on a broken claim surface.
+    expect((report.oracles ?? []).find((o) => o.name === "people: claim invites accepted")).toMatchObject({
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T6 — a profile whose stats CHANGE when it is claimed reds the run", async () => {
+    const { transport, sql } = fakeServer({ statsChangeAfterClaim: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const drift = (report.oracles ?? []).find(
+      (o) => o.name === "people: a claimed profile still reports the same stats",
+    );
+    expect(drift).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(drift?.detail).toContain("DIFFERENT stats");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("changed the stats it reports"))).toBe(true);
   });
 
   // B06a task 4 — the specials oracle's DISCRIMINATING wiring test, and the
