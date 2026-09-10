@@ -399,6 +399,38 @@ export default async function DivisionPage({
         )
       : [];
 
+  // Stream Overlay W1 (task 6) — the per-PAGE half of every run-sheet row's
+  // stream panel, resolved ONCE here rather than per row.
+  //
+  // Both entitlement reads carry the competition id, the same way `news.auto`
+  // and `embeds.enabled` do below and the same way the overlay route's own
+  // gate does (`app/overlay/fixtures/[fixtureId]/page.tsx`): an Event Pass
+  // grants for the competition it was bought for, so an org-wide resolve would
+  // deny a pass holder the fixture they paid for.
+  //
+  // `overlayDict` travels because it has to: the console layout provides the
+  // `ui` namespace, the overlay's own copy is `public.overlay.*`, and
+  // `getDictionary` is `server-only` so the client island cannot load it.
+  // Sliced to that prefix, so the flight carries ~20 strings and not the whole
+  // public catalogue.
+  //
+  // Skipped off the fixtures tab and for a viewer who cannot edit — neither
+  // can reach a panel, and this is two queries plus a dictionary load.
+  const streamPanel =
+    tab === "fixtures" && editable
+      ? {
+          entitled: await hasFeature(auth.orgId, "streaming.overlay", competition.id),
+          relayEntitled: await hasFeature(auth.orgId, "streaming.relay", competition.id),
+          sportKey: division.sport_key,
+          overlayDict: Object.fromEntries(
+            Object.entries(await getDictionary(locale, "public")).filter(([k]) =>
+              k.startsWith("overlay."),
+            ),
+          ) as Record<string, string>,
+          viewerPlan,
+        }
+      : undefined;
+
   return (
     <>
       <main className="mx-auto max-w-6xl px-4 py-8">
@@ -637,6 +669,7 @@ export default async function DivisionPage({
               phase={phase}
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
+              stream={streamPanel}
             />
           </>
         )}

@@ -15,6 +15,7 @@ import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
@@ -220,6 +221,13 @@ interface Props {
    *  pinned by `division-phase.test.ts`, never a number typed in here. */
   matchMinutes?: number;
   viewerPlan: ViewerPlan;
+  /** Stream Overlay W1 (task 6) — the per-PAGE half of each run-sheet row's
+   *  stream panel (both entitlements, the sport key, the overlay copy slice
+   *  and the viewer's plan), resolved ONCE on the division page and threaded
+   *  through. Optional like `venues`/`phase`: the pre-existing
+   *  `stages-panel-*.test.tsx` props build without it, and absent reads as
+   *  "not entitled", so no panel appears rather than a broken one. */
+  stream?: StreamPanelContext;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -329,7 +337,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, venues = [], rosterDrift = {}, canEdit, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1147,6 +1155,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setNotice(msg("schedule.rescheduled"));
           setUndoable(true);
         }}
+        stream={stream}
       />
 
       {canEdit && (

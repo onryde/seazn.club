@@ -22,6 +22,14 @@ import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
+// Stream Overlay W1 (task 6). ONE import; the row owns only the open state and
+// two mount points, because the toggle belongs beside the time cell and the
+// panel spans the row beneath it — one component cannot be in both places.
+import {
+  FixtureStreamPanel,
+  FixtureStreamToggle,
+  type StreamPanelContext,
+} from "@/components/v2/fixture-stream-panel";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
@@ -97,6 +105,7 @@ export function RunSheetRow({
   boardSlotOptions,
   onRescheduled,
   stageName,
+  stream,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -137,10 +146,20 @@ export function RunSheetRow({
    *  blocks never pass it — a day header/bracket section already identifies
    *  its stage. */
   stageName?: string | null;
+  /** Stream Overlay W1 — the per-PAGE half of the stream panel, threaded from
+   *  the division page on the `embeds.enabled` precedent (`<EmbedSnippet
+   *  entitled={await hasFeature(...)}/>`, page.tsx). Optional so every caller
+   *  that never carried it keeps working, exactly as `venues` does; absent is
+   *  read as NOT entitled, so an un-threaded caller shows no panel rather than
+   *  a broken one. */
+  stream?: StreamPanelContext;
 }) {
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
+  // Owned HERE, not in the panel: the toggle and the expander mount in two
+  // different places in this row's composition (see the import's note).
+  const [streamOpen, setStreamOpen] = useState(false);
   // The typed value. Seeded EMPTY here and re-seeded from the STORED instant
   // every time the editor opens — `toggleEditor` below is the authority, and
   // its doc carries the whole argument. Nothing else may set this from
@@ -359,6 +378,13 @@ export function RunSheetRow({
               ? msg("runsheet.action.setTime")
               : msg("runsheet.action.view");
 
+  // Stream Overlay W1, owner Q6 ("Agree"): offered at EVERY fixture status —
+  // a club pastes the replay link after the final whistle — so this is NOT
+  // `canEditFixtureTime`, which hides the time cell's editor by status. ONE
+  // authority for the gate, read by both mount points below; not entitled
+  // means no panel at all, never an upsell (ruling 5 — that is R1's).
+  const showStream = canEdit && stream !== undefined && stream.entitled;
+
   return (
     <li data-fixture-no={fixture.fixture_no} className="px-4 py-2">
       {/* Same two-tier responsive shape `FixtureLine` used (fix-ui audit
@@ -420,6 +446,9 @@ export function RunSheetRow({
                 <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
               )}
             </span>
+          )}
+          {showStream && (
+            <FixtureStreamToggle open={streamOpen} onToggle={() => setStreamOpen((v) => !v)} />
           )}
           <div className="min-w-0 flex-1">
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
@@ -642,6 +671,14 @@ export function RunSheetRow({
             )}
           </div>
         </div>
+      )}
+      {showStream && streamOpen && (
+        <FixtureStreamPanel
+          fixture={fixture}
+          entrantNames={entrantNames}
+          tz={tz}
+          stream={stream}
+        />
       )}
     </li>
   );

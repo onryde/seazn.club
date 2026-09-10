@@ -32,7 +32,14 @@ function files(dir: string): string[] {
       if (entry === "__tests__") continue;
       out = out.concat(files(full));
     } else if (/\.tsx?$/.test(entry)) {
-      out.push(full);
+      // `lib/i18n-keys.ts` is GENERATED from `en` and lists EVERY key in the
+      // catalog as a string literal. Scanning it made "referenced by the
+      // source" mean "declared in en", so this test could not tell a panel
+      // that resolves its copy from one that never mentions a key at all —
+      // it degenerated into an en-vs-locale parity check. Task 6 found that
+      // when the panel's own 30 keys landed and the "finds the keys at all"
+      // floor moved with the DICTIONARY rather than with the code.
+      if (entry !== "i18n-keys.ts") out.push(full);
     }
   }
   return out;
@@ -59,15 +66,15 @@ const dictOf = (locale: string, ns: string): Record<string, string> =>
 describe("overlay + panel copy is complete in every locale", () => {
   it("finds the keys at all — a scan that matched nothing would pass vacuously", () => {
     expect(referencedKeys("overlay").size).toBeGreaterThanOrEqual(8);
-    // RE-PIN (2026-09-09, task 5e): the floor moves again with `slate`.
-    // `theme-registry.ts` now references THREE `stream.tab.*` literals —
-    // `stream.tab.bar`, `stream.tab.bug`, `stream.tab.slate` — so the true
-    // floor today is 3, not the 2 the previous re-pin recorded (when only
-    // bar/bug existed). The organiser panel that will reference
-    // `stream.setup.*`/`stream.link.*` is still Task 6's, unscanned here, so
-    // this is not yet the brief's own `>= 12` either. Raise it again once
-    // the panel lands.
-    expect(referencedKeys("stream").size).toBeGreaterThanOrEqual(3);
+    // RE-PIN (2026-09-10, task 6): the panel has landed, so the floor moves
+    // past the brief's own `>= 12`. `fixture-stream-panel.tsx` resolves 29
+    // `stream.*` literals and `theme-registry.ts` three more (`stream.tab.bar`
+    // / `.bug` / `.slate`) — 32 today with `i18n-keys.ts` excluded above. 24
+    // is a FLOOR, not that count: it is low enough that adding or merging a
+    // key does not red this test, and high enough that a panel which stopped
+    // resolving its copy through `msg` (hardcoded English, a deleted tab, a
+    // whole branch dropped) falls through it.
+    expect(referencedKeys("stream").size).toBeGreaterThanOrEqual(24);
   });
 
   for (const locale of LOCALES) {

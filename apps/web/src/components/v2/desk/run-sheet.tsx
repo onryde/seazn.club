@@ -22,6 +22,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
 import { RunSheetRow } from "./run-sheet-row";
+import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -52,6 +53,7 @@ export function RunSheet({
   onStageFilter,
   boardSlotOptions,
   onRescheduled,
+  stream,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -99,6 +101,10 @@ export function RunSheet({
   onStageFilter: (stageId: string | null) => void;
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
+  /** Stream Overlay W1 — threaded straight through to each row's stream
+   *  panel, exactly as `venues` and `orgTz` above are. This component never
+   *  reads it. */
+  stream?: StreamPanelContext;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -303,6 +309,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
+                stream={stream}
               />
             ))}
             {nowIndex === rows.length && <NowRule msg={msg} />}
@@ -384,6 +391,7 @@ export function RunSheet({
                     venues={venues}
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
+                    stream={stream}
                   />
                 ))}
               </ul>
@@ -419,6 +427,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
+                stream={stream}
                 stageName={stageNameFor(f)}
               />
             ))}
@@ -457,6 +466,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
+                stream={stream}
                 stageName={stageNameFor(f)}
               />
             ))}
@@ -687,6 +697,7 @@ function RowWithNow({
   venues?: readonly Venue[];
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
+  stream?: StreamPanelContext;
 }) {
   return (
     <>
