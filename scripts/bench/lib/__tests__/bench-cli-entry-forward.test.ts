@@ -24,6 +24,10 @@ function emptySuiteReport(): SuiteReport {
 }
 
 vi.mock("../suites/tiny.ts", () => ({
+  // B06a: `lib/suites/registry.ts` imports the pack path alongside the runner,
+  // so a mock of this module owes both exports — a partial mock now fails
+  // collection rather than one test.
+  TINY_PACK_PATH: "/fake/packs/_tiny.json",
   runTinySuite: vi.fn(async (input: { cliEntry?: unknown }) => {
     seen.called += 1;
     seen.cliEntry = "cliEntry" in input ? input.cliEntry : "__ABSENT__";

@@ -187,6 +187,17 @@ describe("runSuite — B03 T7 forwards sql/transport into runTinySuite", () => {
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).join(" | ")).toContain("SENTINEL");
   });
+
+  // B06a Task 1 — the dispatch is a registry lookup, and its refusal names the
+  // keys the registry actually holds rather than a hardcoded "_tiny". The old
+  // message ("only \"_tiny\" exists until B02+ lands real packs") outlived the
+  // packs it was waiting for; deriving it means it cannot go stale again.
+  it("refuses an unknown suite key and names the known ones", async () => {
+    const config = parseCliArgs(["--base", "http://bench.example", "--wipe"]);
+    await expect(
+      runSuite("nope", config, "test-run-id", {} as PlanSql),
+    ).rejects.toThrow(/unknown suite "nope".*_tiny/s);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -210,6 +221,8 @@ describe("runSuite — B04 forwards reportDir and the resolved runId", () => {
     vi.resetModules();
     const seen: Record<string, unknown>[] = [];
     vi.doMock("../suites/tiny.ts", () => ({
+      // B06a: the registry imports TINY_PACK_PATH from this module too.
+      TINY_PACK_PATH: "/fake/packs/_tiny.json",
       runTinySuite: async (input: Record<string, unknown>) => {
         seen.push(input);
         return { suite: "_tiny", gate: "green" as const, timings: {}, keep: false };
