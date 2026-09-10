@@ -149,12 +149,13 @@ const KNOWN_ORPHANS: Readonly<Record<string, string>> = {
   // in `overlay-slate.tsx`'s own header.
   "overlay.slate.signalLostHeadline": "owed to B3 — the <video> seam that can detect a stalled source",
   "overlay.slate.signalLostLine": "owed to B3 — same seam",
-  // W1-step-one.md:315-316 — the PUBLIC MATCH PAGE's link to the stream, which
-  // reads `overlay.watchLive` while scheduled/in_play and `overlay.replay` once
-  // decided/finalized. Task 7's, not this fix round's: deleting them here would
-  // make that task re-mint the same four-locale copy.
-  "overlay.watchLive": "owed to Task 7 — the public match-page stream link",
-  "overlay.replay": "owed to Task 7 — the same link, once the fixture has ended",
+  // `overlay.watchLive` / `overlay.replay` were listed here as owed to Task 7.
+  // Task 7 has WIRED them (the public match page's stream link,
+  // `app/(public)/…/fixtures/[fixtureId]/{stream-link.ts,page.tsx}`), so the
+  // check below reds on a stale entry and the promise is kept by deleting it,
+  // never by keeping the row. Naming the two keys in this paragraph is safe on
+  // both counts: `files()` skips every `__tests__` directory, so this file is
+  // never scanned, and `stripComments` would drop the line even if it were.
 };
 
 const dictOf = (locale: string, ns: string): Record<string, string> =>
