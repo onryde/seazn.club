@@ -194,3 +194,175 @@ export async function acceptClaimInvites(args: {
     invalidTokenStatus,
   };
 }
+
+// ---------------------------------------------------------------------------
+// B06a Task 7 — news drafts and publication
+// ---------------------------------------------------------------------------
+//
+// `report.news` (`report.ts:673`) has been declared since B01 with no writer,
+// and the reason is not neglect: nothing in the bench had ever turned drafting
+// ON, so there was never anything to write. Drafting is a side effect of
+// FOLDING (`refreshNews`, `scoring.ts:132` / `event-import.ts:435`), gated on
+// five conditions in order — the event decides or voids (`scoring.ts:129`),
+// `divisions.auto_posts` is true (`:353-356`, re-read `org-posts.ts:479`), the
+// org holds `news.auto` (`:480`), and the fixture's status is decided,
+// finalized or forfeited (`:483-485`). Miss any one and the call returns `[]`,
+// which is indistinguishable from a broken step unless the run says which
+// precondition it failed to meet.
+//
+// That is why `enableAutoPosts` is a separate export that must run BEFORE the
+// folds: `PATCH /divisions/{id}` itself refuses `auto_posts: true` without
+// `news.auto` (`usecases/divisions.ts:652-654`), and once the events are
+// folded there is no second chance to draft them.
+
+/** `GET /orgs/{id}/posts` rows (`api-v1/posts.ts#toApiPost`). No fixture id on
+ *  the wire — `auto_source` carries it (`org-posts.ts:509-510`), which is the
+ *  only reason publishing NAMED fixtures is possible at all. */
+export interface NewsPost {
+  readonly id: string;
+  readonly status: string;
+  readonly competition_id: string | null;
+  readonly division_id: string | null;
+  readonly published_at: string | null;
+  readonly auto_source: { trigger?: string; fixture_id?: string; stale?: boolean } | null;
+}
+
+export interface NewsEnableResult {
+  readonly requested: number;
+  readonly enabled: number;
+  readonly refused: readonly { readonly divisionId: string; readonly status: number; readonly detail: string }[];
+}
+
+export interface NewsStepResult {
+  readonly drafted: number;
+  readonly published: number;
+  readonly stillDraft: number;
+  /** Fixtures this run asked to publish that had no draft — named, never
+   *  silently absorbed into a smaller `published` count. */
+  readonly requestedButNotDrafted: readonly string[];
+  /** Whether the republish proxy actually RAN. A run that published nothing
+   *  has not tested the fire-once predicate, and `republishWasInert` must not
+   *  be read as evidence without this. */
+  readonly republishProbed: boolean;
+  /**
+   * The fire-once predicate, asserted by proxy. `shouldFirePostPublished`
+   * (`org-posts.ts:317`) fires a PostHog `captureServer` call and NOTHING else
+   * — no row, no outbox, no webhook — so "observed exactly once" is not
+   * observable over HTTP at all. What is observable is what the predicate
+   * protects: `published_at` is assigned only when it was null (`:276,282`),
+   * so a second publish must leave it where it is.
+   */
+  readonly republishWasInert: boolean;
+}
+
+/** Turn drafting on. Runs BEFORE any fold — see this section's header. */
+export async function enableAutoPosts(args: {
+  readonly base: string;
+  readonly session: Session;
+  readonly divisionIds: readonly string[];
+  readonly transport: ClaimTransport;
+}): Promise<NewsEnableResult> {
+  const { base, session, divisionIds, transport } = args;
+  const refused: { divisionId: string; status: number; detail: string }[] = [];
+  let enabled = 0;
+  for (const divisionId of divisionIds) {
+    const res = await transport.raw(base, session, `/api/v1/divisions/${divisionId}`, "PATCH", {
+      auto_posts: true,
+    });
+    if (isAccepted(res.status)) enabled += 1;
+    else {
+      refused.push({
+        divisionId,
+        status: res.status,
+        detail: typeof res.json.error === "string" ? res.json.error : `HTTP ${res.status}`,
+      });
+    }
+  }
+  return { requested: divisionIds.length, enabled, refused };
+}
+
+/** Every draft this run's competition owns, read through the product.
+ *
+ *  Each row's OWN `status` is checked rather than trusting the query string:
+ *  `GET /orgs/{id}/posts` silently IGNORES an unrecognised `status`
+ *  (`route.ts:19`) instead of answering 400, so a typo returns every post and
+ *  a caller that trusted the filter would count published rows as drafts. */
+async function fetchDrafts(args: {
+  readonly base: string;
+  readonly session: Session;
+  readonly orgId: string;
+  readonly competitionId: string;
+  readonly transport: ClaimTransport;
+}): Promise<readonly NewsPost[]> {
+  const res = await args.transport.raw(
+    args.base,
+    args.session,
+    `/api/v1/orgs/${args.orgId}/posts?status=draft`,
+    "GET",
+  );
+  const rows = (res.json.data ?? []) as readonly NewsPost[];
+  // The route carries no competition filter at all (`org-posts.ts:163-167`),
+  // so a shared org's other competitions would inflate every number here.
+  return rows.filter((p) => p.status === "draft" && p.competition_id === args.competitionId);
+}
+
+export async function runNewsStep(args: {
+  readonly base: string;
+  readonly session: Session;
+  readonly orgId: string;
+  readonly competitionId: string;
+  /** Fixture ids whose auto-drafted posts this run publishes. Deliberately a
+   *  SUBSET: what stays draft is half of what this step proves. */
+  readonly publishFixtureIds: readonly string[];
+  readonly transport: ClaimTransport;
+}): Promise<NewsStepResult> {
+  const { base, session, orgId, competitionId, publishFixtureIds, transport } = args;
+  const before = await fetchDrafts({ base, session, orgId, competitionId, transport });
+
+  const byFixture = new Map<string, NewsPost>();
+  for (const p of before) {
+    const fixtureId = p.auto_source?.fixture_id;
+    if (fixtureId !== undefined && !byFixture.has(fixtureId)) byFixture.set(fixtureId, p);
+  }
+
+  const requestedButNotDrafted: string[] = [];
+  const publishedIds: string[] = [];
+  let firstPublishedAt: string | null = null;
+  for (const fixtureId of publishFixtureIds) {
+    const target = byFixture.get(fixtureId);
+    if (target === undefined) {
+      requestedButNotDrafted.push(fixtureId);
+      continue;
+    }
+    const res = await transport.raw(base, session, `/api/v1/posts/${target.id}`, "PATCH", { action: "publish" });
+    if (!isAccepted(res.status)) continue;
+    const row = res.json.data as NewsPost | undefined;
+    publishedIds.push(target.id);
+    if (firstPublishedAt === null) firstPublishedAt = row?.published_at ?? null;
+  }
+
+  const after = await fetchDrafts({ base, session, orgId, competitionId, transport });
+
+  // The fire-once proxy. Only meaningful against a post this run actually
+  // published — hence `republishProbed`, so an upstream oracle can report NO
+  // SUBJECT rather than a pass it did not earn.
+  let republishProbed = false;
+  let republishWasInert = false;
+  const probeId = publishedIds[0];
+  if (probeId !== undefined && firstPublishedAt !== null) {
+    const again = await transport.raw(base, session, `/api/v1/posts/${probeId}`, "PATCH", { action: "publish" });
+    if (isAccepted(again.status)) {
+      republishProbed = true;
+      republishWasInert = (again.json.data as NewsPost | undefined)?.published_at === firstPublishedAt;
+    }
+  }
+
+  return {
+    drafted: before.length,
+    published: publishedIds.length,
+    stillDraft: after.length,
+    requestedButNotDrafted,
+    republishProbed,
+    republishWasInert,
+  };
+}

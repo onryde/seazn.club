@@ -219,7 +219,16 @@ function fakePlanSql(
       // must land on "pro" — the only PUBLIC plan granting all three — never
       // on "enterprise", which is both more privileged AND sorts first
       // alphabetically.
-      if (featureKey === "cricket.dls" || featureKey === "officials.auto" || featureKey === "stats.player") {
+      // B06a T7: `news.auto` joins the same shape. Per the migrations it is
+      // false on `community` (V295 seeded it false, V393:69 flipped it true,
+      // V396:61-64 flipped it back) and true on `pro`/`enterprise` — the same
+      // "leverage is sold, correctness is free" split the other two follow.
+      if (
+        featureKey === "cricket.dls" ||
+        featureKey === "officials.auto" ||
+        featureKey === "stats.player" ||
+        featureKey === "news.auto"
+      ) {
         return [
           // B05: `community` GRANTS `cricket.dls` and nothing else here —
           // V393__entitlements_v18.sql:63-70, "charge for leverage, never
@@ -444,6 +453,7 @@ describe("runDlsGateProbe", () => {
     expect(result.provisionedPlan).toBe("pro");
     expect(result.officialsAutoGranted).toBe(true);
     expect(result.statsPlayerGranted).toBe(true);
+    expect(result.newsAutoGranted).toBe(true);
     expect(result.unsatisfiedCapabilities).toEqual([]);
 
     // The plan derivation queried every feature key BEFORE provisioning
@@ -451,6 +461,7 @@ describe("runDlsGateProbe", () => {
     // provisioned via the seam — never a hardcoded plan string.
     expect(sqlCalls).toContain("entitlementRows(cricket.dls)");
     expect(sqlCalls).toContain("entitlementRows(officials.auto)");
+    expect(sqlCalls).toContain("entitlementRows(news.auto)");
     const provisionAt = sqlCalls.findIndex(
       (c) => c.startsWith("updateSubscriptionPlan") || c.startsWith("createSubscriptionForOrg"),
     );
@@ -505,7 +516,7 @@ describe("runDlsGateProbe", () => {
               { plan_key: "pro", bool_value: true },
             ];
           }
-          if (featureKey === "stats.player") {
+          if (featureKey === "stats.player" || featureKey === "news.auto") {
             return [
               { plan_key: "community", bool_value: false },
               { plan_key: "pro", bool_value: true },
@@ -596,8 +607,8 @@ describe("runDlsGateProbe", () => {
           // Granted by the plan this catalog forces (`pro`), so the ONLY
           // unsatisfied capability stays `officials.auto` — which keeps this
           // test about the split it was written for rather than about
-          // `stats.player` incidentally going missing too.
-          if (featureKey === "stats.player") {
+          // `stats.player` or `news.auto` incidentally going missing too.
+          if (featureKey === "stats.player" || featureKey === "news.auto") {
             return [
               { plan_key: "community", bool_value: false },
               { plan_key: "pro", bool_value: true },
@@ -625,6 +636,51 @@ describe("runDlsGateProbe", () => {
     expect(result.provisionedPlan).toBe("pro");
     expect(result.officialsAutoGranted).toBe(false);
     expect(result.unsatisfiedCapabilities).toEqual(["officials.auto"]);
+  });
+
+  it("B06a T7 — a catalog where no public plan sells news.auto reports it unsatisfied, never granted", async () => {
+    // The outcome that decides whether the news step can run at all:
+    // `PATCH /divisions/{id}` refuses `auto_posts: true` without this key
+    // (`usecases/divisions.ts:652-654`), and drafting is a side effect of
+    // FOLDING, so a run that discovered the gap later could not recover.
+    // `enterprise` is is_public:false, so a grant that lives only there is
+    // exactly a grant this bench cannot buy.
+    const billing = freshOrgBilling();
+    const { sql } = fakePlanSql(
+      {
+        async entitlementRows(featureKey) {
+          if (featureKey === "news.auto") {
+            return [
+              { plan_key: "community", bool_value: false },
+              { plan_key: "enterprise", bool_value: true },
+            ];
+          }
+          return [
+            { plan_key: "community", bool_value: featureKey === "cricket.dls" },
+            { plan_key: "pro", bool_value: true },
+            { plan_key: "enterprise", bool_value: true },
+          ];
+        },
+      },
+      billing,
+    );
+    const { transport } = fakeServer(billing);
+
+    const result = await runDlsGateProbe({
+      base: "http://bench.example",
+      email: "bench-probe@example.com",
+      runTag: "t7-news",
+      sql,
+      transport,
+    });
+
+    expect(result.provisionedPlan).toBe("pro");
+    expect(result.newsAutoGranted).toBe(false);
+    expect(result.unsatisfiedCapabilities).toContain("news.auto");
+    // …and the capabilities that ARE sold publicly are still granted, so this
+    // is the one key going missing rather than the whole selection collapsing.
+    expect(result.officialsAutoGranted).toBe(true);
+    expect(result.statsPlayerGranted).toBe(true);
   });
 
   it("force-activates BOTH divisions via the SQL seam before probing — a division left in setup would WRONG_PHASE every cell", async () => {

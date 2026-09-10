@@ -170,7 +170,7 @@ import {
   type SeedTransport,
 } from "../seed.ts";
 import { defaultProbeTransport, runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
-import { acceptClaimInvites } from "../people.ts";
+import { acceptClaimInvites, enableAutoPosts, runNewsStep } from "../people.ts";
 import { FREE_PLAN_KEY, type PlanSql } from "../plan.ts";
 import {
   readPlayerStatsBaseline,
@@ -1477,6 +1477,10 @@ export async function runPackSuite(
   // without saying how many a human could use is the same silence this whole
   // task exists to break.
   let claimsSummary: { total: number; accepted: number } | undefined;
+  // B06a T7 — `report.news` (`report.ts:673`) has been declared since B01 with
+  // no writer, for the same reason `report.claims` had none: nothing in the
+  // bench had ever turned drafting ON, so there was never anything to write.
+  let newsSummary: { drafted: number; published: number } | undefined;
   const t = input.transport ?? defaultTransport;
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -1657,6 +1661,12 @@ export async function runPackSuite(
     // half of the player-stats baseline (`lib/stats.ts`); the public route
     // needs no entitlement at all, only `competitionVisibility` below.
     let statsPlayerGranted = false;
+    // B06a T7 — whether the chosen plan sells `news.auto`. DERIVED from the
+    // same plan selection as `officialsAutoGranted`, never assumed: without it
+    // `PATCH /divisions/{id}` refuses `auto_posts: true`
+    // (`usecases/divisions.ts:652-654`), and because drafting is a side effect
+    // of FOLDING there is no later moment at which this run could recover.
+    let newsAutoGranted = false;
     if (input.sql !== undefined) {
       log.info(
         {},
@@ -1714,6 +1724,7 @@ export async function runPackSuite(
         );
       }
       autoAssign = probe.officialsAutoGranted;
+      newsAutoGranted = probe.newsAutoGranted;
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
       // the best available candidate, never invents one) — reported here,
@@ -1730,6 +1741,7 @@ export async function runPackSuite(
         {
           provisionedPlan: probe.provisionedPlan,
           officialsAutoGranted: probe.officialsAutoGranted,
+          newsAutoGranted: probe.newsAutoGranted,
           unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
           statsPlayerGranted,
           dlsFreeOnCommunityPlan: probe.dlsFreeOnCommunityPlan,
@@ -1869,6 +1881,56 @@ export async function runPackSuite(
       },
       "suite_seeded",
     );
+
+    // -----------------------------------------------------------------
+    // B06a T7 — turn NEWS DRAFTING on, before anything folds.
+    //
+    // Drafting is a side effect of folding (`refreshNews`, `scoring.ts:132`
+    // and `event-import.ts:435`), never a route anyone calls, and it is gated
+    // on five conditions in order: the event decides or voids
+    // (`scoring.ts:129`), `divisions.auto_posts` is true (`:353-356`, re-read
+    // at `org-posts.ts:479`), the org holds `news.auto` (`:480`), and the
+    // fixture's status is decided/finalized/forfeited (`:483-485`). Miss any
+    // one and the product drafts NOTHING and says nothing about why.
+    //
+    // So this runs HERE — after seeding, before the first fold — and not with
+    // the publish step far below. There is no second chance: an event folded
+    // while `auto_posts` was false never drafts, and re-folding it is not
+    // something a bench may do.
+    let newsEnable: Awaited<ReturnType<typeof enableAutoPosts>> | undefined;
+    if (input.sql !== undefined) {
+      const newsTransport = input.oracleTransport ?? defaultProbeTransport;
+      const divisionIds = [...seeded.divisionIdByRef.values()];
+      if (!newsAutoGranted) {
+        // A REPORTED gap, never a silent skip. `PATCH /divisions/{id}` would
+        // answer 402 and the whole news step would then look like a product
+        // that drafts nothing.
+        warnings.push(
+          `${suiteKey}: the provisioned plan does not grant "news.auto", so auto-posting could not be turned ` +
+            "on and the news step has NO SUBJECT — no post this run reports on was ever draftable",
+        );
+      } else if (divisionIds.length === 0) {
+        warnings.push(`${suiteKey}: no division was seeded, so auto-posting could not be turned on`);
+      } else {
+        newsEnable = await enableAutoPosts({
+          base,
+          session: s,
+          divisionIds,
+          transport: newsTransport,
+        });
+        if (newsEnable.refused.length > 0) {
+          errors.push(
+            `news: auto-posting could not be turned on for ${newsEnable.refused.length} of ` +
+              `${newsEnable.requested} divisions — ` +
+              newsEnable.refused.map((r) => `${r.divisionId} HTTP ${r.status} (${r.detail})`).join("; "),
+          );
+        }
+        log.info(
+          { requested: newsEnable.requested, enabled: newsEnable.enabled },
+          `${suiteKey}: auto-posting enabled ahead of the folds (B06a T7)`,
+        );
+      }
+    }
 
     // -----------------------------------------------------------------------
     // B04 — the scheduling layer, over EVERY division this run seeded
@@ -4499,6 +4561,159 @@ export async function runPackSuite(
         }
       }
     }
+    // -----------------------------------------------------------------
+    // B06a T7 — NEWS: publish some of what folding drafted, and prove the
+    // rest is still a draft.
+    //
+    // LAST, deliberately: after the league folds, after the stage advancement
+    // and after the registration funnel. Drafting is a side effect of folding,
+    // so a news step placed before the advancement block reports NO DRAFT for
+    // the very stage this suite cares most about — `_tiny`'s playoff is folded
+    // there, and running earlier reported "no draft for fx-8" on a run where
+    // the product had done nothing wrong.
+    //
+    // `report.news` has been declared since B01 and written by nothing. The
+    // reason was never neglect: until the step above turned `auto_posts` on,
+    // the product had drafted nothing for this bench to report.
+    //
+    // The fire-once effect is NOT HTTP-observable. `shouldFirePostPublished`
+    // (`org-posts.ts:317-318`) fires a PostHog `captureServer` call and
+    // nothing else — no row, no outbox, no webhook — so this asserts the
+    // PREDICATE by proxy instead: `published_at` is assigned only when it was
+    // null (`:276,282`), so a second publish must not move it. That is the one
+    // thing `prevStatus !== "published"` protects that a client can see.
+    if (input.sql !== undefined && newsEnable !== undefined && newsEnable.enabled > 0) {
+      try {
+        const newsTransport = input.oracleTransport ?? defaultProbeTransport;
+        // Publish the LAST stage's fixtures — the closest `_tiny` has to the
+        // design's "semis and final", and a proper SUBSET so what stays draft
+        // is provable. Derived from the pack, never a count typed in here.
+        // `fixtureKey`, never a hand-built string. The map is keyed by
+        // `JSON.stringify([divisionRef, extKey])` (`pack-schema.ts:1579`) —
+        // a delimiter join misses EVERY entry, and it misses silently: the
+        // list comes back empty and the two oracles below report NO SUBJECT,
+        // which reads exactly like a suite that legitimately drafted nothing.
+        const lastStage = division0.stages[division0.stages.length - 1];
+        const division0Streams = pack.streams.filter((st) => st.divisionRef === division0.ref);
+        const publishFixtureIds =
+          lastStage === undefined
+            ? []
+            : division0Streams
+                .filter((st) => st.stageRef === lastStage.ref)
+                .map((st) => seeded.fixtureIdByKey.get(fixtureKey(st.divisionRef, st.fixtureExtKey)))
+                .filter((id): id is string => id !== undefined);
+
+        const news = await runNewsStep({
+          base,
+          session: s,
+          orgId,
+          competitionId: seeded.competitionId,
+          publishFixtureIds,
+          transport: newsTransport,
+        });
+        newsSummary = { drafted: news.drafted, published: news.published };
+
+        // 1. Did folding draft anything at all? Five preconditions can each
+        //    legitimately produce zero, so zero is NO SUBJECT — never a pass.
+        const draftVerdict = news.drafted === 0 ? "no_subject" : "pass";
+        oracles.push({
+          name: "news: folding drafted posts",
+          passed: true,
+          verdict: draftVerdict,
+          subject: news.drafted > 0,
+          detail:
+            news.drafted === 0
+              ? "auto-posting was on and every fixture decided, yet NOTHING drafted — this oracle compared nothing"
+              : `${news.drafted} draft(s) exist for this run's competition after the folds`,
+        });
+        log.info(oracleLogFields("news_drafted", draftVerdict), "oracle_checked");
+        if (news.drafted === 0) {
+          warnings.push(
+            `${suiteKey}: auto-posting was enabled on ${newsEnable.enabled} division(s) and the folds still drafted ` +
+              "NO posts — the news step has no subject and proves nothing",
+          );
+        }
+
+        // 2. Publishing, and the half that matters more: what stayed draft.
+        //    A run that published everything has not proven the draft state
+        //    exists at all.
+        const askedFor = publishFixtureIds.length;
+        const publishVerdict =
+          askedFor === 0 || news.drafted === 0
+            ? "no_subject"
+            : news.published === askedFor && news.requestedButNotDrafted.length === 0 && news.stillDraft > 0
+              ? "pass"
+              : "fail";
+        oracles.push({
+          name: "news: the named fixtures publish and the rest stay draft",
+          passed: publishVerdict !== "fail",
+          verdict: publishVerdict,
+          subject: publishVerdict !== "no_subject",
+          detail:
+            publishVerdict === "no_subject"
+              ? "nothing was drafted or nothing was asked for — this oracle compared nothing"
+              : `${news.published}/${askedFor} named fixture(s) published, ${news.stillDraft} post(s) still draft` +
+                (news.requestedButNotDrafted.length === 0
+                  ? ""
+                  : ` — no draft existed for ${news.requestedButNotDrafted.join(", ")}`) +
+                (news.stillDraft === 0 ? " — NOTHING stayed draft, so the draft state is unproven" : ""),
+        });
+        log.info(oracleLogFields("news_published", publishVerdict), "oracle_checked");
+        if (publishVerdict === "fail") {
+          errors.push(
+            `news: expected ${askedFor} named fixture(s) to publish with the rest left draft, got ` +
+              `${news.published} published and ${news.stillDraft} still draft` +
+              (news.requestedButNotDrafted.length === 0
+                ? ""
+                : ` (no draft for ${news.requestedButNotDrafted.join(", ")})`),
+          );
+        }
+
+        // 3. The fire-once proxy.
+        const republishVerdict = !news.republishProbed ? "no_subject" : news.republishWasInert ? "pass" : "fail";
+        oracles.push({
+          name: "news: a republish does not move published_at",
+          passed: republishVerdict !== "fail",
+          verdict: republishVerdict,
+          subject: news.republishProbed,
+          detail: !news.republishProbed
+            ? "nothing was published, so the fire-once predicate was never probed — this oracle compared nothing"
+            : news.republishWasInert
+              ? "publishing an already-published post left published_at where it was"
+              : "publishing an already-published post MOVED published_at — the fire-once guard is not holding",
+        });
+        log.info(oracleLogFields("news_republish_inert", republishVerdict), "oracle_checked");
+        if (republishVerdict === "fail") {
+          errors.push(
+            "news: a second publish of an already-published post moved published_at — `shouldFirePostPublished` " +
+              "would fire twice, and its effect is analytics-only so nothing else can witness it",
+          );
+        }
+
+        log.info(
+          {
+            drafted: news.drafted,
+            published: news.published,
+            stillDraft: news.stillDraft,
+            republishProbed: news.republishProbed,
+            republishWasInert: news.republishWasInert,
+          },
+          `${suiteKey}: news drafted and published (B06a T7)`,
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        errors.push(`news: the news step FAILED before it could report — ${detail}`);
+        oracles.push({
+          name: "news: folding drafted posts",
+          passed: false,
+          verdict: "fail",
+          subject: true,
+          detail: `the news step threw before reporting: ${detail}`,
+        });
+        log.info(oracleLogFields("news_drafted", "fail"), "oracle_checked");
+      }
+    }
+
   } catch (err) {
     errors.push(err instanceof Error ? err.message : String(err));
   }
@@ -4545,6 +4760,7 @@ export async function runPackSuite(
     // a denominator that shrank to the attempted count would flatter the
     // number the same way a provenance total taken from known buckets would.
     ...(claimsSummary === undefined ? {} : { claims: claimsSummary }),
+    ...(newsSummary === undefined ? {} : { news: newsSummary }),
     ...(simulation === undefined ? {} : { simulation }),
     ...(importSimulation === undefined ? {} : { importSimulation }),
   };

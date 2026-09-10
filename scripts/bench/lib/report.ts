@@ -956,6 +956,12 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.claims !== undefined) {
       lines.push(`- Claims: ${suite.claims.accepted}/${suite.claims.total} invites accepted`);
     }
+    // B06a T7 — declared since B01 and written by nothing, for the same
+    // reason `claims` was not: until this wave the bench never turned news
+    // drafting on, so the product drafted nothing for it to report.
+    if (suite.news !== undefined) {
+      lines.push(`- News: ${suite.news.published}/${suite.news.drafted} drafted posts published`);
+    }
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
       for (const o of suite.oracles) {

@@ -258,3 +258,221 @@ describe("acceptClaimInvites", () => {
     expect(calls).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B06a Task 7 — news drafts and publication
+// ---------------------------------------------------------------------------
+//
+// Five route facts, re-pinned 2026-09-10, and every one of them corrects the
+// plan:
+//
+//  1. Drafting is NOT two preconditions, it is five, in order: the event must
+//     decide or void (`scoring.ts:129`), `divisions.auto_posts` must be true
+//     (`:353-356`, re-read at `org-posts.ts:479`), the org must hold
+//     `news.auto` (`:480`), and the fixture's status must be one of
+//     decided/finalized/forfeited (`:483-485`). Miss any and the call returns
+//     `[]` — a legitimate zero, indistinguishable from a broken step.
+//  2. `auto_posts` IS settable over the API (`PATCH /api/v1/divisions/{id}`,
+//     `schemas.ts:429`), but setting it TRUE itself requires `news.auto`
+//     (`usecases/divisions.ts:652-654`). So the plan has to be provisioned
+//     before drafting can even be turned on — and because drafting is a side
+//     effect of FOLDING, there is no later moment at which a run could notice
+//     and recover.
+//  3. `GET /orgs/{id}/posts?status=` SILENTLY IGNORES an unrecognised status
+//     (`route.ts:19`) rather than answering 400 — so a typo returns every
+//     post and a caller that trusted the filter would count published rows as
+//     drafts. Every row's own `status` is checked here.
+//  4. There is no competition or division filter on that route
+//     (`org-posts.ts:163-167`); a caller filters client-side.
+//  5. A post carries no fixture id on the wire, but `auto_source` does
+//     (`org-posts.ts:509-510`: `trigger` and `fixture_id`), which is what
+//     makes publishing NAMED fixtures possible at all.
+//
+// And the fact that changes an assertion: `shouldFirePostPublished`
+// (`org-posts.ts:317-318`) fires a PostHog `captureServer` call and nothing
+// else — no row, no outbox, no webhook. "Observed exactly once" is therefore
+// not observable over HTTP. What IS observable is the thing the predicate
+// protects: `published_at` is assigned only when it was null
+// (`org-posts.ts:276,282`), so a second publish must not move it.
+import { enableAutoPosts, runNewsStep, type NewsPost } from "../people.ts";
+
+function post(n: number, over: Partial<NewsPost> = {}): NewsPost {
+  return {
+    id: `post-${n}`,
+    status: "draft",
+    competition_id: "comp-1",
+    division_id: "div-1",
+    published_at: null,
+    auto_source: { trigger: "result", fixture_id: `fx-${n}` },
+    ...over,
+  };
+}
+
+/** A news world that behaves the way the product does on the five facts
+ *  above. Not an echo: it refuses `auto_posts: true` without the entitlement,
+ *  ignores an unrecognised `status` filter exactly as the route does, and
+ *  leaves `published_at` alone on a republish. */
+function newsWorld(
+  opts: {
+    readonly posts?: readonly NewsPost[];
+    readonly newsAutoGranted?: boolean;
+    /** The mutant made reachable: a republish that DOES move `published_at`. */
+    readonly republishBumpsTimestamp?: boolean;
+  } = {},
+): { transport: ProbeTransport; calls: string[]; rows: Map<string, NewsPost> } {
+  const rows = new Map((opts.posts ?? [post(1), post(2), post(3), post(4)]).map((p) => [p.id, p]));
+  const calls: string[] = [];
+  let clock = 0;
+  const transport: ProbeTransport = {
+    async signIn() {
+      return { has_org: true, org_id: "org-1", redirect: "/" };
+    },
+    async request<T>(): Promise<T> {
+      throw new Error("newsWorld: request() is never used by the news flow");
+    },
+    async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
+      calls.push(`${method} ${path}`);
+      if (method === "PATCH" && /^\/api\/v1\/divisions\/[^/]+$/.test(path)) {
+        // `divisions.ts:652-654` — turning it ON needs the entitlement;
+        // turning it off is always allowed.
+        const wants = (body as { auto_posts?: boolean }).auto_posts === true;
+        if (wants && opts.newsAutoGranted === false) {
+          return { status: 402, json: { ok: false, error: "news.auto required" } as RawJson };
+        }
+        return { status: 200, json: { ok: true, data: { auto_posts: wants } } as RawJson };
+      }
+      const list = /^\/api\/v1\/orgs\/([^/]+)\/posts(\?.*)?$/.exec(path);
+      if (method === "GET" && list !== null) {
+        const q = new URLSearchParams((list[2] ?? "").replace(/^\?/, ""));
+        const status = q.get("status");
+        const all = [...rows.values()];
+        // The route's own behaviour: an UNRECOGNISED status is ignored, not
+        // rejected. Modelling that is what lets a caller that trusted the
+        // filter be caught here rather than on a live run.
+        const known = status === "draft" || status === "published" || status === "archived";
+        return {
+          status: 200,
+          json: { ok: true, data: known ? all.filter((p) => p.status === status) : all } as RawJson,
+        };
+      }
+      const patch = /^\/api\/v1\/posts\/([^/]+)$/.exec(path);
+      if (method === "PATCH" && patch !== null) {
+        const row = rows.get(patch[1]!);
+        if (row === undefined) return { status: 404, json: { ok: false, error: "no such post" } as RawJson };
+        const action = (body as { action?: string }).action;
+        if (action !== "publish") return { status: 400, json: { ok: false, error: "unsupported action" } as RawJson };
+        const neverPublished = row.published_at === null;
+        const next: NewsPost = {
+          ...row,
+          status: "published",
+          published_at:
+            neverPublished || opts.republishBumpsTimestamp === true
+              ? `2026-09-10T00:00:${String(++clock).padStart(2, "0")}Z`
+              : row.published_at,
+        };
+        rows.set(next.id, next);
+        return { status: 200, json: { ok: true, data: next } as RawJson };
+      }
+      throw new Error(`newsWorld: unhandled ${method} ${path}`);
+    },
+  };
+  return { transport, calls, rows };
+}
+
+describe("enableAutoPosts", () => {
+  it("turns drafting on for every division and reports the count", async () => {
+    const { transport, calls } = newsWorld();
+    const r = await enableAutoPosts({ base: BASE, divisionIds: ["div-1", "div-2"], transport, session: {} as Session });
+    expect(r).toMatchObject({ requested: 2, enabled: 2, refused: [] });
+    expect(calls).toEqual(["PATCH /api/v1/divisions/div-1", "PATCH /api/v1/divisions/div-2"]);
+  });
+
+  it("records the 402 rather than throwing when the org cannot buy news.auto", async () => {
+    // The outcome that decides whether the whole news step has a subject.
+    // Drafting is a side effect of folding, so a run that swallowed this
+    // would discover an empty draft list much later and have no way to tell
+    // it from a product defect.
+    const { transport } = newsWorld({ newsAutoGranted: false });
+    const r = await enableAutoPosts({ base: BASE, divisionIds: ["div-1"], transport, session: {} as Session });
+    expect(r).toMatchObject({ requested: 1, enabled: 0 });
+    expect(r.refused[0]).toMatchObject({ divisionId: "div-1", status: 402 });
+  });
+});
+
+describe("runNewsStep", () => {
+  const args = (transport: ProbeTransport, publishFixtureIds: readonly string[]) => ({
+    base: BASE,
+    session: {} as Session,
+    orgId: "org-1",
+    competitionId: "comp-1",
+    publishFixtureIds,
+    transport,
+  });
+
+  it("publishes exactly the named fixtures' posts and leaves the rest draft", async () => {
+    const { transport } = newsWorld();
+    const r = await runNewsStep(args(transport, ["fx-1", "fx-3"]));
+    expect(r).toMatchObject({ drafted: 4, published: 2, stillDraft: 2, requestedButNotDrafted: [] });
+  });
+
+  it("names a requested fixture that has no draft rather than quietly publishing fewer", async () => {
+    const { transport } = newsWorld();
+    const r = await runNewsStep(args(transport, ["fx-1", "fx-99"]));
+    expect(r).toMatchObject({ published: 1, requestedButNotDrafted: ["fx-99"] });
+  });
+
+  it("counts only posts belonging to THIS run's competition", async () => {
+    // The route carries no competition filter, so a shared org's other
+    // competitions would inflate every number here.
+    const { transport } = newsWorld({
+      posts: [post(1), post(2, { competition_id: "comp-other" }), post(3, { competition_id: null })],
+    });
+    const r = await runNewsStep(args(transport, ["fx-1"]));
+    expect(r).toMatchObject({ drafted: 1, published: 1, stillDraft: 0 });
+  });
+
+  it("does not trust the status filter — it checks each row's own status", async () => {
+    // `route.ts:19` ignores an unrecognised status instead of answering 400,
+    // so a caller that trusted the query string would count a published post
+    // as a draft. This world hands back a published row in the same list.
+    const { transport } = newsWorld({
+      posts: [post(1), post(2, { status: "published", published_at: "2026-09-01T00:00:00Z" })],
+    });
+    const r = await runNewsStep(args(transport, ["fx-1"]));
+    expect(r.drafted).toBe(1);
+  });
+
+  it("a second publish of the same post does not move published_at", async () => {
+    const { transport } = newsWorld();
+    const r = await runNewsStep(args(transport, ["fx-1"]));
+    expect(r).toMatchObject({ republishProbed: true, republishWasInert: true });
+  });
+
+  it("reds when a republish DOES move published_at", async () => {
+    const { transport } = newsWorld({ republishBumpsTimestamp: true });
+    const r = await runNewsStep(args(transport, ["fx-1"]));
+    expect(r).toMatchObject({ republishProbed: true, republishWasInert: false });
+  });
+
+  it("reports zero drafted, and probes nothing, when no fixture drafted a post", async () => {
+    // The legitimate-zero case the five preconditions make reachable. It must
+    // report NO SUBJECT upstream, never a pass on an empty set — and it must
+    // not claim the fire-once proxy was tested when there was nothing to
+    // publish.
+    const { transport } = newsWorld({ posts: [] });
+    const r = await runNewsStep(args(transport, ["fx-1"]));
+    expect(r).toMatchObject({
+      drafted: 0,
+      published: 0,
+      stillDraft: 0,
+      republishProbed: false,
+      republishWasInert: false,
+    });
+  });
+
+  it("publishes nothing when asked for nothing, and says the drafts are still there", async () => {
+    const { transport } = newsWorld();
+    const r = await runNewsStep(args(transport, []));
+    expect(r).toMatchObject({ drafted: 4, published: 0, stillDraft: 4, republishProbed: false });
+  });
+});

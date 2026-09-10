@@ -404,6 +404,27 @@ describe("B06a T6 — claims", () => {
   });
 });
 
+describe("B06a T7 — news", () => {
+  it("renders published over drafted, so a run that published everything is visible", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), news: { drafted: 8, published: 1 } }],
+    });
+    const line = md.split("\n").find((l) => l.includes("News:"));
+    // Both numbers. What stayed DRAFT is half of what the news step proves,
+    // and a bare "1 published" cannot tell 1-of-8 from 1-of-1.
+    expect(line).toContain("1/8 drafted posts published");
+  });
+
+  it("omits the line for a run that never reached the news step", () => {
+    const base = fullReport();
+    const { news: _dropped, ...suiteWithoutNews } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutNews] });
+    expect(md.split("\n").some((l) => l.includes("News:"))).toBe(false);
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(

@@ -30,6 +30,7 @@ import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import type { DivisionCardSource } from "./_oracle-routes.ts";
 import { makeClaimRoutesWorld } from "./_claim-routes.ts";
+import { makeNewsRoutesWorld, type NewsRoutesOptions } from "./_news-routes.ts";
 import { makeDisciplineRoutesWorld } from "./_discipline-routes.ts";
 import {
   makeOracleRoutesWorld,
@@ -56,6 +57,8 @@ function slug(s: string): string {
 }
 
 function fakeServer(opts: {
+  /** B06a T7 — knobs for the shared news rail (`_news-routes.ts`). */
+  newsRoutes?: NewsRoutesOptions;
   refuseImportWith?: { status: number; code: string; message: string };
 } = {}): {
   transport: ProbeTransport;
@@ -169,6 +172,17 @@ function fakeServer(opts: {
   // `sql`-passing run.
   const claims = makeClaimRoutesWorld();
 
+  // B06a T7 — the news rail. Drafting is a SIDE EFFECT of folding in the real
+  // product, not a route anyone calls, so this world OBSERVES the fold calls
+  // this fake already answers rather than waiting to be told. See
+  // `_news-routes.ts`.
+  let competitionId: string | undefined;
+  const news = makeNewsRoutesWorld({
+    ...(opts.newsRoutes ?? {}),
+    divisionOfFixture: (fixtureId) => fixtureDivisionId.get(fixtureId),
+    competitionOfDivision: () => competitionId,
+  });
+
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
       calls.push({ method: "SIGNIN", path: "signIn", body: undefined });
@@ -201,7 +215,13 @@ function fakeServer(opts: {
       if (method === "POST" && routePath === "/api/v1/competitions") {
         return { id: `comp-${slug((body as { name: string }).name)}` } as T;
       }
-      if (method === "POST" && /^\/api\/v1\/competitions\/[^/]+\/divisions$/.test(routePath)) {
+      const divisionsMatch = /^\/api\/v1\/competitions\/([^/]+)\/divisions$/.exec(routePath);
+      if (method === "POST" && divisionsMatch !== null) {
+        // B06a T7 — the competition every post this run drafts belongs to.
+        // Read off the wire, never guessed: the posts list route carries no
+        // competition filter at all, so the runner filters client-side and a
+        // post with the wrong id would simply vanish from every count.
+        competitionId = divisionsMatch[1]!;
         const b = body as { name?: string; sport_key?: string; config?: { dls?: { enabled?: boolean } } };
         const id = `div-${++divisionCounter}`;
         if (b.name !== undefined) divisionNameById.set(id, b.name);
@@ -318,6 +338,13 @@ function fakeServer(opts: {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B06a T7 — watch the folds (drafting is their side effect), then the
+      // three news routes. Both before anything below: a fold that reached the
+      // events handler without being observed drafts nothing, and the whole
+      // step then reports a legitimate-looking zero.
+      news.observe(method, path, body);
+      const newsRouted = news.handle(method, path, body);
+      if (newsRouted !== undefined) return newsRouted;
       // B06a T6 — claim acceptance (see `_claim-routes.ts`). Checked here for
       // the same reason `/start` is: nothing below can answer it.
       const claimAccepted = claims.handle(method, path);
@@ -436,6 +463,16 @@ function fakeServer(opts: {
       }
       if (featureKey === "officials.auto") {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
+      }
+      // B06a T7 — `news.auto` on the plan this run buys. Without it the
+      // enable step correctly REFUSES (`PATCH /divisions/{id}` would answer
+      // 402, `usecases/divisions.ts:652-654`) and the whole news step reports
+      // no subject — which is what this fake did before the row existed.
+      if (featureKey === "news.auto") {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
+        ] satisfies PlanEntitlementRow[];
       }
       if (featureKey === "stats.player") {
         return [{ plan_key: "community", bool_value: false }, { plan_key: "pro", bool_value: false }] satisfies PlanEntitlementRow[];
