@@ -4993,6 +4993,24 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   const auto = drafts.find((d) => d.kind === "result" && d.auto_source);
   check("news pro: a result post auto-drafted on the decided seam", !!auto);
 
+  // A near-miss status must 400, not quietly return the UNFILTERED feed. This
+  // route used to answer `?status=publish` with every post, drafts included,
+  // while the caller believed it had filtered to published. Driven here rather
+  // than in a unit test because the defect was the ROUTE ignoring its own
+  // enum — a helper can be correct and never called.
+  const badStatus = await v1(admin, `/api/v1/orgs/${proOrgId}/posts?status=publish`);
+  check(
+    "news: ?status=publish 400s instead of silently returning every post " +
+      `(status=${badStatus.status})`,
+    badStatus.status === 400,
+  );
+  check(
+    "news: the 400 names the accepted values",
+    ["draft", "published", "archived"].every((v) =>
+      (badStatus.json.error?.message ?? "").includes(v),
+    ),
+  );
+
   // P3 (D7) — this division has exactly 2 entrants, so round 1 has exactly
   // one fixture: the SAME decided write that drafted the result post above
   // also completes the round, which should have auto-drafted a round_recap
@@ -17142,6 +17160,16 @@ async function disciplineSuite(
   );
   const auto = pending.find((s) => s.source === "auto_accumulation");
   check("disc: 5 yellows raise a pending accumulation ban", !!auto);
+
+  // Same guard as the news feed above: an unrecognised ?status= is refused
+  // rather than widened. Serving served and waived bans to a caller who asked
+  // for pending is a worse answer than an error.
+  const badSusp = await v1(admin, `/api/v1/divisions/${div.id}/suspensions?status=pendign`);
+  check(
+    "disc: a misspelled ?status= 400s instead of listing every suspension " +
+      `(status=${badSusp.status})`,
+    badSusp.status === 400,
+  );
 
   if (auto) {
     const confirmed = await v1(admin, `/api/v1/suspensions/${auto.id}`, "PATCH", {

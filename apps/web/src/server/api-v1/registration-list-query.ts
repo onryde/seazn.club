@@ -1,4 +1,5 @@
 import { HttpError } from "@/lib/errors";
+import { assertOneOf } from "@/server/api-v1/http";
 import { assertUuid } from "@/server/api-v1/auth";
 import { EntrantKind, RegistrationSort, RegistrationStatus } from "@/server/api-v1/schemas";
 import type { ListRegistrationsFilters } from "@/server/usecases/registrations";
@@ -10,12 +11,6 @@ function queryBool(raw: string | null, field: string): boolean | undefined {
   if (raw === "1") return true;
   if (raw === "0") return false;
   throw new HttpError(400, `${field} must be 1 or 0`);
-}
-
-function assertOneOf(value: string | null, options: readonly string[], field: string): void {
-  if (value !== null && !options.includes(value)) {
-    throw new HttpError(400, `${field} must be one of ${options.join(", ")}`);
-  }
 }
 
 export interface RegistrationListQuery {
