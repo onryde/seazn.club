@@ -90,9 +90,11 @@ export interface OverlayDetailLine {
   text: string;
   /** `_THEMES.md` §3/§4's 13.5×18 radius-3 card chip colour, present only for
    *  a discipline-card line. Absent (no chip) for every other detail line, and
-   *  for a discipline entry whose class is DECLARED UNCOLOURED by the pad's own
-   *  table (icehockey's `bench_minor`/`double_minor`/`major`/`misconduct`/
-   *  `game_misconduct` — see `DISCIPLINE_CLASS_TONE` below). */
+   *  for a class no table names. EVERY DECLARED CARD CLASS CARRIES A TONE
+   *  (§2a, product ruling 2026-09-10, F13) — until then icehockey's
+   *  `bench_minor`/`double_minor`/`major`/`misconduct`/`game_misconduct` were
+   *  declared uncoloured here, so a 5-minute major rendered no chip while a
+   *  2-minute minor did. See `DISCIPLINE_CLASS_TONE` below. */
   tone?: SportTone;
 }
 
@@ -332,10 +334,22 @@ function cellsOf(input: OverlayModelInput): { kind: OverlayCellsKind; cells: Ove
  * `HOCKEY_CLASSES`, `skins/icehockey.tsx`'s `ICEHOCKEY_CLASSES`) — same
  * reasoning as `overlay-tokens.ts`'s `OVERLAY_SPORT_KEYS`: those files are
  * `"use client"` pad skins, and `overlay-model.ts` is deliberately "no
- * React" (this file's own header). The three real tables are the authority;
- * `overlay-model.test.ts` imports them directly and asserts this literal
- * equal to their union in both directions, so a class either table adds or
- * recolours reds here until this literal is updated to match.
+ * React" (this file's own header). The three real tables still fix WHICH
+ * CLASSES EXIST; `overlay-model.test.ts` imports them directly and holds the
+ * key sets equal in both directions, so a class either table adds, drops or
+ * renames reds here until this literal is updated to match.
+ *
+ * THE TONES ARE §2a's, AND ON ICE HOCKEY THE TWO NO LONGER AGREE (product
+ * ruling 2026-09-10, F13). `ICEHOCKEY_CLASSES` declares five of its seven
+ * classes uncoloured (`[]`), so before this ruling a 5-minute `major` drew no
+ * chip on air while a 2-minute `minor` drew one — backwards on a broadcast,
+ * where the more serious offence should be the more visible graphic.
+ * `_THEMES.md` §2a's table is now the authority for what this file colours:
+ * `minor`/`bench_minor`/`double_minor` → caution, `major`/`misconduct`/
+ * `game_misconduct`/`match` → dismissal. The pad is `components/v2/**` and out
+ * of this wave's scope, so the divergence is DECLARED here and asserted from
+ * both ends in the test file rather than left to be read as drift. Football's
+ * and hockey's rows are unchanged and still mirror the pad exactly.
  *
  * Safe to merge into ONE flat map keyed on classKey alone (rather than
  * `(sportKey, classKey)`): football's `{yellow, red, second_yellow}` and
@@ -354,19 +368,24 @@ export const DISCIPLINE_CLASS_TONE: Readonly<Record<string, readonly SportTone[]
   second_yellow: ["caution", "dismissal"],
   // hockey (skins/hockey.tsx HOCKEY_CLASSES) — adds green; yellow/red already above
   green: ["advisory"],
-  // icehockey (skins/icehockey.tsx ICEHOCKEY_CLASSES) — five of seven are
-  // DECLARED UNCOLOURED (empty array), not merely absent from this table.
+  // icehockey — `_THEMES.md` §2a's TABLE, not `skins/icehockey.tsx`'s
+  // `ICEHOCKEY_CLASSES`. The pad still declares five of these seven
+  // UNCOLOURED (`[]`) and this file no longer follows it there: see the
+  // divergence paragraph in the block comment above. Two tiers, not three —
+  // the sport has no green-card equivalent, so `advisory` stays unused here
+  // rather than being invented for symmetry.
   minor: ["caution"],
-  bench_minor: [],
-  double_minor: [],
-  major: [],
-  misconduct: [],
-  game_misconduct: [],
+  bench_minor: ["caution"],
+  double_minor: ["caution"],
+  major: ["dismissal"],
+  misconduct: ["dismissal"],
+  game_misconduct: ["dismissal"],
   match: ["dismissal"],
 };
 
-/** The chip colour for one discipline entry's class, or `undefined` for an
- *  uncoloured class (icehockey's five) or an unknown one. A multi-tone class
+/** The chip colour for one discipline entry's class, or `undefined` for a
+ *  class no table names (§2a leaves no DECLARED class uncoloured — the
+ *  empty-array arm survives for a table that adds one). A multi-tone class
  *  (football's `second_yellow`: `["caution","dismissal"]`) takes the LAST
  *  tone — the pad's own rule for the same entry ("draws one swatch per
  *  entry… takes the OUTCOME (the last) for the option's wash",
