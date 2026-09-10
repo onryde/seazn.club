@@ -822,6 +822,9 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     // waitForLockContention's note on why this handshake is required.
     await Promise.race([locked, t1]);
     const deleteCall = deleteVenue(auth, venue.id);
+    // Same unhandled-rejection window as the createCourt race further down —
+    // see the note there.
+    deleteCall.catch(() => {});
 
     // Proves genuine contention, not a lucky non-overlapping interleave.
     await waitForLockContention();
@@ -860,6 +863,17 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     // waitForLockContention's note on why this handshake is required.
     await Promise.race([locked, t1]);
     const createCall = createCourt(auth, venue.id, { name: "Late Court", sort: 0, tags: [] });
+    // Claim the rejection NOW, three awaits before the assertion reads it.
+    // `releaseT1()` below is what makes this promise reject, so without this
+    // line the window between them holds a REJECTED PROMISE WITH NO HANDLER —
+    // an unhandled rejection, which vitest reports and exits 1 on even when
+    // every test in the run passes. It only fires when the rejection wins the
+    // race to settle first, which is why it is intermittent: CI run
+    // 34405863659 caught it here as `{ status: 404, code: 'VENUE_NOT_FOUND' }`
+    // against 184 passing files and zero failures.
+    // Same guard `registration-concurrency.test.ts:623` already uses on its
+    // own lock-race contender.
+    createCall.catch(() => {});
 
     await waitForLockContention();
     releaseT1();
@@ -924,6 +938,9 @@ describe.skipIf(!HAS_DB)("venues usecase — DB", () => {
     // waitForLockContention's note on why this handshake is required.
     await Promise.race([locked, t1]);
     const archiveCall = archiveCourt(auth, court.id);
+    // Same unhandled-rejection window as the createCourt race above — see the
+    // note there.
+    archiveCall.catch(() => {});
 
     await waitForLockContention();
     releaseT1();
