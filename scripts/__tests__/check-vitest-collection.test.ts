@@ -67,6 +67,11 @@ const REST = [
   // the narrowed and unnarrowed numbers disagree with what the script prints.
   "src/server/public-site/__tests__/data-standings-timestamp.test.ts",
   "src/server/public-site/__tests__/describe-format.test.ts",
+  // PR 2 of the four-PR split: the W2 dictionary coverage test. It does not
+  // begin with "c", so it belongs here rather than in C_GLOBBED — and this
+  // gate reddened in CI the moment it landed, which is the explicit list
+  // doing exactly what the comments above promise.
+  "src/server/public-site/__tests__/hub-dictionary.test.ts",
   "src/server/public-site/__tests__/leaders.test.ts",
   "src/server/public-site/__tests__/public-leaders.test.ts",
   "src/server/public-site/__tests__/standings-view.test.ts",
