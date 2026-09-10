@@ -145,6 +145,20 @@ this section now exists.
 Two tiers for icehockey, not three: the sport has no green-card equivalent, so
 `advisory` stays unused there rather than being invented for symmetry.
 
+**The card LABEL is owed in four locales, and today is not** (product ruling,
+2026-09-10, on review MINOR 9). `public-site.ts:425-428` builds the label from
+the class key — `classKey.replace(/_/g, " ")` plus title case — so a French,
+Spanish or Dutch stream renders **"Bench minor"**, **"Game misconduct"** in
+English. The repo's standing rule is unambiguous: any user-facing string lands
+in all four dictionaries and is never hardcoded English.
+
+F13 did not introduce this — those lines already rendered — but it **made five
+more classes visually prominent on a broadcast**, so the ruling that fixed one
+defect amplified another. Ten keys (`green`, `yellow`, `red`, `minor`,
+`bench_minor`, `double_minor`, `major`, `misconduct`, `game_misconduct`,
+`match`) × four locales, keyed off the class rather than off the derived English,
+so a new class is a missing key rather than a silently-anglicised label.
+
 Contrast is already satisfied — §2's table gives icehockey `caution` **11.24**
 and `dismissal` **6.53** on its own `board-2`, both clear of the 3:1 graphical
 floor unaided, and every chip additionally carries the `--sport-ink` hairline.
