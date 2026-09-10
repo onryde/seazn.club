@@ -38,7 +38,14 @@ export interface MatchesTabProps {
   /**
    * A `?filter=` deep link, or a caller that knows better than the ladder.
    * SEEDS the state; it does not pin it — once the spectator picks a chip
-   * theirs wins, and a later poll never moves it back.
+   * theirs wins over this prop.
+   *
+   * It does NOT win over the document. A choice is honoured only while it is
+   * still renderable: if the chosen bucket empties, the reconciliation at
+   * `filter` below falls back to the ladder. An earlier version of this
+   * sentence said "a later poll never moves it back", which review F1 proved
+   * false in the same file — the poll is exactly what moves it, and it has to,
+   * because the chip carrying the choice is gone by then.
    */
   initialFilter?: MatchBucket | null;
   /** A `?division=` deep link. `null`/absent means All. */
