@@ -115,7 +115,14 @@ export function OverlayBug({
               {line.tone ? (
                 <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
               ) : null}
-              {line.text}
+              {/* A REAL box round the text, not a bare text node: §4's
+                  corrected footer rule ("overflowing text ELLIPSES; it never
+                  clips and never wraps") is `text-overflow: ellipsis`, which
+                  paints only on a block container whose own inline content
+                  overflows. An anonymous flex item is not one, so without this
+                  span the rule has nothing to match and a long locale
+                  overflows the tile again. */}
+              <span className="ovl-detail-label">{line.text}</span>
             </span>
           ))}
         </div>

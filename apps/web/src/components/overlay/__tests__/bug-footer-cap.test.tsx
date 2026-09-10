@@ -39,6 +39,13 @@ const keyMsg: OverlayMsg = (key) => key;
 const GLOBALS_CSS = join(__dirname, "..", "..", "..", "app", "globals.css");
 const css = () => readFileSync(GLOBALS_CSS, "utf8");
 
+/** The binding sheet itself — `live-cell-cap.test.ts`'s own path, same dir. */
+const SHEET_PATH = join(
+  __dirname,
+  "../../../../../..",
+  "docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md",
+);
+
 /** The full text of one `.selector { ... }` rule (first occurrence), or "" if
  *  the selector never appears — `discipline-chip-and-hairline.test.tsx`'s own
  *  helper, and `contrast.test.ts`'s style of reading globals.css as text. */
@@ -194,16 +201,21 @@ describe("§4 rule 0 — the footer is a start-aligned gap-18 list, on one line"
     expect(rule, "a flex container's TEXT items wrap internally without this").toMatch(/white-space:\s*nowrap/);
   });
 
-  it("...and does NOT absorb its own overflow — the tile clips, and the e2e watches the tile", () => {
+  it("...and does NOT absorb its own overflow — the e2e's vertical probe watches the tile", () => {
     // Measured in Chromium against the real markup and this real stylesheet:
     // with `overflow: hidden` on the footer, defeating the nowrap above leaves
     // `.ovl-bug` at scrollHeight 273 = clientHeight 273 — the regression is
     // INVISIBLE to `stream-overlay.spec.ts`'s "the tile shows a footer it
     // cannot hold, and does not clip it", which is the only test this defect
     // has. Without it the same defeat reads 299 vs 273. So the footer must NOT
-    // become a scroll container, and the tile must stay the one that clips.
+    // become a scroll container.
     expect(ruleBody(".ovl-bug-footer"), "absorbing here blinds the tile's own probe").not.toMatch(/overflow:/);
-    expect(ruleBody(".ovl-bug"), "the tile is where §4 puts the clip").toMatch(/overflow:\s*hidden/);
+    // The tile keeps `overflow: hidden` for its 12px radius and as the last
+    // backstop against a VERTICAL wrap — NOT as the place a long line is cut.
+    // §4's 2026-09-10 correction withdrew that: horizontal overhang is ellipsed
+    // on the entry's own label and never reaches this box (see the describe
+    // below). Both halves matter, so both are asserted.
+    expect(ruleBody(".ovl-bug"), "the tile still clips its own corners").toMatch(/overflow:\s*hidden/);
   });
 
   it(".ovl-detail-entry is a real box that never breaks across lines", () => {
@@ -211,6 +223,101 @@ describe("§4 rule 0 — the footer is a start-aligned gap-18 list, on one line"
     expect(rule, "globals.css declares no .ovl-detail-entry rule").not.toBe("");
     expect(rule).toMatch(/display:\s*(inline-)?flex/);
     expect(rule).toMatch(/white-space:\s*nowrap/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §4 as CORRECTED 2026-09-10 — "overflowing text ELLIPSES; it never clips and
+// never wraps". The first draft of that paragraph said the tile should clip;
+// it was withdrawn, because `expectNoClip` treats any `overflow-x: hidden` box
+// with >1px of overhang as a defect and offers no exempt path, and by
+// AGENTS.md 23 an overflow is a feature only where the extra content is
+// REACHABLE — on a broadcast graphic nothing is.
+//
+// WHAT THIS FILE CANNOT SEE, again: node has no layout, so no test here proves
+// an ellipsis is PAINTED or that the tile stopped overhanging. That is
+// `stream-overlay.spec.ts`'s "§4's footer ellipses in a long locale", which
+// drives the same hockey seed at `?lang=es` and measures `.ovl-bug` and the
+// labels in Chromium. What IS provable here: the sheet binds it, the CSS
+// declares it on the box that can paint it, and both renderers emit that box.
+// ---------------------------------------------------------------------------
+describe("§4 as corrected — the footer's text ellipses rather than reaching the tile", () => {
+  it("the SHEET is the authority, and it binds an ellipsis (not a clip)", () => {
+    // Derived from `_THEMES.md`, never retyped: if §4 is ever re-amended the
+    // other way, this reds and the CSS below has to move with it rather than
+    // being left asserting a withdrawn ruling — which is exactly the state
+    // this change was written to clear.
+    const sheet = readFileSync(SHEET_PATH, "utf8");
+    const row = sheet.split("\n").find((l) => l.includes("overflowing text"));
+    expect(row, "§4's value block no longer states an overflow rule at all").toBeDefined();
+    expect(row!).toMatch(/ELLIPSES/);
+    expect(row!, "and says so about clipping in the same breath").toMatch(/never clips/);
+  });
+
+  it(".ovl-detail-label carries all three properties an ellipsis needs", () => {
+    const rule = ruleBody(".ovl-detail-label");
+    expect(rule, "globals.css declares no .ovl-detail-label rule").not.toBe("");
+    // `text-overflow` alone paints nothing: it needs a non-visible `overflow`,
+    // and a flex item needs `min-width: 0` before it will shrink below its own
+    // content at all (`min-width: auto` is the default). Drop any one of the
+    // three and the long locale overflows the tile again.
+    expect(rule).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule).toMatch(/overflow:\s*hidden/);
+    expect(rule).toMatch(/min-width:\s*0/);
+  });
+
+  it("the shrink chain gives at the label and nowhere else", () => {
+    // The entry must be allowed to shrink...
+    expect(ruleBody(".ovl-detail-entry"), "an entry that cannot shrink pushes the row out").toMatch(
+      /min-width:\s*0/,
+    );
+    // ...and the chip must NOT, or a hockey entry loses the tone that is the
+    // whole reason the chip exists.
+    expect(ruleBody(".ovl-chip"), "a shrinking chip is a card with no colour").toMatch(
+      /flex-shrink:\s*0/,
+    );
+    // The separator is 1.5px and has the least to give, so it is pinned too.
+    expect(ruleBody(".ovl-detail-sep")).toMatch(/flex:\s*none/);
+  });
+
+  it("the chase/result sentence takes the same guard — it is the longest string either theme carries", () => {
+    const rule = ruleBody(".ovl-detail-emphasis");
+    expect(rule).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule).toMatch(/min-width:\s*0/);
+  });
+
+  it("nothing in the overlay stylesheet still routes the overhang to the TILE", () => {
+    // The withdrawn ruling read "the horizontal overhang ... reaches `.ovl-bug`
+    // instead, which is where §4 wants it clipped". One authority per fact: a
+    // comment restating the superseded version is how the next reader takes the
+    // code as the authority and the sheet as stale.
+    expect(css(), "a comment still cites the withdrawn 'clip deliberately' ruling").not.toMatch(
+      /where §4 wants it clipped/,
+    );
+  });
+});
+
+describe.each([
+  ["OverlayBug", OverlayBug, FOUR_LINES.slice(-2)],
+  ["OverlayBar", OverlayBar, FOUR_LINES],
+] as const)("§4 as corrected — %s gives the ellipsis something to paint on", (_name, Component, shown) => {
+  it("every entry's text sits in its OWN .ovl-detail-label box, inside the entry", () => {
+    // The seam. `text-overflow` paints only on a block container whose own
+    // inline content overflows; an anonymous flex item is not one. A bare text
+    // node here (which is what `overlay-bug.tsx` shipped) leaves the CSS rule
+    // above matching nothing at all, and the tile overflows exactly as before.
+    const tree = render(Component, { ...BASE_MODEL, detail: FOUR_LINES });
+    const entries = entriesIn(tree);
+    expect(entries.length).toBe(shown.length);
+    entries.forEach((entry, i) => {
+      const labels = walk(entry).filter(
+        (el) => (propsOf(el).className as string | undefined) === "ovl-detail-label",
+      );
+      expect(labels.length, `entry ${i} must carry exactly one label box`).toBe(1);
+      expect(textOf(labels[0]!), "and the TEXT must be inside it, not beside it").toBe(
+        shown[i]!.text,
+      );
+    });
   });
 });
 

@@ -110,7 +110,14 @@ export function OverlayBar({
               {line.tone ? (
                 <span data-testid="ovl-chip" className={`ovl-chip ovl-chip-${line.tone}`} />
               ) : null}
-              <span>{line.text}</span>
+              {/* `.ovl-detail-label` carries §4's ellipsis (globals.css). The
+                  bar has 1776px and is nowhere near its own boundary, but the
+                  guard is the PAIR — §4's own lesson is that a composition
+                  guard added to one theme is owed to the other in the same
+                  change, and `.ovl-detail-entry`'s `nowrap` now applies here
+                  too, so an es/nl detail list would overflow this band rather
+                  than wrap. */}
+              <span className="ovl-detail-label">{line.text}</span>
             </span>
           ))}
         </div>

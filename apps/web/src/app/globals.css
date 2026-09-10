@@ -1413,8 +1413,15 @@ body {
                    padding: 0 33px; font-size: 24px; font-weight: 500;
                    background: color-mix(in srgb, var(--sport-board) 90%, transparent);
                    color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
-.ovl-detail-sep { width: 1.5px; height: 24px; background: rgba(255, 255, 255, 0.2); }
-.ovl-detail-emphasis { font-weight: 600; color: var(--sport-ink); }
+/* `flex: none` because a 1.5px rule that shrinks is a rule that disappears:
+   once the entries below can shrink (see `.ovl-detail-label`), every flexible
+   item in the row is a candidate, and the separator has the least to give. */
+.ovl-detail-sep { flex: none; width: 1.5px; height: 24px; background: rgba(255, 255, 255, 0.2); }
+/* The chase/result sentence leads the row and is the longest single string
+   either theme carries ("NOR won by 8 wickets with 12 balls remaining"), so it
+   takes §4's ellipsis on the same terms as an entry's label. */
+.ovl-detail-emphasis { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                       font-weight: 600; color: var(--sport-ink); }
 /* `_THEMES.md` §4 rule 2 (product ruling 2026-09-10) — "an entry is one unit".
    Both renderers wrapped each detail entry in `className="contents"`, and
    `display: contents` hands separator, chip and label to the flex container as
@@ -1426,9 +1433,38 @@ body {
    (§3's band is gap 33 and the flattened children inherited it; §4's footer had
    no gap at all under `space-between`, and takes half the new 18px list gap so
    an entry reads tighter than the list it sits in). */
-.ovl-detail-entry { display: inline-flex; align-items: center; white-space: nowrap; }
+.ovl-detail-entry { display: inline-flex; align-items: center; white-space: nowrap;
+                    flex: 0 1 auto; min-width: 0; }
 .ovl-detail-band .ovl-detail-entry { gap: 33px; }
 .ovl-bug-footer .ovl-detail-entry { gap: 9px; }
+/* `_THEMES.md` §4, corrected 2026-09-10: "overflowing text ELLIPSES; it never
+   clips and never wraps". The earlier draft of §4 said the TILE should clip a
+   long line; that was withdrawn, because `expectNoClip` treats any
+   `overflow-x: hidden` box with more than 1px of overhang as a defect and
+   offers no exempt path, and by AGENTS.md 23 an overflow is a feature only
+   when the extra content is REACHABLE — on a broadcast graphic there is no
+   scroll, no focus and no gesture, so nothing is. The content must FIT.
+   Measured before this rule existed: the capped ENGLISH footer sits at exactly
+   480px in a 480px tile, and `?lang=es` on the same hockey seed pushes past it
+   ("AWA Tarjeta amarilla · AWA Tarjeta roja"; icehockey's `gameMisconduct` /
+   `match` classes are half again as long).
+
+   WHY THREE PROPERTIES AND WHY ON THE LABEL. `text-overflow` paints an
+   ellipsis only on a block container whose own inline content overflows, so it
+   has to sit on the text box itself — not on `.ovl-detail-entry`, whose
+   children are flex items rather than inline content, and not on the footer,
+   which must never become its own scroll container (see `.ovl-bug-footer`).
+   `min-width: 0` is what lets a flex item shrink below its content at all
+   (`min-width: auto` is the default) and is needed on the entry AND on the
+   label, or the chain refuses to give. The chip keeps `flex-shrink: 0`, so the
+   label is the only thing that yields and an entry never loses its tone.
+
+   The TILE still never grows — an OBS operator frames the bug against their
+   camera. Shrinking happens on the item; the box is unchanged. And this does
+   not blind the vertical probe `stream-overlay.spec.ts` runs on `.ovl-bug`: an
+   auto-height label whose text is made to wrap grows rather than clipping, so
+   a defeated `nowrap` still reaches the tile. */
+.ovl-detail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* Theme B — corner bug (_THEMES.md §4) */
 .ovl-bug { position: absolute; left: 60px; top: 54px; width: 480px;
@@ -1488,8 +1524,9 @@ body {
    internally, which is how "AWA Red" ended up on a second line that the tile's
    `overflow: hidden` then cut through. The tile must NOT grow instead — an OBS
    operator frames the bug against their camera, and a graphic that changes
-   height on air moves into the shot — so a line that does not fit is clipped,
-   by the TILE, deliberately.
+   height on air moves into the shot — so a line that does not fit is ELLIPSED,
+   on `.ovl-detail-label`, and never reaches the tile at all (§4 as corrected
+   2026-09-10; the withdrawn draft of that paragraph said to clip here).
 
    NO `overflow: hidden` HERE, and that omission is load-bearing. An earlier
    draft of this rule had it, which made the footer its own scroll container and
@@ -1499,8 +1536,9 @@ body {
    INVISIBLE; without it the same defeat reads 299 vs 273. `stream-overlay.spec.
    ts`'s "the tile shows a footer it cannot hold, and does not clip it" measures
    exactly that difference, so absorbing here would have silently blinded the
-   one test this defect has. The horizontal overhang a long locale can still
-   produce reaches `.ovl-bug` instead, which is where §4 wants it clipped. */
+   one test this defect has. The HORIZONTAL overhang a long locale used to
+   produce is not clipped anywhere now: `.ovl-detail-label` ellipses it before
+   the tile can see it, per §4's 2026-09-10 correction. */
 .ovl-bug-footer { display: flex; align-items: center; justify-content: flex-start; gap: 18px;
                   height: 45px; padding: 0 24px; font-size: 21px; font-weight: 500;
                   white-space: nowrap;
