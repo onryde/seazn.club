@@ -3106,6 +3106,289 @@ export async function runPackSuite(
       }
     }
 
+    // -----------------------------------------------------------------
+    // B06a T9 (found by the FIRST live run) — advancement moved ABOVE the
+    // outcome oracles. It used to run after them, and the per-match oracle
+    // then compared `_tiny`'s playoff fixture while it was still
+    // `scheduled`: `oracle: per-match mismatch in "d-tiny" fixture
+    // "se-r0-i0" — status: expected decided, got scheduled`. The PRODUCT
+    // was right and the bench asserted too early.
+    //
+    // No suite-level test could see it. Those drive `echoExpectedBoard`,
+    // which answers whatever the pack expects BY CONSTRUCTION — the
+    // documented vacuity of that helper, and exactly the class of gap a
+    // live run exists to close.
+    //
+    // The rule this encodes: FOLD EVERYTHING, THEN ASSERT. Every oracle
+    // below now reads a competition whose every stage has been played,
+    // rather than one still mid-progression.
+    // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second
+    // stage, `stage1`, when it declares a `progression` (a `timing:"setup"`
+    // knockout fed from `stage0`'s standings, in `_tiny`'s own case) is
+    // advanced through the LIVE `propose -> assert -> confirm -> generate`
+    // flow (`advance.ts`), its own stream folded through the SAME
+    // `simulateDivisionStreams` T1 uses above, and completed with the
+    // `finalRanks` response CAPTURED (D1 — it is the only time they cross the
+    // wire; `GET /divisions/{id}/history` never carries the payload).
+    //
+    // Gated on `input.sql`, same as every other B05 step — a unit test with
+    // no `sql` gets today's behavior unchanged. A no-op for any pack (or
+    // division) whose second stage declares no `progression`: `_tiny` is the
+    // only pack this bench runs, and its OTHER two divisions
+    // (d-badminton, d-registration) are both single-stage.
+    if (input.sql !== undefined && stage1?.progression !== undefined) {
+      const sourceStageId = seeded.stageIdByRef.get(stage0.ref);
+      const targetStageId = seeded.stageIdByRef.get(stage1.ref);
+      if (sourceStageId === undefined || targetStageId === undefined) {
+        errors.push(
+          `${suiteKey}: division "${division0.ref}" declares a progression-fed stage "${stage1.ref}" but one of ` +
+            `its own stage ids ("${stage0.ref}" / "${stage1.ref}") never resolved — cannot advance it`,
+        );
+      } else {
+        // The expected qualifier order (D7's "expected qualifier list"),
+        // derived from the SOURCE stage's own `expected.tables` row — the
+        // pack's already-authored, already-offline-checked final standings
+        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
+        // minted. Assumes the progression's own take rule pulls every ranked
+        // entrant of that table, in order (true of `_tiny`'s own
+        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
+        // of 8, would need this sliced to the qualifier count, out of this
+        // task's scope).
+        const sourceTable = pack.expected.tables.find(
+          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
+        );
+        const expectedQualifierEntrantIds: string[] = [];
+        const unresolvedQualifierRefs: string[] = [];
+        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
+          const id = seeded.entrantIdByRef.get(row.entrant);
+          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
+          else expectedQualifierEntrantIds.push(id);
+        }
+        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
+          errors.push(
+            sourceTable === undefined
+              ? `${suiteKey}: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
+                `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
+                "against before confirming (D7)"
+              : `${suiteKey}: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
+                `${unresolvedQualifierRefs.join(", ")}`,
+          );
+        } else {
+          log.info(
+            { sourceStage: stage0.ref, targetStage: stage1.ref, expected: expectedQualifierEntrantIds },
+            `${suiteKey}: advancing the progression-fed stage (B05 T3)`,
+          );
+          // The SOURCE stage must be COMPLETE before `computeSeedProposal`
+          // will resolve its standings (409 SEEDING_SOURCE_INCOMPLETE
+          // otherwise) — nothing upstream of this block ever completes a
+          // stage, so this run does it here, once, immediately before
+          // proposing into the stage it feeds.
+          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+
+          const advanceOutcome = await advanceStageSeeding({
+            base,
+            session: s,
+            stageId: targetStageId,
+            expectedQualifierEntrantIds,
+            ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+          });
+          const qc = advanceOutcome.qualifierCheck;
+          oracles.push({
+            name: `advance: ${stage1.ref} seed proposal qualifiers`,
+            passed: qc.matched,
+            detail: qc.matched
+              ? `proposal qualifiers [${qc.actual.join(", ")}] match the pack's expected order`
+              : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
+                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
+          });
+          // B05 review round 1, MAJOR 4: this pushed an `OracleResult` and
+          // emitted nothing, so a log consumer reading `oracle_checked`
+          // undercounted the wave against the report's own oracle list.
+          log.info(oracleLogFields("seed_proposal_qualifiers", qc.matched ? "pass" : "fail"), "oracle_checked");
+          if (!qc.matched) {
+            errors.push(
+              `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
+                `pack's expected order [${qc.expected.join(", ")}]`,
+            );
+          } else {
+            // The newly-confirmed stage's OWN stream(s), folded through the
+            // SAME single-event route T1 uses above — reusing that function
+            // is the acceptance bar (T3's brief: "the existing fold covers
+            // it", not a new folding primitive). Explicit `stageRef` match
+            // only: `division0` now has more than one stage, so the "absent
+            // means the division's only stage" fallback (T1's own block)
+            // does not apply here.
+            const stage1Streams = pack.streams.filter(
+              (st) => st.divisionRef === division0.ref && st.stageRef === stage1.ref,
+            );
+            if (stage1Streams.length > 0) {
+              const refIdByKey = new Map<string, string>([
+                ...seeded.entrantIdByRef,
+                ...seeded.personIdByRef,
+              ]);
+              const advSim = await simulateDivisionStreams({
+                base,
+                session: s,
+                streams: stage1Streams,
+                fixtureIdByKey: seeded.fixtureIdByKey,
+                refIdByKey,
+                ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+              });
+              for (const finding of advSim.findings) {
+                errors.push(
+                  `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+                    `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+                );
+              }
+              log.info(
+                { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
+                "suite_simulated",
+              );
+            }
+
+            const completion = await completeStageCapture(
+              base,
+              s,
+              targetStageId,
+              input.advanceTransport,
+            );
+            // D1 — the finalRanks oracle: the pack's OWN expected order
+            // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
+            // block that can assert a bracket's placement order) compared
+            // against the CAPTURED `complete` response. A mismatch renders
+            // BOTH sides, never just one.
+            const expectedFinalRanksRow = pack.expected.finalRanks.find(
+              (fr) => fr.divisionRef === division0.ref && fr.stageRef === stage1.ref,
+            );
+            if (expectedFinalRanksRow === undefined) {
+              errors.push(
+                `${suiteKey}: stage "${stage1.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
+                  "there is nothing to compare the captured finalRanks against",
+              );
+            } else {
+              const expectedIds: string[] = [];
+              const unresolvedFinalRankRefs: string[] = [];
+              for (const ref of expectedFinalRanksRow.order) {
+                const id = seeded.entrantIdByRef.get(ref);
+                if (id === undefined) unresolvedFinalRankRefs.push(ref);
+                else expectedIds.push(id);
+              }
+              if (unresolvedFinalRankRefs.length > 0) {
+                errors.push(
+                  `${suiteKey}: stage "${stage1.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
+                    `${unresolvedFinalRankRefs.join(", ")}`,
+                );
+              } else {
+                const franksCheck = compareFinalRanks(expectedIds, completion.finalRanks);
+                oracles.push({
+                  name: `advance: ${stage1.ref} finalRanks`,
+                  passed: franksCheck.matched,
+                  // `reason` is set by the comparator only when a side was
+                  // EMPTY — i.e. exactly when there was nothing to compare.
+                  subject: franksCheck.reason === undefined,
+                  detail: franksCheck.matched
+                    ? `captured finalRanks [${(franksCheck.actual ?? []).join(", ")}] match the pack's expected order`
+                    : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
+                      `disagree with the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                });
+                // B05 review round 1, MAJOR 4 — see the sibling emitter above.
+                log.info(oracleLogFields("final_ranks", franksCheck.matched ? "pass" : "fail"), "oracle_checked");
+                if (!franksCheck.matched) {
+                  errors.push(
+                    `advance: ${stage1.ref}: captured finalRanks ` +
+                      `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
+                      `the pack's expected order [${franksCheck.expected.join(", ")}]`,
+                  );
+                }
+
+                // B05 T4 — the runtime oracle layer proper (design doc D1/D2).
+                // A SECOND, independently-fetched crossing of the same final
+                // order: `GET /stages/{id}/standings`'s own `rank` field is
+                // re-readable at any time (unlike the `complete` response
+                // captured above, which is not — `advance.ts`'s own header
+                // comment) and is what a CUSTOMER actually sees. Comparing it
+                // against the captured response is the genuinely new check
+                // this task owes; comparing it against the pack's own
+                // `expected.finalRanks` re-derives D7's own assertion from a
+                // wholly different route.
+                const standingsWire = await fetchStandings(base, s, targetStageId, undefined, input.oracleTransport);
+                const standingsRanked = standingsRankOrder(standingsWire.rows);
+
+                const rankCrossing = compareRankCrossings(completion.finalRanks, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
+                  passed: rankCrossing.matched,
+                  subject: rankCrossing.reason === undefined,
+                  detail: rankCrossing.matched
+                    ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
+                    : renderRankCrossingMismatch(rankCrossing),
+                });
+                log.info(oracleLogFields("rank_crossing", rankCrossing.matched ? "pass" : "fail"), "oracle_checked");
+                if (!rankCrossing.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
+                      `${renderRankCrossingMismatch(rankCrossing)}`,
+                  );
+                }
+
+                const standingsVsExpected = compareFinalRanks(expectedIds, standingsRanked);
+                oracles.push({
+                  name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
+                  passed: standingsVsExpected.matched,
+                  subject: standingsVsExpected.reason === undefined,
+                  detail: standingsVsExpected.matched
+                    ? `re-read standings [${standingsRanked.join(", ")}] match the pack's expected order`
+                    : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +
+                      `[${expectedIds.join(", ")}]`,
+                });
+                log.info(oracleLogFields("standings_final_rank", standingsVsExpected.matched ? "pass" : "fail"), "oracle_checked");
+                if (!standingsVsExpected.matched) {
+                  errors.push(
+                    `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
+                      `pack's expected order [${expectedIds.join(", ")}]`,
+                  );
+                }
+
+                // D2 — champion, defined as rank 1 of the final stage's
+                // standings, cross-checked against the captured response,
+                // compared against `expected.champions`. No champion field
+                // exists anywhere on the wire (F1b) — the bench does not
+                // invent one.
+                const expectedChampionRow = pack.expected.champions.find(
+                  (c) => c.divisionRef === division0.ref && (c.stageRef === undefined || c.stageRef === stage1.ref),
+                );
+                if (expectedChampionRow === undefined) {
+                  warnings.push(
+                    `oracle: division "${division0.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
+                  );
+                } else {
+                  const expectedChampionId = seeded.entrantIdByRef.get(expectedChampionRow.entrant);
+                  if (expectedChampionId === undefined) {
+                    errors.push(
+                      `${suiteKey}: expected.champions names entrant ref "${expectedChampionRow.entrant}" with no resolved id`,
+                    );
+                  } else {
+                    const championCheck = compareChampion(expectedChampionId, standingsRanked, completion.finalRanks);
+                    oracles.push({
+                      name: `oracle: ${division0.ref} champion`,
+                      passed: championCheck.matched,
+                      detail: championCheck.matched
+                        ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
+                        : renderChampionMismatch(championCheck),
+                    });
+                    log.info(oracleLogFields("champion", championCheck.matched ? "pass" : "fail"), "oracle_checked");
+                    if (!championCheck.matched) {
+                      errors.push(`oracle: champion mismatch — ${renderChampionMismatch(championCheck)}`);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
     // B05 T4b — the standings comparator (design doc §3, oracle.ts's
     // `compareStandings`), wired against EVERY `expected.tables` row the
     // pack declares — not only the final stage's placement crossing T4
@@ -3992,272 +4275,6 @@ export async function runPackSuite(
       }
     }
 
-    // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second
-    // stage, `stage1`, when it declares a `progression` (a `timing:"setup"`
-    // knockout fed from `stage0`'s standings, in `_tiny`'s own case) is
-    // advanced through the LIVE `propose -> assert -> confirm -> generate`
-    // flow (`advance.ts`), its own stream folded through the SAME
-    // `simulateDivisionStreams` T1 uses above, and completed with the
-    // `finalRanks` response CAPTURED (D1 — it is the only time they cross the
-    // wire; `GET /divisions/{id}/history` never carries the payload).
-    //
-    // Gated on `input.sql`, same as every other B05 step — a unit test with
-    // no `sql` gets today's behavior unchanged. A no-op for any pack (or
-    // division) whose second stage declares no `progression`: `_tiny` is the
-    // only pack this bench runs, and its OTHER two divisions
-    // (d-badminton, d-registration) are both single-stage.
-    if (input.sql !== undefined && stage1?.progression !== undefined) {
-      const sourceStageId = seeded.stageIdByRef.get(stage0.ref);
-      const targetStageId = seeded.stageIdByRef.get(stage1.ref);
-      if (sourceStageId === undefined || targetStageId === undefined) {
-        errors.push(
-          `${suiteKey}: division "${division0.ref}" declares a progression-fed stage "${stage1.ref}" but one of ` +
-            `its own stage ids ("${stage0.ref}" / "${stage1.ref}") never resolved — cannot advance it`,
-        );
-      } else {
-        // The expected qualifier order (D7's "expected qualifier list"),
-        // derived from the SOURCE stage's own `expected.tables` row — the
-        // pack's already-authored, already-offline-checked final standings
-        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
-        // minted. Assumes the progression's own take rule pulls every ranked
-        // entrant of that table, in order (true of `_tiny`'s own
-        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
-        // of 8, would need this sliced to the qualifier count, out of this
-        // task's scope).
-        const sourceTable = pack.expected.tables.find(
-          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
-        );
-        const expectedQualifierEntrantIds: string[] = [];
-        const unresolvedQualifierRefs: string[] = [];
-        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
-          const id = seeded.entrantIdByRef.get(row.entrant);
-          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
-          else expectedQualifierEntrantIds.push(id);
-        }
-        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
-          errors.push(
-            sourceTable === undefined
-              ? `${suiteKey}: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
-                `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
-                "against before confirming (D7)"
-              : `${suiteKey}: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
-                `${unresolvedQualifierRefs.join(", ")}`,
-          );
-        } else {
-          log.info(
-            { sourceStage: stage0.ref, targetStage: stage1.ref, expected: expectedQualifierEntrantIds },
-            `${suiteKey}: advancing the progression-fed stage (B05 T3)`,
-          );
-          // The SOURCE stage must be COMPLETE before `computeSeedProposal`
-          // will resolve its standings (409 SEEDING_SOURCE_INCOMPLETE
-          // otherwise) — nothing upstream of this block ever completes a
-          // stage, so this run does it here, once, immediately before
-          // proposing into the stage it feeds.
-          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
-
-          const advanceOutcome = await advanceStageSeeding({
-            base,
-            session: s,
-            stageId: targetStageId,
-            expectedQualifierEntrantIds,
-            ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
-          });
-          const qc = advanceOutcome.qualifierCheck;
-          oracles.push({
-            name: `advance: ${stage1.ref} seed proposal qualifiers`,
-            passed: qc.matched,
-            detail: qc.matched
-              ? `proposal qualifiers [${qc.actual.join(", ")}] match the pack's expected order`
-              : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
-                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
-          });
-          // B05 review round 1, MAJOR 4: this pushed an `OracleResult` and
-          // emitted nothing, so a log consumer reading `oracle_checked`
-          // undercounted the wave against the report's own oracle list.
-          log.info(oracleLogFields("seed_proposal_qualifiers", qc.matched ? "pass" : "fail"), "oracle_checked");
-          if (!qc.matched) {
-            errors.push(
-              `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
-                `pack's expected order [${qc.expected.join(", ")}]`,
-            );
-          } else {
-            // The newly-confirmed stage's OWN stream(s), folded through the
-            // SAME single-event route T1 uses above — reusing that function
-            // is the acceptance bar (T3's brief: "the existing fold covers
-            // it", not a new folding primitive). Explicit `stageRef` match
-            // only: `division0` now has more than one stage, so the "absent
-            // means the division's only stage" fallback (T1's own block)
-            // does not apply here.
-            const stage1Streams = pack.streams.filter(
-              (st) => st.divisionRef === division0.ref && st.stageRef === stage1.ref,
-            );
-            if (stage1Streams.length > 0) {
-              const refIdByKey = new Map<string, string>([
-                ...seeded.entrantIdByRef,
-                ...seeded.personIdByRef,
-              ]);
-              const advSim = await simulateDivisionStreams({
-                base,
-                session: s,
-                streams: stage1Streams,
-                fixtureIdByKey: seeded.fixtureIdByKey,
-                refIdByKey,
-                ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
-              });
-              for (const finding of advSim.findings) {
-                errors.push(
-                  `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
-                    `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
-                );
-              }
-              log.info(
-                { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
-                "suite_simulated",
-              );
-            }
-
-            const completion = await completeStageCapture(
-              base,
-              s,
-              targetStageId,
-              input.advanceTransport,
-            );
-            // D1 — the finalRanks oracle: the pack's OWN expected order
-            // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
-            // block that can assert a bracket's placement order) compared
-            // against the CAPTURED `complete` response. A mismatch renders
-            // BOTH sides, never just one.
-            const expectedFinalRanksRow = pack.expected.finalRanks.find(
-              (fr) => fr.divisionRef === division0.ref && fr.stageRef === stage1.ref,
-            );
-            if (expectedFinalRanksRow === undefined) {
-              errors.push(
-                `${suiteKey}: stage "${stage1.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
-                  "there is nothing to compare the captured finalRanks against",
-              );
-            } else {
-              const expectedIds: string[] = [];
-              const unresolvedFinalRankRefs: string[] = [];
-              for (const ref of expectedFinalRanksRow.order) {
-                const id = seeded.entrantIdByRef.get(ref);
-                if (id === undefined) unresolvedFinalRankRefs.push(ref);
-                else expectedIds.push(id);
-              }
-              if (unresolvedFinalRankRefs.length > 0) {
-                errors.push(
-                  `${suiteKey}: stage "${stage1.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
-                    `${unresolvedFinalRankRefs.join(", ")}`,
-                );
-              } else {
-                const franksCheck = compareFinalRanks(expectedIds, completion.finalRanks);
-                oracles.push({
-                  name: `advance: ${stage1.ref} finalRanks`,
-                  passed: franksCheck.matched,
-                  // `reason` is set by the comparator only when a side was
-                  // EMPTY — i.e. exactly when there was nothing to compare.
-                  subject: franksCheck.reason === undefined,
-                  detail: franksCheck.matched
-                    ? `captured finalRanks [${(franksCheck.actual ?? []).join(", ")}] match the pack's expected order`
-                    : `captured finalRanks [${franksCheck.actual === undefined ? "(absent — stage did not report complete)" : franksCheck.actual.join(", ")}] ` +
-                      `disagree with the pack's expected order [${franksCheck.expected.join(", ")}]`,
-                });
-                // B05 review round 1, MAJOR 4 — see the sibling emitter above.
-                log.info(oracleLogFields("final_ranks", franksCheck.matched ? "pass" : "fail"), "oracle_checked");
-                if (!franksCheck.matched) {
-                  errors.push(
-                    `advance: ${stage1.ref}: captured finalRanks ` +
-                      `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
-                      `the pack's expected order [${franksCheck.expected.join(", ")}]`,
-                  );
-                }
-
-                // B05 T4 — the runtime oracle layer proper (design doc D1/D2).
-                // A SECOND, independently-fetched crossing of the same final
-                // order: `GET /stages/{id}/standings`'s own `rank` field is
-                // re-readable at any time (unlike the `complete` response
-                // captured above, which is not — `advance.ts`'s own header
-                // comment) and is what a CUSTOMER actually sees. Comparing it
-                // against the captured response is the genuinely new check
-                // this task owes; comparing it against the pack's own
-                // `expected.finalRanks` re-derives D7's own assertion from a
-                // wholly different route.
-                const standingsWire = await fetchStandings(base, s, targetStageId, undefined, input.oracleTransport);
-                const standingsRanked = standingsRankOrder(standingsWire.rows);
-
-                const rankCrossing = compareRankCrossings(completion.finalRanks, standingsRanked);
-                oracles.push({
-                  name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
-                  passed: rankCrossing.matched,
-                  subject: rankCrossing.reason === undefined,
-                  detail: rankCrossing.matched
-                    ? `captured finalRanks and the re-read standings agree: [${standingsRanked.join(", ")}]`
-                    : renderRankCrossingMismatch(rankCrossing),
-                });
-                log.info(oracleLogFields("rank_crossing", rankCrossing.matched ? "pass" : "fail"), "oracle_checked");
-                if (!rankCrossing.matched) {
-                  errors.push(
-                    `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
-                      `${renderRankCrossingMismatch(rankCrossing)}`,
-                  );
-                }
-
-                const standingsVsExpected = compareFinalRanks(expectedIds, standingsRanked);
-                oracles.push({
-                  name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
-                  passed: standingsVsExpected.matched,
-                  subject: standingsVsExpected.reason === undefined,
-                  detail: standingsVsExpected.matched
-                    ? `re-read standings [${standingsRanked.join(", ")}] match the pack's expected order`
-                    : `re-read standings [${standingsRanked.join(", ")}] disagree with the pack's expected order ` +
-                      `[${expectedIds.join(", ")}]`,
-                });
-                log.info(oracleLogFields("standings_final_rank", standingsVsExpected.matched ? "pass" : "fail"), "oracle_checked");
-                if (!standingsVsExpected.matched) {
-                  errors.push(
-                    `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
-                      `pack's expected order [${expectedIds.join(", ")}]`,
-                  );
-                }
-
-                // D2 — champion, defined as rank 1 of the final stage's
-                // standings, cross-checked against the captured response,
-                // compared against `expected.champions`. No champion field
-                // exists anywhere on the wire (F1b) — the bench does not
-                // invent one.
-                const expectedChampionRow = pack.expected.champions.find(
-                  (c) => c.divisionRef === division0.ref && (c.stageRef === undefined || c.stageRef === stage1.ref),
-                );
-                if (expectedChampionRow === undefined) {
-                  warnings.push(
-                    `oracle: division "${division0.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
-                  );
-                } else {
-                  const expectedChampionId = seeded.entrantIdByRef.get(expectedChampionRow.entrant);
-                  if (expectedChampionId === undefined) {
-                    errors.push(
-                      `${suiteKey}: expected.champions names entrant ref "${expectedChampionRow.entrant}" with no resolved id`,
-                    );
-                  } else {
-                    const championCheck = compareChampion(expectedChampionId, standingsRanked, completion.finalRanks);
-                    oracles.push({
-                      name: `oracle: ${division0.ref} champion`,
-                      passed: championCheck.matched,
-                      detail: championCheck.matched
-                        ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
-                        : renderChampionMismatch(championCheck),
-                    });
-                    log.info(oracleLogFields("champion", championCheck.matched ? "pass" : "fail"), "oracle_checked");
-                    if (!championCheck.matched) {
-                      errors.push(`oracle: champion mismatch — ${renderChampionMismatch(championCheck)}`);
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
 
     // B03r tasks 9+10 — registration divisions (design §3/§9), driven
     // separately from seedSuite's admin walk above (see this file's own

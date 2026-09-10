@@ -865,6 +865,16 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // is the pack's own expectation handed back), so their presence and
       // ORDER is all this assertion claims; that they can fail is proven in
       // `oracle-matches.test.ts` and by the wrong-board wiring test.
+      // B06a T9 — the advancement trio now leads the outcome oracles instead
+      // of trailing them, and the ORDER is the assertion. Advancement used to
+      // run last, so the per-match oracle below compared `_tiny`'s playoff
+      // fixture while it was still `scheduled` and the first live run reported
+      // `expected decided, got scheduled` against a product that was correct.
+      // Fold everything, then assert. If these three drift back below the
+      // per-match rows, that defect is back.
+      "oracle: s-playoff rank crossing (captured vs standings)",
+      "oracle: s-playoff standings rank vs expected.finalRanks",
+      "oracle: d-tiny champion",
       "oracle: d-tiny per-match results",
       "oracle: d-badminton per-match results",
       "oracle: d-tiebreak per-match results",
@@ -886,9 +896,6 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       "oracle: d-tiebreak leaderboard (points)",
       "oracle: d-tiebreak person cards (points)",
       "oracle: p-ana career rollup",
-      "oracle: s-playoff rank crossing (captured vs standings)",
-      "oracle: s-playoff standings rank vs expected.finalRanks",
-      "oracle: d-tiny champion",
     ]);
     expect(runtimeOracles.map((o) => o.passed)).toEqual([
       true, true, true, true, true, true, true, true, true, true,
