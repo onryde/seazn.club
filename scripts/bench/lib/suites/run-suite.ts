@@ -113,7 +113,14 @@ import type pino from "pino";
 import { newSession, signIn, type Session } from "../http.ts";
 import { formatFinding, loadPackFile } from "../pack-io.ts";
 import { hashPack } from "../pack-hash.ts";
-import { fixtureKey, type Pack, type PackDivision, type PackStream } from "../pack-schema.ts";
+import {
+  fixtureKey,
+  type Pack,
+  type PackDivision,
+  type PackExpectedMatch,
+  type PackExpectedOutcome,
+  type PackStream,
+} from "../pack-schema.ts";
 // B04 — the five modules this suite wires together. Each is CLOSED and owns
 // one layer: `schedule.ts` drives the seven steps, `checker.ts` recomputes the
 // rules independently of the product, `certificate.ts` runs §6.3's protocol,
@@ -218,6 +225,11 @@ import {
   type PersonCareerStatsWire,
   type PersonStatsWire,
   type SuspensionFixtureSheet,
+  compareMatches,
+  fetchDivisionFixtures,
+  fetchFixtureSideLines,
+  type ActualMatchRow,
+  type ExpectedMatchRow,
 } from "../oracle.ts";
 import type { SelectedDivisionExposure } from "../env.ts";
 import {
@@ -577,6 +589,21 @@ export interface PackSuiteInput {
    * each must be able to say so.
    */
   oracleTransport?: ProbeTransport;
+  /** B06a task 3 — the per-match oracle's board, injectable for the same
+   *  reason `oracleTransport` is: a suite-level test that fakes the whole
+   *  world would otherwise have to model two more routes
+   *  (`GET /divisions/{id}/fixtures` and `GET /fixtures/{id}/state`) AND the
+   *  identity mapping between pack refs and the ids its own fake minted, just
+   *  to keep a green run green while testing something else entirely.
+   *
+   *  Unset in production: the run fetches the real board. A test that injects
+   *  `echoExpectedBoard` makes the per-match oracle VACUOUS on purpose — the
+   *  oracle's real coverage is `oracle-matches.test.ts` plus the wiring test
+   *  that injects a WRONG board and asserts the run reds. */
+  matchBoard?: (args: {
+    readonly divisionRef: string;
+    readonly expected: readonly ExpectedMatchRow[];
+  }) => readonly ActualMatchRow[] | Promise<readonly ActualMatchRow[]>;
   /** B03r tasks 9+10: `bench.ts`'s `--entry admin|registration` flag,
    *  forwarded through `BenchConfig.entry`/`runSuite`. `undefined` (no flag)
    *  leaves every registration-carrying division on its own pack-declared
@@ -1311,6 +1338,30 @@ export async function findExistingSeed(
 
 interface IdOut {
   id: string;
+}
+
+/** An `expected.matches` outcome carries PACK refs; every comparator in
+ *  `oracle.ts` takes ids already resolved by its caller. Unresolvable refs are
+ *  collected rather than thrown on, so one bad row reports every bad ref in
+ *  that division instead of the first. */
+function resolveExpectedOutcome(
+  outcome: PackExpectedOutcome,
+  entrantIdByRef: ReadonlyMap<string, string>,
+  unresolved: string[],
+): ExpectedMatchRow["outcome"] | undefined {
+  if (outcome.kind === "draw" || outcome.kind === "tie" || outcome.kind === "no_result") return outcome;
+  const winner = entrantIdByRef.get(outcome.winner);
+  if (winner === undefined) unresolved.push(outcome.winner);
+  if (outcome.kind === "award") {
+    // The PACK's award variant carries no `score` (pack-schema.ts states why
+    // it deliberately carries no `method` either) — only the engine's does.
+    if (winner === undefined) return undefined;
+    return { kind: "award", winner };
+  }
+  const loser = entrantIdByRef.get(outcome.loser);
+  if (loser === undefined) unresolved.push(outcome.loser);
+  if (winner === undefined || loser === undefined) return undefined;
+  return { kind: "win", winner, loser, ...(outcome.method === undefined ? {} : { method: outcome.method }) };
 }
 
 export async function runPackSuite(
@@ -2899,7 +2950,115 @@ export async function runPackSuite(
     // `expected.tables` row and is never advanced through a progression at
     // all, so a gate on `stage1?.progression` would leave it permanently
     // unreached.
+    const reportMatchOracle = (
+      divisionRef: string,
+      expectedRows: readonly ExpectedMatchRow[],
+      actualRows: readonly ActualMatchRow[],
+    ): void => {
+      const matchCheck = compareMatches(expectedRows, actualRows);
+      // `checked` is never 0, and there is deliberately no `no_subject`
+      // branch: `matchesByDivision` only holds divisions the pack declares a
+      // match for, and stage 0 REFUSES a pack carrying a stream with no
+      // expected match at all ("a replayed stream with no oracle asserts
+      // nothing", `validate-pack.ts`). So a run that reaches here always has a
+      // subject. `tiny-suite-simulate.test.ts` pins that guarantee rather than
+      // leaving it as a comment.
+      const verdict = matchCheck.mismatches.length === 0 ? "pass" : "fail";
+      oracles.push({
+        name: `oracle: ${divisionRef} per-match results`,
+        passed: matchCheck.mismatches.length === 0,
+        subject: matchCheck.checked > 0,
+        verdict,
+        detail:
+          matchCheck.checked === 0
+            ? "no expected.matches rows for this division"
+            : `${matchCheck.checked} checked, ${matchCheck.mismatches.length} mismatched` +
+              ` (${matchCheck.byRound.map((r) => `r${r.roundNo ?? "-"}: ${r.checked - r.mismatched}/${r.checked}`).join(", ")})`,
+      });
+      log.info({ ...oracleLogFields("per_match_results", verdict), division: divisionRef }, "oracle_checked");
+      for (const miss of matchCheck.mismatches) {
+        errors.push(
+          `oracle: per-match mismatch in "${divisionRef}" fixture "${miss.fixtureExtKey}" — ` +
+            `${miss.field}: expected ${miss.expected}, got ${miss.actual}`,
+        );
+      }
+    };
+
     if (input.sql !== undefined) {
+      // B06a task 3 — per-match results. `expected.matches` has been in the
+      // schema since B02 and was compared only OFFLINE, by stage 0's fold;
+      // nothing ever asked the product what it decided. One request per
+      // division (the route takes no query params and returns the lot), and
+      // the fixture STATE route only for the fixtures whose expected row
+      // declares `perSide` — a 95-match suite must not pay 95 extra round
+      // trips to compare scorelines no pack declared.
+      const matchesByDivision = new Map<string, PackExpectedMatch[]>();
+      for (const m of pack.expected.matches) {
+        const list = matchesByDivision.get(m.divisionRef) ?? [];
+        list.push(m);
+        matchesByDivision.set(m.divisionRef, list);
+      }
+      for (const [divisionRef, declared] of matchesByDivision) {
+        const divisionId = seeded.divisionIdByRef.get(divisionRef);
+        if (divisionId === undefined) {
+          errors.push(`oracle: expected.matches names division ref "${divisionRef}" with no resolved id`);
+          continue;
+        }
+        const expectedRows: ExpectedMatchRow[] = [];
+        const unresolved: string[] = [];
+        for (const m of declared) {
+          const resolvedOutcome = resolveExpectedOutcome(m.outcome, seeded.entrantIdByRef, unresolved);
+          if (resolvedOutcome === undefined) continue;
+          const perSide = m.perSide?.flatMap((side) => {
+            const entrantId = seeded.entrantIdByRef.get(side.entrant);
+            if (entrantId === undefined) {
+              unresolved.push(side.entrant);
+              return [];
+            }
+            return [{ entrant: entrantId, line: side.line }];
+          });
+          expectedRows.push({
+            fixtureExtKey: m.fixtureExtKey,
+            outcome: resolvedOutcome,
+            ...(perSide === undefined ? {} : { perSide }),
+          });
+        }
+        if (unresolved.length > 0) {
+          errors.push(
+            `oracle: expected.matches for "${divisionRef}" names entrant ref(s) with no resolved id: ${unresolved.join(", ")}`,
+          );
+          continue;
+        }
+        if (input.matchBoard !== undefined) {
+          const injected = await input.matchBoard({ divisionRef, expected: expectedRows });
+          reportMatchOracle(divisionRef, expectedRows, injected);
+          continue;
+        }
+        const wire = await fetchDivisionFixtures(base, s, divisionId, input.oracleTransport);
+        // Scorelines come from the fixture STATE route, and only for the
+        // fixtures whose expected row declares `perSide` — see
+        // `fetchFixtureSideLines`'s own note on why this is not a blanket
+        // second pass over every fixture.
+        const wantsLines = new Set(
+          expectedRows.filter((row) => row.perSide !== undefined).map((row) => row.fixtureExtKey),
+        );
+        const actualRows: ActualMatchRow[] = [];
+        for (const f of wire) {
+          const extKey = f.ext_key ?? "";
+          const perSide = wantsLines.has(extKey)
+            ? await fetchFixtureSideLines(base, s, f.id, input.oracleTransport)
+            : undefined;
+          actualRows.push({
+            extKey,
+            status: f.status,
+            roundNo: f.round_no,
+            outcome: f.outcome,
+            ...(perSide === undefined ? {} : { perSide }),
+          });
+        }
+        reportMatchOracle(divisionRef, expectedRows, actualRows);
+      }
+
       for (const table of pack.expected.tables) {
         const tableStageId = seeded.stageIdByRef.get(table.stageRef);
         if (tableStageId === undefined) {

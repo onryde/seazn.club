@@ -43,6 +43,10 @@
 // `usecases/player-stats.ts#divisionPlayerStats/personStats/
 // personCareerStats`, field for field (`B05-repins-2026-09-07.md`'s
 // "Verified pins — oracles" table).
+// The engine's own outcome union, as a RUNTIME value: `compareMatches`
+// parses the wire's jsonb through it rather than reading fields off an
+// `unknown` (see that comparator's own note).
+import { MatchOutcome, ScoreSummary } from "@seazn/engine/core";
 import { raw, type RawResult, type Session } from "./http.ts";
 
 // ---------------------------------------------------------------------------
@@ -1195,4 +1199,220 @@ export async function fetchFixtureLineup(
     );
   }
   return dataOf<LineupWire>(result, path, "lineup");
+}
+
+// ---------------------------------------------------------------------------
+// 9 — Per-match results (design §8; B06a task 3)
+// ---------------------------------------------------------------------------
+// `expected.matches` has been in `PackSchema` since B02 and was read by
+// NOTHING at run time: stage 0 folds each stream offline and compares the fold
+// to it, but the seeded HTTP run never asked the product what it decided. A
+// pack author would reasonably assume the most basic oracle of all — "did the
+// real result come out?" — was covered. It was not.
+//
+// The comparison is on the OUTCOME, because there is no scoreline to compare:
+// `GET /api/v1/divisions/{id}/fixtures` returns `outcome` (jsonb),`status` and
+// `round_no`, and no score field of any kind. Scorelines exist only where a
+// pack declares `perSide`, and are read from the fixture STATE route.
+
+export interface MatchSideLine {
+  readonly entrant: string;
+  readonly line: string;
+}
+
+export interface ExpectedMatchRow {
+  readonly fixtureExtKey: string;
+  /** Pack refs ALREADY resolved to entrant ids by the caller — the convention
+   *  every comparator in this file follows. */
+  readonly outcome: MatchOutcome;
+  readonly perSide?: readonly MatchSideLine[];
+}
+
+export interface ActualMatchRow {
+  readonly extKey: string;
+  readonly status: string;
+  readonly roundNo: number | null;
+  /** Raw off the wire: the route types this `z.unknown().nullable()`, so it is
+   *  parsed through the engine's own union below rather than read field-wise.
+   *  A jsonb column written as a JSON *string* parses to a scalar, and every
+   *  field read off that scalar yields `undefined` — which would compare equal
+   *  to an expected `undefined` and pass in silence. */
+  readonly outcome: unknown;
+  readonly perSide?: readonly MatchSideLine[];
+}
+
+export type MatchMismatchField = "status" | "outcome" | "winner" | "method" | "line";
+
+export interface MatchMismatch {
+  readonly fixtureExtKey: string;
+  readonly field: MatchMismatchField;
+  readonly expected: string;
+  readonly actual: string;
+}
+
+export interface MatchRoundTally {
+  readonly roundNo: number | null;
+  readonly checked: number;
+  readonly mismatched: number;
+}
+
+export interface MatchComparison {
+  readonly checked: number;
+  readonly byRound: readonly MatchRoundTally[];
+  readonly mismatches: readonly MatchMismatch[];
+}
+
+/** A fixture the product considers settled. Anything else — `scheduled`,
+ *  `in_play`, `cancelled` — is reported as a STATUS mismatch rather than
+ *  compared: an outcome read off an unfinished fixture is not a wrong result,
+ *  it is a run that did not get there, and the two need different fixes. */
+const SETTLED_STATUSES = new Set(["decided", "finalized", "forfeited", "abandoned"]);
+
+function outcomeWinnerOf(o: MatchOutcome): string | undefined {
+  return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
+}
+
+/**
+ * Walks the DECLARED list, never the live one: a fixture the pack does not
+ * declare is not this oracle's business, while a declared fixture the board
+ * never returned IS (it reports as `(absent)` rather than being skipped).
+ *
+ * At most one mismatch per fixture — the FIRST differing field — so one wrong
+ * result is one row rather than a cascade of four.
+ */
+export function compareMatches(
+  expected: readonly ExpectedMatchRow[],
+  actual: readonly ActualMatchRow[],
+): MatchComparison {
+  const byKey = new Map(actual.map((a) => [a.extKey, a] as const));
+  const mismatches: MatchMismatch[] = [];
+  const rounds = new Map<number | null, { checked: number; mismatched: number }>();
+
+  for (const row of expected) {
+    const live = byKey.get(row.fixtureExtKey);
+    const roundNo = live?.roundNo ?? null;
+    const tally = rounds.get(roundNo) ?? { checked: 0, mismatched: 0 };
+    tally.checked += 1;
+
+    const miss = firstMismatch(row, live);
+    if (miss !== undefined) {
+      mismatches.push(miss);
+      tally.mismatched += 1;
+    }
+    rounds.set(roundNo, tally);
+  }
+
+  const byRound = [...rounds.entries()]
+    .map(([roundNo, t]) => ({ roundNo, checked: t.checked, mismatched: t.mismatched }))
+    // Nulls last: an unrounded fixture (a league) sorts after the rounds of a
+    // knockout rather than ahead of round 1.
+    .sort((a, b) => (a.roundNo ?? Number.MAX_SAFE_INTEGER) - (b.roundNo ?? Number.MAX_SAFE_INTEGER));
+
+  return { checked: expected.length, byRound, mismatches };
+}
+
+function firstMismatch(row: ExpectedMatchRow, live: ActualMatchRow | undefined): MatchMismatch | undefined {
+  const at = (field: MatchMismatchField, expected: string, actual: string): MatchMismatch => ({
+    fixtureExtKey: row.fixtureExtKey,
+    field,
+    expected,
+    actual,
+  });
+
+  if (live === undefined) return at("status", "decided", "(absent)");
+  if (!SETTLED_STATUSES.has(live.status)) return at("status", "decided", live.status);
+
+  const parsed = MatchOutcome.safeParse(live.outcome);
+  if (!parsed.success) return at("outcome", row.outcome.kind, "(unparseable)");
+  const got = parsed.data;
+
+  if (got.kind !== row.outcome.kind) return at("outcome", row.outcome.kind, got.kind);
+
+  const expectedWinner = outcomeWinnerOf(row.outcome);
+  const actualWinner = outcomeWinnerOf(got);
+  if (expectedWinner !== undefined && expectedWinner !== actualWinner) {
+    return at("winner", expectedWinner, actualWinner ?? "(none)");
+  }
+
+  // Only where the pack declares one: a pack that states no method is not
+  // asserting one, so any live value satisfies it.
+  if (row.outcome.kind === "win" && row.outcome.method !== undefined) {
+    const actualMethod = got.kind === "win" ? got.method : undefined;
+    if (row.outcome.method !== actualMethod) {
+      return at("method", row.outcome.method, actualMethod ?? "(absent)");
+    }
+  }
+
+  for (const side of row.perSide ?? []) {
+    const liveLine = live.perSide?.find((s) => s.entrant === side.entrant)?.line;
+    if (liveLine !== side.line) {
+      return at("line", `${side.entrant}:${side.line}`, `${side.entrant}:${liveLine ?? "(absent)"}`);
+    }
+  }
+
+  return undefined;
+}
+
+/** One division's fixtures, for `compareMatches`.
+ *
+ *  `GET /api/v1/divisions/{id}/fixtures` takes NO query parameters — the whole
+ *  division comes back in one call, which is why the per-match oracle costs
+ *  one request per division rather than one per fixture. */
+export async function fetchDivisionFixtures(
+  base: string,
+  session: Session,
+  divisionId: string,
+  transport?: OracleTransport,
+): Promise<readonly FixtureWire[]> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/divisions/${divisionId}/fixtures`;
+  const result = await t.raw(base, session, path, "GET");
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: division fixtures refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  return dataOf<readonly FixtureWire[]>(result, path, "fixtures");
+}
+
+/** Only the fields `compareMatches` reads. The route returns a great deal
+ *  more; naming the four here keeps the comparator's contract legible and
+ *  stops an unrelated wire change from looking like an oracle change. */
+export interface FixtureWire {
+  readonly id: string;
+  readonly ext_key: string | null;
+  readonly status: string;
+  readonly round_no: number | null;
+  readonly outcome: unknown;
+}
+
+/** The per-side scorelines for ONE fixture, from the state route's summary.
+ *
+ *  Fetched only for fixtures whose expected row declares `perSide`: the
+ *  division fixtures route carries no scoreline at all, and a 95-match suite
+ *  must not pay 95 extra round trips to compare lines no pack declared.
+ *
+ *  `undefined` when the fixture has no summary yet (nothing folded into it) —
+ *  which the comparator then reports as `(absent)` against every declared
+ *  line, never as a pass. */
+export async function fetchFixtureSideLines(
+  base: string,
+  session: Session,
+  fixtureId: string,
+  transport?: OracleTransport,
+): Promise<readonly MatchSideLine[] | undefined> {
+  const t = transport ?? defaultOracleTransport;
+  const path = `/api/v1/fixtures/${fixtureId}/state`;
+  const result = await t.raw(base, session, path, "GET");
+  if (result.status !== 200) {
+    const { code, message } = errorOf(result);
+    throw new Error(
+      `oracle: fixture state refused — HTTP ${result.status} ${code ?? "(no code)"} — ${message ?? "(no message)"}`,
+    );
+  }
+  const state = dataOf<{ readonly summary: unknown }>(result, path, "fixture state");
+  const parsed = ScoreSummary.safeParse(state.summary);
+  if (!parsed.success) return undefined;
+  return parsed.data.perSide.map((side) => ({ entrant: side.entrantId, line: side.line }));
 }

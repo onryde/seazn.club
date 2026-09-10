@@ -36,6 +36,7 @@ import {
   personStatsFromDivisions,
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
+  echoExpectedBoard,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
@@ -482,6 +483,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
     });
 
     expect(report.gate).toBe("green");
@@ -583,6 +585,7 @@ describe("runTinySuite — B05 T2 division-B stream fold wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
     });
 
     expect(report.gate).toBe("red");

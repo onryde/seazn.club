@@ -42,6 +42,7 @@ import {
   personStatsFromDivisions,
   tinyDivisionPlayerStats,
   tinyLeagueTableRows,
+  echoExpectedBoard,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 
@@ -534,6 +535,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
     });
 
     expect(report.gate).toBe("green");
@@ -603,6 +605,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
     });
 
     expect(report.gate).toBe("green");
@@ -660,6 +663,7 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
       startTransport: transport,
       advanceTransport: transport,
       oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
     });
 
     expect(report.gate).toBe("green");
@@ -765,6 +769,7 @@ describe("runTinySuite — the post-officials re-check (B04 F-T6-2)", () => {
       startTransport: server.transport,
       advanceTransport: server.transport,
       oracleTransport: server.transport,
+      matchBoard: echoExpectedBoard,
     });
     return { report, server };
   }

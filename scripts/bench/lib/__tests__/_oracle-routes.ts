@@ -290,6 +290,16 @@ export function personCareerStatsFromDivisions(
   };
 }
 
+/** Only the fields the per-match oracle reads off `GET /divisions/{id}/fixtures`.
+ *  The real route returns a great deal more. */
+export interface DivisionFixtureLike {
+  readonly id: string;
+  readonly ext_key: string | null;
+  readonly status: string;
+  readonly round_no: number | null;
+  readonly outcome: unknown;
+}
+
 export interface OracleRoutesWorld {
   /** `raw()`'s own handler for the three oracle routes — `undefined` for
    *  any other method/path, so a caller chains it before its own branches. */
@@ -316,6 +326,15 @@ export function makeOracleRoutesWorld(input: {
    *  reason the two above are: a caller that never reaches the person-stats
    *  oracles can omit it. */
   getPersonStats?(personId: string): PersonStatsLike | undefined;
+  /** B06a task 3 — `GET /divisions/{id}/fixtures`, the per-match oracle's one
+   *  read per division. `undefined` for a division this world knows nothing
+   *  about, which the route then answers with an EMPTY list: a declared match
+   *  the board never returned must red as `(absent)`, never be skipped. */
+  getDivisionFixtures?(divisionId: string): readonly DivisionFixtureLike[] | undefined;
+  /** B06a task 3 — `GET /fixtures/{id}/state`, fetched only for fixtures whose
+   *  expected row declares `perSide`. `undefined` means "no summary yet",
+   *  which compares as `(absent)` against every declared line. */
+  getFixtureSummary?(fixtureId: string): { readonly perSide: readonly { entrantId: string; line: string }[] } | undefined;
   /** T5b — `GET /persons/{id}/stats?group=sport`'s response. A SEPARATE
    *  callback from `getPersonStats`, never the same one filtered: the whole
    *  point of the career oracle is that the rollup is a different read of the
@@ -326,6 +345,25 @@ export function makeOracleRoutesWorld(input: {
   return {
     handle(method, path) {
       if (method !== "GET") return undefined;
+
+      const divisionFixturesMatch = /^\/api\/v1\/divisions\/([^/]+)\/fixtures$/.exec(path);
+      if (divisionFixturesMatch !== null) {
+        const divisionId = divisionFixturesMatch[1];
+        return {
+          status: 200,
+          json: { ok: true, data: input.getDivisionFixtures?.(divisionId) ?? [] },
+        };
+      }
+
+      const fixtureStateMatch = /^\/api\/v1\/fixtures\/([^/]+)\/state$/.exec(path);
+      if (fixtureStateMatch !== null) {
+        const fixtureId = fixtureStateMatch[1];
+        const summary = input.getFixtureSummary?.(fixtureId);
+        return {
+          status: 200,
+          json: { ok: true, data: { status: "decided", last_seq: 0, summary: summary ?? null } },
+        };
+      }
 
       const standingsMatch = /^\/api\/v1\/stages\/([^/]+)\/standings/.exec(path);
       if (standingsMatch !== null) {
@@ -398,4 +436,37 @@ export function makeOracleRoutesWorld(input: {
       return undefined;
     },
   };
+}
+
+/** B06a task 3 — the per-match board, echoed straight back from what the pack
+ *  declared.
+ *
+ *  A suite-level fake world would otherwise owe two more routes AND the
+ *  mapping between pack refs and the entrant/fixture ids it minted itself,
+ *  purely to keep a green run green while testing the import path or the plan
+ *  chooser. Injecting this makes the per-match oracle VACUOUS by construction
+ *  — a fixture proving a fixture — which is exactly why it must never be the
+ *  evidence that the oracle works. That evidence is `oracle-matches.test.ts`
+ *  (the comparator, ten cases, mutation-checked) and the wiring test that
+ *  injects a WRONG board and asserts the run reds. */
+export function echoExpectedBoard(args: {
+  readonly expected: readonly {
+    readonly fixtureExtKey: string;
+    readonly outcome: unknown;
+    readonly perSide?: readonly { readonly entrant: string; readonly line: string }[];
+  }[];
+}): readonly {
+  readonly extKey: string;
+  readonly status: string;
+  readonly roundNo: number | null;
+  readonly outcome: unknown;
+  readonly perSide?: readonly { readonly entrant: string; readonly line: string }[];
+}[] {
+  return args.expected.map((e) => ({
+    extKey: e.fixtureExtKey,
+    status: "decided",
+    roundNo: null,
+    outcome: e.outcome,
+    ...(e.perSide === undefined ? {} : { perSide: e.perSide }),
+  }));
 }
