@@ -163,7 +163,10 @@ the design's DDL verbatim.
      prepared for. **The two `ingest_rtmps_*` columns are C1 / owner ruling
      R-A (2026-09-10):** the v1 QR contract carries BOTH credential shapes, and
      `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
-     response — both sets are in hand at provision time, so storing one and
+     response — plus a playback twin of each (`rtmpsPlayback`, `srtPlayback`,
+     `webRTCPlayback`) and `playback { hls, dash }`, measured 2026-09-10
+     (U1-S2); persist `webRTCPlayback.url` with the session, it is R2's WHEP
+     pull target. Both sets are in hand at provision time, so storing one and
      discarding the other is a choice this wave has no reason to make, and
      re-acquiring the discarded half later costs a migration plus a re-issue of
      every live input. Same AES-256-GCM envelope discipline as
@@ -196,8 +199,14 @@ the design's DDL verbatim.
 3. **Ports and drivers** `server/relay/ports.ts` (`IngestProvider {
    createLiveInput, inputStatus, addOutput, deleteInput, storageHeadroom }`,
    `RunnerProvider { create, status, delete }` — shapes per §6.4/§7.1),
-   `server/relay/ingest-cf.ts` (Cloudflare Stream: recording `automatic` +
-   explicit `timeoutSeconds`, `deleteRecordingAfterDays` = 7 (ruling E),
+   `server/relay/ingest-cf.ts` (Cloudflare Stream: `recording: { mode:
+   "automatic", timeoutSeconds }` — and **`deleteRecordingAfterDays: 7`
+   (ruling E) as a TOP-LEVEL sibling of `recording`, NOT a member of it.**
+   Measured 2026-09-10 (U1-S1): nested, it is accepted with HTTP 200 and
+   silently dropped, retention is never set, the prepaid storage block never
+   recycles and §6.5 eventually refuses every session — all with green calls.
+   The adapter's test asserts `deleteRecordingAfterDays` comes back NON-NULL on
+   the create response; asserting HTTP 200 cannot see this failure.
    `outputs = [target]` IFF passthrough — §6.4), `server/relay/runner-fly.ts`
    (Machines REST per §7.1: create with `region`, `guest`, `auto_destroy`,
    `env { SESSION_ID, JOB_TOKEN, APP_URL }`; `delete` for hard kill — the

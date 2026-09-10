@@ -1427,3 +1427,271 @@ references", is the accurate one and stands: nothing renders it.
   condition ever creates a row) and **E6** (§9a makes ports-and-adapters binding
   while `RunnerProvider` is named and never defined) belong to the design of
   record and are folded there, not here.
+
+## 2026-09-10 — W2 task zero: the RE-PIN, closed
+
+Three read-only scouts, `model: opus`, against `main` `10c7f94cd` in worktree
+`.claude/worktrees/stream-w2` (branch `feat/stream-w2-moments`). The table in
+`W2-moments.md` was last verified on 2026-09-08 at `60c0615b0`; W1 overlay
+(#761), the R2-prep fold (#767) and four other PRs have landed since. Every row
+was re-opened, not re-grepped.
+
+**Verdict in one line: the wave's SHAPE changes. Its scope does not.** The
+moments the owner named all still exist and all still fire; the mechanism that
+was briefed to detect them does not, for the two sports he named first.
+
+### RE-PIN table — outcomes
+
+| Row | Verdict | Pin on `10c7f94cd` |
+|---|---|---|
+| Overlay route (the ONE poll target) | HELD | `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts:11` |
+| `OverlayLiveData` | HELD | `apps/web/src/components/public-site/live-score-data.ts:59-71` |
+| The projector's emitted field set | **MOVED (semantic)** | `apps/web/src/server/overlay/project.ts:159-178` — emits ONLY `status, summary, outcome, lastSeq, venueTz, clock?, cricket?` |
+| Overlay load path | HELD | `apps/web/src/server/overlay/load.ts:76-81` |
+| `MatchCentreDoc` | HELD (±1) | `apps/web/src/server/public-site/match-centre-schema.ts:84-97`, `timeline` `:87` (was `85-97`) |
+| `publicFixture()` / `match_centre` | MOVED | `apps/web/src/server/usecases/public.ts:433`, spread `:480-481` (was `:392-393`) |
+| `TimelineLine` | HELD | `match-centre-schema.ts:69` — `{seq, at, marker, sideIndex, text, emphasis}`, still NO `type` |
+| `TIMELINE_KEY_FOR` | HELD | `apps/web/src/lib/timeline-keys.ts:60` — many-to-one, inversion lossy |
+| `buildTimeline` / `TimelineArgs` / `personOf` | HELD | `apps/web/src/server/public-site/timeline.ts:587`, `:80-92`, `personOf` `:91` |
+| `loadMatchCentre` | HELD | `apps/web/src/server/public-site/match-centre-load.ts:248` |
+| `useLiveFixture` | MOVED + **WIDENED** | `apps/web/src/components/public-site/match-centre/use-live-fixture.ts:65`; returns FOUR fields `{data, transport, presentationNowOffsetMs, awaitingDelay}` `:42-63` |
+| Overlay's hook call | HELD | `apps/web/src/components/overlay/overlay-stage.tsx:64` |
+| `LiveScoreBody` | MOVED (path) | `apps/web/src/components/public-site/live-score.tsx:103` — not under `match-centre/` |
+| `Side` | HELD | `match-centre-schema.ts:11` |
+| `MatchCentreHeader` | MOVED (range) | `match-centre-schema.ts:14-38` (was `:14-24`); `battingIndex` `:20`; `phase`/`strength` added by W1 |
+| `CricketView.live` | MOVED | `match-centre-schema.ts:55`; all eight fields hold |
+| `CricketBattingRow` / `CricketBowlingRow` | MOVED | `:40` / `:41` (was `:26-27`) |
+| `maskPublicEntrantNames` | MOVED | `apps/web/src/server/public-site/data.ts:565` (was `:510`) |
+| `PublicFixture.last_seq` | MOVED | `apps/web/src/server/public-site/data.ts:284` (was `:206`) |
+| `registry.ts:35,89` | **GONE as briefed** | Those lines are `SportRegistry` and its singleton. The registry declares NO event vocabulary; event types are per-module |
+
+### Findings
+
+**W2-F1 — the moments source is the FALLBACK, and this is now settled.**
+False-premise 1 confirmed false. No raw `score_events.type` reaches the
+overlay's single poll by any path: `projectOverlayLiveData` never sets
+`match_centre`, `TimelineLine` carries no `type`, and `TIMELINE_KEY_FOR` is
+many-to-one so the key cannot be inverted. W2 therefore adds its own
+`recentEvents` projection to `OverlayLiveData`, reading `score_events`
+server-side under `apps/web/src/server/overlay/`. The PR says so in its first
+paragraph, and the wave owes the spectator programme a RECOMMENDATION (never
+"the owner ruled") that raw types be carried.
+
+**W2-F2 — `match_centre` typechecks on the overlay payload and is always
+`undefined` at runtime.** `OverlayLiveData extends LiveFixtureData`, so
+`data.match_centre` compiles clean while the projector never sets it. An
+implementer reaching for it gets a green `tsc` and silence. This is the repo's
+inert-seam class with a type system actively vouching for the dead field.
+Whatever W2 builds must not read it, and the wave should consider narrowing the
+type so the compiler stops lying.
+
+**W2-F3 — the allowlist CANNOT be keyed on event type, for the two sports the
+owner named first.** Scope item 2 briefs `MOMENT_TYPES: Record<sportKey,
+Record<eventType, …>>`. Against the modules:
+
+| concept | reality | pin |
+|---|---|---|
+| cricket four / six / wicket | **no discrete types** — all three are payload fields of `cricket.ball`: `boundary: 4`, `boundary: 6`, `wicket: CricketWicket` | `packages/engine/src/sports/cricket/cricket.ts:407,177,188,168` |
+| football goal / card | `football.goal` / `football.card` — as briefed | `football.ts:438,439` |
+| hockey card | **`hockey.suspension.start`** — there is no `hockey.card` | `period/kernel.ts:1822,1824`; `hockey.ts:45,49` |
+| icehockey card | **`icehockey.suspension.start`** | `period/kernel.ts:1822,1824` |
+
+An allowlist keyed on `"cricket.wicket"` or `"<sport>.card"` would mute every
+cricket dismissal and both hockey codes while staying green — the strings do
+not exist. The allowlist becomes a per-sport MATCHER over `(type, payload)`,
+not a `type → tone` map. Owner scope is unchanged: SIX, OUT, GOAL and the cards
+all still fire.
+
+**W2-F4 — set point and match point are DERIVED in all four racket/net
+modules; set won is an EVENT only at band 0.** No `matchPoint` / `setPoint`
+symbol exists anywhere in `packages/engine/src` or `apps/web/src`.
+
+| module | set point | match point | set won | ace |
+|---|---|---|---|---|
+| tennis | DERIVED | DERIVED | EVENT band 0 `tennis.set_summary`; DERIVED at band 3 | DERIVED — `tennis.point` `meta.kind: "ace"`, a payload field, not a type |
+| badminton | DERIVED | DERIVED | EVENT band 0 `badminton.game.summary` (`partial:true` = NOT won) | n/a |
+| tabletennis | DERIVED | DERIVED | EVENT band 0 `tabletennis.game.summary` | n/a |
+| volleyball | DERIVED | DERIVED | EVENT band 0 `volleyball.set.summary` | n/a |
+
+Evidence: `nested/kernel.ts:200,223,234,363,1565-1569,1702`;
+`setbased/kernel.ts:147,281,1645-1650,1812`. The only summary readers that
+exist are `setBreakdown` (`apps/web/src/lib/public-site.ts:301`) and
+`servingSide` (`:416`) over `ScoreSummary {headline, perSide, detail}`
+(`packages/engine/src/core/types.ts:143`). So the derived branch the brief
+allowed for is the ONLY branch for these, at the bands anyone streams at.
+
+**W2-F5 — false-premise 3 is false, and it falls the safe way.**
+`PublicFixture.last_seq` (`data.ts:284`) is not `max(seq)` over the ledger — it
+is the seq of the last appended row, cached on `match_states.last_seq` and
+upserted per append (`engine-db/append-event.ts:341-345`,
+`V217__match_states.sql:4`), surfaced through `public_fixtures_v`. Seq is
+gapless, `expectedSeq + 1` (`append-event.ts:213`). A void **appends** a
+`core.void` row through the same path (`usecases/scoring.ts:97,236`;
+`core/events.ts:165-190`); the voided row is never mutated. So `last_seq` is
+strictly monotonic and a void increases it. The re-fire the brief feared cannot
+happen. `resolveVoids` still filters at read, so the projection must apply it.
+
+**W2-F6 — a band-2 cricket wicket needs a line DIFF, not a type match.**
+False-premise 5 confirmed false. Band 2 cricket declares exactly one type,
+`cricket.player.line` (`cricket.ts:3358`, map `:3346-3361`); no `cricket.wicket`
+exists at any band. A wicket is `CricketPlayerLine.batting.out: boolean` plus
+optional `batting.dismissal.{kind,bowler,fielder}`, and `bowling.wickets` as a
+count (`cricket.ts:332,341,346-353`). The line is a **cumulative** scorecard row
+re-appended from the `post`-phase panel (`:3326-3330`), so the same person's
+line arrives repeatedly with new totals — the OUT moment fires on `batting.out`
+flipping false→true, and must not re-fire on the next cumulative re-append.
+
+**W2-F7 — neither consent resolver is reachable from the overlay.**
+False-premise 4 confirmed false, and worse than briefed. There are two disjoint
+resolvers: `maskPublicEntrantNames` (`data.ts:565`) for entrant names and
+`resolvePersonDisplayName` (`apps/web/src/lib/name-display.ts:72`) for person
+names, the latter reached through `personOf` (type
+`apps/web/src/server/public-site/match-centre.ts:185`, built `makePersonOf`
+`:214`, wired `:984`) fed by `readPublicLineups`
+(`apps/web/src/server/public-site/public-lineups.ts:25,41`). W2's moment lines
+name PEOPLE, so `personOf` is the one — but `server/overlay/load.ts` and
+`project.ts` do no lineup or person read at all. W2 must ADD that path
+server-side. This was briefed as reuse; it is new work.
+
+**W2-F8 — two one-authority duplicate pairs, confirmed.** False-premise 7
+confirmed false: the overlay payload carries neither `Side.short` nor
+`battingIndex`, and the overlay derives its own of each in the CLIENT from
+`summary` — `shortCode()` (`apps/web/src/lib/overlay-model.ts:187`, three-letter
+fallback `:191`) against wire `Side.short` (`match-centre-schema.ts:11`), and
+`ledEntrantId()` (`overlay-model.ts:439`) → `battingEntrantId()`
+(`apps/web/src/lib/public-site.ts:497`) against wire
+`MatchCentreHeader.battingIndex`, derived server-side at `match-centre.ts:765`.
+Retiring the overlay's copies is NOT a repoint: the wire values would have to
+start arriving on the overlay payload first. Recorded, not actioned by W2.
+
+**W2-F9 — plan/brief conflict on where `recent` lands.** The plan's
+Architecture paragraph puts it on "the public fixture payload"; the brief's F4
+ruling puts it on `OverlayLiveData`, because the overlay no longer polls the
+public fixture route. Per `W2-moments.md`, the brief's rulings win and the
+conflict is this finding. `recentEvents` goes on `OverlayLiveData`.
+
+**W2-F10 — the plan's PRIMARY source for the cricket batter line is
+unreachable.** The plan names `match_centre.cricket.live` as primary with a
+server fallback. Per W2-F1 and W2-F2, `match_centre` never arrives on the
+overlay payload, so the fallback — a server-side `foldMatch` with the real
+cricket module, projecting striker/non-striker `runs(balls)` and bowler
+`O-M-R-W` — is the ONLY source. The primary/fallback framing is struck.
+
+**W2-F11 — the transport grew a field the slab must respect.**
+`useLiveFixture` now returns `awaitingDelay` (I1, 2026-09-10), already
+destructured at `overlay-stage.tsx:64`. A moment raised while the delayed
+transport is still catching up would replay history — precisely what mutant (h)
+exists to kill. The stage's `seenSeq` initialisation and the queue push must
+both gate on it.
+
+**W2-F12 — `HOLD_MS` has a shipped precedent to copy verbatim.**
+False-premise 6 is true and already solved for the pad: five symbols —
+`HOLD_MS_DEFAULT = 12000` (`apps/web/src/components/v2/scorepad/queue.ts:139`),
+`MIN_HOLD_MS = 500` (`:160`), `HOLD_MS_ENV_VAR` (`:143`), the resolver
+(`:161-165`, bad/empty/sub-floor → default, never 0) and the live constant whose
+env read is spelled LITERALLY (`:184`) — plus four tests, including a value
+guard pinned to the DEFAULT (`__tests__/soft-commit.test.ts:83-85`) and a
+source-text guard (`:115-131`) that a dynamic `process.env[VAR]` read cannot
+survive. W2 copies the shape.
+
+### Stale pin found in code (not a defect, worth a one-line fix)
+
+`apps/web/src/server/public-site/public-lineups.ts:10` cites
+`data.ts:510-599` for `maskPublicEntrantNames`, which now begins at `:565`.
+
+### What task zero does NOT close
+
+The plan's Task 1 still carries comment-sketched and empty `it(...)` bodies,
+written that way because these shapes were unpinned. They are now pinned. Those
+bodies must be written into real assertions — and re-reviewed — before Task 1
+starts. An empty `it()` passes vacuously; none may reach a commit.
+
+## 2026-09-10 — U1 spike, step 1: the live input's real shape (MEASURED)
+
+The owner provisioned a Cloudflare account, subscribed to Stream and issued an
+account-owned token (`cfat_` format, `Account → Stream → Edit`). First
+measurement against the real API. One live input was created, read and deleted;
+`live_inputs` is back to 0 and nothing remains on the account.
+
+Method: `POST /accounts/{id}/stream/live_inputs` with the design's own config
+(`recording: { mode: "automatic", timeoutSeconds: 10, requireSignedURLs: false,
+deleteRecordingAfterDays: 7 }`), then `DELETE`. Secrets were never printed —
+only shapes and lengths.
+
+### U1-S1 — `deleteRecordingAfterDays` is TOP-LEVEL, and nesting it is SILENTLY IGNORED
+
+Sent as a member of `recording`. Cloudflare returned HTTP 200, `success: true`,
+and an echoed `recording` block that does **not contain the key at all**:
+
+```
+recording echoed: { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs, timeoutSeconds }
+top-level deleteRecordingAfterDays: null
+```
+
+The field is a sibling of `recording`, not a child. A nested spelling is
+accepted with a 200 and dropped on the floor.
+
+**Why this is not cosmetic.** Design §12 sets `deleteRecordingAfterDays = 7` at
+launch, and §6.5 depends on it: recordings must expire for the prepaid storage
+block to recycle. If R1 sends it nested, retention is never configured,
+recordings accumulate, the block fills, and §6.5's `503 storage_exhausted`
+begins refusing sessions — with a green create call and a 200 in the log at
+every step. R1 must send it top-level AND assert it comes back non-null on the
+create response; a test that only asserts HTTP 200 cannot see this.
+
+### U1-S2 — C1 holds and UNDERCOUNTS: SIX credential objects, not three
+
+The design (§7.6, C1) records that `liveInputs.create()` returns
+`{ uid, rtmps, srt, webRTC }` in one response. It returns those **and a
+playback twin of each**:
+
+| object | keys |
+|---|---|
+| `rtmps` | `url`, `streamKey` |
+| `rtmpsPlayback` | `url`, `streamKey` |
+| `srt` | `url`, `streamId`, `passphrase` |
+| `srtPlayback` | `url`, `streamId`, `passphrase` |
+| `webRTC` | `url` (the WHIP publish endpoint) |
+| `webRTCPlayback` | `url` (the WHEP play endpoint) |
+
+plus `playback: { hls, dash }`, `uid`, `enabled`, `status`, `created`,
+`modified`, `meta`.
+
+**Consequence for R2.** `webRTCPlayback.url` is the compositor's WHEP pull
+target and it is in hand at provision time — the compositor needs no second API
+call and no URL construction to find its source. The same is true of
+`playback.hls` for the LL-HLS fallback path (§3.x transport change). Both should
+be persisted with the session rather than derived later.
+
+Observed non-secret shapes: ingest `rtmps.url` is the shared
+`rtmps://live.cloudflare.com:443/live/` with a per-input `streamKey` (65 chars);
+`srt.url` is `srt://live.cloudflare.com:778` with `streamId` = the input `uid`
+and a 65-char `passphrase`. Playback SRT uses `streamId` = `"play" + uid`.
+The 65-char lengths pin the `*_enc` envelope column sizing in §7.6.
+
+### U1-S3 — creation is NOT gated by zero storage headroom (partial, do not overread)
+
+`storage-usage` reports `totalStorageMinutesLimit: 0` on this account, and the
+create still returned 200. So the design's [B]-rated claim — *an exhausted
+storage block stops NEW live streams from starting* — is **not about input
+creation**, which succeeds regardless.
+
+**This does not falsify the claim.** What was measured is that a live input can
+be CREATED at zero headroom. Whether an ingest connection can be ESTABLISHED, or
+a recording begun, at zero headroom is untested — that needs a real push, which
+is step 2. §6.5's guard is therefore still correctly placed (it refuses before
+the insert, on headroom, not on a create error), but the sentence justifying it
+should say which of the two it rests on. Evidence stays [B] pending step 2.
+
+### What step 1 did NOT answer
+
+**U1 itself is still UNOBSERVED.** The hold window — *does a playback connection
+survive its input disconnecting, and for how long* — requires pushing a feed,
+opening a WHEP connection, cutting the ingest and timing the drop. That is step
+2. Design §7.4's choreography, the ~8 s slate, and the "encoder never restarts"
+property all still rest on it, and §9.2's evidence marker stays **D for the hold
+window**.
+
+`timeoutSeconds: 10` was accepted and echoed inside `recording`, consistent with
+the standing reading that it governs the RECORDER, not a playback hold. Nothing
+observed here contradicts or supports the hold.

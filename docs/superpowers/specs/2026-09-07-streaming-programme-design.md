@@ -734,9 +734,16 @@ RTMPS half of that payload had nowhere on this side to be read from. A
 contract whose producer cannot fill it is the inert seam this repo has shipped
 six times; the columns are what make the payload real.
 `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
-response (§9.2 [B]), so both shapes are in hand at provision time and the
+response — **MEASURED 2026-09-10 against the live API (U1 step 1), and it
+returns MORE than that: a playback twin of each shape** (`rtmpsPlayback`,
+`srtPlayback`, `webRTCPlayback`) plus `playback: { hls, dash }`, six credential
+objects in total. So both ingest shapes are in hand at provision time and the
 second shape costs no second call — the session write simply persists what
-the create already returned. **`ingest_rtmps_key_enc` takes the SAME
+the create already returned. Observed: `rtmps.url` is the shared
+`rtmps://live.cloudflare.com:443/live/` with a 65-char per-input `streamKey`;
+`srt.url` is `srt://live.cloudflare.com:778` with `streamId` = the input `uid`
+and a 65-char `passphrase` (playback SRT uses `"play" + uid`). Those 65-char
+lengths are what the `*_enc` envelope columns must size for. **`ingest_rtmps_key_enc` takes the SAME
 AES-256-GCM envelope as `ingest_srt_key_enc`** (§6.2): a `*_enc` column is
 touched by `server/relay/crypto.ts` and by nothing else, the stream key never
 lands in plaintext in the database or in page HTML, and the panel receives the
@@ -745,6 +752,16 @@ the code client-side (§7.6). `ingest_rtmps_url` is not secret and is stored
 plain, on the same reasoning that `ingest_srt_url` is. A review grep for a
 `*_enc` reference outside `crypto.ts` covers both keys, so the new column
 inherits the guard rather than needing its own.
+
+**`deleteRecordingAfterDays` is a TOP-LEVEL field, not a member of
+`recording` — MEASURED 2026-09-10 (U1 step 1, finding U1-S1).** Sent nested, it
+is accepted with HTTP 200 and `success: true`, echoed back nowhere, and
+top-level `deleteRecordingAfterDays` returns `null`. Retention is then never
+configured: recordings accumulate, the prepaid storage block never recycles,
+and §6.5's `503 storage_exhausted` starts refusing sessions — with a green
+create call at every step. R1 sends it top-level **and asserts it comes back
+non-null on the create response**; a test that asserts only HTTP 200 cannot
+see this.
 
 ### 6.2 Secrets
 
@@ -1098,7 +1115,8 @@ one-shape payload therefore does not merely lack a discriminator, it blocks
 the fallback outright.
 
 Supporting fact: `stream.liveInputs.create()` returns `{ uid, rtmps, srt,
-webRTC }` in ONE response [A/B]. Both shapes are already in hand at provision
+webRTC }` in ONE response — **[A], measured 2026-09-10 (U1 step 1), and it
+also returns a playback twin of each shape**. Both shapes are already in hand at provision
 time, so v1 was carrying SRT out of a payload that already had both — a saving
 of a few dozen bytes against a boundary that costs two repos and a shipped
 phone fleet to widen later.
@@ -1185,7 +1203,7 @@ relay page.** Destination transcode → glass 8–25 s happens AFTER compositing
 | Bitrate math | 3,000 kbps video + 128 kbps AAC = 1.41 GB/h = 4.22 GB / 3 h | A |
 | x11grab | RGB only, no alpha — forces B3 | A |
 | Audio | AAC-LC 128 kbps 48 kHz through the PulseAudio null sink — one A/V clock | A/B |
-| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC` in ONE response (C1, §7.6); `recording { mode: 'automatic', timeoutSeconds }` is a RECORDING setting — it governs when a disconnect starts a NEW recorded video. **The earlier reading "`timeoutSeconds` IS the reconnect window" is WITHDRAWN (2026-09-10)**: it is not evidence of a playback hold, and the hold §7.4 rests on is U1, unobserved. `deleteRecordingAfterDays`; simulcast live-outputs API (= passthrough; composed must NOT use it) | B for the fields and for what `timeoutSeconds` governs; **D for the hold window** (U1, unspiked — no measurement exists) |
+| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC` in ONE response (C1, §7.6); `recording { mode: 'automatic', timeoutSeconds }` is a RECORDING setting — it governs when a disconnect starts a NEW recorded video. **The earlier reading "`timeoutSeconds` IS the reconnect window" is WITHDRAWN (2026-09-10)**: it is not evidence of a playback hold, and the hold §7.4 rests on is U1, unobserved. **`deleteRecordingAfterDays` is TOP-LEVEL, not nested under `recording` — nesting it is accepted with a 200 and silently ignored (U1-S1, measured 2026-09-10)**; the create response also carries a playback twin of every ingest shape (`rtmpsPlayback`, `srtPlayback`, `webRTCPlayback`) plus `playback { hls, dash }` — six credential objects, so R2's WHEP pull URL is in hand at provision time (U1-S2); a live input CREATES successfully at `totalStorageMinutesLimit: 0`, so the storage gate is not on creation (U1-S3, partial — whether INGEST is gated at zero headroom is untested); simulcast live-outputs API (= passthrough; composed must NOT use it) | **A for the response shape and the retention field** (measured against the live API 2026-09-10); B for what `timeoutSeconds` governs; **D for the hold window** (U1 step 2 unrun — no measurement exists) |
 | Cloudflare Stream pricing (official doc, updated 2026-09-01) | Two dimensions. Ingest + encoding always free; no egress line. Storage prepaid in $5 / 1,000-min blocks (duration rounded to the second; file size irrelevant), consumed by uploads + SRT/RTMP live recordings + reserved `maxDurationSeconds`, NOT by ABR renditions or deleted videos. **Exhausted storage blocks NEW live streams from starting.** Delivery $1 / 1,000 min post-paid, counted for player/HLS/DASH playback, WHEP playback, MP4 downloads and simulcasting via live outputs. Live delivery rounds to the source GOP. Zero-viewer broadcast = $0 delivered. Stream Live WebRTC going GA; **WHEP delivery billing begins 2026-10-15** (free until then). | B |
 | Fly Machines | REST create/start/stop/delete maps 1:1 onto the runner port; per-second billing while running; stopped Machines bill rootfs only; the org already operates Fly (placement) | E / D — R0 replaces with the account's rate card |
 
