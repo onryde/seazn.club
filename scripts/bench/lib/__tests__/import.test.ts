@@ -7,13 +7,12 @@
 // here touches `global.fetch` or a real server.
 //
 // What this file pins, and why:
-//  * `IMPORT_CAPS` is a HAND MIRROR of the product's own constant
-//    (`apps/web/src/server/usecases/event-import.ts:39`) — `import.ts`'s own
-//    header comment explains why it cannot be a real import (`server-only`
-//    is unresolvable outside Next's webpack). The "mirror is diffed against
-//    apps/web, not itself" describe block below reads the real file as TEXT
-//    and reds on absence or drift, per `validate-pack.test.ts`'s established
-//    `STAGE_DECIDER_KEYS` pattern.
+//  * `IMPORT_CAPS` is the PRODUCT's own constant, imported — no longer a hand
+//    mirror. `usecases/import-caps.ts` exists to make that possible: it
+//    imports nothing and carries no `server-only`, so this runtime can load
+//    it. The describe block below guards that PROPERTY (the thing a future
+//    edit would break), not the values — two copies checked against each
+//    other is what this replaced.
 //  * Chunking respects all three caps, exercised at the boundary (exactly at
 //    the cap, one over) and far over — `_tiny` never drives these branches
 //    live, so this file is the only place they run at all.
@@ -117,34 +116,52 @@ function baseInput(overrides: Partial<ImportDivisionStreamsInput> = {}): ImportD
 }
 
 // ---------------------------------------------------------------------------
-// IMPORT_CAPS — the mirror is diffed against apps/web, not itself
+// IMPORT_CAPS — imported from the product; guard what makes that possible
 // ---------------------------------------------------------------------------
 
-describe("IMPORT_CAPS — the mirror is diffed against apps/web, not itself", () => {
-  it("equals the product's own constant, read as TEXT", () => {
-    // `import.ts`'s own header comment: apps/web may not be IMPORTED from
-    // scripts/bench (event-import.ts opens with `import "server-only"`,
-    // unresolvable outside Next's webpack). Reading the file as text is not
-    // importing it, and it is the only thing that can catch the failure the
-    // mirror actually has: the PRODUCT changing a ceiling. A test asserting
-    // the mirror against a copy of itself cannot.
+describe("IMPORT_CAPS comes from the product, and stays importable", () => {
+  it("is the value apps/web declares", () => {
+    // Not a drift check any more — there is one copy. This asserts the import
+    // actually resolved to real numbers rather than, say, `undefined` from a
+    // renamed export, which strip-types would not catch at load.
+    expect(IMPORT_CAPS.streams).toBeGreaterThan(0);
+    expect(IMPORT_CAPS.eventsPerFixture).toBeGreaterThan(0);
+    expect(IMPORT_CAPS.eventsPerCall).toBeGreaterThanOrEqual(IMPORT_CAPS.eventsPerFixture);
+  });
+
+  it("import-caps.ts stays free of `server-only` and of any import at all", () => {
+    // THE regression this file exists to catch. The caps were mirrored by hand
+    // for exactly one reason: `event-import.ts` opens with `import
+    // "server-only"`, a Next build-time alias with no package behind it, so
+    // importing it from this runtime was a guaranteed ERR_MODULE_NOT_FOUND.
+    // `import-caps.ts` is plain data on purpose. Adding an import to it — any
+    // import, since a transitive `server-only` is just as fatal — silently
+    // breaks every bench caller at module load, which is a failure that
+    // arrives before a single test runs and is therefore hard to attribute.
+    const source = readFileSync(
+      path.join(REPO_ROOT, "apps/web/src/server/usecases/import-caps.ts"),
+      "utf8",
+    );
+    expect(source, "import-caps.ts not found").toBeTruthy();
+    // Comments STRIPPED before matching. The file's own docblock explains why
+    // it must not carry `server-only`, so a bare text search for that string
+    // matches the explanation and reds on a correct file — this test caught
+    // exactly that on its first run.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code, "import-caps.ts must import nothing").not.toMatch(/^\s*import\s/m);
+    expect(code, "import-caps.ts must not require() either").not.toMatch(/require\s*\(/);
+    // With no imports at all, a transitive `server-only` is impossible; this
+    // pins the direct form too, so the failure names the actual cause.
+    expect(code).not.toMatch(/["']server-only["']/);
+  });
+
+  it("event-import.ts re-exports them, so product importers are unaffected", () => {
+    // The extraction must not have orphaned the product's own consumers.
     const source = readFileSync(
       path.join(REPO_ROOT, "apps/web/src/server/usecases/event-import.ts"),
       "utf8",
     );
-    const literal =
-      /export const IMPORT_CAPS = \{ streams: (\d[\d_]*), eventsPerFixture: (\d[\d_]*), eventsPerCall: (\d[\d_]*) \} as const;/.exec(
-        source,
-      );
-    // Red on ABSENCE rather than skipping: a bench that cannot see the
-    // product it mirrors must say so, not quietly pass.
-    expect(literal, "IMPORT_CAPS literal not found in event-import.ts").not.toBeNull();
-    const [, streams, eventsPerFixture, eventsPerCall] = literal!;
-    expect(IMPORT_CAPS).toEqual({
-      streams: Number(streams!.replaceAll("_", "")),
-      eventsPerFixture: Number(eventsPerFixture!.replaceAll("_", "")),
-      eventsPerCall: Number(eventsPerCall!.replaceAll("_", "")),
-    });
+    expect(source).toMatch(/export\s*\{\s*IMPORT_CAPS\s*\}\s*from\s*"\.\/import-caps"/);
   });
 });
 

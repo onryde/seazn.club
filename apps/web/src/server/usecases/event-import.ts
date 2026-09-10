@@ -33,10 +33,12 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EventImportRequest } from "@/server/api-v1/schemas";
 
-// R4 — see the design doc §6 "Why the caps are what they are": appendEventInTx
-// re-reads and re-folds the whole prior stream on every append (O(n^2) per
-// fixture), so a single huge stream is a hung request, not a rejection.
-export const IMPORT_CAPS = { streams: 50, eventsPerFixture: 1_000, eventsPerCall: 10_000 } as const;
+// The caps live in `import-caps.ts` — a module free of `server-only` — so that
+// consumers outside Next's build (scripts, workers, scripts/bench) can import
+// the real constant instead of mirroring it. Re-exported here so every
+// existing importer of `IMPORT_CAPS` from this module keeps working.
+export { IMPORT_CAPS } from "./import-caps";
+import { IMPORT_CAPS } from "./import-caps";
 
 export type ImportStreamResult = {
   fixture: string; // resolved id, or the ext_key as given
