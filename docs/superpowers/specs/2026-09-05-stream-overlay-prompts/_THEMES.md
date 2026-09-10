@@ -229,7 +229,37 @@ Per-sport content of the bar (W1 unless marked W2):
 
 | Sport | Live cell context | Team cell score / meta | Between cells | Detail band |
 |---|---|---|---|---|
-| cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR |
+| cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR, **plus the revision marker below when the target was revised** |
+
+**The chase line names the method when the target was revised** (owner ruling,
+2026-09-10: *"add the DLS hint in W1"*). Without it a rain-revised chase shows
+new numbers with nothing to say why they moved, which on a broadcast reads as
+the scoreboard being wrong.
+
+The data already arrives — this is a read, not a new derivation. Cricket's
+`summary().detail` emits **`target` AND `targetSource`** together
+(`packages/engine/src/sports/cricket/cricket.ts:3678-3680`), and
+`projectOverlayLiveData` passes `summary` through whole (`server/overlay/project.ts`),
+so `targetSource` is already on the wire and simply has no reader.
+
+`targetSource` is `"dls" | "manual" | null`, so the marker has **three** cases
+and a manual revision must NOT be labelled DLS:
+
+| `targetSource` | Chase line |
+|---|---|
+| `"dls"` | the existing line + ` · DLS` |
+| `"manual"` | the existing line + ` · Revised` |
+| `null` | the existing line, unchanged |
+
+Two new `public.overlay.chase.*` keys in all four locales; the marker is
+appended by the projection (`overlayModel`), never assembled in a component, so
+both themes and every future theme inherit it. `DLS` is a proper noun and stays
+`DLS` in every locale; `Revised` translates.
+
+**Consistency note.** `resultMsg` already names the method at the END of a
+match — `cricket.ts:883` picks a `dls` suffix for the result sentence — so
+before this ruling the overlay explained a revised result and not a revised
+chase. This closes that asymmetry rather than opening a new surface.
 | football, hockey, icehockey | period ("2nd half") | `2` / none | divider; clock cell Barlow 60/700 LED before brand | scorers per side ("Okafor 23'"), card chips 13.5×18 radius 3 in caution / dismissal / advisory, each with a 1-px `--sport-ink` hairline (see below), with name and minute |
 | tennis | set + round ("Set 3, quarter-final") | sets as cells Barlow 51/600 ink 70 %, current set 700 ink 100 %; serve dot 13.5 LED before server's name | points cell Barlow 60/700 LED ("30 : 15") | "Novak serving", break points saved, format line |
 | badminton, tabletennis | game ("Game 2, men's doubles") | games as cells, current 700 ink 100 %; serve dot | games-won cell LED ("1 : 0") | who serves, previous game result, longest rally where the ledger has it |
@@ -537,7 +567,26 @@ The panel follows `embed-snippet.tsx` and `.card` / `.btn` in `globals.css`.
 | heading | `text-sm font-semibold text-slate-700` with a 16 px lucide `Video` icon `text-purple-500`, stroke 1.75 |
 | explainer | `text-xs text-slate-500` |
 | style tabs | `rounded-md px-2.5 py-1 text-xs font-medium`; selected `bg-purple-100 text-purple-800`; idle `text-slate-500 hover:bg-purple-50 hover:text-purple-700`; `role="tab"` `aria-selected` |
-| live preview | the real `<OverlayStage>` at `scale(640/1920)` inside a 96 px tall strip on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)` |
+| live preview | the real `<OverlayStage>` at `scale(640/1920)` inside a **360 px** tall strip on a green field stand-in `linear-gradient(180deg, #3d7a3a, #2e6a2d)`, `transform-origin: top left` (matching `.ovl-canvas`'s own) |
+
+**The strip was 96 px and that number could not work** (owner ruling **360 px**,
+2026-09-10, on the W1 Task 6 finding). At `scale(640/1920)` = 1/3, a 96 px strip
+shows the top **288** of the canvas's 1080 authored px. §4's bug is anchored
+`top: 54`, so it lands at y 18–79 scaled and is visible. **§3's bar is anchored
+`bottom: 54`, which lands at y ≈ 279–342 scaled — entirely below a 96 px
+strip.** Selecting *Broadcast bar* therefore previewed as an empty green
+rectangle, and cricket's own default is `bar` (`defaultThemeFor`), so cricket
+organisers met it first.
+
+360 px is the smallest height that shows the whole 1080 px canvas at the scale
+this row already states (1080 ÷ 3 = 360), so the fix moves ONE number and leaves
+`scale(640/1920)` — which §8's own OBS-link copy and the panel's width maths both
+depend on — untouched. The alternative, keeping 96 px and raising the scale,
+would have shown a crop and made "the preview is the real `<OverlayStage>`" false.
+
+Recorded rather than silently corrected because the two numbers were internally
+inconsistent from the sheet's first draft, and a reader checking only one of them
+would reintroduce it.
 | overlay link field | `rounded-lg border border-purple-100 bg-slate-950 font-mono text-[11px] text-slate-100`, height 40, read-only, selects on focus |
 | copy button | `btn btn-ghost` = border `#e9d5ff`, text `#7e22ce`, 28 px inside the field at ≥ 768; full width 44 px below |
 | steps | `ol` `text-[13px] leading-relaxed text-slate-700`, numbered (it is a sequence) |
