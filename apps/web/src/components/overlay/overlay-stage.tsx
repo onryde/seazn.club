@@ -45,7 +45,10 @@ export interface OverlayStageProps {
    *  bounded server-side by `resolveDelayMs` (`lib/overlay-delay.ts`) before
    *  it ever reaches this prop; the stage passes it straight through to
    *  `useLiveFixture`, never re-validates it. `undefined`/0 behaves exactly
-   *  like every pre-Task-5d caller (no delay). */
+   *  like every pre-Task-5d caller (no delay).
+   *
+   *  Non-zero means the stage draws NO theme for its first `delayMs` — see
+   *  the `awaitingDelay` branch below and I1 in `use-live-fixture.ts`. */
   delayMs?: number;
   /** True on the overlay route: fill the viewport. False in the console
    *  preview, which sets its own scale on the wrapper. */
@@ -58,7 +61,7 @@ export function OverlayStage(props: OverlayStageProps) {
   // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
   // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
   // subtracts it either way.
-  const { data, presentationNowOffsetMs } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
+  const { data, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
     delayMs: props.delayMs,
   });
@@ -120,6 +123,37 @@ export function OverlayStage(props: OverlayStageProps) {
   // `props.style === "bar" ? <OverlayBar/> : <OverlayBug/>` branch is what the
   // owner's answer replaces: a third theme would have had to edit it.
   const Theme = OVERLAY_THEMES[props.style].component;
+
+  // I1 (2026-09-10). Under `?delay=`, the transport presents nothing until the
+  // delay has elapsed — the snapshot in hand at t=0 was taken at t=0 and says
+  // nothing about t−delayMs, so painting it puts the score AHEAD of the
+  // picture, which is the one failure the parameter exists to prevent. The
+  // stage therefore draws no theme meanwhile.
+  //
+  // The root still mounts: `.ovl-canvas` and `.ovl-fit` carry no background of
+  // their own, so an empty canvas is transparent — the browser source shows
+  // the picture with no scorebug, not a black rectangle over it, and OBS gets
+  // a document rather than an empty body. Nothing model-derived is emitted:
+  // `data-led` would put who-is-leading in the DOM even with nothing drawn.
+  //
+  // Reached only when `props.delayMs` is set. Every pre-Task-5d caller — the
+  // overlay route without `?delay=`, and the console preview — has
+  // `awaitingDelay === false` for the life of the island and never sees this.
+  if (awaitingDelay) {
+    return (
+      <div className={props.fit ? "ovl-fit" : undefined}>
+        <div
+          data-testid="ovl-root"
+          data-style={props.style}
+          data-sport-theme={sportThemeAttr(props.sportKey)}
+          data-awaiting-delay="1"
+          data-led="none"
+          className="ovl-canvas ovl-label ovl-static"
+          style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={props.fit ? "ovl-fit" : undefined}>

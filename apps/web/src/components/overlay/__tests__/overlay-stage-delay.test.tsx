@@ -77,10 +77,19 @@ describe("OverlayStage — delayMs reaches the rendered clock end to end (Task 5
     expect(clockTextOf(html)).toBe("01:00");
   });
 
-  it("delayMs=5000 on the SAME fixture: the clock reads 5s further back — 00:55, not 01:00", () => {
+  // Fix round I1 (2026-09-10) — this case used to assert `00:55` here, at t=0.
+  // It cannot any more, and the reason is the fix, not a weakening: a delayed
+  // stage presents NOTHING until `delayMs` has elapsed (a snapshot taken at
+  // t=0 is not evidence about t−delayMs, so painting it leaks the score ahead
+  // of the picture — see `overlay-stage-hold.test.tsx`). There is therefore no
+  // clock cell to read at t=0 under a delay. The `00:55`-shaped assertion —
+  // that the offset really does move the clock text — is not dropped: it moves
+  // to `overlay-stage-hold.test.tsx`, which drives this same real stage
+  // THROUGH the hold on fake timers and reads the delayed clock afterwards.
+  it("delayMs=5000 at t=0: no clock cell at all — the stage is still holding (see overlay-stage-hold.test.tsx)", () => {
     vi.useFakeTimers({ now: FIXED_NOW });
     const html = renderToStaticMarkup(<OverlayStage {...baseProps(5000)} />);
-    expect(clockTextOf(html)).toBe("00:55");
+    expect(() => clockTextOf(html)).toThrow(/no \.ovl-bug-clock cell/);
   });
 
   it("delayMs=0 explicitly behaves exactly like delayMs absent (the pre-Task-5d default)", () => {

@@ -9,7 +9,7 @@
 // looped for ever. Any assertion about how many times an island fetched, or
 // about state that an effect writes, was measuring the harness.
 import { describe, expect, it } from "vitest";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, walk } from "./_hook-harness";
 
@@ -566,5 +566,93 @@ describe("_hook-harness unmount (constraints-panel unmount-flush regression)", (
     island.unmount();
 
     expect(seenOnUnmount).toEqual(["second"]);
+  });
+});
+
+describe("_hook-harness useLayoutEffect (stream overlay W1 fix round, I1)", () => {
+  // Added for `OverlayStage`, whose canvas scale is a `useLayoutEffect`. With
+  // no slot for it the dispatcher hands back `undefined` and the component
+  // cannot be driven at all — which is why the overlay's DELAY behaviour could
+  // only be asserted through `renderToStaticMarkup`, one frozen instant with
+  // no effects and no timers, and a delay is a thing that happens over TIME.
+  it("runs on mount, and its cleanup runs on unmount", () => {
+    const log: string[] = [];
+    function Island() {
+      useLayoutEffect(() => {
+        log.push("run");
+        return () => {
+          log.push("cleanup");
+        };
+      }, []);
+      return <button type="button">hi</button>;
+    }
+
+    const island = renderIsland(Island, {});
+    expect(log, "a layout effect that never runs makes every assertion after it vacuous").toEqual([
+      "run",
+    ]);
+    island.unmount();
+    expect(log).toEqual(["run", "cleanup"]);
+  });
+
+  it("honours its deps — `[]` runs once across rerenders, a changed dep re-runs it", () => {
+    let empty = 0;
+    let keyed = 0;
+    function Island({ tag }: { tag: string }) {
+      useLayoutEffect(() => void (empty += 1), []);
+      useLayoutEffect(() => void (keyed += 1), [tag]);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    island.rerender({ tag: "b" });
+    island.rerender({ tag: "b" }); // unchanged dep — neither may re-run
+    expect([empty, keyed]).toEqual([1, 2]);
+  });
+
+  it("commits BEFORE the passive effects, the way React orders them", () => {
+    const order: string[] = [];
+    function Island() {
+      useEffect(() => void order.push("passive"), []);
+      useLayoutEffect(() => void order.push("layout"), []);
+      return <button type="button">hi</button>;
+    }
+
+    renderIsland(Island, {});
+    expect(order, "declaration order is not commit order").toEqual(["layout", "passive"]);
+  });
+
+  it("is keyed by its OWN call order — a passive effect between two of them does not shift the cells", () => {
+    // The bug a shared cell list would produce: `layoutEffects[1]` compared
+    // against a passive effect's deps, so one of them silently never re-runs.
+    const seen: string[] = [];
+    function Island({ tag }: { tag: string }) {
+      useLayoutEffect(() => void seen.push(`L1:${tag}`), [tag]);
+      // `[]` on purpose, and it is the whole point: the passive effect must
+      // NOT re-run on the rerender, so if the two lists shared cells one of
+      // the layout effects would inherit its "unchanged" verdict and go quiet.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      useEffect(() => void seen.push(`P:${tag}`), []);
+      useLayoutEffect(() => void seen.push(`L2:${tag}`), [tag]);
+      return <button type="button">{tag}</button>;
+    }
+
+    const island = renderIsland(Island, { tag: "a" });
+    island.rerender({ tag: "b" });
+    expect(seen).toEqual(["L1:a", "L2:a", "P:a", "L1:b", "L2:b"]);
+  });
+
+  it("a layout effect that sets state re-renders through the normal path", () => {
+    function Island() {
+      const [n, setN] = useState(0);
+      useLayoutEffect(() => {
+        if (n === 0) setN(1);
+      }, [n]);
+      return <button type="button">{String(n)}</button>;
+    }
+
+    const island = renderIsland(Island, {});
+    const button = island.tree().find((el) => el.type === "button");
+    expect(propsOf(button!).children).toBe("1");
   });
 });

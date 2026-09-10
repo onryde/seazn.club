@@ -261,4 +261,78 @@ describe("useLiveFixture", () => {
     await vi.advanceTimersByTimeAsync(1000);                 // t = 32 000, due = 30 000: BOTH due
     expect(hook.current.data.summary?.headline, "the newest DUE snapshot, never s1").toBe("s2");
   });
+
+  // ---- Fix round I1 (2026-09-10): the INITIAL snapshot is a snapshot too ----
+  //
+  // Everything above exercises POLLED snapshots. `initial` went straight into
+  // `useState` and was painted at once, so `?delay=30000` delayed the clock and
+  // not the score for the first delayMs after every load — and OBS reloads a
+  // browser source on every scene change. `initial` is now the buffer's first
+  // entry, received at mount, presented by the same drain as everything else.
+  //
+  // `awaitingDelay` is what a consumer must gate on: while it is true the hook
+  // has presented NOTHING and `data` is still the un-presented seed. It is
+  // permanently false for a caller that passes no `delayMs`.
+
+  const scored = (headline: string): LiveFixtureData =>
+    ({ ...scheduled, status: "in_play", summary: { headline } }) as LiveFixtureData;
+
+  it("no delayMs: awaitingDelay is false at mount and the initial document is presented immediately", () => {
+    const hook = mount("fx-1", scheduled, false);
+    expect(hook.current.awaitingDelay, "nothing to wait for").toBe(false);
+    expect(hook.current.data).toBe(scheduled);
+  });
+
+  it("delayMs: the INITIAL snapshot is held too — nothing is presented at t=0", () => {
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher: vi.fn(async () => scored("3 — 1")), delayMs: 3000 });
+    expect(hook.current.awaitingDelay, "a snapshot taken now is not evidence about 3 s ago").toBe(true);
+    expect(vi.getTimerCount(), "poll + drain — seeding the buffer adds no third timer").toBe(2);
+  });
+
+  it("delayMs: the hold ends at exactly delayMs, and what it presents is INITIAL's score, not the poll's", async () => {
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher, delayMs: 3000 });
+
+    await vi.advanceTimersByTimeAsync(2999); // drains at 1 000 and 2 000 — neither is due
+    expect(hook.current.awaitingDelay, "2 s < 3 s").toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1); // t = 3 000: the seed's own due instant
+    expect(hook.current.awaitingDelay).toBe(false);
+    // The right answer differs from the wrong one's constant: a hook that
+    // started its buffer at the first poll would present nothing here (POLL_MS
+    // is 15 s), and one that presented eagerly would already be showing 3 — 1.
+    expect(hook.current.data.summary?.headline).toBe("2 — 1");
+    expect(fetcher, "no poll has fired yet at t = 3 000").not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(POLL_MS); // t = 18 000: poll at 15 000, due at 18 000
+    expect(hook.current.data.summary?.headline, "polled snapshots still mature on their own receipt").toBe("3 — 1");
+    expect(hook.current.awaitingDelay, "once presenting, never awaiting again").toBe(false);
+  });
+
+  it("delayMs: awaitingDelay stays true for the whole hold even with polls landing (no early release)", async () => {
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher, delayMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3); // t = 45 000: three polls buffered
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(hook.current.awaitingDelay, "45 s < 60 s — a poll arriving is not a snapshot maturing").toBe(true);
+    await vi.advanceTimersByTimeAsync(15_000); // t = 60 000
+    expect(hook.current.awaitingDelay).toBe(false);
+    expect(hook.current.data.summary?.headline, "the seed matures first, in receipt order").toBe("2 — 1");
+  });
+
+  it("delayMs: seeding happens ONCE — a later delayMs does not re-queue the mount-time document", async () => {
+    // `?delay=` is parsed once server-side, so nothing in production moves it
+    // mid-life. But the drain effect is keyed on `delayMs`, so without the
+    // once-guard a change would push the mount-time document back into the
+    // buffer and present it again `delayMs` later — winding the overlay BACK
+    // to the score at page load, long after it had moved on.
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    const hook = mount("fx-1", scored("2 — 1"), false, { fetcher, delayMs: 3000 });
+    await vi.advanceTimersByTimeAsync(18_000); // seed at 3 000, poll received 15 000 → presented 18 000
+    expect(hook.current.data.summary?.headline).toBe("3 — 1");
+
+    hook.rerender({ fetcher, delayMs: 10_000 }); // re-arms the drain
+    await vi.advanceTimersByTimeAsync(10_000); // t = 28 000 — when a re-seed would land
+    expect(hook.current.data.summary?.headline, "never winds back to the load-time score").toBe("3 — 1");
+  });
 });

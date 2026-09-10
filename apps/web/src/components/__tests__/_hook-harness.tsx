@@ -42,6 +42,15 @@ interface HookDispatcher {
    *  org form's billing groups) renders an empty shell without this, and every
    *  assertion about what it draws afterwards would be vacuous. */
   useEffect: (create: () => void | (() => void), deps: Deps) => void;
+  /** Same machinery as `useEffect`, its own cell list, committed BEFORE the
+   *  passive ones — React's own order. Added for `OverlayStage`, whose canvas
+   *  scale is a `useLayoutEffect`: without a slot here the dispatcher hands
+   *  back `undefined` and the component cannot be driven at all, which is why
+   *  the overlay's delay behaviour could only ever be asserted through
+   *  `renderToStaticMarkup` (one frozen instant, no timers, no effects) — and
+   *  a delay is a thing that happens over TIME. Nothing else in the repo calls
+   *  `useLayoutEffect` under this harness today, so this is purely additive. */
+  useLayoutEffect: (create: () => void | (() => void), deps: Deps) => void;
   /** Memoised by `deps`, exactly like `useEffect` below — NOT straight through.
    *  "A cache, never a behaviour" is false the moment a memo result becomes a
    *  `useEffect` dependency, which is the ordinary React idiom: recomputing it
@@ -197,16 +206,24 @@ export function renderIsland<P>(
   // component that sets state from an effect into an infinite loop.
   const effects: { deps: Deps; cleanup: void | (() => void) }[] = [];
   let effectCursor = 0;
+  // Layout effects: the SAME bookkeeping, a SEPARATE list. Every hook type
+  // here is keyed by its own call order, so sharing `effects` would make each
+  // list's indices depend on the other's call sites (the reason `useCallback`
+  // does not share `memos` either).
+  const layoutEffects: { deps: Deps; cleanup: void | (() => void) }[] = [];
+  let layoutCursor = 0;
   // What THIS pass declared, held back until the pass survives. A render-phase
   // update throws its pass away, and the effect bookkeeping has to go with it:
   // recording `deps` from a discarded pass would make the surviving pass look
   // unchanged, so the effect would never run at all.
-  let pending: {
+  type Queued = {
     index: number;
     deps: Deps;
     changed: boolean;
     create: () => void | (() => void);
-  }[] = [];
+  };
+  let pending: Queued[] = [];
+  let pendingLayout: Queued[] = [];
   // Memo cells, keyed by call order like every other hook — see `useMemo` on
   // HookDispatcher for why this is not a straight-through call.
   const memos: ({ deps: Deps; value: Cell } | undefined)[] = [];
@@ -261,6 +278,10 @@ export function renderIsland<P>(
     useEffect(create, deps) {
       const index = effectCursor++;
       pending.push({ index, deps, changed: depsChanged(effects[index], deps), create });
+    },
+    useLayoutEffect(create, deps) {
+      const index = layoutCursor++;
+      pendingLayout.push({ index, deps, changed: depsChanged(layoutEffects[index], deps), create });
     },
     useMemo(create, deps) {
       const index = memoCursor++;
@@ -329,11 +350,13 @@ export function renderIsland<P>(
       renderPhaseUpdate = false;
       cursor = 0;
       effectCursor = 0;
+      layoutCursor = 0;
       memoCursor = 0;
       callbackCursor = 0;
       refCursor = 0;
       reducerCursor = 0;
       pending = [];
+      pendingLayout = [];
       cacheUndo = [];
       const previous = slot.H;
       slot.H = dispatcher;
@@ -359,19 +382,27 @@ export function renderIsland<P>(
     } while (renderPhaseUpdate);
     // After the render, like React's commit phase — and OUTSIDE the dispatcher,
     // so an effect that calls setState re-renders through the normal path.
+    // Layout effects commit BEFORE passive ones, exactly as React orders them.
+    const queuedLayout = pendingLayout;
+    pendingLayout = [];
     const queued = pending;
     pending = [];
-    // Commit the surviving pass's dependency arrays first, keeping whatever
-    // cleanup the previous render left — then run only the effects whose deps
-    // actually moved.
+    commit(queuedLayout, layoutEffects);
+    commit(queued, effects);
+  }
+
+  /** Commit the surviving pass's dependency arrays first, keeping whatever
+   *  cleanup the previous render left — then run only the effects whose deps
+   *  actually moved. Shared by both effect kinds so the two cannot drift. */
+  function commit(queued: Queued[], store: { deps: Deps; cleanup: void | (() => void) }[]) {
     for (const { index, deps } of queued) {
-      effects[index] = { deps, cleanup: effects[index]?.cleanup };
+      store[index] = { deps, cleanup: store[index]?.cleanup };
     }
     for (const { index, changed, create } of queued) {
       if (!changed) continue;
-      effects[index]?.cleanup?.();
+      store[index]?.cleanup?.();
       const cleanup = create();
-      const slotEntry = effects[index];
+      const slotEntry = store[index];
       if (slotEntry) slotEntry.cleanup = cleanup;
     }
   }
@@ -397,6 +428,9 @@ export function renderIsland<P>(
      *  flush-on-unmount fix needs — has no way to fire at all in this
      *  harness. */
     unmount: () => {
+      for (const effect of layoutEffects) {
+        effect?.cleanup?.();
+      }
       for (const effect of effects) {
         effect?.cleanup?.();
       }
@@ -443,6 +477,9 @@ export function expandWithHooks<P>(Component: (props: P) => ReactNode, props: P)
     },
     useEffect() {
       throw new Error("expandWithHooks: useEffect is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
+    },
+    useLayoutEffect() {
+      throw new Error("expandWithHooks: useLayoutEffect is not supported — this helper is read-only hooks (useContext/useMemo/useCallback) only.");
     },
     useMemo(create) {
       return create();

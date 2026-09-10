@@ -24,7 +24,9 @@ export const POLL_MS = 15_000;
  *  invisible to a props-stable test harness. */
 export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
   fetcher?: (fixtureId: string) => Promise<T>;
-  /** Present snapshots no sooner than `delayMs` after they were received. */
+  /** Present snapshots no sooner than `delayMs` after they were received —
+   *  `initial` included (I1, 2026-09-10), which is why a delayed hook presents
+   *  nothing at all for its first `delayMs`. See `awaitingDelay`. */
   delayMs?: number;
 }
 
@@ -36,6 +38,19 @@ export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureDat
    *  reads it. A FIELD here, never a module export — one authority per hook
    *  instance (design FS17). */
   presentationNowOffsetMs: number;
+  /**
+   * True while a DELAYED hook has not yet presented anything — i.e. `initial`
+   * was received less than `delayMs` ago and no buffered snapshot is due.
+   * Always `false` when `delayMs` is 0 or absent, so a three-argument caller
+   * never sees it turn true and needs no branch for it.
+   *
+   * **A delayed consumer MUST gate its render on this.** While it is true,
+   * `data` is still the un-presented seed: non-null so the type stays
+   * `T` for every existing caller, but not a snapshot this hook is willing to
+   * vouch for as "how things were `delayMs` ago". Painting it anyway is
+   * exactly the I1 defect (below).
+   */
+  awaitingDelay: boolean;
 }
 
 export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
@@ -64,6 +79,34 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // The delay buffer: snapshots RECEIVED, waiting to be PRESENTED. Empty and
   // unused when delayMs is 0.
   const bufferRef = useRef<{ receivedAt: number; snapshot: T }[]>([]);
+  // `initial` as of mount. A ref, so the seeding effect below reads the
+  // mount-time document without listing a prop object in its dependencies —
+  // this hook has always seeded ONCE and a changed `initial` has always needed
+  // a `key` change (fixture-stream-panel.tsx does exactly that).
+  const initialRef = useRef(initial);
+  // I1 (review-unreviewed-range.md, 2026-09-10). `initial` used to be
+  // presented at once even under a delay, because only POLLED snapshots went
+  // through the buffer. `?delay=30000` therefore delayed the CLOCK and not the
+  // SCORE for the first delayMs after every load, and OBS reloads a browser
+  // source on every scene change — so a delayed overlay announced a goal up to
+  // 30 s before the picture reached it, which is the one thing the parameter
+  // exists to prevent.
+  //
+  // `initial` is now the buffer's FIRST entry, received at mount and matured
+  // by the same drain as every polled one. One rule, no exceptions: with
+  // `?delay=N`, nothing is presented that was not in hand N ms ago. The trade
+  // is a cold start — a delayed overlay presents nothing for its first
+  // delayMs, and its consumer must render nothing meanwhile (`awaitingDelay`).
+  // That is deliberate and it is the smaller harm: a scorebug that is missing
+  // reads as "graphics not up yet", a scorebug that is EARLY is a broadcast
+  // failure. It is also paid only by an operator who explicitly typed
+  // `?delay=`; without it this hook is byte-identical to the pre-fix version.
+  //
+  // Seeding through the buffer rather than a separate timer is what bounds
+  // that cold start at exactly delayMs. Starting it at the first poll instead
+  // would have made it delayMs + POLL_MS.
+  const seededRef = useRef(false);
+  const [awaitingDelay, setAwaitingDelay] = useState(delayMs > 0);
   // NO `updatedAt` state here. The freshness line ("Updated 5s ago") derives
   // from `header.updatedAt` — the DOCUMENT's own timestamp, ticked every
   // second by `useNow()` in `court-card.tsx` — never from when this hook last
@@ -145,6 +188,13 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // while delayMs > 0 — the no-option path never creates it.
   useEffect(() => {
     if (delayMs <= 0) return;
+    // I1: `initial` is the first thing in the buffer, received at mount. Once
+    // only — a `delayMs` that changed mid-life would otherwise re-seed a
+    // document that is by then long stale.
+    if (!seededRef.current) {
+      seededRef.current = true;
+      bufferRef.current = [{ receivedAt: Date.now(), snapshot: initialRef.current }, ...bufferRef.current];
+    }
     const id = setInterval(() => {
       const due = Date.now() - delayMs;
       const buf = bufferRef.current;
@@ -153,6 +203,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       if (idx >= 0 && mountedRef.current) {
         setData(buf[idx]!.snapshot);
         bufferRef.current = buf.slice(idx + 1);
+        setAwaitingDelay(false);
       }
     }, 1000);
     return () => clearInterval(id);
@@ -165,5 +216,10 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     return () => clearInterval(id);
   }, [live, subscribed, refresh]);
 
-  return { data, transport: subscribed ? "realtime" : "poll", presentationNowOffsetMs: delayMs };
+  return {
+    data,
+    transport: subscribed ? "realtime" : "poll",
+    presentationNowOffsetMs: delayMs,
+    awaitingDelay,
+  };
 }
