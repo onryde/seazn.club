@@ -816,7 +816,7 @@ describe("InfoTab", () => {
     // alignment names each link after the OTHER division. Both the inventory
     // and the per-link hrefs say so.
     expect(
-      [...h.matchAll(/data-testid="(mh-info-calendar-[a-z0-9-]+)"/g)].map((x) => x[1]),
+      [...h.matchAll(/data-testid="(mh-info-calendar-[a-z0-9_-]+)"/g)].map((x) => x[1]),
     ).toEqual(["mh-info-calendar-sunday-league", "mh-info-calendar-premier"]);
     expect(tagOf(h, "mh-info-calendar-sunday-league")).toContain(
       `href="/riverside/autumn-cup/sunday-league/calendar.ics"`,
@@ -855,8 +855,8 @@ describe("InfoTab", () => {
     // was worse than nothing, because it collides with a STRUCTURAL match on
     // the very document it was written for — a filtered calendar list is
     // exactly what puts an unmatched entry beside a matched one.
-    expect(calendarSlug({ href: "/somewhere/else.ics" }, 1, divisions)).toBe("1");
-    expect(calendarSlug({ href: "/somewhere/else.ics" }, 5, divisions)).toBe("5");
+    expect(calendarSlug({ href: "/somewhere/else.ics" }, 1, divisions)).toBe("_1");
+    expect(calendarSlug({ href: "/somewhere/else.ics" }, 5, divisions)).toBe("_5");
 
     // The collision itself, as a uniqueness assertion rather than a value one:
     // entry 0 matches nothing, entry 1 matches `premier`. Under the old rung
@@ -864,8 +864,22 @@ describe("InfoTab", () => {
     // Stats row testid was deviated from the brief to avoid.
     const mixed = [{ href: "/moved/premier.ics" }, calendarFor("premier")];
     const slugs = mixed.map((cal, i) => calendarSlug(cal, i, divisions));
-    expect(slugs).toEqual(["0", "premier"]);
+    expect(slugs).toEqual(["_0", "premier"]);
     expect(new Set(slugs).size).toBe(slugs.length);
+
+    // Re-review N1 — the UNDERSCORE, and the case that earns it. A bare
+    // `String(index)` was called "unique by construction" and is not: `Slug`
+    // (`api-v1/schemas.ts:56-60`) permits a bare "0" and it is client-settable
+    // at `CreateDivision.slug`. So a division genuinely slugged "0", beside an
+    // unmatched entry at index 0, collided all over again — the same defect one
+    // rung further down, because moving a guard does not re-earn its rationale.
+    // Neither `Slug` nor `slugify` can emit `_`, so the fallback now lives in a
+    // namespace no real slug can reach.
+    const zeroSlug = [division("0"), division("premier")];
+    const clash = [{ href: "/moved/zero.ics" }, calendarFor("0")];
+    const clashSlugs = clash.map((cal, i) => calendarSlug(cal, i, zeroSlug));
+    expect(clashSlugs).toEqual(["_0", "0"]);
+    expect(new Set(clashSlugs).size).toBe(clashSlugs.length);
 
     // …and through the component, on the same shape, so the invariant is held
     // where the testids are actually emitted.
@@ -880,12 +894,12 @@ describe("InfoTab", () => {
         }),
       }),
     );
-    const ids = [...filtered.matchAll(/data-testid="(mh-info-calendar-[a-z0-9-]+)"/g)].map(
+    const ids = [...filtered.matchAll(/data-testid="(mh-info-calendar-[a-z0-9_-]+)"/g)].map(
       (x) => x[1]!,
     );
-    expect(ids).toEqual(["mh-info-calendar-0", "mh-info-calendar-premier"]);
+    expect(ids).toEqual(["mh-info-calendar-_0", "mh-info-calendar-premier"]);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(tagOf(filtered, "mh-info-calendar-0")).toContain(`href="/moved/premier.ics"`);
+    expect(tagOf(filtered, "mh-info-calendar-_0")).toContain(`href="/moved/premier.ics"`);
     expect(tagOf(filtered, "mh-info-calendar-premier")).toContain(
       `href="/riverside/autumn-cup/premier/calendar.ics"`,
     );
@@ -903,9 +917,9 @@ describe("InfoTab", () => {
       }),
     );
     expect(
-      [...stray.matchAll(/data-testid="(mh-info-calendar-[a-z0-9-]+)"/g)].map((x) => x[1]),
-    ).toEqual(["mh-info-calendar-0", "mh-info-calendar-1"]);
-    expect(tagOf(stray, "mh-info-calendar-1")).toContain(`href="/moved/ghost.ics"`);
+      [...stray.matchAll(/data-testid="(mh-info-calendar-[a-z0-9_-]+)"/g)].map((x) => x[1]),
+    ).toEqual(["mh-info-calendar-_0", "mh-info-calendar-_1"]);
+    expect(tagOf(stray, "mh-info-calendar-_1")).toContain(`href="/moved/ghost.ics"`);
   });
 
   it("the Present link is always offered, at the href the document carries", () => {

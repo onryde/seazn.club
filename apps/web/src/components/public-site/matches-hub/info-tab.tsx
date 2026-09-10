@@ -118,7 +118,7 @@ export function competitionDateLine(info: {
  * list breaks the alignment silently, renaming every link after its neighbour.
  *
  * So the join is STRUCTURAL: the division whose own href this `.ics` hangs off.
- * The fallback is the entry's own INDEX, which is unique by construction.
+ * The fallback is the entry's own INDEX, prefixed `_`.
  *
  * It used to fall back to `divisions[index]?.slug` first, and review F2 is
  * right that that rung was worse than nothing. It breaks the very invariant
@@ -131,10 +131,23 @@ export function competitionDateLine(info: {
  * filtered calendar list, the case the rung was insurance against, is precisely
  * what produces an unmatched entry beside a matched one.
  *
- * `String(index)` is a worse LABEL and a correct id, which is the right trade
- * for a testid: it is only ever read by a test or a locator, it is unique by
- * construction, and it appears only on a document the builder cannot currently
- * produce.
+ * `_${index}` is a worse LABEL and a correct id, which is the right trade for a
+ * testid: it is only ever read by a test or a locator, and it appears only on a
+ * document the builder cannot currently produce.
+ *
+ * The UNDERSCORE is the whole point, and re-review N1 is why. A bare
+ * `String(index)` was described here as "unique by construction" and is not:
+ * `Slug` (`api-v1/schemas.ts:56-60`) permits a bare `"0"` and it is
+ * client-settable at `CreateDivision.slug`, so `divisions = [premier, {slug:
+ * "0"}]` with an unmatched entry at index 0 renders `mh-info-calendar-0` twice
+ * — the same duplicate-locator defect this fallback replaced, one rung further
+ * down. Neither `Slug` nor `slugify` can emit `_`, so prefixing it puts the
+ * fallback in a namespace no real slug can reach, and THAT is unique by
+ * construction rather than by assertion.
+ *
+ * Worth noting how this was found: the F2 fix removed an overstated uniqueness
+ * claim and restated the same claim one rung lower. Moving a guard does not
+ * re-earn its rationale.
  */
 export function calendarSlug(
   calendar: { href: string },
@@ -142,7 +155,7 @@ export function calendarSlug(
   divisions: readonly { slug: string; href: string }[],
 ): string {
   const matched = divisions.find((d) => calendar.href === `${d.href}/calendar.ics`);
-  return matched?.slug ?? String(index);
+  return matched?.slug ?? `_${index}`;
 }
 
 // One class for every link on the tab, so the 44px tap target cannot be
