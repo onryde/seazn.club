@@ -21,8 +21,8 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | 5 — provenance writer | **COMMITTED** `aadfcf30a` |
 | 6 — claim accept (§9 P2) | **COMMITTED** `1e1289c06`, `ae2d6f914`, `8da28fd25`, `734f16dbe` |
 | 7 — news drafts + publish (§9 P6) | **COMMITTED** `5196b5408`, `69e846945`, `e90218292` |
-| 8 — doc corrections | **NEXT** |
-| 9 — live run, both placement legs | not started — **needs a local env; orchestrator only, never a subagent (600s watchdog)** |
+| 8 — doc corrections | **COMMITTED** `705b209d0` |
+| 9 — live run, both placement legs | **NEXT, BLOCKED** — needs a local env (DB + server, `seazn-local-env`); orchestrator only, never a subagent (600s watchdog) |
 
 ## Gate numbers, in order, so a regression is visible
 
