@@ -687,6 +687,18 @@ test.describe("§8's live preview", () => {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=fixtures`);
 
+      // PREMISE, and the reason this is not the four-line test the review
+      // estimated: the run sheet opens on its "Today" filter, and
+      // `seedRosteredFixture` does not schedule for today — so the row that
+      // carries the toggle is filtered OUT of the sheet even though the same
+      // page's "Now playing" strip is showing the fixture. Assert the sheet
+      // rendered first, or "no toggle" is indistinguishable from "no page".
+      await expect(
+        page.locator('[data-testid="run-sheet"]'),
+        "the fixtures tab did not render its run sheet at all",
+      ).toHaveCount(1);
+      await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
+
       const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
       await expect(toggle, "the rig's org holds streaming.overlay, so the row offers the panel").toHaveCount(1);
       await toggle.click();
@@ -751,6 +763,17 @@ test.describe("§8's live preview", () => {
         at(320).canvas,
         `the strip is ${at(320).strip}px at a 320 viewport and ${at(1280).strip}px at 1280 — the canvas must follow`,
       ).toBeLessThan(at(1280).canvas);
+
+      // Named against the SUPERSEDED constant on purpose. `640/1920` is what
+      // the panel shipped and is what a reverted `transform` would paint here
+      // whatever the strip measures, so this is the assertion that kills that
+      // mutant — and it is the only one anywhere that can, because
+      // `environment: "node"` has no layout and the pure function returns its
+      // own fallback (the same 640/1920) when nothing has been measured.
+      expect(
+        at(320).canvas,
+        `at a 320 viewport the strip is ${at(320).strip}px; a canvas still painting the shipped 640px constant reads 640 here`,
+      ).toBeLessThan(639);
     } finally {
       await owner.close();
     }
