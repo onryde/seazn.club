@@ -464,6 +464,32 @@ export function chaseNeed(summary: unknown): number | null {
 }
 
 /**
+ * HOW a chase target was set, or null.
+ *
+ * `_THEMES.md` §3's cricket row (owner ruling 2026-09-10, "add the DLS hint in
+ * W1"): a rain-revised chase that shows new numbers with nothing to say why
+ * they moved reads, on a broadcast, as the scoreboard being wrong. The data
+ * already arrives — cricket's `summary().detail` emits `targetSource` beside
+ * `target` (`packages/engine/src/sports/cricket/cricket.ts:3678-3680`) and the
+ * overlay projection passes `summary` through whole — so this is a READER, not
+ * a derivation. Nothing here recomputes a target or infers a method.
+ *
+ * The engine's own type is `"dls" | "manual" | null`, THREE cases, and the two
+ * non-null ones are not interchangeable: labelling a manually-agreed target as
+ * DLS is a false claim about how it was set. So this names the two methods it
+ * knows rather than testing for non-null — an unknown token (a future VJD
+ * setting, a bespoke league rule) falls through to null and the line stays
+ * unmarked, which is short rather than wrong.
+ */
+export function chaseTargetSource(summary: unknown): "dls" | "manual" | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const source = (detail as { targetSource?: unknown }).targetSource;
+  return source === "dls" || source === "manual" ? source : null;
+}
+
+/**
  * Balls still available to the side batting second, or null.
  *
  * The denominator of the line `_THEMES.md` §3 draws — "Need 45 off 45". Both

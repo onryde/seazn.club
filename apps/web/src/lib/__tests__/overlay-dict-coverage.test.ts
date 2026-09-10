@@ -45,20 +45,117 @@ function files(dir: string): string[] {
   return out;
 }
 
+/**
+ * Source with its comments removed.
+ *
+ * Found while mutation-testing the orphan check below (fix round 5): the key
+ * scan matches BACKTICK-delimited literals, and this codebase's doc comments
+ * routinely name a key in backticks — `overlay.brand`, right here in this
+ * sentence, is one. So a component could stop resolving a key entirely, keep
+ * the comment that mentions it, and the key would still read as "referenced".
+ * The un-wiring mutant survived on exactly that. A comment is documentation,
+ * never a reader.
+ *
+ * The `//` arm ignores a match preceded by `:` so `https://…` inside a string
+ * does not truncate the rest of its line.
+ */
+export function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+}
+
 /** Every string literal in the source that looks like one of this wave's keys.
- *  Deliberately a literal scan: a key built by concatenation would be missed,
- *  which is why the model builds none (see `headerContext`'s explicit switch). */
+ *  Deliberately a literal scan: a key built by concatenation is missed here and
+ *  picked up by `dynamicPrefixesIn` below instead. */
 function referencedKeys(prefix: string): Set<string> {
   const re = new RegExp(`["'\`](${prefix}\\.[A-Za-z0-9_.]+)["'\`]`, "g");
   const found = new Set<string>();
   for (const dir of SCAN_DIRS) {
     for (const file of files(dir)) {
-      const source = readFileSync(file, "utf8");
+      const source = stripComments(readFileSync(file, "utf8"));
       for (const m of source.matchAll(re)) found.add(m[1]!);
     }
   }
   return found;
 }
+
+/**
+ * The static head of every template literal that BUILDS a key of this wave —
+ * `` `stream.preview.${style}` `` yields `"stream.preview."`.
+ *
+ * The orphan check below needs this or it reports a false positive for every
+ * key resolved by concatenation: `fixture-stream-panel.tsx:206` renders its
+ * per-style caption that way, and `stream.preview.slate` therefore appears in
+ * no source file as a literal while being fully wired.
+ *
+ * A prefix is only accepted with at least one segment BELOW the namespace
+ * (`stream.preview.`, never a bare `stream.`) — a namespace-wide prefix would
+ * excuse every key in it and quietly turn this whole test off.
+ */
+export function dynamicPrefixesIn(source: string, ns: string): Set<string> {
+  const re = new RegExp("`(" + ns + "\\.[A-Za-z0-9_.]*)\\$\\{", "g");
+  const out = new Set<string>();
+  for (const m of source.matchAll(re)) {
+    const head = m[1]!;
+    // Both conjuncts carry weight, and each has its own row in the parser test
+    // below: a head that does not end at a segment boundary (`stream.tab${id}`)
+    // would excuse `stream.tabs.label` too, and a head of exactly one segment
+    // (`stream.${key}`) would excuse the entire namespace and turn the orphan
+    // check off without changing a single expectation.
+    if (head.endsWith(".") && head.split(".").length > 2) out.add(head);
+  }
+  return out;
+}
+
+function dynamicPrefixes(ns: string): Set<string> {
+  const out = new Set<string>();
+  for (const dir of SCAN_DIRS) {
+    for (const file of files(dir)) {
+      for (const p of dynamicPrefixesIn(stripComments(readFileSync(file, "utf8")), ns)) out.add(p);
+    }
+  }
+  return out;
+}
+
+/**
+ * Keys `en` DECLARES that no source file resolves — in either direction: not as
+ * a literal, not through a concatenated prefix.
+ *
+ * This is the half `overlay-dict-coverage.test.ts` did not have, and the reason
+ * five orphaned `public.overlay.*` keys shipped past it: the source→dict checks
+ * below prove nothing is MISSING, and the en-vs-locale check proves no locale
+ * has an EXTRA — neither can see a key that is present in all four locales and
+ * read by nothing. `overlay.brand` sat there in four dictionaries while three
+ * components hardcoded `seazn`.
+ */
+function orphanKeys(ns: string, dict: Record<string, string>): string[] {
+  const referenced = referencedKeys(ns);
+  const prefixes = [...dynamicPrefixes(ns)];
+  return Object.keys(dict)
+    .filter((k) => k.startsWith(`${ns}.`))
+    .filter((k) => !referenced.has(k) && !prefixes.some((p) => k.startsWith(p)))
+    .sort();
+}
+
+/**
+ * Orphans with a REASON and an owner. An entry here is a promise that the key
+ * is owed to named future work, not that it is fine — so the test below fails
+ * BOTH ways: an un-listed orphan, and a listed key that has since been wired or
+ * deleted. Without that second direction the list would silently outlive the
+ * thing it excuses, which is how the exemption becomes the defect.
+ */
+const KNOWN_ORPHANS: Readonly<Record<string, string>> = {
+  // `_THEMES.md` §4a's "SIGNAL LOST" state cannot be reached from `OverlayModel`
+  // alone; it needs B3's `<video>` element to report a stalled source. Recorded
+  // in `overlay-slate.tsx`'s own header.
+  "overlay.slate.signalLostHeadline": "owed to B3 — the <video> seam that can detect a stalled source",
+  "overlay.slate.signalLostLine": "owed to B3 — same seam",
+  // W1-step-one.md:315-316 — the PUBLIC MATCH PAGE's link to the stream, which
+  // reads `overlay.watchLive` while scheduled/in_play and `overlay.replay` once
+  // decided/finalized. Task 7's, not this fix round's: deleting them here would
+  // make that task re-mint the same four-locale copy.
+  "overlay.watchLive": "owed to Task 7 — the public match-page stream link",
+  "overlay.replay": "owed to Task 7 — the same link, once the fixture has ended",
+};
 
 const dictOf = (locale: string, ns: string): Record<string, string> =>
   JSON.parse(readFileSync(join(DICT, locale, `${ns}.json`), "utf8"));
@@ -103,6 +200,74 @@ describe("overlay + panel copy is complete in every locale", () => {
       expect(missing, `${locale} is missing these stream keys`).toEqual([]);
     });
   }
+
+  // -------------------------------------------------------------------------
+  // The OTHER direction (fix round 5, I5). Everything above asks "does every
+  // key the source uses exist?"; nothing above could ask "does every key that
+  // exists reach a screen?", which is why three orphans shipped.
+  // -------------------------------------------------------------------------
+  it("every `overlay.*` key en declares is resolved by the source, or listed with its owner", () => {
+    const orphans = orphanKeys("overlay", dictOf("en", "public"));
+    const unexplained = orphans.filter((k) => !(k in KNOWN_ORPHANS));
+    expect(
+      unexplained,
+      "declared in four locales and read by nothing — wire it, delete it, or add it to KNOWN_ORPHANS with the task that owes it",
+    ).toEqual([]);
+  });
+
+  it("every `stream.*` key en declares is resolved by the source, or listed with its owner", () => {
+    const orphans = orphanKeys("stream", dictOf("en", "ui"));
+    const unexplained = orphans.filter((k) => !(k in KNOWN_ORPHANS));
+    expect(unexplained, "same rule for the console panel's namespace").toEqual([]);
+  });
+
+  it("KNOWN_ORPHANS does not outlive what it excuses — every listed key is still declared AND still an orphan", () => {
+    // The half that makes the list a promise rather than a mute. When Task 7
+    // wires `overlay.watchLive`, this reds and the entry has to go; if someone
+    // deletes the key instead, this reds too.
+    const declared = { ...dictOf("en", "public"), ...dictOf("en", "ui") };
+    const orphans = new Set([
+      ...orphanKeys("overlay", dictOf("en", "public")),
+      ...orphanKeys("stream", dictOf("en", "ui")),
+    ]);
+    const stale = Object.keys(KNOWN_ORPHANS)
+      .filter((k) => typeof declared[k] !== "string" || !orphans.has(k))
+      .sort();
+    expect(stale, "these entries no longer describe the tree — remove them").toEqual([]);
+    expect(Object.keys(KNOWN_ORPHANS).length, "an empty list would make the two checks above vacuous-proof but this one vacuous").toBeGreaterThan(0);
+  });
+
+  it("the concatenated-key reader is a real parser, not a rubber stamp", () => {
+    // `orphanKeys` excuses a key when a template literal builds its prefix.
+    // That escape hatch is only safe if it is narrow: one row per refusal.
+    expect([...dynamicPrefixesIn("const k = `stream.preview.${style}`;", "stream")]).toEqual([
+      "stream.preview.",
+    ]);
+    expect(
+      [...dynamicPrefixesIn("const k = `stream.${anything}`;", "stream")],
+      "a namespace-wide prefix would excuse every key at once",
+    ).toEqual([]);
+    expect(
+      [...dynamicPrefixesIn("const k = `stream.tabs.lab${id}`;", "stream")],
+      "a head that stops mid-segment would excuse stream.tabs.label — and it is DEEP enough to clear the depth guard, so only the segment-boundary conjunct refuses it",
+    ).toEqual([]);
+    expect([...dynamicPrefixesIn('const k = "stream.preview.slate";', "stream")]).toEqual([]);
+    expect([...dynamicPrefixesIn("const k = `overlay.status.${s}`;", "stream")]).toEqual([]);
+  });
+
+  it("a key named in a COMMENT is not a reader — documentation cannot wire copy", () => {
+    // The mutant that found this: un-wiring `overlay.brand` from all three
+    // themes left the orphan check green, because the comments explaining the
+    // change still named the key in backticks.
+    const wired = 'const label = msg("overlay.brand");';
+    const documented = "// see `overlay.brand`, resolved elsewhere\n/* and `overlay.brand` again */";
+    expect(stripComments(wired), "real code is untouched").toBe(wired);
+    expect(stripComments(documented).includes("overlay.brand"), "both comment forms go").toBe(false);
+    expect(
+      stripComments('const u = "https://example.test/x"; const k = "overlay.brand";'),
+      "a URL's // must not eat the rest of the line",
+    ).toContain("overlay.brand");
+  });
 
   it("no locale carries an overlay/stream key en has dropped", () => {
     const en = { ...dictOf("en", "public"), ...dictOf("en", "ui") };

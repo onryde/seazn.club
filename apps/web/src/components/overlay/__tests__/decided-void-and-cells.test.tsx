@@ -7,10 +7,16 @@
 // tree is a real, non-mocked render of THIS wave's actual production
 // components.
 import { describe, expect, it } from "vitest";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
+import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { overlayModel } from "@/lib/overlay-model";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
 import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { ReactNode } from "react";
 
 /** Fix round 5 — both themes now resolve the brand wordmark through `msg`
@@ -191,5 +197,86 @@ describe("OverlayBar — an empty meta never occupies the layout (F8)", () => {
     const meta = tree.find((el) => classesOf(el) === "ovl-team-meta");
     expect(meta).toBeDefined();
     expect(textOf(meta!)).toBe("12.3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 5, I2 — the RENDERING half of §3's decided/void context line.
+// `overlay-model.test.ts` pins what the projection computes for each of the
+// three cases; this pins that each one reaches the DOM slot §3 draws it in,
+// driven end to end through the REAL producer (a real engine fold →
+// `overlayModel`) and the REAL consumers, never a hand-written model.
+// ---------------------------------------------------------------------------
+describe("§3's decided/void context line reaches the rendered second line (I2)", () => {
+  const TEMPLATES: DecidedOutcomeTemplates = {
+    tie: "TIE",
+    plain: "WIN {winner}",
+    shootoutPlain: "WIN {winner} SO",
+    byMethod: { regulation: "WIN {winner} REG" },
+  };
+  const SIDES: [{ id: string; name: string }, { id: string; name: string }] = [
+    { id: "H", name: "Milton Keynes Rovers" },
+    { id: "A", name: "Northbridge Athletic" },
+  ];
+
+  /** One real football fold, projected at whatever status/outcome a case needs. */
+  function modelFor(status: string, outcome: OverlayLiveData["outcome"]): OverlayModel {
+    const mod = builtinModules.find((m) => m.key === "football")!;
+    const cfg = mod.configSchema.parse(SIM_CONFIGS["football"] ?? {});
+    const events: EventEnvelope[] = (
+      [
+        ["core.start", {}],
+        ["football.goal", { by: "H" }],
+        ["football.period", { phase: "HT" }],
+      ] as const
+    ).map(([type, p], i) => makeEnvelope(i, { type, payload: p } as never));
+    const state = foldMatch(mod as never, cfg as never, defaultLineupPair(mod.positions), events);
+    const summary = (mod as { summary: (s: unknown) => OverlayLiveData["summary"] }).summary(state);
+    return overlayModel({
+      sportKey: "football",
+      data: { status, summary, outcome, lastSeq: null, venueTz: "UTC" },
+      sides: SIDES,
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: TEMPLATES,
+    });
+  }
+
+  const contextLineOf = (Component: typeof OverlayBar | typeof OverlayBug, model: OverlayModel) => {
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
+    const cls = Component === OverlayBar ? "ovl-context" : "ovl-bug-context";
+    const el = tree.find((node) => classesOf(node) === cls);
+    return el === undefined ? undefined : textOf(el);
+  };
+
+  describe.each([
+    ["OverlayBar", OverlayBar],
+    ["OverlayBug", OverlayBug],
+  ] as const)("%s", (_name, Component) => {
+    it("live: the sport's own line", () => {
+      expect(contextLineOf(Component, modelFor("in_play", null))).toBe("H2");
+    });
+
+    it("decided: the SHORT form of the result sentence, not the phase", () => {
+      const line = contextLineOf(Component, modelFor("decided", { kind: "win", winner: "H", method: "regulation" }));
+      expect(line, "the winner reduced to the cell's short name").toBe("WIN MIL REG");
+      expect(line, "the phase must not survive under the word 'Final'").not.toBe("H2");
+    });
+
+    it("void carrying a verdict: the same short form as decided", () => {
+      const line = contextLineOf(Component, modelFor("forfeited", { kind: "award", winner: "A", method: "regulation" }));
+      expect(line).toBe("WIN NOR REG");
+    });
+
+    it("void, no verdict: the sport's own line SURVIVES — the regression this closes", () => {
+      // Before I2 this rendered no second line at all: an abandoned match lost
+      // the phase (or, for tennis, its "Set 3") the instant it ended.
+      expect(contextLineOf(Component, modelFor("abandoned", null))).toBe("H2");
+    });
+
+    it("the negative pair: a scheduled fixture renders no second line at all", () => {
+      expect(contextLineOf(Component, modelFor("scheduled", null))).toBeUndefined();
+    });
   });
 });

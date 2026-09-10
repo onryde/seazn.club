@@ -9,6 +9,7 @@ import {
   battingEntrantId,
   chaseBalls,
   chaseNeed,
+  chaseTargetSource,
   disciplineLabel,
   disciplineList,
   matchStrength,
@@ -117,8 +118,15 @@ export interface OverlayModel {
     /** Fix round 3, F4 — the context LINE below it (`_THEMES.md` §3's
      *  "context line Geist 21/500 ink 70%"): the period/set label while
      *  live ("H1", "Set 1"). Absent for cricket/generic (no periods or
-     *  sets) and for every non-live state — `overlay-bar.tsx` renders it
-     *  only when set. */
+     *  sets) and while scheduled — `overlay-bar.tsx` renders it only when
+     *  set.
+     *
+     *  Fix round 5, I2 — §3's "Decided / void" row gives this line a value
+     *  in ALL THREE end cases, and round 3 gave it one in none of them.
+     *  Decided (and void-carrying-a-verdict) carry the SHORT FORM of the
+     *  result sentence; void-with-no-verdict carries "the sport's own line
+     *  unchanged", which round 3 actively removed — a cancelled tennis
+     *  match lost its "Set 3". */
     period?: string;
     clock?: string;
   };
@@ -249,13 +257,19 @@ function headerContext(input: OverlayModelInput, ended: boolean): string {
 /** Fix round 3, F4 — the context LINE under "Live" (`_THEMES.md` §3's own
  *  second line), split out of the old `headerContext` so the status word
  *  above it can always say "Live" rather than a period/set label crowding
- *  it out. Undefined once ended (P8's already-correct decided render shows
- *  no second line) or scheduled, and for a sport with neither a period nor
- *  a set breakdown (cricket, generic) — an absent line is invisible, not a
- *  gap the sheet asks this fix round to close. */
-function headerPeriod(input: OverlayModelInput, ended: boolean): string | undefined {
+ *  it out. Undefined while scheduled, and for a sport with neither a period
+ *  nor a set breakdown (cricket, generic) — an absent line is invisible.
+ *
+ *  Fix round 5, I2 — the `ended` half of the old guard is GONE. §3's third
+ *  end case ("void, no verdict") says the sport's own line is *unchanged*,
+ *  and returning undefined for every ended fixture removed it: a cancelled
+ *  tennis match at "Set 3" lost the line it had been showing a second
+ *  earlier. `overlayModel` still overrides this for the two cases that DO
+ *  replace the line (decided and void-carrying-a-verdict, which take the
+ *  short form of the result sentence). */
+function sportPeriodLine(input: OverlayModelInput): string | undefined {
   const { data, msg, sportKey } = input;
-  if (ended || data.status === "scheduled") return undefined;
+  if (data.status === "scheduled") return undefined;
   const periods = periodBreakdown(data.summary);
   if (periods && periods.length > 0) return periods[periods.length - 1]!.phase;
   const breakdown = setBreakdown(data.summary, sportKey);
@@ -407,6 +421,33 @@ function ledEntrantId(input: OverlayModelInput, decided: boolean, ended: boolean
   return null;
 }
 
+/**
+ * `_THEMES.md` §3's cricket row (owner ruling 2026-09-10) — the chase line
+ * names the METHOD when the target was revised, so a rain-revised chase does
+ * not show new numbers with nothing to say why they moved.
+ *
+ * Three cases, and the two non-null ones are NOT interchangeable: a manually
+ * agreed target announced as DLS is a false claim about how it was set, made
+ * on a live broadcast. `chaseTargetSource` already refuses to answer for
+ * anything but the two methods the engine names.
+ *
+ * Appended HERE, in the projection, rather than in a component: both shipped
+ * themes and every future theme inherit it from the one model, which is the
+ * same property that lets eleven sports and N themes meet in one place. The
+ * separator is the mid-dot both themes already use between detail items — a
+ * punctuation choice, not copy, so it is not a dictionary key.
+ */
+function withRevisionMarker(
+  line: string,
+  source: "dls" | "manual" | null,
+  msg: OverlayMsg,
+): string {
+  if (source === null) return line;
+  // `DLS` is a proper noun and stays `DLS` in every locale; `Revised`
+  // translates. Both are `public.overlay.chase.*` keys, never literals.
+  return `${line} · ${msg(source === "dls" ? "overlay.chase.dls" : "overlay.chase.revised")}`;
+}
+
 export function overlayModel(input: OverlayModelInput): OverlayModel {
   const { data, msg, sides } = input;
   // Fix round 3, F1 — the OLD predicate here was `data.status === "decided"
@@ -454,11 +495,27 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // The clock is the STAGE's timer (use-overlay-clock.ts), formatted before it
   // reaches this pure model; decided frames show none (amended 2026-09-07).
   const clock = ended ? null : input.clockLabel;
+  const shootout = shootoutScoreFromDetail(data.summary?.detail);
   const result = renderDecidedOutcome(
     data.outcome,
     { [sides[0].id]: sides[0].name, [sides[1].id]: sides[1].name },
     input.decidedTemplates,
-    shootoutScoreFromDetail(data.summary?.detail),
+    shootout,
+  );
+  // Fix round 5, I2 — `_THEMES.md` §3:330-333: "the band carries `resultMsg`'s
+  // full sentence, the context line carries the same sentence with the winner
+  // reduced to the short name the cell already uses ('Kings won by 44 runs'
+  // against 'Mumbai Kings won by 44 runs'). Both come from `resultMsg`; only
+  // the winner token differs." So this is the SAME producer with the SAME
+  // templates and one different name map — never a second sentence authority,
+  // which would let the bar and the detail band disagree about who won.
+  // `codes` is what `OverlaySide.short` already carries (an entrant's own
+  // short name where the payload ever holds one, else three letters).
+  const shortResult = renderDecidedOutcome(
+    data.outcome,
+    { [sides[0].id]: codes[0], [sides[1].id]: codes[1] },
+    input.decidedTemplates,
+    shootout,
   );
   // Fix round 3, F1/F3 — a void-no-verdict frame renders NO detail band at
   // all (`_THEMES.md` §3/§4): `chase`/`result` are already null by
@@ -466,7 +523,14 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // discipline line recorded BEFORE the match was voided would otherwise
   // survive in `detail` and render a band the sheet says must be absent.
   const detail = voided ? [] : detailOf(input, codes, live);
-  const period = headerPeriod(input, ended);
+  // §3's "Decided / void" row, all three cases. The first two ("decided", and
+  // "void carrying a verdict" — one boolean here, see `decided`'s own doc)
+  // REPLACE the line with the short form; the third leaves the sport's own
+  // line alone. A decided outcome the sentence producer has nothing to say
+  // about (a draw — `renderDecidedOutcome` describes wins, ties and awards
+  // only) falls to no line at all rather than back to the period: "H2" under
+  // the word "Final" would read as a match still in its second half.
+  const period = decided ? (shortResult ?? undefined) : sportPeriodLine(input);
   const cellsResult = cellsOf(input);
 
   return {
@@ -485,10 +549,13 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     ...(need === null
       ? {}
       : {
-          chase:
+          chase: withRevisionMarker(
             balls === null
               ? msg("overlay.chase.need", { runs: need })
               : msg("overlay.chase.needBalls", { runs: need, balls }),
+            chaseTargetSource(data.summary),
+            msg,
+          ),
         }),
     ...(result === null ? {} : { result }),
   };

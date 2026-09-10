@@ -76,9 +76,14 @@ function payload(
   stream: readonly (readonly [string, unknown])[],
   status: string,
   outcome: LiveFixtureData["outcome"] = null,
+  /** Fix round 5 — the DLS marker needs `cfg.dls.enabled`, which no sport's
+   *  `SIM_CONFIGS` entry turns on (cricket's is `{ ballsPerInnings: 30 }`).
+   *  Still parsed through the module's OWN schema, so an invalid override is
+   *  a ZodError here rather than a silently different world. */
+  rawCfg: unknown = undefined,
 ): LiveFixtureData {
   const mod = moduleFor(key);
-  const cfg = mod.configSchema.parse(SIM_CONFIGS[key] ?? {});
+  const cfg = mod.configSchema.parse(rawCfg ?? SIM_CONFIGS[key] ?? {});
   const lineups = defaultLineupPair(mod.positions);
   const events: EventEnvelope[] = stream.map(([type, p], i) =>
     makeEnvelope(i, { type, payload: p } as never),
@@ -474,6 +479,266 @@ describe("overlayModel — cricket chase line", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Fix round 5, I2 — `_THEMES.md` §3's "Decided / void" row specifies a CONTEXT
+// LINE for all three of its cases, and the shipped model produced one for none
+// of them: `headerPeriod` returned `undefined` for every ended fixture. Two of
+// the three were simply missing; the third was an active REMOVAL, since §3
+// says the sport's own line is "unchanged" there.
+//
+// The status WORD (`header.context`) is already right and is not re-litigated
+// here — those cases live in the three-case-split describe above. This block
+// is only about the second line.
+// ---------------------------------------------------------------------------
+describe("overlayModel — §3's decided/void context line (fix round 5, I2)", () => {
+  it("decided: the context line is the SHORT form of the result sentence, from the same producer", () => {
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ], "decided", { kind: "win", winner: "H", method: "regulation" });
+    const model = project("football", data);
+    // §3:330-333 — "the band carries `resultMsg`'s full sentence, the context
+    // line carries the same sentence with the winner reduced to the short name
+    // the cell already uses… Both come from `resultMsg`; only the winner token
+    // differs." `shortCode("Milton Keynes Rovers")` is "MIL".
+    expect(model.result, "the detail band's own full sentence is unchanged").toBe(
+      "WIN Milton Keynes Rovers REG",
+    );
+    expect(model.header.period, "the same sentence, short winner").toBe("WIN MIL REG");
+    expect(
+      model.header.period,
+      "the differential: a short form built from the FULL name map would be identical to the band's",
+    ).not.toBe(model.result);
+  });
+
+  it("void carrying a verdict (a forfeit): the same short form, under the status word", () => {
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ], "forfeited", { kind: "award", winner: "A", method: "regulation" });
+    const model = project("football", data);
+    expect(model.header.context, "the status word, not 'Final'").toBe("overlay.status.forfeited");
+    // The winner here is AWAY, so a short form that always names sides[0]
+    // would read "MIL" and pass a home-winner case forever.
+    expect(model.header.period, "§3: 'the short form, same as decided'").toBe("WIN NOR REG");
+    expect(model.result).toBe("WIN Northbridge Athletic REG");
+  });
+
+  it("void, no verdict — a CANCELLED tennis match keeps the set line it had while live", () => {
+    // The concrete regression: before ending, the bar reads "Live / Set 3";
+    // after, §3 says the sport's own line is UNCHANGED, and the shipped model
+    // dropped it. The expectation is DERIVED from the same fold read as live,
+    // never typed here — "unchanged" is a comparison, not a literal.
+    const stream = [
+      ["core.start", {}],
+      ...Array.from({ length: 24 }, () => ["tennis.point", { by: "H" }] as const),
+      ...Array.from({ length: 24 }, () => ["tennis.point", { by: "A" }] as const),
+      ["tennis.point", { by: "H" }],
+    ] as const;
+    const live = project("tennis", payload("tennis", stream, "in_play"));
+    expect(live.header.period, "anti-vacuity: the live fold must HAVE a set line").toBeDefined();
+    expect(live.header.period, "…and it must be the set key, not a stray string").toMatch(
+      /^overlay\.header\.set\(n=\d+\)$/,
+    );
+
+    const cancelled = project("tennis", payload("tennis", stream, "cancelled", null));
+    expect(cancelled.voided, "cancelled never carries a verdict").toBe(true);
+    expect(cancelled.header.context).toBe("overlay.status.cancelled");
+    expect(cancelled.header.period, "§3: 'the sport's own line unchanged'").toBe(live.header.period);
+  });
+
+  it("void, no verdict — an ABANDONED football match keeps its period line too (the other branch of the sport's own line)", () => {
+    // `headerPeriod` has two arms — `periodBreakdown` and `setBreakdown`. The
+    // tennis case above only proves the second; mutating the first alone would
+    // survive it.
+    const stream = [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+      ["football.period", { phase: "HT" }],
+    ] as const;
+    const live = project("football", payload("football", stream, "in_play"));
+    expect(live.header.period, "anti-vacuity: H2 after the HT marker").toBe("H2");
+    const abandoned = project("football", payload("football", stream, "abandoned", null));
+    expect(abandoned.voided).toBe(true);
+    expect(abandoned.header.period).toBe("H2");
+  });
+
+  it("a scheduled fixture still has NO context line — the guard that survives I2", () => {
+    const model = project("generic", { status: "scheduled", summary: null, outcome: null }, "Sat 14:00");
+    expect(model.header.period, "nothing has happened yet; there is no line to carry").toBeUndefined();
+  });
+
+  it("decided with a DRAW: no context line rather than a raw key or an empty string", () => {
+    // `renderDecidedOutcome` returns null for `draw` (it describes wins, ties
+    // and awards only), so both the band sentence and the short form are
+    // absent — §3 asks for the short form OF the result sentence, and there
+    // is none. The header must not fall back to the sport's own line here:
+    // "H2" under the word "Final" would read as a live period.
+    const data = payload("football", [
+      ["core.start", {}],
+      ["football.period", { phase: "HT" }],
+    ], "decided", { kind: "draw" });
+    const model = project("football", data);
+    expect(model.decided, "a draw is a real verdict").toBe(true);
+    expect(model.result).toBeUndefined();
+    expect(model.header.period).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DLS / Revised marker (owner ruling 2026-09-10, `_THEMES.md` §3's cricket
+// row). `targetSource` is `"dls" | "manual" | null` — THREE cases, and a
+// manually-set target must never be labelled DLS: that is a false claim about
+// how a target was set, on a live broadcast.
+//
+// Every case below folds a REAL cricket ledger through the REAL module, so the
+// `targetSource` under test is the one the engine emits beside `target`
+// (`cricket.ts:3678-3680`) and the projection passes through whole — not a
+// field a fixture on both ends invented.
+// ---------------------------------------------------------------------------
+describe("overlayModel — the chase line's revision marker (fix round 5)", () => {
+  /** Innings 2's deliveries: the bowler must be in the FIELDING lineup, which
+   *  is the one membership check a non-strict read fold enforces. */
+  const CHASE_BALL = (over: number, ball: number, runs: number) =>
+    ["cricket.ball", { over, ballInOver: ball, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p1", runs: { bat: runs } }] as const;
+
+  /** H bats first for 8, closes, (optionally revises), A faces one ball. */
+  const stream = (revise: readonly (readonly [string, unknown])[]) => [
+    ["cricket.toss", { wonBy: "H", elected: "bat" }],
+    ["core.start", {}],
+    CRICKET_BALL(0, 1, 4),
+    CRICKET_BALL(0, 2, 4),
+    ["cricket.innings.close", {}],
+    ...revise,
+    CHASE_BALL(0, 1, 1),
+  ] as const;
+
+  const DLS_CFG = { ballsPerInnings: 30, dls: { enabled: true, edition: "standard" } };
+
+  const sourceOf = (data: LiveFixtureData) =>
+    (data.summary as { detail?: { targetSource?: unknown } } | null)?.detail?.targetSource;
+
+  it("no revision: the chase line is unchanged, with no marker at all", () => {
+    const data = payload("cricket", stream([]), "in_play");
+    expect(sourceOf(data), "an unrevised fold emits no targetSource — the third union member").toBeUndefined();
+    const model = project("cricket", data);
+    expect(model.chase, "8 set, 1 chased ⇒ need 8").toBe("overlay.chase.need(runs=8)");
+    expect(model.chase).not.toContain("·");
+  });
+
+  it("a MANUALLY revised target is labelled 'Revised' — never DLS", () => {
+    const data = payload("cricket", stream([["cricket.revise", { target: 40 }]]), "in_play");
+    expect(sourceOf(data), "the engine's own word for this ledger").toBe("manual");
+    const model = project("cricket", data);
+    expect(model.chase).toBe("overlay.chase.need(runs=39) · overlay.chase.revised");
+    expect(
+      model.chase,
+      "the whole point of the three-case split: this must not claim a DLS calculation",
+    ).not.toContain("overlay.chase.dls");
+  });
+
+  it("a DLS-computed target is labelled 'DLS'", () => {
+    // A rain-shortened chase: innings 1 closed at 30 balls of resources, the
+    // chase revised down to 3 overs, so the engine recomputes the target
+    // itself and stamps `targetSource: "dls"`.
+    const data = payload(
+      "cricket",
+      stream([["cricket.revise", { oversPerSide: 3 }]]),
+      "in_play",
+      null,
+      DLS_CFG,
+    );
+    expect(sourceOf(data), "the engine computed this one").toBe("dls");
+    const model = project("cricket", data);
+    expect(model.chase).toContain(" · overlay.chase.dls");
+    expect(model.chase, "…and it must not read as a manual revision").not.toContain(
+      "overlay.chase.revised",
+    );
+    expect(model.chase, "the marker rides the existing line, it does not replace it").toMatch(
+      /^overlay\.chase\.need\(runs=\d+\) · overlay\.chase\.dls$/,
+    );
+  });
+
+  it("the three cases produce three DIFFERENT markers — the runs alone already differ, so compare the SUFFIX", () => {
+    // Comparing whole chase lines here would be vacuous: the three folds set
+    // three different targets, so the lines differ whether or not a marker is
+    // appended at all. The marker is what this asserts.
+    const markerOf = (line: string | undefined) =>
+      (line ?? "").replace(/^overlay\.chase\.need\(runs=\d+\)/, "");
+    const none = markerOf(project("cricket", payload("cricket", stream([]), "in_play")).chase);
+    const manual = markerOf(
+      project("cricket", payload("cricket", stream([["cricket.revise", { target: 40 }]]), "in_play")).chase,
+    );
+    const dls = markerOf(
+      project(
+        "cricket",
+        payload("cricket", stream([["cricket.revise", { oversPerSide: 3 }]]), "in_play", null, DLS_CFG),
+      ).chase,
+    );
+    expect(none, "no revision ⇒ nothing after the line").toBe("");
+    expect(new Set([none, manual, dls]).size, "three distinct markers").toBe(3);
+  });
+
+  it("a wire that carries a target but NO targetSource gets no marker — never a guessed method", () => {
+    // Older rows, a coarsened summary, or any producer that stops emitting the
+    // field: `target` alone must not be read as "revised by DLS".
+    const data: OverlayLiveData = {
+      status: "in_play",
+      summary: {
+        headline: "180/8 (20) — 91/3 (12)",
+        perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "91/3 (12)" }],
+        detail: {
+          target: 150,
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, closed: true },
+            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 72, closed: false },
+          ],
+        },
+      },
+      outcome: null,
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    expect(project("cricket", data).chase).toBe("overlay.chase.need(runs=59)");
+  });
+
+  it("an UNKNOWN targetSource gets no marker — the reader names the two methods it knows, not 'not null'", () => {
+    // A future method (VJD, a bespoke league rule) must fall through to the
+    // unmarked line rather than being announced as DLS.
+    const data: OverlayLiveData = {
+      status: "in_play",
+      summary: {
+        headline: "180/8 (20) — 91/3 (12)",
+        perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "91/3 (12)" }],
+        detail: {
+          target: 150,
+          targetSource: "vjd",
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, closed: true },
+            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 72, closed: false },
+          ],
+        },
+      },
+      outcome: null,
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    expect(project("cricket", data).chase).toBe("overlay.chase.need(runs=59)");
+  });
+
+  it("no chase, no marker — a revised target on an ENDED fixture carries nothing", () => {
+    const data = payload(
+      "cricket",
+      stream([["cricket.revise", { target: 40 }]]),
+      "abandoned",
+      { kind: "no_result" },
+    );
+    const model = project("cricket", data);
+    expect(model.voided).toBe(true);
+    expect(model.chase, "§3's void-no-verdict frame renders no detail band at all").toBeUndefined();
+  });
+});
+
 describe("overlayModel — the football family's clock", () => {
   it("places the stage's formatted clock in header.clock, and drops it on a decided frame (amended 2026-09-07)", () => {
     // The clock is the STAGE's 1 Hz timer, formatted by `formatClock` before it
@@ -501,7 +766,16 @@ describe("overlayModel — the football family's clock", () => {
     expect(model.header.period, "the phase is its own context line").toBe("H2");
     const done = project("football", { ...data, status: "decided", outcome: { kind: "win", winner: "H" } }, null, "90:00");
     expect(done.header.clock, "no clock on a decided frame, whatever the stage hands in").toBeUndefined();
-    expect(done.header.period, "no second line once ended (P8's already-correct decided render)").toBeUndefined();
+    // AMENDED, fix round 5 (I2). This line used to assert `toBeUndefined()`
+    // "no second line once ended (P8's already-correct decided render)" — it
+    // was pinning the DEFECT: `_THEMES.md` §3's "Decided / void" row gives the
+    // decided case a context line ("the short form of the result sentence"),
+    // and round 3's `headerPeriod` returned undefined for every ended fixture.
+    // The clock is still dropped; the LINE is now the short sentence. The
+    // templates here carry no `regulation` entry, so `renderDecidedOutcome`
+    // falls to `plain` — "WIN {winner}" with the CELL's short name.
+    expect(done.header.period, "the short form replaces the phase once decided").toBe("WIN MIL");
+    expect(done.header.period, "…and it is NOT the phase it showed while live").not.toBe("H2");
   });
 
   it("leaves the clock absent when the stage has nothing to show, and for a sport with none", () => {

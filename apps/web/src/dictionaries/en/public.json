@@ -404,6 +404,8 @@
   "overlay.status.forfeited": "Forfeited",
   "overlay.detail.serving": "{side} serving",
   "overlay.detail.card": "{side} {card}",
+  "overlay.chase.dls": "DLS",
+  "overlay.chase.revised": "Revised",
   "overlay.chase.need": "Need {runs}",
   "overlay.chase.needBalls": "Need {runs} off {balls}",
   "overlay.brand": "seazn",
