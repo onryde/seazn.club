@@ -31,6 +31,7 @@ import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import { makeDisciplineRoutesWorld, type SuspensionRowLike } from "./_discipline-routes.ts";
 import type { DivisionCardSource, DivisionPlayerStatsLike } from "./_oracle-routes.ts";
+import { makeClaimRoutesWorld, type ClaimRoutesOptions } from "./_claim-routes.ts";
 import {
   makeOracleRoutesWorld,
   personCareerStatsFromDivisions,
@@ -58,6 +59,8 @@ function slug(s: string): string {
 function fakeServer(
   opts: {
     conflictAt?: { extKey: string; expectedSeq: number };
+    /** B06a T6 — knobs for the shared claim rail (`_claim-routes.ts`). */
+    claimRoutes?: ClaimRoutesOptions;
     /** B05 T3 regression — the seed-proposal answers with the WRONG order
      *  (reversed), so D7's assertion should red and neither confirm,
      *  generate nor the playoff's own stream fold should ever be attempted. */
@@ -152,7 +155,6 @@ function fakeServer(
   const phase = makeDivisionPhaseWorld();
   const fixtureExtKeyById = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
-  const claimInvites = new Map<string, unknown>();
   // B05 T4b — D6's OWN mis-attribution regression, run through the WIRED
   // leaderboard oracle rather than only a unit fixture: this fake TALLIES
   // real `generic.score` events as they land on `/fixtures/{id}/events`
@@ -315,6 +317,12 @@ function fakeServer(
         : personCareerStatsFromDivisions(personId, divisionCardSources()),
   });
 
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
+  // now: the runner accepts the pack's player invites after the fold on every
+  // `sql`-passing run.
+  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
+
   const transport: ProbeTransport = {
     async signIn(_base, _s) {
       calls.push({ method: "SIGNIN", path: "signIn", body: undefined });
@@ -439,14 +447,12 @@ function fakeServer(
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
-      const inviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
-      if (method === "POST" && inviteMatch) {
-        const officialId = inviteMatch[1]!;
-        const personId = `invited-${officialId}`;
-        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return { person_id: personId } as T;
-      }
+      // B06a T6 — the officials invite, the person claim-invite mint and its
+      // read-back all live in `_claim-routes.ts` now: all four fakes carried
+      // byte-identical copies of them, and the mint has to hand back a
+      // `claim_url` for the accept step to have a token at all.
+      const claimRouted = claims.handleRequest(method, routePath, body);
+      if (claimRouted !== undefined) return claimRouted.value as T;
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
@@ -457,16 +463,6 @@ function fakeServer(
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        const row = { person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return row as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        return (claimInvites.get(personId) ?? null) as T;
       }
       if (method === "GET" && /^\/api\/v1\/divisions\/[^/]+$/.test(routePath)) {
         // B05 T2.5 — `status` is D9's own RE-READ; `slug` is unrelated
@@ -483,6 +479,10 @@ function fakeServer(
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B06a T6 — claim acceptance (see `_claim-routes.ts`). Checked here for
+      // the same reason `/start` is: nothing below can answer it.
+      const claimAccepted = claims.handle(method, path);
+      if (claimAccepted !== undefined) return claimAccepted;
       // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
@@ -907,16 +907,53 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // the report's own list, and this length check could not see it because
     // both sides of it excluded the same two rows. The set spans both
     // prefixes now.
+    //
+    // B06a task 6 widened it again, for the same reason: the claim-acceptance
+    // rows carry the `people:` prefix and every one of them emits, so a set
+    // that stopped at `oracle:`/`advance:` would count four fewer report rows
+    // than log events and this length check would red on a correct run.
     const emittingOracles = (report.oracles ?? []).filter(
-      (o) => o.name.startsWith("oracle:") || o.name.startsWith("advance:"),
+      (o) => o.name.startsWith("oracle:") || o.name.startsWith("advance:") || o.name.startsWith("people:"),
     );
-    // The two `advance:` rows are genuinely in this run, or the widened
-    // count below would be the same number it always was.
-    expect(emittingOracles.length).toBe(runtimeOracles.length + 2);
+    const peopleOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("people:"));
+    // The two `advance:` rows and the four `people:` ones are genuinely in
+    // this run, or the widened count below would be the same number it
+    // always was.
+    // Five, and the fifth is the tell: `people: an accepted invite is closed`
+    // is pushed ONLY when something was actually accepted, so a run where the
+    // claim step silently accepted nothing lands on four.
+    expect(peopleOracles.map((o) => o.name)).toEqual([
+      "people: claim invites accepted",
+      "people: an invalid claim token is refused",
+      "people: an accepted invite is closed",
+      "people: invites past the limit stay unclaimed",
+      "people: a claimed profile still reports the same stats",
+    ]);
+    expect(emittingOracles.length).toBe(runtimeOracles.length + 2 + peopleOracles.length);
+    // Every `people:` row a green run must PASS, and the last one is the
+    // load-bearing one: it is `pass` only when an accepted profile carried
+    // REAL numbers before acceptance (`comparedAny`), so a fake answering an
+    // empty division list would land it on `no_subject` here instead. The
+    // verdict is asserted, never inferred from `passed`, because a no-subject
+    // row is `passed: true` on the wire.
+    expect(peopleOracles.map((o) => [o.name.replace("people: ", ""), o.verdict])).toEqual([
+      ["claim invites accepted", "pass"],
+      ["an invalid claim token is refused", "pass"],
+      ["an accepted invite is closed", "pass"],
+      ["invites past the limit stay unclaimed", "pass"],
+      ["a claimed profile still reports the same stats", "pass"],
+    ]);
     expect(oracleEvents).toHaveLength(emittingOracles.length);
     // …and by KIND, so a mislabelled emitter cannot satisfy the count alone.
     expect(oracleEvents.filter((e) => e.kind === "seed_proposal_qualifiers")).toHaveLength(1);
     expect(oracleEvents.filter((e) => e.kind === "final_ranks")).toHaveLength(1);
+    expect(oracleEvents.filter((e) => e.kind.startsWith("claims_")).map((e) => e.kind).sort()).toEqual([
+      "claims_accepted",
+      "claims_accepted_closed",
+      "claims_invalid_token",
+      "claims_profile_stats",
+      "claims_untouched_open",
+    ]);
     // Every OTHER oracle's verdict is untouched by this change — either
     // absent (the pre-T6 shape) or an explicit pass, never no_subject.
     // B06a task 3 widened the exempt set: the per-match rows carry an EXPLICIT
@@ -1071,6 +1108,86 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(leaderboardOracles.map((o) => o.passed)).toEqual([false, false]);
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).some((e) => e.includes("d-tiny/scores") || e.includes("leaderboard"))).toBe(true);
+  });
+
+  // B06a task 6 — the claim rail's two DISCRIMINATING wiring tests.
+  //
+  // The green run above proves acceptance works. Neither of these can pass
+  // against a claim surface that waves everything through, which is exactly
+  // the failure the whole negative case exists for: a bench that only ever
+  // accepts VALID tokens has proven that the happy path works and nothing at
+  // all about whether the product checks the token.
+  it("B06a T6 — a claim surface that accepts an unminted token reds the run", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { acceptAnyToken: true } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const negative = (report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused");
+    expect(negative).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(negative?.detail).toContain("HTTP 200");
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).some((e) => e.includes("not validating the token"))).toBe(true);
+    // The REAL acceptances still succeeded — the run reds on the negative case
+    // alone, so this is not a fake that simply broke everything.
+    expect((report.oracles ?? []).find((o) => o.name === "people: claim invites accepted")).toMatchObject({
+      passed: true,
+      verdict: "pass",
+    });
+  });
+
+  it("B06a T6 — a claim surface that refuses a real invite reds the run and names the status", async () => {
+    const { transport, sql } = fakeServer({ claimRoutes: { refuseWith: 409 } });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    const accepted = (report.oracles ?? []).find((o) => o.name === "people: claim invites accepted");
+    expect(accepted).toMatchObject({ passed: false, verdict: "fail", subject: true });
+    expect(accepted?.detail).toContain("HTTP 409");
+    expect(report.gate).toBe("red");
+    // And the negative case does NOT report a pass off the back of it: every
+    // acceptance failed, so a refusal of the tampered token proves nothing
+    // about token validation. `invalidTokenRefused` stays false.
+    expect((report.oracles ?? []).find((o) => o.name === "people: an invalid claim token is refused")).toMatchObject({
+      passed: false,
+    });
+    // Nothing was accepted, so the "an accepted invite is closed" row is not
+    // pushed at all — a run that reported it here would be reporting on an
+    // empty set.
+    expect((report.oracles ?? []).some((o) => o.name === "people: an accepted invite is closed")).toBe(false);
   });
 
   // B06a task 4 — the specials oracle's DISCRIMINATING wiring test, and the

@@ -129,6 +129,7 @@
 // real schema/usecase it copies.
 import { newSession, request, signIn, type RequestOptions, type Session } from "./http.ts";
 import { fixtureKey, type PackCourt, type PackStream, type PackVenue } from "./pack-schema.ts";
+import type { MintedInvite } from "./people.ts";
 import type {
   SeedPlan,
   SeedPlanClaimInvite,
@@ -760,6 +761,31 @@ interface ValidateOfficialsOut {
  *  accept the invite it just read back. `claimed_at`/`revoked_at` being
  *  `null` is itself the proof nothing here accepted it (B03 §5: "the accept
  *  flow is B05's, seeding only mints invites"). */
+/**
+ * B06a T6 — the mint response, which is the ONLY moment the one-time secret
+ * is readable: `POST .../claim-invites` builds `claim_url` from
+ * `routes.claim(secret)` and returns it once
+ * (`app/api/v1/persons/[id]/claim-invites/route.ts:24-25`), and the GET above
+ * deliberately omits it. Captured here so `acceptClaimInvites` can drive the
+ * flow a real invitee walks; before this, nothing downstream of seeding could
+ * accept an invite it had just minted, which is why B03 §5's "seeding only
+ * mints" line held for three waves after the accept flow was owed.
+ */
+interface ClaimInviteMint {
+  readonly person_id: string;
+  readonly claim_url: string;
+}
+
+/** `/claim/{secret}` (`lib/routes.ts:77`) — the secret is the last segment.
+ *  Returns `null` for a response with no usable `claim_url`, so a product
+ *  that stopped returning one shows up as an invite that cannot be accepted
+ *  rather than as a token of `"undefined"` drawing a mystery 401. */
+export function claimSecretFromUrl(claimUrl: string | undefined): string | null {
+  if (typeof claimUrl !== "string" || claimUrl.length === 0) return null;
+  const segment = claimUrl.split("?")[0].split("/").filter((p) => p.length > 0).pop();
+  return segment === undefined || segment.length === 0 ? null : segment;
+}
+
 export interface ClaimInviteReadBack {
   readonly id: string;
   readonly person_id: string;
@@ -835,6 +861,14 @@ export interface SeededOfficialsAndClaims {
    * above. `claimed_at` staying null on that read is the proof nothing here
    * accepted it (B03 §5: seeding only mints invites). */
   readonly officialClaimInviteByRef: ReadonlyMap<string, ClaimInviteReadBack>;
+  /**
+   * B06a T6 — every invite this driver minted, WITH the one-time secret, in a
+   * stable order: player-lane invites (`pack.claimInvites[]`) first, then the
+   * officials'. Order is load-bearing — `acceptClaimInvites`'s `limit` accepts
+   * a prefix of this list, and the suite proves the remainder stays unclaimed,
+   * so a reordering would silently change which invites a run leaves alone.
+   */
+  readonly mintedInvites: readonly MintedInvite[];
 }
 
 /**
@@ -999,18 +1033,32 @@ export async function seedOfficialsAndClaims(
   // accept, and read back (`claimed_at` staying null on the READ is the
   // proof, not just the absence of an accept call in this file). ----
   const claimInviteByPersonRef = new Map<string, ClaimInviteReadBack>();
+  const playerMints = new Map<string, MintedInvite>();
   await Promise.all(
     claimInvites.map(async (c) => {
       const personId = personIdByRef.get(c.personRef);
       if (personId === undefined) {
         throw new Error(`claim invite references person ref "${c.personRef}" with no resolved id`);
       }
-      await t.request(base, s, `/api/v1/persons/${personId}/claim-invites`, {
+      const minted = await t.request<ClaimInviteMint>(base, s, `/api/v1/persons/${personId}/claim-invites`, {
         method: "POST",
         body: { email: c.email },
       });
       const read = await t.request<ClaimInviteReadBack>(base, s, `/api/v1/persons/${personId}/claim-invites`);
       claimInviteByPersonRef.set(c.personRef, read);
+      // B06a T6: keep the secret. Still mints only — accepting is the runner's
+      // own step, deliberately after the fold so a claimed profile's stats can
+      // be compared with what the leaderboard already proved.
+      const secret = claimSecretFromUrl(minted?.claim_url);
+      if (secret !== null) {
+        playerMints.set(c.personRef, {
+          ref: c.personRef,
+          kind: "player",
+          personId,
+          email: c.email,
+          token: secret,
+        });
+      }
     }),
   );
 
@@ -1027,12 +1075,14 @@ export async function seedOfficialsAndClaims(
   // player claim-invite block's own unconditional precedent just above.
   // Mint only: never follows `claim_url`, never calls an accept route. ----
   const officialClaimInviteByRef = new Map<string, ClaimInviteReadBack>();
+  const officialMints = new Map<string, MintedInvite>();
   await Promise.all(
     officials.map(async (o) => {
       const officialId = requireOfficialId(officialIdByRef, o.ref);
-      const minted = await t.request<{ person_id: string }>(base, s, `/api/v1/officials/${officialId}/invite`, {
+      const inviteEmail = officialInviteEmail(o.ref, runTag);
+      const minted = await t.request<ClaimInviteMint>(base, s, `/api/v1/officials/${officialId}/invite`, {
         method: "POST",
-        body: { email: officialInviteEmail(o.ref, runTag) },
+        body: { email: inviteEmail },
       });
       // Distinct GET, never the POST's own echoed body — same "not merely
       // 201" precedent as every other read-back in this file.
@@ -1042,6 +1092,16 @@ export async function seedOfficialsAndClaims(
         `/api/v1/persons/${minted.person_id}/claim-invites`,
       );
       officialClaimInviteByRef.set(o.ref, read);
+      const secret = claimSecretFromUrl(minted?.claim_url);
+      if (secret !== null) {
+        officialMints.set(o.ref, {
+          ref: o.ref,
+          kind: "official",
+          personId: minted.person_id,
+          email: inviteEmail,
+          token: secret,
+        });
+      }
     }),
   );
 
@@ -1051,6 +1111,19 @@ export async function seedOfficialsAndClaims(
     scheduleConflicts,
     claimInviteByPersonRef,
     officialClaimInviteByRef,
+    // Both loops above are `Promise.all` over an unordered map, so read the
+    // ORDER back off the plan rather than off completion order — see
+    // `mintedInvites`' own doc comment for why order is load-bearing.
+    mintedInvites: [
+      ...claimInvites.flatMap((c) => {
+        const m = playerMints.get(c.personRef);
+        return m === undefined ? [] : [m];
+      }),
+      ...officials.flatMap((o) => {
+        const m = officialMints.get(o.ref);
+        return m === undefined ? [] : [m];
+      }),
+    ],
   };
 }
 

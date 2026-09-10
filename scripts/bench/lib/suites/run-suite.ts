@@ -164,11 +164,13 @@ import {
   defaultTransport,
   runOfficialsAutoAssign,
   seedSuite,
+  type ClaimInviteReadBack,
   type FixtureOfficialRow,
   type SeededSuite,
   type SeedTransport,
 } from "../seed.ts";
-import { runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
+import { defaultProbeTransport, runDlsGateProbe, type ProbeTransport } from "../dls-gate.ts";
+import { acceptClaimInvites } from "../people.ts";
 import { FREE_PLAN_KEY, type PlanSql } from "../plan.ts";
 import {
   readPlayerStatsBaseline,
@@ -3649,6 +3651,237 @@ export async function runPackSuite(
           }
         }
       }
+    }
+
+    // -----------------------------------------------------------------
+    // B06a T6 — CLAIM ACCEPTANCE. The half of the people layer nothing has
+    // ever driven.
+    //
+    // B03 §5 drew the line ("the accept flow is B05's, seeding only mints
+    // invites") and no wave since crossed it, so every people-layer claim
+    // this programme has made rests on a `person_claims` row EXISTING. That
+    // is not the customer's question. The customer's question is whether the
+    // human the invite was sent to can get into their own profile, and an
+    // unusable invite and a working one are indistinguishable from
+    // `claimed_at === null`.
+    //
+    // Runs AFTER the folds so a claimed profile's stats can be compared with
+    // the numbers this run has already proven, and gated on `input.sql` for
+    // the same reason every other B05/B06a step is.
+    //
+    // Two route facts found while building this, both correcting the plan:
+    //   - `GET /persons/{id}/claim-invites` is `getOpenClaim`
+    //     (`usecases/person-claims.ts:200-208`), whose WHERE clause carries
+    //     `claimed_at is null`. An accepted invite therefore reads back as
+    //     `null`, not as a row with a timestamp. That absence is the
+    //     read-back proof, and the plan's "assert claimed_at != null" would
+    //     have asserted against a row the route refuses to return.
+    //   - `/api/claims/*` runs on the non-v1 envelope (`lib/http.ts:113-121`)
+    //     which DROPS the error `code`, so `CLAIM_INVALID` never crosses the
+    //     wire. Refusals are asserted on STATUS.
+    if (input.sql !== undefined && seeded.officialsAndClaims !== undefined) {
+      const minted = seeded.officialsAndClaims.mintedInvites;
+      // Accept the PLAYER invites and leave the officials' alone. Not an
+      // arbitrary split: a player invite points at a pack person who actually
+      // scored, so the claimed profile has stats to compare, and the
+      // untouched remainder is what keeps "an unclaimed invite still exists
+      // after this step" provable rather than assumed.
+      const limit = minted.filter((m) => m.kind === "player").length;
+      const claimTransport = input.oracleTransport ?? defaultProbeTransport;
+      // Local, not `timings` — `RunReport.timings` is a fixed four-field shape
+      // and widening it is a report change this task does not owe.
+      const claimStart = performance.now();
+
+      // Snapshot BEFORE, so the comparison is against this run's own numbers
+      // rather than a table typed into the bench.
+      const statsBefore = new Map<string, PersonStatsWire>();
+      for (const inv of minted.slice(0, limit)) {
+        statsBefore.set(inv.personId, await fetchPersonStats(base, s, inv.personId, undefined, input.oracleTransport));
+      }
+
+      const claims = await acceptClaimInvites({ base, invites: minted, limit, transport: claimTransport });
+      const claimsMs = Math.round(performance.now() - claimStart);
+
+      const acceptedAll = claims.attempted > 0 && claims.accepted === claims.attempted;
+      oracles.push({
+        name: "people: claim invites accepted",
+        passed: acceptedAll,
+        verdict: claims.attempted === 0 ? "no_subject" : acceptedAll ? "pass" : "fail",
+        subject: claims.attempted > 0,
+        detail:
+          claims.attempted === 0
+            ? "the pack declares no claim invites — nothing was accepted and this oracle compared NOTHING"
+            : `${claims.accepted}/${claims.attempted} invites accepted by the invited address` +
+              (claims.rejected.length === 0
+                ? ""
+                : ` — refused: ${claims.rejected.map((r) => `${r.person} HTTP ${r.status} (${r.detail})`).join("; ")}`),
+      });
+      log.info(
+        oracleLogFields("claims_accepted", claims.attempted === 0 ? "no_subject" : acceptedAll ? "pass" : "fail"),
+        "oracle_checked",
+      );
+      if (claims.attempted > 0 && !acceptedAll) {
+        errors.push(
+          `people: ${claims.rejected.length} of ${claims.attempted} claim invites were REFUSED — ` +
+            claims.rejected.map((r) => `${r.person} HTTP ${r.status} (${r.detail})`).join("; "),
+        );
+      }
+      if (claims.attempted === 0) {
+        warnings.push(
+          "people: the pack declares no claim invites, so claim acceptance had NO SUBJECT and was not proven",
+        );
+      }
+
+      // The negative case, and the reason it is an assertion rather than
+      // decoration: a run that accepted everything it was handed proves the
+      // happy path and nothing about whether the product checks the token at
+      // all. `invalidTokenRefused` is false unless a tampered token drew a
+      // 401 IN A RUN THAT ALSO ACCEPTED SOMETHING — see its own doc comment.
+      oracles.push({
+        name: "people: an invalid claim token is refused",
+        passed: claims.invalidTokenRefused,
+        verdict: claims.invalidTokenStatus === null ? "no_subject" : claims.invalidTokenRefused ? "pass" : "fail",
+        subject: claims.invalidTokenStatus !== null,
+        detail:
+          claims.invalidTokenStatus === null
+            ? "no invite was available to tamper with — the negative case compared NOTHING"
+            : `a same-shape, same-length token that was never minted drew HTTP ${claims.invalidTokenStatus}` +
+              (claims.invalidTokenRefused ? "" : " — expected 401 from a run that also accepted a real invite"),
+      });
+      log.info(
+        oracleLogFields(
+          "claims_invalid_token",
+          claims.invalidTokenStatus === null ? "no_subject" : claims.invalidTokenRefused ? "pass" : "fail",
+        ),
+        "oracle_checked",
+      );
+      if (claims.invalidTokenStatus !== null && !claims.invalidTokenRefused) {
+        errors.push(
+          `people: a tampered claim token drew HTTP ${claims.invalidTokenStatus}, not the 401 a never-minted ` +
+            "token must draw — the claim surface is not validating the token",
+        );
+      }
+
+      // Read back through the product, never off the acceptance response.
+      // `getOpenClaim` returns only OPEN claims, so an accepted invite reads
+      // as `null` and an untouched one still reads as a row — the two
+      // assertions below are the same route answering opposite ways, which is
+      // what makes either of them worth anything.
+      const stillOpen = async (personId: string): Promise<ClaimInviteReadBack | null> =>
+        await t.request<ClaimInviteReadBack | null>(base, s, `/api/v1/persons/${personId}/claim-invites`);
+
+      const acceptedStillOpen: string[] = [];
+      for (const personId of claims.acceptedPersonIds) {
+        if ((await stillOpen(personId)) !== null) acceptedStillOpen.push(personId);
+      }
+      if (claims.accepted > 0) {
+        const closed = acceptedStillOpen.length === 0;
+        oracles.push({
+          name: "people: an accepted invite is closed",
+          passed: closed,
+          verdict: closed ? "pass" : "fail",
+          subject: true,
+          detail: closed
+            ? `all ${claims.accepted} accepted invites no longer read back as open`
+            : `${acceptedStillOpen.length} accepted invite(s) still read back as OPEN: ${acceptedStillOpen.join(", ")}`,
+        });
+        log.info(oracleLogFields("claims_accepted_closed", closed ? "pass" : "fail"), "oracle_checked");
+        if (!closed) {
+          errors.push(
+            `people: ${acceptedStillOpen.length} invite(s) reported accepted still read back as open — ` +
+              "the acceptance did not persist",
+          );
+        }
+      }
+
+      const skippedInvites = minted.slice(limit);
+      const skippedClosed: string[] = [];
+      for (const inv of skippedInvites) {
+        if ((await stillOpen(inv.personId)) === null) skippedClosed.push(inv.ref);
+      }
+      oracles.push({
+        name: "people: invites past the limit stay unclaimed",
+        passed: skippedInvites.length > 0 && skippedClosed.length === 0,
+        verdict: skippedInvites.length === 0 ? "no_subject" : skippedClosed.length === 0 ? "pass" : "fail",
+        subject: skippedInvites.length > 0,
+        detail:
+          skippedInvites.length === 0
+            ? "this run accepted every invite the pack declares, so nothing proves an UNCLAIMED one survives"
+            : skippedClosed.length === 0
+              ? `${skippedInvites.length} invite(s) were never touched and still read back as open`
+              : `${skippedClosed.length} invite(s) this run never touched are no longer open: ${skippedClosed.join(", ")}`,
+      });
+      log.info(
+        oracleLogFields(
+          "claims_untouched_open",
+          skippedInvites.length === 0 ? "no_subject" : skippedClosed.length === 0 ? "pass" : "fail",
+        ),
+        "oracle_checked",
+      );
+      if (skippedClosed.length > 0) {
+        errors.push(
+          `people: invite(s) this run never touched are no longer open (${skippedClosed.join(", ")}) — ` +
+            "something accepted an invite nobody asked it to",
+        );
+      }
+
+      // Claiming a profile must not change what it reports. The comparison is
+      // against this run's own BEFORE snapshot, so a change to the metrics
+      // moves both sides together instead of leaving a typed-in table
+      // asserting yesterday's numbers.
+      const statsDrift: string[] = [];
+      let comparedAny = false;
+      for (const personId of claims.acceptedPersonIds) {
+        const before = statsBefore.get(personId);
+        if (before === undefined) continue;
+        const after = await fetchPersonStats(base, s, personId, undefined, input.oracleTransport);
+        const hadNumbers = before.divisions.some((d) => Object.keys(d.stats ?? {}).length > 0);
+        if (hadNumbers) comparedAny = true;
+        if (JSON.stringify(after.divisions) !== JSON.stringify(before.divisions)) {
+          statsDrift.push(personId);
+        }
+      }
+      oracles.push({
+        name: "people: a claimed profile still reports the same stats",
+        passed: comparedAny && statsDrift.length === 0,
+        verdict: !comparedAny ? "no_subject" : statsDrift.length === 0 ? "pass" : "fail",
+        subject: comparedAny,
+        detail: !comparedAny
+          ? "no accepted profile carried any stats before acceptance — this oracle compared NOTHING"
+          : statsDrift.length === 0
+            ? `${claims.accepted} claimed profile(s) report the same divisions and stats as before acceptance`
+            : `claimed profile(s) ${statsDrift.join(", ")} report DIFFERENT stats after being claimed`,
+      });
+      log.info(
+        oracleLogFields(
+          "claims_profile_stats",
+          !comparedAny ? "no_subject" : statsDrift.length === 0 ? "pass" : "fail",
+        ),
+        "oracle_checked",
+      );
+      if (statsDrift.length > 0) {
+        errors.push(
+          `people: claiming a profile changed the stats it reports (${statsDrift.join(", ")}) — ` +
+            "the same person-stats read returned different numbers before and after acceptance",
+        );
+      }
+      if (!comparedAny && claims.accepted > 0) {
+        warnings.push(
+          "people: every accepted profile had EMPTY stats before acceptance, so the claimed-profile stats " +
+            "oracle had no subject — the pack's claim invites do not point at anyone who scored",
+        );
+      }
+
+      log.info(
+        {
+          attempted: claims.attempted,
+          accepted: claims.accepted,
+          skipped: claims.skipped,
+          invalidTokenStatus: claims.invalidTokenStatus,
+          ms: claimsMs,
+        },
+        `${suiteKey}: claim invites accepted (B06a T6)`,
+      );
     }
 
     // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second

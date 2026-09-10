@@ -35,6 +35,7 @@ import {
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
 import type { DivisionCardSource } from "./_oracle-routes.ts";
+import { makeClaimRoutesWorld, type ClaimRoutesOptions } from "./_claim-routes.ts";
 import { makeDisciplineRoutesWorld } from "./_discipline-routes.ts";
 import {
   makeOracleRoutesWorld,
@@ -68,6 +69,9 @@ function slug(s: string): string {
  *  directions of the wiring from one factory. */
 function fakeServer(opts: {
   officialsAutoGranted: boolean;
+  /** B06a T6 — knobs for the shared claim rail (`_claim-routes.ts`). */
+  claimRoutes?: ClaimRoutesOptions;
+
   /** B04 — knobs for the shared scheduling world (`_schedule-routes.ts`). */
   schedule?: FakeScheduleOptions;
   /**
@@ -113,7 +117,6 @@ function fakeServer(opts: {
   const divisionSportById = new Map<string, string>();
   const fixtureDivisionId = new Map<string, string>();
   const fixtureOfficials = new Map<string, unknown[]>();
-  const claimInvites = new Map<string, unknown>();
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
@@ -191,6 +194,12 @@ function fakeServer(opts: {
     getPersonStats: (personId) => personStatsFromDivisions(personId, divisionCardSources()),
     getPersonCareerStats: (personId) => personCareerStatsFromDivisions(personId, divisionCardSources()),
   });
+
+  // B06a T6 — the claim rail (officials invite, person claim-invite mint and
+  // read-back, and `POST /api/claims/{token}/accept`). Reached unconditionally
+  // now: the runner accepts the pack's player invites after the fold on every
+  // `sql`-passing run.
+  const claims = makeClaimRoutesWorld(opts.claimRoutes ?? {});
 
   const transport: ProbeTransport = {
     async signIn(_base, s) {
@@ -335,14 +344,12 @@ function fakeServer(opts: {
       if (method === "POST" && /^\/api\/v1\/officials\/[^/]+\/availability$/.test(routePath)) {
         return { date: (body as { date: string }).date } as T;
       }
-      const inviteMatch = /^\/api\/v1\/officials\/([^/]+)\/invite$/.exec(routePath);
-      if (method === "POST" && inviteMatch) {
-        const officialId = inviteMatch[1]!;
-        const personId = `invited-${officialId}`;
-        const row = { id: personId, person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return { person_id: personId } as T;
-      }
+      // B06a T6 — the officials invite, the person claim-invite mint and its
+      // read-back all live in `_claim-routes.ts` now: all four fakes carried
+      // byte-identical copies of them, and the mint has to hand back a
+      // `claim_url` for the accept step to have a token at all.
+      const claimRouted = claims.handleRequest(method, routePath, body);
+      if (claimRouted !== undefined) return claimRouted.value as T;
       if (method === "PATCH" && /^\/api\/v1\/fixtures\/[^/]+\/officials$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         const set = (body as { set: unknown[] }).set;
@@ -356,16 +363,6 @@ function fakeServer(opts: {
       if (method === "GET" && /^\/api\/v1\/fixtures\/[^/]+$/.test(routePath)) {
         const fixtureId = routePath.split("/")[4]!;
         return { id: fixtureId, officials: fixtureOfficials.get(fixtureId) ?? [] } as T;
-      }
-      if (method === "POST" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        const row = { person_id: personId, claimed_at: null, revoked_at: null };
-        claimInvites.set(personId, row);
-        return row as T;
-      }
-      if (method === "GET" && /^\/api\/v1\/persons\/[^/]+\/claim-invites$/.test(routePath)) {
-        const personId = routePath.split("/")[4]!;
-        return (claimInvites.get(personId) ?? null) as T;
       }
       // B05 T2.5 (D9) — the RE-READ `runDivisionStartLayer` makes after a
       // successful `/start`.
@@ -381,6 +378,10 @@ function fakeServer(opts: {
     },
     async raw(_base, _s, path, method = "GET", body): Promise<RawResult> {
       calls.push({ method, path, body });
+      // B06a T6 — claim acceptance (see `_claim-routes.ts`). Checked here for
+      // the same reason `/start` is: nothing below can answer it.
+      const claimAccepted = claims.handle(method, path);
+      if (claimAccepted !== undefined) return claimAccepted;
       // B05 T2.5 (D9) — `/start` itself, unconditionally whenever `sql` is
       // present. Checked FIRST: nothing below can be reached before this.
       const started = phase.handleStart(method, path);
