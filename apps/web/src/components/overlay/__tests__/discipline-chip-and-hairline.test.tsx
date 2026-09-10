@@ -24,7 +24,11 @@ import { join } from "node:path";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel } from "@/lib/overlay-model";
+import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+
+/** Fix round 5 — both themes resolve the brand wordmark through `msg`
+ *  (`overlay.brand`, I5); returning the key keeps this file about the chips. */
+const keyMsg: OverlayMsg = (key) => key;
 
 const GLOBALS_CSS = join(__dirname, "..", "..", "..", "app", "globals.css");
 const css = () => readFileSync(GLOBALS_CSS, "utf8");
@@ -107,7 +111,7 @@ describe.each([
       ...BASE_MODEL,
       detail: [{ text: "overlay.detail.card(side=NOR,card=Yellow card)", tone: "caution" }],
     };
-    const tree = walk(Component({ model, tick: [false, false] }));
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     const chips = chipsIn(tree);
     expect(chips.length, "the toned line must produce exactly one chip").toBe(1);
     expect(propsOf(chips[0]!).className).toContain("ovl-chip-caution");
@@ -118,7 +122,7 @@ describe.each([
       ...BASE_MODEL,
       detail: [{ text: "overlay.detail.serving(side=MIL)" }],
     };
-    const tree = walk(Component({ model, tick: [false, false] }));
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     expect(chipsIn(tree).length, "an untoned line must render no chip at all").toBe(0);
   });
 
@@ -131,7 +135,7 @@ describe.each([
         { text: "c", tone: "dismissal" },
       ],
     };
-    const tree = walk(Component({ model, tick: [false, false] }));
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     const classes = chipsIn(tree).map((el) => propsOf(el).className);
     expect(classes).toEqual(["ovl-chip ovl-chip-advisory", "ovl-chip ovl-chip-caution", "ovl-chip ovl-chip-dismissal"]);
   });

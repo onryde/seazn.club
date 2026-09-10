@@ -3,26 +3,41 @@
 // so the stream matches the app. `cells[].value` is always "home–away" by
 // construction in `overlayModel`, so each row renders its own half of it —
 // that split lives here, in the renderer, rather than widening the model.
-import type { OverlayModel } from "@/lib/overlay-model";
+import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
 
 const halfOf = (value: string, row: 0 | 1): string => {
   const parts = value.split("–");
   return parts[row] ?? value;
 };
 
-export function OverlayBug({ model, tick }: { model: OverlayModel; tick: [boolean, boolean] }) {
+export function OverlayBug({
+  model,
+  tick,
+  msg,
+}: {
+  model: OverlayModel;
+  tick: [boolean, boolean];
+  msg: OverlayMsg;
+}) {
   return (
     <div className="ovl-bug">
       <div className="ovl-bug-header">
         {model.live ? <span data-testid="ovl-live-dot" className="ovl-live-dot" /> : null}
         <span className="ovl-bug-status">{model.header.context}</span>
         {model.header.period ? <span className="ovl-bug-context">{model.header.period}</span> : null}
+        {/* Fix round 5, I3 — §4's header ends in "brand Barlow 24/600 .08em
+            ink 70 % — football family: clock Barlow 33/700 LED instead". The
+            clock used to borrow `.ovl-bug-brand` and override only `color`,
+            so the one number a football viewer reads shipped 27 % small, a
+            weight light, and letter-spaced like a wordmark. Its own class,
+            not a widening of the brand's — the brand cell below is unchanged.
+            I5 — and the brand word itself now comes from the dictionary
+            (`overlay.brand`, declared in all four locales since W1 and read
+            by nothing until now). */}
         {model.header.clock ? (
-          <span className="ovl-bug-brand ovl-display" style={{ color: "var(--sport-led)" }}>
-            {model.header.clock}
-          </span>
+          <span className="ovl-bug-clock ovl-display">{model.header.clock}</span>
         ) : (
-          <span className="ovl-bug-brand ovl-display">seazn</span>
+          <span className="ovl-bug-brand ovl-display">{msg("overlay.brand")}</span>
         )}
       </div>
       {([0, 1] as const).map((row) => {

@@ -59,10 +59,14 @@ function baseProps(delayMs: number | undefined): OverlayStageProps {
   };
 }
 
-/** `OverlayBug`'s clock cell: `<span class="ovl-bug-brand ovl-display" ...>`. */
+/** `OverlayBug`'s clock cell: `<span class="ovl-bug-clock ovl-display">`.
+ *  Fix round 5, I3 — was `.ovl-bug-brand`, which the clock BORROWED (24/600
+ *  plus the wordmark's .08em tracking) against §4's own "clock Barlow 33/700
+ *  LED". The clock has its own token now, and this selector must follow it:
+ *  matching the brand's class again would find the wordmark cell, not a clock. */
 function clockTextOf(html: string): string {
-  const match = html.match(/ovl-bug-brand ovl-display"[^>]*>([^<]*)</);
-  if (!match) throw new Error(`no .ovl-bug-brand clock cell found in:\n${html}`);
+  const match = html.match(/ovl-bug-clock ovl-display"[^>]*>([^<]*)</);
+  if (!match) throw new Error(`no .ovl-bug-clock cell found in:\n${html}`);
   return match[1]!;
 }
 

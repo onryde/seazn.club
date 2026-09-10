@@ -1423,6 +1423,17 @@ body {
 .ovl-bug-brand { margin-left: auto; font-size: 24px; font-weight: 600;
                  letter-spacing: 0.08em;
                  color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
+/* Fix round 5, I3 — §4's header, right-hand slot: "brand Barlow 24/600 .08em
+   ink 70 % — football family: clock Barlow 33/700 LED instead". The clock had
+   been rendering through `.ovl-bug-brand` above with only `color` overridden
+   inline, so it shipped at 24/600 with the wordmark's .08em tracking applied
+   to tabular digits — 27 % small, a weight light, and jittering in width. Its
+   OWN token rather than a widening of the brand's: the two share the slot, not
+   the type. `letter-spacing` is deliberately absent (a clock is not tracked),
+   and the LED colour lives here rather than inline so §3's `.ovl-clock-cell`
+   and this one are the same kind of declaration. */
+.ovl-bug-clock { margin-left: auto; font-size: 33px; font-weight: 700;
+                 color: var(--sport-led); }
 .ovl-bug-row { position: relative; display: flex; align-items: center; gap: 18px;
                height: 90px; padding: 0 24px; }
 .ovl-bug-code { width: 96px; font-size: 48px; font-weight: 600; }

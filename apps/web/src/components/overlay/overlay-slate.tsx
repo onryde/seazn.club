@@ -103,7 +103,9 @@ export function OverlaySlate({ model, tick, msg, sportKey }: OverlayThemeProps) 
 
   return (
     <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state}>
-      <span className="ovl-slate-brand ovl-display">seazn</span>
+      {/* Fix round 5, I5 — the third of the three hardcoded wordmarks, now the
+          dictionary's own `overlay.brand`. */}
+      <span className="ovl-slate-brand ovl-display">{msg("overlay.brand")}</span>
       {state === "live" ? null : (
         <div
           data-testid="ovl-slate-content"

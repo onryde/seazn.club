@@ -3,7 +3,7 @@
 // is a class in globals.css's `.ovl-*` block, which carries the sheet's native
 // values; nothing is styled inline here except the LED bar's slide, which is a
 // transform the CSS transitions.
-import type { OverlayModel } from "@/lib/overlay-model";
+import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
 
 // Fix round 3, F5 — the bug's own pattern (`overlay-bug.tsx`'s `halfOf`),
 // duplicated rather than imported: the two themes stay independent renderers
@@ -14,7 +14,15 @@ const halfOf = (value: string, row: 0 | 1): string => {
   return parts[row] ?? value;
 };
 
-export function OverlayBar({ model, tick }: { model: OverlayModel; tick: [boolean, boolean] }) {
+export function OverlayBar({
+  model,
+  tick,
+  msg,
+}: {
+  model: OverlayModel;
+  tick: [boolean, boolean];
+  msg: OverlayMsg;
+}) {
   // Fix round 4, R2 (was F6, round 3, which is the regression this
   // corrects) — the between-cells LED count (`_THEMES.md` §3's "games-won
   // cell LED" / tennis's points cell) belongs ONLY to the set/game sports
@@ -73,7 +81,10 @@ export function OverlayBar({ model, tick }: { model: OverlayModel; tick: [boolea
           </div>
         ) : null}
         {model.header.clock ? <div className="ovl-clock-cell ovl-display">{model.header.clock}</div> : null}
-        <div className="ovl-brand ovl-display">seazn</div>
+        {/* Fix round 5, I5 — `overlay.brand` shipped in all four locales with
+            no reader while three components hardcoded the wordmark. One
+            authority, resolved through the SAME `msg` the projection uses. */}
+        <div className="ovl-brand ovl-display">{msg("overlay.brand")}</div>
       </div>
       {model.detail.length > 0 || model.chase || model.result ? (
         <div data-testid="ovl-detail" className="ovl-detail-band">

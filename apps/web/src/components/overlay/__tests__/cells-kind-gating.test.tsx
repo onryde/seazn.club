@@ -23,7 +23,12 @@ import { describe, expect, it } from "vitest";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel } from "@/lib/overlay-model";
+import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+
+/** Fix round 5 — both themes now resolve the brand wordmark through `msg`
+ *  (`overlay.brand`, I5). Returning the key keeps every assertion below about
+ *  the CELL GATES, not about copy. */
+const keyMsg: OverlayMsg = (key) => key;
 
 function classesOf(el: ReturnType<typeof walk>[number]): string {
   return (propsOf(el).className as string | undefined) ?? "";
@@ -73,19 +78,19 @@ describe.each([
   ["OverlayBug", OverlayBug, "ovl-bug-cells"],
 ] as const)("%s — cellsKind \"periods\" renders no cell group (R1 bar / R3 bug)", (_name, Component, cellsClass) => {
   it("no clock at all — the EXACT state that defeated the round-3 guard (R2)", () => {
-    const tree = walk(Component({ model: periodModel(), tick: [false, false] }));
+    const tree = walk(Component({ model: periodModel(), tick: [false, false], msg: keyMsg }));
     const groups = tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells");
     expect(groups.length, "no per-period cell group anywhere").toBe(0);
     for (const el of tree) expect(classesOf(el)).not.toContain(cellsClass);
   });
 
   it("clock present — still no cell group (the gate is the kind, not the clock's absence)", () => {
-    const tree = walk(Component({ model: periodModel("12:41"), tick: [false, false] }));
+    const tree = walk(Component({ model: periodModel("12:41"), tick: [false, false], msg: keyMsg }));
     expect(tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells").length).toBe(0);
   });
 
   it("the positive/negative pair — cellsKind \"sets\" still mounts the cell group", () => {
-    const tree = walk(Component({ model: setModel, tick: [false, false] }));
+    const tree = walk(Component({ model: setModel, tick: [false, false], msg: keyMsg }));
     const groups = tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells");
     expect(groups.length, "one per side").toBe(2);
   });
@@ -93,18 +98,18 @@ describe.each([
 
 describe("OverlayBar — the between-cells LED is gated on cellsKind, never on header.clock (R2)", () => {
   it("cellsKind \"periods\", no clock — no LED (this is the regression case: three copies of the score, live)", () => {
-    const tree = walk(OverlayBar({ model: periodModel(), tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: periodModel(), tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display")).toBeUndefined();
   });
 
   it("cellsKind \"periods\", WITH a clock — still no LED, and the clock cell renders instead", () => {
-    const tree = walk(OverlayBar({ model: periodModel("12:41"), tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: periodModel("12:41"), tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display")).toBeUndefined();
     expect(tree.find((el) => classesOf(el) === "ovl-clock-cell ovl-display")).toBeDefined();
   });
 
   it("the positive/negative pair — cellsKind \"sets\" renders the LED with the sides' scores", () => {
-    const tree = walk(OverlayBar({ model: setModel, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: setModel, tick: [false, false], msg: keyMsg }));
     const led = tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display");
     expect(led).toBeDefined();
   });
@@ -112,7 +117,7 @@ describe("OverlayBar — the between-cells LED is gated on cellsKind, never on h
 
 describe("OverlayBug — an empty meta never occupies the layout (R4, F8's twin, unfixed in round 3)", () => {
   it("a side with no sub renders no .ovl-bug-meta span at all", () => {
-    const tree = walk(OverlayBug({ model: periodModel(), tick: [false, false] }));
+    const tree = walk(OverlayBug({ model: periodModel(), tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-bug-meta")).toBeUndefined();
   });
 
@@ -121,7 +126,7 @@ describe("OverlayBug — an empty meta never occupies the layout (R4, F8's twin,
       ...periodModel(),
       sides: [{ ...SIDES_PERIOD[0], sub: "12.3" }, SIDES_PERIOD[1]],
     };
-    const tree = walk(OverlayBug({ model, tick: [false, false] }));
+    const tree = walk(OverlayBug({ model, tick: [false, false], msg: keyMsg }));
     const meta = tree.find((el) => classesOf(el) === "ovl-bug-meta");
     expect(meta).toBeDefined();
   });

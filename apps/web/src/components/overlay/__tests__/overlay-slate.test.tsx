@@ -160,6 +160,24 @@ describe("OverlaySlate — ground, brand and the scorebug-on-top mount in every 
     expect(bug, "the composited scorebug (football ⇒ bug, per defaultThemeFor)").toBeDefined();
   });
 
+  it("fix round 5, I5 — the brand is RESOLVED, not a hardcoded literal", () => {
+    // The case above cannot separate the two states: `overlay.brand` is
+    // "seazn" in all four dictionaries, so a hardcoded `seazn` satisfies it
+    // forever. A resolver that returns the KEY is what tells them apart —
+    // the same shape that would have caught the five orphaned
+    // `overlay.slate.*` keys at 5e.
+    const keyMsg: OverlayMsg = (key) => key;
+    const tree = renderIsland(
+      OverlaySlate,
+      { model: BASE_MODEL, tick: [false, false] as [boolean, boolean], msg: keyMsg, sportKey: "football" },
+      expand,
+    ).tree();
+    const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
+    expect(textOf(brand!), "slate resolves the wordmark through the dictionary channel").toBe(
+      "overlay.brand",
+    );
+    expect(textOf(brand!)).not.toBe("seazn");
+  });
 });
 
 // ---------------------------------------------------------------------------

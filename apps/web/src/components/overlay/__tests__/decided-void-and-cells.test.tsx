@@ -10,8 +10,12 @@ import { describe, expect, it } from "vitest";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel } from "@/lib/overlay-model";
+import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
 import type { ReactNode } from "react";
+
+/** Fix round 5 — both themes now resolve the brand wordmark through `msg`
+ *  (`overlay.brand`, I5); returning the key keeps this file about the frame. */
+const keyMsg: OverlayMsg = (key) => key;
 
 const BASE_MODEL: OverlayModel = {
   live: true,
@@ -41,7 +45,7 @@ describe.each([
 ] as const)("%s — void, no verdict drops both sides to ink-50%% (F3)", (_name, Component, rowClass) => {
   it("model.voided adds ovl-voided to both side rows", () => {
     const model: OverlayModel = { ...BASE_MODEL, voided: true };
-    const tree = walk(Component({ model, tick: [false, false] }));
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     const rows = tree.filter((el) => classesOf(el).includes(rowClass));
     expect(rows.length, "one row per side").toBe(2);
     for (const row of rows) expect(classesOf(row), "every side row must carry the class").toContain("ovl-voided");
@@ -49,14 +53,14 @@ describe.each([
 
   it("the positive/negative pair — voided:false renders no ovl-voided class anywhere", () => {
     const model: OverlayModel = { ...BASE_MODEL, voided: false };
-    const tree = walk(Component({ model, tick: [false, false] }));
+    const tree = walk(Component({ model, tick: [false, false], msg: keyMsg }));
     for (const el of tree) expect(classesOf(el)).not.toContain("ovl-voided");
   });
 });
 
 describe("OverlayBar — the live cell splits into a status word and a context line (F4)", () => {
   it("renders header.context in the live row and header.period as its own .ovl-context line", () => {
-    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     const liveRow = tree.find((el) => classesOf(el) === "ovl-live-row");
     expect(liveRow, "the dot + status word row must exist").toBeDefined();
     expect(textOf(liveRow!)).toBe("overlay.header.live");
@@ -67,14 +71,14 @@ describe("OverlayBar — the live cell splits into a status word and a context l
 
   it("the positive/negative pair — an undefined header.period renders no .ovl-context line at all", () => {
     const model: OverlayModel = { ...BASE_MODEL, header: { context: "overlay.header.live" } };
-    const tree = walk(OverlayBar({ model, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model, tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-context")).toBeUndefined();
   });
 });
 
 describe("OverlayBug — the header splits into a status word and a context line (F4)", () => {
   it("renders header.context in .ovl-bug-status and header.period in .ovl-bug-context", () => {
-    const tree = walk(OverlayBug({ model: BASE_MODEL, tick: [false, false] }));
+    const tree = walk(OverlayBug({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     const status = tree.find((el) => classesOf(el) === "ovl-bug-status");
     expect(status).toBeDefined();
     expect(textOf(status!)).toBe("overlay.header.live");
@@ -85,7 +89,7 @@ describe("OverlayBug — the header splits into a status word and a context line
 
   it("the positive/negative pair — an undefined header.period renders no .ovl-bug-context line", () => {
     const model: OverlayModel = { ...BASE_MODEL, header: { context: "overlay.header.live" } };
-    const tree = walk(OverlayBug({ model, tick: [false, false] }));
+    const tree = walk(OverlayBug({ model, tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-bug-context")).toBeUndefined();
   });
 });
@@ -102,7 +106,7 @@ describe("OverlayBar — per-side set/game cells move into the team cell, not th
   };
 
   it("mounts ovl-cells TWICE — once per side — inside the team cell, never joined in the context line", () => {
-    const tree = walk(OverlayBar({ model: WITH_CELLS, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: WITH_CELLS, tick: [false, false], msg: keyMsg }));
     const cellGroups = tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells");
     expect(cellGroups.length, "one per side, matching the bug's own mount count").toBe(2);
     for (const group of cellGroups) expect(classesOf(group)).toBe("ovl-bar-cells");
@@ -112,7 +116,7 @@ describe("OverlayBar — per-side set/game cells move into the team cell, not th
   });
 
   it("each side shows its OWN half of every cell, and the LAST cell carries the current-cell emphasis class", () => {
-    const tree = walk(OverlayBar({ model: WITH_CELLS, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: WITH_CELLS, tick: [false, false], msg: keyMsg }));
     const cellGroups = tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells");
     const homeCells = walk(childrenOf(cellGroups[0]!));
     const awayCells = walk(childrenOf(cellGroups[1]!));
@@ -130,7 +134,7 @@ describe("OverlayBar — per-side set/game cells move into the team cell, not th
   });
 
   it("the positive/negative pair — no cells at all mounts no ovl-cells anywhere", () => {
-    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     expect(tree.filter((el) => propsOf(el)["data-testid"] === "ovl-cells").length).toBe(0);
   });
 });
@@ -144,7 +148,7 @@ describe("OverlayBar — the between-cells LED count (F6, corrected round 4 — 
   };
 
   it("renders sides[0].big : sides[1].big in LED when cellsKind is \"sets\" and there is no clock cell", () => {
-    const tree = walk(OverlayBar({ model: WITH_CELLS_NO_CLOCK, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: WITH_CELLS_NO_CLOCK, tick: [false, false], msg: keyMsg }));
     const led = tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display");
     expect(led, "the between-cells LED element must mount").toBeDefined();
     expect(textOf(led!).replace(/\s+/g, " ")).toBe("2 : 1");
@@ -155,7 +159,7 @@ describe("OverlayBar — the between-cells LED count (F6, corrected round 4 — 
       ...WITH_CELLS_NO_CLOCK,
       header: { context: "overlay.header.live", clock: "12:41" },
     };
-    const tree = walk(OverlayBar({ model: withClock, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: withClock, tick: [false, false], msg: keyMsg }));
     expect(
       tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display"),
       "the LED still renders — a set-sport carrying a clock is a synthetic case, but it proves the guard reads cellsKind, not header.clock",
@@ -164,14 +168,14 @@ describe("OverlayBar — the between-cells LED count (F6, corrected round 4 — 
   });
 
   it("no between-cells LED when there are no cells at all (cricket/generic, cellsKind \"none\")", () => {
-    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-cells-led ovl-display")).toBeUndefined();
   });
 });
 
 describe("OverlayBar — an empty meta never occupies the layout (F8)", () => {
   it("a side with no sub renders no .ovl-team-meta span at all", () => {
-    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el) === "ovl-team-meta")).toBeUndefined();
   });
 
@@ -183,7 +187,7 @@ describe("OverlayBar — an empty meta never occupies the layout (F8)", () => {
         BASE_MODEL.sides[1],
       ],
     };
-    const tree = walk(OverlayBar({ model, tick: [false, false] }));
+    const tree = walk(OverlayBar({ model, tick: [false, false], msg: keyMsg }));
     const meta = tree.find((el) => classesOf(el) === "ovl-team-meta");
     expect(meta).toBeDefined();
     expect(textOf(meta!)).toBe("12.3");
