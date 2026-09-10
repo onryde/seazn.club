@@ -24,6 +24,7 @@ import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
 
@@ -95,6 +96,11 @@ export default async function DivisionHomePage({ params }: Props) {
   // request-scoped cookies()/headers() call to make and every visitor sees
   // the SAME page regardless of who they are.
   const orgLocale = toLocale(org.default_locale);
+  // Same org-locale rule as `lookup` below, and for the same reason: this page
+  // is ISR, so the dictionary is chosen by the ORG, never by the visitor's
+  // Accept-Language — a per-visitor choice would need a request-scoped read and
+  // would make every cached copy wrong for somebody.
+  const dict = await getDictionary(orgLocale, "public");
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
   // <Schedule> is a Client Component — it cannot call msgFor() itself
@@ -340,7 +346,21 @@ export default async function DivisionHomePage({ params }: Props) {
         </section>
       ) : null}
 
-      <Tabs labels={["Schedule", "Standings", "Entrants"]}>
+      {/* The ids are the `?tab=` values the hub already links to
+          (`competition-hub.ts:584,608`) and are deliberately NOT translated —
+          a shared link has to survive the reader's locale. The LABELS are, and
+          were English in every locale until now: the four keys have shipped in
+          en/es/fr/nl all along and nothing rendered them, so their only
+          consumer was the coverage test asserting they exist. */}
+      <Tabs
+        ids={["schedule", "standings", "entrants"]}
+        labels={[
+          t(dict, "division.tab.schedule"),
+          t(dict, "division.tab.standings"),
+          t(dict, "division.tab.entrants"),
+        ]}
+        label={t(dict, "division.tabsLabel")}
+      >
         {[
           <Schedule
             key="schedule"
