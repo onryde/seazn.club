@@ -1346,8 +1346,16 @@ body {
            box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
 .ovl-bar-main { display: flex; align-items: stretch; height: 126px;
                 background: var(--sport-board); }
+/* MAX-WIDTH 480 (product ruling 2026-09-10, `_THEMES.md` §3). The cell has a
+   225 px floor and the team cells are `flex: 1 1 auto`, so it GREW with its
+   context line — 312 px at "Riverside won by 44 runs", 610 px at a full-name
+   result sentence, taking each team cell down to 509 px. It never wrapped and
+   never overflowed the page, so this is balance, not a defect: a scorebug's
+   job is the score, and its caption must never dominate the frame. 480 clears
+   the reachable worst case (§3's decided context line is the SHORT form) while
+   capping a long one, so nothing reachable moves. */
 .ovl-live-cell { display: flex; flex-direction: column; justify-content: center;
-                 gap: 3px; min-width: 225px; padding: 0 33px;
+                 gap: 3px; min-width: 225px; max-width: 480px; padding: 0 33px;
                  background: var(--sport-board-2); }
 .ovl-live-row { display: flex; align-items: center; gap: 12px;
                 font-size: 24px; font-weight: 600; letter-spacing: 0.02em; }
@@ -1365,7 +1373,12 @@ body {
 .ovl-live-dot { width: 15px; height: 15px; border-radius: 9999px;
                 border: 1px solid var(--sport-ink);
                 background: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.8); }
-.ovl-context { font-size: 21px; font-weight: 500;
+/* "Past the cap the line clips" (§3). Without `nowrap` the 480 px cap above
+   turns a long caption into a two-line one inside a fixed 126 px band, which
+   trades one composition defect for another; `overflow: hidden` sits on the
+   line rather than on `.ovl-live-cell` so the live dot's 15 px glow
+   (`box-shadow`, which paints outside its box) is not clipped with it. */
+.ovl-context { font-size: 21px; font-weight: 500; white-space: nowrap; overflow: hidden;
                color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-team-cell { position: relative; display: flex; align-items: center; gap: 24px;
                  flex: 1 1 auto; min-width: 0; padding: 0 42px; }
