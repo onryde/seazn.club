@@ -237,10 +237,25 @@ bound and no relation to the period's declared length. A club that starts a
 match and never ends it is ordinary, and this is the one element on screen that
 keeps moving, so an absurd value is both the most visible defect and the most
 likely. Where the period's expected length is knowable from the sport config,
-show the broadcast convention past it (`45+`, `20+`); where it is not, hold the
-clock at that ceiling rather than counting past it.
+show the broadcast convention past it — the **minutes** form, `45+` / `20+`.
+Where it is NOT knowable, **hold the clock at its last value** rather than
+counting past it.
 
-**Correction, same day:** this paragraph first read "`45+`, `90+`, `Q1+`".
+**Two corrections, same day.** This paragraph first read "`45+`, `90+`, `Q1+`".
+
+**`Q1+` cannot occur either, and was a third unimplementable reading of a binding
+sentence.** `formatClockCapped` emits the minutes form only, so a four-quarter
+period sport reads `12+`, never `Q1+`; `git grep -a "Q1+"` over the whole tree
+returns exactly one hit — this sheet. A requirement no brief ever picked up.
+Dropped rather than left, because a binding sentence naming an output the code
+cannot produce is worse than silence.
+
+**And the fallback clause said "hold at that ceiling", which cannot exist in that
+branch** — where the length is unknowable there IS no ceiling, and the code holds
+at the last value (`use-overlay-clock.ts:50`), which is the only sensible reading
+and is what shipped. Corrected to the shipped behaviour rather than left for the
+next wave to re-derive.
+
 **`90+` cannot occur.** `GameTime.elapsed` is **period-relative**, not
 cumulative, so a football second half past its nominal length reads **`45+`**,
 never `90+` — the clock restarts each period. Cumulative football minutes would
