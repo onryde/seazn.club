@@ -271,7 +271,7 @@ export function renderIsland<P>(
           renderPhaseUpdate = true;
           return;
         }
-        run();
+        schedule();
       };
       return [cells[index], set];
     },
@@ -323,7 +323,7 @@ export function renderIsland<P>(
               renderPhaseUpdate = true;
               return;
             }
-            run();
+            schedule();
           },
         });
       }
@@ -339,12 +339,27 @@ export function renderIsland<P>(
     },
   };
 
-  function run() {
-    // React's render-phase-update loop: a set fired from the component body
-    // discards the output and runs the body again, never commits the
-    // half-finished pass, and never runs effects for it. The bound is React's
-    // own (25, then "Too many re-renders"), so an adjustment that fails to
-    // converge fails LOUDLY here instead of hanging the suite.
+  /** Set state from an effect, the way a component that measures in a layout
+   *  effect and then stores the measurement does. React does NOT re-enter the
+   *  commit phase for it: the update is queued and flushed once the whole
+   *  commit — every layout effect, then every passive one — has finished, and
+   *  the next render happens after that. See `commitRound` below. */
+  function schedule() {
+    if (committing) {
+      commitUpdate = true;
+      return;
+    }
+    run();
+  }
+  let committing = false;
+  let commitUpdate = false;
+
+  /** ONE render, including React's render-phase-update loop — no commit. A set
+   *  fired from the component body discards the output and runs the body again,
+   *  never commits the half-finished pass, and never runs effects for it. The
+   *  bound is React's own (25, then "Too many re-renders"), so an adjustment
+   *  that fails to converge fails LOUDLY here instead of hanging the suite. */
+  function renderPass() {
     let passes = 0;
     do {
       renderPhaseUpdate = false;
@@ -380,15 +395,54 @@ export function renderIsland<P>(
         );
       }
     } while (renderPhaseUpdate);
-    // After the render, like React's commit phase — and OUTSIDE the dispatcher,
-    // so an effect that calls setState re-renders through the normal path.
-    // Layout effects commit BEFORE passive ones, exactly as React orders them.
-    const queuedLayout = pendingLayout;
-    pendingLayout = [];
-    const queued = pending;
-    pending = [];
-    commit(queuedLayout, layoutEffects);
-    commit(queued, effects);
+  }
+
+  /**
+   * Render, then commit — and repeat while the commit itself raised an update.
+   *
+   * Review MINOR 4 (2026-09-10): THE COMMIT PHASE IS NOT RE-ENTRANT, and
+   * `useLayoutEffect`'s canonical measure→setState idiom is exactly the
+   * re-entrant shape. This function used to capture both queues and then
+   * commit them; a setState from a layout effect re-entered `run()`
+   * SYNCHRONOUSLY from inside that commit, rendered the next pass and
+   * committed ITS passive queue — after which the outer `commit()` ran the
+   * SUPERSEDED passive queue, calling every effect's cleanup + create a second
+   * time and writing the discarded pass's `deps` over the newer pass's. Final
+   * state came out right and the effect bookkeeping did not, so nothing
+   * noticed; the hazard pre-existed for passive→passive re-entry and the
+   * layout slot widened it. `hook-harness.test.tsx`'s "commit re-entrancy"
+   * block pins the ORDER, which is where it shows.
+   *
+   * A set raised during the commit now lands in `commitUpdate` (see
+   * `schedule`) and re-enters this loop AFTERWARDS — React's own order: every
+   * layout effect, then every passive one, then the re-render. Nothing moves
+   * for the ordinary non-re-entrant case; `commitUpdate` simply stays false.
+   */
+  function run() {
+    let rounds = 0;
+    do {
+      commitUpdate = false;
+      renderPass();
+      // Like React's commit phase, and OUTSIDE the dispatcher. Layout effects
+      // commit BEFORE passive ones, exactly as React orders them.
+      const queuedLayout = pendingLayout;
+      pendingLayout = [];
+      const queued = pending;
+      pending = [];
+      committing = true;
+      try {
+        commit(queuedLayout, layoutEffects);
+        commit(queued, effects);
+      } finally {
+        committing = false;
+      }
+      if (++rounds > 25) {
+        throw new Error(
+          "Too many commit-phase updates. An effect sets state on every commit without " +
+            "converging (see the commit re-entrancy note in _hook-harness.tsx).",
+        );
+      }
+    } while (commitUpdate);
   }
 
   /** Commit the surviving pass's dependency arrays first, keeping whatever
