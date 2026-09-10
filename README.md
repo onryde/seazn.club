@@ -153,6 +153,30 @@ Optional but needed for full feature coverage: Supabase keys (realtime, storage)
 (test keys), Resend, Google OAuth. See [`apps/web/.env.example`](apps/web/.env.example)
 for the full list.
 
+### Cloudflare Stream (relay tier)
+
+The streaming programme's Tier B relay publishes a phone's feed into a Cloudflare Stream
+live input, pulls it back into a headless browser, and re-encodes to the club's
+destination. None of it is wired yet — the tree currently references no Cloudflare env
+var at all — so an account and a scoped token are a prerequisite for any R0/R1/R2 work,
+including the U1 spike:
+
+- `CF_ACCOUNT_ID` — the account live inputs are created under
+- `CF_API_TOKEN` — scoped to Stream; server-side only, never reaches the browser
+
+Two facts worth knowing before reading the design:
+
+- `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,
+  so both ingest credential shapes are in hand without a second request. That is why the
+  QR contract carries both rather than choosing one at provision time.
+- `timeoutSeconds` is nested under `recording` and governs when a disconnect starts a new
+  recorded video. It does **not** describe what a playback connection sees while an input
+  is disconnected — that is the open question the U1 spike exists to settle, and the
+  composited tier's "the encoder never restarts" property rests on the answer.
+
+For any Cloudflare work, load the `cloudflare` skill rather than working from memory:
+limits and API shapes move, and the skill retrieves current docs.
+
 ### Database
 
 Apply schema and migrations (local dev or CI bootstrap):
