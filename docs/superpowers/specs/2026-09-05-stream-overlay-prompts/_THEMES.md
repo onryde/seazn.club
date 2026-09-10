@@ -237,8 +237,15 @@ bound and no relation to the period's declared length. A club that starts a
 match and never ends it is ordinary, and this is the one element on screen that
 keeps moving, so an absurd value is both the most visible defect and the most
 likely. Where the period's expected length is knowable from the sport config,
-show the broadcast convention past it (`45+`, `90+`, `Q1+`); where it is not,
-hold the clock at that ceiling rather than counting past it. The live dot and
+show the broadcast convention past it (`45+`, `20+`); where it is not, hold the
+clock at that ceiling rather than counting past it.
+
+**Correction, same day:** this paragraph first read "`45+`, `90+`, `Q1+`".
+**`90+` cannot occur.** `GameTime.elapsed` is **period-relative**, not
+cumulative, so a football second half past its nominal length reads **`45+`**,
+never `90+` — the clock restarts each period. Cumulative football minutes would
+be a different feature and are not specified here. Recorded rather than quietly
+swapped, because "90+" is the number a reader expects and would re-introduce. The live dot and
 the period label carry liveness — the clock does not have to.
 
 **The hairline is `--sport-ink`, not `--sport-board`, and it — not the fill —
