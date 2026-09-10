@@ -437,6 +437,29 @@ footer:           height 45, padding 0 24, Geist 21/500 ink 85 %, space-between
                   emphasis Geist 600 ink 100 % (chase line)
 ```
 
+**The bug's header never carries the result sentence, and its context slot is
+guarded like the bar's** (product ruling, 2026-09-10, on review finding
+IMPORTANT 1).
+
+`header.period` carries the short result sentence once a fixture is decided, and
+**both themes read that field** — so it lands in the bug's header, where §4 puts
+the result in the **footer** and spec's the header context at 19.5/500 for
+"2nd half"-sized labels. Two things follow.
+
+1. **The bug ignores `header.period` when decided.** The result belongs in the
+   footer, as this section already says; the header keeps the status word.
+2. **`.ovl-bug-context` gets `min-width: 0; white-space: nowrap; overflow:
+   hidden`** regardless — the twin of the guard §3's `.ovl-context` already has.
+   Measured: about 291 px ≈ 32 characters are free in that header after "Final",
+   the gaps and "seazn". `MUM won by 44 runs (DLS)` fits; `NOR won by 8 wickets
+   with 12 balls remaining` wraps inside a fixed 48 px header and clips, and
+   French and Dutch run 15–25 % longer than English.
+
+**The lesson is the rule, not the fix: the bar and the bug are twins, and a
+composition guard added to one is owed to the other in the same change.** This
+is the second guard in one day that shipped on §3 and was missed on §4 — the
+480 px live-cell cap was the first.
+
 **The footer holds AT MOST TWO entries, on one line, and never wraps** (product
 ruling, 2026-09-10, on a defect the Task 8 hockey seed PHOTOGRAPHED — the first
 time three card chips had ever rendered anywhere).
