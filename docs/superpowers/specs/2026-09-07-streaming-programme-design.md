@@ -243,6 +243,39 @@ match-centre SSR tests unchanged (R5, one transport). `delayMs` buffers
 − delayMs` on a 1 s drain (R2 uses it; W1 builds it so the seam is real, not
 "left for later").
 
+**A transport change SNAPS `delayMs`; only drift ramps (D3).** The auto-tune
+that drives `delayMs` from the relay page's `measuredLatencyMs` (§7.3) is an
+EWMA clamped to 0–10 s and to a step of ≤ 250 ms per beat. **The beat is the
+session HEARTBEAT beat, and it is pinned HERE at 15 s** — that is the path the
+tune already rides (the page reports `measuredLatencyMs` through
+`window.relayReport`, the supervisor carries it in the heartbeat body, and
+`page.evaluate` pushes the new `delayMs` back: §7.2, §6.3). 15 s is a CHOSEN
+constant, not a measurement, picked so §10's `heartbeat gap p99 < 45 s` is
+three beats and §6.4's `stale > 90 s` is six, rather than tolerances that
+stand in no stated relation to the thing they tolerate. It is pinned here
+because the arithmetic below is DERIVED from it and says nothing without it.
+That clamp is right
+for DRIFT and wrong for a DISCONTINUITY: a WHEP → LL-HLS fallback is not
+drift but a step — the ladder falls back after ~5 s, roughly 0.5 s → 6 s in
+one beat — and at ≤ 250 ms per 15 s beat, closing that 5.5 s gap takes
+5,500 / 250 = 22 beats and 22 × 15 s = about
+**five and a half minutes with the score running ahead of the picture**, at
+exactly the moment the transport has already degraded and a viewer is least
+forgiving. Rule: on a transport change — WHEP → LL-HLS, LL-HLS → WHEP, or any
+`<video>` retry that re-establishes the source — `delayMs` SNAPS to the fresh
+`measuredLatencyMs` in ONE beat and the EWMA accumulator is reset; the step
+clamp is suspended for that beat only and binds every beat after. The 0–10 s
+clamp still binds the snapped value, and the organiser's `overlay_delay_ms`
+nudge survives the snap (it is an offset on the tuned value, not a competing
+authority). The page therefore reports the transport it is on beside
+`measuredLatencyMs`, or the tuner cannot tell a step from a drift. The tune is
+a pure controller so the rule is unit-testable at all — the alignment e2e pins
+`delayMs` statically and cannot see the ramp at all (R2 scope 4, T3). The
+five-and-a-half minutes is DERIVED from the two constants above (step clamp
+and beat) and is not a figure to restate: move either and the cost moves with
+it, so T3's bounded time-to-converge is computed from the constants rather
+than from "5.5 minutes" typed into an assertion.
+
 ### 3.4 Projection (pure)
 
 `apps/web/src/lib/overlay-model.ts`:
@@ -315,8 +348,12 @@ authority for the offset, or the clock tears ahead of the goal).
 
 ### 3.7 Data: `stream_url`
 
-Migration `V400__fixture_stream_url.sql` (next free at rebase; deltas run to
-V399 [E] — the 09-05 text said V392, the 09-06 text V399, both taken):
+Migration `V401__fixture_stream_url.sql`, **landed** (E1, re-pinned
+2026-09-10). This section predicted `V400` "next free at rebase" — the 09-05
+text said V392 and the 09-06 text V399, both taken by then — and `V400` was
+taken in turn by `V400__repair_orphaned_age_cutoff_half.sql` before this one
+landed, so it shipped as V401. Three predictions, three collisions: the number
+is re-checked at write, never carried from a design:
 `alter table fixtures add column stream_url text null check (stream_url is
 null or stream_url like 'https://%')` plus a FULL `create or replace view
 public_fixtures_v` redefinition copied from its latest definer
@@ -465,7 +502,7 @@ Owner 2026-09-07: two keys (*"we can keep corpus name as it"*); purchase from
 the fixture console; per-match credits (*"I think per match?"* → the
 per-match recommendation, *"go"*).
 
-### 5.1 Two catalogue keys (`V401__streaming_entitlements.sql`)
+### 5.1 Two catalogue keys (`V402__streaming_entitlements.sql`, landed)
 
 | Key | Meaning | `community` | `pro` | `event_pass` | `event_pass_l` | `enterprise` |
 |---|---|---|---|---|---|---|
@@ -488,6 +525,17 @@ untouched until the GA flip** — the pricing page shows nothing while the
 feature is dark; the test org sees it through override rows. Pricing copy in
 all four locales ships in the same change as the domain entry (standing
 rule: an entitlement row and its copy are one unit).
+
+**E1 (2026-09-10) — the number moved, and this migration has already
+landed.** This heading said `V401`, which `main` had already taken with
+§3.7's `V401__fixture_stream_url.sql`; the two keys shipped as
+**`V402__streaming_entitlements.sql`**, whose own header records the re-pin.
+No further migration is owed here — the GA flip above is the next one, and it
+takes the next free number at the rebase that writes it, never a number typed
+into this document. The reason the number is re-checked in the change that
+writes the file (`ls db/migration/deltas | sort -V | tail -1`) rather than
+carried from a design doc: a duplicate Flyway version survives a clean rebase
+and reds late, long after the branch that introduced it looked mergeable.
 
 ### 5.2 The credits ledger
 
@@ -576,7 +624,23 @@ Money is tested against the **Stripe sandbox**, never assumed (checklist
 
 ## 6. Tier B — data and API
 
-### 6.1 Tables (`V402__stream_sessions.sql`)
+### 6.1 Tables (`__stream_sessions.sql` — stem only, NO version; owner ruling 2026-09-10)
+
+**A migration version is NEVER pinned in a design or a prompt (owner ruling
+2026-09-10). This SUPERSEDES E1's "renumber to V403+"** — renumbering is the
+same mistake with a larger number, so the ruling removes the number instead of
+moving it. This migration is named by its STEM, `__stream_sessions.sql`. Its
+version is resolved by the task that WRITES it, at the moment that task
+starts, with `ls db/migration/deltas | sort -V | tail -1`; and if the file is
+already written but not yet merged, the repair is to **AMEND that file**,
+never a forward-fix delta stacked on top of it. Migrations that have LANDED
+keep their concrete numbers in this document, as history and nothing else:
+`V401__fixture_stream_url.sql` (§3.7) and `V402__streaming_entitlements.sql`
+(§5.1). The evidence is recorded ONCE, in §3.7 — this document predicted a
+number three times (V392, then V399, then V400) and was overtaken all three
+times — and §5.1 records why the collision reds late rather than at the
+rebase. The rule binds §11's prompt/plan table and §13's rows equally: a
+number typed into a prompt is a prediction wearing a plan's clothes.
 
 ```sql
 create table org_stream_targets (
@@ -599,9 +663,6 @@ create table fixture_stream_sessions (
   theme_id             text null,
   overlay_delay_ms     integer not null default 0,
   target_id            uuid not null references org_stream_targets(id),
-  ingest_input_id      text null,
-  ingest_srt_url       text null,
-  ingest_srt_key_enc   bytea null,
   machine_id           text null,               -- Fly Machine id (composed only)
   last_heartbeat       jsonb null,
   heartbeat_at         timestamptz null,
@@ -616,11 +677,74 @@ create table fixture_stream_sessions (
 create unique index fixture_stream_sessions_one_active
   on fixture_stream_sessions (fixture_id)
   where state in ('requested','provisioning','warming','live','ending');
+
+-- One broadcast, N ingest inputs, one Machine (M3 / owner ruling R-B).
+create table fixture_stream_inputs (
+  id                   uuid primary key default gen_random_uuid(),
+  session_id           uuid not null references fixture_stream_sessions(id) on delete cascade,
+  slot                 smallint not null check (slot >= 0),
+  ingest_input_id      text null,
+  ingest_srt_url       text null,
+  ingest_srt_key_enc   bytea null,        -- AES-256-GCM envelope (§6.2)
+  ingest_rtmps_url     text null,         -- C1: §7.6's v1 payload carries BOTH shapes
+  ingest_rtmps_key_enc bytea null,        -- same envelope discipline as the SRT key
+  created_at           timestamptz not null default now(),
+  unique (session_id, slot)
+);
 ```
 
-Double-start is a constraint, not code. RLS enabled on all three tables with
-**zero client policies**; the panel reads an API projection. Greenfield
-schema stance applies (no backfills).
+Double-start is a constraint, not code. **RLS is enabled with zero client
+policies on all FOUR of this programme's tables** — `org_stream_targets`,
+`fixture_stream_sessions` and `fixture_stream_inputs` here, plus
+`org_stream_credits` (§5.2) — and the panel reads an API projection.
+Greenfield schema stance applies (no backfills). (E4: this sentence read "all
+three tables" beside two definitions. The count was wrong before
+`fixture_stream_inputs` existed and would have read as accidentally right
+after it, with §5.2's credits table — the one holding money — quietly outside
+the claim. The tables are named rather than counted so the next table cannot
+inherit the same silence.)
+
+**Why the ingest columns are their own table (M3, owner ruling R-B
+2026-09-10).** Multi-camera is **N inputs under ONE session, not N
+sessions.** That is the whole modelling decision, and it is what keeps
+everything else already written here correct: `fixture_stream_sessions_one_active`
+stays a true statement about one broadcast per fixture, credits and the §6.4
+state machine stay per-broadcast rather than per-camera, and §7.4's "one
+Machine, no fan-in" survives unchanged. Splitting the ingest columns out
+now is a table in a migration nobody has run; splitting them after R1 ships is
+a data migration on live broadcasts. **R1 and R2 write exactly ONE row, at
+`slot = 0`, and read it back by slot** — the slot is real from the first
+migration, so multi-camera later INSERTS rows instead of reshaping a shipped
+one-to-one model. Nothing else is pre-built: per R-B, boundaries that cannot
+be refactored unilaterally get shaped for N today (this table; the QR contract
+in §7.6, which is a second repo; the runner port in §7.1, which is a provider
+seam), while everything in-process — relay page layout, source switching,
+per-source `jitterBufferTarget`, cross-source NTP — does not, because
+pre-building those is the speculative generality `AGENTS.md` forbids. **An
+`inputs jsonb` column is rejected explicitly**: it carries no foreign key, no
+`unique (session_id, slot)`, no NOT NULL and no CHECK, and this repo has
+already been bitten by a jsonb value that read back as something other than
+what was written.
+
+**BOTH credential shapes are columns, because §7.6's v1 payload requires both
+(C1).** The QR contract carries `cred: { srt: { url, streamId, passphrase,
+latencyMs }, rtmps: { url, streamKey } }` plus `preferred` under owner ruling
+R-A — and until 2026-09-10 this table carried only the SRT triplet, so the
+RTMPS half of that payload had nowhere on this side to be read from. A
+contract whose producer cannot fill it is the inert seam this repo has shipped
+six times; the columns are what make the payload real.
+`stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
+response (§9.2 [B]), so both shapes are in hand at provision time and the
+second shape costs no second call — the session write simply persists what
+the create already returned. **`ingest_rtmps_key_enc` takes the SAME
+AES-256-GCM envelope as `ingest_srt_key_enc`** (§6.2): a `*_enc` column is
+touched by `server/relay/crypto.ts` and by nothing else, the stream key never
+lands in plaintext in the database or in page HTML, and the panel receives the
+decrypted pair only through the organiser-authed session projection that mints
+the code client-side (§7.6). `ingest_rtmps_url` is not secret and is stored
+plain, on the same reasoning that `ingest_srt_url` is. A review grep for a
+`*_enc` reference outside `crypto.ts` covers both keys, so the new column
+inherits the guard rather than needing its own.
 
 ### 6.2 Secrets
 
@@ -649,13 +773,29 @@ the envelope if the project's tier has it (§12).
 Every route under `v1()`/`handler()`, zod at `server/api-v1/schemas.ts`,
 OpenAPI `ROUTES` entries in the same change.
 
+**E5 (resolved 2026-09-10) — `storage_exhausted` is a REFUSAL, never a
+state.** The headroom check runs with the other create gates, before the
+insert and in the same transaction, so an exhausted block yields
+`503 storage_exhausted` and **no `fixture_stream_sessions` row at all**;
+§6.4's failed-reason list drops it accordingly. The two sections used to say
+both, which left it undecided whether the organiser sees an error or a dead
+row. `no_credits` legitimately appears in both places and is not the same
+case: the balance is re-read and consumed at the `live` transition (§5.2), so
+it can be true at create and false four minutes later. The fact behind the
+storage guard cannot do that — an exhausted block **stops NEW live streams
+from starting** (§6.5 [B]) and says nothing about one already running. A
+condition that cannot arise after the row exists must not be listed as a state
+the row can reach.
+
 ### 6.4 Session state machine
 
 `requested → provisioning → warming → live → ending → completed | failed(reason)`.
 
 - **provision**: `IngestProvider.createLiveInput` (recording `mode:
-  'automatic'`, explicit `timeoutSeconds` = the reconnect window,
-  `deleteRecordingAfterDays` = retention; `outputs = [target]` iff
+  'automatic'`, explicit `timeoutSeconds` — a RECORDING setting: it governs
+  when a disconnect starts a NEW recorded video, and is **not** the playback
+  hold §7.4 rests on (C2, U1) — `deleteRecordingAfterDays` = retention;
+  `outputs = [target]` iff
   passthrough); composed additionally `RunnerProvider.create(session)` (§7.1).
 - **warming**: the Machine pushes slate frames so the destination stream is
   alive before the camera; passthrough waits for the input's
@@ -669,7 +809,9 @@ OpenAPI `ROUTES` entries in the same change.
   (stale heartbeat > 90 s while live → ONE retry on the same session with the
   same credentials, the phone never notices → then failed), `target_rejected`
   (destination refuses the key; copy carries YouTube's fresh-channel ~24 h
-  note), `storage_exhausted` (§6.5), `no_credits`.
+  note), `no_credits` (checked again at the `live` transition, §5.2 — a
+  session created with balance ≥ 1 can still find it spent). **Not**
+  `storage_exhausted`: that is a create-time refusal with no row (§6.3, E5).
 - The heartbeat is the control channel: the Machine polls `desiredState` on
   every beat; a Machine takes no inbound traffic.
 - **Replay** (RD10): on `completed` with `stream_url` null, fill it with the
@@ -680,8 +822,9 @@ OpenAPI `ROUTES` entries in the same change.
 
 Cloudflare bills recording storage in prepaid $5 / 1,000-minute blocks and
 **an exhausted block stops NEW live streams from starting** [B]. The session
-create checks headroom through the ingest port and fails fast as
-`failed(storage_exhausted)` with panel copy — never a mid-warming mystery.
+create checks headroom through the ingest port and **refuses before it
+inserts** — `503 storage_exhausted` with panel copy (§6.3), no session row —
+never a mid-warming mystery, and never a dead `failed` row in the panel (E5).
 The sweep alerts below one retained match of headroom.
 `deleteRecordingAfterDays` (7 at launch, §12) keeps the block recycling.
 
@@ -706,7 +849,8 @@ Fly app `seazn-relay` in `lhr` beside the app and the database. Image
 `placement-*.yml` pattern [E]. Driver `server/relay/runner-fly.ts` over the
 Machines REST API: `POST /v1/apps/seazn-relay/machines` with `region: "lhr"`,
 `config.image`, `config.guest { cpus, memory_mb, cpu_kind }` from the R0 memo,
-`config.auto_destroy: true`, `config.env { SESSION_ID, JOB_TOKEN, APP_URL }`;
+`config.auto_destroy: true`, **`config.restart: { policy: "no" }`** (D4 —
+load-bearing, below), `config.env { SESSION_ID, JOB_TOKEN, APP_URL }`;
 `machine_id` stored on the session; stop = `desiredState: ending` → graceful
 flush → exit 0 → auto-destroy; hard kill = `DELETE …/machines/{id}`. Region is
 driver config, default `lhr` (Cloudflare ingest is anycast; nothing is gained
@@ -716,10 +860,97 @@ stays, so a second driver is one file later. A warm pool of stopped Machines
 is a later optimisation; `warming` already hides create latency behind the
 slate.
 
+**`restart.policy` is `no`, and that is load-bearing (D4).** Fly's default is
+UNDERSTOOD to restart a Machine in place on a non-zero exit — a docs reading,
+PREDICTED and unmeasured, because this programme has never created a Machine,
+let alone killed one; R0 watch 4 is where it is observed. The policy is
+therefore set to `no` EXPLICITLY rather than by knowing the default, which is
+the right shape whichever way the default turns out to go. §7.2 makes any child death
+exit non-zero, and §6.4 gives the stale-heartbeat path ONE retry that creates
+a REPLACEMENT Machine — so any policy other than `no` puts two compositors on
+one session, pushing to one stream key. A destination receiving two encoders
+on one key is **visible corruption on air, not a clean failure**, and the
+soak's Machine-kill check can pass straight through it: the stream stays up,
+because the restarted Machine is still pushing. The retry authority is the
+sweep and nothing else — the Machine's supervisor exits, the session's
+`machine_id` moves to the replacement, and two live `machine_id`s for one
+session is a state the design does not have. R0 watch 4 proves it by killing a
+Machine and reading the DESTINATION, never only the session row.
+
+**The ports, written down (E6).** §9a makes ports-and-adapters binding and
+names `RunnerProvider` as its exemplar, but until 2026-09-10 this section said
+only "the `RunnerProvider` port stays, so a second driver is one file later"
+and no field list or signature existed anywhere in the programme — the pattern
+was cited, not honoured. It is an interface in `server/relay/ports.ts` with
+its fake in `server/relay/fakes.ts`:
+
+```ts
+export type RunnerSpec = {
+  sessionId: string;   // fixture_stream_sessions.id
+  jobToken: string;    // AUTH_SECRET-signed, scope "relay-job", exp per §6.6
+  appUrl: string;      // origin the Machine polls; carries no secret
+  guest: { cpus: number; memoryMb: number; cpuClass: "shared" | "dedicated" };  // R0 memo
+  region: string;      // driver default "lhr" (§7.1); nothing is gained by moving it
+};
+
+export type RunnerHandle = { runnerId: string };  // stored as sessions.machine_id
+
+export interface RunnerProvider {
+  create(spec: RunnerSpec): Promise<RunnerHandle>;
+  destroy(runnerId: string): Promise<void>;  // idempotent: an absent runner is success
+}
+```
+
+`RunnerSpec` carries exactly what §7.1 already passes and nothing more: the
+Machine fetches theme, target and delay from
+`GET /api/internal/relay/sessions/[sid]` (§6.3) under its job token, so those
+never cross this seam. Guest sizing is a FIELD rather than driver config
+because R0 sets it per programme, not per provider. `create` maps 1:1 onto the
+Machines create body above — including `restart.policy` — and `destroy` is
+`DELETE …/machines/{id}` and **must be idempotent**, because the sweep and an
+organiser stop can both reach it for the same session. No provider VOCABULARY
+crosses the interface (no Fly ids, no Machines JSON, no Fly enum values),
+which is what makes "a second driver is one file" a checkable claim rather
+than a hope.
+
+**Why the claim says vocabulary and not "concept" (2026-09-10).** This field
+list read `cpuKind: "shared" | "performance"` until 2026-09-10, which is Fly's
+own `cpu_kind` enum spelled verbatim into a port that claimed to carry none of
+it — the next paragraph contradicted the previous line. The distinction it
+encodes is NOT Fly-specific: a shared slice of a vCPU versus a dedicated core
+is a choice every runner provider offers, and it is the axis R0's own matrix
+varies. So the FIELD stays and its VALUES generalise — `cpuClass: "shared" |
+"dedicated"` — and each driver maps them itself: `runner-fly.ts` maps
+`"dedicated"` → `cpu_kind: "performance"` and `"shared"` →
+`cpu_kind: "shared"`, which is the ONE place Fly's spelling appears and
+exactly where a port is supposed to keep it. `create` is therefore 1:1 onto
+the Machines create body in FIELDS, with `cpuClass` translated rather than
+passed through. R0's memo reports its verdict in this vocabulary (its own
+cells stay named in Fly sizes, because the bench runs on Fly).
+
+**C2 — the INGEST port's contract carries the HOLD WINDOW, not just the
+fields.** `IngestProvider` (§6.4) keeps the credential fields opaque so a
+front-door swap never breaks a deployed phone (§7.6); that half is right and
+stays. But the property §7.4 depends on is behavioural: *the front door holds
+a disconnected input for ≥ N seconds without closing the playback
+connection.* That hold is the entire reason an in-window phone reconnect is
+invisible on air and the encoder never restarts. A provider swapped in without
+it would satisfy every field, validate every contract fixture and accept every
+shipped phone — and would **silently delete the no-restart property**,
+surfacing as a broken broadcast rather than as a type error. So the port
+states it: a declared `holdWindowSeconds` on the adapter's capability record,
+the fake's value driving the R2 assertion that a reconnect inside the window
+produces no restart, and an adapter that cannot express a hold is not a valid
+adapter. N itself is NOT fixed here — it is U1, unspiked, carried in the
+corpus's `_OPEN-QUESTIONS.md` (NOT §12, whose seven questions are a different
+set and have never included it) — and `timeoutSeconds` does not answer it,
+being nested under `recording` and governing when a disconnect starts a new
+recorded VIDEO.
+
 ### 7.2 Container
 
-tini → node supervisor → Xvfb `:99` 1280×720 → PulseAudio null sink (one A/V
-clock) → Chromium **headed on `:99`** through puppeteer (`--kiosk
+tini → node supervisor → Xvfb `:99` 1280×720 → PulseAudio, `module-null-sink`
+**plus** `set-default-source <sink>.monitor` (one A/V clock; D2) → Chromium **headed on `:99`** through puppeteer (`--kiosk
 --autoplay-policy=no-user-gesture-required`, SwiftShader), navigated ONCE to
 the relay page; puppeteer is the control plane (`exposeFunction('relayReport')`
 → `{ videoState, measuredLatencyMs }` feeds heartbeats; `page.evaluate` sets
@@ -738,6 +969,42 @@ shape (B3) over naive overlay capture [A]. B2 (chroma-key over `?bg=key`) is
 the documented fallback only on R0's say-so; B1 (PNG pipe) is dead (cannot
 hold 30 fps).
 
+**The audio boot is two commands, not one (D2).** `pactl load-module
+module-null-sink sink_name=relay` **and then** `pactl set-default-source
+relay.monitor`, both before Chromium starts. Loading the sink alone is not
+enough: `-i default` in the FFmpeg line above then resolves against Pulse's
+default SOURCE, which in a container with no capture device is expected to be
+nothing — so FFmpeg either errors at start or encodes silence for three hours.
+**Predicted from the mechanism, and unmeasured**: no container of this shape
+has been built or run by this programme, so WHICH of those two it does (and
+whether Pulse falls back to some other source instead) is R0's to observe, not
+this document's to assert. The two commands are right either way. The monitor
+is what makes a sink readable as a source, and it is a second command rather
+than a property of the first. This section named the sink and not the monitor
+until 2026-09-10, which is exactly how a container that boots cleanly and
+passes a "the stream is up" check ships a broadcast whose audio track is
+present and empty. It shares that failure signature with D1 (§7.3): fix only
+one and the level floor asserted on the encoded audio still fails, reading as
+the first fix not working.
+
+**The two clocks beat (D5).** x11grab polls the `:99` framebuffer on its own
+fixed 30 fps timer while Chromium paints on its own schedule under
+SwiftShader; the two are unsynchronised, so periodic duplicate and dropped
+frames are the PREDICTED behaviour of this shape rather than a symptom of a
+broken one — predicted from the mechanism and **unmeasured**: no compositor
+container exists in this tree, so neither the rate of the beat nor whether it
+is visible at all has been observed here, and R0 watch 1 is the first
+opportunity to see it. They show as judder on pans — which is what football and cricket
+cameras do continuously, so this is not an edge case for these sports. R0
+watch 1 asks whether capture WORKS at 720p, which is a question about capture
+and not about smoothness; the smoothness question is separate, and the
+assertion that can see it is a decoded frame-ordinal sequence with no repeats
+and no gaps (R2's soak), not a bitrate or an uptime. The remedies — matching
+the grab rate to the paint rate, or an explicit `fps`/`-vsync` choice on the
+video filter chain — are deliberately NOT specified here, because R0 has not
+measured which is needed and a guess written into the design of record would
+be read as a decision.
+
 ### 7.3 Relay page
 
 `app/overlay/fixtures/[fixtureId]/relay/{layout,page}.tsx`, gated by the
@@ -747,16 +1014,55 @@ ladder) UNDER the unmodified `<OverlayStage>`. Page states from the element's
 own events: `waiting` → warming slate, `stalled > 8 s` → signal-lost slate,
 `playing` → live; each reported through `window.relayReport` when exposed.
 `measuredLatencyMs` (the page measures it live) auto-tunes `delayMs` through
-the hook so the score never runs ahead of the picture.
+the hook so the score never runs ahead of the picture (snapping on a transport
+change, §3.3 D3).
+
+**The `<video>` element's attributes are specified HERE (D1).**
+`autoplay playsinline preload="auto"`, `controls` absent, volume left at 1 —
+and **`muted` is NEVER set**, in the markup or programmatically. This section
+specified no attributes at all until 2026-09-10, which is how the prompt
+acquired a `muted` the design never asked for: a muted media element sends
+nothing to the audio device, so `-f pulse -i default` (§7.2) encodes silence
+and the broadcast ships with an audio track that is present and empty — a
+failure that every "is the stream up" check passes. `muted` is not buying
+autoplay here either: Chromium runs with
+`--autoplay-policy=no-user-gesture-required` (§7.2), which is EXPECTED to make
+autoplay unconditional in this container — a flag reading, PREDICTED and
+unmeasured, because no such container has been run — so the attribute has no
+upside to trade against that downside. Should R0 find the flag insufficient,
+the answer is a programmatic `play()` driven from puppeteer, never `muted`:
+`muted` re-creates the silent broadcast this paragraph exists to prevent. The element is a compositor source, not a player. Its
+witness is a level floor asserted on the ENCODED audio (`astats` /
+`volumedetect`), never the presence of an audio stream in the output — see D2,
+which produces the identical silent output from the other end of the same
+path.
 
 ### 7.4 Failure choreography
 
-Phone drop → Cloudflare holds `timeoutSeconds` → slate within ~8 s → seamless
-resume (the encoder never restarts; the front door's window makes an
-in-window resume invisible on air). Destination rejects the key →
+Phone drop → the front door holds the disconnected input for its hold window
+(length UNOBSERVED — U1, below) → slate within ~8 s → resume with no encoder
+restart, IF that hold is real. Destination rejects the key →
 `failed(target_rejected)` in words. Double start → 409 showing the existing
 session. Forgotten stream → `max_duration`. Machine host event → observed in
 the soak; recurring → the port makes another driver a file swap.
+
+**The hold window is UNOBSERVED, and the first leg above RESTS on it (U1).**
+The choreography is left exactly as designed rather than rewritten around a
+guess — it is genuinely gated on the U1 spike, which cannot run until a
+Cloudflare account and a scoped Stream token exist — but every claim in that
+first leg is downgraded here. The premise is behavioural: *the front door
+keeps a playback connection alive for ≥ N seconds while its input is
+disconnected* (§7.1, C2). Nothing in this programme has measured N, or
+observed that the property exists at all. **`timeoutSeconds` is not the
+evidence**: it is nested under `recording` and governs when a disconnect
+starts a NEW recorded video, which describes what the RECORDER does and says
+nothing about what a playback connection sees while the input is away. So the
+~8 s slate, the "no encoder restart", and the invisibility of an in-window
+reconnect are all PREDICTED and unmeasured. If the hold proves shorter than a
+realistic cellular reconnect — or absent — this leg is a restart rather than
+a resume, the destination sees a new encoder on the same key, and §7.1's
+`restart.policy = no` reasoning is what has to carry it. U1 is recorded in the
+corpus's `_OPEN-QUESTIONS.md`, and the spike replaces this paragraph.
 
 ### 7.5 Slate theme
 
@@ -769,13 +1075,53 @@ registry entry AND (under B3) a page state driven by the `<video>` element.
 `docs/contracts/capture-qr.v1.json` + fixtures (valid, expired, tampered,
 wrong-version) live in THIS repo, checksum-tested here and vendored into the
 capture repo — the cross-repo drift gate. Payload:
-`{ v: 1, sid, srt: { url, streamId, passphrase, latencyMs }, exp }` — the
-three SRT fields **opaque** (no port knowledge; a front-door swap never
-touches shipped phones); `exp` = provision + `max_duration` + 30 min; ≈
-220–300 B → QR version ~10–13 at EC-M, 4-module quiet zone [A]; manual
-paste-code fallback, which the sheet makes unconditional rather than a
-degraded-mode extra. The panel renders it client-side from the
+`{ v: 1, sid, slot, cred: { srt: { url, streamId, passphrase, latencyMs },
+rtmps: { url, streamKey } }, preferred, exp }` — every credential field
+**opaque** (no port knowledge; a front-door swap never touches shipped
+phones); `exp` = provision + `max_duration` + 30 min; EC-M with a 4-module
+quiet zone [A]; manual paste-code fallback, which the sheet makes
+unconditional rather than a degraded-mode extra. The panel renders it client-side from the
 organiser-authed session projection — the secret never enters page HTML.
+
+**R-A (owner ruling 2026-09-10) — v1 carries BOTH credential shapes (C1).**
+`preferred` is a discriminator (`"srt" | "rtmps"`), not a selection: the app
+holds both sets from the one scan. The reason is that the fallback cannot be
+allowed to require a round trip. SRT is UDP [A], and UDP is EXPECTED to be
+blocked or throttled at some grounds — a prediction from the transport, not a
+measurement: no ground network has been tested by this programme, and P5's
+device spike is what turns it into a number. The ruling does not wait on that,
+because carrying both shapes costs bytes and being wrong costs a broadcast: a
+phone that discovers this at kickoff cannot re-scan a code that is
+no longer in front of it, and may not have the connectivity to ask the API for
+the other shape — which is the condition it is trying to work around. A
+one-shape payload therefore does not merely lack a discriminator, it blocks
+the fallback outright.
+
+Supporting fact: `stream.liveInputs.create()` returns `{ uid, rtmps, srt,
+webRTC }` in ONE response [A/B]. Both shapes are already in hand at provision
+time, so v1 was carrying SRT out of a payload that already had both — a saving
+of a few dozen bytes against a boundary that costs two repos and a shipped
+phone fleet to widen later.
+
+**The ORDERING is deferred to R3**, informed by P5's device spike: which shape
+is primary, and what the app treats as the signal to fall back, is a config
+line in an app nobody has written, whereas this contract is the cross-repo
+boundary. `preferred` exists in v1 precisely so R3 can rule without a v2.
+
+`slot` is §6.1's `fixture_stream_inputs.slot` (M3): R1 and R2 mint every code
+at `slot: 0`, and multi-camera later hands each phone its own slot under the
+same session rather than its own session. Both `cred` shapes are READ from
+that row — `ingest_srt_url` / `ingest_srt_key_enc` and `ingest_rtmps_url` /
+`ingest_rtmps_key_enc` (§6.1, added with C1) — so this payload has a producer
+on this side and is not a contract nothing can fill.
+
+Consequence to re-measure, not to guess: the RTMPS pair adds roughly 110–160 B
+to a payload previously estimated at ≈ 220–300 B, so the **`~10–13` QR version
+range this section used to state is SUPERSEDED and unmeasured**. It is
+re-taken against a real provisioned pair in the change that checksums the
+contract fixtures, and the paste-code fallback (already unconditional here) is
+what keeps a larger code from being a blocker if it lands badly on a phone
+screen.
 Everything else about the phone app (libraries, ABR, thermal, five screens)
 is the `seazn-capture` spec's, not this one's.
 
@@ -839,7 +1185,7 @@ relay page.** Destination transcode → glass 8–25 s happens AFTER compositing
 | Bitrate math | 3,000 kbps video + 128 kbps AAC = 1.41 GB/h = 4.22 GB / 3 h | A |
 | x11grab | RGB only, no alpha — forces B3 | A |
 | Audio | AAC-LC 128 kbps 48 kHz through the PulseAudio null sink — one A/V clock | A/B |
-| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC`; `recording { mode: 'automatic', timeoutSeconds }` IS the reconnect window; `deleteRecordingAfterDays`; simulcast live-outputs API (= passthrough; composed must NOT use it) | B |
+| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC` in ONE response (C1, §7.6); `recording { mode: 'automatic', timeoutSeconds }` is a RECORDING setting — it governs when a disconnect starts a NEW recorded video. **The earlier reading "`timeoutSeconds` IS the reconnect window" is WITHDRAWN (2026-09-10)**: it is not evidence of a playback hold, and the hold §7.4 rests on is U1, unobserved. `deleteRecordingAfterDays`; simulcast live-outputs API (= passthrough; composed must NOT use it) | B for the fields and for what `timeoutSeconds` governs; **D for the hold window** (U1, unspiked — no measurement exists) |
 | Cloudflare Stream pricing (official doc, updated 2026-09-01) | Two dimensions. Ingest + encoding always free; no egress line. Storage prepaid in $5 / 1,000-min blocks (duration rounded to the second; file size irrelevant), consumed by uploads + SRT/RTMP live recordings + reserved `maxDurationSeconds`, NOT by ABR renditions or deleted videos. **Exhausted storage blocks NEW live streams from starting.** Delivery $1 / 1,000 min post-paid, counted for player/HLS/DASH playback, WHEP playback, MP4 downloads and simulcasting via live outputs. Live delivery rounds to the source GOP. Zero-viewer broadcast = $0 delivered. Stream Live WebRTC going GA; **WHEP delivery billing begins 2026-10-15** (free until then). | B |
 | Fly Machines | REST create/start/stop/delete maps 1:1 onto the runner port; per-second billing while running; stopped Machines bill rootfs only; the org already operates Fly (placement) | E / D — R0 replaces with the account's rate card |
 
@@ -980,7 +1326,7 @@ time anyone read them); a prompt names symbols, which survive.
 | **T1** | `T1-theme-and-visual-gate.md` (§4) | `2026-09-07-streaming-t1.md` | now | PR-T1 |
 | **W1** | `W1-step-one.md` corrected in place | existing `2026-09-05-stream-overlay-w1.md` with the Task-0 amendment (§3.2, §3.3) and the Phone tab strip reading the §5.3 gate | now | PR1 |
 | **R0** | `R0-bench.md` (§8) | none — the memo is the deliverable | now | — |
-| **R1** | `R1-relay-core.md` (§5, §6, §7.6: V401 keys, V402 tables, credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron pair + workflow, Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
+| **R1** | `R1-relay-core.md` (§5, §6, §7.6: catalogue keys **landed** as `V402__streaming_entitlements.sql`; the `__stream_sessions.sql` tables — version taken by the task that writes it, never here (§6.1); credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron pair + workflow, Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
 | **R2** | `R2-compositor.md` (§7: relay page, `slate`, `delayMs` + alignment e2e, container + supervisor, `relay-*` workflows, soak harness, green soak) | `2026-09-07-streaming-r2.md` | prompt now; **plan after the R0 memo** | PR-R2 |
 | W2 | existing `W2-moments.md` (+F3/F4 corrections at Task 0; RE-PIN rows annotated 2026-09-08 @ 60c0615b0) | existing `2026-09-05-stream-overlay-w2-moments.md` — **gate satisfied 2026-09-08** (spectator W1 #743 merged); its task zero = the RE-PIN table on THIS main, with `buildTimeline` / `match_centre.timeline` evaluated as the moments source (F4 still rides the overlay endpoint: the endpoint may embed a projected timeline slice rather than the page double-polling); NOT executable until those rows close | exists; executes after PR1 | PR2 |
 | PR3 | after its artboard | — | deferred | PR3 |
@@ -1043,7 +1389,7 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | F6 | Bitrate-ladder contradiction in the PDFs (3,000→800 vs 3,500→500) | 3,000→800 (an 800 floor keeps on-screen text legible); belongs to the capture spec |
 | F7 | HaishinKit chosen for Android | RTMP-only on Android [B]; belongs to the capture spec |
 | **FS1** | The 09-06 documents asserted a "route-key condition in `cookie-consent.tsx` (its own pathname mechanism)" | **None exists** (`cookie-consent.tsx:34,66`, `localStorage` only; mounted at `app/layout.tsx:68`) [E fb99bbd4c]. W1-C builds the `usePathname` return + zero-cookies e2e (§3.1) |
-| **FS2** | Migrations V399/V400 (09-06) and V392 (09-05) | `V399__stats_player_career_split.sql` exists; this programme takes **V400 / V401 / V402** at rebase and re-checks `ls deltas \| tail` |
+| **FS2** | Migrations V399/V400 (09-06) and V392 (09-05) | all three predictions were overtaken, and this row's own "takes V400 / V401 / V402" was the fourth. `stream_url` landed as **`V401__fixture_stream_url.sql`** (§3.7); the two catalogue keys as **`V402__streaming_entitlements.sql`** (§5.1). The sessions tables are **`__stream_sessions.sql`, unnumbered** — owner ruling 2026-09-10: the version is resolved by the task that writes the file (`ls db/migration/deltas \| sort -V \| tail -1`), AMENDED in place if written-but-unmerged, and never pinned in a design or a prompt (§6.1) |
 | **FS3** | "`.claude/worktrees/stream-overlay` exists, pushed" (09-06 plan P5) | the directory was a 15 MB unregistered residue with no `.git`; moved to `stream-overlay.stale-20260907`, worktree re-added from the branch, rebased clean on `fb99bbd4c` |
 | **FS4** | "coordinate desk W2 on `run-sheet-row.tsx`" | desk W2 MERGED (#725); the live contention is **desk W3** (`feat/competition-desk-w3-band-and-phone`) |
 | **FS5** | Cloud Run Jobs as a first-class runner, benched beside Fly | dropped (owner A: "all ok"); Fly Machines only; the port keeps a second driver a file away |
@@ -1066,7 +1412,7 @@ design or owner RULING is an `_INDEX.md` finding, never silently resolved.
 | # | Pin | State |
 |---|---|---|
 | RP1 | panel mounts in `components/v2/desk/run-sheet-row.tsx` beside the symbol `data-testid="run-sheet-edit-time"` | verified [E b2244879f] — `:407` after desk W3 (#740); the number is not the pin (FS14) |
-| RP2 | migrations | V400 stream_url, V401 keys, V402 sessions — next free at rebase, re-check at Task 0 |
+| RP2 | migrations | **LANDED:** `V401__fixture_stream_url.sql` (`stream_url`, §3.7), `V402__streaming_entitlements.sql` (catalogue keys, §5.1) — these keep their numbers as history. **OWED:** `__stream_sessions.sql` (§6.1) and the GA-flip delta (§5.1), both **unnumbered by ruling 2026-09-10** — nothing to re-pin here, because the version is taken by the task that writes the file |
 | RP3 | `public_fixtures_v` copy source `V362:22` | **moved: `V369:18`** [E fb99bbd4c, FS13]; re-pin at Task 0 (`grep -al "public_fixtures_v" db/migration/deltas \| tail -1`) |
 | RP4 | catalogue rows in the v18 shape, five plans | verified [E V393] |
 | RP5 | desk contention | W2 merged; W3 live — W1-D rebases after any W3 merge |

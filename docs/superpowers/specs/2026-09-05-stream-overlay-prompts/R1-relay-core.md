@@ -57,9 +57,30 @@ transaction that makes the stream live.
 
 ## Task 0 — re-pin on the merged tree (scout, read-only, before any build)
 
-`ls db/migration/deltas | sort -V | tail -1` FIRST — the design intends V401
-(keys) and V402 (sessions + credits) but both are "next free at rebase"; a
-duplicate Flyway version survives a clean rebase (three times in this repo).
+`ls db/migration/deltas | sort -V | tail -1` FIRST — **both design numbers
+COLLIDE (E1, re-pinned 2026-09-10 against `db/migration/deltas/`, and against
+every ref rather than `main` alone)**: `V401__fixture_stream_url.sql` and
+`V402__streaming_entitlements.sql` are already landed (the latter is W1's own),
+so design §5.1's `V401` (keys) and §6.1's `V402__stream_sessions.sql` are both
+taken. **`V402` shipped BOTH keys** — `streaming.overlay` AND `streaming.relay`,
+across all five v18 plans, `false` everywhere — so this wave owes NO entitlement
+migration at all; the row R1 was about to write already exists.
+**OWNER RULING 2026-09-10 — a migration version is NEVER pinned in a prompt.**
+This prompt names the file STEM only (`__stream_sessions.sql`); the number is
+resolved when the task STARTS, by `ls db/migration/deltas | sort -V | tail -1`
+plus an all-refs scan (`/usr/bin/git log --all --diff-filter=A --name-only
+--pretty=format: -- 'db/migration/deltas/V4*' | sort -u`), because a concurrent
+branch can have claimed a number that never appears in this tree. A number
+written into a prompt is stale the moment another wave lands one, and a stale
+pin reads as an instruction rather than as a snapshot — which is how the
+collision this bullet exists to record was created in the first place. LANDED
+migrations keep their concrete numbers, as history: that is exactly what
+`V401__fixture_stream_url.sql` and `V402__streaming_entitlements.sql` are doing
+above, and they are safe to write down precisely because they can no longer
+move. If R1's own migration is written and NOT yet merged, AMEND it to the free
+number rather than adding a forward-fix. A duplicate Flyway version survives a
+clean rebase and reds late, far from the change that caused it (three times in
+this repo).
 Then re-pin: `hasFeature` (`lib/entitlements.ts:456` at `fb99bbd4c`, the
 design says `:454` at `ac85c70` — MOVED, cite the symbol); `requireResourceAuth`
 (`server/api-v1/auth.ts:352`); `server/api-v1/schemas.ts`; the cron pair
@@ -97,30 +118,81 @@ the design's DDL verbatim.
 
 ## Scope (build order; every value from the design § cited, never restated)
 
-1. **Migrations** (numbers = Task 0's next free; header prose to the V393 bar
+1. **Migrations** (file STEMS only — the version number is resolved at task
+   start per E1 above and is never read out of this prompt, then re-confirmed
+   still free at rebase; header prose to the V393 bar
    "measured, not assumed"):
-   - `V4xx__streaming_relay_entitlement.sql`: `streaming.relay` rows for the
-     FIVE v18 plans, **`false` everywhere** (design §10.4: dark until GA; W1
-     landed `streaming.overlay` the same way), `on conflict (plan_key,
-     feature_key) do update`. The §5.1 split (`pro`, `event_pass_l`,
-     `enterprise` true for BOTH keys) is the GA flip — ONE later migration
-     flips both keys together with the `ENTITLEMENT_DOMAINS` entry and the
-     four-locale pricing copy (the standing rule: a row and its copy are one
-     unit). `ENTITLEMENT_DOMAINS` UNTOUCHED here. The test org and the pilot
-     leagues get BOTH keys through `org_entitlement_overrides` rows.
-   - `V4xx__stream_sessions.sql`: `org_stream_targets`,
+   - **No entitlement migration.** `streaming.relay` landed in
+     `V402__streaming_entitlements.sql` with W1 — both keys, all five v18 plans,
+     `false` everywhere (dark until GA, design §10.4), `on conflict (plan_key,
+     feature_key) do update`. Re-writing those rows here would be a no-op that
+     burns a version number, which is the very thing E1 exists to stop. The
+     §5.1 split (`pro`, `event_pass_l`, `enterprise` true for BOTH keys) remains
+     the GA flip: ONE later migration flips both keys together with the
+     `ENTITLEMENT_DOMAINS` entry and the four-locale pricing copy, because a row
+     and its copy are one unit. `ENTITLEMENT_DOMAINS` UNTOUCHED here. The test
+     org and the pilot leagues get BOTH keys through `org_entitlement_overrides`
+     rows, which is data, not a migration.
+   - **`__stream_sessions.sql`** (the file STEM; its version number is
+     resolved at task start per E1, never pinned here): `org_stream_targets`,
      `fixture_stream_sessions` (columns and the partial unique index
-     `fixture_stream_sessions_one_active` VERBATIM from design §6.1),
+     `fixture_stream_sessions_one_active` VERBATIM from design §6.1, MINUS the
+     ingest columns — see the next bullet), `fixture_stream_inputs`,
      `org_stream_credits` (VERBATIM from §5.2, plus `balance_after` only if
-     the owner rules on FS10), RLS enabled on all three with ZERO client
-     policies (precedent `V366__rls_billing_org_tables.sql`).
+     the owner rules on FS10), RLS enabled on all FOUR with ZERO client
+     policies (precedent `V366__rls_billing_org_tables.sql`) — the count moved
+     from three to four with the extraction, and design §6.1's own "all three"
+     line was already stale (E4).
+   - **`fixture_stream_inputs` — the N-input extraction (M3, ruling R-B).**
+     The modelling decision, stated here so R2 and R3 cannot re-derive it
+     wrongly: **multi-camera is N inputs under ONE session, never N sessions.**
+     N sessions would break `fixture_stream_sessions_one_active` as written —
+     that index is what makes a double start a CONSTRAINT rather than code — and
+     would split credits and the §6.4 state machine across rows when both are
+     per-BROADCAST. So the ingest columns move off the session row into
+     `fixture_stream_inputs (id uuid pk, session_id uuid not null references
+     fixture_stream_sessions(id) on delete cascade, slot smallint not null
+     check (slot >= 0), ingest_input_id text null, ingest_srt_url text null,
+     ingest_srt_key_enc bytea null, ingest_rtmps_url text null,
+     ingest_rtmps_key_enc bytea null, created_at timestamptz not null default
+     now(), unique (session_id, slot))`. The `check (slot >= 0)` is not
+     decoration and is not optional: this bullet's own case against
+     `inputs jsonb` is that jsonb carries no FK, no `unique (session_id, slot)`
+     and **no check constraints** — a table that then omits the check argues
+     against itself and admits `slot = -1`, which no reader downstream is
+     prepared for. **The two `ingest_rtmps_*` columns are C1 / owner ruling
+     R-A (2026-09-10):** the v1 QR contract carries BOTH credential shapes, and
+     `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
+     response — both sets are in hand at provision time, so storing one and
+     discarding the other is a choice this wave has no reason to make, and
+     re-acquiring the discarded half later costs a migration plus a re-issue of
+     every live input. Same AES-256-GCM envelope discipline as
+     `ingest_srt_key_enc` (§6.2): `server/relay/crypto.ts` is the ONLY module
+     that touches a `*_enc` column, and scope 2's static test must NAME the new
+     column or the boundary has a hole from the day it is added.
+     **`machine_id` STAYS on the session** — an input is a
+     camera, a Machine is the compositor, and §7.4's "one Machine, no fan-in"
+     holds. **R1 writes exactly ONE row, at `slot = 0`, in the same transaction
+     as the session insert, and reads it back with a join**; the state machine,
+     the panel and the §7.6 payload see one input, and nothing else in this wave
+     changes. Multi-cam later INSERTS rows instead of migrating a shipped
+     one-to-one table. **An `inputs jsonb` column is rejected explicitly**: it
+     carries no FK, no `unique (session_id, slot)` and no check constraints, and
+     this repo has already been bitten by jsonb coercion reading a written value
+     back as something else. RLS on this table too, zero client policies — it
+     holds `ingest_srt_key_enc`.
 2. **Crypto** `apps/web/src/server/relay/crypto.ts` (new): AES-256-GCM
    envelope per §6.2 — per-row DEK, KEK from env `RELAY_KEK` (Fly secret),
    `seal(plain): Buffer` / `open(enc): string`; Supabase Vault swap if Task 0
    finds it enabled. Static test `server/relay/__tests__/enc-boundary.test.ts`:
-   `grep -a` over `apps/web/src` for `rtmp_enc|ingest_srt_key_enc` outside
+   `grep -a` over `apps/web/src` for
+   `rtmp_enc|ingest_srt_key_enc|ingest_rtmps_key_enc` outside
    `server/relay/**` → must be empty (design §6.2; mutant "reference `*_enc`
-   outside `server/relay/**`").
+   outside `server/relay/**`"). The pattern ENUMERATES, so it is only as good
+   as its list: the same test asserts its list equals the set of `*_enc`
+   columns declared in the migration, or the next encrypted column added
+   (C1/R-A added two at once) walks straight past the boundary with the
+   static test still green.
 3. **Ports and drivers** `server/relay/ports.ts` (`IngestProvider {
    createLiveInput, inputStatus, addOutput, deleteInput, storageHeadroom }`,
    `RunnerProvider { create, status, delete }` — shapes per §6.4/§7.1),
@@ -172,12 +244,30 @@ the design's DDL verbatim.
    (402 `no_credits`) → `IngestProvider.storageHeadroom` (503
    `storage_exhausted`) → insert `requested` (the partial unique index turns a
    double start into 409 `active_session`, caught and answered with the
-   existing session id) → `provisioning`); `POST …/[sid]/stop` (`desired_state
-   = ending`); `GET …/stream-sessions/current` (non-secret projection: state,
+   existing session id; the slot-0 input row is inserted in that SAME
+   transaction, so a session never exists without its input) → `provisioning`);
+   `POST …/[sid]/stop` (`desired_state = ending`); `GET …/stream-sessions/current` (non-secret projection: state,
    mode, `health`, `qr` payload per §7.6 built server-side from the DECRYPTED
-   SRT triplet at request time, balance, `fail_reason`); internal `GET
-   /api/internal/relay/sessions/[sid]` and `POST …/heartbeat` (job token;
-   heartbeat body → `{ desiredState }`; the beat is the control channel).
+   credentials of the **`slot = 0` `fixture_stream_inputs` row, read by join**
+   (M3) at request time, balance, `fail_reason`).
+   **C1 / owner ruling R-A (2026-09-10) — the `qr` payload carries BOTH
+   credential sets, never SRT alone.** Shape:
+   `{ srt: { url, streamId, passphrase }, rtmps: { url, streamKey },
+   preferred: "srt" | "rtmps", slot }`, every secret field decrypted through
+   `server/relay/crypto.ts` at request time and never persisted decrypted.
+   `preferred` is a DISCRIMINATOR the phone obeys, not a hint: this wave
+   asserts NOTHING about which leg is production primary — that ordering is
+   R3's to rule, informed by P5's device spike — and carrying both shapes is
+   exactly what keeps that ruling a config line instead of a change to two
+   repos and a QR contract already printed on a shipped phone build. `slot`
+   is the input row's own `slot` VALUE, read off the joined row (`0` this
+   wave), never a literal typed into the projection, so multi-cam later
+   changes the ROW and not the builder. The paste-code fallback (scope 10)
+   shows the SAME payload as text, so both credential sets travel that path
+   too — a fallback that carried only SRT would be a second, quieter contract.
+   Internal `GET /api/internal/relay/sessions/[sid]` and `POST …/heartbeat`
+   (job token; heartbeat body → `{ desiredState }`; the beat is the control
+   channel).
    State machine `server/usecases/stream-sessions.ts` — every §6.4 transition
    as one function over the ports, `live` transition wrapping
    `consumeForSession` in the SAME transaction; passthrough's `live` fires on
@@ -212,24 +302,58 @@ the design's DDL verbatim.
     EC-M, ≥ 264 px, quiet zone 4; paste-code fallback showing the same
     payload as text); live with the health line; ending; ended with the
     replay link if filled; failed with the `fail_reason` → dictionary copy map
-    (incl. `target_rejected`'s YouTube ~24 h note, `storage_exhausted`,
-    `no_credits`). "Match decided — still streaming" chip when the fixture is
+    (incl. `target_rejected`'s YouTube ~24 h note, and `no_credits`).
+    **E5 (resolved 2026-09-10) — `storage_exhausted` is NOT a `fail_reason`,
+    and its copy moves.** Design §6.3 answers an exhausted storage block with
+    **503 at CREATE, and NO session row is ever written**; §6.4 additionally
+    listed it as a `failed(reason)`, and the two disagreed. The resolution is
+    §6.3's: an exhausted block stops a NEW stream starting, so it cannot fail
+    a session that already exists — there is no row for it to fail. Its copy
+    therefore belongs in the **create-error** map beside 402 `no_credits`, 409
+    `overlay_required` and 409 `active_session` (the inline error the "Go
+    live" button shows when the POST is refused, testid
+    `stream-create-error`), and NOT in the failed state's map, where nothing
+    can ever select it. A `fail_reason` key no transition can produce is the
+    vacuous kind of i18n coverage: present in four dictionaries, rendered
+    never, and green in every test that only checks the key exists.
+    **`no_credits` legitimately appears in BOTH maps, and that asymmetry is
+    deliberate — not a leftover of this move.** Balance is checked at create
+    (402, no row) AND re-consumed inside the `live` transition's own
+    transaction (scopes 5 and 7), so an org can pass the create gate and still
+    reach zero when another fixture's session consumes the last credit first.
+    That second refusal HAS a session row to fail, so it is a genuine
+    `fail_reason`. `storage_exhausted` has no counterpart inside the `live`
+    transition — headroom is read once, at create — which is precisely why it
+    moves and `no_credits` stays in both places. Anyone reviewing the two maps
+    should read this asymmetry as the answer to "why is one duplicated and the
+    other not", rather than as an oversight to tidy up.
+    "Match decided — still streaming" chip when the fixture is
     decided and the session is live (ruling E, no auto-end). Buy-credits card
     posting `relay-checkout` and following the Checkout URL. Phone first
     (R15): 320 full-width 44 px controls; control SET identical 320 ↔ 1280.
     Testids `stream-phone-tab`, `stream-balance`, `stream-target`,
     `stream-target-add`, `stream-mode`, `stream-go-live`, `stream-qr`,
     `stream-qr-text`, `stream-health`, `stream-stop`, `stream-fail-reason`,
+    `stream-create-error` (the E5 create-error map above),
     `stream-decided-chip`, `stream-buy-pack-1|5|20`.
-11. **i18n**: `ui.stream.phone.*` and `ui.stream.fail.*` in all four
+11. **i18n**: `ui.stream.phone.*`, `ui.stream.fail.*` and — new with E5 —
+    `ui.stream.error.*`, the CREATE-error map (402 `no_credits`, 409
+    `overlay_required`, 409 `active_session`, 503 `storage_exhausted`; see
+    scope 10), in all four
     dictionaries (`ui.json`, the namespace `run-sheet-row.tsx` reads — RP9
     pinned at W1-D; carry its finding), `pnpm i18n:gen-keys`, commit
-    `lib/i18n-keys.ts`.
+    `lib/i18n-keys.ts`. Every key in BOTH maps must be selectable by a
+    reachable code path — `ui.stream.fail.storage_exhausted` must NOT be
+    written, because after E5 nothing can produce it, and four translations of
+    a string nothing renders is worse than a missing one: it reads as covered.
 12. **Sentry**: uncomment `NEXT_PUBLIC_SENTRY_DSN` in `fly.toml:11` and set the
     Fly secret (design §10.4); pino fields `sid, fixtureId, orgId, state,
     transition, reason, machineId` on every transition.
-13. **`_INDEX.md`**: wave row, migration numbers as landed, FS10 outcome,
-    RP9, the driver env, the Stripe lookup keys' names (never values).
+13. **`_INDEX.md`**: wave row, the migration number AS LANDED (E1 — recorded
+    in `_INDEX.md` after the fact, which is the only place a concrete number
+    belongs; never pinned forward into a prompt), the `fixture_stream_inputs`
+    extraction and its slot-0 invariant (M3), FS10 outcome, RP9, the driver env,
+    the Stripe lookup keys' names (never values).
 
 ## Out of scope
 
@@ -258,7 +382,17 @@ and `lib/credits.ts` (donor — read, never edit); the engine; `.github/workflow
     credit; `failed(no_credits)` when balance 0 — and the POSITIVE pair: with
     balance 1 the same call reaches `live`; restart on the same fixture within
     24 h consumes nothing (and at 25 h consumes again — the differential
-    case); double start → the unique-violation path answers the existing id.
+    case); double start → the unique-violation path answers the existing id;
+    **the N-input model (M3): provisioning writes EXACTLY ONE
+    `fixture_stream_inputs` row and its `slot` is `0` — assert the VALUE, not
+    merely that a row exists; `slot = -1` is REFUSED by `check (slot >= 0)`
+    (item 4 — the constraint is only real if something tries to violate it);
+    `current` reads BOTH credential sets back through the join and the `qr`
+    payload carries `srt`, `rtmps`, `preferred` and `slot` (C1/R-A), with a
+    DIFFERENTIAL row that seeds the input at a NON-ZERO slot so a builder
+    hard-coding `slot: 0` cannot pass; and a session whose input row is
+    missing projects `qr: null` rather than a default object (the empty case
+    first).**
   - `stream-credits.test.ts`: `creditBalance` over an empty ledger = 0 (empty
     set explicit); purchase + consume + refund sum; replayed
     `stripe_event_id` → no second row; the gated-transaction harness
@@ -275,7 +409,12 @@ and `lib/credits.ts` (donor — read, never edit); the engine; `.github/workflow
     before (boundary rows on both sides); the advisory lock makes a concurrent
     second sweep a no-op.
   - `capture-qr.v1.test.ts`: the contract fixtures (valid, expired, tampered,
-    wrong-version) parse/refuse; checksum of `capture-qr.v1.json` pinned.
+    wrong-version) parse/refuse; checksum of `capture-qr.v1.json` pinned; and
+    (C1/R-A) a v1 payload missing EITHER credential set, or missing
+    `preferred` or `slot`, is REFUSED — with its positive pair, a payload
+    carrying both sets plus `preferred: "rtmps"` accepted, so the schema
+    cannot be satisfied by SRT alone. The fixtures are authored against §7.6,
+    NOT dumped from the builder they are meant to check.
   - **Money mutants (design §5.4) + R1 mutants (§10.2), each recorded with
     its killer:** (m1) delete the `consume` insert → e2e "live leaves balance
     unchanged" red; (m2) delete `for update` → the concurrency unit red; (m3)
@@ -286,8 +425,18 @@ and `lib/credits.ts` (donor — read, never edit); the engine; `.github/workflow
     rule → fake-runner soak: session stays `live` forever → red; (r3) reference
     `*_enc` outside `server/relay/**` → static test red; (r4) accept a tampered
     token → token unit red; (r5) delete the implication check → community org
-    with a relay override → expects 409 `overlay_required` → red. A survivor
-    is a missing test.
+    with a relay override → expects 409 `overlay_required` → red; (r6, M3)
+    drop `unique (session_id, slot)` → a second slot-0 insert on the same
+    session succeeds → the one-input unit red; (r7, M3) build the QR payload
+    from the session row instead of the joined input row → the `current` unit
+    red (the seam is proven through its real producer and consumer, never a
+    fixture on both ends); (r8, C1/R-A) drop the `rtmps` half of the `qr`
+    payload, or hard-code `slot: 0` in the builder → the `current` unit red on
+    the dual-credential row and on the non-zero-slot differential row
+    respectively — note what r8 does NOT kill: `capture-qr.v1.test.ts` alone
+    stays green whenever its fixtures were dumped from the same builder, which
+    is why the bullet above requires them authored against §7.6; (r9, item 4)
+    drop `check (slot >= 0)` → the negative-slot unit red. A survivor is a missing test.
 - **E2E** (`apps/web/e2e/walkthrough/stream-relay.spec.ts`, named in
   `WALKTHROUGH_SPECS` (`src/lib/__tests__/e2e-ci-wiring.test.ts:155`) in the
   same commit; `RELAY_DRIVERS=fake` on the server under test; whole file, never
@@ -308,8 +457,11 @@ and `lib/credits.ts` (donor — read, never edit); the engine; `.github/workflow
   SANDBOX"); the run is skipped, not faked, when `STRIPE_SANDBOX_E2E` is unset,
   and the skip is printed.
 - **Smoke** (`scripts/smoke.ts`): session CRUD on fakes (create → current →
-  stop); heartbeat with a job token round-trips `desiredState`; `rtmp_enc`
-  read back from the DB is not the plaintext (`≠` and not a substring); cron
+  stop); heartbeat with a job token round-trips `desiredState`; EVERY `*_enc`
+  column — `rtmp_enc`, `ingest_srt_key_enc` and `ingest_rtmps_key_enc`
+  (C1/R-A) — read back from the DB is not the plaintext (`≠` and not a
+  substring, each asserted separately: one encrypted column does not vouch for
+  its neighbour); cron
   route → 503 without the env, 401 with a bad secret (in that order), 200 with
   the secret.
 - **Regression**: W1's `stream-overlay.spec.ts` green unchanged (the OBS tab

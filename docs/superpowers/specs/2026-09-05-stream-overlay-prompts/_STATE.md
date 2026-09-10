@@ -3,15 +3,64 @@
 **Read this first.** It says what exists, what is decided, and the next
 action in order.
 
-**Implementation HAS started.** The T1 wave is complete and sits in **PR #752**
-on branch `feat/stream-overlay`: four tasks plus a post-review fix round, the
-first code this programme has shipped under `apps/web`. Nothing under
-`packages` or `db` is
-touched, and no migration exists yet. Anything below that says "no code exists"
-or "docs only" describes the tree before 2026-09-08 and is marked where it
-survives as a prior record.
+**Implementation HAS started, and TWO waves have MERGED.** T1 shipped as
+**PR #752** (merge `1d1f34d69`) and W1 as **PR #761** (merge `0dc6fe1b9`,
+2026-09-10), both from branch `feat/stream-overlay`. The programme carries
+production and test code under `apps/web`, and `db/` is no longer untouched —
+`V401__fixture_stream_url.sql` and `V402__streaming_entitlements.sql` are on
+`main`. Anything below that says "no code exists", "docs only", "no migration
+exists yet", or names #752 as an OPEN pull request describes the tree before
+2026-09-10 and is marked where it survives as a prior record.
 
-Last updated: 2026-09-08, **T1 closed and in PR #752**; W1 is next.
+Last updated: **2026-09-10**, by the R2-prep wave (branch `feat/stream-r2-prep`):
+**W1 CLOSED; W2 is next and owes a task-zero RE-PIN; R0, R1 and R2 are prompts
+with no plans and none started; R3 is deferred to the capture repo.**
+
+## 2026-09-10 — where things stand (R2-prep; SUPERSEDES the 2026-09-08 block below)
+
+- **W1 is CLOSED.** Merged 2026-09-10 as **PR #761** — `0dc6fe1b9`, "Merge pull
+  request #761 from onryde/feat/stream-overlay" (verified against `origin/main`
+  on 2026-09-10). Its close is the pair of `## 2026-09-10 —` sections in
+  `_INDEX.md` — the measured gate numbers, FS-W1-8a's clipped footer, the three
+  false premises, the two seed traps, and **"W1 closing: what is OWED to the next
+  wave"**. That file is the authority for all of it; do not re-derive it here.
+- **T1 is DONE and MERGED** as **PR #752** (`1d1f34d69`). The 2026-09-08 block
+  below still describes #752 as an open pull request waiting on a
+  `workflow_dispatch pr=752` run and a per-screen sign-off. Both are discharged;
+  read that block as history.
+- **W2 is NEXT, and it owes a task-zero RE-PIN before any step runs** — the rows
+  annotated in `W2-moments.md` and in
+  `../../plans/2026-09-05-stream-overlay-w2-moments.md`, with
+  `match_centre.timeline` to be evaluated as the moments source. The spectator-W1
+  gate that blocked it is open (PR #743 merged 2026-09-08); the RE-PIN is not.
+- **R0, R1 and R2 are PROMPTS with NO PLANS, and none has started.** No
+  compositor code exists in the tree — no `x11grab`, no `module-null-sink`, no
+  `runner-fly.ts`. Plans are still written one wave ahead: R1's gate ("after PR1
+  merges") is now OPEN, since PR1 is #761; R2's plan waits on the R0 memo.
+- **R3 is DEFERRED to the capture repo** (owner ruling 18: "R3 native apps in
+  their own spec in the capture repo"). Its inherited risks **P1–P5** are
+  recorded in `_INDEX.md` rather than here, because two of the five constrain
+  work in THIS repo: **P5** (a device spike on real handsets) is startable NOW
+  and blocks the R3 estimate; **P1** (iOS drops the camera when backgrounded)
+  changes what R2's soak should prove.
+- **ONE owner action gates THREE items.** R0, R1 and the U1 spike
+  (`_OPEN-QUESTIONS.md` Q17) all wait on the same thing: **provisioning a
+  Cloudflare account and a Stream-scoped API token.** The code tree references no
+  Cloudflare env var at all — `CF_ACCOUNT_ID` and `CF_API_TOKEN` appear only in
+  `README.md:164-165` and nowhere under `apps/`, `packages/` or `scripts/`
+  (verified 2026-09-10). Nobody can size the guest, provision a live input, or
+  answer U1 until that account exists. It is the single highest-leverage
+  unblock in the programme.
+- **Migration numbers: the RULE still holds and the collision is already real.**
+  `main` now ends at `V402__streaming_entitlements.sql`, so design §5.1's `V401`
+  and §6.1's `V402` are BOTH taken. Take the next free number after
+  `ls db/migration/deltas | sort -V | tail -1`, re-read at every rebase. A
+  duplicate Flyway version survives a clean rebase with no conflict.
+- **This wave:** **R2-prep**, branch `feat/stream-r2-prep`, opened 2026-09-10 —
+  documentation only, folding the 22-row register
+  `_FINDINGS-2026-09-10-relay-signal-path.html` into its owning documents before
+  R2 starts and the window closes. Brief and fold map:
+  `_WAVE-2026-09-10-r2-prep.md`; per-row audit trail in `_INDEX.md`.
 
 ## 2026-09-08 — where things stand (read this block, then the tables)
 
@@ -252,7 +301,10 @@ prior record.
   The previous directory at that path was an unregistered residue and was
   moved to `.claude/worktrees/stream-overlay.stale-20260907`; the worktree was
   re-added from the branch. ~~The branch has no PR (docs only).~~ **It has one:
-  PR #752**, opened 2026-09-08 once T1 landed code.
+  PR #752**, opened 2026-09-08 once T1 landed code — **and #752 has since
+  MERGED (`1d1f34d69`), as has W1's PR #761 (`0dc6fe1b9`, 2026-09-10).**
+  R2-prep works from a different branch and worktree: `feat/stream-r2-prep`,
+  `.claude/worktrees/stream-r2-prep`.
 - ~~Every commit is documentation, all under `docs/superpowers/`.~~ **False
   since T1.** The branch now carries production and test code under `apps/web`
   (`lib/contrast.ts`, `components/overlay/overlay-tokens.ts`, `e2e/visual/**`,
@@ -309,7 +361,33 @@ on a stale copy of this file:
   the branch has since been a fast-forward and is pushed. `git push` plainly, or
   nothing at all.
 
-The live order:
+**SUPERSEDED 2026-09-10 by the R2-prep wave. Items 1–3 below are DISCHARGED**
+and are kept only so a fresh session does not act on a stale copy: #752 (T1)
+merged as `1d1f34d69`, and W1 merged 2026-09-10 as **PR #761** (`0dc6fe1b9`),
+carrying W1-E. Item 4's R1 gate has opened with it. Item 5 is NOT discharged —
+FS-T1g (`standings-table.tsx:58`, axe SERIOUS) and FS-T1h
+(`live-score.tsx:245`, `truncate` without `min-w-0`) still name an owner and a
+wave, and neither belongs to this programme.
+
+**The live order, 2026-09-10:**
+
+1. **The owner action that gates three items** — provision a Cloudflare account
+   and a Stream-scoped API token. R0, R1 and the U1 spike
+   (`_OPEN-QUESTIONS.md` Q17) all wait on it, and nothing in the relay tier can
+   be measured until it exists.
+2. **W2**, from `../../plans/2026-09-05-stream-overlay-w2-moments.md`, whose
+   task zero owes the RE-PIN table in the PR. This is the only wave that can
+   move without the Cloudflare account.
+3. **The organiser-panel e2e** (`components/v2/fixture-stream-panel.tsx`) — the
+   owner-ruled first item of the next wave, still unbuilt. Read the E3
+   correction in `_INDEX.md`'s R2-prep section BEFORE writing the rig: the gate
+   is four conditions across two files, not the one this file's ancestors
+   recorded.
+4. **P5, the device spike**, is startable now and blocks the R3 estimate. It
+   needs handsets, not this repo, and touches nothing R2 depends on.
+5. Then R0's bench (once 1 is done), R1, R2. Plans stay one wave ahead.
+
+**The 2026-09-08 order, kept for the record:**
 
 1. **PR #752 (T1).** Two things gate it, and neither is CI-automatic:
    (a) **pre-merge e2e is `workflow_dispatch` with `pr=752`** — `e2e.yml`
@@ -362,6 +440,13 @@ The live order:
 Design §12: real prices, passthrough half-credit, Enterprise monthly bundle,
 Vault vs envelope, YouTube fresh-channel copy, per-destination VOD, mic
 default (R3). Q11–Q13 from the earlier set stand as recorded.
+
+**Added 2026-09-10 — and Q17 IS blocking, despite this heading.** `Q17`
+(register U1, what the playback side sees while a live input is disconnected) is
+the one open question in the programme that gates a wave: it decides whether R2's
+slate is driven by frame starvation or by reconnect logic. It cannot be answered
+until the Cloudflare account exists. `Q18`/`Q19` are RULED, not open — owner
+rulings R-A and R-B, 2026-09-10, recorded as rulings 24 and 25 in `_INDEX.md`.
 
 ## Environment (SUPERSEDED — prior record, 2026-09-07)
 
