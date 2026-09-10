@@ -11,9 +11,9 @@ record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
 |---|---|
 | 1 — suite registry | **COMMITTED** `bf9853b94` |
 | 2 — extract the runner | **COMMITTED** `3acc0ace9` |
-| 3 — `compareMatches` | IN FLIGHT |
-| 4 — `compareSpecials` | not started |
-| 5 — provenance writer | not started |
+| 3 — `compareMatches` | **COMMITTED** `bffb3fabe` |
+| 4 — `compareSpecials` | **COMMITTED** `04f302798` |
+| 5 — provenance writer | IN FLIGHT |
 | 6 — claim accept | not started |
 | 7 — news | not started |
 | 8 — doc corrections | not started |
@@ -26,6 +26,8 @@ record: `designs/2026-09-09-b06-pack-pilot-design.md` (owner decisions D1–D8).
 | baseline (before task 1) | 36 | 1397/1397 | 0 |
 | after task 1 | 37 | 1404/1404 | 0 |
 | after task 2 | 38 | 1408/1408 | 0 |
+| after task 3 | 39 | 1420/1420 | 0 |
+| after task 4 | 40 | 1430/1430 | 0 |
 
 Gate command (the apps/web suite and turbo never see `scripts/bench`):
 
@@ -56,6 +58,21 @@ added 3 written + 1 generated (`run-suite.ts`).
    suite that forgot to pass one would have folded the proof pack while
    reporting its own name. `runPackSuite` now takes it from the definition and
    has no `_tiny` fallback; `run-suite.test.ts` mutation-proves both.
+
+4. **A new HTTP read costs every suite-level fake a route it does not model.**
+   Task 3 hit it with the fixtures board; task 4 hit it again with folded state,
+   where the fake would additionally have owed a state its sport module accepts.
+   Both are solved with injectable seams (`matchBoard`, `specialSubjects`) whose
+   echo helpers are VACUOUS by construction and say so — with the real coverage
+   in the comparator unit tests plus one wrong-data wiring test each.
+5. **`expected.specials` standings claims read the fixture's own
+   `StandingsDelta`,** not the cumulative table — `_tiny` says `won: 1` where its
+   table says 2, and the pack is right. Derived by the engine from the PRODUCT's
+   folded state, guarded so an unrecognised shape reds rather than throws.
+6. **A `squads` claim has no live source** and is reported UNSUPPORTED (reds),
+   never silently satisfied.
+7. **Process:** `git checkout <file>` to remove a debug line also reverted that
+   file's uncommitted wiring. Remove debug lines surgically.
 
 ## What a fresh session should do first
 
