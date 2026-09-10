@@ -242,12 +242,24 @@ export function FixtureStreamPanel({
     }
   }
 
-  // §8's tab grammar, shared by both strips so the two cannot drift. The
-  // phone half is `max-md:*` only: at 320 a tab grows to fill its row and
-  // clears 44px, and `flex-wrap` + a small basis means N tabs can never put a
-  // horizontal scrollbar on the panel — they wrap instead.
+  // §8's tab grammar, shared by BOTH strips so the two cannot drift.
+  //
+  // Written MOBILE-FIRST rather than as `max-md:` overrides, deliberately:
+  // every branch in this panel is "base = phone, `md:` = the §8 desktop
+  // value", so no phone rule ever has to out-order a desktop one in the
+  // generated CSS. `max-md:static` beating a base `absolute` was the one
+  // place that would have depended on Tailwind's utility sort, and no unit
+  // test in this repo can see a cascade.
+  //
+  // The tightest row on this surface is three 44px style tabs at 320 (plus
+  // the OBS/Phone pair above them). `flex-wrap` + `grow basis-0` + a 4rem
+  // floor is what makes that safe for ANY number of themes: three fit one row
+  // inside the card's ~246px at 320, a fourth wraps to a second row, and a
+  // tab whose label is too long wraps its TEXT (`leading-tight`) rather than
+  // widening. There is no N at which the strip can put a horizontal scrollbar
+  // on the panel.
   const tabClass = (selected: boolean) =>
-    `rounded-md px-2.5 py-1 text-xs font-medium leading-tight transition max-md:min-h-11 max-md:min-w-[4rem] max-md:grow max-md:basis-0 ${
+    `min-h-11 min-w-[4rem] grow basis-0 rounded-md px-2.5 py-1 text-xs font-medium leading-tight transition md:min-h-0 md:min-w-0 md:grow-0 md:basis-auto ${
       selected
         ? "bg-purple-100 text-purple-800"
         : "text-slate-500 hover:bg-purple-50 hover:text-purple-700"
@@ -359,13 +371,13 @@ export function FixtureStreamPanel({
               aria-label={msg("stream.link.label")}
               value={overlayUrl}
               onFocus={(e) => e.currentTarget.select()}
-              className="h-10 w-full rounded-lg border border-purple-100 bg-slate-950 pl-3 pr-24 font-mono text-[11px] text-slate-100 max-md:h-11 max-md:pr-3"
+              className="h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 md:h-10 md:pr-24"
             />
             <button
               type="button"
               data-testid="stream-copy"
               onClick={copy}
-              className="btn btn-ghost absolute right-2 top-1.5 h-7 px-2.5 text-xs max-md:static max-md:mt-1.5 max-md:h-11 max-md:w-full"
+              className="btn btn-ghost mt-1.5 h-11 w-full text-xs md:absolute md:right-2 md:top-1.5 md:mt-0 md:h-7 md:w-auto md:px-2.5"
             >
               {copied ? (
                 <>
@@ -391,7 +403,7 @@ export function FixtureStreamPanel({
             <li>{msg("stream.step3")}</li>
           </ol>
 
-          <div className="mt-3 flex gap-2 max-md:flex-col">
+          <div className="mt-3 flex flex-col gap-2 md:flex-row">
             <input
               data-testid="stream-url-input"
               aria-label={msg("stream.url.label")}
@@ -402,14 +414,14 @@ export function FixtureStreamPanel({
                 setSaved(false);
                 setError(null);
               }}
-              className="h-10 flex-1 rounded-lg border border-purple-200 bg-white px-3 text-[13px] text-slate-700 max-md:h-11"
+              className="h-11 flex-1 rounded-lg border border-purple-200 bg-white px-3 text-[13px] text-slate-700 md:h-10"
             />
             <button
               type="button"
               data-testid="stream-save"
               disabled={busy}
               onClick={save}
-              className="btn btn-primary h-10 shrink-0 max-md:h-11 max-md:w-full"
+              className="btn btn-primary h-11 w-full shrink-0 md:h-10 md:w-auto"
             >
               {saved ? msg("stream.saved") : msg("stream.save")}
             </button>
@@ -440,7 +452,7 @@ export function FixtureStreamPanel({
                     disabled
                     data-testid="stream-credit-pack"
                     data-pack={pack.matches}
-                    className={`rounded-lg border p-3 text-left max-md:min-h-11 max-md:w-full ${
+                    className={`min-h-11 w-full rounded-lg border p-3 text-left ${
                       pack.popular ? "border-purple-500" : "border-purple-200"
                     }`}
                   >
@@ -463,7 +475,7 @@ export function FixtureStreamPanel({
                 type="button"
                 disabled
                 data-testid="stream-buy-soon"
-                className="btn btn-primary mt-2 h-10 max-md:h-11 max-md:w-full"
+                className="btn btn-primary mt-2 h-11 w-full md:h-10 md:w-auto"
               >
                 {msg("stream.credits.soon")}
               </button>

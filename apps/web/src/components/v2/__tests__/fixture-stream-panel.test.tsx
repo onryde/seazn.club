@@ -327,6 +327,48 @@ describe("the Phone tab reads the §5.3 gate and ships nothing else", () => {
   });
 });
 
+describe("phone first — the 44px floor is the BASE, not an override", () => {
+  // §8: "at 320 every control full width and 44 px tall, tabs 44 px". Written
+  // mobile-first, so the floor must be on the UNPREFIXED class: a
+  // `max-md:h-11` would satisfy the rendered page only by out-ordering a base
+  // utility in the generated CSS, which nothing in a node-environment suite
+  // can see. This asserts the spelling that needs no ordering at all.
+  const TAPPABLE = /(^|\s)(min-h-11|h-11)(\s|$)/;
+
+  it("every control an organiser taps carries it", () => {
+    const seen: string[] = [];
+    const check = (el: ReactElement | undefined, what: string) => {
+      expect(el, `${what} did not render`).toBeDefined();
+      seen.push(what);
+      expect(
+        String(propsOf(el!).className ?? ""),
+        `${what} has no unprefixed 44px floor`,
+      ).toMatch(TAPPABLE);
+    };
+    for (const relayEntitled of [false, true]) {
+      const island = open({ relayEntitled });
+      for (const tab of styleTabs(island.tree())) check(tab, `style tab ${attr(tab, "data-stream-style")}`);
+      for (const id of ["stream-tab-obs", "stream-tab-phone", "stream-link", "stream-copy", "stream-url-input", "stream-save"]) {
+        check(byTestId(island.tree(), id), id);
+      }
+      click(byTestId(island.tree(), "stream-tab-phone"));
+      if (relayEntitled) {
+        for (const pack of allTestIds(island.tree(), "stream-credit-pack")) check(pack, "credit pack");
+        check(byTestId(island.tree(), "stream-buy-soon"), "stream-buy-soon");
+      }
+    }
+    // The positive pair: without it an empty tree passes every check above.
+    expect(seen.length, "nothing was checked").toBeGreaterThanOrEqual(20);
+  });
+
+  it("and the toggle in the row itself does too", () => {
+    const button = walk(expandWithHooks(FixtureStreamToggle, { open: false, onToggle: () => {} })).find(
+      (el) => attr(el, "data-testid") === "fixture-stream-toggle",
+    );
+    expect(String(propsOf(button!).className ?? "")).toMatch(TAPPABLE);
+  });
+});
+
 describe("one DOM, branched — never a second phone tree", () => {
   it("nothing in the panel is hidden by width, at either tab", () => {
     for (const relayEntitled of [false, true]) {
