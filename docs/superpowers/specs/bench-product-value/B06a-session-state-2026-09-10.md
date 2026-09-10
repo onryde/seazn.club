@@ -1,7 +1,14 @@
 # B06a — session state (live, rewritten at each task boundary)
 
-Worktree `.claude/worktrees/bench-b06a`, branch `feat/bench-b06a-framework`,
-cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
+Worktree `.claude/worktrees/bench-b06a`, branch `feat/bench-b06a-framework`.
+Nothing pushed yet; no PR yet.
+
+**Do not anchor anything here to a commit SHA.** This file used to carry one
+per task and the 2026-09-10 rebase onto `origin/main` invalidated every one of
+them at a stroke — 23 commits replayed, 24 SHAs dead, and a reader chasing them
+gets "unknown revision" rather than a wrong answer, which is the only mercy in
+it. Use `git log --oneline origin/main..HEAD` instead: it is correct before a
+rebase, after one, and after the next.
 
 - Plan (nine tasks, with the test code and the pinned routes for T6/T7):
   `docs/superpowers/plans/2026-09-09-bench-b06a-suite-framework.md`
@@ -14,15 +21,15 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 
 | task | state |
 |---|---|
-| 1 — suite registry | **COMMITTED** `bf9853b94` |
-| 2 — extract the runner | **COMMITTED** `3acc0ace9` |
-| 3 — `compareMatches` | **COMMITTED** `bffb3fabe` |
-| 4 — `compareSpecials` | **COMMITTED** `04f302798` |
-| 5 — provenance writer | **COMMITTED** `aadfcf30a` |
-| 6 — claim accept (§9 P2) | **COMMITTED** `1e1289c06`, `ae2d6f914`, `8da28fd25`, `734f16dbe` |
-| 7 — news drafts + publish (§9 P6) | **COMMITTED** `5196b5408`, `69e846945`, `e90218292` |
-| 8 — doc corrections | **COMMITTED** `705b209d0` |
-| 9 — live run, both placement legs | **NEXT, BLOCKED** — needs a local env (DB + server, `seazn-local-env`); orchestrator only, never a subagent (600s watchdog) |
+| 1 — suite registry | **COMMITTED** |
+| 2 — extract the runner | **COMMITTED** |
+| 3 — `compareMatches` | **COMMITTED** |
+| 4 — `compareSpecials` | **COMMITTED** |
+| 5 — provenance writer | **COMMITTED** |
+| 6 — claim accept (§9 P2) | **COMMITTED** |
+| 7 — news drafts + publish (§9 P6) | **COMMITTED** |
+| 8 — doc corrections | **COMMITTED** |
+| 9 — live run, both placement legs | **DONE** — both legs green, evidence committed under `bench-prompts/evidence/b06a-tiny-run/` |
 
 ## Gate numbers, in order, so a regression is visible
 
@@ -36,6 +43,8 @@ cut from `8f3e3d655`. Nothing pushed yet; no PR yet.
 | after task 5 | 41 | 1438/1438 | 0 |
 | after task 6 | 42 | 1457/1457 | 0 |
 | after task 7 | 42 | 1474/1474 | 0 |
+| after the rebase onto origin/main (67 commits) | 42 | 1474/1474 | 0 |
+| after task 9's ordering fix | 42 | 1474/1474 | 0 |
 
 Gate command (the apps/web suite and `turbo` never see `scripts/bench`):
 
@@ -194,6 +203,26 @@ published everything. Both closed with a knob, then killed.
 
 **Process error, twice now:** `git checkout -- scripts/bench` to revert a
 mutant ALSO reverts uncommitted work in that tree. Commit before sweeping.
+
+## Task 9 finding — what the live run bought
+
+22. **The per-match oracle compared a fixture the run had not folded yet.**
+    Stage advancement ran AFTER the outcome oracles, so `_tiny`'s playoff
+    fixture was read while still `scheduled`:
+    `oracle: per-match mismatch in "d-tiny" fixture "se-r0-i0" — status:
+    expected decided, got scheduled`. The PRODUCT was right — the same run's
+    `final_ranks`, `rank crossing` and `champion` all passed on that fixture
+    moments later. **No suite-level test could have caught it**: all four fakes
+    drive `echoExpectedBoard`, which satisfies whatever the pack expects by
+    construction, so 1474 green tests said nothing. Fixed by moving advancement
+    above the oracles — fold everything, then assert — and pinned by the
+    oracle-ORDER assertion rather than a comment.
+
+Both legs then went green: leg A `solverStatus: ok` (two divisions solved,
+`d-badminton` `already_optimal`), leg B `solver_unavailable` on all three, and
+identical oracle verdicts across both — which is the point of running both, since
+an oracle that passed only with the solver live would be reading the solver
+rather than the product.
 
 ## QUEUED — owner-approved, to start after T7 (2026-09-10)
 
