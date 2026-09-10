@@ -318,6 +318,14 @@ function newsWorld(
     readonly newsAutoGranted?: boolean;
     /** The mutant made reachable: a republish that DOES move `published_at`. */
     readonly republishBumpsTimestamp?: boolean;
+    /**
+     * Answer EVERY post whatever `status` was asked for — the route's real
+     * behaviour when the value is not one it recognises (`route.ts:19` ignores
+     * it rather than answering 400). Without this the world honours the filter
+     * itself, the per-row status check downstream is never load-bearing, and a
+     * mutant that deletes it survives. It did, on the first sweep.
+     */
+    readonly ignoreStatusFilter?: boolean;
   } = {},
 ): { transport: ProbeTransport; calls: string[]; rows: Map<string, NewsPost> } {
   const rows = new Map((opts.posts ?? [post(1), post(2), post(3), post(4)]).map((p) => [p.id, p]));
@@ -349,7 +357,9 @@ function newsWorld(
         // The route's own behaviour: an UNRECOGNISED status is ignored, not
         // rejected. Modelling that is what lets a caller that trusted the
         // filter be caught here rather than on a live run.
-        const known = status === "draft" || status === "published" || status === "archived";
+        const known =
+          opts.ignoreStatusFilter !== true &&
+          (status === "draft" || status === "published" || status === "archived");
         return {
           status: 200,
           json: { ok: true, data: known ? all.filter((p) => p.status === status) : all } as RawJson,
@@ -434,12 +444,19 @@ describe("runNewsStep", () => {
   it("does not trust the status filter — it checks each row's own status", async () => {
     // `route.ts:19` ignores an unrecognised status instead of answering 400,
     // so a caller that trusted the query string would count a published post
-    // as a draft. This world hands back a published row in the same list.
+    // as a draft. `ignoreStatusFilter` makes this world behave that way, which
+    // is the whole point: with the world honouring the filter itself, the
+    // per-row check downstream is never load-bearing and a mutant that deletes
+    // it SURVIVES. It did, on the first sweep.
     const { transport } = newsWorld({
+      ignoreStatusFilter: true,
       posts: [post(1), post(2, { status: "published", published_at: "2026-09-01T00:00:00Z" })],
     });
     const r = await runNewsStep(args(transport, ["fx-1"]));
     expect(r.drafted).toBe(1);
+    // …and the published row is not republished by accident either: only the
+    // draft this run published is probed.
+    expect(r).toMatchObject({ published: 1, republishProbed: true });
   });
 
   it("a second publish of the same post does not move published_at", async () => {
