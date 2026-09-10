@@ -368,14 +368,14 @@ test.describe("the overlay route", () => {
 
 test.describe("§4's corner bug and its footer", () => {
   test("the tile shows a footer it cannot hold, and does not clip it", async ({ browser }) => {
-    // `test.fail()` — this asserts the CORRECT behaviour and records that the
-    // product does not have it yet, so the run reds the day someone fixes the
-    // page. That is the `knownDefects` contract in Playwright's own vocabulary,
-    // and the reason this is not written the other way round: freezing the live
-    // bug as an expected value is AGENTS.md class 4, and it is how a defect
-    // survives two sign-offs.
+    // FIXED 2026-09-10 — the `test.fail()` that stood here is gone and this
+    // now runs as an ordinary test. It was written asserting the CORRECT
+    // behaviour rather than freezing the live bug as an expected value
+    // (AGENTS.md class 4), so closing the defect meant deleting one line and
+    // changing no assertion. Everything below is the defect it was recorded
+    // for, kept because it is why each of these numbers is what it is.
     //
-    // WHAT IS WRONG, found by looking at a picture and nothing else. With three
+    // WHAT WAS WRONG, found by looking at a picture and nothing else. With three
     // cards on the ledger the bug's footer (`.ovl-bug-footer`, a 45 px
     // `justify-content: space-between` flex row inside a 480 px tile) wraps to a
     // second line, and `.ovl-bug`'s `overflow: hidden` cuts it in half: "AWA
@@ -390,22 +390,25 @@ test.describe("§4's corner bug and its footer", () => {
     // instead — an OBS operator frames the bug against their camera and a
     // graphic that changes height on air moves into the shot.
     //
-    // MEASURED, with `test.fail()` lifted for one run: the tile clips 9px of
+    // MEASURED, with `test.fail()` lifted for one run: the tile clipped 9px of
     // its own footer at 1920x1080 (`overflow-y: hidden`).
     //
-    // NOT FIXED HERE: `overlay-bug.tsx` and `globals.css` are outside this
-    // task's file set. The fix round's LAST step is to delete the `test.fail()`
-    // line below.
+    // THE FIX (`overlay-bug.tsx`, `overlay-bar.tsx`, `globals.css`): the cap to
+    // the two most recent entries, each in a real `.ovl-detail-entry` box, and
+    // `white-space: nowrap` on the footer and the entry. The footer deliberately
+    // does NOT take `overflow: hidden` — that would make it its own scroll
+    // container and absorb any future wrap before the probe below could see it
+    // (measured: 273 vs 273 with it, 299 vs 273 without).
     //
     // The visual gate cannot see this and could not have: `expectNoClip`
     // compares `scrollWidth` with `clientWidth`, so every VERTICAL clip in the
     // product is invisible to it.
     //
-    // The PRECONDITIONS are held by normal tests, never by this one: under
-    // `test.fail()` a missing tile would read as the expected failure and mask
-    // itself. `bug: every card chip carries the hairline` above renders this
-    // exact page and this exact footer, and reds honestly if either is absent.
-    test.fail();
+    // The PRECONDITIONS are held by normal tests, never by this one: under the
+    // `test.fail()` this used to carry, a missing tile would have read as the
+    // expected failure and masked itself. `bug: every card chip carries the
+    // hairline` above renders this exact page and this exact footer, and reds
+    // honestly if either is absent.
     const page = await anonPage(browser);
     try {
       await page.setViewportSize({ width: 1920, height: 1080 });
