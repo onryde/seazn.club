@@ -277,6 +277,13 @@ common_env() {
 }
 smoke_env() {
   common_env
+  # `scripts/smoke.ts` signs in by reading `login_url` off the magic-link
+  # response, and the standalone server it drives runs as NODE_ENV=production.
+  # Production no longer exposes that link on a failed send (it used to, which
+  # meant a Resend outage handed out sign-in links), so a production-mode
+  # harness has to opt in explicitly. `e2e_env` does NOT set this: those jobs
+  # mint login tokens straight in the DB via E2E_PROD_TARGET.
+  export AUTH_DEV_LINKS=1
   export NEXT_PUBLIC_SUPABASE_URL=""
   export AI_FIXTURE_PORT=4319
   export ANTHROPIC_API_KEY=sk-ant-ci-smoke-fixture

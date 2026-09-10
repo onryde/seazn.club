@@ -7,6 +7,7 @@ import { createFunnelDraft, funnelPayloadSchema } from "@/lib/funnel";
 import { sendFunnelClaimEmail } from "@/lib/email";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
+import { mayExposeDevLink } from "@/lib/dev-links";
 
 const schema = z
   .object({ email: z.string().email().max(120) })
@@ -26,7 +27,9 @@ export async function POST(req: Request) {
     const draft = await createFunnelDraft(email, payload);
 
     const link = `${baseUrl(req)}/start/claim?token=${draft.token}`;
-    const sent = await sendFunnelClaimEmail(email, {
+    // The result is no longer read — exposure is decided by `mayExposeDevLink`,
+    // not by whether the mailer worked. `send()` already logs its own failure.
+    await sendFunnelClaimEmail(email, {
       competitionName: payload.name,
       sport: payload.sport,
       link,
@@ -40,8 +43,10 @@ export async function POST(req: Request) {
 
     return {
       message: "Check your email — your competition is one click away.",
-      // Dev convenience so the flow is testable without a verified domain.
-      ...(!sent || process.env.NODE_ENV !== "production" ? { claim_url: link } : {}),
+      // Same rule as the magic-link route, from the same helper: the send
+      // outcome does not decide exposure. `!sent` used to, and this claim link
+      // signs its holder in exactly as a magic link does.
+      ...(mayExposeDevLink() ? { claim_url: link } : {}),
     };
   });
 }

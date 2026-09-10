@@ -382,7 +382,13 @@ export async function loginUi(page: Page, email: string, next?: string): Promise
     });
     loginUrl = ((await res.json()) as { data?: { login_url?: string } }).data?.login_url;
   }
-  if (!loginUrl) throw new Error("magic-link login_url missing — dev server required");
+  if (!loginUrl) {
+    throw new Error(
+      "magic-link login_url missing — a production-mode server (next start / standalone) only exposes it " +
+        "with AUTH_DEV_LINKS=1 in the SERVER's env, or run against a dev server. " +
+        "CI e2e jobs never need this: they set E2E_PROD_TARGET and mint tokens in the DB.",
+    );
+  }
   await page.goto(loginUrl);
   await page.waitForURL(
     (u) => !u.pathname.startsWith("/login") && !u.pathname.startsWith("/magic-link"),

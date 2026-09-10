@@ -33,7 +33,10 @@ async function provision(page: Page, email: string): Promise<void> {
     loginUrl = ((await linkRes.json()) as { data?: { login_url?: string } }).data?.login_url;
   }
   if (!loginUrl)
-    throw new Error("magic-link login_url missing — dev server (non-production) required for e2e");
+    throw new Error(
+      "magic-link login_url missing — a production-mode server only exposes it with AUTH_DEV_LINKS=1 " +
+        "in the SERVER's env, or run against a dev server. CI sets E2E_PROD_TARGET and mints tokens in the DB instead.",
+    );
 
   // Opening the link consumes the token, signs in, and redirects (→ onboarding).
   await page.goto(loginUrl);
