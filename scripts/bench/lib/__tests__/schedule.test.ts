@@ -849,6 +849,26 @@ describe("runScheduleLayer — the board", () => {
     expect(r.outcomes[0].unplacedCount).toBe(1);
   });
 
+  it("treats an ABSENT status as scheduled — the strict side", async () => {
+    // `S.Fixture` declares `status` required and `fx` defaults it, so this
+    // case cannot arrive from the real wire — which is exactly why it needs
+    // driving explicitly: without it, a mutant making an absent status read as
+    // SETTLED survives, and the fallback silently becomes a free pass for any
+    // row that ever loses the field.
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { metrics: { ...OK_METRICS, placed: 0, total: 1 } },
+          fixturesAfter: [fx({ id: "f1", scheduled_at: null, status: undefined })],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].unplacedCount).toBe(1);
+  });
+
   it("carries entrants, round, pool, ext_key and the lock flag off the fetched row", async () => {
     const { transport } = fakeTransport({
       divisions: {
