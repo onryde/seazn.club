@@ -1841,3 +1841,28 @@ call and no warning. The adapter clamps to ≥ 1 and asserts the echo.
 **Evidence grade: A** — the window's existence, its control, its magnitude at two
 settings, and the in-window and beyond-window behaviours are all measured
 first-hand against the live API on 2026-09-11.
+
+### U1-S9 — deleting a live input does NOT delete its recordings
+
+After the spike, `GET /stream/live_inputs` returned **0** — every input had been
+deleted by its own `finally` block — while `GET /stream/storage-usage` reported
+**10 videos and 8.91 minutes still consumed**. Listing `/stream` showed all ten,
+each still carrying its `liveInput` id pointing at an input that no longer
+exists. They were removed with `DELETE /stream/{videoId}`, after which usage
+returned to `0 / 1000`.
+
+**Why this matters more than it looks.** §6.5's headroom guard and §12's
+retention plan both reason about storage as though it follows the session. It
+does not: the session ends, the input is deleted, and the recording stays,
+billing against the prepaid block until its retention expires — which, per
+U1-S4, is at least 30 days.
+
+So a cleanup path that deletes the live input and stops there **leaks storage
+permanently at the rate of one recording per session**. R1's sweep must delete
+the VIDEO, not just the input, and the test for it asserts
+`storage-usage.videoCount` returns to its prior value — deleting the input and
+asserting a 200 cannot see this.
+
+This is also the mechanical argument for Q21's lever (c): an own-sweep calling
+`DELETE /stream/{videoId}` is not merely a way around the 30-day floor, it is
+required anyway for cleanup correctness.

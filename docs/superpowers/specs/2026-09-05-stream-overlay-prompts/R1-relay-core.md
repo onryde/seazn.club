@@ -199,7 +199,14 @@ the design's DDL verbatim.
    (C1/R-A added two at once) walks straight past the boundary with the
    static test still green.
 3. **Ports and drivers** `server/relay/ports.ts` (`IngestProvider {
-   createLiveInput, inputStatus, addOutput, deleteInput, storageHeadroom }`,
+   createLiveInput, inputStatus, addOutput, deleteInput, deleteRecordings,
+   storageHeadroom }` — **`deleteRecordings` is not optional: deleting a live
+   input does NOT delete the videos it recorded, and they keep billing against
+   the prepaid block (U1-S9, measured 2026-09-11: ten inputs deleted, zero
+   inputs left, and ten recordings still holding 8.91 minutes). Cleanup that
+   stops at `deleteInput` leaks one recording per session, permanently.** Its
+   test asserts `storage-usage.videoCount` returns to its prior value; deleting
+   the input and asserting a 200 cannot see this),
    `RunnerProvider { create, status, delete }` — shapes per §6.4/§7.1),
    `server/relay/ingest-cf.ts` (Cloudflare Stream: `recording: { mode:
    "automatic", timeoutSeconds }` — and **`deleteRecordingAfterDays` as a
