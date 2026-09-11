@@ -776,3 +776,66 @@ rather than technical. Remote audio stays deferred per the owner's direction.
 **Passthrough / simulcast.** There is no compositing step: Cloudflare live
 outputs forward what the club sends. Nothing can be added on that path, in
 either medium.
+
+## ~~Q23~~ (raised by the owner 2026-09-11) RULED — a motion vocabulary is its OWN WAVE, not a slab decision
+
+**Asked:** should the moment slab use Motion (motion.dev) rather than CSS?
+
+**Answered, and the answer is about scope rather than about the slab.** The
+owner accepted the framing: adopting Motion is coherent ONLY as *adopt a motion
+vocabulary across the product* — the slab, W1's score tick / side change / live
+dot, the pad's dock — with `_THEMES.md` §6 rewritten and the e2e-weighted
+testing cost accepted. **That is a wave. It is not W2's, and W2 does not take
+it.** The slab ships on CSS.
+
+### What made it a wave rather than a task
+
+- **There is no animation library anywhere in this repo today.** The first one
+  sets precedent for the pad, the board and the console. That is the decision
+  being made, and it should be made deliberately rather than as a side effect of
+  one slide-in.
+- **It moves behaviour out of unit-test reach.** `apps/web` vitest is
+  `environment: "node"` with no jsdom, which is exactly why W2 is shaped as a
+  PURE reducer plus a thin paint layer, and why `moment-queue.ts` carries 9/9
+  mutation coverage. Motion pushes more of the slab into e2e-only territory,
+  where each assertion costs a browser and a seeded fixture.
+- **It runs in the broadcast path.** An OBS source runs for a whole match on a
+  machine that is also encoding video. `motion/react` is ~34 kB gzipped (the
+  mini `animate()` ~2.6 kB) on a page whose whole job is painting a scorebug.
+  Today's fold is a CSS transform — compositor-only. Motion's WAAPI path is too
+  WHILE it stays on WAAPI-compatible properties; a spring or a layout animation
+  is main-thread per frame.
+
+### What the wave owes, in order
+
+1. **A design conversation before any code** — §6 is an owner-approved section
+   and the vocabulary (durations, easings, whether springs are in the language
+   at all) is a design question, not an implementation one.
+2. **The package choice**: `motion` mini (`animate()`, ~2.6 kB) versus
+   `motion/react` (`<motion.div>`, ~34 kB). The mini package keeps the
+   broadcast-path cost near zero and is probably enough for every motion listed
+   in §6; the React package buys variants and layout animations the product may
+   not need.
+3. **A testing posture, stated up front**: which motions keep a pure,
+   node-testable core (the slab's queue already does) and which become
+   e2e-only, so the wave does not quietly trade mutation coverage for polish.
+4. **The scope list**, which is wider than it looks: the slab, §6's three W1
+   motions, and the pad's own `.pad-*` motions — the pad is a different
+   programme (`2026-08-06-scoringpad-v2-prompts`) with its own rulings, so this
+   needs cross-programme sequencing rather than a single branch.
+
+### The one thing the wave MUST NOT sweep up
+
+**§6's deliberate exception: the football clock is DATA, not decoration.** It is
+the overlay's only timer, it is phase-aware, it re-anchors to the engine's
+snapshot on every push, and `prefers-reduced-motion` does NOT disable it —
+because it is information rather than movement. A motion vocabulary that
+normalises "everything animated goes through one library, and reduced motion
+turns it off" would silently freeze the match clock on air for any viewer with
+that setting. Stated here because it is exactly the kind of thing a tidy-up
+wave gets wrong.
+
+### Not chosen, and cheap if the fold simply feels flat
+
+The fold is `ease-out` at 250 ms. A slight-overshoot cubic-bezier is one line
+and no dependency. Worth shooting both before spending a wave on the question.

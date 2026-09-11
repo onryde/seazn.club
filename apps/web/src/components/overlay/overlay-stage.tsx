@@ -25,7 +25,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
 // imports neither `overlay-bar` nor `overlay-bug` — registering a third theme
 // must not touch this file, and an import here would be exactly that edit.
-import { OVERLAY_THEMES, type ThemeId } from "./theme-registry";
+import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "./theme-registry";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -131,6 +131,7 @@ export function OverlayStage(props: OverlayStageProps) {
    * shown.
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
+  const placement = slabPlacementFor(props.style, props.sportKey);
   const reducedMotion = usePrefersReducedMotion();
 
   const model: OverlayModel = overlayModel({
@@ -250,15 +251,11 @@ export function OverlayStage(props: OverlayStageProps) {
             disagree about how long a fold takes. */}
         <div
           data-testid="ovl-moment-slot"
-          className="ovl-moment-slot"
+          className={`ovl-moment-slot ovl-moment-slot--${placement}`}
           style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
         >
           {moment === null ? null : (
-            <OverlayMomentSlab
-              moment={moment}
-              phase={phase}
-              placement={props.style === "bug" ? "bug" : "bar"}
-            />
+            <OverlayMomentSlab moment={moment} phase={phase} placement={placement} />
           )}
         </div>
       </div>

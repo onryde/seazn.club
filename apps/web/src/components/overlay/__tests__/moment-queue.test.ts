@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { INITIAL, momentQueueReducer as reduce, nextDeadline } from "../moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
 import type { OverlayMoment } from "@/lib/overlay-moments";
+import { slabPlacementFor } from "../theme-registry";
+import { builtinModules } from "@seazn/engine/sports";
 
 const m = (seq: number, kind = "goal"): OverlayMoment => ({
   seq,
@@ -146,5 +148,34 @@ describe("momentQueueReducer", () => {
     expect(s.phase, "still holding: 601s is inside the new deadline").toBe("hold");
     s = tick(s, 604_000);
     expect(s).toMatchObject({ phase: "out" });
+  });
+});
+
+describe("slabPlacementFor — which scorebug the slab attaches to", () => {
+  it("bar and bug answer for themselves", () => {
+    expect(slabPlacementFor("bar", "cricket")).toBe("bar");
+    expect(slabPlacementFor("bug", "cricket")).toBe("bug");
+    expect(slabPlacementFor("bar", "football")).toBe("bar");
+    expect(slabPlacementFor("bug", "football")).toBe("bug");
+  });
+
+  it("SLATE paints no scorebug — it composites one, and the slab follows THAT", () => {
+    // §4a: slate renders `defaultThemeFor(sportKey)` on top of itself. Reading
+    // `?style=` alone gave the slab bar geometry under slate while the BUG was
+    // on screen — wrong for ten of the eleven sports, and right for cricket
+    // only by accident, which is why both halves are asserted here.
+    expect(slabPlacementFor("slate", "cricket"), "cricket composites the bar").toBe("bar");
+    for (const sport of ["football", "hockey", "tennis", "badminton", "volleyball"]) {
+      expect(slabPlacementFor("slate", sport), `${sport} composites the bug`).toBe("bug");
+    }
+  });
+
+  it("every sport the registry serves resolves to a placement the CSS defines", () => {
+    // A third placement would render an unstyled slab rather than fail.
+    for (const style of ["bar", "bug", "slate"] as const) {
+      for (const sport of builtinModules.map((m) => m.key)) {
+        expect(["bar", "bug"]).toContain(slabPlacementFor(style, sport));
+      }
+    }
   });
 });

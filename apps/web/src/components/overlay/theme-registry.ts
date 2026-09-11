@@ -104,6 +104,24 @@ export function defaultThemeFor(sportKey: string): ThemeId {
   return sportKey === "cricket" ? "bar" : "bug";
 }
 
+/**
+ * Which SCOREBUG the moment slab attaches to (W2 Task 4).
+ *
+ * Not the same question as `?style=`, and that difference was a live bug:
+ * `slate` is a theme in its own right but it paints no scorebug — it
+ * COMPOSITES one, `defaultThemeFor(sportKey)`, on top of itself (§4a). A slab
+ * placed from `props.style` alone therefore took the BAR's geometry under
+ * `?style=slate` while the bug was the thing actually on screen — wrong for
+ * ten of the eleven sports, and right for cricket only by accident.
+ *
+ * Caught by reading the overlay contact sheet, which shows three themes; the
+ * code had been written against two.
+ */
+export function slabPlacementFor(style: ThemeId, sportKey: string): "bar" | "bug" {
+  const scorebug = style === "slate" ? defaultThemeFor(sportKey) : style;
+  return scorebug === "bug" ? "bug" : "bar";
+}
+
 function suits(theme: OverlayThemeDef, sportKey: string): boolean {
   return theme.sports === "all" || theme.sports.includes(sportKey);
 }
