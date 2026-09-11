@@ -411,6 +411,71 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     expect(() => overviewPlan(rogue, dict, "en")).toThrow(/playoffs/);
   });
 
+  it("each rung's ORDER is pinned as itself, not only as what a document happened to render", () => {
+    // The mutation sweep is why this test exists and why it reads the plan
+    // rather than the markup. Swapping `finished`'s order for `next`'s SURVIVED
+    // every render-level assertion in this file, and it survives them for a
+    // sound reason: `finished` means every fixture is completed, so the
+    // upcoming set is empty by construction, the `next` section renders nothing
+    // and is filtered out, and the two orders produce byte-identical markup on
+    // every document that can reach that rung. The difference is real but it
+    // exists only in the DECLARATION — so that is the layer it is pinned at.
+    //
+    // Pinned as whole arrays rather than "contains"/"does not contain": the
+    // defect a ladder ships is a wrong POSITION, and every containment check
+    // passes on a shuffled list.
+    const orderOf = (s: LandingStatus) => overviewPlan(s, dict, "en").order;
+    expect(orderOf({ kind: "live", n: 1 })).toEqual([
+      "live",
+      "next",
+      "tables",
+      "register",
+      "description",
+      "sponsors",
+    ]);
+    expect(orderOf({ kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" })).toEqual([
+      "next",
+      "tables",
+      "register",
+      "description",
+      "sponsors",
+    ]);
+    // `match_day` SHARES `next`'s order and differs only in what it says. The
+    // two are asserted separately, so a later change to one cannot silently
+    // move the other.
+    expect(orderOf({ kind: "match_day" })).toEqual([
+      "next",
+      "tables",
+      "register",
+      "description",
+      "sponsors",
+    ]);
+    expect(orderOf({ kind: "finished" })).toEqual([
+      "tables",
+      "register",
+      "description",
+      "sponsors",
+    ]);
+    expect(orderOf({ kind: "dates", startsOn: null, endsOn: null })).toEqual([
+      "register",
+      "description",
+      "sponsors",
+    ]);
+    expect(orderOf({ kind: "empty" })).toEqual(["register", "description", "sponsors"]);
+    // `live` is the only rung that can carry a live match — every other rung
+    // sits below `landingStatus`'s own live check — so a `"live"` entry in any
+    // other order would be a section that provably cannot render.
+    for (const rung of [
+      { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
+      { kind: "match_day" },
+      { kind: "finished" },
+      { kind: "dates", startsOn: null, endsOn: null },
+      { kind: "empty" },
+    ] as LandingStatus[]) {
+      expect(orderOf(rung), rung.kind).not.toContain("live");
+    }
+  });
+
   it("every rung `landingStatus` can return IS handled — enumerated, not sampled", () => {
     // The positive pair for the throw above, and the thing that would have
     // caught `match_day` when it was missed.
@@ -507,7 +572,17 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(h.indexOf("mh-next-up-card-u2")).toBeLessThan(h.indexOf("mh-next-up-card-u3"));
   });
 
-  it("next up carries UPCOMING matches only — a live or completed fixture is another section's job", () => {
+  it("the two rails PARTITION the document — each fixture is in exactly one of them, or neither", () => {
+    // Found by the mutation sweep, which is the honest provenance: scoping the
+    // live rail on `bucket !== "completed"` instead of `=== "live"` survived
+    // every other assertion in this file, because the documents that counted
+    // live cards had no upcoming fixture and the document that had one never
+    // counted its live cards. A spectator would have read an upcoming match
+    // under the "Live now" heading, and twice — once in each rail.
+    //
+    // So both rails are counted AND named on ONE document that carries all
+    // three buckets. A count alone is not enough either: 1 and 1 is also what
+    // "each rail took the first match it saw" produces.
     const mixed = hubDoc({
       matches: [
         m("l1", "live", "2026-09-05T10:00:00.000Z", "premier"),
@@ -516,8 +591,15 @@ describe("OverviewTab — next up and the table previews", () => {
       ],
     });
     const h = render(mixed);
-    expect(h.match(/data-testid="mh-next-up-card-/g)?.length).toBe(1);
-    expect(h).toContain(`data-testid="mh-next-up-card-u1"`);
+    const ids = (rail: string) =>
+      [...h.matchAll(new RegExp(`data-testid="mh-${rail}-card-([a-z0-9]+)"`, "g"))].map(
+        ([, id]) => id,
+      );
+    expect(ids("live-now")).toEqual(["l1"]);
+    expect(ids("next-up")).toEqual(["u1"]);
+    // The completed fixture is in neither — the Matches tab owns Results.
+    expect(h).not.toContain(`data-testid="mh-live-now-card-c1"`);
+    expect(h).not.toContain(`data-testid="mh-next-up-card-c1"`);
   });
 
   it("each table previews its first THREE rows and keeps its full-division link", () => {
