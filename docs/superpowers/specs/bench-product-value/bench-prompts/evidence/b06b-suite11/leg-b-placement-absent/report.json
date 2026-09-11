@@ -1,7 +1,7 @@
 {
-  "runId": "5f26de5513e7e3b5ca623672424bf210da4b523d",
-  "startedAt": "2026-09-11T09:22:59.891Z",
-  "finishedAt": "2026-09-11T09:24:20.583Z",
+  "runId": "3b1ce6b37407e893d4c3ad2ab397b8f46d3a3480",
+  "startedAt": "2026-09-11T09:44:12.312Z",
+  "finishedAt": "2026-09-11T09:45:19.330Z",
   "engine": "both",
   "base": "http://localhost:3384",
   "preflight": {
@@ -15,12 +15,12 @@
   "suites": [
     {
       "suite": "suite11",
-      "gate": "red",
+      "gate": "green",
       "timings": {
-        "seedMs": 5705,
-        "scheduleMs": 726,
-        "simMs": 15496,
-        "importMs": 26949
+        "seedMs": 6955,
+        "scheduleMs": 640,
+        "simMs": 9986,
+        "importMs": 24023
       },
       "keep": false,
       "solver": {
@@ -195,9 +195,6 @@
         "drafted": 205,
         "published": 95
       },
-      "errors": [
-        "d-womens: certificate PACK_AUTHORING_BUG — the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver"
-      ],
       "warnings": [
         "leaderboards.not_derived @ expected.leaderboards: 2 declared expected.leaderboards entries are NOT checked offline: the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a parallel implementation rather than a check. Owed to the seeded HTTP run (B05)",
         "champions.not_derived @ expected.champions: 2 declared expected.champions entries are NOT checked offline: a champion is the product's stage-completion and progression answer, not the fold's. Owed to the seeded HTTP run (B05)",
@@ -227,7 +224,7 @@
           "blockingCount": 0,
           "warnKindTally": {},
           "unplacedCount": 0,
-          "wallMs": 292,
+          "wallMs": 239,
           "scheduleErrors": [],
           "checker": {
             "clean": true,
@@ -291,7 +288,7 @@
               }
             ],
             "similarityToHistorical": {
-              "sameDayPct": 8,
+              "sameDayPct": 11,
               "sameInstantPct": 2,
               "comparedFixtures": 95,
               "historicalRows": 95
@@ -320,7 +317,7 @@
           "blockingCount": 0,
           "warnKindTally": {},
           "unplacedCount": 0,
-          "wallMs": 337,
+          "wallMs": 313,
           "scheduleErrors": [],
           "checker": {
             "clean": true,
@@ -367,18 +364,18 @@
             ]
           },
           "certificate": {
-            "branch": "PACK_AUTHORING_BUG",
-            "reason": "the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver",
-            "red": true,
+            "branch": "HISTORY_SELF_CONFLICT",
+            "reason": "the real timetable breaches our own encoding (1 findings: court_double_booking), and every breach lands on a row the pack DECLARED as a known conflict — the source data contradicts itself, so there is nothing to fix in the pack or the solver: the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact",
+            "red": false,
             "violations": [
               {
                 "kind": "court_double_booking",
                 "divisionRef": "d-womens",
                 "fixtureIds": [
-                  "184faa0d-2087-4def-8959-c88a67dc8ab2",
-                  "bb7d295d-6a53-46ee-a12c-e049edfadc7b"
+                  "f8b619e7-ee07-4018-ad86-c2e2133babb2",
+                  "91b02735-240f-4b29-ba50-3e1ede4f36f5"
                 ],
-                "detail": "court 440278f4-f78c-4125-a924-7a6b10be083e is occupied by 184faa0d-2087-4def-8959-c88a67dc8ab2 (2024-03-23T12:23) and bb7d295d-6a53-46ee-a12c-e049edfadc7b (2024-03-23T12:32) at the same time, for 12 minutes each"
+                "detail": "court 09929c1a-9303-4894-9417-c428e712a543 is occupied by f8b619e7-ee07-4018-ad86-c2e2133babb2 (2024-03-23T12:23) and 91b02735-240f-4b29-ba50-3e1ede4f36f5 (2024-03-23T12:32) at the same time, for 12 minutes each"
               }
             ]
           },
@@ -398,20 +395,18 @@
               },
               {
                 "key": "primeSlotFairness",
-                "score": 69
+                "score": 68
               }
             ],
             "similarityToHistorical": {
               "sameDayPct": 100,
-              "sameInstantPct": 0,
+              "sameInstantPct": 2,
               "comparedFixtures": 110,
               "historicalRows": 110
             }
           },
-          "red": true,
-          "reasons": [
-            "d-womens: certificate PACK_AUTHORING_BUG — the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver"
-          ]
+          "red": false,
+          "reasons": []
         }
       ],
       "engineDelta": {
@@ -435,16 +430,16 @@
       ],
       "simulation": {
         "eventsSent": 622,
-        "wallMs": 15496,
-        "eventsPerSecond": 40.13939081053175
+        "wallMs": 9986,
+        "eventsPerSecond": 62.28720208291608
       },
       "importSimulation": {
         "eventsSent": 804,
-        "wallMs": 26949,
-        "eventsPerSecond": 29.83413113659134,
+        "wallMs": 24023,
+        "eventsPerSecond": 33.46792657037006,
         "chunks": 3
       }
     }
   ],
-  "gate": "red"
+  "gate": "green"
 }

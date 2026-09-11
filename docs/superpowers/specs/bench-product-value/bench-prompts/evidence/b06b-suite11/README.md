@@ -1,54 +1,67 @@
 # B06b — suite 11 live-run evidence
 
-Two legs of the same suite, per `_RULES.md` §2: once with the placement
-service reachable and once with it stopped. Reports are committed verbatim as
-the runner wrote them.
+Two legs of the same suite at the same commit, per `_RULES.md` §2: once with
+the placement service reachable and once with it stopped. Reports are committed
+verbatim as the runner wrote them.
 
-## What the two legs prove, and what they do not
+**Both legs: GATE GREEN, 0 errors, 25 oracles with identical verdicts** — 23
+with a subject, 23 PASS, 0 FAIL, 2 NO SUBJECT. An oracle that passed only with
+the solver live would be reading the solver rather than the product; none does.
 
-**They prove the oracles read the PRODUCT, not the solver.** All 25 oracles
-return identical verdicts across both legs — 23 with a subject, 23 PASS, 0
-FAIL, 2 NO SUBJECT. An oracle that passed only with the solver live would be
-reading the solver.
+| | leg A | leg B |
+|---|---|---|
+| pre-flight placement | live | absent |
+| gate | **green** | **green** |
+| `d-worlds` certificate | `FEASIBLE` | `FEASIBLE` |
+| `d-womens` certificate | `HISTORY_SELF_CONFLICT` | `HISTORY_SELF_CONFLICT` |
 
-**They do NOT prove the solver ran.** Read this before quoting these reports:
-
-| leg | pre-flight placement | `solverStatus` | engine used | tiers |
-|---|---|---|---|---|
-| A | **live** | `solver_unavailable` | greedy | 0/6, `budgetExpired: true` |
-| B | **absent** | `solver_unavailable` | greedy | 0/6, `budgetExpired: true` |
-
-The optimized path never reached the solver in EITHER leg, so the two legs are
-indistinguishable at the scheduling layer for this suite. The directories are
-named `placement-live` / `placement-absent` rather than `solver-live` for
-exactly that reason.
-
-This is not a broken environment: B06a's `_tiny` run reached the solver on
-this same machine and recipe (`solverStatus: ok`, two divisions solved). It is
-specific to THIS board — 95 fixtures, one court, 16 playing days, the hardest
-packing case in the roster by design — where the budget expires before a
-single tier of six completes. **Recorded as an open product finding for the
-owner, not diagnosed here.**
-
-Note also that the bench's placement pre-flight probes from the BENCH process,
-while the PRODUCT SERVER is what actually calls the solver. A green pre-flight
-says the bench can reach it, not that the server can.
-
-## The one red
-
-`d-womens` certifies `PACK_AUTHORING_BUG` with exactly ONE finding: a genuine
-same-board overlap in the published timetable (board 2, R3-2 against R4-2),
-which three independent DartConnect feeds agree on and the pack declares in
-`meta.adaptations`. The certificate is working — it found the real clash and
-nothing else. What is wrong is the BRANCH: "the pack encoded constraints
-stricter than reality" is false here, because the pack matches reality exactly
-and reality self-conflicts. Under the checker's fixed-width occupancy
-(`checker.ts:42`, ruling R12) any `matchMinutes` above 9 reports the clash and
-anything at or below 9 is shorter than every real match, so no encoding makes
-it clean without making the check vacuous.
+## The certificate branches
 
 `d-worlds` certifies **FEASIBLE**: the real timetable satisfies our encoding
 and the product placed all 95 fixtures.
+
+`d-womens` certifies **`HISTORY_SELF_CONFLICT`** on one finding — the genuine
+same-board overlap in the published Women's Series timetable, which three
+independent DartConnect feeds agree on. The pack declares both rows with
+`knownConflict`, so the certificate reports the breach without gating. It is
+declared **per row**: one undeclared fixture anywhere in a finding and this is
+a `PACK_AUTHORING_BUG` exactly as before. Div A declares none and may not —
+its timetable is DERIVED from a session-level schedule, so a breach there is
+our own arithmetic, which is what the red branch is for and what it caught
+earlier in this wave.
+
+## The open finding: the solver does not survive a real fixture count
+
+Read this before quoting these reports. The optimized path never ran in
+EITHER leg:
+
+| suite | division | fixtures | courts | `solverStatus` | tiers |
+|---|---|---|---|---|---|
+| `_tiny` | d-tiny | 3 | 2 | **ok**, optimized | 6/6 |
+| `_tiny` | d-tiebreak | 3 | 2 | **ok**, optimized | 6/6 |
+| suite 11 | d-worlds | 95 | 1 | `solver_unavailable` | 0/6, budget expired |
+| suite 11 | d-womens | 110 | 16 | `solver_unavailable` | 0/6, budget expired |
+
+`_tiny` was run in THIS environment, at this label, with this server and this
+placement service, and reached the solver. So this is **not** connectivity and
+**not** a broken environment. It is also not "one court is hard": Div B has
+sixteen boards and a single day and fails identically.
+
+What distinguishes the failing cases is **fixture count**, and 95 is not an
+extreme tournament. The whole bench exists to measure the scheduler, so a
+scheduler that falls back to greedy at realistic volumes is the most valuable
+thing this programme has produced so far. **Recorded for the owner, not
+diagnosed here** — it needs solver knowledge and its own wave.
+
+Two consequences for anyone reading these reports:
+
+- The directories are named `placement-live` / `placement-absent`, never
+  `solver-live`. The two legs are indistinguishable at the scheduling layer
+  for this suite, so they prove the oracles read the product without proving
+  anything about the solver.
+- The bench's placement pre-flight probes from the BENCH process, while the
+  product SERVER is what actually calls the solver. A green pre-flight says
+  the bench can reach it, not that the server can.
 
 ## Headline numbers (identical on both legs)
 
@@ -58,7 +71,7 @@ and the product placed all 95 fixtures.
 - Blocking conflicts: 0 · Provenance: 100% real, 205/205 streams
 - Claims: 3/3 accepted through the real magic-link flow
 - News: 205 drafted, 95 published, the rest proven still draft
-- Throughput FLOOR: ~29.5 events/s single-POST, ~24.3 events/s batch import.
+- Throughput FLOOR: ~30 events/s single-POST, ~24 events/s batch import.
   A floor, not a measurement — `_RULES.md` §3 assigns the real volume
-  measurement to B08, and these numbers are whatever this pack's stream volume
+  measurement to B08, and these are whatever this pack's stream volume
   happened to exercise on one machine under load.

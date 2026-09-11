@@ -1,10 +1,10 @@
-# Scheduler bench — run `5f26de5513e7e3b5ca623672424bf210da4b523d`
+# Scheduler bench — run `3b1ce6b37407e893d4c3ad2ab397b8f46d3a3480`
 
-- Gate: **RED**
+- Gate: **GREEN**
 - Engine: both
 - Base: http://localhost:3384
-- Started: 2026-09-11T08:54:43.559Z
-- Finished: 2026-09-11T08:56:07.302Z
+- Started: 2026-09-11T09:42:38.893Z
+- Finished: 2026-09-11T09:43:48.632Z
 - Oracles: 25 total, 23 with a subject (23 PASS, 0 FAIL), 2 NO SUBJECT
 
 ## Pre-flight
@@ -14,9 +14,9 @@
 
 ## Suites
 
-### suite11 — RED
+### suite11 — GREEN
 
-- Timings: seed 7051ms, schedule 658ms, sim 21084ms, import 33091ms
+- Timings: seed 5284ms, schedule 1751ms, sim 15027ms, import 25130ms
 - Data left in place: no (--wipe requested)
 - Solver: requested=both, actual=greedy, status=n/a
 - Blocking conflicts: 0
@@ -49,8 +49,6 @@
   - PASS news: folding drafted posts — 205 draft(s) exist for this run's competition after the folds
   - PASS news: the named fixtures publish and the rest stay draft — 95/95 named fixture(s) published, 110 post(s) still draft
   - PASS news: a republish does not move published_at — publishing an already-published post left published_at where it was
-- Errors:
-  - d-womens: certificate PACK_AUTHORING_BUG — the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver
 - Warnings (not gated):
   - leaderboards.not_derived @ expected.leaderboards: 2 declared expected.leaderboards entries are NOT checked offline: the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a parallel implementation rather than a check. Owed to the seeded HTTP run (B05)
   - champions.not_derived @ expected.champions: 2 declared expected.champions entries are NOT checked offline: a champion is the product's stage-completion and progression answer, not the fold's. Owed to the seeded HTTP run (B05)
@@ -64,8 +62,8 @@
 
 | Suite | Division | Requested | Actual | Status | Mode | Blocking | Unplaced (board) | Placed/Total (proposal) | Wall |
 |---|---|---|---|---|---|---|---|---|---|
-| suite11 | d-worlds | both | greedy | solver_unavailable | build | 0 | 0 | 95/95 | 272ms |
-| suite11 | d-womens | both | greedy | not_searched | build | 0 | 0 | 110/110 | 303ms |
+| suite11 | d-worlds | both | greedy | solver_unavailable | build | 0 | 0 | 95/95 | 575ms |
+| suite11 | d-womens | both | greedy | not_searched | build | 0 | 0 | 110/110 | 1033ms |
 
 - `d-worlds`: solver budget expired (tiers 0/6)
 - `d-womens`: solver did not search — too_big
@@ -111,19 +109,19 @@ Every OTHER layer in this report is division-scoped and blind to this by constru
 | Suite | Division | Branch | Red? | Reason |
 |---|---|---|---|---|
 | suite11 | d-worlds | `FEASIBLE` | no | the real timetable satisfies our encoding and the product placed all 95 fixtures (solver status solver_unavailable) |
-| suite11 | d-womens | `PACK_AUTHORING_BUG` | yes | the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver |
+| suite11 | d-womens | `HISTORY_SELF_CONFLICT` | no | the real timetable breaches our own encoding (1 findings: court_double_booking), and every breach lands on a row the pack DECLARED as a known conflict — the source data contradicts itself, so there is nothing to fix in the pack or the solver: the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact |
 
 History's own violations of this pack's encoding:
-- `d-womens` `court_double_booking` [26304728-40ef-4b5a-a9ea-7f0d2527ea55, 66be94b7-a5ff-420e-95a0-45aadc485419]: court 0d6b9014-0d46-46a6-bd4c-c1ef38c2f91b is occupied by 26304728-40ef-4b5a-a9ea-7f0d2527ea55 (2024-03-23T12:23) and 66be94b7-a5ff-420e-95a0-45aadc485419 (2024-03-23T12:32) at the same time, for 12 minutes each
+- `d-womens` `court_double_booking` [1d875a9a-f801-4ef1-9073-6bc72113a819, 38c9c540-3f39-4a3d-9798-40bc12c887c6]: court 42ec2f1e-e2d7-436f-9131-00673d5626f5 is occupied by 1d875a9a-f801-4ef1-9073-6bc72113a819 (2024-03-23T12:23) and 38c9c540-3f39-4a3d-9798-40bc12c887c6 (2024-03-23T12:32) at the same time, for 12 minutes each
 
 ## Believability
 
 Report-only — nothing here ever reds a run (design §3.5).
 
-- `suite11/d-worlds`: restSpread=100, courtBalance=100, gapDispersion=9, primeSlotFairness=63
-  - similarity to historical: 16% same day, 2% same instant over 95 compared fixture(s) of 95 declared row(s)
-- `suite11/d-womens`: restSpread=100, courtBalance=100, gapDispersion=100, primeSlotFairness=70
-  - similarity to historical: 100% same day, 2% same instant over 110 compared fixture(s) of 110 declared row(s)
+- `suite11/d-worlds`: restSpread=100, courtBalance=100, gapDispersion=9, primeSlotFairness=62
+  - similarity to historical: 8% same day, 4% same instant over 95 compared fixture(s) of 95 declared row(s)
+- `suite11/d-womens`: restSpread=100, courtBalance=100, gapDispersion=100, primeSlotFairness=68
+  - similarity to historical: 100% same day, 0% same instant over 110 compared fixture(s) of 110 declared row(s)
 
 ## Engine delta (greedy − optimized)
 
