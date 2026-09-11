@@ -528,6 +528,15 @@ describe("TeamsTab", () => {
       ["e3 (neutral)", e3],
     ] as const) {
       expect(cardHtml, id).toContain('aria-hidden="true"');
+      // ONE GEOMETRY FOR ALL THREE ARMS, and 32 specifically. This used to be
+      // structural — a private `CREST_CLASS` literal shared by three branches —
+      // and is now a `size={32}` passed to `EntityLogo`, which is a value
+      // rather than a shape. A mutation sweep found the difference: dropping
+      // the card's crest to 24 SURVIVED every test in this file, because no
+      // assertion had ever named the box. A reachability test is satisfied by
+      // any value; this pins the one the card opens at.
+      expect(cardHtml, id).toContain("h-8 w-8");
+      expect(cardHtml, id).not.toContain("h-6 w-6");
     }
   });
 
