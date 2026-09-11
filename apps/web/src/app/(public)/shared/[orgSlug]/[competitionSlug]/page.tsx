@@ -59,6 +59,7 @@ import { renderProse } from "@/lib/prose";
 import { competitionMetaDescription } from "@/lib/public-meta";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, plural, t } from "@/lib/i18n";
+import { hubDict } from "@/lib/hub-dict";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { SponsorsBoard } from "@/components/public-site/sponsors-board";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
@@ -346,7 +347,13 @@ export default async function CompetitionHomePage({ params }: Props) {
           failed to load. */}
       <CompetitionLanding
         initial={hub}
-        dict={dict}
+        // The HUB SLICE, not the whole dictionary. `CompetitionLanding` is a
+        // client root, so whatever it is handed is serialised into the HTML —
+        // the full `public.json` was 85 KB of a 131 KB page, and put every
+        // string in the body whether or not anything rendered it. See
+        // `lib/hub-dict.ts`; the differential test there is what keeps the
+        // slice honest, not the prefix list.
+        dict={hubDict(dict)}
         locale={locale}
         sponsorsSlot={
           sponsors.length > 0 ? (
