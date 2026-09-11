@@ -48,6 +48,7 @@ import {
   landingStatus,
   sortHubMatches,
   type LandingStatus,
+  type MatchBucket,
 } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { StandingsTableView } from "../standings-table-view";
@@ -354,11 +355,12 @@ const PREVIEW_ROWS = 3;
  * same reason, and the Matches tab lists them under their own Unscheduled
  * heading where they read correctly.
  */
-export function nextUpMatches<T extends { bucket: string; scheduledAt: string | null; tz: string }>(
-  matches: readonly T[],
-  scope: NextUpScope | null,
-  now: number,
-): T[] {
+export function nextUpMatches<
+  // `MatchBucket`, not a bare `string`: `sortHubMatches` constrains its own
+  // generic to the union, so a looser bound here does not compile — and it took
+  // the typecheck gate to say so, because vitest never type-checks.
+  T extends { bucket: MatchBucket; scheduledAt: string | null; tz: string },
+>(matches: readonly T[], scope: NextUpScope | null, now: number): T[] {
   if (scope === null) return [];
   // Guarded before `toISOString()`, which THROWS on an Invalid Date — `now` is
   // a caller's value, and an unusable clock must mean "nothing to show" rather

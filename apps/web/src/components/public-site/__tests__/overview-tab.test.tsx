@@ -475,6 +475,32 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       "sponsors",
     ]);
     expect(orderOf({ kind: "empty" })).toEqual(["register", "description", "sponsors"]);
+    // And the scope pairs with the order EXACTLY: non-null when the rung
+    // renders the rail, null when it does not. Without this the three rungs
+    // that never show next-up could carry any scope at all — a dead value no
+    // mutant can kill, which is what the sweep found (setting `finished`'s to
+    // "ahead" survived everything).
+    for (const rung of [
+      { kind: "empty" },
+      { kind: "live", n: 1 },
+      { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
+      { kind: "match_day" },
+      { kind: "finished" },
+      { kind: "dates", startsOn: null, endsOn: null },
+    ] as LandingStatus[]) {
+      const plan = overviewPlan(rung, dict, "en");
+      expect(plan.nextUp !== null, `${rung.kind} pairs its scope with its order`).toBe(
+        plan.order.includes("next"),
+      );
+    }
+    // The two rungs that DO render it disagree about what "next" means, which
+    // is the whole reason the scope exists — asserted by value, so collapsing
+    // them to one predicate reds here as well as in the render tests.
+    expect(overviewPlan({ kind: "live", n: 1 }, dict, "en").nextUp).toBe("ahead");
+    expect(
+      overviewPlan({ kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "UTC" }, dict, "en").nextUp,
+    ).toBe("ahead");
+    expect(overviewPlan({ kind: "match_day" }, dict, "en").nextUp).toBe("today");
     // `live` is the only rung that can carry a live match — every other rung
     // sits below `landingStatus`'s own live check — so a `"live"` entry in any
     // other order would be a section that provably cannot render.
@@ -621,6 +647,23 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(tagOf(h, "mh-status")).toContain(`data-kind="next"`);
     expect(h).toContain("Next: Sat 5 Sept 15:00"); // 14:00Z = 15:00 in Europe/London
     expect(cardIds(h, "next-up")).toEqual(["real"]);
+  });
+
+  it("on NEXT, a fixture on a LATER DAY is still next up — the scope is ahead-of-now, not today", () => {
+    // The mirror of the match-day test, and the sweep is why it exists:
+    // scoping `next` as `"today"` SURVIVED every assertion above, because every
+    // document that reaches the `next` rung in this file happens to have its
+    // fixtures on the same day as `now`. A competition whose next match is
+    // tomorrow would have rendered "Next: Sun 6 Sept 14:00" above an EMPTY
+    // next-up section — or rather above no section at all, since an empty one
+    // is absent by design, which is the quieter version of the same bug.
+    const doc = hubDoc({
+      matches: [m("tomorrow", "upcoming", "2026-09-06T14:00:00.000Z", "premier")],
+    });
+    const h = render(doc);
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="next"`);
+    expect(cardIds(h, "next-up")).toEqual(["tomorrow"]);
+    expect(sections(h)).toContain("next");
   });
 
   it("MATCH DAY keeps today's overdue fixtures — the rung would otherwise empty its own rail", () => {
