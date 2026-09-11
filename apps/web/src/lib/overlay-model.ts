@@ -47,6 +47,10 @@ export interface OverlaySideInput {
 export interface OverlaySide {
   short: string;
   name: string;
+  /** `_THEMES.md` §1's one size step, longest first — see `nameLadder`. The
+   *  bar renders the first rung that FITS; every other theme reads `name` or
+   *  `short` and ignores this. */
+  ladder: readonly string[];
   big: string;
   sub?: string;
   /** The side in play: batting, or serving, or the winner once decided. */
@@ -211,13 +215,51 @@ export interface OverlayModelInput {
 
 const EM_DASH = "—";
 
-/** Three letters, upper-cased — the bug's code column. Punctuation and spaces
- *  are dropped first so "St. Ives" reads STI, not "ST.". */
+/** Three letters from the entrant's NAME, upper-cased. Punctuation and spaces
+ *  are dropped first so "St. Ives" reads STI, not "ST.".
+ *
+ *  Split out of `shortCode` for `nameLadder`: the ladder's BOTTOM rung is
+ *  always this derivation, while `shortCode` prefers the entrant's own short
+ *  name when one exists. Folded together they made a two-rung ladder whose
+ *  last two entries differed only in case. */
+export function threeLetterCode(name: string): string {
+  const letters = name.replace(/[^\p{L}\p{N}]/gu, "");
+  return letters.length > 0 ? letters.slice(0, 3).toUpperCase() : EM_DASH;
+}
+
+/** Three letters, upper-cased — the bug's code column. */
 export function shortCode(side: OverlaySideInput): string {
   const explicit = side.short?.trim();
   if (explicit) return explicit.toUpperCase();
-  const letters = side.name.replace(/[^\p{L}\p{N}]/gu, "");
-  return letters.length > 0 ? letters.slice(0, 3).toUpperCase() : EM_DASH;
+  return threeLetterCode(side.name);
+}
+
+/**
+ * `_THEMES.md` §1's ladder, longest first: the full name, the entrant's own
+ * short name where the payload carries one, then the three-letter code.
+ *
+ * A LIST rather than a step, because the choice is a MEASUREMENT and only the
+ * browser can make it — §1 forbids wrapping, truncation and an ellipsis alike,
+ * so the bar renders the first rung that fits its cell (`pickNameRung`).
+ *
+ * Deduped by value: a side whose short name is already its name, or whose short
+ * name upper-cases to its own code, gets no rung that changes nothing on air —
+ * a rung that renders identically is a step the ladder appears to have and does
+ * not.
+ *
+ * `public_entrants_v` carries no `short_name` today (W1 watch-list 6, resolved
+ * to the code), so in production this is [name, code]. The middle rung is
+ * reachable the day that view grows one, and is driven in both directions by
+ * `overlay-model.test.ts` rather than left to be discovered then.
+ */
+export function nameLadder(side: OverlaySideInput): readonly string[] {
+  const explicit = side.short?.trim();
+  const rungs = [
+    side.name,
+    ...(explicit === undefined || explicit === "" ? [] : [explicit]),
+    threeLetterCode(side.name),
+  ];
+  return rungs.filter((rung, i) => rungs.indexOf(rung) === i);
 }
 
 /** Kernel side lines are "<value> <meta>" — "142/6 (20)", "3". The value is
@@ -536,6 +578,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
     return {
       short: codes[row],
       name: input_.name,
+      ladder: nameLadder(input_),
       big: line.big,
       ...(line.sub === undefined ? {} : { sub: line.sub }),
       led: led !== null && led === input_.id,

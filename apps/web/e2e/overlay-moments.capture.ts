@@ -21,10 +21,12 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { apiJson } from "./helpers";
 import {
   grantOverlay,
   seedCricketOverlayFixture,
   seedFootballOverlayFixture,
+  seedHockeyGoalOverlayFixture,
   seedOverlayFixture,
   sendEvent,
 } from "./overlay-kit";
@@ -140,9 +142,10 @@ test("football — a penalty goal names its taker AND says penalty, on the bar",
   browser,
 }) => {
   test.setTimeout(300_000);
-  // Owner ruling 28 (2026-09-11). Football is the ONLY sport that can produce
-  // this slab: `PeriodGoal` has no `penalty` field, so hockey and ice hockey
-  // reach a stroke through `kind`, which the rules do not read.
+  // Owner ruling 28 (2026-09-11). Football reaches this slab through
+  // `penalty: true`; ruling 31 the same day gave the period sports parity
+  // through `kind`, so the hockey scene below is this one's twin and the two
+  // must be judged together.
   const rig = await seedFootballOverlayFixture(page);
   await grantOverlay(rig.orgId);
   const taker = rig.offenderIds[0];
@@ -175,6 +178,102 @@ test("football — a penalty goal names its taker AND says penalty, on the bar",
   await ctx.close();
 });
 
+test("hockey — a penalty stroke names its taker AND says stroke, on the bar", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(300_000);
+  // Ruling 31 (2026-09-11), the period sports' parity with ruling 28. Before
+  // it, `PeriodGoal` had no `penalty` field and nothing read `kind`, so the one
+  // goal in field hockey that most deserves a name reached air as a bare name
+  // and was indistinguishable from one scored in open play.
+  const rig = await seedHockeyGoalOverlayFixture(page);
+  await grantOverlay(rig.orgId);
+  const taker = rig.offenderIds[0];
+  const ctx = await browser.newContext({
+    storageState: { cookies: [], origins: [] },
+    viewport: { width: 1920, height: 1080 },
+  });
+  const view = await ctx.newPage();
+  await view.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+  const slab = view.locator('[data-testid="overlay-moment"]');
+  const line = view.locator('[data-testid="overlay-moment-line"]');
+
+  // OPEN PLAY FIRST, and photographed: without it "the line says stroke" would
+  // be satisfied by a build that put a set piece on every goal.
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", {
+    by: rig.homeEntrantId,
+    person: taker,
+  });
+  await settled(view);
+  await expect(slab).toHaveAttribute("data-kind", "goal");
+  await expect(line, "an open-play goal must carry the name ALONE").not.toHaveText(/·/);
+  await shoot(view, "hockey-bar-goal-openplay");
+  await expect(slab).toHaveCount(0, { timeout: 40_000 });
+
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", {
+    by: rig.homeEntrantId,
+    person: taker,
+    kind: "stroke",
+  });
+  await settled(view);
+  await expect(slab).toHaveAttribute("data-tone", "led");
+  // Both halves, as a shape. The name is whatever the consent resolver returns
+  // and is never hard-coded; the suffix is the English dictionary's own words
+  // for `overlay.moment.goalKind.stroke`.
+  await expect(line).toHaveText(/\S.*·\s*Penalty stroke$/);
+  await shoot(view, "hockey-bar-penalty-stroke");
+  await ctx.close();
+});
+
+test("§1's ladder — a name the cell cannot hold falls to its three-letter code", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(300_000);
+  // W2-F45. `_THEMES.md` §1: "a name longer than the cell can hold at 45 px
+  // falls to the entrant's short name, then to the three-letter code; this is
+  // the only size step." W1 rendered `side.name` unconditionally, so at
+  // 1920×1080 the home name ran 376 px past its cell (339→1438 in 297→1062),
+  // the home SCORE painted inside the away cell, and the away name reached
+  // 2000 — across the brand mark at 1708 and off the canvas.
+  //
+  // BOTH SIDES LONG, because that is the only arrangement that reproduces it:
+  // with one long name and one short one the long side simply grows and the
+  // short one shrinks, and nothing spills (measured, `stream-overlay.spec.ts`).
+  // This is therefore the frame to sign off — the one the defect lived in.
+  const rig = await seedFootballOverlayFixture(page);
+  await grantOverlay(rig.orgId);
+  for (const [id, name] of [
+    [rig.homeEntrantId, "Royal Kingsbridge & Wandsworth Wanderers Athletic Club Reserves"],
+    [rig.awayEntrantId, "Northbridge Athletic & Riverside Wanderers Reserve XI"],
+  ] as const) {
+    // Before the first public read: `getPublicFixture` caches for 30 s and the
+    // overlay page takes its entrant names from it.
+    const res = await apiJson(page.request, `/api/v1/entrants/${id}`, "PATCH", {
+      display_name: name,
+    });
+    if (res.status >= 300) throw new Error(`ladder scene: PATCH -> ${res.status}`);
+  }
+  const ctx = await browser.newContext({
+    storageState: { cookies: [], origins: [] },
+    viewport: { width: 1920, height: 1080 },
+  });
+  const view = await ctx.newPage();
+  await view.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+
+  const home = view.locator('[data-testid="ovl-side-home"] [data-testid="ovl-team-name"]');
+  const away = view.locator('[data-testid="ovl-side-away"] [data-testid="ovl-team-name"]');
+  await expect(home).toBeVisible({ timeout: 30_000 });
+  await expect(home).toHaveText("ROY", { timeout: 15_000 });
+  // Different codes, so the picture cannot be of a bar showing one side twice.
+  // The "a name that fits is left alone" pair is the spec's, not a scene: it
+  // needs a second fixture and would photograph as an ordinary bar.
+  await expect(away).toHaveText("NOR");
+  await shoot(view, "bar-name-ladder");
+  await ctx.close();
+});
+
 test("reduced motion — the slab still appears, it just does not slide", async ({ page, browser }) => {
   test.setTimeout(300_000);
   const rig = await seedOverlayFixture(page);
@@ -196,7 +295,7 @@ test.afterAll(() => {
   if (!DIR) return;
   // The gate's own vacuous modes, both closed here: no file, an empty file, or
   // several identical pictures.
-  expect(shots.length, "no scene captured — the harness errored before shooting").toBeGreaterThan(5);
+  expect(shots.length, "no scene captured — the harness errored before shooting").toBeGreaterThan(8);
   const digests = new Map<string, string>();
   for (const path of shots) {
     expect(existsSync(path), `${path} was never written`).toBe(true);

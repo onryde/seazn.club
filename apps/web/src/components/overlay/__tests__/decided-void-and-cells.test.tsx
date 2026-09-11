@@ -11,7 +11,7 @@ import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { overlayModel } from "@/lib/overlay-model";
+import { nameLadder, overlayModel } from "@/lib/overlay-model";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
 import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
@@ -29,8 +29,8 @@ const BASE_MODEL: OverlayModel = {
   voided: false,
   header: { context: "overlay.header.live", period: "H1" },
   sides: [
-    { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
-    { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
+    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "2", led: false, serving: false },
+    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "1", led: true, serving: false },
   ],
   cellsKind: "none",
   cells: [],

@@ -41,6 +41,7 @@ import {
   DISCIPLINE_CLASS_TONE,
   disciplineTone,
   overlayModel,
+  nameLadder,
   overlayStartLabel,
   shortCode,
   splitLine,
@@ -128,6 +129,83 @@ describe("shortCode / splitLine", () => {
   it("splits a kernel side line into its value and its trailing meta", () => {
     expect(splitLine("142/6 (20)")).toEqual({ big: "142/6", sub: "(20)" });
     expect(splitLine("3")).toEqual({ big: "3" });
+  });
+});
+
+describe("nameLadder — `_THEMES.md` §1's one size step (W2-F45)", () => {
+  it("is TWO rungs today, because no short name reaches the public payload", () => {
+    // The production shape. `public_entrants_v` carries `display_name` and a
+    // `team_display` blob with no `short_name` (W1 watch-list 6, resolved to
+    // the code), so `short` is absent on every real side.
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers" })).toEqual([
+      "Milton Keynes Rovers",
+      "MIL",
+    ]);
+  });
+
+  it("is THREE rungs once an entrant has a short name, and the MIDDLE one is it", () => {
+    // The rung the bar steps to before the code, and the case that tells a
+    // real ladder from a full-name-or-code toggle: the short name is neither
+    // of the other two.
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "Rovers" })).toEqual([
+      "Milton Keynes Rovers",
+      "Rovers",
+      "MIL",
+    ]);
+  });
+
+  it("drops a rung that would render IDENTICALLY to the one above it", () => {
+    // A ladder whose steps are invisible is a ladder that appears to have
+    // more room to give than it has. Both directions: a short name equal to
+    // the full name, and one that already IS the code.
+    expect(nameLadder({ id: "H", name: "RIV", short: "RIV" })).toEqual(["RIV"]);
+    expect(nameLadder({ id: "H", name: "Riverside", short: "RIV" })).toEqual(["Riverside", "RIV"]);
+  });
+
+  it("keeps a short name that differs only in CASE from the code", () => {
+    // `shortCode` upper-cases an explicit short name; the ladder does NOT —
+    // "Riv" and "RIV" are two different things on air, and folding them would
+    // silently upper-case the middle rung.
+    expect(nameLadder({ id: "H", name: "Riverside Athletic", short: "Riv" })).toEqual([
+      "Riverside Athletic",
+      "Riv",
+      "RIV",
+    ]);
+  });
+
+  it("the last rung is derived from the NAME, never from the short name", () => {
+    // Against `shortCode`, whose answer here is "MKR". If the ladder reused it
+    // the bottom rung would be four letters on some sides and three on others,
+    // and a short name longer than the code would be the shortest thing
+    // available.
+    expect(shortCode({ id: "H", name: "Milton Keynes Rovers", short: "mkr" })).toBe("MKR");
+    expect(nameLadder({ id: "H", name: "Milton Keynes Rovers", short: "mkr" }).at(-1)).toBe("MIL");
+  });
+
+  it("an unnameable side still has a rung — the em dash, not an empty string", () => {
+    expect(nameLadder({ id: "H", name: "  " })).toEqual(["  ", "—"]);
+  });
+
+  it("reaches the MODEL, so the bar reads it rather than deriving it again", () => {
+    // The wiring half. Without this the ladder is a pure function nothing
+    // calls — and the two sides carry DIFFERENT ladder lengths here, so a
+    // model that built one ladder and used it twice fails.
+    const model = overlayModel({
+      sportKey: "football",
+      data: { lastSeq: null, venueTz: "UTC", status: "in_play" } as OverlayLiveData,
+      sides: [
+        { id: "H", name: "Milton Keynes Rovers", short: "Rovers" },
+        { id: "A", name: "Riverside" },
+      ],
+      startLabel: null,
+      clockLabel: null,
+      msg: keyMsg,
+      decidedTemplates: TEMPLATES,
+    });
+    expect(model.sides.map((s) => s.ladder)).toEqual([
+      ["Milton Keynes Rovers", "Rovers", "MIL"],
+      ["Riverside", "RIV"],
+    ]);
   });
 });
 

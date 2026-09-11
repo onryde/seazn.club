@@ -31,7 +31,7 @@ import { join } from "node:path";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 import type { ReactElement } from "react";
 
 const keyMsg: OverlayMsg = (key) => key;
@@ -61,8 +61,8 @@ const BASE_MODEL: OverlayModel = {
   voided: false,
   header: { context: "overlay.header.live", period: "H2" },
   sides: [
-    { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
-    { short: "AWA", name: "Awaydon Athletic", big: "1", led: true, serving: false },
+    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "2", led: false, serving: false },
+    { short: "AWA", name: "Awaydon Athletic", ladder: nameLadder({ id: "x", name: "Awaydon Athletic" }), big: "1", led: true, serving: false },
   ],
   cellsKind: "none",
   cells: [],

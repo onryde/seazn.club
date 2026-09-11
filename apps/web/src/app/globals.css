@@ -1387,7 +1387,19 @@ body {
                color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-team-cell { position: relative; display: flex; align-items: center; gap: 24px;
                  flex: 1 1 auto; min-width: 0; padding: 0 42px; }
-.ovl-team-name { font-size: 45px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
+/* W2-F45 — §1's ladder needs a box that can be MEASURED and cannot spill.
+   `flex: 0 1 auto` + `min-width: 0` lets the name shrink instead of pushing the
+   score into the other cell and the away name over the brand mark (measured at
+   1920×1080: the home score painted 1046→1156 against a cell starting at 1063).
+   `overflow: hidden` is the mechanical floor UNDER the ladder, not a
+   replacement for it: it holds the one frame before `TeamName` has measured,
+   and §1's "never truncate" is about the resting state. `position: relative` is
+   what the probes are absolute against — they must contribute no width, or the
+   box measures every rung at once. */
+.ovl-team-name { position: relative; flex: 0 1 auto; min-width: 0; overflow: hidden;
+                 font-size: 45px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
+.ovl-team-name-probe { position: absolute; left: 0; top: 0; visibility: hidden;
+                       pointer-events: none; white-space: nowrap; }
 .ovl-team-score { margin-left: auto; font-size: 78px; font-weight: 700; line-height: 1; }
 .ovl-team-meta { width: 66px; font-size: 33px; font-weight: 500;
                  color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
