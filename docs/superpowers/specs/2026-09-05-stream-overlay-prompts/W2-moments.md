@@ -88,8 +88,15 @@ and bowler `O-M-R-W` — never retyped cricket maths.
    `seq <= seenSeq`, returns in ascending seq (FIFO), advances `seenSeq` to the
    max seq SEEN (allowlisted or not — an unlisted event still counts as seen,
    or it would be re-scanned forever).
-2. **Allowlist** — `MOMENT_TYPES: Record<sportKey, Record<eventType, { tone;
-   headlineKey; lineKey? }>>` per spec: cricket boundary four and six (`led`),
+2. **Allowlist** — **CORRECTED 2026-09-11: a flat `Record<eventType, {tone}>` map
+   CANNOT express this and the plan already knows it.** Cricket's four, six and
+   wicket are payload fields of `cricket.ball` (`boundary: 4|6`, `wicket`), not
+   discrete types, and hockey/ice-hockey cards are `*.suspension.start` — there
+   is no `*.card`. Use the plan's shape: `MOMENT_RULES: Record<sportKey,
+   Record<string, (ev, ctx) => OverlayMoment | null>>`, matching on
+   `(type, payload)`. The rows below are right about WHICH moments exist and
+   wrong only about the lookup shape. `MOMENT_TYPES: Record<sportKey,
+   Record<eventType, { tone; headlineKey; lineKey? }>>` per spec: cricket boundary four and six (`led`),
    wicket (`dismissal`); football goal (`led`), card (`caution`); hockey and ice
    hockey goal and card; tennis, badminton, table tennis: ace where the module
    records it, break point, set point, match point, set won (`led`);

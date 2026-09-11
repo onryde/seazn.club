@@ -1485,7 +1485,30 @@ inert-seam class with a type system actively vouching for the dead field.
 Whatever W2 builds must not read it, and the wave should consider narrowing the
 type so the compiler stops lying.
 
-**W2-F3 — the allowlist CANNOT be keyed on event type, for the two sports the
+**W2-F3 — CORRECTED 2026-09-11, and it was overstated. The finding applies to
+the BRIEF, not to the PLAN.** `W2-moments.md` scope item 2 briefs
+`MOMENT_TYPES: Record<sportKey, Record<eventType, { tone; headlineKey }>>` — a
+flat type→tone map, which is genuinely falsified below. But the implementation
+plan (`plans/2026-09-05-stream-overlay-w2-moments.md`, Task 2) already specifies
+`MOMENT_RULES: Record<sportKey, Record<string, MomentRule>>` where
+`MomentRule = (ev, ctx) => OverlayMoment | null` — a FUNCTION that inspects the
+payload. It already reads `boundary 6` → SIX, `boundary 4` → FOUR and
+`wicketKind` → OUT off `cricket.ball`, already names `hockey.suspension.start`
+and `icehockey.suspension.start` rather than a `*.card` that does not exist,
+already derives set/match point, and additionally names
+`cricket.superover.ball` (verified at `cricket.ts:408`, sharing the `CricketBall`
+schema) which this re-pin's own scout list missed. **No mechanism change is owed
+in the plan; the brief is what needs correcting.** Per `W2-moments.md`'s own
+rule, a brief/plan conflict is this finding.
+
+What DOES survive from the original finding, and is still owed: **a band-2
+cricket ledger has no `cricket.ball` at all** (only `cricket.player.line`), so
+an OUT at band 2 needs the line diff of W2-F6 — the plan's Task 2 does not
+handle that case. And W2-F4's per-module EVENT-vs-DERIVED table CONFIRMS the
+plan's derived branch rather than correcting it.
+
+The falsified claim, which stands against the brief only:
+**the brief's flat type→tone allowlist cannot express the two sports the
 owner named first.** Scope item 2 briefs `MOMENT_TYPES: Record<sportKey,
 Record<eventType, …>>`. Against the modules:
 

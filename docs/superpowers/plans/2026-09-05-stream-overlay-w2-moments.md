@@ -19,8 +19,8 @@ design as numbers.
 
 **Status (2026-09-10): TASK ZERO IS CLOSED. Outcomes and findings W2-F1–W2-F12 are in `../specs/2026-09-05-stream-overlay-prompts/_INDEX.md` § “2026-09-10 — W2 task zero: the RE-PIN, closed”, re-verified against `main` `10c7f94cd`. Both gates are open (spectator W1 #743; PR1 / W1 overlay #761). NOT yet executable for one remaining reason: the re-pin falsified three premises this plan is written on, so Task 1's shapes and its placeholder test bodies must be rewritten and re-reviewed first. The wave's SCOPE is unchanged — every moment the owner named still fires. Its MECHANISM changes:**
 
-- **W2-F3 — the allowlist cannot be keyed on event type.** Cricket four, six and wicket have no discrete types: all three are payload fields of `cricket.ball` (`boundary: 4`, `boundary: 6`, `wicket`). Hockey and ice hockey have no `*.card` — the type is `*.suspension.start`. `MOMENT_TYPES` becomes a per-sport MATCHER over `(type, payload)`.
-- **W2-F4 — set point and match point are DERIVED in tennis, badminton, table tennis and volleyball**, at every band anyone streams at; `<sport>.set.summary` / `.game.summary` is an EVENT only at band 0. No `matchPoint`/`setPoint` symbol exists in the tree.
+- **W2-F3 — NO CHANGE OWED HERE (corrected 2026-09-11).** The finding was raised against `W2-moments.md`'s flat `MOMENT_TYPES` map and does not apply to this plan: Task 2 already specifies `MOMENT_RULES` as `(ev, ctx) => OverlayMoment | null` functions that read `boundary`/`wicketKind` off `cricket.ball`, already names `*.suspension.start` rather than a non-existent `*.card`, and additionally names `cricket.superover.ball` (verified `cricket.ts:408`). The BRIEF is what needs correcting.
+- **W2-F4 — CONFIRMS this plan's derived branch** rather than correcting it: set point and match point are DERIVED in tennis, badminton, table tennis and volleyball at every band anyone streams at (`<sport>.set.summary` / `.game.summary` is an EVENT only at band 0), which is exactly what Task 2's `derived.pointState` / `derived.setWon` rules assume.
 - **W2-F6 — a band-2 cricket wicket is a line DIFF**, not a type match: `batting.out` flipping false→true on a cumulative, repeatedly re-appended `cricket.player.line`.
 - **W2-F1/F9/F10 — the source is the fallback, and it lands on `OverlayLiveData`,** not on the public fixture payload (the overlay no longer polls that route). The cricket batter line's “primary” source `match_centre.cricket.live` never arrives on the overlay payload; the server-side fold is the only source.
 - **W2-F7 — the consent resolver is not reachable from the overlay projection.** `personOf` is the right one for person names, but `server/overlay/{load,project}.ts` do no lineup read at all. This is new work, not reuse.
@@ -150,16 +150,45 @@ docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md  MOD  status 
 
 ### Task 1: The public payload carries the last eight events (`recent`)
 
-**Files:**
+**Files — DESTINATION CORRECTED 2026-09-11 by task zero (W2-F1, W2-F9, W2-F10).**
+`recent` goes on **`OverlayLiveData`, the overlay endpoint's projection**, NOT on
+the public fixture payload: the overlay's ONE poll target is
+`GET /api/v1/public/fixtures/[id]/overlay` and it no longer reads the public
+fixture route at all. Putting it on `publicFixture` would ship a field the
+overlay never receives.
+
 - Create: `apps/web/src/lib/overlay-recent-types.ts`
-- Create: `apps/web/src/server/public-site/overlay-recent.ts`
-- Modify: `apps/web/src/server/usecases/public.ts:263-298` (`publicFixture`)
-- Modify: `apps/web/src/server/public-site/data.ts:689-747` (`getPublicFixture`)
-- Modify: `apps/web/src/components/public-site/live-score-data.ts` (`LiveFixtureData`)
-- Modify: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` (W1; `initial` gains `recent`)
-- Modify: `scripts/smoke.ts` (one `check`)
-- Test: `apps/web/src/server/public-site/__tests__/overlay-recent.test.ts`
-- Do NOT touch: `apps/web/src/app/api/v1/public/fixtures/[id]/route.ts` (the route already returns whatever `publicFixture` returns), the engine, `live-score.tsx`.
+- Create: `apps/web/src/server/overlay/recent.ts` (**under `server/overlay/`, not
+  `server/public-site/`** — it is the overlay projection's own helper)
+- Modify: `apps/web/src/server/overlay/project.ts:159-178` — the projector
+  currently emits exactly `{ status, summary, outcome, lastSeq, venueTz, clock?,
+  cricket? }`; `recent` is added there or it does not reach the overlay
+- Modify: `apps/web/src/server/overlay/load.ts:76-81` — the ledger read and the
+  **new lineup/person read** (see below)
+- Modify: `apps/web/src/components/public-site/live-score-data.ts:59-71`
+  (`OverlayLiveData`, NOT the shared `LiveFixtureData`)
+- Modify: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` (W1; `initial`
+  gains `recent`)
+- Modify: `scripts/smoke.ts` (one `check`, against the OVERLAY endpoint)
+- Test: `apps/web/src/server/overlay/__tests__/recent.test.ts`
+- Do NOT touch: `apps/web/src/server/usecases/public.ts`,
+  `apps/web/src/server/public-site/data.ts`, the public fixture route, the
+  engine, `live-score.tsx`.
+
+**New work this task must carry, briefed as reuse and measured as absent
+(W2-F7):** the consent resolver is NOT reachable from the overlay projection.
+`server/overlay/{load,project}.ts` do no lineup or person read at all. Moment
+lines name PEOPLE, so this task adds that path — `personOf` (type
+`server/public-site/match-centre.ts:185`, built by `makePersonOf` `:214`) fed by
+`readPublicLineups` (`server/public-site/public-lineups.ts:25,41`), which is the
+single caller of `resolvePersonDisplayName` (`lib/name-display.ts:72`). Do NOT
+reach for `maskPublicEntrantNames` (`data.ts:565`) — that is the ENTRANT-name
+resolver and a different thing.
+
+**Do NOT read `data.match_centre` on the overlay payload (W2-F2).** It
+typechecks, because `OverlayLiveData extends LiveFixtureData`, and is always
+`undefined` at runtime — the projector never sets it. A green `tsc` proves
+nothing here.
 
 **Interfaces:**
 
@@ -202,7 +231,21 @@ export const RECENT_PROJECT: Readonly<Record<string, Project>>;      // keyed by
 export function diffClosedSets(before: unknown, after: unknown): RecentDerived["setWon"] | undefined;
 ```
 
-- [ ] **Step 1: RE-PIN.** In the rebased tree run and record in `_INDEX.md`: `grep -an "match_centre\|loadMatchCentre" apps/web/src/server/usecases/public.ts apps/web/src/server/public-site/data.ts` (D7); `grep -an "export" apps/web/src/server/public-site/public-lineups.ts` (D4); `grep -an "^export async function scoreEvent" -A 8 apps/web/src/server/usecases/scoring.ts` and `grep -an "export const ScoreEvent\b\|export const PutLineup\b" -A 8 apps/web/src/server/api-v1/schemas.ts` (the producers' input shapes); `grep -an "youth\|player_name_display" db/migration -r | head` (whether the two columns live on `divisions` or only on the view).
+- [x] **Step 1: RE-PIN — DONE 2026-09-11 (task zero).** Outcomes and findings
+  W2-F1…W2-F12 are in `_INDEX.md` § "2026-09-10 — W2 task zero". Pins that this
+  task builds on, all re-verified at `main` `10c7f94cd`:
+  `project.ts:159-178` (the emitted field set), `load.ts:76-81`,
+  `live-score-data.ts:59-71` (`OverlayLiveData`), `timeline.ts:587` +
+  `:80-92` (`buildTimeline`, `personOf` at `:91`), `match-centre.ts:185`/`:214`
+  (`personOf`, `makePersonOf`), `public-lineups.ts:25,41`,
+  `name-display.ts:72`, `data.ts:284` (`PublicFixture.last_seq`),
+  `V216__score_events.sql:8,14` (gapless `seq`, `unique (fixture_id, seq)`),
+  `append-event.ts:213,341-345` (`match_states.last_seq` upserted per append).
+  Two further facts this task must honour: a void **appends** a `core.void` row
+  so `last_seq` is strictly monotonic and cannot re-fire an old moment (W2-F5),
+  and `resolveVoids` still filters at read, so the projection applies it.
+  **The remaining greps in this step were aimed at `usecases/public.ts` and
+  `public-site/data.ts`, which are no longer this task's files — dropped.**
 
 - [ ] **Step 2: Failing tests** — `apps/web/src/server/public-site/__tests__/overlay-recent.test.ts`. DB-backed, following `apps/web/src/server/usecases/__tests__/add-fixture.test.ts:5-17` (`HAS_DB`, `describe.skipIf`) and the `_rig.ts` seeding helpers. Post through the REAL producers (`scoreEvent`, `putLineup`), never SQL inserts into `score_events`.
 
