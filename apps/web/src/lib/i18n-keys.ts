@@ -2465,6 +2465,7 @@ export type DictionaryKey =
   | "landing.tab.teams"
   | "landing.tables"
   | "landing.tabsLabel"
+  | "landing.today"
   | "launch.failedStart"
   | "launch.schedule"
   | "launch.start"

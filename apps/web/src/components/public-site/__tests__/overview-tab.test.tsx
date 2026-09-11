@@ -51,6 +51,30 @@ import { division, hubDoc, info, m, tableRow, tableView } from "./hub-fixtures";
 
 const dict = en as Dict;
 
+/**
+ * ONE sample of EVERY rung, keyed by kind.
+ *
+ * A `Record<LandingStatus["kind"], …>` and not a `[…] as LandingStatus[]`
+ * (review N3). The array form was a cast, and a cast suppresses exactly the
+ * alarm these loops exist to raise: adding a seventh member to `LandingStatus`
+ * left the array at six, so `overviewPlan`'s `never` default would force a new
+ * `case` to be written while nothing forced a test ROW — which is the
+ * "hand-written coverage list that cannot fail when a rung appears" that
+ * `overview-tab.tsx`'s own header argues against, reintroduced one layer up in
+ * the suite. As a keyed record a new kind is a missing property, and the
+ * typecheck gate reaches test files.
+ */
+const EVERY_RUNG = {
+  empty: { kind: "empty" },
+  live: { kind: "live", n: 1 },
+  next: { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
+  match_day: { kind: "match_day" },
+  finished: { kind: "finished" },
+  dates: { kind: "dates", startsOn: "2026-09-01", endsOn: null },
+} satisfies Record<LandingStatus["kind"], LandingStatus>;
+
+const ALL_RUNGS: LandingStatus[] = Object.values(EVERY_RUNG);
+
 /** One instant, used as `now` everywhere, so every relative sentence and every
  *  ladder rung in this file is reproducible. Midday UTC on 5 September 2026,
  *  the day `hub-fixtures` dates its documents around. */
@@ -480,14 +504,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // that never show next-up could carry any scope at all — a dead value no
     // mutant can kill, which is what the sweep found (setting `finished`'s to
     // "ahead" survived everything).
-    for (const rung of [
-      { kind: "empty" },
-      { kind: "live", n: 1 },
-      { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
-      { kind: "match_day" },
-      { kind: "finished" },
-      { kind: "dates", startsOn: null, endsOn: null },
-    ] as LandingStatus[]) {
+    for (const rung of ALL_RUNGS) {
       const plan = overviewPlan(rung, dict, "en");
       expect(plan.nextUp !== null, `${rung.kind} pairs its scope with its order`).toBe(
         plan.order.includes("next"),
@@ -504,29 +521,18 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // `live` is the only rung that can carry a live match — every other rung
     // sits below `landingStatus`'s own live check — so a `"live"` entry in any
     // other order would be a section that provably cannot render.
-    for (const rung of [
-      { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
-      { kind: "match_day" },
-      { kind: "finished" },
-      { kind: "dates", startsOn: null, endsOn: null },
-      { kind: "empty" },
-    ] as LandingStatus[]) {
+    for (const rung of ALL_RUNGS.filter((r) => r.kind !== "live")) {
       expect(orderOf(rung), rung.kind).not.toContain("live");
     }
   });
 
   it("every rung `landingStatus` can return IS handled — enumerated, not sampled", () => {
     // The positive pair for the throw above, and the thing that would have
-    // caught `match_day` when it was missed.
-    const rungs: LandingStatus[] = [
-      { kind: "empty" },
-      { kind: "live", n: 1 },
-      { kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" },
-      { kind: "match_day" },
-      { kind: "finished" },
-      { kind: "dates", startsOn: "2026-09-01", endsOn: null },
-    ];
-    for (const rung of rungs) {
+    // caught `match_day` when it was missed. Driven off `ALL_RUNGS` rather than
+    // a hand-written list — an ANNOTATED array (`const x: LandingStatus[] = […]`)
+    // has the same hole as the cast N3 was filed about: it accepts six entries
+    // for a seven-member union without complaint.
+    for (const rung of ALL_RUNGS) {
       const plan = overviewPlan(rung, dict, "en");
       expect(plan.copy, rung.kind).not.toBeNull();
       // The copy is a SENTENCE, not the key that was looked up — `t()` returns
@@ -666,6 +672,67 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(sections(h)).toContain("next");
   });
 
+  it("MATCH DAY heads the section 'Today', not 'Next up' — an overdue card is not next", () => {
+    // Review N2. The filter is right on this rung and stays: today's card is
+    // still the day's card. The HEADING was the lie — a fixture that kicked off
+    // three hours ago sitting under "Next up" is the same promise-you-cannot-
+    // keep the `"ahead"` filter exists to stop, one element higher.
+    //
+    // The scope picks the word as well as the window, so the two cannot drift.
+    const matchDay = hubDoc({
+      matches: [m("today-1", "upcoming", "2026-09-05T09:00:00.000Z", "premier")],
+    });
+    const h = render(matchDay);
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="match_day"`);
+    expect(h).toMatch(/id="mh-next-up-label"[^>]*>[^<]*Today</);
+    expect(h).not.toContain(en["landing.nextUp"]);
+
+    // Differential against the rung next door, on the same assertion: a genuine
+    // `next` still reads "Next up". Without this pair, a heading hardcoded to
+    // "Today" would pass the test above.
+    const ahead = hubDoc({
+      matches: [m("u1", "upcoming", "2026-09-05T14:00:00.000Z", "premier")],
+    });
+    const a = render(ahead);
+    expect(tagOf(a, "mh-status")).toContain(`data-kind="next"`);
+    expect(a).toMatch(/id="mh-next-up-label"[^>]*>[^<]*Next up</);
+    expect(a).not.toContain(en["landing.today"]);
+  });
+
+  it("the Today heading is dictionary copy in all four locales, not an English literal", () => {
+    const matchDay = hubDoc({
+      matches: [m("today-1", "upcoming", "2026-09-05T09:00:00.000Z", "premier")],
+    });
+    const h = render(matchDay, { dict: es as Dict, locale: "es" });
+    expect(h).toMatch(new RegExp(`id="mh-next-up-label"[^>]*>[^<]*${es["landing.today"]}`));
+    expect(h).not.toContain("Today");
+  });
+
+  it("while a match is LIVE, an overdue fixture is not smuggled under a 'Next up' heading", () => {
+    // Review N2's other half: the `live` rung's scope was pinned by VALUE only,
+    // so no render test said which fixtures its rail actually shows. The
+    // document carries a live match AND an overdue-today upcoming one.
+    //
+    // `live: "ahead"` is a CHOICE, not forced by `landingStatus` (which returns
+    // at its live check and never computes a next fixture): while something is
+    // in play the live rail is the story, and a section headed "Next up" has to
+    // mean what it says. Nothing is hidden — the overdue fixture surfaces under
+    // "Today" the moment the ladder drops to `match_day`, which the test above
+    // pins.
+    const doc = hubDoc({
+      matches: [
+        m("now-live", "live", "2026-09-05T11:00:00.000Z", "premier"),
+        m("overdue", "upcoming", "2026-09-05T09:00:00.000Z", "premier"),
+      ],
+    });
+    const h = render(doc);
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="live"`);
+    expect(cardIds(h, "live-now")).toEqual(["now-live"]);
+    expect(cardIds(h, "next-up")).toEqual([]);
+    // Absent, not an empty shell headed with a promise.
+    expect(sections(h)).not.toContain("next");
+  });
+
   it("MATCH DAY keeps today's overdue fixtures — the rung would otherwise empty its own rail", () => {
     // The other half of the same decision, and the reason the scope is a RUNG
     // decision rather than one predicate. `match_day` is reached only when no
@@ -728,6 +795,35 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(() => nextUpMatches(one, "today", Number.NaN)).not.toThrow();
     expect(nextUpMatches(one, "today", Number.NaN)).toEqual([]);
     expect(() => nextUpMatches(one, "ahead", Number.NaN)).not.toThrow();
+  });
+
+  it("the rail and the status line agree at EVERY clock value, NaN included", () => {
+    // Review N1. The two halves guarded the same boundary in OPPOSITE
+    // directions: `landingStatus` excludes on `at < nowMs`, which is false for
+    // everything when `now` is NaN, so it returned `{kind:"next"}`; the rail
+    // included on `at >= now`, which is ALSO false for everything, so it
+    // rendered nothing. A sentence promising a kick-off above a panel with no
+    // sections at all — I1's defect in the quiet direction, and the round that
+    // fixed I1 added a NaN guard and a test that implied this case was handled.
+    //
+    // `!(at < now)` mirrors the exclusion instead of re-deriving its negation,
+    // so the agreement is TOTAL rather than true-for-finite-clocks.
+    const doc = hubDoc({
+      matches: [m("u1", "upcoming", "2026-09-05T14:00:00.000Z", "premier")],
+    });
+    const h = render(doc, { now: Number.NaN });
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="next"`);
+    // The promise is kept: the fixture the status line is about is on screen.
+    expect(cardIds(h, "next-up")).toEqual(["u1"]);
+    expect(sections(h)).toContain("next");
+    // And the unit-level statement of the same rule, so the mirroring is pinned
+    // where it is written and not only through a render.
+    expect(nextUpMatches(doc.matches, "ahead", Number.NaN).map((x) => x.fixtureId)).toEqual(["u1"]);
+    // A `scheduledAt` that will not parse is still excluded by BOTH halves —
+    // the `Number.isNaN(at)` clause mirrors `landingStatus`'s `at === null`.
+    const bad = [m("junk", "upcoming", "not-a-date", "premier")];
+    expect(nextUpMatches(bad, "ahead", Number.NaN)).toEqual([]);
+    expect(nextUpMatches(bad, "ahead", NOW)).toEqual([]);
   });
 
   it("a fixture starting at EXACTLY now is still next — no one-millisecond hole", () => {

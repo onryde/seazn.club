@@ -180,21 +180,53 @@ const PRESEASON_ORDER = [
  * has to be, because the two rungs that render the rail mean different things
  * by "next".
  *
- *  • `"ahead"` — still in front of us. This is `landingStatus`'s own rule for
- *    its `next` rung, restated where the rail is picked so the two cannot
- *    disagree. They DID disagree, and it was visible on screen: `bucket` is
- *    derived from the wire status alone (`lib/matches-hub.ts:39-41` — anything
- *    not `in_play` and not terminal is `upcoming`), so a fixture nobody started
- *    stays `upcoming` for ever, and a rail filtered on the bucket put a FOUR
- *    DAY OLD card directly under a status line announcing a different kick-off.
+ *  • `"ahead"` — still in front of us.
+ *
+ *    On the `next` rung this is FORCED: it is `landingStatus`'s own rule,
+ *    restated where the rail is picked so the two cannot disagree. They DID
+ *    disagree, and it was visible on screen — `bucket` is derived from the wire
+ *    status alone (`lib/matches-hub.ts:39-41`: anything not `in_play` and not
+ *    terminal is `upcoming`), so a fixture nobody started stays `upcoming` for
+ *    ever, and a rail filtered on the bucket put a FOUR DAY OLD card directly
+ *    under a status line announcing a different kick-off.
+ *
+ *    On the `live` rung it is CHOSEN, and the earlier version of this comment
+ *    claimed the same forcing for both (review N2). It is not forced there:
+ *    `landingStatus` returns at its live check and never computes a next
+ *    fixture, and the live copy names no fixture, so there is no sibling rule
+ *    to match. The reason is its own: while something is in play the live rail
+ *    IS the story, and a section headed "Next up" has to mean what it says.
+ *    Today's overdue fixtures are not hidden by this — they surface under
+ *    `"today"` the moment the last live match ends and the ladder drops to
+ *    `match_day`.
+ *
  *  • `"today"` — on the fixture's own venue day, which is what `match_day`
  *    exists to say. That rung is reached only when NO upcoming fixture is ahead
  *    of `now` (`next` is checked first and would have won), so "ahead" there
  *    would empty the rail and silently drop the rung's whole point: the
  *    afternoon of the one day a spectator came to watch. Every fixture it shows
- *    is therefore overdue, deliberately.
+ *    is therefore overdue, deliberately — which is why the scope also picks the
+ *    HEADING (`NEXT_UP_LABEL`). A fixture that kicked off three hours ago is
+ *    the day's match; it is not "next", and a section calling it that is the
+ *    same promise-you-cannot-keep the `"ahead"` filter exists to stop.
  */
 export type NextUpScope = "ahead" | "today";
+
+/**
+ * The section's own heading, chosen by the SAME scope that chooses its window
+ * — so the label and the contents cannot describe different things.
+ *
+ * `landing.today` was added for this (all four locales), copied verbatim from
+ * `ui.json`'s `runsheet.filter.today` so the product has one translation of the
+ * word rather than two. Deliberately NOT `landing.status.matchDay`, which is
+ * the right words but already the sentence immediately above this heading on
+ * exactly this rung — the same duplicate-announcement problem the
+ * `aria-labelledby` rewrite removed.
+ */
+const NEXT_UP_LABEL: Record<NextUpScope, string> = {
+  ahead: "landing.nextUp",
+  today: "landing.today",
+};
 
 export interface OverviewPlan {
   /** The status sentence, or null when the rung has nothing to say — which is
@@ -363,19 +395,35 @@ export function nextUpMatches<
 >(matches: readonly T[], scope: NextUpScope | null, now: number): T[] {
   if (scope === null) return [];
   // Guarded before `toISOString()`, which THROWS on an Invalid Date — `now` is
-  // a caller's value, and an unusable clock must mean "nothing to show" rather
-  // than an exception out of a render. `landingStatus` guards the same way at
-  // the same boundary (`lib/matches-hub.ts:324`).
+  // a caller's value, and an unusable clock must not become an exception out of
+  // a render. `landingStatus` guards the same way at the same boundary
+  // (`lib/matches-hub.ts:324`), and the agreement survives it: at `NaN` this
+  // yields `null`, so no fixture's day can match — and `landingStatus`'s
+  // `isMatchDay` compares against the same `null` and is false too, so the
+  // `match_day` rung cannot be reached with a NaN clock and this branch cannot
+  // run with one. It is reachable from a DIRECT call, which is where it is
+  // tested.
   const nowIso = Number.isNaN(now) ? null : new Date(now).toISOString();
   return sortHubMatches(
     matches.filter((m) => {
       if (m.bucket !== "upcoming" || m.scheduledAt === null) return false;
       if (scope === "ahead") {
         const at = Date.parse(m.scheduledAt);
-        // Inclusive at the boundary, matching `landingStatus`: a fixture
-        // starting at exactly `now` is still next, so there is no
-        // one-millisecond hole between the two sections.
-        return !Number.isNaN(at) && at >= now;
+        // `!(at < now)`, NOT `at >= now`, and the difference is the whole point
+        // of writing it this way: it is `landingStatus`'s OWN exclusion
+        // (`lib/matches-hub.ts:323` — `if (at === null || at < nowMs) continue`)
+        // mirrored rather than re-derived. The two are identical for every
+        // finite clock, and they differ at exactly one value — `NaN`, where
+        // every comparison is false, so `at >= now` excluded EVERYTHING while
+        // `landingStatus` excluded NOTHING and still returned `{kind:"next"}`.
+        // That inversion rendered a sentence promising a kick-off above a panel
+        // with no sections at all (review N1): I1's own defect, in the quiet
+        // direction. Mirroring the exclusion makes the agreement TOTAL rather
+        // than true-for-finite-clocks, which is what the invariant claims.
+        //
+        // `Number.isNaN(at)` stays, and mirrors the same line's `at === null`:
+        // a `scheduledAt` that will not parse is excluded by both halves.
+        return !Number.isNaN(at) && !(at < now);
       }
       // The fixture's OWN venue day against the same instant — never the
       // viewer's zone and never the competition's, the rule `dayKeyInZone`
@@ -428,7 +476,10 @@ export function OverviewTab({
   // renders — see `NextUpScope`. Reading the scope off the same plan as the
   // copy is what keeps the rail and the sentence above it talking about the
   // same fixture.
-  const upNext = nextUpMatches(doc.matches, plan.nextUp, now);
+  // A plain const so the section below narrows on it — the scope decides the
+  // window AND the heading, and both reads want it non-null together.
+  const scope = plan.nextUp;
+  const upNext = nextUpMatches(doc.matches, scope, now);
 
   // What each section would render, or null when it has nothing to say. Built
   // for every section regardless of the ladder, and then INTERSECTED with the
@@ -475,10 +526,18 @@ export function OverviewTab({
         </>
       ),
     next:
-      upNext.length === 0 ? null : (
+      // Both conditions, and both mean something: `scope === null` is the rungs
+      // that do not offer this section at all, `upNext.length === 0` is a rung
+      // that does and has nothing to put in it. The first also narrows `scope`
+      // for the heading lookup below.
+      scope === null || upNext.length === 0 ? null : (
         <>
           <h2 id="mh-next-up-label" className={HEADING_CLASS}>
-            {t(dict, "landing.nextUp")}
+            {/* The scope picks the WORD as well as the window — see
+                `NEXT_UP_LABEL`. On `match_day` every fixture here kicked off
+                hours ago, and "Next up" over an overdue card is a promise the
+                page cannot keep (review N2). */}
+            {t(dict, NEXT_UP_LABEL[scope])}
           </h2>
           <ul
             data-testid="mh-next-up"
