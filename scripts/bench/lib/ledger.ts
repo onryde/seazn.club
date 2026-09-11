@@ -56,7 +56,16 @@ function dataOrThrow(result: RawResult, path: string, label: string): unknown {
         `${err?.code ?? "(no code)"} — ${err?.message ?? "(no message)"}`,
     );
   }
-  return (result.json as unknown as { data?: unknown })?.data;
+  // A 200 that carried no `data` is an unrecognised shape, and it has to be
+  // just as loud as a refusal. Falling through would hand the driver an empty
+  // ledger — which reads downstream as "the scorer's taps recorded nothing",
+  // a data defect pointing at entirely the wrong place. Same shape and same
+  // message as the sibling `dataOf` (`oracle.ts:83-89`).
+  const data = (result.json as unknown as { data?: unknown })?.data;
+  if (data === undefined || data === null) {
+    throw new Error(`ledger: ${label} response for ${path} carried no data`);
+  }
+  return data;
 }
 
 export interface LedgerRow {
@@ -66,13 +75,23 @@ export interface LedgerRow {
   readonly payload: unknown;
 }
 
-function rowsOf(data: unknown): readonly LedgerRow[] {
-  if (!Array.isArray(data)) return [];
+function rowsOf(data: unknown, sinceSeq: number, path: string): readonly LedgerRow[] {
+  if (!Array.isArray(data)) {
+    throw new Error(
+      `ledger: fixture events response for ${path} was not a list of rows (got ${typeof data})`,
+    );
+  }
   const rows: LedgerRow[] = [];
   for (const item of data) {
     if (typeof item !== "object" || item === null) continue;
     const r = item as Record<string, unknown>;
     if (typeof r.seq !== "number" || typeof r.type !== "string") continue;
+    // `since_seq` is EXCLUSIVE — `listEvents` selects `seq > ${sinceSeq}`
+    // (`fixtures.ts:503`). Enforced here rather than merely documented,
+    // because the driver spends this contract as "exactly one new row per
+    // tap": a row AT the anchor drifting through would surface there as a
+    // phantom extra event, blamed on the pad rather than on the read.
+    if (r.seq <= sinceSeq) continue;
     // Narrowed rather than `String(r.id ?? "")`: `r.id` is `unknown` here, and
     // coercing an object id would mint the literal string "[object Object]"
     // and hand it to the driver as a real event id (@typescript-eslint/
@@ -99,7 +118,7 @@ export async function fetchFixtureLedger(
 ): Promise<readonly LedgerRow[]> {
   const path = `/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`;
   const result = await transport.raw(base, session, path, "GET");
-  return rowsOf(dataOrThrow(result, path, "fixture events"));
+  return rowsOf(dataOrThrow(result, path, "fixture events"), sinceSeq, path);
 }
 
 /**
@@ -118,7 +137,7 @@ export async function fetchFixtureStatus(
 ): Promise<{ status: string; lastSeq: number }> {
   const path = `/api/v1/fixtures/${fixtureId}/state`;
   const result = await transport.raw(base, session, path, "GET");
-  const data = (dataOrThrow(result, path, "fixture state") ?? {}) as Record<string, unknown>;
+  const data = dataOrThrow(result, path, "fixture state") as Record<string, unknown>;
   // `(absent)` rather than a plausible-looking default: an unrecognised state
   // shape has to READ as unrecognised downstream (oracle.ts's own convention),
   // never as a fixture that merely hasn't started.

@@ -31,6 +31,19 @@ function transportRefusing(status: number, code: string, message: string) {
   };
 }
 
+/** A 200 whose envelope is not what this module expects — no `data` at all, or
+ *  a `data` of the wrong shape. Distinct from a refusal: the call "succeeded". */
+function transportReturningBody(json: { ok: boolean; data?: unknown }) {
+  const calls: string[] = [];
+  return {
+    calls,
+    raw: async (_base: string, _s: unknown, path: string) => {
+      calls.push(path);
+      return { status: 200, json };
+    },
+  };
+}
+
 describe("fetchFixtureLedger", () => {
   it("asks only for rows after the seq it was given, and returns them in seq order", async () => {
     const t = transportReturning({
@@ -92,6 +105,40 @@ describe("fetchFixtureLedger", () => {
     expect(rows.map((r) => r.id)).toEqual(["e1", ""]);
     expect(rows.map((r) => r.seq)).toEqual([1, 2]);
   });
+
+  // `since_seq` is exclusive server-side (`fixtures.ts:503`). The driver reads
+  // "one new row per tap" off this, so a row at the anchor coming back would
+  // read as a phantom extra event.
+  it("excludes a row AT the since_seq anchor and includes the one past it", async () => {
+    const t = transportReturning({
+      "/api/v1/fixtures/f1/events?since_seq=3": [
+        { id: "e3", seq: 3, type: "carrom.board.summary", payload: null },
+        { id: "e4", seq: 4, type: "carrom.board.summary", payload: null },
+      ],
+    });
+    const rows = await fetchFixtureLedger("http://x", newSession(), "f1", 3, t);
+    expect(rows.map((r) => r.id)).toEqual(["e4"]);
+    expect(rows.map((r) => r.seq)).toEqual([4]);
+  });
+
+  it("throws when a 200 carries no data instead of reporting an empty ledger", async () => {
+    const t = transportReturningBody({ ok: true });
+    const err = await fetchFixtureLedger("http://x", newSession(), "f1", 0, t).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("carried no data");
+    expect((err as Error).message).toContain("/api/v1/fixtures/f1/events?since_seq=0");
+  });
+
+  it("throws when a 200's data is not a list of rows", async () => {
+    const t = transportReturningBody({ ok: true, data: { rows: [] } });
+    const err = await fetchFixtureLedger("http://x", newSession(), "f1", 0, t).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("was not a list of rows");
+  });
 });
 
 describe("fetchFixtureStatus", () => {
@@ -126,6 +173,16 @@ describe("fetchFixtureStatus", () => {
       status: "in_play",
       lastSeq: 0,
     });
+  });
+
+  it("throws when a 200 carries no data instead of reporting a fixture at seq 0", async () => {
+    const t = transportReturningBody({ ok: true });
+    const err = await fetchFixtureStatus("http://x", newSession(), "f1", t).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("carried no data");
+    expect((err as Error).message).toContain("/api/v1/fixtures/f1/state");
   });
 
   it("throws on a refusal instead of reporting a scheduled fixture at seq 0", async () => {
