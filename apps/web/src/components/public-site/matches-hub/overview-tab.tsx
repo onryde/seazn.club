@@ -526,10 +526,16 @@ export function OverviewTab({
         </>
       ),
     next:
-      // Both conditions, and both mean something: `scope === null` is the rungs
-      // that do not offer this section at all, `upNext.length === 0` is a rung
-      // that does and has nothing to put in it. The first also narrows `scope`
-      // for the heading lookup below.
+      // `scope === null` is RUNTIME-REDUNDANT and is here to narrow the type
+      // for the heading lookup below, which is worth saying plainly rather than
+      // claiming two independent guards: `nextUpMatches` already returns `[]`
+      // for a null scope, so `upNext.length === 0` covers the same documents.
+      //
+      // It is not decoration either, and the sweep settled which: deleting it
+      // SURVIVES all 52 tests here and is caught by `tsc` —
+      // `TS2538: Type 'null' cannot be used as an index type`. A guard whose
+      // only enforcement is the type-checker is fine; a guard nobody enforces
+      // is the thing AGENTS.md 3 is about, and this is not that.
       scope === null || upNext.length === 0 ? null : (
         <>
           <h2 id="mh-next-up-label" className={HEADING_CLASS}>
