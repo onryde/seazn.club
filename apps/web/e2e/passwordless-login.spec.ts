@@ -9,7 +9,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // (e.g. staging) send real email instead, so there is nothing to assert there.
 test.skip(PROD_TARGET, "dev link exposure is disabled on production targets");
 
-const email = `e2e-magic-${Date.now().toString(36)}@example.com`;
+const email = `delivered+e2e-magic-${Date.now().toString(36)}@resend.dev`;
 
 test("passwordless login: emailing a link creates the account and signs in", async ({
   page,
@@ -49,7 +49,7 @@ test("magic-link threads the invite-page `next` redirect through sign-in", async
   page,
 }) => {
   const res = await request.post("/api/auth/magic-link", {
-    data: { email: `e2e-next-${Date.now().toString(36)}@example.com`, next: "/join/some-token" },
+    data: { email: `delivered+e2e-next-${Date.now().toString(36)}@resend.dev`, next: "/join/some-token" },
   });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();

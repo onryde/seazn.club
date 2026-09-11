@@ -163,7 +163,7 @@ test("a pooled solo sign-up is placed through the real Registrants-tab banner an
   // the ENTRY journey itself is rs007's charter).
   const teamName = `RS012 Team A ${suffix}`;
   const team = await apiJson<SubmitResult>(request, `/api/v1/public/orgs/${org.slug}/competitions/${compSlug}/register`, "POST", {
-    contact: { name: `RS012 Captain A ${suffix}`, email: `rs012-captain-a-${suffix}@example.com` },
+    contact: { name: `RS012 Captain A ${suffix}`, email: `delivered+rs012-captain-a-${suffix}@resend.dev` },
     privacy_consent: true,
     entries: [
       {
@@ -180,7 +180,7 @@ test("a pooled solo sign-up is placed through the real Registrants-tab banner an
   // The solo sign-up under test — one real person, waiting.
   const soloName = `RS012 Solo A ${suffix}`;
   const solo = await apiJson<SubmitResult>(request, `/api/v1/public/orgs/${org.slug}/competitions/${compSlug}/register`, "POST", {
-    contact: { name: soloName, email: `rs012-solo-a-${suffix}@example.com` },
+    contact: { name: soloName, email: `delivered+rs012-solo-a-${suffix}@resend.dev` },
     privacy_consent: true,
     entries: [
       {
@@ -301,7 +301,7 @@ test("an unplaced solo sign-up sees its own deadline, is auto-withdrawn once it 
   // Solo sign-up #1 — fills the pool bound to exactly 1/1.
   const solo1Name = `RS012 Solo B1 ${suffix}`;
   const solo1 = await apiJson<SubmitResult>(request, `/api/v1/public/orgs/${org.slug}/competitions/${compSlug}/register`, "POST", {
-    contact: { name: solo1Name, email: `rs012-solo-b1-${suffix}@example.com` },
+    contact: { name: solo1Name, email: `delivered+rs012-solo-b1-${suffix}@resend.dev` },
     privacy_consent: true,
     entries: [
       {
@@ -353,7 +353,7 @@ test("an unplaced solo sign-up sees its own deadline, is auto-withdrawn once it 
 
       // step 1: WHO — no "I'm playing" tick, so no DOB is required.
       await anon2.locator("#reg-who-name").fill(`RS012 Solo B2 ${suffix}`);
-      await anon2.locator("#reg-who-email").fill(`rs012-solo-b2-${suffix}@example.com`);
+      await anon2.locator("#reg-who-email").fill(`delivered+rs012-solo-b2-${suffix}@resend.dev`);
       await shot(anon2, "05-pool-full-who");
       await anon2.getByRole("button", { name: /^next$/i }).click();
 

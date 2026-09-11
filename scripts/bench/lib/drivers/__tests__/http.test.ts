@@ -59,7 +59,7 @@ const division: RegistrationDivisionTarget = {
 // Recorded fixture: a straightforward individual entry, registering the
 // contact themselves (RS006's common case — singles).
 const soloEntry: RegistrationEntry = {
-  contact: { name: "Ada Lovelace", email: "ada@example.com" },
+  contact: { name: "Ada Lovelace", email: "delivered+ada@resend.dev" },
   privacyConsent: true,
   mediaConsent: false,
   entrantKind: "individual",
@@ -86,7 +86,7 @@ describe("httpCaptain().enter()", () => {
     expect(body.website).toBe("");
     expect(body.contact).toEqual({
       name: "Ada Lovelace",
-      email: "ada@example.com",
+      email: "delivered+ada@resend.dev",
       dob: null,
       gender: null,
       guardian_name: null,

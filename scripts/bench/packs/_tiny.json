@@ -1177,11 +1177,11 @@
   "claimInvites": [
     {
       "person": "p-ana",
-      "email": "ana.alvarez.claim@example.com"
+      "email": "delivered+ana.alvarez.claim@resend.dev"
     },
     {
       "person": "p-cho",
-      "email": "cho.minjun.claim@example.com"
+      "email": "delivered+cho.minjun.claim@resend.dev"
     }
   ],
   "expected": {

@@ -147,7 +147,7 @@ const OPEN_ENDS_ON = "2099-12-31";
  *  sibling competitions some of the tests below seed alongside it. */
 async function seedRig(label: string): Promise<Rig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `ep-${label}-${tag}@example.com`;
+  const ownerEmail = `delivered+ep-${label}-${tag}@resend.dev`;
   const orgSlug = `ep-${label}-org-${tag}`;
   const compSlug = `ep-${label}-cup-${tag}`;
   return withDb(async (sql) => {

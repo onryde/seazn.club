@@ -109,12 +109,12 @@ test("configure, register, join, waitlist, approve, opt-out — every screen agr
   };
 
   const captainName = `Captain ${TAG}`;
-  const captainEmail = `xflow-captain-${TAG}@example.com`;
+  const captainEmail = `delivered+xflow-captain-${TAG}@resend.dev`;
   const mateName = `Mate ${TAG}`;
-  const mateEmail = `xflow-mate-${TAG}@example.com`;
+  const mateEmail = `delivered+xflow-mate-${TAG}@resend.dev`;
   const teamName = `Cross Flow Team ${TAG}`;
   const overflowCaptainName = `Overflow ${TAG}`;
-  const overflowEmail = `xflow-overflow-${TAG}@example.com`;
+  const overflowEmail = `delivered+xflow-overflow-${TAG}@resend.dev`;
   const overflowTeamName = `Cross Flow Overflow ${TAG}`;
   const mateMasked = expectedMask(mateName);
 

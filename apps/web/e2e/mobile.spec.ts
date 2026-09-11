@@ -372,7 +372,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     access_token: string;
     entries: { join_code: string | null }[];
   }>(request, `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`, "POST", {
-    contact: { name: `Mobile Captain ${TAG}`, email: `mobile-captain-${TAG}@example.com` },
+    contact: { name: `Mobile Captain ${TAG}`, email: `delivered+mobile-captain-${TAG}@resend.dev` },
     privacy_consent: true,
     entries: [
       {
@@ -407,7 +407,7 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
     `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`,
     "POST",
     {
-      contact: { name: `Mobile Solo ${TAG}`, email: `mobile-solo-${TAG}@example.com` },
+      contact: { name: `Mobile Solo ${TAG}`, email: `delivered+mobile-solo-${TAG}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -1317,7 +1317,7 @@ test("Directory: the active tab is scrolled into view at this width", async ({ p
 test("dual-role header (#516): organiser + claimed player profile holds no horizontal scroll", async ({
   browser,
 }) => {
-  const email = `e2e-dualrole-${TAG}@example.com`;
+  const email = `delivered+e2e-dualrole-${TAG}@resend.dev`;
   const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined });
   try {
     const dual = await ctx.newPage();
@@ -2900,7 +2900,7 @@ let p6DivisionId = "";
 // account per width project. The org-surface test is read-only but must log
 // back into the SAME account as setup to see the division it created, so it
 // reuses this identity rather than computing a distinct one.
-const P6_FIX1_EMAIL = () => `p6-fix1-${TAG}-${projectTag()}@example.com`;
+const P6_FIX1_EMAIL = () => `delivered+p6-fix1-${TAG}-${projectTag()}@resend.dev`;
 
 test("P6 setup: a fresh org with an up-front TBD knockout fixture (seeded, group stage never generated)", async ({
   page,
@@ -3044,7 +3044,7 @@ test("P6 public surface: a visitor sees the resolved slot label in the ORG's own
 // collided), and the destructive-edit test MUTATES too (generates then
 // regenerates a stage's fixtures). Each width project needs its own account
 // so its confirm()/regenerate() can't be raced by another project's.
-const P6B_EMAIL = () => `p6b-${TAG}-${projectTag()}@example.com`;
+const P6B_EMAIL = () => `delivered+p6b-${TAG}-${projectTag()}@resend.dev`;
 let p6bDivisionId = "";
 const P6B_COURT = "Center Court E2E";
 const P6B_ENTRANTS = ["Nova Q", "Orion Q", "Piper Q", "Reeve Q"];
@@ -3399,7 +3399,7 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
 // and share helpers.ts's per-PROCESS `TAG`, so an un-tagged email can log two
 // of them into the same user/org/division (see the P6 comment above).
 // ---------------------------------------------------------------------------
-const REG_HUB_MOBILE_EMAIL = () => `reghub-${TAG}-${projectTag()}@example.com`;
+const REG_HUB_MOBILE_EMAIL = () => `delivered+reghub-${TAG}-${projectTag()}@resend.dev`;
 
 test("registration hub: the config panel has no horizontal scroll, open", async ({ page }) => {
   await loginUi(page, REG_HUB_MOBILE_EMAIL());
@@ -3448,7 +3448,7 @@ test("registration hub: the config panel has no horizontal scroll, open", async 
 // SAME reason that test's own comment gives: it MUTATES (via the public
 // register API) and TAG is per-PROCESS, not per-project.
 // ---------------------------------------------------------------------------
-const REGISTRANTS_MOBILE_EMAIL = () => `regtab-${TAG}-${projectTag()}@example.com`;
+const REGISTRANTS_MOBILE_EMAIL = () => `delivered+regtab-${TAG}-${projectTag()}@resend.dev`;
 
 test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar overflow, at this width", async ({
   page,
@@ -3510,7 +3510,7 @@ test("registrants tab: no-scroll, grid/card switch, expanded-row and filter-bar 
     `/api/v1/public/orgs/${org.slug}/competitions/${comp.data!.slug}/register`,
     "POST",
     {
-      contact: { name: captainName, email: `mobile-captain-${TAG}-${projectTag()}@example.com` },
+      contact: { name: captainName, email: `delivered+mobile-captain-${TAG}-${projectTag()}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -3717,7 +3717,7 @@ test("register stepper: ENTRIES/DETAILS/CONSENT/REVIEW hold at this width, no ho
       // is unaffected.
       await expect(anon.locator("#reg-who-name")).toBeVisible({ timeout: 20_000 });
       await anon.locator("#reg-who-name").fill(`Mobile Stepper Contact ${TAG}`);
-      await anon.locator("#reg-who-email").fill(`stepper-${TAG}-${projectTag()}@example.com`);
+      await anon.locator("#reg-who-email").fill(`delivered+stepper-${TAG}-${projectTag()}@resend.dev`);
       await expect(
         anon.locator("#reg-who-dob"),
         "a contact who is not playing must NOT be asked for their own date of birth",

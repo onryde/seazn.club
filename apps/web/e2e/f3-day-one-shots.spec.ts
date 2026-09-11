@@ -87,7 +87,7 @@ const GENERIC_CONFIG = {
 test("F3 Task 5a/5b — roster-drift banner + Rebuild button, real drift state, 1280/768/320", async ({
   page,
 }) => {
-  await loginUi(page, `f3-drift-${Date.now()}@example.com`, "/");
+  await loginUi(page, `delivered+f3-drift-${Date.now()}@resend.dev`, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
     name: `F3 Drift Shots ${Date.now()}`,
   });
@@ -235,7 +235,7 @@ test("F3 Task 5a/5b — roster-drift banner + Rebuild button, real drift state, 
 test("F3 Task 5c — pending-seed-proposal dot on the Fixtures tab, visible from Standings, 1280/768/320", async ({
   page,
 }) => {
-  await loginUi(page, `f3-seed-dot-${Date.now()}@example.com`, "/");
+  await loginUi(page, `delivered+f3-seed-dot-${Date.now()}@resend.dev`, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
     name: `F3 Seed Dot Shots ${Date.now()}`,
   });

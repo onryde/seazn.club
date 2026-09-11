@@ -63,7 +63,7 @@ test("directory Officials tab: invite falls back to a copyable claim link", asyn
 
   const row = page.locator("li").filter({ hasText: name });
   await row.getByRole("button", { name: "Invite" }).click();
-  await row.getByLabel("Email", { exact: true }).fill(`ref_${TAG}@example.com`);
+  await row.getByLabel("Email", { exact: true }).fill(`delivered+ref_${TAG}@resend.dev`);
   await row.getByRole("button", { name: "Send invite" }).click();
 
   // this worktree's RESEND_API_KEY is blank — send always fails, so the
@@ -156,7 +156,7 @@ test("schedule Officials tab: compact roster strip reflects the pool and links t
 // door), (c) a non-member official can't reach an organiser-only, non-fixture
 // page even once they hold an accepted assignment elsewhere.
 test.describe.serial("officiating: accept, score, and access boundaries", () => {
-  const officialEmail = `e2e-official-${TAG}@example.com`;
+  const officialEmail = `delivered+e2e-official-${TAG}@resend.dev`;
   let divisionId: string;
   let fixtureA: string; // assigned + accepted → scored via the console
   let fixtureB: string; // assigned, never accepted → stays blocked

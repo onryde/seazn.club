@@ -36,7 +36,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test("a French-locale org's day-one timetable export still renders (F5 remainder)", async ({
   page,
 }) => {
-  await loginUi(page, `f5-fr-locale-${Date.now()}@example.com`, "/");
+  await loginUi(page, `delivered+f5-fr-locale-${Date.now()}@resend.dev`, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
     name: `F5 FR Locale ${Date.now()}`,
   });

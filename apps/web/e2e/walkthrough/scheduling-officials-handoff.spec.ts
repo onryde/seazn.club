@@ -315,7 +315,7 @@ test.describe("the officials handoff, both people driven", () => {
   let officialPage: Page;
 
   const officialName = `Official ${TAG}`;
-  const officialEmail = `e2e-official-handoff-${TAG}@example.com`;
+  const officialEmail = `delivered+e2e-official-handoff-${TAG}@resend.dev`;
   let officialId = "";
 
   const DAY_A = ymd(Date.now() + 20 * 86_400_000);

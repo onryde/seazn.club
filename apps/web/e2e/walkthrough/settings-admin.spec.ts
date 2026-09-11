@@ -852,7 +852,7 @@ test.describe("legacy settings redirects", () => {
 
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const token = `e2e-emailchange-${stamp}`;
-    const newEmail = `e2e-emailchange-${stamp}@example.com`;
+    const newEmail = `delivered+e2e-emailchange-${stamp}@resend.dev`;
 
     const currentEmail = await withDb(async (sql) => {
       const [row] = await sql<{ email: string }[]>`

@@ -3126,7 +3126,7 @@ for (const sport of SPORTS) {
     const tag = `${TAG}${Math.random().toString(36).slice(2, 6)}`;
     const dir = join(GALLERY_DIR, sport.slug);
     mkdirSync(dir, { recursive: true });
-    const email = `gallery-${sport.slug}-${tag}@example.com`;
+    const email = `delivered+gallery-${sport.slug}-${tag}@resend.dev`;
     const measurements: Measurement320[] = [];
 
     await armCookieBypass(page);
@@ -3295,7 +3295,7 @@ test("gallery: venues (P8)", async ({ page }) => {
   const tag = `${TAG}${Math.random().toString(36).slice(2, 6)}`;
   const dir = join(GALLERY_DIR, "venues");
   mkdirSync(dir, { recursive: true });
-  const email = `gallery-venues-${tag}@example.com`;
+  const email = `delivered+gallery-venues-${tag}@resend.dev`;
 
   await armCookieBypass(page);
   await loginUi(page, email);

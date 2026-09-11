@@ -483,12 +483,12 @@ describe("applyOrganiserActions", () => {
 
 describe("captainEmail", () => {
   it("is deterministic per entry per run", () => {
-    expect(captainEmail("e-1", "run7")).toBe("bench-captain-e-1-run7@example.com");
+    expect(captainEmail("e-1", "run7")).toBe("delivered+bench-captain-e-1-run7@resend.dev");
     expect(captainEmail("e-1", "run7")).toBe(captainEmail("e-1", "run7"));
   });
 
   it("sanitizes characters outside [A-Za-z0-9_.-]", () => {
-    expect(captainEmail("e:1/x y", "run7")).toBe("bench-captain-e-1-x-y-run7@example.com");
+    expect(captainEmail("e:1/x y", "run7")).toBe("delivered+bench-captain-e-1-x-y-run7@resend.dev");
   });
 });
 

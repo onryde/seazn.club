@@ -145,7 +145,7 @@ async function seedOrg(opts: {
   subUpdatedAt?: string;
 }): Promise<SeededOrg> {
   const tag = randomBytes(5).toString("hex");
-  const ownerEmail = `ph-owner-${TAG}-${tag}@example.com`;
+  const ownerEmail = `delivered+ph-owner-${TAG}-${tag}@resend.dev`;
   return withDb(async (sql) => {
     const [{ id: ownerId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified)
@@ -287,7 +287,7 @@ async function submitPublicRegistration(
     {
       contact: {
         name: who,
-        email: `${who.toLowerCase().replace(/\W+/g, "-")}-${randomBytes(3).toString("hex")}@example.com`,
+        email: `delivered+${who.toLowerCase().replace(/\W+/g, "-")}-${randomBytes(3).toString("hex")}@resend.dev`,
       },
       privacy_consent: true,
       entries: [

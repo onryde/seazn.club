@@ -284,8 +284,8 @@ describe("buildSeedPlan — the T4 generalisation, exercised on a REAL two-divis
     expect(eli.assignments).toEqual([]);
 
     expect(plan.claimInvites).toEqual([
-      { personRef: "p-ana", email: "ana.alvarez.claim@example.com" },
-      { personRef: "p-cho", email: "cho.minjun.claim@example.com" },
+      { personRef: "p-ana", email: "delivered+ana.alvarez.claim@resend.dev" },
+      { personRef: "p-cho", email: "delivered+cho.minjun.claim@resend.dev" },
     ]);
   });
 });

@@ -158,7 +158,7 @@ test("RS006 — organiser settings, team entry, Stripe Connect payment", async (
 
     // ---- BEAT 2 — WHO ----------------------------------------------------
     await anon.locator("#reg-who-name").fill("Priya Raman");
-    await anon.locator("#reg-who-email").fill(`priya-${Date.now()}@example.com`);
+    await anon.locator("#reg-who-email").fill(`delivered+priya-${Date.now()}@resend.dev`);
     await anon.getByRole("checkbox").first().check(); // "I'm playing"
     await expect(anon.locator("#reg-who-dob")).toBeVisible();
     await anon.locator("#reg-who-dob").fill("1994-03-22");

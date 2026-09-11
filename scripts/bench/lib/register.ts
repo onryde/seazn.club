@@ -105,7 +105,7 @@ export function resolveEntryMode(declaredEntry: EntryMode, suiteKey: string, cli
  */
 export function captainEmail(entryExtKey: string, runTag: string): string {
   const safe = entryExtKey.replace(/[^A-Za-z0-9_.-]/g, "-");
-  return `bench-captain-${safe}-${runTag}@example.com`;
+  return `delivered+bench-captain-${safe}-${runTag}@resend.dev`;
 }
 
 function toRegistrationPlayer(person: PackPerson, isCaptain: boolean): RegistrationPlayer {

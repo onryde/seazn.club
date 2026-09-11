@@ -33,7 +33,7 @@ test("wizard → claim link → inside the created competition", async ({ browse
     await page.getByRole("button", { name: /looks right/i }).click();
 
     // Step 3: email capture → draft + dev claim link.
-    await page.getByLabel("Your email").fill(`e2e-funnel-${TAG}@example.com`);
+    await page.getByLabel("Your email").fill(`delivered+e2e-funnel-${TAG}@resend.dev`);
     await page.getByRole("button", { name: /email me the link/i }).click();
     const claim = page.locator("[data-claim-url]");
     await expect(claim).toBeVisible({ timeout: 20_000 });

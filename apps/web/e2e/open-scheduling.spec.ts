@@ -89,7 +89,7 @@ interface SeededOrg {
  *  nothing here can accidentally read as a Pro result. */
 async function seedCommunityOrg(): Promise<SeededOrg> {
   const tag = hex();
-  const ownerEmail = `os-owner-${TAG}-${tag}@example.com`;
+  const ownerEmail = `delivered+os-owner-${TAG}-${tag}@resend.dev`;
   return withDb(async (sql) => {
     const [owner] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified)

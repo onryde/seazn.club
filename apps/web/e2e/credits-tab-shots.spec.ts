@@ -16,7 +16,7 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 test("AI Credits tab: nav entry, desktop + mobile, axe", async ({ page }) => {
-  const email = `credits-${Date.now()}@example.com`;
+  const email = `delivered+credits-${Date.now()}@resend.dev`;
   await loginUi(page, email, "/");
   // Create + activate a fresh org (bootstrap credit grant fires on creation),
   // so the wallet shows a real balance.

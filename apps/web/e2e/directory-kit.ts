@@ -37,7 +37,7 @@ import {
  *  What actually needs the entropy: `TAG` is per-PROCESS (helpers.ts), so it
  *  separates one Playwright WORKER from another but gives every call inside a
  *  worker the same value. And the identifiers this seeds are not all org
- *  scoped — `freshOrg` mints `dir-<label>-<stamp>@example.com`, and an email
+ *  scoped — `freshOrg` mints `delivered+dir-<label>-<stamp>@resend.dev`, and an email
  *  is unique across the whole database, not within an org. So the random tail
  *  is what keeps two calls in one process, and two specs in one run, apart.
  *
@@ -177,7 +177,7 @@ export async function waitForCourtRow(page: Page, venueName: string, courtName: 
  */
 export async function freshOrg(page: Page, label: string): Promise<{ orgId: string; email: string }> {
   const s = stamp();
-  const email = `dir-${label}-${s}@example.com`;
+  const email = `delivered+dir-${label}-${s}@resend.dev`;
   await loginUi(page, email, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
     name: `${label} ${s}`,

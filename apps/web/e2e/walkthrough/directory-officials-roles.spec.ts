@@ -259,7 +259,7 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
 
   // --- D. the official is invited, and the link is real --------------------
   await row.getByRole("button", { name: "Invite" }).click();
-  await row.getByLabel("Email", { exact: true }).fill(`official-${s}@example.com`);
+  await row.getByLabel("Email", { exact: true }).fill(`delivered+official-${s}@resend.dev`);
   await row.getByRole("button", { name: "Send invite" }).click();
   // The link is the send-FAILURE fallback: with a mailer configured the form
   // renders `officials.inviteSent` and no link at all, so this spec says that

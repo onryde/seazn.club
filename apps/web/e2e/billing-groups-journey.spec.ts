@@ -376,7 +376,7 @@ test.describe.serial("billing groups — visual workflow", () => {
     // Ownership of an ORG is separate from who pays, and it is the only consent
     // in the no-card handover path.
     const heir = await db(async (sql) => {
-      const email = `e2e-heir-${TAG}@example.com`;
+      const email = `delivered+e2e-heir-${TAG}@resend.dev`;
       await sql`insert into users (email, display_name, email_verified)
                 values (${email}, ${"Sam Heir"}, true) on conflict (email) do nothing`;
       const [u] = await sql<{ id: string }[]>`select id from users where email = ${email}`;

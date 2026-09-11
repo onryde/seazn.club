@@ -145,7 +145,7 @@ async function main() {
   const admin = newSession();
 
   // --- Auth: passwordless sign-in for a fresh owner (link -> consume) ---
-  const ver = await signIn(admin, `admin_${tag}@example.com`);
+  const ver = await signIn(admin, `delivered+admin_${tag}@resend.dev`);
   check("admin signed in (passwordless)", !!admin.cookies["seazn_session"]);
   // A default org is auto-provisioned on first sign-in (no forced form).
   check("default org auto-provisioned", !!ver.org_id && ver.has_org === true);
@@ -154,7 +154,7 @@ async function main() {
   check("new user routed to onboarding", ver.redirect === "/onboarding");
   // GDPR (spec 2026-07-14): requesting the magic link under the clickwrap
   // notice stamps terms acceptance on the account.
-  await checkTermsStamp(`admin_${tag}@example.com`);
+  await checkTermsStamp(`delivered+admin_${tag}@resend.dev`);
   const org = { id: ver.org_id };
 
   // --- Competition lifecycle guards (v2 service layer) ---
@@ -197,7 +197,7 @@ async function main() {
   check("viewer invite created", !!viewerInvite.token);
 
   const viewer = newSession();
-  const viewerEmail = `viewer_${tag}@example.com`;
+  const viewerEmail = `delivered+viewer_${tag}@resend.dev`;
   // Requesting a link creates the account but grants no session until consumed.
   const vlink = (await call(viewer, "/api/auth/magic-link", "POST", {
     email: viewerEmail,
@@ -245,7 +245,7 @@ async function main() {
   // Invite-by-email (team settings): personal invite, single-use forced,
   // address stored; email_sent reports the Resend outcome (false with a blank
   // key — the UI then offers the personal link for manual sharing).
-  const emailInvitee = `emailinvitee_${tag}@example.com`;
+  const emailInvitee = `delivered+emailinvitee_${tag}@resend.dev`;
   const emailInvite = (await call(admin, `/api/orgs/${org.id}/invites`, "POST", {
     role: "viewer",
     email: emailInvitee,
@@ -327,7 +327,7 @@ async function main() {
     max_uses: 0,
   })) as { token: string };
   const member = newSession();
-  await signIn(member, `member_${tag}@example.com`);
+  await signIn(member, `delivered+member_${tag}@resend.dev`);
   await call(member, `/api/invites/${adminInvite.token}/accept`, "POST");
   const memberComp = await v1(member, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Member Made ${tag}`,
@@ -903,7 +903,7 @@ async function main() {
   // deliberately did NOT hang off that seed either.
   {
     const roundRole = newSession();
-    await signIn(roundRole, `smoke-roundrole-${tag}@example.com`);
+    await signIn(roundRole, `delivered+smoke-roundrole-${tag}@resend.dev`);
     await smokeBracketRoundRoleAndByes(roundRole);
   }
 
@@ -974,7 +974,7 @@ async function main() {
   // scorer out nor rewrite a published result — plus /admin's audited escape
   // hatch. Right after w4aTimeModelSuite (same class of defect), before
   // gapSuite's destructive downgrade.
-  await configSnapshotSuite(admin, `admin_${tag}@example.com`);
+  await configSnapshotSuite(admin, `delivered+admin_${tag}@resend.dev`);
 
   // --- design/v7 PROMPT-52: waitlist queue position + public count. RS001
   // deleted the public submit endpoint this used to drive; what remains
@@ -1034,7 +1034,7 @@ async function main() {
   await gapSuite(admin, org.id, org2.id);
 
   // --- design/v7 PROMPT-51: staff-console platform revenue report.
-  await platformRevenueSuite(admin, `admin_${tag}@example.com`);
+  await platformRevenueSuite(admin, `delivered+admin_${tag}@resend.dev`);
 
   // --- One trial per organisation, ever (V277): both staff stamping rails on
   // the pro path, the comp rail + the upgrade CTA on the free path. Own fresh
@@ -1152,7 +1152,7 @@ async function main() {
  *  has a registered entrant (roster) and one real duty assignment (rota). */
 async function f5RemainderExportLocaleSuite(): Promise<void> {
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-f5-fr-locale-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-f5-fr-locale-${tag}@resend.dev`)).org_id;
   const locale = await v1(s, `/api/orgs/${orgId}`, "PATCH", { default_locale: "fr" });
   check("f5 remainder: org PATCH accepts default_locale=fr", locale.status === 200);
 
@@ -1252,7 +1252,7 @@ async function disputeSurfacesSuite() {
   // call — asserts the server-side gate, not just the disabled checkbox
   // (keyless-safe: the 422 answers before getStripe()).
   const owner = newSession();
-  const who = await signIn(owner, `tos_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+tos_${tag}@resend.dev`);
   await setPlan(who.org_id, "pro", owner);
   const refused = await v1(owner, `/api/v1/orgs/${who.org_id}/connect`, "POST", {
     return_path: "/settings/connect",
@@ -1323,7 +1323,7 @@ async function dataProtectionCopySuite() {
  *  the load-bearing assertion); keyless-safe and spends no AI tokens. */
 async function personMergeSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `dupmerge_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+dupmerge_${tag}@resend.dev`);
   const orgId = who.org_id;
   await setPlan(orgId, "pro", owner);
 
@@ -1488,7 +1488,7 @@ async function personMergeSuite(): Promise<void> {
 async function p72Suite(): Promise<void> {
   // === PRO PATH: the three delete-money guards, each pinned distinctly. ===
   const owner = newSession();
-  const who = await signIn(owner, `p72_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+p72_${tag}@resend.dev`);
   const orgId = who.org_id;
   await setPlan(orgId, "pro", owner); // sponsor packages + api keys are Pro surfaces
 
@@ -1574,7 +1574,7 @@ async function p72Suite(): Promise<void> {
   // the pass's real grants (entrants 64, a cheaper fee, branded exports, …)
   // are covered by the pass-scope suites and the entrants/fee checks above. ===
   const comm = newSession();
-  const commWho = await signIn(comm, `p72comm_${tag}@example.com`);
+  const commWho = await signIn(comm, `delivered+p72comm_${tag}@resend.dev`);
   const commOrgId = commWho.org_id;
   const commOrgs = (await call(comm, "/api/orgs")) as {
     id: string;
@@ -1726,7 +1726,7 @@ async function p72Suite(): Promise<void> {
  */
 async function publicQuotaDegradeSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `pubquota_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+pubquota_${tag}@resend.dev`);
   const orgId = who.org_id;
   await insertEntitlementOverride(owner, orgId, "competitions.max_active", 50);
 
@@ -1923,7 +1923,7 @@ async function smokePlanMatrix(): Promise<void> {
     // person-claim rail, claims + accepts, sees the duty and scores it exactly
     // like a scorer (acceptedOfficialCovers). Officials are non-members — no
     // members.max seat consumed, so this holds on community too.
-    const officialEmail = `official_${key}_${tag}@example.com`;
+    const officialEmail = `delivered+official_${key}_${tag}@resend.dev`;
     const officialSession = newSession();
     await signIn(officialSession, officialEmail);
     const official = v1data<{ id: string }>(
@@ -1971,7 +1971,7 @@ async function smokePlanMatrix(): Promise<void> {
     // member who scores a DIFFERENT fixture via the assignment path
     // (scoresViaAssignment). V395 deleted `scorers.max`; the seat is charged
     // against `members.max` now, which on community is 3 — so one still fits.
-    const scorerEmail = `scorer_${key}_${tag}@example.com`;
+    const scorerEmail = `delivered+scorer_${key}_${tag}@resend.dev`;
     const scorerSession = newSession();
     await signIn(scorerSession, scorerEmail);
     const scorerInvite = (await call(owner, `/api/orgs/${orgId}/invites`, "POST", {
@@ -2002,7 +2002,7 @@ async function smokePlanMatrix(): Promise<void> {
     // --- User 4 (player): claims the person on entrant #1 and reads their own
     // fixtures. Only two fixtures were decided above; the player's entrant is
     // in three, so at least one stays upcoming — the self-view is never empty.
-    const playerEmail = `player_${key}_${tag}@example.com`;
+    const playerEmail = `delivered+player_${key}_${tag}@resend.dev`;
     const playerSession = newSession();
     await signIn(playerSession, playerEmail);
     const claimInvite = await v1(owner, `/api/v1/persons/${person.id}/claim-invites`, "POST", {
@@ -2055,7 +2055,7 @@ async function smokePlanMatrix(): Promise<void> {
 
   // === PERSONA 1 — community (default plan, no flip) =====================
   const comm = newSession();
-  const commOrg = (await signIn(comm, `smoke-community-${tag}@example.com`)).org_id;
+  const commOrg = (await signIn(comm, `delivered+smoke-community-${tag}@resend.dev`)).org_id;
   const commEnt = await readEnt(comm, commOrg);
   check("matrix/community: org resolves the community plan", commEnt.plan_key === "community");
   check(
@@ -2147,7 +2147,7 @@ async function smokePlanMatrix(): Promise<void> {
 
   // === PERSONA 2 — pro ==================================================
   const pro = newSession();
-  const proOrg = (await signIn(pro, `smoke-pro-${tag}@example.com`)).org_id;
+  const proOrg = (await signIn(pro, `delivered+smoke-pro-${tag}@resend.dev`)).org_id;
   await setPlan(proOrg, "pro", pro);
   const proEnt = await readEnt(pro, proOrg);
   check("matrix/pro: org resolves the pro plan", proEnt.plan_key === "pro");
@@ -2209,7 +2209,7 @@ async function smokePlanMatrix(): Promise<void> {
   // the above-Pro rung of the matrix — so it follows the rung to `enterprise`
   // rather than being deleted; the numbers below move to that column.
   const ent = newSession();
-  const entOrg = (await signIn(ent, `smoke-enterprise-${tag}@example.com`)).org_id;
+  const entOrg = (await signIn(ent, `delivered+smoke-enterprise-${tag}@resend.dev`)).org_id;
   await setPlan(entOrg, "enterprise", ent);
   const entEnt = await readEnt(ent, entOrg);
   check("matrix/enterprise: org resolves the enterprise plan", entEnt.plan_key === "enterprise");
@@ -2366,7 +2366,7 @@ async function smokePlanMatrix(): Promise<void> {
 
   // === PERSONA 4 — event_pass (community org + a single-comp pass) ======
   const passer = newSession();
-  const passOrg = (await signIn(passer, `smoke-pass-${tag}@example.com`)).org_id;
+  const passOrg = (await signIn(passer, `delivered+smoke-pass-${tag}@resend.dev`)).org_id;
 
   // Passed comp: create, then grant its pass. Unlisted sidesteps the public
   // dashboard cap; the pass frees the active-comp slot for the sibling below.
@@ -2502,7 +2502,7 @@ async function passGrantsSuite(): Promise<void> {
   const featureKey = (r: V1Res) => (r.json.error as { feature_key?: string } | undefined)?.feature_key;
 
   const s = newSession();
-  const orgId = (await signIn(s, `passgrant_${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+passgrant_${tag}@resend.dev`)).org_id;
   const orgs = (await call(s, "/api/orgs")) as { id: string; slug: string; name: string }[];
   const org = orgs.find((o) => o.id === orgId)!;
 
@@ -3097,7 +3097,7 @@ async function passRungLSuite(): Promise<void> {
   );
 
   const s = newSession();
-  const orgId = (await signIn(s, `passl_${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+passl_${tag}@resend.dev`)).org_id;
   const mkComp = async (name: string) =>
     v1data<{ id: string; slug: string }>(
       await v1(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -3302,7 +3302,7 @@ async function passRungLSuite(): Promise<void> {
   // against L's unlimited) is now the only leg on this pair that discriminates,
   // and it is deliberately left as the load-bearing one. ===
   const pro = newSession();
-  const proOrgId = (await signIn(pro, `passlpro_${tag}@example.com`)).org_id;
+  const proOrgId = (await signIn(pro, `delivered+passlpro_${tag}@resend.dev`)).org_id;
   await setPlan(proOrgId, "pro", pro);
   const proComp = v1data<{ id: string }>(
     await v1(pro, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -3414,7 +3414,7 @@ async function passRungLSuite(): Promise<void> {
 async function clubsSuite(): Promise<void> {
   // --- Pro path: the full club-hub lifecycle.
   const pro = newSession();
-  const proVer = await signIn(pro, `clubpro_${tag}@example.com`);
+  const proVer = await signIn(pro, `delivered+clubpro_${tag}@resend.dev`);
   await setPlan(proVer.org_id, "pro", pro);
 
   const club = await v1(pro, "/api/v1/clubs", "POST", {
@@ -3436,7 +3436,7 @@ async function clubsSuite(): Promise<void> {
   const contact = await v1(pro, `/api/v1/clubs/${clubId}/contacts`, "POST", {
     role_key: "secretary",
     full_name: `Sam Secretary ${tag}`,
-    email: `sam_${tag}@example.com`,
+    email: `delivered+sam_${tag}@resend.dev`,
     is_primary: true,
   });
   check("clubs pro: committee contact added (201)", contact.status === 201);
@@ -3560,7 +3560,7 @@ async function clubsSuite(): Promise<void> {
   // --- Free path: the tunable community clubs.max = 5 (V319 "free runs big").
   // Five clubs land, the sixth 402s with the feature key that drives the paywall.
   const free = newSession();
-  await signIn(free, `clubfree_${tag}@example.com`);
+  await signIn(free, `delivered+clubfree_${tag}@resend.dev`);
   const freeClubs = [];
   for (let i = 1; i <= 5; i++) {
     freeClubs.push(await v1(free, "/api/v1/clubs", "POST", { name: `Free Club ${i} ${tag}` }));
@@ -3588,8 +3588,8 @@ async function clubsSuite(): Promise<void> {
  *  checkout fixture and is already covered by `registrations.ts`'s unit tests
  *  — not re-proven here. Own fresh orgs; keyless-safe, no AI tokens spent. */
 async function referralSuite(): Promise<void> {
-  const referrerEmail = `referrer_${tag}@example.com`;
-  const referredEmail = `referred_${tag}@example.com`;
+  const referrerEmail = `delivered+referrer_${tag}@resend.dev`;
+  const referredEmail = `delivered+referred_${tag}@resend.dev`;
 
   const referrer = newSession();
   const referrerAuth = await signIn(referrer, referrerEmail);
@@ -3738,7 +3738,7 @@ async function extraOrgAddonSuite(): Promise<void> {
       }
     ).entitlements["orgs.max_owned"]?.limit;
 
-  const payerEmail = `orgaddon_${tag}@example.com`;
+  const payerEmail = `delivered+orgaddon_${tag}@resend.dev`;
   const payer = newSession();
   const auth = await signIn(payer, payerEmail);
   await setPlan(auth.org_id, "pro", payer); // busts the entitlement cache itself
@@ -3797,7 +3797,7 @@ async function extraOrgAddonSuite(): Promise<void> {
     // only group they could actually buy on is their own auto-provisioned
     // community one. Runs BEFORE the purchase on purpose — a bought rider would
     // lift this cap to 6 and the refusal would stop being reachable.
-    const nonPayerEmail = `orgaddon_nonpayer_${tag}@example.com`;
+    const nonPayerEmail = `delivered+orgaddon_nonpayer_${tag}@resend.dev`;
     const nonPayer = newSession();
     await signIn(nonPayer, nonPayerEmail);
     const [npRow] = await db<{ id: string }[]>`
@@ -3829,7 +3829,7 @@ async function extraOrgAddonSuite(): Promise<void> {
     );
 
     // --- FREE path: community sells no rider -----------------------------
-    const freeEmail = `orgaddon_free_${tag}@example.com`;
+    const freeEmail = `delivered+orgaddon_free_${tag}@resend.dev`;
     const free = newSession();
     await signIn(free, freeEmail);
     const freeBlocked = await raw(free, "/api/orgs", "POST", { name: `Free Org ${tag}` });
@@ -3965,7 +3965,7 @@ async function addonChurnWebhookSuite(): Promise<void> {
      *  handlers can match on. Returns the wallet (= subscription) id. */
     const seedGroup = async (label: string, plan: string) => {
       const s = newSession();
-      const email = `addonchurn_${label}_${tag}@example.com`;
+      const email = `delivered+addonchurn_${label}_${tag}@resend.dev`;
       const orgId = (await signIn(s, email)).org_id;
       await setPlan(orgId, plan, s);
       const [row] = await db<{ wallet_id: string }[]>`
@@ -4115,7 +4115,7 @@ async function passLockEnforcementSuite(): Promise<void> {
     new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 
   const s = newSession();
-  const orgId = (await signIn(s, `passlock_${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+passlock_${tag}@resend.dev`)).org_id;
   // READ, never typed. This was `const COMMUNITY_COMP_CAP = 10` on a comment
   // citing V319; entitlements v18 (V393) cut `competitions.max_active` on
   // community to 3, so the fixture loop below 402'd on the fourth create,
@@ -4181,7 +4181,7 @@ async function passLockEnforcementSuite(): Promise<void> {
     // org that already holds a pass is refused for a different reason, and a
     // refusal that fires for the wrong reason proves nothing.
     const buyer = newSession();
-    await signIn(buyer, `passsell_${tag}@example.com`);
+    await signIn(buyer, `delivered+passsell_${tag}@resend.dev`);
     const buyComp = v1data<{ id: string }>(
       await v1(buyer, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
         name: `Lock Sell ${tag}`,
@@ -4224,7 +4224,7 @@ async function passLockEnforcementSuite(): Promise<void> {
  *  claim invites must mint on every plan. */
 async function playerAccountsSuite(admin: Session, orgId: string): Promise<void> {
   const player = newSession();
-  const playerVer = await signIn(player, `player_${tag}@example.com`);
+  const playerVer = await signIn(player, `delivered+player_${tag}@resend.dev`);
 
   admin.cookies["seazn_org"] = orgId; // active-org cookie targets the v1 calls
   const orgs = (await call(admin, "/api/orgs")) as {
@@ -4285,7 +4285,7 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
 
   // Invite → claim (the claim_url IS the credential; shown once).
   const invite = await v1(admin, `/api/v1/persons/${personId}/claim-invites`, "POST", {
-    email: `player_${tag}@example.com`,
+    email: `delivered+player_${tag}@resend.dev`,
   });
   const claimUrl = v1data<{ claim_url: string }>(invite).claim_url ?? "";
   check("pa claim invite minted", invite.status === 201 && claimUrl.includes("/claim/pc_"));
@@ -4366,7 +4366,7 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
 
   // Second invite on a claimed person fails clean.
   const again = await v1(admin, `/api/v1/persons/${personId}/claim-invites`, "POST", {
-    email: `else_${tag}@example.com`,
+    email: `delivered+else_${tag}@resend.dev`,
   });
   check("pa second invite on a claimed person is a clean 409", again.status === 409);
 
@@ -4380,7 +4380,7 @@ async function playerAccountsSuite(admin: Session, orgId: string): Promise<void>
     player,
     `/api/v1/persons/${v1data<{ id: string }>(freePerson).id}/claim-invites`,
     "POST",
-    { email: `else_${tag}@example.com` },
+    { email: `delivered+else_${tag}@resend.dev` },
   );
   check(
     "pa claim invite mints on a community org (no plan gate)",
@@ -4401,7 +4401,7 @@ async function officialOnboardingSuite(
   orgId: string,
   orgSlug: string,
 ): Promise<void> {
-  const refEmail = `ref_${tag}@example.com`;
+  const refEmail = `delivered+ref_${tag}@resend.dev`;
   const ref = newSession();
   const refVer = await signIn(ref, refEmail);
 
@@ -4626,7 +4626,7 @@ async function officialOnboardingSuite(
   // wrong email gets the generic 404 — same as a bogus id, so a non-owner
   // can't even learn the claim exists (review fix 2026-07-17).
   const stranger = newSession();
-  await signIn(stranger, `stranger_${tag}@example.com`);
+  await signIn(stranger, `delivered+stranger_${tag}@resend.dev`);
   const wrongAccept = await v1(
     stranger,
     `/api/v1/me/officiating-claims/${claim2Id}/accept`,
@@ -4657,7 +4657,7 @@ async function officialOnboardingSuite(
     `/api/v1/officials/${v1data<{ id: string }>(freeOff).id}/invite`,
     "POST",
     {
-      email: `else_${tag}@example.com`,
+      email: `delivered+else_${tag}@resend.dev`,
     },
   );
   check(
@@ -4851,7 +4851,7 @@ async function marksReportsSuite(
     await v1(owner, `/api/v1/fixtures/${fx}/officials`, "PATCH", {
       set: [{ official_id: offId, role_key: "referee", locked: false }],
     });
-    const refEmail = `marksref_${label}_${tag}@example.com`;
+    const refEmail = `delivered+marksref_${label}_${tag}@resend.dev`;
     const ref = newSession();
     await signIn(ref, refEmail);
     const inv = await v1(owner, `/api/v1/officials/${offId}/invite`, "POST", {
@@ -4912,7 +4912,7 @@ async function marksReportsSuite(
 
   // ---- Free path (fresh community owner) ----
   const commOwner = newSession();
-  await signIn(commOwner, `markscomm_${tag}@example.com`);
+  await signIn(commOwner, `delivered+markscomm_${tag}@resend.dev`);
   const commOrgId = ((await call(commOwner, "/api/orgs")) as { id: string }[])[0].id;
   const free = await decidedFixtureWithOfficial(commOwner, commOrgId, "Free");
   const freeFoId = await foId(free.fx, free.offId);
@@ -5103,7 +5103,7 @@ async function newsSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
 
   // ---- Free path (fresh community owner) ----
   const commOwner = newSession();
-  await signIn(commOwner, `newscomm_${tag}@example.com`);
+  await signIn(commOwner, `delivered+newscomm_${tag}@resend.dev`);
   const commOrg = ((await call(commOwner, "/api/orgs")) as { id: string; slug: string }[])[0];
   commOwner.cookies["seazn_org"] = commOrg.id;
 
@@ -5218,7 +5218,7 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
   // --- Free path: a fresh community owner's public page carries both the
   // attribution CTA and the fan ShareBar.
   const free = newSession();
-  const freeVer = await signIn(free, `plg_free_${tag}@example.com`);
+  const freeVer = await signIn(free, `delivered+plg_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -5253,7 +5253,7 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
   // bootstrap (postAuthLanding) — exactly how claim/invite emails land.
   const playerOnly = newSession();
   const plgReq = (await call(playerOnly, "/api/auth/magic-link", "POST", {
-    email: `plg_player_${tag}@example.com`,
+    email: `delivered+plg_player_${tag}@resend.dev`,
   })) as { login_url?: string };
   const plgTok = new URL(plgReq.login_url ?? "").searchParams.get("token");
   await call(playerOnly, "/api/auth/magic-link/consume", "POST", {
@@ -5593,7 +5593,7 @@ async function timedFixture(
  */
 async function matchCentreSmoke(): Promise<void> {
   const owner = newSession();
-  await signIn(owner, `matchcentre_${tag}@example.com`);
+  await signIn(owner, `delivered+matchcentre_${tag}@resend.dev`);
   const comp = v1data<{ id: string; slug: string }>(
     await v1(owner, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -6097,7 +6097,7 @@ async function w4aTimeModelSuite(admin: Session): Promise<void> {
   // further down stays as the CONTROL for the opposite failure: a door that
   // has stopped stamping `at` at all would pass everything above and fail it.
   const free = newSession();
-  await signIn(free, `w4a_free_${tag}@example.com`);
+  await signIn(free, `delivered+w4a_free_${tag}@resend.dev`);
   const freeComp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
       name: `W4a Free Time ${tag}`,
@@ -6269,7 +6269,7 @@ const near = (a: number | null, b: number) => a !== null && Math.abs(a - b) < 1e
 
 async function cricketDlsSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `dls_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+dls_${tag}@resend.dev`);
   // A DLS-computed target is a Pro feature (scoring.ts gates `cricket.revise`
   // without a manual target on `cricket.dls`); smoke's orgs start on community.
   await setPlan(who.org_id, "pro", owner);
@@ -6780,7 +6780,7 @@ async function platformRevenueSuite(admin: Session, staffEmail: string): Promise
  *  no arm reaches Stripe — the comp rail has no subscription to update, and
  *  the refusal arm answers BEFORE the Stripe call by design. */
 async function oneTrialSuite(): Promise<void> {
-  const staffEmail = `trial_staff_${tag}@example.com`;
+  const staffEmail = `delivered+trial_staff_${tag}@resend.dev`;
   const staff = newSession();
   await signIn(staff, staffEmail);
 
@@ -6853,16 +6853,16 @@ async function oneTrialSuite(): Promise<void> {
 
   // === PRO PATH — the staff trial-grant rail ============================
   const pro = newSession();
-  const proOrg = (await signIn(pro, `trial_pro_${tag}@example.com`)).org_id;
+  const proOrg = (await signIn(pro, `delivered+trial_pro_${tag}@resend.dev`)).org_id;
   // A second pro-path org, used only for the DEPARTED case (an ex-customer that
   // kept its dead subscription id). It needs to be unburned at grant time, so
   // it cannot share proOrg.
   const dep = newSession();
-  const depOrg = (await signIn(dep, `trial_dep_${tag}@example.com`)).org_id;
+  const depOrg = (await signIn(dep, `delivered+trial_dep_${tag}@resend.dev`)).org_id;
 
   // === FREE PATH — a fresh community owner ==============================
   const free = newSession();
-  const freeOrg = (await signIn(free, `trial_free_${tag}@example.com`)).org_id;
+  const freeOrg = (await signIn(free, `delivered+trial_free_${tag}@resend.dev`)).org_id;
   const freeSlug = ((await call(free, "/api/orgs")) as { id: string; slug: string }[]).find(
     (o) => o.id === freeOrg,
   )!.slug;
@@ -7059,15 +7059,15 @@ async function paymentMethodSuite(): Promise<void> {
   const { default: Stripe } = await import("stripe");
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-  const staffEmail = `pm_staff_${tag}@example.com`;
+  const staffEmail = `delivered+pm_staff_${tag}@resend.dev`;
   const staff = newSession();
   await signIn(staff, staffEmail);
 
   const owner = newSession();
-  const ownerOrg = (await signIn(owner, `pm_owner_${tag}@example.com`)).org_id;
+  const ownerOrg = (await signIn(owner, `delivered+pm_owner_${tag}@resend.dev`)).org_id;
 
   const customer = await stripe.customers.create({
-    email: `pm_owner_${tag}@example.com`,
+    email: `delivered+pm_owner_${tag}@resend.dev`,
   });
   const pm = await stripe.paymentMethods.attach("pm_card_visa", {
     customer: customer.id,
@@ -7222,7 +7222,7 @@ async function divisionSettingsSuite(admin: Session): Promise<void> {
  */
 async function scheduleCourtRemovalGuardSuite(): Promise<void> {
   const free = newSession();
-  const freeOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const freeOrgId = (await signIn(free, `delivered+dtx_free_${tag}@resend.dev`)).org_id;
   const guardVenue = v1data<{ id: string }>(
     await v1(free, `/api/v1/orgs/${freeOrgId}/venues`, "POST", { name: `Guard Venue ${tag}` }),
   );
@@ -7308,7 +7308,7 @@ async function scheduleCourtRemovalGuardSuite(): Promise<void> {
  */
 async function capacityPrecheckSuite(): Promise<void> {
   const free = newSession();
-  const capacityOrgId = (await signIn(free, `dtx_free_${tag}@example.com`)).org_id;
+  const capacityOrgId = (await signIn(free, `delivered+dtx_free_${tag}@resend.dev`)).org_id;
   const capacityVenue = v1data<{ id: string }>(
     await v1(free, `/api/v1/orgs/${capacityOrgId}/venues`, "POST", { name: `Capacity Venue ${tag}` }),
   );
@@ -7386,7 +7386,7 @@ async function capacityPrecheckSuite(): Promise<void> {
  */
 async function templateInstantiationSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_template_${tag}@example.com`);
+  await signIn(free, `delivered+dtx_template_${tag}@resend.dev`);
   const created = v1data<{
     competitionId: string;
     slug: string;
@@ -7434,7 +7434,7 @@ async function templateInstantiationSuite(): Promise<void> {
   // Pro session, via the same setPlan + bustOrgEntitlements flip every other
   // Pro-gated suite in this file already uses, not a template-specific block.
   const proTemplateUser = newSession();
-  const proVer = await signIn(proTemplateUser, `dtx_template_pro_${tag}@example.com`);
+  const proVer = await signIn(proTemplateUser, `delivered+dtx_template_pro_${tag}@resend.dev`);
   await setPlan(proVer.org_id, "pro", proTemplateUser);
 
   const t20Created = v1data<{
@@ -7538,7 +7538,7 @@ async function templateInstantiationSuite(): Promise<void> {
  */
 async function stageProgressionSuite(): Promise<void> {
   const free = newSession();
-  const { org_id: freeOrgId } = await signIn(free, `dtx_seed_${tag}@example.com`);
+  const { org_id: freeOrgId } = await signIn(free, `delivered+dtx_seed_${tag}@resend.dev`);
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Seed ${tag}` }),
   );
@@ -7803,7 +7803,7 @@ async function stageProgressionSuite(): Promise<void> {
  */
 async function stageRosterDriftSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_drift_${tag}@example.com`);
+  await signIn(free, `delivered+dtx_drift_${tag}@resend.dev`);
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `DTX Drift ${tag}` }),
   );
@@ -7913,7 +7913,7 @@ async function stageRosterDriftSuite(): Promise<void> {
  */
 async function scheduleHealthSuite(): Promise<void> {
   const free = newSession();
-  const healthOrgId = (await signIn(free, `dtx_health_${tag}@example.com`)).org_id;
+  const healthOrgId = (await signIn(free, `delivered+dtx_health_${tag}@resend.dev`)).org_id;
   const healthVenue = v1data<{ id: string }>(
     await v1(free, `/api/v1/orgs/${healthOrgId}/venues`, "POST", { name: `Health Venue ${tag}` }),
   );
@@ -8153,7 +8153,7 @@ async function scheduleHealthSuite(): Promise<void> {
  */
 async function scheduleRestFloorSuite(): Promise<void> {
   const free = newSession();
-  await signIn(free, `dtx_restfloor_${tag}@example.com`);
+  await signIn(free, `delivered+dtx_restfloor_${tag}@resend.dev`);
   const comp = v1data<{ id: string }>(
     await v1(free, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -8237,7 +8237,7 @@ async function scheduleRestFloorSuite(): Promise<void> {
  */
 async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
   const free = newSession();
-  const roundOrderOrgId = (await signIn(free, `dtx_roundorder_${tag}@example.com`)).org_id;
+  const roundOrderOrgId = (await signIn(free, `delivered+dtx_roundorder_${tag}@resend.dev`)).org_id;
   const roundOrderVenue = v1data<{ id: string }>(
     await v1(free, `/api/v1/orgs/${roundOrderOrgId}/venues`, "POST", {
       name: `Round Order Venue ${tag}`,
@@ -8390,7 +8390,7 @@ async function scheduleRoundOrderDeltaGateSuite(): Promise<void> {
  */
 async function competitionScheduleApplyRoundOrderSuite(): Promise<void> {
   const s = newSession();
-  const orgId = (await signIn(s, `dtx_jointroundorder_${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+dtx_jointroundorder_${tag}@resend.dev`)).org_id;
   // scheduling.multi_division is Pro and above.
   await setPlan(orgId, "pro", s);
 
@@ -8959,7 +8959,7 @@ async function registrationPaidLoopSuite(): Promise<void> {
   };
 
   const owner = newSession();
-  const who = await signIn(owner, `regpay_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+regpay_${tag}@resend.dev`);
   const orgId = who.org_id;
   await setPlan(orgId, "pro", owner);
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
@@ -9036,7 +9036,7 @@ async function registrationPaidLoopSuite(): Promise<void> {
     `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
     "POST",
     {
-      contact: { name: `Reg Payer ${tag}`, email: `regpayer_${tag}@example.com` },
+      contact: { name: `Reg Payer ${tag}`, email: `delivered+regpayer_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -9129,7 +9129,7 @@ async function registrationPaidLoopSuite(): Promise<void> {
  */
 async function poolSummarySuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `pool_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+pool_${tag}@resend.dev`);
   const orgId = who.org_id;
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
@@ -9196,7 +9196,7 @@ async function poolSummarySuite(): Promise<void> {
     `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
     "POST",
     {
-      contact: { name: soloName, email: `pool_solo_${tag}@example.com` },
+      contact: { name: soloName, email: `delivered+pool_solo_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -9378,7 +9378,7 @@ async function releaseConnectAccount(orgId: string, previousHolderId: string | n
  * Callers own paying the cart (payRealDestinationCharge — NOT this session;
  * see that function's own doc comment for why), own restoring
  * `previousHolderId` via releaseConnectAccount when done, and own adding
- * their owner's email (`${label}_${tag}@example.com`) to cleanup()'s list —
+ * their owner's email (`delivered+${label}_${tag}@resend.dev`) to cleanup()'s list —
  * the registrant contact email needs no entry there (see
  * registrationPaidLoopSuite's own teardown comment: registering_self is
  * never set on a public submit, so nothing resolves that address to a users
@@ -9409,7 +9409,7 @@ async function seedRealRegistrationCart(
   };
 
   const owner = newSession();
-  const who = await signIn(owner, `${label}_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+${label}_${tag}@resend.dev`);
   const orgId = who.org_id;
   await setPlan(orgId, "pro", owner);
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
@@ -9469,7 +9469,7 @@ async function seedRealRegistrationCart(
     `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
     "POST",
     {
-      contact: { name: `Real Payer ${tag}`, email: `${label}player_${tag}@example.com` },
+      contact: { name: `Real Payer ${tag}`, email: `delivered+${label}player_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -10482,7 +10482,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
   const s = newSession();
   // `scheduling.constraints` (the whole constraints v2 family, `hard` included)
   // is Pro, and so is the board apply path.
-  const orgId = (await signIn(s, `smoke-sched-constraints-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-sched-constraints-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
   const constraintsVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Constraints Venue ${tag}` }),
@@ -11046,7 +11046,7 @@ async function schedulingConstraintsSuite(): Promise<void> {
 async function autoScheduleSuite(): Promise<void> {
   const s = newSession();
   // The board apply path and the constraints family are Pro.
-  const orgId = (await signIn(s, `smoke-autosched-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-autosched-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
 
   const comp = v1data<{ id: string }>(
@@ -11489,7 +11489,7 @@ async function autoScheduleSuite(): Promise<void> {
  */
 async function twoVenueScheduleSuite(): Promise<void> {
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-two-venue-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-two-venue-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
 
   const venueNorth = v1data<{ id: string }>(
@@ -11676,7 +11676,7 @@ async function placementOptimizedSuite(): Promise<void> {
     return;
   }
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-placement-opt-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-placement-opt-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
   const optVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `Optimized Venue ${tag}` }),
@@ -11820,7 +11820,7 @@ async function placementPerCourtBlackoutSuite(): Promise<void> {
     return;
   }
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-placement-pcg-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-placement-pcg-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
   const perCourtVenue = v1data<{ id: string }>(
     await v1(s, `/api/v1/orgs/${orgId}/venues`, "POST", { name: `PerCourt Venue ${tag}` }),
@@ -11980,7 +11980,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
   try {
     // ---- Free path: the AI credit wallet gate (keyless — 402 fires before any model) ----
     const free = newSession();
-    const freeOrg = (await signIn(free, `smoke-ai-free-${tag}@example.com`)).org_id;
+    const freeOrg = (await signIn(free, `delivered+smoke-ai-free-${tag}@resend.dev`)).org_id;
     const freeDivIds = await seedPlannableAiDivision(free, "AI Free");
     await drainWallet(freeOrg, 0);
     const capped = await v1(
@@ -12034,7 +12034,7 @@ async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: string): 
     // ---- Paid two-phase happy path (schedule + officials) — needs the model ----
     if (fixture) {
       const paid = newSession();
-      const paidOrg = (await signIn(paid, `smoke-ai-pro-${tag}@example.com`)).org_id;
+      const paidOrg = (await signIn(paid, `delivered+smoke-ai-pro-${tag}@resend.dev`)).org_id;
       await setPlan(paidOrg, "pro", paid);
       const { compId, divId, stageId } = await seedPlannableAiDivision(paid, "AI Paid");
       const firstRefId = v1data<{ id: string }>(
@@ -12542,7 +12542,7 @@ async function scheduleAiRoundOrderSuite(): Promise<void> {
     // sits on `pro` because that is the paid plan v4AiSuite uses and `pro_plus`
     // no longer exists in `plans` (V393, entitlements v18).
     const paid = newSession();
-    const paidOrg = (await signIn(paid, `smoke-ai-roundorder-${tag}@example.com`)).org_id;
+    const paidOrg = (await signIn(paid, `delivered+smoke-ai-roundorder-${tag}@resend.dev`)).org_id;
     await setPlan(paidOrg, "pro", paid);
     const { divId } = await seedPlannableAiDivision(paid, "AI Round Order");
 
@@ -12704,7 +12704,7 @@ async function jointAiSuite(): Promise<void> {
 
   try {
     const s = newSession();
-    const orgId = (await signIn(s, `smoke-ai-joint-${tag}@example.com`)).org_id;
+    const orgId = (await signIn(s, `delivered+smoke-ai-joint-${tag}@resend.dev`)).org_id;
     // scheduling.multi_division is Pro and above, and Pro matches the sibling AI
     // suite. (It used to flip to `pro_plus`, a plan V393 deleted from `plans`;
     // the credit balance this suite reasons about is set by `drainWallet`
@@ -12931,7 +12931,7 @@ async function scheduledCountsByDivision(divisionIds: string[]): Promise<Record<
  *  leave a flipped org as found in case a later suite lands above this one). */
 async function aboveProRungSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `aboveprorung_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+aboveprorung_${tag}@resend.dev`);
   const orgId = who.org_id;
 
   const comp = v1data<{ id: string; slug: string }>(
@@ -13121,7 +13121,7 @@ async function pricingV3Suite(): Promise<void> {
     config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
   };
   const buyer = newSession();
-  const who = await signIn(buyer, `pass_${tag}@example.com`);
+  const who = await signIn(buyer, `delivered+pass_${tag}@resend.dev`);
   const orgId = who.org_id;
 
   // Free caps (v17 matrix, V319 "free runs big"): community now runs several
@@ -13321,10 +13321,10 @@ async function i18nSuite(): Promise<void> {
   // missing key or broken {placeholder} would surface as a 500 here. Emails are
   // not tier-gated, so this exercises the path for free and pro accounts alike.
   const mailer = newSession();
-  await signIn(mailer, `i18nmail_${tag}@example.com`);
+  await signIn(mailer, `delivered+i18nmail_${tag}@resend.dev`);
   await call(mailer, "/api/users/me", "PATCH", { locale: "fr" });
   const chg = await raw(mailer, "/api/auth/change-email", "POST", {
-    new_email: `i18nmail2_${tag}@example.com`,
+    new_email: `delivered+i18nmail2_${tag}@resend.dev`,
   });
   check("i18n: fr-locale user renders French change-email server-side", chg.status === 200);
 
@@ -13421,7 +13421,7 @@ async function marketingSuite(): Promise<void> {
 async function funnelSuite(): Promise<void> {
   const visitor = newSession();
   const started = (await call(visitor, "/api/funnel/start", "POST", {
-    email: `funnel_${tag}@example.com`,
+    email: `delivered+funnel_${tag}@resend.dev`,
     name: `Funnel Fiesta ${tag}`,
     sport: "Badminton",
     entrants: 8,
@@ -13540,7 +13540,7 @@ async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug: strin
   const gated = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-orders`, "POST", {
     package_id: pkg.id,
     sponsor_name: "Gate Probe",
-    sponsor_email: `gate_${tag}@example.com`,
+    sponsor_email: `delivered+gate_${tag}@resend.dev`,
   });
   check("sp checkout refused without Connect (409)", gated.status === 409);
   // The one org in the run that gets a REAL connected account, when supplied —
@@ -13550,7 +13550,7 @@ async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug: strin
   const started = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-orders`, "POST", {
     package_id: pkg.id,
     sponsor_name: `Acme ${tag}`,
-    sponsor_email: `acme_${tag}@example.com`,
+    sponsor_email: `delivered+acme_${tag}@resend.dev`,
   });
   if (!process.env.STRIPE_SECRET_KEY) {
     // Keyless: the Stripe mint fails AFTER the pending order landed — the
@@ -13584,7 +13584,7 @@ async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug: strin
 
   // --- Free path: flat partner strip stays free; tiers + packages are 402.
   const free = newSession();
-  const freeVer = await signIn(free, `sponsor_free_${tag}@example.com`);
+  const freeVer = await signIn(free, `delivered+sponsor_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -13800,7 +13800,7 @@ async function venuesSuite(admin: Session, orgId: string): Promise<void> {
  */
 async function importCapAtCommitSuite(): Promise<void> {
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-import-cap-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-import-cap-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
 
   // 51 rows: over community's cap, under Pro's (whose `import.bulk` row carries
@@ -13843,7 +13843,7 @@ async function importCapAtCommitSuite(): Promise<void> {
 
 async function courtHoursSuite(): Promise<void> {
   const s = newSession();
-  const orgId = (await signIn(s, `smoke-court-hours-${tag}@example.com`)).org_id;
+  const orgId = (await signIn(s, `delivered+smoke-court-hours-${tag}@resend.dev`)).org_id;
   await setPlan(orgId, "pro", s);
 
   const DAY_MS = 24 * 60 * 60 * 1000;
@@ -14412,7 +14412,7 @@ async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise<void> 
 
   // Free path: fresh community owner, same flow.
   const free = newSession();
-  const freeVer = await signIn(free, `ui_free_${tag}@example.com`);
+  const freeVer = await signIn(free, `delivered+ui_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -15010,7 +15010,7 @@ async function schedRegV3Suite(
 
   // --- Free path: fresh community owner ---
   const free = newSession();
-  const freeVer = await signIn(free, `sched_free_${tag}@example.com`);
+  const freeVer = await signIn(free, `delivered+sched_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -16266,7 +16266,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     default_scope: { type: "division", id: divId },
   })) as { token: string };
   const scorer = newSession();
-  await signIn(scorer, `scorer_${tag}@example.com`);
+  await signIn(scorer, `delivered+scorer_${tag}@resend.dev`);
   const accepted = (await call(
     scorer,
     `/api/invites/${scorerInvite.token}/accept`,
@@ -16297,7 +16297,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     default_scope: { type: "division", id: divId },
   })) as { token: string };
   const scorer2 = newSession();
-  await signIn(scorer2, `scorer2_${tag}@example.com`);
+  await signIn(scorer2, `delivered+scorer2_${tag}@resend.dev`);
   const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
   check(
     "gap second scorer seat is free to take (V395 deleted scorers.max)",
@@ -16313,7 +16313,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     max_uses: 1,
   })) as { token: string };
   const gapViewer = newSession();
-  await signIn(gapViewer, `gap_viewer_${tag}@example.com`);
+  await signIn(gapViewer, `delivered+gap_viewer_${tag}@resend.dev`);
   await call(gapViewer, `/api/invites/${gapViewerInvite.token}/accept`, "POST", {});
   const umpInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
     role: "scorer",
@@ -16423,7 +16423,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   // --- Free paths on a fresh community owner: device links 402, offline
   // entry fees allowed without Stripe ---
   const free = newSession();
-  await signIn(free, `free_${tag}@example.com`);
+  await signIn(free, `delivered+free_${tag}@resend.dev`);
   const fComp = await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Free Gap ${tag}`,
   });
@@ -16695,7 +16695,7 @@ async function seedOverlayOrg(label: string, cards: boolean): Promise<{
   fixtureId: string;
 }> {
   const owner = newSession();
-  await signIn(owner, `overlay_${label}_${tag}@example.com`);
+  await signIn(owner, `delivered+overlay_${label}_${tag}@resend.dev`);
   const comp = v1data<{ id: string }>(
     await v1(owner, "/api/v1/competitions", "POST", {
       ends_on: "2030-12-31",
@@ -16993,7 +16993,7 @@ async function v3ContentApiSuite(
 
   // ---- FREE PATH ------------------------------------------------------
   const free = newSession();
-  const freeVer = await signIn(free, `content_free_${tag}@example.com`);
+  const freeVer = await signIn(free, `delivered+content_free_${tag}@resend.dev`);
   const freeOrgId = freeVer.org_id;
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
@@ -17193,7 +17193,7 @@ async function disciplineSuite(
 
   // --- Free path: 402 on the rules PUT + PlusReveal on the Discipline tab ---
   const free = newSession();
-  await signIn(free, `disc_free_${tag}@example.com`);
+  await signIn(free, `delivered+disc_free_${tag}@resend.dev`);
   const freeOrgs = (await call(free, "/api/orgs")) as {
     id: string;
     slug: string;
@@ -17796,7 +17796,7 @@ async function scorePadV2AppendSuite(admin: Session, proOrgId: string): Promise<
   // ---- Free (community) path: proves a free org can score at all through
   // the same append door — tier 0 carries no entitlement, so no plan flip. ----
   const freeOwner = newSession();
-  await signIn(freeOwner, `scorepadfree_${tag}@example.com`);
+  await signIn(freeOwner, `delivered+scorepadfree_${tag}@resend.dev`);
   const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0].id;
   await decideOneFixture(freeOwner, freeOrgId, "Free");
 }
@@ -17879,7 +17879,7 @@ async function footballFidelityGateSuite(admin: Session, proOrgId: string): Prom
   // this comment is the record of why; putting the 402 back re-establishes a
   // paywall the owner removed on 2026-08-30.
   const freeOwner = newSession();
-  await signIn(freeOwner, `fidelitygatefree_${tag}@example.com`);
+  await signIn(freeOwner, `delivered+fidelitygatefree_${tag}@resend.dev`);
   const freeOrgId = ((await call(freeOwner, "/api/orgs")) as { id: string }[])[0].id;
   const free = await shotFixture(freeOwner, freeOrgId, "Free");
   const freeShot = await appendScoreEvent(freeOwner, free.fixtureId, "football.shot", {
@@ -18252,119 +18252,119 @@ async function cleanup(tag: string): Promise<void> {
     return;
   }
   const emails = [
-    `admin_${tag}@example.com`,
-    `viewer_${tag}@example.com`,
-    `member_${tag}@example.com`,
-    `scorer_${tag}@example.com`,
-    `scorer2_${tag}@example.com`,
-    `free_${tag}@example.com`,
-    `walkin_${tag}@example.com`,
+    `delivered+admin_${tag}@resend.dev`,
+    `delivered+viewer_${tag}@resend.dev`,
+    `delivered+member_${tag}@resend.dev`,
+    `delivered+scorer_${tag}@resend.dev`,
+    `delivered+scorer2_${tag}@resend.dev`,
+    `delivered+free_${tag}@resend.dev`,
+    `delivered+walkin_${tag}@resend.dev`,
     // #402 — gapSuite's signed-in self-registrant. Its persons rows live in the
     // admin's Pro org and go with that org in the same delete statement above,
     // so nothing still references this user by the time the users delete runs.
-    `selflink_${tag}@example.com`,
-    `ui_free_${tag}@example.com`,
-    `disc_free_${tag}@example.com`,
-    `pass_${tag}@example.com`,
-    `aboveprorung_${tag}@example.com`,
-    `funnel_${tag}@example.com`,
-    `tos_${tag}@example.com`,
-    `player_${tag}@example.com`,
-    `ref_${tag}@example.com`,
-    `p72_${tag}@example.com`,
+    `delivered+selflink_${tag}@resend.dev`,
+    `delivered+ui_free_${tag}@resend.dev`,
+    `delivered+disc_free_${tag}@resend.dev`,
+    `delivered+pass_${tag}@resend.dev`,
+    `delivered+aboveprorung_${tag}@resend.dev`,
+    `delivered+funnel_${tag}@resend.dev`,
+    `delivered+tos_${tag}@resend.dev`,
+    `delivered+player_${tag}@resend.dev`,
+    `delivered+ref_${tag}@resend.dev`,
+    `delivered+p72_${tag}@resend.dev`,
     // #451 cricketDlsSuite — its own Pro org (two cricket divisions cascade).
-    `dls_${tag}@example.com`,
+    `delivered+dls_${tag}@resend.dev`,
     // S13/W11 scorePadV2AppendSuite's own free (community) org — pre-existing
     // gap, found and fixed in R8 sweep task G's review (fix round 1): missing
     // here since that suite was added, every smoke run leaked its org.
-    `scorepadfree_${tag}@example.com`,
+    `delivered+scorepadfree_${tag}@resend.dev`,
     // R8 sweep, task G — footballFidelityGateSuite's own free (community)
     // org (its one division/fixture cascades with it).
-    `fidelitygatefree_${tag}@example.com`,
+    `delivered+fidelitygatefree_${tag}@resend.dev`,
     // #404 personMergeSuite — its own Pro org (its two persons, their
     // suspension and the person_merges ledger row all cascade with it).
-    `dupmerge_${tag}@example.com`,
+    `delivered+dupmerge_${tag}@resend.dev`,
     // T14 autoScheduleSuite — its own Pro org (one competition, one division
     // and its six fixtures all cascade with it).
-    `smoke-autosched-${tag}@example.com`,
+    `delivered+smoke-autosched-${tag}@resend.dev`,
     // P9 review: twoVenueSuite's own Pro org (its two venues and their
     // courts) — was missing from this list entirely, so every smoke run
     // leaked the org along with its venues/courts (the courts/venues purge
     // below is keyed off this SAME `emails` array via `doomedOrgs`).
-    `smoke-two-venue-${tag}@example.com`,
-    `p72comm_${tag}@example.com`,
-    `smoke-community-${tag}@example.com`,
-    `smoke-pro-${tag}@example.com`,
-    `smoke-enterprise-${tag}@example.com`,
-    `smoke-pass-${tag}@example.com`,
+    `delivered+smoke-two-venue-${tag}@resend.dev`,
+    `delivered+p72comm_${tag}@resend.dev`,
+    `delivered+smoke-community-${tag}@resend.dev`,
+    `delivered+smoke-pro-${tag}@resend.dev`,
+    `delivered+smoke-enterprise-${tag}@resend.dev`,
+    `delivered+smoke-pass-${tag}@resend.dev`,
     // T20 publicQuotaDegradeSuite — its own community org (the cap-many public
     // competitions, the degraded one and the templated one all cascade with
     // it, as does its competitions.max_active override).
-    `pubquota_${tag}@example.com`,
+    `delivered+pubquota_${tag}@resend.dev`,
     // Task 23 — passGrantsSuite's own org (its two competitions, pass row,
     // sponsors, packages, person and AI ledger rows all cascade with it).
-    `passgrant_${tag}@example.com`,
+    `delivered+passgrant_${tag}@resend.dev`,
     // v17 #294 passRungLSuite — the community buyer (three competitions, two
     // bought passes, the +25 grants) and the Pro org holding an inert L pass.
-    `passl_${tag}@example.com`,
-    `passlpro_${tag}@example.com`,
+    `delivered+passl_${tag}@resend.dev`,
+    `delivered+passlpro_${tag}@resend.dev`,
     // Task 20 — the three extra users seeded per plan org (owner is above).
     ...["community", "pro", "enterprise", "pass"].flatMap((k) => [
-      `scorer_${k}_${tag}@example.com`,
-      `official_${k}_${tag}@example.com`,
-      `player_${k}_${tag}@example.com`,
+      `delivered+scorer_${k}_${tag}@resend.dev`,
+      `delivered+official_${k}_${tag}@resend.dev`,
+      `delivered+player_${k}_${tag}@resend.dev`,
     ]),
-    `clubpro_${tag}@example.com`,
-    `clubfree_${tag}@example.com`,
-    `trial_staff_${tag}@example.com`,
-    `trial_pro_${tag}@example.com`,
-    `trial_free_${tag}@example.com`,
-    `trial_dep_${tag}@example.com`,
-    `pm_staff_${tag}@example.com`,
-    `pm_owner_${tag}@example.com`,
+    `delivered+clubpro_${tag}@resend.dev`,
+    `delivered+clubfree_${tag}@resend.dev`,
+    `delivered+trial_staff_${tag}@resend.dev`,
+    `delivered+trial_pro_${tag}@resend.dev`,
+    `delivered+trial_free_${tag}@resend.dev`,
+    `delivered+trial_dep_${tag}@resend.dev`,
+    `delivered+pm_staff_${tag}@resend.dev`,
+    `delivered+pm_owner_${tag}@resend.dev`,
     // The one-click email-invite claimee (auto-login + join). Its org_members
     // row is dropped inline after the claim assertions to free the seat; this
     // clears the leftover user row at teardown.
-    `emailinvitee_${tag}@example.com`,
+    `delivered+emailinvitee_${tag}@resend.dev`,
     // #267 referralSuite — referrer + referred, own orgs. Both rows go in the
     // same `delete from organizations` statement, so the self-referencing
     // `referred_by_org_id` FK (NO ACTION, checked at end-of-statement) never
     // trips: by the time it's checked, both rows are already gone together.
-    `referrer_${tag}@example.com`,
-    `referred_${tag}@example.com`,
+    `delivered+referrer_${tag}@resend.dev`,
+    `delivered+referred_${tag}@resend.dev`,
     // #293 extraOrgAddonSuite — the Pro payer (whose four seeded fill
     // organisations carry created_by = this user and so go with the purge
     // below), the non-payer co-owner, and the community owner.
-    `orgaddon_${tag}@example.com`,
-    `orgaddon_nonpayer_${tag}@example.com`,
-    `orgaddon_free_${tag}@example.com`,
-    // registrationPaidLoopSuite — the org owner. `regpayer_${tag}@example.com`
+    `delivered+orgaddon_${tag}@resend.dev`,
+    `delivered+orgaddon_nonpayer_${tag}@resend.dev`,
+    `delivered+orgaddon_free_${tag}@resend.dev`,
+    // registrationPaidLoopSuite — the org owner. `delivered+regpayer_${tag}@resend.dev`
     // (the registrant's own contact email on the submit) is NOT a users row —
     // registering_self is never set on that entry, so nothing resolves it to
     // a person/user — it needs no entry here; the org purge above already
     // cascades its registration_groups row away with the org.
-    `regpay_${tag}@example.com`,
+    `delivered+regpay_${tag}@resend.dev`,
     // RS006 money-hardening — registrationDuplicatePaymentSuite and
     // registrationRefundReversalSuite, each its own Pro org owner. Same
     // "registrant contact email needs no entry" reasoning as regpay_ above
-    // applies to `regdupplayer_${tag}@example.com`/`regrefundplayer_${tag}@example.com`.
-    `regdup_${tag}@example.com`,
-    `regrefund_${tag}@example.com`,
+    // applies to `delivered+regdupplayer_${tag}@resend.dev`/`delivered+regrefundplayer_${tag}@resend.dev`.
+    `delivered+regdup_${tag}@resend.dev`,
+    `delivered+regrefund_${tag}@resend.dev`,
     // RS010 registration-core-flow smoke — each of the four new suites' own
     // org owner. Same "anonymous registrant contact email needs no entry"
     // reasoning as regpay_ above applies to every non-self contact email
     // these suites submit (openflow_free_/openflow_manual_/wait*_/*cap_/
     // soloplayer_) — none of them sign in, so none mint a users row.
-    // `selflink_${tag}@example.com` (registrationSelfLinkAndConsentSuite's
+    // `delivered+selflink_${tag}@resend.dev` (registrationSelfLinkAndConsentSuite's
     // own SIGNED-IN self-registrant) is already above, from gapSuite's now-
     // orphaned #402 entry — reused, not duplicated.
-    `regopen_${tag}@example.com`,
-    `regwait_${tag}@example.com`,
-    `regteam_${tag}@example.com`,
-    `regself_${tag}@example.com`,
+    `delivered+regopen_${tag}@resend.dev`,
+    `delivered+regwait_${tag}@resend.dev`,
+    `delivered+regteam_${tag}@resend.dev`,
+    `delivered+regself_${tag}@resend.dev`,
     // Task 15 (spectator W1) — matchCentreSmoke's own org (one competition,
     // one cricket division and its fixture cascade with it).
-    `matchcentre_${tag}@example.com`,
+    `delivered+matchcentre_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -19032,7 +19032,7 @@ async function qualifyFromAnyStageSuite(admin: Session): Promise<void> {
  *  division's player-stats fold, and the decided-write news auto-draft. */
 async function eventImportSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `eventimport_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+eventimport_${tag}@resend.dev`);
   const orgId = who.org_id;
   await setPlan(orgId, "pro", owner);
   await insertEntitlementOverride(owner, orgId, "import.events", true);
@@ -19189,7 +19189,7 @@ async function eventImportSuite(): Promise<void> {
  */
 async function eligibilityGateOnPlanSuite(plan: "pro" | "community"): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `elig_${plan}_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+elig_${plan}_${tag}@resend.dev`);
   const orgId = who.org_id;
   if (plan === "pro") await setPlan(orgId, "pro", owner);
 
@@ -19270,7 +19270,7 @@ async function eligibilityGateSuite(): Promise<void> {
 // gapSuite: device links/lineups). Nothing here resurrects their old code —
 // every request below is built fresh against `PublicRegisterGroupRequest`/
 // `PublicJoinRequest` (schemas.ts), the group shape, not the deleted flat
-// single-entry one. `selflink_${tag}@example.com` was already present,
+// single-entry one. `delivered+selflink_${tag}@resend.dev` was already present,
 // orphaned, in cleanup()'s emails array with a #402/gapSuite comment naming
 // exactly this suite's shape — reused rather than renamed.
 // ---------------------------------------------------------------------------
@@ -19283,7 +19283,7 @@ async function eligibilityGateSuite(): Promise<void> {
  */
 async function registrationOpenFlowSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `regopen_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+regopen_${tag}@resend.dev`);
   const orgId = who.org_id;
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
@@ -19345,7 +19345,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
     `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
     "POST",
     {
-      contact: { name: `Free Entrant ${tag}`, email: `openflow_free_${tag}@example.com` },
+      contact: { name: `Free Entrant ${tag}`, email: `delivered+openflow_free_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -19396,7 +19396,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
     `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
     "POST",
     {
-      contact: { name: `Manual Entrant ${tag}`, email: `openflow_manual_${tag}@example.com` },
+      contact: { name: `Manual Entrant ${tag}`, email: `delivered+openflow_manual_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -19437,7 +19437,7 @@ async function registrationOpenFlowSuite(): Promise<void> {
  */
 async function registrationWaitlistPromoteSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `regwait_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+regwait_${tag}@resend.dev`);
   const orgId = who.org_id;
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
@@ -19492,7 +19492,7 @@ async function registrationWaitlistPromoteSuite(): Promise<void> {
   const submitOne = async (label: string) =>
     v1data<SubmitOut>(
       await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
-        contact: { name: `${label} ${tag}`, email: `wait${label.toLowerCase()}_${tag}@example.com` },
+        contact: { name: `${label} ${tag}`, email: `delivered+wait${label.toLowerCase()}_${tag}@resend.dev` },
         privacy_consent: true,
         entries: [
           {
@@ -19590,7 +19590,7 @@ async function registrationWaitlistPromoteSuite(): Promise<void> {
  */
 async function registrationTeamOpsSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `regteam_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+regteam_${tag}@resend.dev`);
   const orgId = who.org_id;
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
@@ -19641,7 +19641,7 @@ async function registrationTeamOpsSuite(): Promise<void> {
   const submitTeam = async (label: string) =>
     v1data<SubmitOut>(
       await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
-        contact: { name: `${label} Captain ${tag}`, email: `${label.toLowerCase()}cap_${tag}@example.com` },
+        contact: { name: `${label} Captain ${tag}`, email: `delivered+${label.toLowerCase()}cap_${tag}@resend.dev` },
         privacy_consent: true,
         entries: [
           {
@@ -19667,7 +19667,7 @@ async function registrationTeamOpsSuite(): Promise<void> {
 
   const soloOut = v1data<SubmitOut>(
     await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`, "POST", {
-      contact: { name: `Solo Player ${tag}`, email: `soloplayer_${tag}@example.com` },
+      contact: { name: `Solo Player ${tag}`, email: `delivered+soloplayer_${tag}@resend.dev` },
       privacy_consent: true,
       entries: [
         {
@@ -19745,13 +19745,13 @@ async function registrationTeamOpsSuite(): Promise<void> {
  * .../register/route.ts). This suite is that HTTP-wiring proof, layered on
  * top of already-solid unit coverage, not a gap-fill for a missing one.
  *
- * Reuses `selflink_${tag}@example.com` — already present, orphaned, in
+ * Reuses `delivered+selflink_${tag}@resend.dev` — already present, orphaned, in
  * cleanup()'s emails array with a #402/gapSuite comment naming exactly this
  * suite's shape.
  */
 async function registrationSelfLinkAndConsentSuite(): Promise<void> {
   const owner = newSession();
-  const who = await signIn(owner, `regself_${tag}@example.com`);
+  const who = await signIn(owner, `delivered+regself_${tag}@resend.dev`);
   const orgId = who.org_id;
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
   const orgSlug = orgs.find((o) => o.id === orgId)!.slug;
@@ -19812,7 +19812,7 @@ async function registrationSelfLinkAndConsentSuite(): Promise<void> {
   }
 
   const registrant = newSession();
-  await signIn(registrant, `selflink_${tag}@example.com`);
+  await signIn(registrant, `delivered+selflink_${tag}@resend.dev`);
   const fullName = `Selflink Player ${tag}`;
   const dob = "1990-01-01"; // adult — deriveLinkUserId refuses a minor regardless of affirmation
 
@@ -19824,7 +19824,7 @@ async function registrationSelfLinkAndConsentSuite(): Promise<void> {
         `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/register`,
         "POST",
         {
-          contact: { name: fullName, email: `selflink_${tag}@example.com`, dob },
+          contact: { name: fullName, email: `delivered+selflink_${tag}@resend.dev`, dob },
           privacy_consent: true,
           entries: [
             {

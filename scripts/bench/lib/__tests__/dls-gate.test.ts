@@ -405,7 +405,7 @@ describe("runDlsGateProbe", () => {
 
     const result = await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7",
       sql,
       transport,
@@ -531,7 +531,7 @@ describe("runDlsGateProbe", () => {
 
     const result = await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7-free",
       sql,
       transport,
@@ -569,7 +569,7 @@ describe("runDlsGateProbe", () => {
 
     const result = await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7-regated",
       sql,
       transport,
@@ -623,7 +623,7 @@ describe("runDlsGateProbe", () => {
 
     const result = await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7b",
       sql,
       transport,
@@ -668,7 +668,7 @@ describe("runDlsGateProbe", () => {
 
     const result = await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7-news",
       sql,
       transport,
@@ -690,7 +690,7 @@ describe("runDlsGateProbe", () => {
 
     await runDlsGateProbe({
       base: "http://bench.example",
-      email: "bench-probe@example.com",
+      email: "delivered+bench-probe@resend.dev",
       runTag: "t7c",
       sql,
       transport,

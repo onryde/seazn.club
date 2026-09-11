@@ -593,7 +593,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
   const t = input.transport ?? defaultTransport;
   const s = newSession();
 
-  const email = `bench-${plan.org.slug}-${runTag}@example.com`;
+  const email = `delivered+bench-${plan.org.slug}-${runTag}@resend.dev`;
   const { org_id: orgId } = await t.signIn(base, s, email);
 
   const venuesWork = seedVenuesAndCourts(base, s, t, orgId, venues);
@@ -918,7 +918,7 @@ export interface SeededOfficialsAndClaims {
  * valid email local-part character. */
 export function officialInviteEmail(ref: string, runTag: string): string {
   const safeRef = ref.replace(/[^A-Za-z0-9_.-]/g, "-");
-  return `bench-official-${safeRef}-${runTag}@example.com`;
+  return `delivered+bench-official-${safeRef}-${runTag}@resend.dev`;
 }
 
 /** Resolves an official's ref to its real id, or throws naming the ref —

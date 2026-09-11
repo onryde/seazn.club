@@ -373,7 +373,7 @@ test.describe("RS004 registration hub", () => {
     const ownerCtx = await browser.newContext();
     const ownerPage = await ownerCtx.newPage();
     try {
-      await loginUi(ownerPage, `e2e-reghub-owner-${suffix}@example.com`);
+      await loginUi(ownerPage, `delivered+e2e-reghub-owner-${suffix}@resend.dev`);
       const org = await activeOrg(ownerPage);
       const comp = await apiJson<{ id: string; slug: string }>(
         ownerPage.request,
@@ -396,7 +396,7 @@ test.describe("RS004 registration hub", () => {
         const guestCtx = await browser.newContext();
         const guestPage = await guestCtx.newPage();
         try {
-          await loginUi(guestPage, `e2e-reghub-${role}-${suffix}@example.com`);
+          await loginUi(guestPage, `delivered+e2e-reghub-${role}-${suffix}@resend.dev`);
           const accepted = await guestPage.request.post(`/api/invites/${invite.data!.token}/accept`, {
             data: {},
           });
@@ -534,7 +534,7 @@ test.describe("RS004 registration hub", () => {
         `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
         "POST",
         {
-          contact: { name: who, email: `${who.toLowerCase().replace(/\W+/g, "-")}@example.com` },
+          contact: { name: who, email: `delivered+${who.toLowerCase().replace(/\W+/g, "-")}@resend.dev` },
           privacy_consent: true,
           entries: [
             { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} },
@@ -682,7 +682,7 @@ async function loginAsViewer(
   expect(invite.status, "viewer invite create").toBeLessThan(300);
   const context = await browser.newContext();
   const guestPage = await context.newPage();
-  await loginUi(guestPage, `e2e-rs005-viewer-${emailSuffix}@example.com`);
+  await loginUi(guestPage, `delivered+e2e-rs005-viewer-${emailSuffix}@resend.dev`);
   const accepted = await guestPage.request.post(`/api/invites/${invite.data!.token}/accept`, { data: {} });
   expect(accepted.ok(), "viewer invite accept").toBe(true);
   return { context, page: guestPage };
@@ -712,7 +712,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: `Captain ${suffix}`, email: `captain-${suffix}@example.com` },
+        contact: { name: `Captain ${suffix}`, email: `delivered+captain-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           {
@@ -779,7 +779,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: `Player ${suffix}`, email: `player-${suffix}@example.com` },
+        contact: { name: `Player ${suffix}`, email: `delivered+player-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           {
@@ -840,7 +840,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `boundary-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+boundary-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -896,7 +896,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `recovery-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+recovery-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -953,7 +953,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `reject-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+reject-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -1004,7 +1004,7 @@ test.describe("RS005 registrants tab", () => {
         `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
         "POST",
         {
-          contact: { name: who, email: `${who.toLowerCase().replace(/\W+/g, "-")}@example.com` },
+          contact: { name: who, email: `delivered+${who.toLowerCase().replace(/\W+/g, "-")}@resend.dev` },
           privacy_consent: true,
           entries: [
             { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} },
@@ -1076,7 +1076,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `withdrawn-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+withdrawn-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -1123,7 +1123,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `rollback-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+rollback-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -1242,7 +1242,7 @@ test.describe("RS005 registrants tab", () => {
         {
           contact: {
             name: displayName,
-            email: `${displayName.toLowerCase().replace(/\W+/g, "-")}@example.com`,
+            email: `delivered+${displayName.toLowerCase().replace(/\W+/g, "-")}@resend.dev`,
             // Cart-wide required the instant ANY entry sets registering_self
             // (schemas.ts's superRefine) — harmless to include unconditionally.
             dob: "1990-01-01",
@@ -1383,7 +1383,7 @@ test.describe("RS005 registrants tab", () => {
       `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
       "POST",
       {
-        contact: { name: displayName, email: `filtered-${suffix}@example.com` },
+        contact: { name: displayName, email: `delivered+filtered-${suffix}@resend.dev` },
         privacy_consent: true,
         entries: [
           { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
@@ -1455,7 +1455,7 @@ test.describe("RS005 registrants tab", () => {
         `/api/v1/public/orgs/${org.slug}/competitions/${comp.data!.slug}/register`,
         "POST",
         {
-          contact: { name: who, email: `${who.toLowerCase().replace(/\W+/g, "-")}@example.com` },
+          contact: { name: who, email: `delivered+${who.toLowerCase().replace(/\W+/g, "-")}@resend.dev` },
           privacy_consent: true,
           entries: [{ division_id: divId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} }],
         },

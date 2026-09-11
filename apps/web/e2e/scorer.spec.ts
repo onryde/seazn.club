@@ -18,7 +18,7 @@ import {
 // resource it was. Staying a single serial spec is now a magic-link budget
 // decision, not a seat one.
 test.describe.serial("scorer routing and scoring surface", () => {
-  const scorerEmail = `e2e-scorer-${TAG}@example.com`;
+  const scorerEmail = `delivered+e2e-scorer-${TAG}@resend.dev`;
   let divisionId: string;
   /** The division's slug chain, resolved by the ORGANISER in the first test.
    *  The scorer cannot resolve it — refusing them that page is what the 404

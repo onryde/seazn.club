@@ -205,7 +205,7 @@ async function main() {
     // from `plans`, and `plan_key` carries a live FK, so the old literal made
     // this script die on its first write.
     const paid = newSession();
-    const paidOrg = (await signIn(paid, `smoke-ai-pro-${tag}@example.com`)).org_id;
+    const paidOrg = (await signIn(paid, `delivered+smoke-ai-pro-${tag}@resend.dev`)).org_id;
     await setPlan(paidOrg, "pro");
     console.log("Session + org ready:", paidOrg);
 

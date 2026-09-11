@@ -221,7 +221,7 @@ test("Case 12b: a sole owner of an org with NO other members is NOT blocked — 
   // (those name the two long-lived shared fixtures), and its storage state is
   // never written to any e2e/.auth/*.json file — nothing else in this suite
   // will ever address this identity again once this test ends.
-  const email = `e2e-w3-case12b-${TAG}-${randomBytes(4).toString("hex")}@example.com`;
+  const email = `delivered+e2e-w3-case12b-${TAG}-${randomBytes(4).toString("hex")}@resend.dev`;
   const ctx = await browser.newContext(); // no storageState — genuinely anonymous start
   const page = await ctx.newPage();
   let orgId: string | undefined;

@@ -62,7 +62,7 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
  *  whose `officials.auto` is FALSE or the pass is not what is under test. */
 async function seedCommunityOrg(): Promise<{ orgId: string; ownerEmail: string }> {
   const tag = hex();
-  const ownerEmail = `po-owner-${TAG}-${tag}@example.com`;
+  const ownerEmail = `delivered+po-owner-${TAG}-${tag}@resend.dev`;
   return withDb(async (sql) => {
     const [{ id: ownerId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified)

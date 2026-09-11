@@ -155,9 +155,9 @@ async function setPlan(orgId: string, plan: string): Promise<void> {
 
 async function cleanup(): Promise<void> {
   const emails = [
-    `sports_${tag}@example.com`,
-    `community_${tag}@example.com`,
-    `superover_${tag}@example.com`,
+    `delivered+sports_${tag}@resend.dev`,
+    `delivered+community_${tag}@resend.dev`,
+    `delivered+superover_${tag}@resend.dev`,
   ];
   const sql = db();
   try {
@@ -923,7 +923,7 @@ async function signIn(s: Session, email: string): Promise<V1Res> {
 
 async function communityFineFidelitySuite(): Promise<void> {
   const s = newSession();
-  await signIn(s, `community_${tag}@example.com`);
+  await signIn(s, `delivered+community_${tag}@resend.dev`);
 
   const comp = await must(s, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Community Gate ${tag}`,
@@ -1027,7 +1027,7 @@ async function communityFineFidelitySuite(): Promise<void> {
 
 async function cricketSuperOverSuite(): Promise<void> {
   const s = newSession();
-  await signIn(s, `superover_${tag}@example.com`);
+  await signIn(s, `delivered+superover_${tag}@resend.dev`);
   // NO setPlan: this org stays on COMMUNITY. It used to be flipped to pro for
   // one reason only — `cricket.ball` / `cricket.superover.ball` sat behind
   // `scoring.ball_by_ball`, the same gate the volleyball suite above exercised
@@ -1220,7 +1220,7 @@ async function main() {
   await seedCatalog();
 
   const s = newSession();
-  const ver = data<{ org_id: string }>(await signIn(s, `sports_${tag}@example.com`));
+  const ver = data<{ org_id: string }>(await signIn(s, `delivered+sports_${tag}@resend.dev`));
   check("owner signed in + org provisioned", !!ver.org_id);
 
   // Pro BEFORE any division exists: 8 divisions in one competition need it

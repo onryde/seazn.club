@@ -96,7 +96,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     await anon.getByRole("button", { name: /^accept$/i }).click({ timeout: 3000 }).catch(() => {});
 
     await anon.locator("#reg-who-name").fill(`Journey Captain ${TAG}`);
-    await anon.locator("#reg-who-email").fill(`journey-captain-${TAG}@example.com`);
+    await anon.locator("#reg-who-email").fill(`delivered+journey-captain-${TAG}@resend.dev`);
     // Ticking "I'm registering myself" REVEALS a required date-of-birth
     // field. Without it "Next" does nothing and "Back" stays disabled — the
     // page is saying it is still on step 1, not that the button is broken.
@@ -177,7 +177,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     // ------------------------------------------------ the mate CLAIMS it
     await anon.getByRole("radio", { name: MATES[0]! }).check();
     await anon.locator("#reg-who-name").fill(MATES[0]!);
-    await anon.locator("#reg-who-email").fill(`journey-mate-${TAG}@example.com`);
+    await anon.locator("#reg-who-email").fill(`delivered+journey-mate-${TAG}@resend.dev`);
     await anon.locator("#reg-consent-privacy").check();
     await shot(anon, "08-join-filled");
     await anon.getByRole("button", { name: /confirm my spot/i }).click();
@@ -209,7 +209,7 @@ test("a captain enters a team, and a team-mate claims their spot from the link t
     // register/status/page.tsx directly) — no ISR revalidation window to
     // race, a plain reload is always fresh.
     // ------------------------------------------------------------------
-    const mate2Email = `journey-mate2-${TAG}@example.com`;
+    const mate2Email = `delivered+journey-mate2-${TAG}@resend.dev`;
     const mate2Ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     try {
       // Mate Two's OWN join is not what this segment tests — Mate One's UI
