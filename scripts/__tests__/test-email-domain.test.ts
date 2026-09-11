@@ -63,7 +63,14 @@ describe("test email addresses", () => {
         // `example.org`/`.net` are refused by the same rule; `test.com` is named
         // in Resend's own list. Matched on the address, not the bare domain, so
         // prose in a comment about the rule does not trip its own guard.
-        if (/[A-Za-z0-9._%+$-]@(example\.(com|org|net)|test\.com)/.test(line)) {
+        //
+        // `}` IS IN THE CLASS DELIBERATELY, and leaving it out is how the first
+        // version of this guard let a reverted generator through its own
+        // mutation sweep: the commonest address shape in this repo ends with an
+        // interpolation, `` `bench-captain-${safe}-${runTag}@example.com` ``, so
+        // the character immediately before the `@` is a closing brace far more
+        // often than it is a letter.
+        if (/[A-Za-z0-9._%+$}-]@(example\.(com|org|net)|test\.com)/.test(line)) {
           offenders.push(`${file}:${i + 1}: ${line.trim()}`);
         }
       });
