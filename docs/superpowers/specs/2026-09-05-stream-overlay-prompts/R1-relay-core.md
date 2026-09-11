@@ -322,10 +322,28 @@ the design's DDL verbatim.
    with `heartbeat_at` older than 90 s → ONE retry (`RunnerProvider.create`
    again on the same session, same creds) then `failed(machine_crash)`; wall
    clock > `max_duration_minutes` → `desired_state = ending`; storage headroom
-   below one retained match → a pino warning with the number (§6.5).
-   Workflow `.github/workflows/relay-sweep.yml` cloned from
-   `registrations-sweep.yml` (every 5 min; same secret; same
-   `PROD_SWEEP_ENABLED` gate).
+   below one retained match → a pino warning with the number (§6.5);
+   **RETENTION (ruling 27): delete every recording older than 7 days via
+   `IngestProvider.deleteRecordings` → `DELETE /stream/{video_uid}`.** This rule
+   IS the storage bill — `deleteRecordingAfterDays: 30` is only the backstop
+   beneath it, and deleting a live input does NOT delete its recordings (U1-S9),
+   so nothing else reclaims them.
+
+   **The `schedule:` workflow is NOT in this repo.** `d53d87024` (PR #757,
+   2026-09-09) moved all 8 scheduled ops workflows to
+   `onryde/seazn.club.workflow`; `origin/main` now carries 11 workflows of which
+   `help-shots.yml` is the only `schedule:`. A `relay-sweep.yml` added here is
+   fired by nothing, CI stays green, and the sweep silently never runs. Raise it
+   in the workflow repo, cloned from `registrations-sweep.yml` there (every
+   5 min; same secret; same `PROD_SWEEP_ENABLED` gate), with `CRON_SECRET`
+   mirrored — `gh secret set` in that repo, `flyctl secrets set` on the app.
+   Those workflows skip-with-warning on a missing secret rather than failing
+   red, so a mismatch looks green while doing nothing: assert the response body,
+   never the run colour.
+
+   **The owner is building the workflow; this repo owes the ROUTE.** Until this
+   scope item ships there is no endpoint — a schedule pointing at
+   `/api/cron/relay-sweep` today POSTs into a 404.
 9. **Replay fill** (ruling F): on the `completed` transition, when
    `fixtures.stream_url` is null AND the target kind is `youtube`, call W1's
    `setFixtureStreamUrl` with the destination's watch URL through
