@@ -396,8 +396,12 @@ export function nextUpMatches<
   if (scope === null) return [];
   // Guarded before `toISOString()`, which THROWS on an Invalid Date — `now` is
   // a caller's value, and an unusable clock must not become an exception out of
-  // a render. `landingStatus` guards the same way at the same boundary
-  // (`lib/matches-hub.ts:324`), and the agreement survives it: at `NaN` this
+  // a render. `landingStatus` guards the same BOUNDARY
+  // (`lib/matches-hub.ts:324`) but not the same VALUE — it tests
+  // `a.now.getTime()`, this tests the raw `number` — so the two agree at `NaN`
+  // and diverge at `±Infinity`, where this one throws. See the `!(at < now)`
+  // note below; the divergence is pre-existing and unreachable from `useNow()`.
+  // At `NaN` this
   // yields `null`, so no fixture's day can match — and `landingStatus`'s
   // `isMatchDay` compares against the same `null` and is false too, so the
   // `match_day` rung cannot be reached with a NaN clock and this branch cannot
@@ -418,8 +422,19 @@ export function nextUpMatches<
         // `landingStatus` excluded NOTHING and still returned `{kind:"next"}`.
         // That inversion rendered a sentence promising a kick-off above a panel
         // with no sections at all (review N1): I1's own defect, in the quiet
-        // direction. Mirroring the exclusion makes the agreement TOTAL rather
-        // than true-for-finite-clocks, which is what the invariant claims.
+        // direction. Mirroring the exclusion closes that inversion.
+        //
+        // It does NOT make the agreement total, and an earlier version of this
+        // comment said it did (re-review P1). The COMPARATORS now agree
+        // everywhere, but the two functions guard different values: this one
+        // guards the raw `number`, `landingStatus` guards
+        // `a.now.getTime()`. At `±Infinity` — and at any `|now| > 8.64e15` —
+        // `new Date(now).toISOString()` throws `RangeError` straight out of the
+        // render while the status line still says `next`. That guard predates
+        // this wave and is unreachable from `useNow()`, which is why it is not
+        // being widened here; what was new, and wrong, was the CLAIM. A
+        // totality claim has to be true at every value or it is worth less than
+        // no claim, because the next reader stops checking.
         //
         // `Number.isNaN(at)` stays, and mirrors the same line's `at === null`:
         // a `scheduledAt` that will not parse is excluded by both halves.

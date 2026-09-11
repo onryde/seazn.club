@@ -48,6 +48,15 @@ export const W2_KEYS = [
   // over `LandingStatus["kind"]` with a `never` default, which makes tsc — not
   // a reviewer — reject a rung with no branch.
   "landing.status.empty", "landing.status.live.one", "landing.status.live.other", "landing.status.next", "landing.status.matchDay", "landing.status.finished", "landing.status.dates", "landing.status.datesFrom",
+  // `landing.today` is Task 11's, and it is here for the reason the header
+  // above states rather than because someone remembered. The Overview's
+  // next-up SCOPE picks the heading as well as the window, so the `match_day`
+  // rung emits this key unconditionally — a PRODUCER, exactly like
+  // `landing.status.matchDay` — and it arrived in round 2 of Task 11, after
+  // this list was last written. Its fr/nl values were asserted by nothing until
+  // now, which is the same gap in the same file that let `matchDay` ship
+  // missing from four locales.
+  "landing.today",
   "landing.liveNow", "landing.nextUp", "landing.tables", "landing.register", "landing.present", "landing.divisions.one", "landing.divisions.other",
   "landing.entrants.one", "landing.entrants.other", "landing.liveCount.one", "landing.liveCount.other", "landing.sponsors", "landing.presentedBy", "landing.partners", "landing.noDivisions",
   // matches hub

@@ -38,6 +38,8 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { LandingStatus } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
@@ -699,13 +701,42 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(a).not.toContain(en["landing.today"]);
   });
 
-  it("the Today heading is dictionary copy in all four locales, not an English literal", () => {
+  /** React's own text escaping, so an assertion compares like with like. */
+  const escapeHtml = (s: string): string =>
+    s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#x27;");
+
+  // Re-review P4 — this test was titled "in all four locales" and rendered
+  // SPANISH only. The title was the thing under test as far as a reader was
+  // concerned, and it was false: fr and nl could each have carried the English
+  // word and nothing here would have said so. Read what a test ASSERTS, never
+  // what it is called — the fix is to render the four rather than to rename the
+  // one, because the four are what the claim was worth.
+  it.each([
+    ["es", es],
+    ["fr", fr],
+    ["nl", nl],
+  ])("the Today heading is %s dictionary copy, not an English literal", (locale, dict) => {
     const matchDay = hubDoc({
       matches: [m("today-1", "upcoming", "2026-09-05T09:00:00.000Z", "premier")],
     });
-    const h = render(matchDay, { dict: es as Dict, locale: "es" });
-    expect(h).toMatch(new RegExp(`id="mh-next-up-label"[^>]*>[^<]*${es["landing.today"]}`));
-    expect(h).not.toContain("Today");
+    const h = render(matchDay, { dict: dict as Dict, locale: locale as Locale });
+    // ESCAPED, not raw. French is "Aujourd'hui" and React serialises the
+    // apostrophe as `&#x27;`, so a raw comparison reds on correct output. The
+    // Spanish-only version of this test could never have shown that — "Hoy"
+    // has nothing to escape — which is the second thing rendering all three
+    // bought beyond the title being true.
+    expect(h).toMatch(new RegExp(`id="mh-next-up-label"[^>]*>[^<]*${escapeHtml(dict["landing.today"])}`));
+    // The negative pair, and it is only meaningful while the locale's own word
+    // DIFFERS from English — assert that first, or this passes vacuously the
+    // day a translation happens to coincide (nl `landing.sponsors` is
+    // "Sponsors", which is exactly how that trap has bitten this repo before).
+    expect(dict["landing.today"]).not.toBe(en["landing.today"]);
+    expect(h).not.toContain(en["landing.today"]);
   });
 
   it("while a match is LIVE, an overdue fixture is not smuggled under a 'Next up' heading", () => {
@@ -775,6 +806,28 @@ describe("OverviewTab — next up and the table previews", () => {
     //   → correct: dropped. Zone-blind: included.
     const nextDayInLA = Date.parse("2026-09-06T12:00:00.000Z");
     expect(nextUpMatches([late], "today", nextDayInLA)).toEqual([]);
+
+    // Re-review P2 — the two assertions above are differential for a mutant
+    // that zone-blinds BOTH sides, and blind to one that zone-blinds only the
+    // `now` side. Above, LA's day and UTC's day for `now` happen to coincide in
+    // exactly the way that keeps the verdict unchanged, so
+    // `dayKeyInZone(nowIso, "UTC")` survives them. A comparison has two sides
+    // and a test that fixes one of them only proves the other.
+    //
+    // Tokyo separates them: UTC+9 puts `now` on a different UTC day from its
+    // own venue day, which LA (behind UTC) cannot do at these hours.
+    //
+    //   fixture 2026-09-06T01:00Z → Tokyo 10:00 on 09-06
+    const tokyo = m("tokyo", "upcoming", "2026-09-06T01:00:00.000Z", "premier", {
+      tz: "Asia/Tokyo",
+    });
+    //   now 2026-09-05T22:00Z → Tokyo 07:00 on 09-06 (MATCHES the fixture's day),
+    //   while the same instant is still 09-05 in UTC (does not).
+    //   → correct: included. `now` read in UTC: dropped.
+    const tokyoMorning = Date.parse("2026-09-05T22:00:00.000Z");
+    expect(nextUpMatches([tokyo], "today", tokyoMorning).map((x) => x.fixtureId)).toEqual([
+      "tokyo",
+    ]);
   });
 
   it("an UNSCHEDULED fixture is in neither scope — 'next up' with no time is a blank, not a teaser", () => {
