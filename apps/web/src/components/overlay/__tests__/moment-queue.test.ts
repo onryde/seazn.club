@@ -179,3 +179,48 @@ describe("slabPlacementFor — which scorebug the slab attaches to", () => {
     }
   });
 });
+
+describe("the revision — what stops the queue freezing under reduced motion", () => {
+  const R = { foldMs: 0, holdMs: OVERLAY_MOMENT_HOLD_MS };
+
+  it("a REPEATED deadline still changes the state, so a timer keyed on it re-arms", () => {
+    // The live defect this exists for: with `foldMs: 0`, `out → promote`
+    // computes `now + 0`. When the tick lands exactly on the deadline, the new
+    // deadline is NUMERICALLY IDENTICAL to the one that just fired. A React
+    // effect keyed on the deadline alone does not re-run, no timer is armed,
+    // and `enqueue` never touches `deadline` while `current` is set — the slab
+    // freezes and nothing airs again.
+    let s = reduce(INITIAL, { type: "enqueue", moments: [m(1), m(2)], now: 0, ...R });
+    s = reduce(s, { type: "tick", now: 0, ...R }); // in → hold
+    s = reduce(s, { type: "tick", now: 4_000, ...R }); // hold → out, deadline 4000
+    expect(s).toMatchObject({ phase: "out", deadline: 4_000 });
+
+    const before = s.revision;
+    s = reduce(s, { type: "tick", now: 4_000, ...R }); // out → promote, deadline 4000 AGAIN
+    expect(s.deadline, "the deadline genuinely repeats — this is the trap").toBe(4_000);
+    expect(s.current?.seq, "and the queue HAS advanced").toBe(2);
+    expect(s.revision, "so the revision must move, or nothing re-arms").toBeGreaterThan(before);
+  });
+
+  it("every transition moves the revision, and a no-op does NOT", () => {
+    let s = enqueue(INITIAL, [m(1)], 0);
+    const seen = [s.revision];
+    s = tick(s, 250);
+    seen.push(s.revision);
+    s = tick(s, 4_250);
+    seen.push(s.revision);
+    s = tick(s, 4_500);
+    seen.push(s.revision);
+    expect(new Set(seen).size, "four distinct transitions").toBe(4);
+    expect(seen).toEqual([...seen].sort((a, b) => a - b));
+
+    // A tick before the deadline and an enqueue of nothing both change nothing,
+    // and must not churn the effect either.
+    const idle = enqueue(INITIAL, [m(9)], 0);
+    expect(tick(idle, 1).revision).toBe(idle.revision);
+    expect(enqueue(idle, [], 1).revision).toBe(idle.revision);
+    expect(enqueue(idle, [m(9)], 1).revision, "an already-seen moment is a no-op").toBe(
+      idle.revision,
+    );
+  });
+});

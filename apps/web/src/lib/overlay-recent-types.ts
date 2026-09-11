@@ -33,9 +33,20 @@ export interface RecentPerson {
 }
 
 export interface RecentPayload {
-  /** Index into `[home, away]` of the side the event credits (`by` / `wonBy`).
-   *  ABSENT when the payload names neither side — cricket's ball is the live
-   *  case: it records a striker, not an entrant. */
+  /**
+   * Index into `[home, away]` of the side the payload NAMES — `by`, or `wonBy`
+   * for a rally.
+   *
+   * NOT always the side CREDITED, and the difference is one event: on an own
+   * goal, `FootballGoal.by` / `PeriodGoal.by` is the side whose player struck
+   * it, and the goal counts for the opponent (football.ts:213,
+   * period/kernel.ts:224). Read `ownGoal` alongside this rather than treating
+   * `side` as the scoring team; the raw fact is carried here so a consumer can
+   * decide, and nothing in W2 captions a side from it.
+   *
+   * ABSENT when the payload names neither side — cricket's ball is the live
+   * case: it records a striker, not an entrant.
+   */
   side?: 0 | 1;
   person?: RecentPerson;
   /** Cricket: runs off the bat (`runs.bat`). */

@@ -1692,7 +1692,12 @@ body {
    rounded corners moved to the TOP for the same reason; the bottom two are
    never seen. */
 .ovl-moment-slot--bar {
-  left: 0;
+  /* 72, NOT 0 — the slot's near edge has to be FLUSH with the slab, exactly as
+     `--bug`'s is. With the inset on the slab instead, `translateX(-100%)` of a
+     185 px slab put it at x=-113..72 while the window still clipped at 0, so a
+     solid 72x216 block of `--sport-led` sat at the canvas edge through both
+     fold phases. The slab is at `left: 0` within this window. */
+  left: 72px;
   right: 0;
   bottom: 231px;
   height: 216px;
@@ -1709,7 +1714,6 @@ body {
   padding: 0 33px;
   background: var(--sport-led);
   color: var(--sport-board);
-  transition: transform var(--ovl-slab-fold, 250ms) ease-out;
   will-change: transform;
 }
 
@@ -1717,7 +1721,7 @@ body {
    at the bottom of the canvas, so its slab rises from beneath it. */
 /* Both sit at their slot's near edge; the slot does the placing. */
 .ovl-slab--bar {
-  left: 72px;
+  left: 0;
   border-radius: 6px 6px 0 0;
 }
 .ovl-slab--bug {
@@ -1725,15 +1729,43 @@ body {
   border-radius: 0 12px 12px 0;
 }
 
-/* The three phases. `in` and `hold` are on screen; `out` is folding away. The
-   resting position is off-canvas in the direction the host clips. */
-.ovl-slab--in,
-.ovl-slab--out {
-  transform: translateX(-100%);
+/* The three phases, as KEYFRAMES rather than transitions.
+
+   A transition needs a frame in which the element already exists at its start
+   value, so `in` could only ever mean "mounted, hidden, not yet moving" — the
+   slide then happened at the START OF `hold` and ate 250 ms of the 4000 ms it
+   is supposed to be still for, while `in` painted nothing at all. §6 asks for
+   "→ 0 250 ms ease-out, hold 4000 ms, → -100% 250 ms ease-in", which is
+   exactly 250 sliding + 4000 still + 250 sliding; an animation runs on mount
+   and delivers that.
+
+   The easings were also inverted: the entrance took the `hold` rule's ease-in
+   and the exit fell through to the base ease-out. Both now read as §6 writes
+   them. */
+@keyframes ovl-slab-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes ovl-slab-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+.ovl-slab--in {
+  animation: ovl-slab-in var(--ovl-slab-fold, 250ms) ease-out both;
 }
 .ovl-slab--hold {
   transform: translateX(0);
-  transition-timing-function: ease-in;
+}
+.ovl-slab--out {
+  animation: ovl-slab-out var(--ovl-slab-fold, 250ms) ease-in both;
 }
 
 .ovl-slab__headline {
@@ -1781,7 +1813,8 @@ body {
 /* §6 — "show and hide with no transition". The PHASES still run: the slab
    still appears and leaves on the same schedule, it simply does not slide. */
 @media (prefers-reduced-motion: reduce) {
-  .ovl-slab {
-    transition: none;
+  .ovl-slab--in,
+  .ovl-slab--out {
+    animation: none;
   }
 }

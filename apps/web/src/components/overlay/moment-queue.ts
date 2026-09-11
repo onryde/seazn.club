@@ -31,6 +31,21 @@ export interface MomentQueueState {
    * seconds for as long as it stayed in the window.
    */
   seen: string[];
+  /**
+   * Bumped on every state CHANGE, and never otherwise.
+   *
+   * The hook arms one `setTimeout` from `nextDeadline`, so the deadline is its
+   * effect dependency — and a deadline can REPEAT. Under reduced motion
+   * `foldMs` is 0, so `out → promote` computes `now + 0`, which equals the
+   * deadline that just fired whenever the tick lands exactly on it. React sees
+   * an unchanged dependency, does not re-run the effect, arms no timer, and
+   * `enqueue` never touches `deadline` while `current` is set — so the slab
+   * freezes and NO FURTHER MOMENT airs for the rest of the broadcast.
+   *
+   * A monotonic counter cannot collide, so the effect re-runs whatever the
+   * clock does.
+   */
+  revision: number;
 }
 
 export type QueueAction =
@@ -43,6 +58,7 @@ export const INITIAL: MomentQueueState = {
   queue: [],
   deadline: null,
   seen: [],
+  revision: 0,
 };
 
 /**
@@ -68,8 +84,16 @@ export function nextDeadline(state: MomentQueueState): number | null {
 
 function promote(state: MomentQueueState, now: number, foldMs: number): MomentQueueState {
   const [head, ...rest] = state.queue;
-  if (head === undefined) return { ...INITIAL, seen: state.seen };
-  return { current: head, phase: "in", queue: rest, deadline: now + foldMs, seen: state.seen };
+  const revision = state.revision + 1;
+  if (head === undefined) return { ...INITIAL, seen: state.seen, revision };
+  return {
+    current: head,
+    phase: "in",
+    queue: rest,
+    deadline: now + foldMs,
+    seen: state.seen,
+    revision,
+  };
 }
 
 export function momentQueueReducer(
@@ -93,6 +117,7 @@ export function momentQueueReducer(
       ...state,
       queue: [...state.queue, ...fresh],
       seen: [...state.seen, ...fresh.map(idOf)],
+      revision: state.revision + 1,
     };
     // A moment arriving while one is on air QUEUES. Interrupting the slab on
     // screen would cut a wicket off mid-sentence.
@@ -109,10 +134,20 @@ export function momentQueueReducer(
   // collapsing three phases into one frame would flash the slab rather than
   // fold it.
   if (state.phase === "in") {
-    return { ...state, phase: "hold", deadline: action.now + action.holdMs };
+    return {
+      ...state,
+      phase: "hold",
+      deadline: action.now + action.holdMs,
+      revision: state.revision + 1,
+    };
   }
   if (state.phase === "hold") {
-    return { ...state, phase: "out", deadline: action.now + action.foldMs };
+    return {
+      ...state,
+      phase: "out",
+      deadline: action.now + action.foldMs,
+      revision: state.revision + 1,
+    };
   }
   return promote(state, action.now, action.foldMs);
 }

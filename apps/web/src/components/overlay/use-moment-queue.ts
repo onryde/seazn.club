@@ -46,6 +46,11 @@ export function useMomentQueue(
   }, [key, foldMs, holdMs]);
 
   const deadline = nextDeadline(state);
+  // `state.revision` is in the deps, and it is NOT redundant with `deadline`: a
+  // deadline REPEATS when `foldMs` is 0 (reduced motion) and a tick lands
+  // exactly on it, and an unchanged dependency means no re-run, no timer, and a
+  // slab frozen for the rest of the broadcast. The revision is monotonic, so it
+  // cannot collide.
   useEffect(() => {
     if (deadline === null) return;
     // `Math.max(0, …)` because a deadline already past must still fire — on a
@@ -56,7 +61,7 @@ export function useMomentQueue(
       Math.max(0, deadline - Date.now()),
     );
     return () => clearTimeout(timer);
-  }, [deadline, foldMs, holdMs]);
+  }, [deadline, state.revision, foldMs, holdMs]);
 
   return { current: state.current, phase: state.phase };
 }

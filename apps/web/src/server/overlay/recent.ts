@@ -517,6 +517,16 @@ export async function loadRecentPersonOf(
  * bowler's analysis, through `deriveCricketScorecard`: the ENGINE'S own public
  * spectator seam, already used by the match centre.
  *
+ * Returns the block WITHOUT names, carrying PERSON IDS, because the two halves
+ * belong on opposite sides of the cache. The scorecard is the expensive half
+ * and changes only when the ledger does, so it rides INSIDE the cached fold;
+ * names do not, because consent can change with no event to invalidate on and a
+ * player who withdraws theirs should stop appearing at the next poll rather
+ * than at the next ball. An earlier shape had this whole function running per
+ * poll — a second `loadFoldInputs` plus a full scorecard derivation for every
+ * viewer, which made the file's own "N polls at one ledger position cost one
+ * fold" promise false for cricket.
+ *
  * THE CONFIG MUST BE PARSED. Measured 2026-09-11: handed the raw
  * `resolveFixtureCfg` output — which is exactly what `loadFoldInputs` carries,
  * because `foldMatch` takes it unparsed — `deriveCricketScorecard` throws
@@ -529,10 +539,9 @@ export async function loadRecentPersonOf(
  * Best effort throughout, like everything else on this path: a club is on air,
  * and a missing second band is a smaller loss than a dark overlay.
  */
-export function overlayCricketLive(
+export function overlayCricketLiveIds(
   inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
   active: readonly EventEnvelope[],
-  personOf: (id: unknown) => RecentPerson | undefined,
 ): OverlayCricketLive | null {
   if (inputs.sportKey !== "cricket") return null;
   const parsed = inputs.module.configSchema.safeParse(inputs.cfg);
@@ -546,24 +555,48 @@ export function overlayCricketLive(
       cfg: parsed.data as never,
       lineups: inputs.lineups,
     });
-    return liveFromScorecard(scorecard, (id) => personOf(id)?.name);
+    // The id IS the name at this stage; `nameOf` below swaps them for the
+    // consent-resolved ones once the cache has been crossed.
+    return liveFromScorecard(scorecard, (id) => id);
   } catch (err) {
     log.warn({ err }, "overlay: cricket scorecard failed, serving no crease band");
     return null;
   }
 }
 
+/**
+ * The names, applied OUTSIDE the cache — see `overlayCricketLiveIds`.
+ *
+ * A person the line-up never named loses their name and keeps their figures,
+ * exactly as `liveFromScorecard` decides: the crease is a fact, the name is
+ * consent.
+ */
+export function nameCricketLive(
+  live: OverlayCricketLive | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayCricketLive | null {
+  if (live === null) return null;
+  const named = (id: string | undefined) => (id === undefined ? undefined : personOf(id)?.name);
+  return {
+    batters: live.batters.map((b) => {
+      const name = named(b.name);
+      return { ...(name === undefined ? {} : { name }), runs: b.runs, balls: b.balls, onStrike: b.onStrike };
+    }),
+    ...(live.bowler === undefined
+      ? {}
+      : (() => {
+          const name = named(live.bowler.name);
+          return name === undefined ? {} : { bowler: { ...live.bowler, name } };
+        })()),
+    thisOver: live.thisOver,
+  };
+}
+
 /** The person ids the cricket band will publish — the two at the crease and the
- *  bowler. Collected the same way `personIdsIn` does it: by asking the real
- *  producer, so the lookup cannot drift from what is rendered. */
-export function cricketPersonIdsIn(
-  inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
-  active: readonly EventEnvelope[],
-): string[] {
-  const asked = new Set<string>();
-  overlayCricketLive(inputs, active, (id) => {
-    if (typeof id === "string") asked.add(id);
-    return undefined;
-  });
-  return [...asked];
+ *  bowler. Read off the id-carrying block itself, so the lookup cannot drift
+ *  from what is rendered. */
+export function cricketPersonIdsIn(live: OverlayCricketLive | null): string[] {
+  if (live === null) return [];
+  const ids = [...live.batters.map((b) => b.name), live.bowler?.name];
+  return [...new Set(ids.filter((id): id is string => typeof id === "string"))];
 }

@@ -397,3 +397,35 @@ describe("maxSeq", () => {
     expect(maxSeq([{ seq: 4, type: "x", at: "", payload: {} }, { seq: 9, type: "x", at: "", payload: {} }])).toBe(9);
   });
 });
+
+describe("the wicket line degrades without trailing punctuation", () => {
+  it("a dismissal kind the table does not name keeps the figures and drops the separator", () => {
+    // `kind ?? ""` rendered "Name 4 (2) · " — a dangling separator on a
+    // broadcast graphic, for exactly the future-kind case the fallback exists
+    // to survive.
+    const ev: RecentEvent = {
+      seq: 9,
+      type: "cricket.ball",
+      at: "",
+      payload: { wicketKind: "future_mode", person: { name: "H. One", masked: true } },
+      derived: { batter: { runs: 4, balls: 2 } },
+    };
+    const m = of("cricket", [ev])[0]!;
+    expect(m.tone).toBe("dismissal");
+    expect(m.line).toBe("H. One 4 (2)");
+    expect(m.line).not.toContain("·");
+  });
+
+  it("a KNOWN kind still renders the full line, separator and all", () => {
+    const ev: RecentEvent = {
+      seq: 9,
+      type: "cricket.ball",
+      at: "",
+      payload: { wicketKind: "bowled", person: { name: "H. One", masked: true } },
+      derived: { batter: { runs: 4, balls: 2 } },
+    };
+    expect(of("cricket", [ev])[0]!.line).toBe(
+      `overlay.moment.batterLine${JSON.stringify({ name: "H. One", runs: 4, balls: 2, kind: "overlay.moment.wicket.bowled" })}`,
+    );
+  });
+});

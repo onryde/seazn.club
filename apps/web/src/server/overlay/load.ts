@@ -22,7 +22,8 @@ import {
   buildOverlayRecent,
   cricketPersonIdsIn,
   loadRecentPersonOf,
-  overlayCricketLive,
+  nameCricketLive,
+  overlayCricketLiveIds,
   personIdsIn,
   recentWindow,
   replayDerived,
@@ -65,11 +66,12 @@ interface PublicRow {
 interface CachedOverlay {
   folded: FoldedFixture | null;
   derived: Record<string, RecentDerived>;
-  /** W2 Task 3 — the crease, WITHOUT names. The scorecard is expensive and
-   *  changes only when the ledger does, so it belongs inside the cache; the
-   *  NAMES do not, because consent can change with no event to invalidate on.
-   *  `cricketIds` is what the uncached half then has to resolve. */
-  cricketIds: string[];
+  /** W2 Task 3 — the crease, WITHOUT names: every `name` field carries a PERSON
+   *  ID at this point. The scorecard is the expensive half and changes only
+   *  when the ledger does, so it belongs inside the cache; the NAMES do not,
+   *  because consent can change with no event to invalidate on. `nameCricketLive`
+   *  swaps ids for consent-resolved names on the other side. */
+  cricketLive: OverlayCricketLive | null;
 }
 
 /** Folds once per (fixture, last_seq), and derives in the SAME pass. The fold
@@ -99,7 +101,7 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOve
     async () =>
       sql.begin(async (tx) => {
         const inputs = await loadFoldInputs(tx, fixtureId);
-        if (inputs === null) return { folded: null, derived: {}, cricketIds: [] };
+        if (inputs === null) return { folded: null, derived: {}, cricketLive: null };
         const folded = foldFrom(fixtureId, inputs);
         const { bySeq } = replayDerived({
           sportKey: inputs.sportKey,
@@ -111,7 +113,7 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOve
         return {
           folded,
           derived: Object.fromEntries([...bySeq].map(([seq, d]) => [String(seq), d])),
-          cricketIds: cricketPersonIdsIn(inputs, folded.active),
+          cricketLive: overlayCricketLiveIds(inputs, folded.active),
         };
       }) as Promise<CachedOverlay>,
     ["overlay-fold-v2", fixtureId, String(lastSeq)],
@@ -142,7 +144,7 @@ async function foldOrNull(fixtureId: string, lastSeq: number): Promise<CachedOve
     return await cachedFold(fixtureId, lastSeq)();
   } catch (err) {
     log.error({ err, fixtureId, lastSeq }, "overlay: fold failed, serving the row without it");
-    return { folded: null, derived: {}, cricketIds: [] };
+    return { folded: null, derived: {}, cricketLive: null };
   }
 }
 
@@ -182,28 +184,32 @@ async function recentOrEmpty(row: PublicRow, bundle: CachedOverlay): Promise<Rec
 }
 
 /**
- * The crease band's names (W2 Task 3), resolved OUTSIDE the cache.
+ * The crease band's NAMES (W2 Task 3), resolved outside the cache.
  *
  * The scorecard itself rides in the cached entry — it is the expensive half and
  * changes only when the ledger does. The names do not: consent can change with
  * no event to invalidate on, and a player who withdraws their name should stop
  * appearing on air at the next poll rather than at the next ball.
  *
- * Recomputed rather than cached, and cheap: `cricketIds` is at most three.
+ * This used to re-derive the whole scorecard here, and a second
+ * `loadFoldInputs` with it, on EVERY poll for every viewer — which quietly made
+ * this file's own "N polls at one ledger position cost one fold" promise false
+ * for cricket, the one sport whose default theme is the bar. Now the only work
+ * left outside the cache is one query for at most three names.
  */
 async function cricketLiveOrNull(
   row: PublicRow,
   bundle: CachedOverlay,
 ): Promise<OverlayCricketLive | null> {
-  if (!bundle.folded || bundle.cricketIds.length === 0) return null;
+  const ids = cricketPersonIdsIn(bundle.cricketLive);
+  if (bundle.cricketLive === null) return null;
+  if (ids.length === 0) return nameCricketLive(bundle.cricketLive, () => undefined);
   try {
-    const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, bundle.cricketIds);
-    const inputs = await sql.begin((tx) => loadFoldInputs(tx, row.id));
-    if (inputs === null) return null;
-    return overlayCricketLive(inputs, bundle.folded.active, personOf);
+    const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, ids);
+    return nameCricketLive(bundle.cricketLive, personOf);
   } catch (err) {
-    log.error({ err, fixtureId: row.id }, "overlay: crease band failed, serving without it");
-    return null;
+    log.error({ err, fixtureId: row.id }, "overlay: crease names failed, serving the band unnamed");
+    return nameCricketLive(bundle.cricketLive, () => undefined);
   }
 }
 
@@ -212,7 +218,7 @@ export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiv
   const venueTz = await venueTzForDivision(row.division_id);
   const bundle: CachedOverlay =
     row.last_seq === null
-      ? { folded: null, derived: {}, cricketIds: [] }
+      ? { folded: null, derived: {}, cricketLive: null }
       : await foldOrNull(fixtureId, row.last_seq);
   const recent = await recentOrEmpty(row, bundle);
   const cricketLive = await cricketLiveOrNull(row, bundle);

@@ -85,15 +85,20 @@ const ball: MomentRule = (ev, { msg }) => {
     const kind = key ? msg(key) : undefined;
     const figures = ev.derived?.batter;
     const who = name(ev);
+    // The full line only when BOTH halves exist. `kind ?? ""` rendered a
+    // trailing "· " for a dismissal kind the table does not yet name, which is
+    // exactly the case the fallback above exists to survive gracefully.
     const line =
-      who !== undefined && figures !== undefined
+      who !== undefined && figures !== undefined && kind !== undefined
         ? msg("overlay.moment.batterLine", {
             name: who,
             runs: figures.runs,
             balls: figures.balls,
-            kind: kind ?? "",
+            kind,
           })
-        : (kind ?? who);
+        : who !== undefined && figures !== undefined
+          ? `${who} ${figures.runs} (${figures.balls})`
+          : (kind ?? who);
     return {
       kind: "wicket",
       headline: msg("overlay.moment.out"),
