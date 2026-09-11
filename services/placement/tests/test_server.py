@@ -29,6 +29,7 @@ import threading
 import grpc
 import grpc_testing
 import pytest
+import structlog.testing
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from _board_positional import to_proto_request
@@ -219,6 +220,43 @@ def test_maps_invalid_request_to_error_response(test_server):
     assert response.status == scheduler_pb2.SOLVE_STATUS_ERROR
     assert response.error.code == "INVALID_REQUEST"
     assert "fixtures" in response.error.message
+
+
+def test_a_wire_refusal_is_logged_not_just_returned(test_server):
+    """The refusal the caller sees must also be one an OPERATOR can find.
+
+    `_solve_build` has two INVALID_REQUEST paths. The domain one
+    (`build_model`/`solve` raising ValueError) logs `solve_rejected`. The WIRE
+    one (`request_to_model_input` raising InvalidRequestError) used to return
+    the same response shape and log NOTHING, which made it the only refusal on
+    this path that was invisible on both sides of the wire: the TS caller reads
+    a RESOLVED response, so `buildSchedule`'s catch never runs either.
+
+    That asymmetry cost a bench wave. Suite 11 reported "the optimized
+    scheduling path does not survive a real fixture count" against
+    `solver_unavailable` with nothing in any log to contradict it, and a 30 s
+    control run later showed the build returning in 849 ms against a 30_000 ms
+    wall — never a timeout at all. The message this refusal already carried
+    would have named the real fault on the first run.
+    """
+    with structlog.testing.capture_logs() as captured:
+        response, _, code, _ = _invoke(
+            test_server, scheduler_pb2.SolveBuildRequest(request_id="r-wire-refusal")
+        )
+
+    assert code == grpc.StatusCode.OK
+    assert response.error.code == "INVALID_REQUEST"
+
+    refusals = [e for e in captured if e.get("event") == "request_refused"]
+    assert refusals, f"the wire refusal was not logged at all: {captured}"
+    entry = refusals[0]
+    # The request id is what ties this line back to the caller's own log.
+    assert entry["request_id"] == "r-wire-refusal"
+    # The REASON, not just the fact. A log that said only "refused" would leave
+    # an operator exactly where the missing line did.
+    assert "fixtures" in entry["error"], entry
+    # Same severity as its sibling refusal, so one filter finds both.
+    assert entry["log_level"] == "warning", entry
 
 
 @pytest.mark.parametrize(

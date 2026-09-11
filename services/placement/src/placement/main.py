@@ -162,6 +162,27 @@ class SchedulerServicer(scheduler_pb2_grpc.SchedulerServiceServicer):
         try:
             parsed = request_to_model_input(request)
         except InvalidRequestError as exc:
+            # LOG IT, at the same level and with the same shape as
+            # `solve_rejected` below. These are the two INVALID_REQUEST paths
+            # and they used to be asymmetric: the domain one logged, this WIRE
+            # one returned the identical response and said nothing.
+            #
+            # That made it the only refusal here invisible on BOTH sides. The
+            # caller receives a RESOLVED response, not an RPC error, so the TS
+            # `buildSchedule` catch never runs either — and until its sibling
+            # commit the resolved-ERROR arm logged nothing and dropped this
+            # message. A fully-diagnosed refusal, with the reason already
+            # written down, reached the operator as a bare
+            # `solver_unavailable`.
+            #
+            # It cost a bench wave: suite 11 published "the optimized
+            # scheduling path does not survive a real fixture count" against
+            # exactly that evidence, and a 30 s control run later showed the
+            # build returning in 849 ms against a 30_000 ms wall — never a
+            # timeout. This line is what names the real fault on run one.
+            log.warning(
+                "request_refused", request_id=request.request_id, error=str(exc)
+            )
             return error_response("INVALID_REQUEST", str(exc))
 
         wall = min(parsed.wall_seconds, self._settings.wall_seconds_max)
