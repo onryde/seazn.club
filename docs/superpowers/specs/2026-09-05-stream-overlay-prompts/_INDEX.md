@@ -1972,3 +1972,75 @@ input is created successfully at `totalStorageMinutesLimit: 0` — so a block
 exhausted between the check and the phone connecting yields a session that
 provisions cleanly and never goes live, with no error to show. That is a
 silent-stall risk for the stale sweep to end, not a money one.
+
+---
+
+## 2026-09-11 — W2 Task 1 built: the `recent` window, and five findings
+
+Shipped: `recent` on `OverlayLiveData`, projected in
+`apps/web/src/server/overlay/recent.ts`. 40/40 green in `src/server/overlay`,
+exit 0, paths confirmed in this worktree; `tsc` clean for `apps/web` and
+`tsconfig.scripts.json`; lint 0 errors; `openapi:gen` regenerated and committed.
+`derived` (`setWon` / `pointState`) is SPLIT OUT as Task 1 Step 7, not dropped.
+
+**W2-F13 — the spectator timeline cannot source moments, and now there is a
+reason rather than an absence.** W2-F1 established that no raw
+`score_events.type` reaches the overlay. Building Task 1 found the stronger
+statement: `buildTimeline` runs on this very fixture already —
+`loadMatchCentre` is called inside `publicFixture`, which `server/overlay/load.ts`
+awaits — so its output is genuinely in hand and was tested against this need
+before a line was written. It cannot serve it, for three independent reasons:
+`TimelineLine` is `{ seq, at, marker, sideIndex, text: Msg, emphasis }` and
+carries NO raw event type; `TIMELINE_KEY_FOR` is deliberately many-to-one (the
+three set-based sports share `timeline.setbased.rally`, both hockeys share
+`timeline.periodsport.goal`) so the key cannot be inverted back to a type; and
+**cricket has no entry in that table at all**, so every delivery renders the
+neutral key. A moment must tell a six from a four.
+
+**This is the RECOMMENDATION the wave owes the spectator programme** (never
+"the owner ruled"): carry the raw type on `TimelineLine`. It costs one field and
+would let a second consumer exist.
+
+**W2-F14 — `FoldedFixture.active` IS the void-resolved stream, so the briefed
+second ledger read is not owed.** `engine-db/fold.ts` returns
+`active: resolveVoids(envelopes)`, and `load.ts` already holds it. The plan's
+`loadOverlayRecent(sql, fixture)` would have re-read `score_events`,
+`divisions`, `fixtures`, `stages` and the line-ups that `foldFixture` had just
+read — and, worse, been a SECOND AUTHORITY for which events survived a void.
+Deleted from the plan rather than written. Same shape, same task: the overlay
+PAGE needed no change either — its `initial` is `await loadOverlayLiveData(…)`
+verbatim, so `recent` arrives on first paint with no edit.
+
+**W2-F15 — two engine payload shapes the brief had wrong, both found by folding
+the test streams rather than trusting them.** `CricketWicket.bowlerCredited` is
+REQUIRED (`z.boolean()`, no `.optional()`) — a wicket ball without it is refused
+by `parsePayload` with a bare "invalid cricket.ball payload" and no field name.
+And `core.lineup.substitution` is `{ side, off: PersonId, on: LineupSlot }`, not
+the briefed `{ by, off, on }` — all three keys differ. Neither is visible to a
+hand-typed fixture; both surfaced the moment a real module was asked to accept
+the stream. **Fold the stream, then project it. A fixture on both ends proves
+the fixture.**
+
+**W2-F16 — the JSON reporter said `numTotalTests: 30, numPassedTests: 30,
+numFailedTests: 0` while a suite FAILED TO COLLECT.** A `vi.mock` factory is
+hoisted above the module body, so a factory that READS a top-level `const`
+while building its return value (rather than inside a closure it returns) throws
+`Cannot access 'sqlFn' before initialization`. That arrives as a collection
+failure: the 30 came from the other two files in the run, and the JSON carried
+no trace of the third beyond `numFailedTestSuites: 1`. **The exit code was the
+only honest signal** — it was 1 while every number in the report said green.
+Use `vi.hoisted` for anything a factory reads eagerly, and never read a count
+without also reading the exit code.
+
+**W2-F17 — a mutant survived because the test's right answer and its wrong
+answer were the same person.** The sweep ran 8 mutants over `recent.ts`; 7 died.
+The survivor made the cricket projector name the STRIKER instead of the
+dismissed batter, and survived because both wicket cases dismissed the striker
+himself (`striker: "H-p1"`, `wicket.out: "H-p1"`). Both now use a RUN OUT, where
+the dismissed batter is the non-striker: three of the four person ids on that
+payload are wrong answers and each is a different person from the right one.
+8/8 after the fix. **A projection test that reads two fields of one payload has
+to make those fields differ, or it asserts nothing about which one was read.**
+
+**Owed and NOT done:** `recent` reaching a browser. The DB-backed route test and
+the four new smoke checks both need a live DB and server, and neither has run.
