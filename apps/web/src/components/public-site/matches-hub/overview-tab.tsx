@@ -43,7 +43,12 @@ import type { ReactNode } from "react";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { UTC, fmtDate, fmtTime } from "@/lib/format";
-import { landingStatus, sortHubMatches, type LandingStatus } from "@/lib/matches-hub";
+import {
+  dayKeyInZone,
+  landingStatus,
+  sortHubMatches,
+  type LandingStatus,
+} from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { StandingsTableView } from "../standings-table-view";
 import { MatchCard } from "./match-card";
@@ -58,11 +63,31 @@ export interface OverviewTabProps {
   /** `Date.now()` at render, passed down rather than read here so a card's
    *  "Starts in 2 hours" is stable across a server render and its hydration. */
   now: number;
-  /** The org's sponsor board. An async server component (`resolveSponsors` plus
-   *  a `sponsors.tiers` entitlement read), so it cannot be built here. */
+  /**
+   * The org's sponsor board. An async server component (`resolveSponsors` plus
+   * a `sponsors.tiers` entitlement read), so it cannot be built here.
+   *
+   * ⚠️ CALLER CONTRACT — PASS `undefined`, NEVER AN ELEMENT THAT MAY RENDER
+   * NOTHING. This tab keys the section on whether the slot was GIVEN, because
+   * that is the only thing it can see: an element that returns null is still a
+   * non-null `ReactNode` here, and no parent can ask a child what it will
+   * render without rendering it. Hand one over and the ladder spends a rung and
+   * a `gap-6` row on an empty `<section>` — the "empty shell" the approved
+   * composition exists to forbid, and on a `dates` document it would be the
+   * only section on the tab.
+   *
+   * The page being replaced already gets this right and is the precedent to
+   * copy: `app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:272`
+   * renders its board only when `sponsors.length > 0`. `InfoTab` has the
+   * identical shape (`info-tab.tsx:204,286`), so this is ONE contract for both,
+   * not two — and `overview-tab.test.tsx` characterises it, so a caller that
+   * breaks it is at least breaking a documented rule rather than a silent one.
+   */
   sponsorsSlot?: ReactNode;
   /** The competition's own prose — HTML from the database, sanitised on the
-   *  server. This tab only decides where it sits. */
+   *  server. This tab only decides where it sits. Same caller contract as
+   *  `sponsorsSlot`: `undefined` when there is no prose, never an element that
+   *  renders nothing. */
   descriptionSlot?: ReactNode;
   // NO `onOpenTab`. The brief declares one and then, in its own Step 3, argues
   // itself out of the only use it had: the table preview's "Full division" link
@@ -149,6 +174,27 @@ const PRESEASON_ORDER = [
   "sponsors",
 ] as const satisfies readonly OverviewSection[];
 
+/**
+ * Which upcoming fixtures the Next-up rail may show — a RUNG decision, and it
+ * has to be, because the two rungs that render the rail mean different things
+ * by "next".
+ *
+ *  • `"ahead"` — still in front of us. This is `landingStatus`'s own rule for
+ *    its `next` rung, restated where the rail is picked so the two cannot
+ *    disagree. They DID disagree, and it was visible on screen: `bucket` is
+ *    derived from the wire status alone (`lib/matches-hub.ts:39-41` — anything
+ *    not `in_play` and not terminal is `upcoming`), so a fixture nobody started
+ *    stays `upcoming` for ever, and a rail filtered on the bucket put a FOUR
+ *    DAY OLD card directly under a status line announcing a different kick-off.
+ *  • `"today"` — on the fixture's own venue day, which is what `match_day`
+ *    exists to say. That rung is reached only when NO upcoming fixture is ahead
+ *    of `now` (`next` is checked first and would have won), so "ahead" there
+ *    would empty the rail and silently drop the rung's whole point: the
+ *    afternoon of the one day a spectator came to watch. Every fixture it shows
+ *    is therefore overdue, deliberately.
+ */
+export type NextUpScope = "ahead" | "today";
+
 export interface OverviewPlan {
   /** The status sentence, or null when the rung has nothing to say — which is
    *  only `dates` with neither date. A blank `<p>` reads as content that failed
@@ -156,6 +202,11 @@ export interface OverviewPlan {
    *  that does have divisions, so the line is absent instead. */
   copy: string | null;
   order: readonly OverviewSection[];
+  /** Non-null EXACTLY when `order` carries `"next"`. Stating it as null rather
+   *  than as a harmless default is what makes the pairing testable: a default
+   *  on a rung that never renders the rail is a dead value no mutant can kill,
+   *  and the suite asserts the two agree for every rung. */
+  nextUp: NextUpScope | null;
 }
 
 /** The competition's calendar dates. `day numeric / month long / year numeric`,
@@ -215,11 +266,12 @@ export function overviewPlan(
 ): OverviewPlan {
   switch (status.kind) {
     case "empty":
-      return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER };
+      return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER, nextUp: null };
     case "live":
       return {
         copy: plural(dict, "landing.status.live", status.n, locale),
         order: LIVE_ORDER,
+        nextUp: "ahead",
       };
     case "next":
       return {
@@ -230,6 +282,7 @@ export function overviewPlan(
           when: `${fmtDate(status.tz, status.at)} ${fmtTime(status.tz, status.at)}`,
         }),
         order: NEXT_ORDER,
+        nextUp: "ahead",
       };
     case "match_day":
       // Same sections as `next`, different sentence. Today's fixtures are
@@ -237,13 +290,14 @@ export function overviewPlan(
       // `next` — but they are still the most live thing the competition has, so
       // next-up leads and the rail is absent (there is no live match, by
       // construction: `landingStatus` checks `live` first).
-      return { copy: t(dict, "landing.status.matchDay"), order: NEXT_ORDER };
+      return { copy: t(dict, "landing.status.matchDay"), order: NEXT_ORDER, nextUp: "today" };
     case "finished":
-      return { copy: t(dict, "landing.status.finished"), order: FINISHED_ORDER };
+      return { copy: t(dict, "landing.status.finished"), order: FINISHED_ORDER, nextUp: null };
     case "dates":
       return {
         copy: datesCopy(dict, status.startsOn, status.endsOn),
         order: PRESEASON_ORDER,
+        nextUp: null,
       };
     default: {
       const unhandled: never = status;
@@ -261,6 +315,74 @@ export function overviewPlan(
  *  row of the `md:grid-cols-3` grid below; the Matches tab holds the rest and
  *  is one tap away on the rail. */
 const NEXT_UP = 3;
+
+/**
+ * How many standings tables the tab previews. OWNER RULING.
+ *
+ * Every table used to get one, so an eight-division competition with two pools
+ * each put SIXTEEN previews in the `lg` side rail. Three, because the Overview
+ * is a summary and the Table tab — carrying the complete set, grouped by
+ * division — is already on the rail one tap away. So the cap costs a large
+ * competition nothing it cannot reach, while the uncapped version cost every
+ * large competition a side rail nobody scrolls.
+ *
+ * Deliberately NO "see all" affordance beside it, and no new dictionary key:
+ * the Table tab already IS that affordance, and a second route to it sitting
+ * next to the first is the duplicate-route problem in miniature.
+ */
+const TABLE_PREVIEWS = 3;
+
+/** How many ROWS of each previewed table are shown. A different three from the
+ *  two above, with a different reason — a podium — so it is named rather than
+ *  written as a literal at the call site where it would drift from its
+ *  siblings (review M6). */
+const PREVIEW_ROWS = 3;
+
+/**
+ * The fixtures the Next-up rail shows: upcoming, in `scope`, soonest first, at
+ * most `NEXT_UP` of them.
+ *
+ * Exported because this is where review I1 lived and a render test alone could
+ * not have caught it — the defect needed a document carrying a
+ * past-but-still-`upcoming` fixture, which no fixture in the suite had, and a
+ * mutation sweep can only find defects the fixture space can express.
+ *
+ * An UNSCHEDULED fixture (`scheduledAt === null`) is in neither scope, and that
+ * is a change from the first cut, which sorted them last and showed them once
+ * the dated ones ran out. "Next up" about a fixture with no time is not a
+ * teaser, it is a blank; `landingStatus`'s own `next` rung skips them for the
+ * same reason, and the Matches tab lists them under their own Unscheduled
+ * heading where they read correctly.
+ */
+export function nextUpMatches<T extends { bucket: string; scheduledAt: string | null; tz: string }>(
+  matches: readonly T[],
+  scope: NextUpScope | null,
+  now: number,
+): T[] {
+  if (scope === null) return [];
+  // Guarded before `toISOString()`, which THROWS on an Invalid Date — `now` is
+  // a caller's value, and an unusable clock must mean "nothing to show" rather
+  // than an exception out of a render. `landingStatus` guards the same way at
+  // the same boundary (`lib/matches-hub.ts:324`).
+  const nowIso = Number.isNaN(now) ? null : new Date(now).toISOString();
+  return sortHubMatches(
+    matches.filter((m) => {
+      if (m.bucket !== "upcoming" || m.scheduledAt === null) return false;
+      if (scope === "ahead") {
+        const at = Date.parse(m.scheduledAt);
+        // Inclusive at the boundary, matching `landingStatus`: a fixture
+        // starting at exactly `now` is still next, so there is no
+        // one-millisecond hole between the two sections.
+        return !Number.isNaN(at) && at >= now;
+      }
+      // The fixture's OWN venue day against the same instant — never the
+      // viewer's zone and never the competition's, the rule `dayKeyInZone`
+      // exists for.
+      const day = dayKeyInZone(m.scheduledAt, m.tz);
+      return day !== null && day === dayKeyInZone(nowIso, m.tz);
+    }),
+  ).slice(0, NEXT_UP);
+}
 
 /** `text-xl` flat, NOT the `text-xl md:text-2xl` the Table/Stats/Teams tabs put
  *  on their division headings. Those head a full-width panel; from `lg` these
@@ -300,10 +422,11 @@ export function OverviewTab({
   // Ordered by `sortHubMatches`, never by document order: inside a bucket it
   // reads soonest-first, which is what both of these rails mean.
   const live = sortHubMatches(doc.matches.filter((x) => x.bucket === "live"));
-  const upNext = sortHubMatches(doc.matches.filter((x) => x.bucket === "upcoming")).slice(
-    0,
-    NEXT_UP,
-  );
+  // The rung decides WHICH upcoming fixtures qualify, not just whether the rail
+  // renders — see `NextUpScope`. Reading the scope off the same plan as the
+  // copy is what keeps the rail and the sentence above it talking about the
+  // same fixture.
+  const upNext = nextUpMatches(doc.matches, plan.nextUp, now);
 
   // What each section would render, or null when it has nothing to say. Built
   // for every section regardless of the ladder, and then INTERSECTED with the
@@ -313,7 +436,9 @@ export function OverviewTab({
     live:
       live.length === 0 ? null : (
         <>
-          <h2 className={HEADING_CLASS}>{t(dict, "landing.liveNow")}</h2>
+          <h2 id="mh-live-now-label" className={HEADING_CLASS}>
+            {t(dict, "landing.liveNow")}
+          </h2>
           {/* A scrolling rail, so it owes a tab stop, a role and an accessible
               name — AGENTS.md 23, where an unnamed one tripped axe at SERIOUS
               impact. `role="list"` explicitly because Tailwind's preflight
@@ -325,7 +450,7 @@ export function OverviewTab({
             className="flex gap-3 overflow-x-auto pb-1 max-md:-mx-4 max-md:px-4"
             role="list"
             tabIndex={0}
-            aria-label={t(dict, "landing.liveNow")}
+            aria-labelledby="mh-live-now-label"
           >
             {live.map((match) => (
               <li
@@ -350,12 +475,14 @@ export function OverviewTab({
     next:
       upNext.length === 0 ? null : (
         <>
-          <h2 className={HEADING_CLASS}>{t(dict, "landing.nextUp")}</h2>
+          <h2 id="mh-next-up-label" className={HEADING_CLASS}>
+            {t(dict, "landing.nextUp")}
+          </h2>
           <ul
             data-testid="mh-next-up"
             className="grid gap-3 md:grid-cols-3"
             role="list"
-            aria-label={t(dict, "landing.nextUp")}
+            aria-labelledby="mh-next-up-label"
           >
             {upNext.map((match) => (
               <li
@@ -372,7 +499,9 @@ export function OverviewTab({
     tables:
       doc.tables.length === 0 ? null : (
         <>
-          <h2 className={HEADING_CLASS}>{t(dict, "landing.tables")}</h2>
+          <h2 id="mh-tables-label" className={HEADING_CLASS}>
+            {t(dict, "landing.tables")}
+          </h2>
           {/* 2-up from `md`, and back to 1-up from `lg` — from there these sit
               in a 20rem side rail, and two columns inside it would put the
               points column, the number a table exists for, behind a scroll.
@@ -382,9 +511,9 @@ export function OverviewTab({
             data-testid="mh-tables"
             className="grid gap-4 md:grid-cols-2 lg:grid-cols-1"
             role="list"
-            aria-label={t(dict, "landing.tables")}
+            aria-labelledby="mh-tables-label"
           >
-            {doc.tables.map((view) => (
+            {doc.tables.slice(0, TABLE_PREVIEWS).map((view) => (
               <li key={view.id} className="min-w-0">
                 <StandingsTableView
                   view={view}
@@ -393,7 +522,7 @@ export function OverviewTab({
                   // overall table and one per pool, so a division-keyed prefix
                   // emits duplicate ids on the ordinary document.
                   testid={`mh-table-preview-${view.id}`}
-                  preview={3}
+                  preview={PREVIEW_ROWS}
                   // The full link goes to the DIVISION page, not to this hub's
                   // own Table tab. The tab is one tap away on the rail above;
                   // the division page is not, and it is the only place the rest

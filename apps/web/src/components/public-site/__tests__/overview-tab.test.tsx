@@ -41,7 +41,12 @@ import es from "@/dictionaries/es/public.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { LandingStatus } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
-import { OverviewTab, overviewPlan, type OverviewSection } from "../matches-hub/overview-tab";
+import {
+  OverviewTab,
+  nextUpMatches,
+  overviewPlan,
+  type OverviewSection,
+} from "../matches-hub/overview-tab";
 import { division, hubDoc, info, m, tableRow, tableView } from "./hub-fixtures";
 
 const dict = en as Dict;
@@ -110,6 +115,14 @@ function ladder(h: string): [OverviewSection, number][] {
 
 /** Just the section ids, top to bottom. */
 const sections = (h: string): OverviewSection[] => ladder(h).map(([id]) => id);
+
+/** The fixture ids in one of the two rails, in render order. A LIST, so
+ *  "which matches" and "how many" are one assertion — a count alone is
+ *  satisfied by a rail that took the wrong fixtures. */
+const cardIds = (h: string, rail: "live-now" | "next-up"): string[] =>
+  [...h.matchAll(new RegExp(`data-testid="mh-${rail}-card-([a-z0-9-]+)"`, "g"))].map(
+    ([, id]) => id!,
+  );
 
 /** One section's markup, from its own testid to the next section's — so a
  *  negative assertion can be scoped to it rather than to the whole tab. */
@@ -507,7 +520,15 @@ describe("OverviewTab — the Live-now rail", () => {
     // accessible name, or axe reds at SERIOUS impact.
     expect(rail).toContain(`role="list"`);
     expect(rail).toContain(`tabindex="0"`);
-    expect(rail).toMatch(/aria-label="[^"]+"/);
+    // Named BY the visible heading (review M5), not by a second copy of the
+    // same string — a screen reader announced "Live now, heading" then "Live
+    // now, list". And the reference is checked to RESOLVE: an
+    // `aria-labelledby` pointing at nothing leaves the region with no
+    // accessible name at all, which a duplicated `aria-label` could not get
+    // wrong. That is the risk the new mechanism adds, so it is the thing
+    // asserted.
+    expect(rail).toContain(`aria-labelledby="mh-live-now-label"`);
+    expect(h).toMatch(/id="mh-live-now-label"[^>]*>[^<]*Live now/);
     expect(h.match(/data-testid="mh-live-now-card-/g)?.length).toBe(2);
     // The W0 defect: the rail rendered scores with no names. All four names, so
     // a card bound to one side only is visible.
@@ -516,10 +537,29 @@ describe("OverviewTab — the Live-now rail", () => {
     }
   });
 
-  it("the rail is named from the DICTIONARY, not from an English literal", () => {
-    const h = render(docLive2, { dict: es as Dict, locale: "es" });
-    expect(tagOf(h, "mh-live-now")).toContain(`aria-label="${es["landing.liveNow"]}"`);
-    expect(h).toContain(es["landing.liveNow"]);
+  it("all three list names come from the DICTIONARY, not from English literals", () => {
+    // The name now travels through the heading, so THIS is the assertion that
+    // keeps it translated — and it covers all three lists rather than the rail
+    // alone, because the same `aria-labelledby` rewrite touched all three and a
+    // one-list assertion would leave two of them unwitnessed.
+    const doc = hubDoc({
+      matches: [...docLive2.matches, m("u1", "upcoming", "2026-09-05T18:00:00.000Z", "premier")],
+      tables: [tableView("t8-s1-overall", "premier")],
+    });
+    const h = render(doc, { dict: es as Dict, locale: "es" });
+    for (const [testid, key] of [
+      ["mh-live-now", "landing.liveNow"],
+      ["mh-next-up", "landing.nextUp"],
+      ["mh-tables", "landing.tables"],
+    ] as const) {
+      expect(tagOf(h, testid), testid).toContain(`aria-labelledby="${testid}-label"`);
+      expect(h, testid).toMatch(
+        new RegExp(`id="${testid}-label"[^>]*>[^<]*${es[key].replace(/[.*+?^$()|[\]\\]/g, "\\$&")}`),
+      );
+    }
+    // Positive pair: the English strings are nowhere in the Spanish render.
+    expect(h).not.toContain(en["landing.liveNow"]);
+    expect(h).not.toContain(en["landing.nextUp"]);
   });
 
   it("soonest kick-off first, not document order", () => {
@@ -559,6 +599,102 @@ describe("OverviewTab — the Live-now rail", () => {
 });
 
 describe("OverviewTab — next up and the table previews", () => {
+  it("an OVERDUE fixture is not 'next' — the rail and the status line must name the same match", () => {
+    // Review I1, and the finding neither the 773-test suite nor a 40-mutant
+    // sweep could see, because NO document in the suite carried a
+    // past-but-still-`upcoming` fixture. `bucket` is derived from the wire
+    // status alone (`lib/matches-hub.ts:39-41`), so a fixture nobody started
+    // stays `upcoming` for ever, while `landingStatus` deliberately drops past
+    // kick-offs — "the page must not promise a kick-off that is already behind
+    // us". The two sections of one panel therefore disagreed ON SCREEN: the
+    // status announced Saturday's 15:00 while the first card under "Next up"
+    // was four days stale.
+    const doc = hubDoc({
+      matches: [
+        m("stale", "upcoming", "2026-09-01T09:00:00.000Z", "premier"),
+        m("real", "upcoming", "2026-09-05T14:00:00.000Z", "premier"),
+      ],
+    });
+    const h = render(doc);
+    // Both halves on ONE render, which is what makes it an agreement test
+    // rather than two independent assertions.
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="next"`);
+    expect(h).toContain("Next: Sat 5 Sept 15:00"); // 14:00Z = 15:00 in Europe/London
+    expect(cardIds(h, "next-up")).toEqual(["real"]);
+  });
+
+  it("MATCH DAY keeps today's overdue fixtures — the rung would otherwise empty its own rail", () => {
+    // The other half of the same decision, and the reason the scope is a RUNG
+    // decision rather than one predicate. `match_day` is reached only when no
+    // upcoming fixture is ahead of `now` (`next` is checked first and would
+    // have won), so filtering on "ahead" here would show nothing at all and
+    // silently drop the rung's whole point — the afternoon of the one day a
+    // spectator came to watch. Every fixture it shows is overdue, deliberately.
+    //
+    // The document carries a fixture from a PREVIOUS day as well, so "today's"
+    // and "all upcoming" are different answers and the assertion can tell them
+    // apart.
+    const doc = hubDoc({
+      matches: [
+        m("lastweek", "upcoming", "2026-08-29T09:00:00.000Z", "premier"),
+        m("today-1", "upcoming", "2026-09-05T09:00:00.000Z", "premier"),
+        m("today-2", "upcoming", "2026-09-05T10:30:00.000Z", "premier"),
+      ],
+    });
+    const h = render(doc);
+    expect(tagOf(h, "mh-status")).toContain(`data-kind="match_day"`);
+    expect(cardIds(h, "next-up")).toEqual(["today-1", "today-2"]);
+  });
+
+  it("the scope is the fixture's OWN venue day — and the case is differential BOTH ways against UTC", () => {
+    // A 23:30 kick-off in Los Angeles is still 5 September there while it is
+    // already the 6th in UTC, which is what makes a zone-blind implementation
+    // wrong rather than merely unprincipled. Both instants below separate the
+    // two answers; an assertion where LA and UTC happened to agree would prove
+    // nothing, which is the trap this file's `fmtDate` tests already record.
+    //
+    //   fixture 2026-09-06T06:30Z → LA day 09-05, UTC day 09-06
+    const late = m("late", "upcoming", "2026-09-06T06:30:00.000Z", "premier", {
+      tz: "America/Los_Angeles",
+    });
+    //   now 2026-09-05T20:00Z → LA 13:00 on 09-05 (MATCHES), UTC day 09-05 (does not)
+    //   → correct: included. Zone-blind: dropped.
+    const sameDayInLA = Date.parse("2026-09-05T20:00:00.000Z");
+    expect(nextUpMatches([late], "today", sameDayInLA).map((x) => x.fixtureId)).toEqual(["late"]);
+    //   now 2026-09-06T12:00Z → LA 05:00 on 09-06 (does not match), UTC day 09-06 (matches)
+    //   → correct: dropped. Zone-blind: included.
+    const nextDayInLA = Date.parse("2026-09-06T12:00:00.000Z");
+    expect(nextUpMatches([late], "today", nextDayInLA)).toEqual([]);
+  });
+
+  it("an UNSCHEDULED fixture is in neither scope — 'next up' with no time is a blank, not a teaser", () => {
+    const undated = m("tbd", "upcoming", null, "premier");
+    const dated = m("real", "upcoming", "2026-09-05T14:00:00.000Z", "premier");
+    expect(nextUpMatches([undated, dated], "ahead", NOW).map((x) => x.fixtureId)).toEqual(["real"]);
+    expect(nextUpMatches([undated], "today", NOW)).toEqual([]);
+    // `landingStatus`'s own `next` rung skips them for the same reason, and the
+    // Matches tab lists them under their own Unscheduled heading.
+    expect(nextUpMatches([undated], "ahead", NOW)).toEqual([]);
+  });
+
+  it("a null scope shows nothing, and an unusable clock does not throw out of a render", () => {
+    const one = [m("u1", "upcoming", "2026-09-05T14:00:00.000Z", "premier")];
+    // `null` is the rungs that do not render the rail at all.
+    expect(nextUpMatches(one, null, NOW)).toEqual([]);
+    // `new Date(NaN).toISOString()` THROWS, and `now` is a caller's value.
+    expect(() => nextUpMatches(one, "today", Number.NaN)).not.toThrow();
+    expect(nextUpMatches(one, "today", Number.NaN)).toEqual([]);
+    expect(() => nextUpMatches(one, "ahead", Number.NaN)).not.toThrow();
+  });
+
+  it("a fixture starting at EXACTLY now is still next — no one-millisecond hole", () => {
+    // Inclusive at the boundary, matching `landingStatus`'s own rule, so the
+    // status line and the rail cannot disagree for the millisecond in between.
+    const exact = m("exact", "upcoming", "2026-09-05T12:00:00.000Z", "premier");
+    expect(nextUpMatches([exact], "ahead", NOW).map((x) => x.fixtureId)).toEqual(["exact"]);
+    expect(nextUpMatches([exact], "ahead", NOW + 1)).toEqual([]);
+  });
+
   it("the three EARLIEST upcoming matches only, though a fourth exists", () => {
     const h = render(docUpcoming4);
     expect(h.match(/data-testid="mh-next-up-card-/g)?.length).toBe(3);
@@ -612,6 +748,31 @@ describe("OverviewTab — next up and the table previews", () => {
       expect(h).toContain(`data-testid="mh-table-preview-t8-s1-overall-row-${id}"`);
     }
     expect(h).not.toContain(`data-testid="mh-table-preview-t8-s1-overall-row-e4"`);
+  });
+
+  it("at most THREE tables are previewed, however many the competition publishes (owner ruling)", () => {
+    // The Overview is a summary; the Table tab carries the complete set,
+    // grouped by division, one tap away on the rail. Uncapped, an eight-
+    // division competition with two pools each put SIXTEEN previews in the
+    // `lg` side rail.
+    //
+    // Five tables, pairwise-distinct ids, so this reds at four (a fourth id
+    // appears) and at two (the third is missing) — a bare count would only
+    // catch one of those directions.
+    const five = hubDoc({
+      matches: docUpcoming4.matches,
+      tables: ["t1", "t2", "t3", "t4", "t5"].map((id) => tableView(id, "premier")),
+    });
+    const h = render(five);
+    // One `-full` link per rendered view, so this is a count AND a roll-call.
+    const ids = [...h.matchAll(/data-testid="mh-table-preview-(t[0-9])-full"/g)].map(
+      ([, id]) => id!,
+    );
+    expect(ids).toEqual(["t1", "t2", "t3"]);
+    // Deliberately NO "see all" affordance beside them and no new dictionary
+    // key: the Table tab already is that affordance, and a second route to it
+    // sitting next to the first is the duplicate-route problem in miniature.
+    expect(h).not.toContain(`data-testid="mh-tables-more"`);
   });
 
   it("every table the document publishes gets its own preview, with its own id", () => {
@@ -675,6 +836,30 @@ describe("OverviewTab — the register CTA and the slots", () => {
     expect(without).not.toContain("ABOUT THIS CUP");
     expect(sections(without)).not.toContain("description");
     expect(sections(without)).not.toContain("sponsors");
+  });
+
+  it("CALLER CONTRACT: a slot that renders NOTHING still costs a section — pass undefined instead", () => {
+    // Review I2, characterised rather than papered over. This tab keys the
+    // section on whether the slot was GIVEN, because that is the only thing it
+    // can see — an element returning null is still a non-null `ReactNode`
+    // here, and no parent can ask a child what it will render without
+    // rendering it.
+    //
+    // So the hole is real and the fix is the CALLER's (Task 12). The page
+    // being replaced already gets it right
+    // (`…/[competitionSlug]/page.tsx:272` renders its board only when
+    // `sponsors.length > 0`). This test exists so the rule is written down in
+    // an executable place and so a later "silent fix" here has to face it:
+    // `InfoTab` has the identical shape, so it is ONE contract for both files.
+    const Empty = () => null;
+    const h = render(closed, { sponsorsSlot: <Empty /> });
+    expect(sections(h)).toContain("sponsors");
+    // Empty in the literal sense: the section's element has no content at all.
+    const at = h.indexOf(`data-testid="mh-sec-sponsors"`);
+    expect(h.slice(h.indexOf(">", at) + 1)).toMatch(/^<\/section>/);
+    // Positive pair, and the shape the contract asks for: `undefined` costs
+    // nothing at all.
+    expect(sections(render(closed, { sponsorsSlot: undefined }))).not.toContain("sponsors");
   });
 
   it("a slot is rendered ONCE — a slot in two sections would duplicate a sponsor board", () => {
