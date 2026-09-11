@@ -2269,14 +2269,22 @@ screenshot shows something wrong, measure before believing the picture.** A
 motion frame, a stale build and a genuine layout fault are three different
 things that produce the same image.
 
-**W2-F31 — §5 and §3 disagree about where the bar's slab goes, and the ARITHMETIC
-settles it.** §5 says "centred under the bar's detail band", radius `0 0 6 6`.
+**W2-F31 — RESOLVED 2026-09-11 by owner ruling: "above the bar, tucked behind".**
+`_THEMES.md` §5 is amended IN PLACE and now carries the arithmetic below, the
+corrected radii (`6 6 0 0` on the bar — the bottom two corners are never seen),
+the bug's numbers, the clipping-window rule and the `slabPlacementFor` note. The
+built geometry already matched the ruling and did not change. Original finding: §5 says "centred under the bar's detail band", radius `0 0 6 6`.
 §3 puts the bar at `bottom: 54` standing 177 tall (126 main + 51 detail), so
 there are 54 px of canvas beneath it and the slab is 216 tall. The literal
 reading does not fit. Built as an interim: slab ABOVE the bar, bottom tucked
-behind its top edge, corners rounded at the top. **The sheet has NOT been
-amended** — rewriting an owner-approved section to match what was built is not
-this wave's call. Raised with the owner; awaiting a ruling.
+behind its top edge, corners rounded at the top. The sheet was deliberately left
+unamended until the owner ruled, rather than rewriting an owner-approved section
+to match what had been built.
+
+**Worth keeping as a habit rather than as a fact about slabs:** the conflict was
+only visible once both sections' insets were put in the same sum. §5 and §3 each
+read fine alone. A design sheet split across sections can hold a geometry that
+no canvas satisfies, and only arithmetic finds it.
 
 **W2-F32 — a serial spec file's shared rig is a coupling, not a convenience.**
 The moments tests appended to `stream-overlay.spec.ts`'s shared hockey fixture

@@ -1683,10 +1683,14 @@ body {
 }
 /* §3 — the bar is inset left/right 72, bottom 54, and stands 177 tall (126 main
    + 51 detail), so its top edge is 231 from the canvas bottom. The slab sits
-   directly above it and emerges from the left. SEE `_OPEN-QUESTIONS.md` Q23:
-   the sheet says "centred under the bar's detail band", and there is no room
-   under it — 54 px of canvas against a 216 px slab. This is the interim
-   reading, not a ruling. */
+   directly above it, underside tucked behind that edge, and emerges from the
+   left.
+
+   OWNER-RULED 2026-09-11, and `_THEMES.md` §5 now carries the arithmetic: the
+   sheet used to say "centred under the bar's detail band", which is not
+   buildable — 54 px of canvas beneath the bar against a 216 px slab. The
+   rounded corners moved to the TOP for the same reason; the bottom two are
+   never seen. */
 .ovl-moment-slot--bar {
   left: 0;
   right: 0;
