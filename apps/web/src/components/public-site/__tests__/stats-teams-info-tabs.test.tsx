@@ -42,7 +42,7 @@
 //  6. The brief's Teams card says "seed chip when `seed`". Shipped as
 //     `seed !== null`, which keeps the chip for a zero-seeded entrant; the
 //     literal truthiness silently drops it. Tested both ways below.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
 import en from "@/dictionaries/en/public.json";
@@ -744,6 +744,54 @@ describe("InfoTab", () => {
       "the assertion above is only differential if a behind-UTC zone really moves the day",
     ).toBe("31 August 2026");
     expect(infoDoc.divisions.every((d) => d.tz === "America/New_York")).toBe(true);
+  });
+
+  it("the calendar dates are formatted by a MECHANISM that names its zone — a guard that holds at CI's zone too", () => {
+    // The test above kills "formatted in the division's zone", because the
+    // division is explicitly `America/New_York`. It does NOT kill the other
+    // shape of the same bug: formatting with NO zone at all
+    // (`new Date(d).toLocaleDateString("en-GB", …)`), which is what the
+    // competition landing page did until Task 12. That mutant renders
+    // "1 September 2026" on this runner (Europe/London, UTC+1 in September) and
+    // again on CI (`ubuntu-latest`, UTC) — so it survives in both the broken and
+    // the fixed state everywhere the suite actually runs, and is decoration.
+    //
+    // Task 12 hit this exactly and answered it by asserting the MECHANISM
+    // rather than a rendered day. Copied here, because a zone-dependent guard
+    // over a zone bug is the one kind of test that cannot witness its own
+    // subject: `process.env.TZ` set mid-run does not move ICU, so the suite
+    // cannot arrange the zone that would make it differential.
+    const ctor = new Set<string | undefined>();
+    const Original = Intl.DateTimeFormat;
+    const locale = vi.spyOn(Date.prototype, "toLocaleDateString");
+    // A `function`, not an arrow: `fmt()` calls `new Intl.DateTimeFormat(…)`
+    // (`lib/format.ts:29`) and an arrow is not constructible, so an arrow mock
+    // reds with "is not a constructor" rather than measuring anything.
+    const spy = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (
+      this: unknown,
+      l?: Intl.LocalesArgument,
+      o?: Intl.DateTimeFormatOptions,
+    ) {
+      ctor.add(o?.timeZone);
+      return new Original(l, o);
+    } as unknown as typeof Intl.DateTimeFormat);
+
+    try {
+      render();
+    } finally {
+      spy.mockRestore();
+      locale.mockRestore();
+    }
+
+    // `toLocaleDateString` does NOT route through the patchable `Intl` global,
+    // so a zone-less formula is invisible to the constructor spy and only this
+    // assertion sees it. Both halves are needed; neither is redundant.
+    expect(locale, "no date is formatted without naming a zone").not.toHaveBeenCalled();
+    expect(ctor.size, "at least one formatter was built").toBeGreaterThan(0);
+    expect([...ctor], "every formatter names its zone, and the calendar dates use UTC").not.toContain(
+      undefined,
+    );
+    expect([...ctor]).toContain("UTC");
   });
 
   it("the date line covers every combination of the two nullable calendar dates", () => {

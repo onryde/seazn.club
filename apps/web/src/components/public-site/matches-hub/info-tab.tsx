@@ -75,11 +75,13 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * plausible wrong answers (the viewer's zone, the division's) are both
  * reachable from this component's own props.
  *
- * The same trap is live today on the competition landing page,
- * `app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:74-75`, which does
- * `new Date(d).toLocaleDateString("en-GB", …)` with no zone at all and so
- * formats in whatever zone the Node process happens to run in. Recorded for
- * the owner; not fixed here, since that file is another wave's.
+ * The competition landing page carried the same trap —
+ * `new Date(d).toLocaleDateString("en-GB", …)` with no zone at all, formatting
+ * in whatever zone the Node process happened to run in. **Task 12 fixed it**,
+ * so this paragraph no longer describes anything live; it said "live today" and
+ * then went on being read as true after the thing it described was gone.
+ * Kept, corrected, because the trap itself is worth naming: a `date` column is
+ * a wall-clock DAY, and any zone at all — including none — can move it.
  *
  * ── AND IN ENGLISH, IN EVERY LOCALE ────────────────────────────────────────
  * `format.ts:10` pins `const LOCALE = "en-GB"` and `fmtDate` takes no locale
