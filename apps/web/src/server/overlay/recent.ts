@@ -21,10 +21,24 @@
 // allowlist unable to see it.
 import "server-only";
 import type postgres from "postgres";
-import { isLineupEventType, resolveVoids, type EventEnvelope } from "@seazn/engine/core";
+import {
+  REPLAY_LINEUP_POLICY,
+  initSquads,
+  isLineupEventType,
+  reduceLineupEvent,
+  resolveVoids,
+  type EventEnvelope,
+  type LineupPair,
+  type ScoreSummary,
+  type SquadState,
+} from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { servingSide, setBreakdown } from "@/lib/public-site";
+import { log } from "@/server/logger";
 import { readPublicLineups } from "@/server/public-site/public-lineups";
 import {
   OVERLAY_RECENT_WINDOW,
+  type RecentDerived,
   type RecentEvent,
   type RecentPayload,
   type RecentPerson,
@@ -154,6 +168,7 @@ function projectRecent(
   window: readonly EventEnvelope[],
   sides: readonly [string, string],
   personOf: (id: unknown) => RecentPerson | undefined,
+  derived?: ReadonlyMap<number, RecentDerived>,
 ): RecentEvent[] {
   const sideOf = (id: unknown): 0 | 1 | undefined =>
     id === sides[0] ? 0 : id === sides[1] ? 1 : undefined;
@@ -162,7 +177,8 @@ function projectRecent(
     const payload = project
       ? project((e.payload ?? {}) as Record<string, unknown>, { sideOf, personOf })
       : {};
-    return { seq: e.seq, type: e.type, at: e.recordedAt, payload };
+    const d = derived?.get(e.seq);
+    return { seq: e.seq, type: e.type, at: e.recordedAt, payload, ...(d ? { derived: d } : {}) };
   });
 }
 
@@ -194,8 +210,236 @@ export function buildOverlayRecent(args: {
   sides: readonly [string, string];
   personOf: (id: unknown) => RecentPerson | undefined;
   window?: number;
+  /** From `replayDerived`. Omitted for a sport with no sets, and for any caller
+   *  that only needs the recorded facts. */
+  derived?: ReadonlyMap<number, RecentDerived>;
 }): RecentEvent[] {
-  return projectRecent(recentWindow(args.active, args.window), args.sides, args.personOf);
+  return projectRecent(
+    recentWindow(args.active, args.window),
+    args.sides,
+    args.personOf,
+    args.derived,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// `derived` — the two facts the ledger does not record (W2 Task 1 Step 7).
+//
+// "Set point" is not an event at any fidelity band anyone streams at (W2-F4),
+// so the only honest way to know one is to ASK THE MODULE what would happen if
+// the next point went each way. That keeps every set rule, tiebreak length and
+// deciding-set variation inside the engine, where they already live and are
+// already tested — this file contains no scoring rule of any sport.
+//
+// The replay's SHAPE is `buildTimeline`'s derived pass, deliberately: one
+// incremental walk applying each event once, diffing `module.summary`, and
+// degrading by STOPPING where the module refuses rather than throwing. A
+// per-prefix `foldMatch` would be O(n²) over the same ledger and would have no
+// way to report where it gave up.
+// ---------------------------------------------------------------------------
+
+/** The synthetic "next point for this side", per kernel that records one. A
+ *  sport absent here has no point to probe, and that is the whole answer for
+ *  it — football's goal is not a point in this sense. */
+const PROBE_POINT: Readonly<Record<string, (by: string) => { type: string; payload: Record<string, unknown> }>> = {
+  tennis: (by) => ({ type: "tennis.point", payload: { by } }),
+  badminton: (by) => ({ type: "badminton.rally", payload: { wonBy: by } }),
+  tabletennis: (by) => ({ type: "tabletennis.rally", payload: { wonBy: by } }),
+  volleyball: (by) => ({ type: "volleyball.rally", payload: { wonBy: by } }),
+};
+
+const closedCount = (summary: unknown, sportKey: string): number =>
+  (setBreakdown(summary, sportKey)?.sets ?? []).filter((set) => set.closed).length;
+
+/** Tennis only: `detail.games` is the running GAME score within the set, which
+ *  is what a break is measured in (nested/kernel.ts). */
+const gamesOf = (summary: unknown): { home: number; away: number } | null => {
+  const detail = (summary as { detail?: unknown } | null)?.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const games = (detail as { games?: unknown }).games;
+  if (typeof games !== "object" || games === null) return null;
+  const { home, away } = games as Record<string, unknown>;
+  return typeof home === "number" && typeof away === "number" ? { home, away } : null;
+};
+
+/**
+ * The set this event CLOSED, if any.
+ *
+ * Reads `setBreakdown` rather than `summary.detail.sets` directly, so the
+ * overlay, the timeline, the Sets tab and the live score all agree on what
+ * counts as a set for a given sport — `GAME_UNIT_SPORTS` lives there and
+ * nowhere else.
+ *
+ * `home >= away` credits a drawn set to home, which is `derivedLines`'s own
+ * convention in `timeline.ts`. A closed set cannot be level in any sport that
+ * carries one, so the branch is unreachable; the two surfaces agreeing matters
+ * more than picking a different unreachable answer.
+ */
+export function diffClosedSets(
+  before: unknown,
+  after: unknown,
+  sportKey: string,
+): RecentDerived["setWon"] | undefined {
+  const b = setBreakdown(before, sportKey)?.sets ?? [];
+  const a = setBreakdown(after, sportKey)?.sets ?? [];
+  for (let i = 0; i < a.length; i++) {
+    const set = a[i]!;
+    if (!set.closed || b[i]?.closed === true) continue;
+    return { set: i + 1, winner: set.home >= set.away ? 0 : 1, home: set.home, away: set.away };
+  }
+  return undefined;
+}
+
+type PointState = Omit<NonNullable<RecentDerived["pointState"]>, "fresh">;
+const RANK: Record<PointState["kind"], number> = { match: 3, set: 2, break: 1 };
+
+function probePointState(args: {
+  sportKey: string;
+  module: AnySportModule;
+  state: unknown;
+  squads: SquadState;
+  sides: readonly [string, string];
+  after: EventEnvelope;
+}): PointState | undefined {
+  const { sportKey, module, state, squads, sides, after } = args;
+  const make = PROBE_POINT[sportKey];
+  if (!make) return undefined;
+  // A decided match is at no point state: the slab must not announce a match
+  // point after the handshake.
+  if (module.outcome(state) !== null) return undefined;
+
+  const now = module.summary(state);
+  const closedNow = closedCount(now, sportKey);
+  const serving = servingSide(now);
+  const gamesNow = gamesOf(now);
+
+  let best: PointState | undefined;
+  for (const side of [0, 1] as const) {
+    const probe = make(sides[side]!);
+    // DERIVED FROM THE MODULE'S OWN DECLARATIONS. Only eight of the eleven
+    // modules declare `eventSchemas` at all, and a probe of a type a module
+    // never declared is a fabricated event — `apply` may accept it and fold
+    // something meaningless.
+    if (!(probe.type in (module.eventSchemas ?? {}))) return undefined;
+    const env: EventEnvelope = {
+      id: "overlay-probe",
+      fixtureId: after.fixtureId,
+      seq: after.seq + 1,
+      type: probe.type,
+      payload: probe.payload,
+      recordedAt: after.recordedAt,
+      recordedBy: null,
+    };
+    let next: unknown;
+    try {
+      next = module.apply(state as never, env as never, { strict: false, squads });
+    } catch {
+      // This side cannot legally take the next point from here (a tennis
+      // game-award state, an expedite rule). Not a failure — just no answer.
+      continue;
+    }
+    const then = module.summary(next as never);
+    let kind: PointState["kind"] | undefined;
+    if (module.outcome(next as never)?.kind === "win") kind = "match";
+    else if (closedCount(then, sportKey) > closedNow) kind = "set";
+    else if (
+      sportKey === "tennis" &&
+      serving !== null &&
+      serving !== (side === 0 ? "home" : "away") &&
+      gamesNow !== null
+    ) {
+      const key = side === 0 ? "home" : "away";
+      if ((gamesOf(then)?.[key] ?? 0) > gamesNow[key]) kind = "break";
+    }
+    if (kind && (best === undefined || RANK[kind] > RANK[best.kind])) best = { kind, side };
+  }
+  return best;
+}
+
+export interface DerivedReplay {
+  bySeq: Map<number, RecentDerived>;
+  /** False when the module refused the ledger part-way: annotations beyond that
+   *  point are ABSENT, not proven not to exist. Reported rather than swallowed
+   *  — an empty catch here would make a fixture that loses every set-won
+   *  annotation indistinguishable from one that had none to lose. */
+  complete: boolean;
+}
+
+export function replayDerived(args: {
+  sportKey: string;
+  module: AnySportModule;
+  cfg: unknown;
+  lineups: LineupPair;
+  active: readonly EventEnvelope[];
+  window?: number;
+}): DerivedReplay {
+  const { sportKey, module, cfg, lineups } = args;
+  // The probe's entrant ids come from the LINE-UP PAIR, which is the same
+  // authority the fold itself was given — not from the fixture row read
+  // separately, which could disagree with what was folded.
+  const sides: readonly [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
+  const bySeq = new Map<number, RecentDerived>();
+  const active = resolveVoids(args.active);
+  const inWindow = new Set(recentWindow(active, args.window).map((e) => e.seq));
+  if (inWindow.size === 0) return { bySeq, complete: true };
+  // The probe is the expensive half (one `apply` per side per event), and it is
+  // only needed inside the window — plus ONE event before it, so the window's
+  // first entry knows whether its point state is a transition or a continuation.
+  const firstWindowIndex = active.findIndex((e) => inWindow.has(e.seq));
+  const probeFrom = Math.max(0, firstWindowIndex - 1);
+
+  let complete = true;
+  let failedAt: number | null = null;
+  try {
+    let state: unknown = module.init(cfg as never, lineups);
+    let squads: SquadState = initSquads(lineups);
+    if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
+    let previous: ScoreSummary = module.summary(state as never);
+    let prevPoint: PointState | undefined;
+
+    for (let i = 0; i < active.length; i++) {
+      const event = active[i]!;
+      failedAt = event.seq;
+      // The three families `foldMatch` never hands to a module.
+      if (event.type === "core.suspend" || event.type === "core.resume") continue;
+      if (isLineupEventType(event.type)) {
+        const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+        if (reduced.ok) {
+          squads = reduced.squads;
+          if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);
+        }
+        continue;
+      }
+      state = module.apply(state as never, event as never, { strict: false, squads });
+      const summary = module.summary(state as never);
+
+      const point =
+        i >= probeFrom
+          ? probePointState({ sportKey, module, state, squads, sides, after: event })
+          : undefined;
+
+      if (inWindow.has(event.seq)) {
+        const derived: RecentDerived = {};
+        const setWon = diffClosedSets(previous, summary, sportKey);
+        if (setWon) derived.setWon = setWon;
+        if (point) {
+          const fresh = !(prevPoint && prevPoint.kind === point.kind && prevPoint.side === point.side);
+          derived.pointState = { ...point, fresh };
+        }
+        if (Object.keys(derived).length > 0) bySeq.set(event.seq, derived);
+      }
+      previous = summary;
+      prevPoint = point;
+    }
+    failedAt = null;
+  } catch (err) {
+    complete = false;
+    log.warn(
+      { sportKey, seq: failedAt, err: err instanceof Error ? err.message : String(err) },
+      "overlay: derived replay stopped; set-won and point-state beyond this seq are absent",
+    );
+  }
+  return { bySeq, complete };
 }
 
 /**

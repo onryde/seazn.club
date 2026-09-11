@@ -54,6 +54,31 @@ export interface RecentPayload {
   penalty?: boolean;
 }
 
+/**
+ * Facts the ledger does NOT record, derived server-side by replaying the module.
+ *
+ * Both are engine answers, never re-typed rules. "Set point" is not a stored
+ * event at any fidelity band anyone streams at (W2-F4): the only way to know
+ * whether the next point wins a set is to ASK the module what would happen, so
+ * that is what the server does — it applies a synthetic point for each side and
+ * reads the result. No set rule, tiebreak length or deciding-set variation
+ * appears anywhere in this codebase as a consequence.
+ */
+export interface RecentDerived {
+  /** The event CLOSED a set. `set` is 1-based; `home`/`away` are that set's
+   *  final scores. */
+  setWon?: { set: number; winner: 0 | 1; home: number; away: number };
+  /**
+   * After this event, ONE more point by `side` would break serve, win the set,
+   * or win the match.
+   *
+   * `fresh` is false when the previous event was already at the same state for
+   * the same side — a deuce fought out over ten points is ONE match point
+   * arriving, not ten. The slab fires on `fresh`.
+   */
+  pointState?: { kind: "break" | "set" | "match"; side: 0 | 1; fresh: boolean };
+}
+
 /** One surviving ledger event, projected. `type` is the ENGINE'S OWN recorded
  *  type string, unmapped — the moment allowlist keys on it. */
 export interface RecentEvent {
@@ -62,6 +87,9 @@ export interface RecentEvent {
   /** ISO, the envelope's `recordedAt`. */
   at: string;
   payload: RecentPayload;
+  /** ABSENT when the replay derived nothing for this event, and absent for
+   *  every sport that is not set-based. Never an empty object. */
+  derived?: RecentDerived;
 }
 
 /** How many surviving module events the overlay carries. Eight is the slab's

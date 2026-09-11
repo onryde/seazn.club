@@ -13,11 +13,11 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { venueTzForDivision } from "@/server/venue-tz";
-import { foldFixture, type FoldedFixture } from "@/server/engine-db/fold";
+import { foldFrom, loadFoldInputs, type FoldedFixture } from "@/server/engine-db/fold";
 import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
-import type { RecentEvent } from "@/lib/overlay-recent-types";
-import { buildOverlayRecent, loadRecentPersonOf, personIdsIn, recentWindow } from "./recent";
+import type { RecentDerived, RecentEvent } from "@/lib/overlay-recent-types";
+import { buildOverlayRecent, loadRecentPersonOf, personIdsIn, recentWindow, replayDerived } from "./recent";
 import { projectOverlayLiveData } from "./project";
 
 interface PublicRow {
@@ -45,10 +45,61 @@ interface PublicRow {
  *  `Invariant: incrementalCache missing`; the DB-backed route test therefore
  *  stubs `next/cache` passthrough, exactly as this repo's other
  *  `unstable_cache` tests do. */
-function cachedFold(fixtureId: string, lastSeq: number): () => Promise<FoldedFixture | null> {
+/** What one cache entry holds: the fold, and the replay's set-won / point-state
+ *  annotations for the window.
+ *
+ *  `derived` is a plain OBJECT keyed by the sequence number as a string, not
+ *  the `Map` `replayDerived` returns. `unstable_cache` SERIALISES its value,
+ *  and a Map crosses that boundary as `{}` — silently, and invisibly to every
+ *  test in this repo, because they all double `unstable_cache` with a
+ *  passthrough that preserves it. */
+interface CachedOverlay {
+  folded: FoldedFixture | null;
+  derived: Record<string, RecentDerived>;
+}
+
+/** Folds once per (fixture, last_seq), and derives in the SAME pass. The fold
+ *  reads the whole ledger and every module the fixture pins; at ~1 event / 36 s
+ *  per T20 that is once per ledger advance, and never once per 15 s poll across
+ *  every viewer.
+ *
+ *  The derivation shares this boundary rather than taking one of its own for
+ *  two reasons: it needs the module, the cfg and the line-up pair, which
+ *  `loadFoldInputs` has just read and which `FoldedFixture` cannot carry
+ *  through a serialising cache; and a second cached call would be a second read
+ *  of the same ledger.
+ *
+ *  `unstable_cache` inside a Route Handler is an established pattern in this
+ *  app — `calendar.ics/route.ts` calls `getPublicDivision`, which is wrapped
+ *  the same way (`public-site/data.ts`). It has no incremental cache OUTSIDE
+ *  the Next server runtime, so a plain vitest process gets
+ *  `Invariant: incrementalCache missing`; the DB-backed route test therefore
+ *  stubs `next/cache` passthrough, exactly as this repo's other
+ *  `unstable_cache` tests do.
+ *
+ *  The key is `overlay-fold-v2`: the VALUE's shape changed here, and a live
+ *  entry written under the old key would deserialise as a `FoldedFixture`
+ *  where this now expects a `CachedOverlay`. */
+function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOverlay> {
   return unstable_cache(
-    async () => sql.begin(async (tx) => foldFixture(tx, fixtureId)) as Promise<FoldedFixture | null>,
-    ["overlay-fold", fixtureId, String(lastSeq)],
+    async () =>
+      sql.begin(async (tx) => {
+        const inputs = await loadFoldInputs(tx, fixtureId);
+        if (inputs === null) return { folded: null, derived: {} };
+        const folded = foldFrom(fixtureId, inputs);
+        const { bySeq } = replayDerived({
+          sportKey: inputs.sportKey,
+          module: inputs.module,
+          cfg: inputs.cfg,
+          lineups: inputs.lineups,
+          active: folded.active,
+        });
+        return {
+          folded,
+          derived: Object.fromEntries([...bySeq].map(([seq, d]) => [String(seq), d])),
+        };
+      }) as Promise<CachedOverlay>,
+    ["overlay-fold-v2", fixtureId, String(lastSeq)],
     { revalidate: 300 },
   );
 }
@@ -57,7 +108,7 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<FoldedFix
  * Review 2026-09-09 (I5) — the fold is BEST EFFORT, and its failure must never
  * reach the wire.
  *
- * `foldFixture` throws `EngineError("WRONG_PHASE")` for a fixture with an
+ * `loadFoldInputs` throws `EngineError("WRONG_PHASE")` for a fixture with an
  * unassigned entrant (reachable whenever an entrant is deleted after scoring —
  * the FK is `on delete set null`), and `resolveModule` can throw
  * `MODULE_NOT_FOUND` for a pinned module version this build no longer ships.
@@ -71,12 +122,12 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<FoldedFix
  * scorebug keeps showing the score and simply loses the clock / innings block.
  * A wrong clock on air is worse than no clock; a blank overlay is worse still.
  */
-async function foldOrNull(fixtureId: string, lastSeq: number): Promise<FoldedFixture | null> {
+async function foldOrNull(fixtureId: string, lastSeq: number): Promise<CachedOverlay> {
   try {
     return await cachedFold(fixtureId, lastSeq)();
   } catch (err) {
     log.error({ err, fixtureId, lastSeq }, "overlay: fold failed, serving the row without it");
-    return null;
+    return { folded: null, derived: {} };
   }
 }
 
@@ -95,10 +146,8 @@ async function foldOrNull(fixtureId: string, lastSeq: number): Promise<FoldedFix
  * nothing else). `personIdsIn` answers that by running the real projectors, so
  * it cannot drift from what is actually published.
  */
-async function recentOrEmpty(
-  row: PublicRow,
-  folded: FoldedFixture | null,
-): Promise<RecentEvent[]> {
+async function recentOrEmpty(row: PublicRow, bundle: CachedOverlay): Promise<RecentEvent[]> {
+  const { folded } = bundle;
   if (!folded) return [];
   const { home_entrant_id: home, away_entrant_id: away } = row;
   // Not a degrade: `foldFixture` itself throws WRONG_PHASE for an unassigned
@@ -109,7 +158,8 @@ async function recentOrEmpty(
   try {
     const ids = personIdsIn(recentWindow(folded.active), [home, away]);
     const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, ids);
-    return buildOverlayRecent({ active: folded.active, sides: [home, away], personOf });
+    const derived = new Map(Object.entries(bundle.derived).map(([seq, d]) => [Number(seq), d]));
+    return buildOverlayRecent({ active: folded.active, sides: [home, away], personOf, derived });
   } catch (err) {
     log.error({ err, fixtureId: row.id }, "overlay: recent window failed, serving without it");
     return [];
@@ -119,7 +169,8 @@ async function recentOrEmpty(
 export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiveData> {
   const row = (await publicFixture(fixtureId)) as PublicRow;
   const venueTz = await venueTzForDivision(row.division_id);
-  const folded = row.last_seq === null ? null : await foldOrNull(fixtureId, row.last_seq);
-  const recent = await recentOrEmpty(row, folded);
-  return projectOverlayLiveData({ row, folded, venueTz, recent });
+  const bundle: CachedOverlay =
+    row.last_seq === null ? { folded: null, derived: {} } : await foldOrNull(fixtureId, row.last_seq);
+  const recent = await recentOrEmpty(row, bundle);
+  return projectOverlayLiveData({ row, folded: bundle.folded, venueTz, recent });
 }

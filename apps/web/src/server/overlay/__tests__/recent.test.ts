@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
-import { buildOverlayRecent, personIdsIn, recentWindow } from "../recent";
+import { buildOverlayRecent, diffClosedSets, personIdsIn, recentWindow, replayDerived } from "../recent";
 import { OVERLAY_RECENT_WINDOW, type RecentPerson } from "@/lib/overlay-recent-types";
 
 const moduleFor = (key: string) => {
@@ -270,5 +270,267 @@ describe("personIdsIn", () => {
   it("a ledger that names nobody asks for nothing — the server skips the person read entirely", () => {
     const stream = active("football", [["core.start", {}], ["football.goal", { by: "H" }]]);
     expect(personIdsIn(recentWindow(stream), SIDES)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 7 — `derived`: the two facts the ledger does not record.
+//
+// Every expectation below is DERIVED FROM THE ENGINE, never typed as a
+// constant: the streams are driven to a state and the module is then asked what
+// it thinks. A table of "a tennis set is 6 games" written here would freeze
+// today's rules into a test that cannot witness tomorrow's variant.
+// ---------------------------------------------------------------------------
+
+/** Replays `stream` exactly as the loader does and returns the window with its
+ *  derived annotations attached. */
+function derivedOf(key: string, stream: readonly (readonly [string, unknown])[], window?: number) {
+  const mod = moduleFor(key);
+  const events = active(key, stream);
+  const replay = replayDerived({
+    sportKey: key,
+    module: mod as never,
+    cfg: cfgFor(key) as never,
+    lineups: defaultLineupPair(mod.positions),
+    active: events,
+    window,
+  });
+  return {
+    replay,
+    events: buildOverlayRecent({
+      active: events,
+      sides: SIDES,
+      personOf,
+      window,
+      derived: replay.bySeq,
+    }),
+  };
+}
+
+/** Points until `stop(n)` says enough — the engine decides when, not a literal. */
+const points = (n: number, by: string) =>
+  Array.from({ length: n }, () => ["badminton.rally", { wonBy: by }] as const);
+
+describe("diffClosedSets", () => {
+  it("returns nothing when either side has no sets at all", () => {
+    expect(diffClosedSets(null, null, "badminton")).toBeUndefined();
+    expect(diffClosedSets({ detail: {} }, { detail: {} }, "badminton")).toBeUndefined();
+  });
+
+  it("names the set that CLOSED, its ordinal and its winner — and says nothing on the next event", () => {
+    const mod = moduleFor("badminton");
+    const cfg = cfgFor("badminton");
+    const lineups = defaultLineupPair(mod.positions);
+    const upToGame: (readonly [string, unknown])[] = [["core.start", {}]];
+    // Drive until the module itself says a set closed — no "21" typed here.
+    let closed = 0;
+    let before = (mod as never as { summary: (s: unknown) => unknown }).summary(
+      (mod as never as { init: (c: unknown, l: unknown) => unknown }).init(cfg, lineups),
+    );
+    for (let i = 0; i < 60 && closed === 0; i++) {
+      upToGame.push(["badminton.rally", { wonBy: "H" }]);
+      const evs = active("badminton", upToGame);
+      const state = foldMatch(mod as never, cfg as never, lineups, evs);
+      const after = (mod as never as { summary: (s: unknown) => unknown }).summary(state);
+      const won = diffClosedSets(before, after, "badminton");
+      if (won) {
+        expect(won).toMatchObject({ set: 1, winner: 0, away: 0 });
+        expect(won.home).toBeGreaterThan(0);
+        closed = 1;
+      }
+      before = after;
+    }
+    expect(closed).toBe(1);
+  });
+});
+
+describe("replayDerived", () => {
+  it("a sport with no sets derives nothing at all — `derived` is ABSENT, never an empty object", () => {
+    const { events, replay } = derivedOf("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H" }],
+    ]);
+    expect(replay.complete).toBe(true);
+    expect(events.at(-1)!.derived).toBeUndefined();
+    expect("derived" in events.at(-1)!).toBe(false);
+  });
+
+  it("badminton: the point that closes a game annotates setWon on THAT event", () => {
+    const mod = moduleFor("badminton");
+    // 21 unanswered points closes a game under any shipped variant; the
+    // assertion reads the module's own set list rather than the number 21.
+    const { events } = derivedOf("badminton", [["core.start", {}], ...points(21, "H")]);
+    const wins = events.filter((e) => e.derived?.setWon);
+    expect(wins).toHaveLength(1);
+    expect(wins[0]!.derived!.setWon).toMatchObject({ set: 1, winner: 0, away: 0 });
+    void mod;
+  });
+
+  it("badminton: one point short of the game is a SET point for the leader, and it is FRESH exactly once", () => {
+    const { events } = derivedOf("badminton", [["core.start", {}], ...points(20, "H")], 25);
+    const last = events.at(-1)!;
+    expect(last.derived?.pointState).toMatchObject({ kind: "set", side: 0 });
+    // Nothing before 20-0 is a set point, so this one is a transition.
+    expect(last.derived?.pointState?.fresh).toBe(true);
+    const setPoints = events.filter((e) => e.derived?.pointState?.kind === "set");
+    expect(setPoints).toHaveLength(1);
+  });
+
+  it("badminton: a set point that would also win the MATCH reads as match, not set", () => {
+    // Game one to H, then one point short of game two.
+    const { events } = derivedOf(
+      "badminton",
+      [["core.start", {}], ...points(21, "H"), ...points(20, "H")],
+      50,
+    );
+    expect(events.at(-1)!.derived?.pointState).toMatchObject({ kind: "match", side: 0 });
+  });
+
+  it("a DECIDED match is at no point state at all — the slab must not announce a match point after the handshake", () => {
+    const { events } = derivedOf("badminton", [["core.start", {}], ...points(21, "H"), ...points(21, "H")], 60);
+    expect(events.at(-1)!.derived?.pointState).toBeUndefined();
+  });
+
+  it("`fresh` is FALSE while the same state persists — a deuce fought out is one match point arriving, not many", () => {
+    // 20-0 then 20-1, 20-2 … H stays one point from the game throughout.
+    const { events } = derivedOf(
+      "badminton",
+      [["core.start", {}], ...points(20, "H"), ...points(3, "A")],
+      50,
+    );
+    const run = events.filter((e) => e.derived?.pointState?.kind === "set");
+    expect(run.length).toBeGreaterThan(1);
+    expect(run[0]!.derived!.pointState!.fresh).toBe(true);
+    expect(run.slice(1).every((e) => e.derived!.pointState!.fresh === false)).toBe(true);
+  });
+
+  it("the probe never runs a type the module does not DECLARE", () => {
+    const mod = moduleFor("badminton");
+    const blind = { ...(mod as object), eventSchemas: {} } as never;
+    const replay = replayDerived({
+      sportKey: "badminton",
+      module: blind,
+      cfg: cfgFor("badminton") as never,
+      lineups: defaultLineupPair(mod.positions),
+      active: active("badminton", [["core.start", {}], ...points(20, "H")]),
+    });
+    expect([...replay.bySeq.values()].some((d) => d.pointState)).toBe(false);
+  });
+
+  it("a module that REFUSES the ledger part-way reports it rather than pretending the rest had nothing", () => {
+    const mod = moduleFor("badminton");
+    const exploding = {
+      ...(mod as object),
+      apply: () => {
+        throw new Error("refused");
+      },
+    } as never;
+    const replay = replayDerived({
+      sportKey: "badminton",
+      module: exploding,
+      cfg: cfgFor("badminton") as never,
+      lineups: defaultLineupPair(mod.positions),
+      active: active("badminton", [["core.start", {}], ...points(3, "H")]),
+    });
+    expect(replay.complete).toBe(false);
+  });
+});
+
+describe("replayDerived — tennis, the only sport with a BREAK", () => {
+  const point = (by: string) => ["tennis.point", { by }] as const;
+
+  it("the RECEIVER one point from the game is at BREAK point; the SERVER at game point is at no point state", () => {
+    // Who serves first is the engine's answer, not a literal — read it off the
+    // summary after `core.start` and drive the receiver to 0–40.
+    const mod = moduleFor("tennis");
+    const cfg = cfgFor("tennis");
+    const lineups = defaultLineupPair(mod.positions);
+    const opened = foldMatch(mod as never, cfg as never, lineups, active("tennis", [["core.start", {}]]));
+    const serving = (mod as never as { summary: (s: unknown) => { detail?: { serving?: string } } })
+      .summary(opened).detail?.serving;
+    expect(serving).toBe("home");
+    const receiver = "A";
+
+    const { events } = derivedOf("tennis", [["core.start", {}], point(receiver), point(receiver), point(receiver)], 20);
+    expect(events.at(-1)!.derived?.pointState).toMatchObject({ kind: "break", side: 1, fresh: true });
+
+    // The server at 40–0 would win the GAME, which is not a break, not a set
+    // and not a match — so nothing is announced.
+    const held = derivedOf("tennis", [["core.start", {}], point("H"), point("H"), point("H")], 20);
+    expect(held.events.at(-1)!.derived?.pointState).toBeUndefined();
+  });
+});
+
+describe("replayDerived — the guards, each witnessed alone", () => {
+  const CLOSED = { home: 21, away: 0, closed: true };
+  const envelopes = (n: number) =>
+    Array.from({ length: n }, (_, i) => makeEnvelope(i + 1, { type: "badminton.rally", payload: { wonBy: "H" } } as never));
+
+  it("a module whose `apply` TOLERATES a point after the match is decided is still not asked", () => {
+    // The `catch` around the probe hides this on every real module, because
+    // theirs throw. A tolerant one would fold a phantom point and report a
+    // match point after the handshake — which is exactly what the decided
+    // guard exists for, and the only way to witness it.
+    const tolerant = {
+      eventSchemas: { "badminton.rally": {} },
+      init: () => ({}),
+      apply: (s: unknown) => s,
+      summary: () => ({ headline: "", detail: { sets: [CLOSED] } }),
+      outcome: () => ({ kind: "win", winner: "H" }),
+    } as never;
+    const replay = replayDerived({
+      sportKey: "badminton",
+      module: tolerant,
+      cfg: {},
+      lineups: defaultLineupPair(moduleFor("badminton").positions),
+      active: envelopes(3),
+    });
+    expect([...replay.bySeq.values()].some((d) => d.pointState)).toBe(false);
+  });
+
+  it("when one side would win a SET and the other the MATCH, the match wins the announcement", () => {
+    const probing = {
+      eventSchemas: { "badminton.rally": {} },
+      init: () => ({ probe: null }),
+      apply: (_s: unknown, ev: { id: string; payload: { wonBy?: string } }) =>
+        ({ probe: ev.id === "overlay-probe" ? (ev.payload.wonBy ?? null) : null }),
+      summary: (s: { probe: string | null }) => ({
+        headline: "",
+        detail: { sets: s.probe === "H" ? [CLOSED, CLOSED] : [CLOSED] },
+      }),
+      outcome: (s: { probe: string | null }) => (s.probe === "A" ? { kind: "win", winner: "A" } : null),
+    } as never;
+    const replay = replayDerived({
+      sportKey: "badminton",
+      module: probing,
+      cfg: {},
+      lineups: defaultLineupPair(moduleFor("badminton").positions),
+      active: envelopes(2),
+    });
+    const states = [...replay.bySeq.values()].map((d) => d.pointState);
+    expect(states.at(-1)).toMatchObject({ kind: "match", side: 1 });
+  });
+
+  it("a set already closed is not re-won by every event that follows it", () => {
+    const { events } = derivedOf(
+      "badminton",
+      [["core.start", {}], ...points(21, "H"), ...points(5, "A")],
+      60,
+    );
+    expect(events.filter((e) => e.derived?.setWon)).toHaveLength(1);
+  });
+
+  it("at the DEFAULT window the first entry still knows it is a continuation, not a fresh point state", () => {
+    // The probe runs from ONE event before the window for exactly this. With
+    // the window starting at the probe, the first entry has no previous state
+    // to compare against and every run reads as fresh.
+    // EIGHT replies, so the whole window sits AFTER H reached 20 and every
+    // entry in it — including the first — is a continuation. With six, the
+    // window's first entry was H's 19th point, which is not a set point at
+    // all, and the case proved nothing.
+    const { events } = derivedOf("badminton", [["core.start", {}], ...points(20, "H"), ...points(8, "A")]);
+    expect(events).toHaveLength(OVERLAY_RECENT_WINDOW);
+    expect(events.every((e) => e.derived?.pointState?.kind === "set")).toBe(true);
+    expect(events[0]!.derived?.pointState).toMatchObject({ kind: "set", side: 0, fresh: false });
   });
 });
