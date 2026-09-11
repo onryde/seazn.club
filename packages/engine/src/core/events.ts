@@ -56,7 +56,15 @@ export const CoreAbandon = z.strictObject({ reason: z.string().min(1) });
  *  it inline as `{ by: string }`, which is why the REQUIRED `reason` was
  *  silently dropped in all eight of them — the cast named the field it wanted
  *  and the compiler had nothing to say about the one it did not. Parsing here
- *  instead means a module cannot read `by` without the reason coming with it. */
+ *  instead means a module cannot read `by` without the reason coming with it.
+ *
+ *  The `.parse` CANNOT introduce a new throw on stored data, which is the
+ *  question to ask of any cast-to-parse change: `foldMatch` already calls
+ *  `validateCoreEvent` on every active event, ungated by `strict` (see the
+ *  fold loop below), so a `core.forfeit` whose payload does not satisfy this
+ *  exact schema has been failing INVALID_EVENT on every fold since long before
+ *  this helper existed. By the time a module's reducer runs, the payload is
+ *  known good; parsing again is belt-and-braces, not a new gate. */
 export function forfeitOf(payload: unknown): { by: string; reason: string } {
   return CoreForfeit.parse(payload);
 }

@@ -435,11 +435,16 @@ describe("PackSchema — a stream may name its stage", () => {
 });
 
 describe("PackSchema — an award outcome cannot claim a method", () => {
-  // The engine's `award` variant is `{kind, winner, score?}` — no `method`
-  // (core/types.ts). A pack that could write one would parse and then be
-  // UNSATISFIABLE against every possible fold.
-  it("refuses `method` on an award", () => {
-    expectIssue(
+  // INVERTED 2026-09-11, and the old assertion is worth stating because it was
+  // right when it was written: the engine's `award` variant was
+  // `{kind, winner, score?}` with no `method`, so a pack that wrote one would
+  // parse and then be UNSATISFIABLE against every possible fold — the
+  // comparison reads `undefined` and reds forever. `MatchOutcome`'s award now
+  // declares `method`, fed verbatim from `core.forfeit`'s required `reason`,
+  // so the field is satisfiable and a pack folding a forfeit can assert WHY
+  // the award happened. Suite 11's walkover is the first caller.
+  it("accepts `method` on an award, and KEEPS the parsed value", () => {
+    const parsed = PackSchema.parse(
       pack((p) => {
         const matches = (p.expected as Record<string, unknown>)["matches"] as Record<string, unknown>[];
         (matches[0]!["outcome"] as Record<string, unknown>) = {
@@ -448,11 +453,12 @@ describe("PackSchema — an award outcome cannot claim a method", () => {
           method: "walkover",
         };
       }),
-      // zod reports an unrecognized key at the OBJECT, not at the key — so
-      // this path is what the parse really produces, not what reads naturally.
-      ["expected", "matches", 0, "outcome"],
-      /unrecognized key: "method"/i,
     );
+    const outcome = parsed.expected.matches?.[0]?.outcome as { kind: string; method?: string };
+    expect(outcome.kind).toBe("award");
+    // Pinned by VALUE, not merely by presence: a schema that stripped the key
+    // would still parse, and the pack would then silently assert nothing.
+    expect(outcome.method).toBe("walkover");
   });
 
   it("still accepts `method` on a win, and KEEPS the parsed value", () => {

@@ -358,16 +358,49 @@ function scoreEvents(
   }));
 }
 
+/** Div A's event stream. Every match is `core.start` + one `generic.score` per
+ *  set won + an empty `generic.result` — EXCEPT the walkover, which is
+ *  `core.start` + `core.forfeit` and no result card at all.
+ *
+ *  The first version of this pack encoded the walkover as an administrative
+ *  1-0 and recorded "there is no route to forfeit an existing fixture" as a
+ *  product finding. Both halves were false. `usecases/scoring.ts` applies no
+ *  event-type allowlist — the sport module's reducer is the only validator —
+ *  so `core.forfeit` is postable on any fixture like any other event, and
+ *  `append-event.ts:127` derives the `forfeited` status from it, exactly as
+ *  `withdrawal.ts:102` already relies on. It folds to `{kind: "award"}`
+ *  carrying NO score, which is precisely what a walkover is.
+ *
+ *  `reason` is REQUIRED by `CoreForfeit` and is carried verbatim onto the
+ *  outcome's `method` by every module but boardgame, so "walkover" here is
+ *  what the expectation below asserts — the pack can now state WHY the award
+ *  happened instead of asserting a played 1-0. */
+function worldsEvents(m: WorldsMatch): NonNullable<PackInput["streams"]>[number]["events"] {
+  if (m.setScores === null) {
+    const winner = worldsWinner(m);
+    const loser = winner === m.p1 ? m.p2 : m.p1;
+    return [
+      { type: "core.start" },
+      // A PAYLOAD ref, so it carries the `@` sigil (header note 6). Without it
+      // PackSchema reads the string as a literal and only stage 0 catches it.
+      { type: "core.forfeit", payload: { by: sigil(entrantRef("a", loser)), reason: "walkover" } },
+    ];
+  }
+  return [{ type: "core.start" }, ...scoreEvents(worldsUnits(m), "a"), { type: "generic.result", payload: {} }];
+}
+
 function worldsUnits(m: WorldsMatch): { winner: string }[] {
   if (m.setScores === null) {
-    // The walkover. No darts were thrown, and the generic module in score
-    // mode REFUSES a result card with no scores and no tally
-    // (generic.ts:119-120) — while the product has no route to forfeit an
-    // existing fixture at all (only the bracket generator stamps
-    // `forfeited`, on byes it created itself: stages.ts:1351). So the
-    // advance is encoded as a single administrative unit. Declared in
-    // meta.adaptations; recorded as a product finding in the PR.
-    return [{ winner: worldsWinner(m) }];
+    // THE WALKOVER CONTRIBUTES NO UNITS. No darts were thrown, so nothing is
+    // scored — the advance rides `core.forfeit` instead (see `worldsEvents`).
+    // This function feeds both the stream and the leaderboard/career
+    // expectations, so returning an empty list here is what keeps a set
+    // nobody threw out of a real named player's statistics.
+    //
+    // It used to return one administrative unit, because this pack believed
+    // the product had no route to forfeit an existing fixture. That was
+    // wrong — see the `worldsEvents` note.
+    return [];
   }
   // `setScores` is in PLAY order, so the tally moves the way the match moved
   // rather than as a block of wins followed by a block of losses. A pack that
@@ -428,7 +461,7 @@ function buildStreams(): NonNullable<PackInput["streams"]> {
       home: entrantRef("a", m.p1),
       away: entrantRef("a", m.p2),
       provenance: "real",
-      events: [{ type: "core.start" }, ...scoreEvents(worldsUnits(m), "a"), { type: "generic.result", payload: {} }],
+      events: worldsEvents(m),
     });
   }
   for (const m of WOMENS.matches) {
@@ -809,6 +842,25 @@ function expectedMatches(): ExpectedMatchInput[] {
     const winner = worldsWinner(m);
     const loser = winner === m.p1 ? m.p2 : m.p1;
     const units = worldsUnits(m);
+    if (m.setScores === null) {
+      // THE WALKOVER. `core.forfeit` folds to an award, and since 2026-09-11
+      // the award carries the forfeit's `reason` as its `method` — so the
+      // pack asserts "walkover" against a fold that really produces it,
+      // rather than the "regulation" it used to assert against a fabricated
+      // 1-0. No score exists, and `sideLine` answers from the OUTCOME rather
+      // than a tally: "W/O" to the side that advanced, "L" to the side that
+      // did not (generic.ts:219-220).
+      rows.push({
+        divisionRef: DIV_A,
+        fixtureExtKey: extKey(WORLDS_BRACKET, m),
+        outcome: { kind: "award", winner: entrantRef("a", winner), method: "walkover" },
+        perSide: [
+          { entrant: entrantRef("a", m.p1), line: m.p1 === winner ? "W/O" : "L" },
+          { entrant: entrantRef("a", m.p2), line: m.p2 === winner ? "W/O" : "L" },
+        ],
+      });
+      continue;
+    }
     const won = units.filter((u) => u.winner === m.p1).length;
     const lost = units.length - won;
     rows.push({
@@ -818,15 +870,6 @@ function expectedMatches(): ExpectedMatchInput[] {
         kind: "win",
         winner: entrantRef("a", winner),
         loser: entrantRef("a", loser),
-        // "regulation" even for the walkover, and that is the FINDING rather
-        // than a concession. Stage 0 refused `method: "walkover"` here —
-        // `method: pack expects "walkover", the fold produced "regulation"` —
-        // because a walkover encoded as an administrative 1-0 is, to the
-        // engine, an ordinary win. So a walkover is not merely awkward to
-        // record (there is no route to forfeit an existing fixture at all):
-        // once recorded the only way it can be, it is INDISTINGUISHABLE from
-        // a played 1-0. Asserting "walkover" would assert something the
-        // product cannot express.
         method: "regulation",
       },
       // `sideLine` renders `String(state.score[side])` once decided
@@ -1000,8 +1043,8 @@ function adaptations(): NonNullable<PackInput["meta"]>["adaptations"] {
       where: "divisions[].stages[].config.slotOrder",
     },
     {
-      what: "Div A match 35, Ian White w/o Sandro Eric Sosing, is encoded as a single 1-0 administrative set and its expected outcome method is \"regulation\", not \"walkover\". No darts were thrown.",
-      why: "Two product facts, not one. There is no route to forfeit an existing fixture — `forfeited` is a fixture status but its only writer is the bracket generator, stamping byes it created itself (stages.ts:1351) — and the generic module in score mode refuses a result card with no scores and no tally (generic.ts:119-120), so a stream cannot express it either. Encoded the only way available, the walkover then becomes INDISTINGUISHABLE from a played 1-0: stage 0 refused `method: \"walkover\"` against a fold that produced `\"regulation\"`. The 1-0 is an encoding of record, not a score that happened. Both halves recorded as a product finding.",
+      what: "Div A match 35, Ian White w/o Sandro Eric Sosing, is encoded as `core.forfeit` with reason \"walkover\" and carries NO score events. No darts were thrown, and none are recorded.",
+      why: "`core.forfeit` is postable on any fixture through the ordinary scoring door (usecases/scoring.ts applies no event-type allowlist — the sport module's reducer is the only validator), append-event.ts:127 derives the `forfeited` status from it, and it folds to `{kind: \"award\"}` carrying no score. So the adaptation is small: the source records only that the match was a walkover, and the pack states that and nothing more. AN EARLIER VERSION OF THIS ENTRY CLAIMED THE OPPOSITE — no route to forfeit, so encode an administrative 1-0 with method \"regulation\". Both halves were false, and the 1-0 was harmful: leaderboard and career expectations derive from the streams, so a set nobody threw entered a real player's statistics. The real defect was narrower and is fixed — every module discarded core.forfeit's required `reason` (core/forfeit-reason.test.ts now sweeps all eleven).",
       where: "streams[] and expected.matches[] for se-r0-i19 of Div A",
     },
     {
