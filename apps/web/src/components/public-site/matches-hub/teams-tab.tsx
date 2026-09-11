@@ -97,7 +97,7 @@ export function TeamsTab({ doc, dict }: TeamsTabProps) {
                 two of those at 320 truncate to nothing. R1's one-DOM rule —
                 the same cards, laid out wider, no control appears or
                 disappears. */}
-            <ul className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+            <ul className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" role="list">
               {teams.map((tm) => (
                 <li key={tm.entrantId} className="min-w-0">
                   {/* The whole card is the link and the whole card is the

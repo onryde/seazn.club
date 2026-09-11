@@ -154,7 +154,7 @@ export function TableTab({ doc, dict }: TableTabProps) {
                 at all — a half-width table at 360 puts the points column, the
                 number the table exists for, behind a scroll. `min-w-0` on the
                 cell because a grid item defaults to `min-width: auto`. */}
-            <ul className={`grid gap-4${views.length > 1 ? " md:grid-cols-2" : ""}`}>
+            <ul className={`grid gap-4${views.length > 1 ? " md:grid-cols-2" : ""}`} role="list">
               {views.map((view) => (
                 <li key={view.id} className="min-w-0">
                   <StandingsTableView

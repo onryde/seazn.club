@@ -311,7 +311,12 @@ describe("MatchesTab", () => {
     // widest text sets the column and a 43-character name pushes the page
     // sideways at 320 instead of ellipsising.
     const h = render(doc, { initialFilter: "upcoming" });
-    expect(h).toMatch(/<ul class="[^"]*grid[^"]*"><li class="[^"]*min-w-0/);
+    // `[^>]*` after the class: the list now also carries `role="list"`
+    // (final review C8 — Tailwind's preflight strips list semantics, and the
+    // reason held on one tab and was missing on five). The assertion is about
+    // the `<li>` being the GRID ITEM, not about which attributes the `<ul>`
+    // happens to carry.
+    expect(h).toMatch(/<ul class="[^"]*grid[^"]*"[^>]*><li class="[^"]*min-w-0/);
   });
 
   // ------------------------------------------------- reconciling a stale choice

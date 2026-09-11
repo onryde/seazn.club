@@ -78,7 +78,7 @@ export interface OverviewTabProps {
    * only section on the tab.
    *
    * The page being replaced already gets this right and is the precedent to
-   * copy: `app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:272`
+   * copy: `app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:352`
    * renders its board only when `sponsors.length > 0`. `InfoTab` has the
    * identical shape (`info-tab.tsx:204,286`), so this is ONE contract for both,
    * not two — and `overview-tab.test.tsx` characterises it, so a caller that
@@ -397,7 +397,7 @@ export function nextUpMatches<
   // Guarded before `toISOString()`, which THROWS on an Invalid Date — `now` is
   // a caller's value, and an unusable clock must not become an exception out of
   // a render. `landingStatus` guards the same BOUNDARY
-  // (`lib/matches-hub.ts:324`) but not the same VALUE — it tests
+  // (`lib/matches-hub.ts:325`) but not the same VALUE — it tests
   // `a.now.getTime()`, this tests the raw `number` — so the two agree at `NaN`
   // and diverge at `±Infinity`, where this one throws. See the `!(at < now)`
   // note below; the divergence is pre-existing and unreachable from `useNow()`.
@@ -415,7 +415,7 @@ export function nextUpMatches<
         const at = Date.parse(m.scheduledAt);
         // `!(at < now)`, NOT `at >= now`, and the difference is the whole point
         // of writing it this way: it is `landingStatus`'s OWN exclusion
-        // (`lib/matches-hub.ts:323` — `if (at === null || at < nowMs) continue`)
+        // (`lib/matches-hub.ts:315` — `if (at === null || at < nowMs) continue`)
         // mirrored rather than re-derived. The two are identical for every
         // finite clock, and they differ at exactly one value — `NaN`, where
         // every comparison is false, so `at >= now` excluded EVERYTHING while
@@ -635,6 +635,16 @@ export function OverviewTab({
                     it skipped it INTO `StandingsTableView`'s `<h3>` caption
                     below — the Overview's outline ran h2 → h4 → h3 while the
                     Table tab nests the same two facts the other way up. */}
+                {/* `truncate`, where Table, Stats and Teams all WRAP their
+                    division heading and each say why ("a heading is the one
+                    string on this tab with room to take two lines"). A
+                    deliberate divergence, stated because three siblings write
+                    the opposite rule out at length and silence would read as
+                    an oversight (final review C11): from `lg` these previews
+                    sit in a 20rem side rail, where a two-line division name
+                    over a three-row table makes the heading taller than the
+                    thing it heads. This is a caption above a teaser, not the
+                    top of a panel's outline. */}
                 <h3
                   data-testid={`mh-table-preview-${view.id}-division`}
                   className="mb-1 min-w-0 truncate text-sm font-semibold text-ink-muted"

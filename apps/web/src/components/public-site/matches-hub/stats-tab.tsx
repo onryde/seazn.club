@@ -109,7 +109,7 @@ export function StatsTab({ doc, dict }: StatsTabProps) {
   if (doc.leaders.length === 0) {
     return (
       <div data-testid="mh-stats" className="min-w-0">
-        <p data-testid="mh-leaders-empty" className="py-8 text-center text-sm text-ink-muted">
+        <p data-testid="mh-stats-empty" className="py-8 text-center text-sm text-ink-muted">
           {t(dict, "leaders.empty")}
         </p>
       </div>
@@ -144,7 +144,7 @@ export function StatsTab({ doc, dict }: StatsTabProps) {
                 for no gain, and below `md` nothing goes two-up at all — a
                 half-width board at 360 truncates every name on it. `min-w-0` on
                 the cell because a grid item defaults to `min-width: auto`. */}
-            <ul className={`grid gap-4${boards.length > 1 ? " md:grid-cols-2" : ""}`}>
+            <ul className={`grid gap-4${boards.length > 1 ? " md:grid-cols-2" : ""}`} role="list">
               {boards.map((b) => (
                 <li key={b.key} className="min-w-0">
                   <section
@@ -160,7 +160,7 @@ export function StatsTab({ doc, dict }: StatsTabProps) {
                     <h3 className="mb-1 min-w-0 truncate font-display text-sm font-semibold text-ink">
                       {b.label}
                     </h3>
-                    <ol className="min-w-0">
+                    <ol className="min-w-0" role="list">
                       {b.rows.map((row, i) => {
                         const href = linkFor(row);
                         // Bound ONCE and rendered by whichever wrapper the row

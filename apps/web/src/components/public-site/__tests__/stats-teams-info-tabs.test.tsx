@@ -173,10 +173,10 @@ describe("StatsTab", () => {
   const render = (d: CompetitionHubDocT = statsDoc, dd: Dict = dict) =>
     renderToStaticMarkup(<StatsTab doc={d} dict={dd} />);
 
-  it("EMPTY: no boards → the mh-leaders-empty sentence and nothing else — and the tab that would show it does not exist", () => {
+  it("EMPTY: no boards → the mh-stats-empty sentence and nothing else — and the tab that would show it does not exist", () => {
     const empty = hubDoc({ leaders: [] });
     const h = render(empty);
-    expect(h).toContain(`data-testid="mh-leaders-empty"`);
+    expect(h).toContain(`data-testid="mh-stats-empty"`);
     expect(h).toContain("No stats yet"); // the dictionary's copy, not the key
     expect(h).not.toContain(`data-testid="mh-stats-division-`);
     expect(h).not.toContain("<ol");

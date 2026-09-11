@@ -427,7 +427,12 @@ describe("TableTab", () => {
     // And it is the GRID ITEM that carries it — `min-width: auto` is a
     // property of the item, so the same class on a wrapper inside the cell
     // would not do the job.
-    expect(h).toMatch(/<ul class="[^"]*grid[^"]*"><li class="[^"]*min-w-0/);
+    // `[^>]*` after the class: the list now also carries `role="list"`
+    // (final review C8 — Tailwind's preflight strips list semantics, and the
+    // reason held on one tab and was missing on five). The assertion is about
+    // the `<li>` being the GRID ITEM, not about which attributes the `<ul>`
+    // happens to carry.
+    expect(h).toMatch(/<ul class="[^"]*grid[^"]*"[^>]*><li class="[^"]*min-w-0/);
   });
 
   // ---------------------------------------------------------------- i18n

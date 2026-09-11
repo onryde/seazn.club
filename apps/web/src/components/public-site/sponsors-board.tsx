@@ -148,6 +148,7 @@ export function SponsorsBoard({ sponsors, tiered, dict }: SponsorsBoardProps) {
             <ul
               data-testid="mh-sponsors-panels"
               className="flex flex-wrap items-center justify-center gap-2 px-4 py-3.5"
+              role="list"
             >
               {boardRows.map((s) => (
                 <li key={s.name}>
@@ -184,7 +185,7 @@ export function SponsorsBoard({ sponsors, tiered, dict }: SponsorsBoardProps) {
       ) : null}
       {!tiered ? (
         // Free strip: quiet light chips, no board, no hierarchy.
-        <ul data-testid="mh-sponsors-flat" className="flex flex-wrap items-center gap-3">
+        <ul data-testid="mh-sponsors-flat" className="flex flex-wrap items-center gap-3" role="list">
           {sponsors.map((s) => (
             <li key={s.name}>
               {linked(

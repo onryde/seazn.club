@@ -70,7 +70,7 @@ const DARK_INK = "#0f172a";
  * public-site documents as `team_display_v.colors.home_primary`
  * (`server/public-site/competition-hub.ts:335-340`, `primaryColour`) and the v1
  * API takes club `colors` as an unvalidated `z.record(z.string(), z.string())`
- * on both write paths (`server/api-v1/schemas.ts:3188` `CreateClub`, `:3199`
+ * on both write paths (`server/api-v1/schemas.ts:3257` `CreateClub`, `:3268`
  * `PatchClub`). The club-hub picker is an `<input type="color">`; the API is
  * not.
  *
@@ -177,7 +177,7 @@ export function EntityLogo({
   // AHEAD of the org monogram, and that is a decision rather than an accident:
   // the colour and the initials it is painted behind both name THIS entity,
   // while the org letter mark is a stand-in for an entity that offers nothing
-  // of its own. No caller passes both today — not one of the six `EntityLogo`
+  // of its own. No caller passes both today — not one of the seven `EntityLogo`
   // call sites passes `orgName` at all — so this orders a rule, not a live
   // path, and the suite pins the order so it cannot be reversed silently.
   const paint = monogramInk(colour);

@@ -256,7 +256,7 @@ export function InfoTab({
               — gives a screen reader's link list the same four words repeated,
               which is the defect `matchesHub.card.label` shipped in W2 Task 7. */}
           <h2 className={LABEL_CLASS}>{t(dict, "info.calendar")}</h2>
-          <ul className="flex flex-wrap gap-2">
+          <ul className="flex flex-wrap gap-2" role="list">
             {info.calendars.map((cal, i) => (
               <li key={cal.href} className="min-w-0">
                 <Link

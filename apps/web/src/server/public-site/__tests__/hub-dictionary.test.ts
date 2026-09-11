@@ -67,6 +67,18 @@ export const W2_KEYS = [
   "landing.metaDescription",
   // matches hub
   "matchesHub.filter.live", "matchesHub.filter.upcoming", "matchesHub.filter.completed", "matchesHub.filtersLabel", "matchesHub.divisionsLabel", "matchesHub.division.all",
+  // The called-off statuses. `MatchCard` renders `header.statusLine` for the
+  // first time on this branch, and the builder emits exactly these six there
+  // (`competition-hub.ts`'s `STATUS_LINE_KEYS`) for abandoned / cancelled /
+  // forfeited / postponed / walkover, with `other` as the catch-all.
+  //
+  // Booked by this file's own rule — "a key is owed by what can EMIT it, never
+  // by what happens to read it" — and NOT because a hole was found: all six are
+  // present and translated in all four locales today. That is precisely the
+  // shape of the `landing.status.matchDay` miss this file documents, which was
+  // also fine right up until it was not. Final review C7.
+  "matchCentre.status.abandoned", "matchCentre.status.cancelled", "matchCentre.status.forfeited",
+  "matchCentre.status.postponed", "matchCentre.status.walkover", "matchCentre.status.other",
   // NO `matchesHub.startsAt`. It was `"{when}"` — byte-identical in all four
   // locales, because a template that is nothing but its own argument cannot
   // differ by locale. A dictionary round trip that returns its input is not a

@@ -392,7 +392,7 @@ export function MatchesTab({
                     new control — the same cards, laid out wider. `min-w-0` on
                     the cell because a grid item defaults to `min-width: auto`
                     and the card truncates three of its own strings. */}
-                <ul className="grid gap-2 md:grid-cols-2">
+                <ul className="grid gap-2 md:grid-cols-2" role="list">
                   {g.items.map((match) => (
                     <li key={match.fixtureId} className="min-w-0">
                       <MatchCard
