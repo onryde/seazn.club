@@ -252,7 +252,7 @@ export async function seedOverlayFixture(page: Page): Promise<OverlayRig> {
  */
 export async function seedCricketOverlayFixture(page: Page): Promise<OverlayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `ovlc-${tag}@example.com`;
+  const ownerEmail = `delivered+ovlc-${tag}@resend.dev`;
   const orgSlug = `ovlc-org-${tag}`;
 
   const { orgId } = await withDb(async (sql) => {
@@ -367,7 +367,7 @@ export async function seedCricketOverlayFixture(page: Page): Promise<OverlayRig>
  */
 export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `ovlf-${tag}@example.com`;
+  const ownerEmail = `delivered+ovlf-${tag}@resend.dev`;
   const orgSlug = `ovlf-org-${tag}`;
 
   const { orgId } = await withDb(async (sql) => {
