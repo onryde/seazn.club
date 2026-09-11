@@ -1887,11 +1887,13 @@ was declined. The 7-day intent survives, delivered by a sweep issuing
 `DELETE /stream/{video_uid}`, because no native Cloudflare mechanism can express
 a value under 30 days.
 
-**Added under the ruling, flagged to the owner rather than assumed:**
-`deleteRecordingAfterDays: 30` is also set, as a backstop. It is the lowest
-value the API accepts and costs nothing while the sweep is healthy; if the sweep
-stops, recordings expire at 30 days instead of never, so a broken sweep is a
-bigger bill rather than an unbounded one.
+**`deleteRecordingAfterDays: 30` is also set, as a backstop — CONFIRMED by the
+owner** ("set 30 and we will create a cron to clean up in 7 days"). It is the
+lowest value the API accepts and costs nothing while the sweep is healthy; if
+the sweep stops, recordings expire at 30 days instead of never, so a broken
+sweep is a bigger bill rather than an unbounded one. **The owner is taking the
+cron.** This repo owes the route and the usecase; the `schedule:` workflow is
+raised in `onryde/seazn.club.workflow`.
 
 **Owed:** §12's value; §6.5's arithmetic re-derived for a 7-day concurrent
 window; R1's sweep deleting at 7 days and asserting both fields echo back; the

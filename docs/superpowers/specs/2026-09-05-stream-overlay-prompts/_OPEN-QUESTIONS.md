@@ -463,12 +463,17 @@ our own cron issuing `DELETE /stream/{video_uid}`.** Recording is NOT turned off
 the 7-day intent from §12 is preserved by deleting at 7 days ourselves rather
 than by a field that cannot express it.
 
-**One addition I am making under that ruling, flagged rather than assumed:
-`deleteRecordingAfterDays: 30` is ALSO set, as a backstop.** It is the lowest
-value the API accepts, it costs nothing while the cron is healthy, and if the
-sweep ever stops running the recordings expire at 30 days instead of never — so
-a broken sweep becomes a larger bill rather than an unbounded one. Say the word
-if you would rather leave the field unset.
+**`deleteRecordingAfterDays: 30` is ALSO set, as a backstop — CONFIRMED by the
+owner 2026-09-11** ("set 30 and we will create a cron to clean up in 7 days").
+It is the lowest value the API accepts, it costs nothing while the cron is
+healthy, and if the sweep ever stops running the recordings expire at 30 days
+instead of never — so a broken sweep becomes a larger bill rather than an
+unbounded one.
+
+**The owner is taking the cron itself.** The `schedule:` half belongs in
+`onryde/seazn.club.workflow` (`d53d87024`); this repo owes only
+`POST /api/cron/relay-sweep` (design §6.3) and the usecase behind it, deleting
+videos older than 7 days via `DELETE /stream/{video_uid}`.
 
 **Owed:** §12's value replaced with "7 days by sweep, 30-day native backstop";
 §6.5's headroom arithmetic re-derived (at a 7-day concurrent window the block
