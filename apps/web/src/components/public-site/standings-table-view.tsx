@@ -161,14 +161,33 @@ export function StandingsTableView({
   const [expanded, setExpanded] = useState(false);
 
   const rows = preview === undefined ? view.rows : view.rows.slice(0, preview);
-  const hasLongTail = view.columns.some((c) => !c.compact);
+  // A PREVIEW has no long tail at all — see `foldCls`. Without this the
+  // disclosure renders under a preview offering to reveal columns that are
+  // unconditionally hidden, which is a control that does nothing.
+  const hasLongTail = preview === undefined && view.columns.some((c) => !c.compact);
   const sizes = view.columns.map((c, i) =>
     columnSize(Math.max(c.abbr.length, ...view.rows.map((r) => (r.cells[i] ?? "").length))),
   );
   // A compact column is always shown. A long-tail one folds below `md` until
   // the disclosure is opened; from `md` up nothing folds, ever.
   const shown = (c: TableColumnT) => c.compact || expanded;
-  const foldCls = (c: TableColumnT) => (shown(c) ? "" : " max-md:hidden");
+  // `max-md:hidden` for a full table, `hidden` for a PREVIEW — and the
+  // difference was found by driving the built page, not by a test.
+  //
+  // The fold is keyed to the VIEWPORT ("from `md` up nothing folds, ever"),
+  // which is right for a table that gets the page's width and wrong for one in
+  // a box narrower than the viewport. The Overview puts previews two-up at
+  // `md` and in a 320px side rail at `lg`, so from `md` the widest column set
+  // renders in the narrowest container: measured at both 768 and 1280, the
+  // region needed 380px and had 358 and 318, and the column pushed out of
+  // sight was **Points** — the number a standings table exists for. A media
+  // query cannot see its container, so the viewport answer is the wrong tool.
+  //
+  // A preview therefore shows its compact columns at every width, exactly as
+  // it already shows only its first `preview` ROWS. The rest of the table is
+  // not lost: "Full division" sits beside it and is the affordance for it.
+  const foldCls = (c: TableColumnT) =>
+    shown(c) ? "" : preview === undefined ? " max-md:hidden" : " hidden";
   // The floor described at the top of the file, in two flavours because the
   // column set differs by viewport. BELOW `md` a folded column is
   // `display:none` and claims nothing, so only the shown set counts — which is
@@ -178,7 +197,13 @@ export function StandingsTableView({
   const floor = (px: (c: TableColumnT, i: number) => number) =>
     RANK_PX + NAME_MIN_PX + view.columns.reduce((total, c, i) => total + px(c, i), 0);
   const minPhone = floor((c, i) => (shown(c) ? sizes[i]!.px : 0));
-  const minWide = floor((_c, i) => sizes[i]!.px);
+  // The wide floor counts every column because above `md` a full table folds
+  // nothing — but a PREVIEW folds at every width (see `foldCls`), so counting
+  // its hidden columns reserves width for cells that are not rendered. That is
+  // what kept **Points** behind a scroll after the fold fix: the columns were
+  // gone and the floor still demanded 380px in a 318px rail, so the table
+  // overflowed by exactly the space its invisible columns had booked.
+  const minWide = floor((c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
 
   const rankChip = (rank: number | null) => (
     <span

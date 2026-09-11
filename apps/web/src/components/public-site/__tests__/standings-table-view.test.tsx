@@ -310,4 +310,45 @@ describe("StandingsTableView — phone composition", () => {
     expect(html().match(new RegExp(`data-testid="${TESTID}-row-`, "g"))?.length).toBe(2);
     expect(html({ showFullLink: false })).not.toContain(`data-testid="${TESTID}-full"`);
   });
+
+  it("a preview folds its long tail at EVERY width, and books no width for what it folded", () => {
+    // Found by driving the built page at 768 and 1280, not by any test here —
+    // and nothing in this suite moved when it was fixed, in either direction.
+    //
+    // The fold is keyed to the VIEWPORT (`max-md:hidden`, "from `md` up nothing
+    // folds, ever"), which is right for a table that gets the page's width. The
+    // Overview puts previews two-up at `md` and in a 320px side rail at `lg`,
+    // so from `md` the WIDEST column set rendered in the NARROWEST container:
+    // the region wanted 380px and had 358 and 318, and the column pushed out of
+    // sight was **Points** — the number a standings table exists for. A media
+    // query cannot see its container.
+    const previewed = html({ preview: 1 });
+    const full = html();
+
+    // 1. The long tail is gone at every width, not merely below `md`.
+    expect(previewed).toMatch(/class="[^"]*\shidden"/);
+    expect(previewed).not.toMatch(/class="[^"]*max-md:hidden"/);
+    // Positive pair: the full table still folds the phone way.
+    expect(full).toMatch(/class="[^"]*max-md:hidden"/);
+
+    // 2. No disclosure, because there is nothing left for it to reveal — a
+    //    control offering to show unconditionally hidden columns does nothing.
+    expect(previewed).not.toContain(`data-testid="${TESTID}-more"`);
+    expect(full).toContain(`data-testid="${TESTID}-more"`);
+
+    // 3. THE HALF THAT ACTUALLY BIT. Hiding the columns was not enough: the
+    //    `md:` width floor still counted them, so the table demanded room for
+    //    cells it was no longer drawing and overflowed by exactly that. Both
+    //    floors must agree for a preview; they must still differ for a full
+    //    table, which is what the `md:` floor is for.
+    const floors = (h: string) => {
+      const m = h.match(/--sv-min:\s*(\d+)px;\s*--sv-min-md:\s*(\d+)px/);
+      expect(m, "both floors ride as custom properties").not.toBeNull();
+      return { phone: Number(m![1]), wide: Number(m![2]) };
+    };
+    const p = floors(previewed);
+    expect(p.wide, "a preview books no width for a column it folded").toBe(p.phone);
+    const f = floors(full);
+    expect(f.wide, "a full table still widens from `md`").toBeGreaterThan(f.phone);
+  });
 });
