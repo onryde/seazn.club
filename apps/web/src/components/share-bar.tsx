@@ -107,7 +107,7 @@ export function ShareBar({
         <button
           type="button"
           onClick={native}
-          className="btn btn-ghost"
+          className="btn btn-ghost min-h-11"
           data-testid="native-share"
         >
           {L.share}
@@ -118,12 +118,12 @@ export function ShareBar({
         target="_blank"
         rel="noreferrer"
         onClick={() => fire("whatsapp")}
-        className="btn btn-ghost"
+        className="btn btn-ghost min-h-11"
         aria-label={L.whatsappAria}
       >
         {L.whatsapp}
       </a>
-      <button type="button" onClick={copy} className="btn btn-ghost">
+      <button type="button" onClick={copy} className="btn btn-ghost min-h-11">
         {copied ? L.copied : L.copy}
       </button>
     </div>

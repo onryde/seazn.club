@@ -81,6 +81,19 @@ describe("ShareBar labels", () => {
     expect(html).not.toContain("Copy link");
   });
 
+  // 44px is the standing mobile tap-target floor, and `.btn` alone is 36
+  // (`px-3.5 py-2 text-sm`). `share-button.tsx` reached the same conclusion
+  // about its own default for the same reason; this row is the other public
+  // share control and had never been measured. Asserted on the element
+  // carrying the href/onClick, not on a wrapper — a row's own class is not a
+  // tap target.
+  it("gives every control a 44px tap target", () => {
+    const html = renderToStaticMarkup(<ShareBar path="/x" title="Y" labels={LABELS} />);
+    const controls = [...html.matchAll(/<(?:a|button)\b[^>]*class="([^"]*)"[^>]*>/g)];
+    expect(controls.length).toBeGreaterThan(0);
+    for (const [, cls] of controls) expect(cls, cls).toContain("min-h-11");
+  });
+
   it("keeps the English it shipped with when no labels are passed (the news post page)", () => {
     const html = renderToStaticMarkup(<ShareBar path="/x" title="Y" />);
 
