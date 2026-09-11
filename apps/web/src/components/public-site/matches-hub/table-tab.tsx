@@ -69,9 +69,14 @@ export function TableTab({ doc, dict }: TableTabProps) {
   // panel would read as a broken page; a sentence reads as an empty one.
   if (doc.tables.length === 0) {
     return (
-      <p data-testid="mh-table-empty" className="py-8 text-center text-sm text-ink-muted">
-        {t(dict, "table.empty")}
-      </p>
+      // The panel ROOT is inside this branch too — see the root's own note
+      // below. A handle that exists on one arm and not the other is not a
+      // handle.
+      <div data-testid="mh-table" className="min-w-0">
+        <p data-testid="mh-table-empty" className="py-8 text-center text-sm text-ink-muted">
+          {t(dict, "table.empty")}
+        </p>
+      </div>
     );
   }
 
@@ -81,7 +86,11 @@ export function TableTab({ doc, dict }: TableTabProps) {
     // inside a layout nobody has written yet, and a flex or grid parent breaks
     // the truncate chain ABOVE this component — `StandingsTableView` truncates
     // its caption and every entrant name.
-    <div className="min-w-0 space-y-6">
+    //
+    // `data-testid="mh-table"` added by Task 11 (its R3), for the reason
+    // `matches-tab.tsx`'s root writes up: the hub root needs a uniform handle
+    // for WHICH panel drew, and the three Task 10 tabs already had one.
+    <div data-testid="mh-table" className="min-w-0 space-y-6">
       {byDivision(doc.tables).map((views) => {
         const first = views[0]!;
         // ONE crown per division, not one per table. `divisionChampion`

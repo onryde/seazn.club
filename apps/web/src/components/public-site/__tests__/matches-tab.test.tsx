@@ -151,7 +151,23 @@ describe("MatchesTab", () => {
     // Inside this component the truncate chain is complete, but Task 11/12
     // mounts it in a layout nobody has written; a flex or grid parent breaks
     // the chain ABOVE here and `MatchCard` truncates three of its own strings.
-    expect(render()).toMatch(/^<div class="min-w-0 space-y-3"/);
+    // `data-testid="mh-matches"` joined it in Task 11 (its R3): the hub root
+    // counts `mh-<tabId>` roots to prove exactly one panel drew, which is what
+    // kills "render every tab regardless of `doc.tabs`". Asserted HERE, on the
+    // root, rather than only from the mount — the class and the handle are one
+    // element's contract and a mount-side test could not tell which element
+    // carried which.
+    expect(render()).toMatch(/^<div data-testid="mh-matches" class="min-w-0 space-y-3"/);
+  });
+
+  it("the EMPTY arm carries the same root handle — a handle on one arm only is not a handle", () => {
+    // The absolute-empty state returns early, so its root is a different
+    // element in the source. Task 10's Stats tab found exactly this and put the
+    // root inside both branches; these two files were the ones still returning
+    // a bare `<p>`.
+    const h = render(hubDoc({ matches: [] }));
+    expect(h).toContain(`data-testid="mh-matches"`);
+    expect(h).toContain(`data-testid="mh-matches-empty"`);
   });
 
   // ---------------------------------------------------------------- beyond the brief

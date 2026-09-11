@@ -225,9 +225,14 @@ export function MatchesTab({
   // chips reading zero above an empty list is worse than one sentence.
   if (doc.matches.length === 0) {
     return (
-      <p data-testid="mh-matches-empty" className="py-8 text-center text-sm text-ink-muted">
-        {t(dict, "matchesHub.empty")}
-      </p>
+      // The panel ROOT is inside this branch too — see the root's own note
+      // below. A handle that exists on one arm and not the other is not a
+      // handle.
+      <div data-testid="mh-matches" className="min-w-0">
+        <p data-testid="mh-matches-empty" className="py-8 text-center text-sm text-ink-muted">
+          {t(dict, "matchesHub.empty")}
+        </p>
+      </div>
     );
   }
 
@@ -295,7 +300,15 @@ export function MatchesTab({
     // `min-w-0` on the root (review P3): everything below it is protected, but
     // Task 11/12 mounts this component inside a layout nobody has written yet,
     // and a flex or grid parent breaks the truncate chain ABOVE here.
-    <div className="min-w-0 space-y-3">
+    //
+    // `data-testid="mh-matches"` added by Task 11 (its R3): the hub root is the
+    // component that needs a uniform way to say WHICH panel rendered, and
+    // `mh-tab-panel-<id>` cannot answer that — it names the tab the rail
+    // selected, which is a different fact from the component that actually
+    // drew. Counting `mh-<tabId>` roots is what kills "render every tab
+    // regardless of `doc.tabs`". The three Task 10 tabs already carried theirs;
+    // this file and `table-tab.tsx` were the two that did not.
+    <div data-testid="mh-matches" className="min-w-0 space-y-3">
       <div
         data-testid="mh-filters"
         role="group"

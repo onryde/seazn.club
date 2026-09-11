@@ -110,6 +110,10 @@ describe("TableTab", () => {
     const empty = hubDoc({ tables: [] });
     const h = render(empty);
     expect(h).toContain(`data-testid="mh-table-empty"`);
+    // The root handle is on THIS arm too (Task 11, R3) — a handle that exists
+    // on the populated arm only resolves for a locator on one competition and
+    // not on another.
+    expect(h).toContain(`data-testid="mh-table"`);
     expect(h).toContain("No standings yet"); // the dictionary's copy, not the key
     expect(h).not.toContain(`data-testid="mh-table-division-`);
     expect(h).not.toContain("<table");
@@ -410,7 +414,10 @@ describe("TableTab", () => {
     // component inside a layout nobody has written, and a flex or grid parent
     // breaks the chain ABOVE here (Task 8, review P3).
     const h = render(championDoc);
-    expect(h).toMatch(/^<div class="min-w-0 /);
+    // `data-testid="mh-table"` joined it in Task 11 (its R3) — see
+    // `matches-tab.test.tsx`'s own root test for why the hub root needs a
+    // uniform per-panel handle.
+    expect(h).toMatch(/^<div data-testid="mh-table" class="min-w-0 /);
     // EVERY cell, not the first one (review F5): this document has five tables
     // across three divisions, so a `min-w-0` that only reached the head of a
     // group — or only the first group — is visible here.
