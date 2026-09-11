@@ -1,21 +1,60 @@
-// Competition home (doc 09 §2): hero + branding (Pro — nulled in the view for
-// non-entitled orgs), division cards, live-now strip. Unlisted competitions
-// render with noindex; private ones never reach here (the view 404s them).
+// Competition home — the spectator landing (W2 Task 12).
+//
+// This page used to BE the competition: a hero, a live-now strip and a grid of
+// division cards, all of it hardcoded English. It is now a hero plus ONE mount
+// — `CompetitionLanding` — which renders the hub document's six tabs and polls
+// it. The divisions grid and the live-now rail are gone from this file; the
+// Overview tab draws both, from the same document the rest of the page reads.
+//
+// Unlisted competitions still render with noindex; private ones never reach
+// here (the view 404s them).
+//
+// ── THE LOCALE THIS PAGE RENDERS IN IS THE ORG'S, NOT THE VIEWER'S ─────────
+// Task 11 deliberately left the choice here (its review F9), so it is made
+// here and the reasoning is written down rather than left to be re-derived.
+//
+// `competition-hub.ts:368` resolves ONE locale — the org's `default_locale` —
+// and pre-resolves every string in the document against it: `divisionName`,
+// board labels, format lines, slot sentences. Those strings arrive already
+// translated and this page cannot re-translate them. So a page that resolved
+// the VIEWER's locale for its chrome would put two languages in one panel,
+// three once `lib/format.ts`'s en-GB dates are counted.
+//
+// And this route is ISR (`revalidate` below). A per-visitor locale read would
+// make the cached copy wrong for everybody who is not the visitor who warmed
+// it — the same argument the division page settled on when it resolved
+// `getDictionary(orgLocale, "public")` (`[divisionSlug]/page.tsx:94-103`).
+//
+// ── AND IT IS READ OFF THE DOCUMENT, NOT OFF THE ORG ROW ──────────────────
+// `toLocale(hub.locale)`, not `toLocale(org.default_locale)`. They are the
+// same value in the steady state — `hub.locale` IS the org's, resolved by the
+// builder — but the two reads are cached SEPARATELY (`REVALIDATE_FAST` on the
+// hub, 30s on this page), so an org that changes its default locale has a
+// window where they disagree. Reading the document's own field makes the
+// chrome match the content it wraps by construction, in that window too,
+// instead of only by the two caches happening to agree.
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
-import Image from "next/image";
 import type { Metadata } from "next";
-import { ChevronRight } from "lucide-react";
 import { getPublicCompetition } from "@/server/public-site/data";
+import { getPublicCompetitionHub } from "@/server/public-site/competition-hub";
 import { sharedRenameTarget } from "@/server/slug-resolve";
-import { publicRegistrationInfo } from "@/server/usecases/registrations";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { hasFeature } from "@/lib/entitlements";
-import { resolveSponsors, type SponsorTier } from "@/server/usecases/sponsors";
+import { resolveSponsors } from "@/server/usecases/sponsors";
 import { renderProse } from "@/lib/prose";
 import { competitionMetaDescription } from "@/lib/public-meta";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
-import { ShareBar } from "@/components/share-bar";
+import { SponsorsBoard } from "@/components/public-site/sponsors-board";
+import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
+// ONE producer for the competition's date line, shared with the Info tab that
+// renders the same two dates a tab away. Two implementations of "1 September
+// 2026 – 20 September 2026" is how one of them ends up a day out; `info-tab`'s
+// is the one that already fixes the calendar-date/timezone trap below.
+import { competitionDateLine } from "@/components/public-site/matches-hub/info-tab";
+import { ShareBar, type ShareBarLabels } from "@/components/share-bar";
 
 export const revalidate = 30;
 
@@ -34,16 +73,29 @@ interface Branding {
   sponsors?: { name: string; url?: string; logo?: string }[];
 }
 
+/** Slab chip — the hero's counters. */
+const CHIP = "rounded-full bg-white/12 px-3 py-1 backdrop-blur";
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { orgSlug, competitionSlug } = await params;
   const data = await getPublicCompetition(orgSlug, competitionSlug);
   if (!data) return {};
+  // The org row's locale, not the hub document's: this description is built
+  // from the shell's OWN two fields (the competition's name and the org's), so
+  // it is self-consistent with what it wraps without paying for a second
+  // cached read on a path that renders no document.
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
   return {
     title: `${data.competition.name} — ${data.org.name}`,
     description: competitionMetaDescription(
-      data.competition.name,
-      data.org.name,
       data.competition.description,
+      // The fallback sentence, in the org's language. `lib/public-meta.ts`
+      // used to build this in English for all four locales; the i18n decision
+      // lives here now, where a locale is already resolved.
+      t(dict, "landing.metaDescription", {
+        competition: data.competition.name,
+        org: data.org.name,
+      }),
     ),
     // Doc 09 §1: unlisted = link-only. Keep crawlers out but the page up.
     ...(data.competition.visibility === "unlisted"
@@ -54,32 +106,58 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function CompetitionHomePage({ params }: Props) {
   const { orgSlug, competitionSlug } = await params;
-  const data = await getPublicCompetition(orgSlug, competitionSlug);
+  // Both reads go through the same `unstable_cache`d shell — `getPublicCompetitionHub`
+  // fetches it too, to derive its tag list — so this is one query, not two.
+  const [data, hub] = await Promise.all([
+    getPublicCompetition(orgSlug, competitionSlug),
+    getPublicCompetitionHub(orgSlug, competitionSlug),
+  ]);
   if (!data) {
     const renamed = await sharedRenameTarget(orgSlug, competitionSlug);
     if (renamed) permanentRedirect(renamed);
     notFound();
   }
-  const { org, competition, divisions, liveNow } = data;
+  // The shell exists and the document does not: the two reads are not atomic,
+  // so a competition deleted between them lands here. There is nothing to
+  // render — every section below is derived from `hub` — and a 404 is the
+  // honest answer for a competition that no longer exists.
+  if (!hub) notFound();
+
+  const { org, competition } = data;
   const branding = (competition.branding ?? {}) as Branding;
+  const locale = toLocale(hub.locale);
+  const dict = await getDictionary(locale, "public");
+
   // Sponsors (v10 PROMPT-56): table rows via the resolver (blob shim only for
   // un-backfilled orgs). Tier grouping is Pro `sponsors.tiers` — without it
   // every row collapses to the free flat partner strip.
   const tiered = await hasFeature(org.id, "sponsors.tiers", competition.id);
   const sponsors = await resolveSponsors(org.id, competition.id, { tiered });
-  // Register CTA (doc 16 §1.1): shown while any division accepts submissions.
-  const registration = await publicRegistrationInfo(orgSlug, competitionSlug).catch(() => null);
-  const registrationOpen = registration?.divisions.some((d) => d.open) ?? false;
 
-  const fmtDate = (d: string) =>
-    new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
-  const dateLine = [
-    competition.starts_on ? fmtDate(competition.starts_on) : null,
-    competition.ends_on ? fmtDate(competition.ends_on) : null,
-  ]
-    .filter(Boolean)
-    .join(" – ");
-  const totalEntrants = divisions.reduce((n, d) => n + d.entrant_count, 0);
+  // Markdown → sanitized HTML — the editor's Preview runs this exact pipeline,
+  // so what organisers saw is what ships.
+  const descriptionHtml = competition.description
+    ? await renderProse(competition.description)
+    : null;
+
+  // Every counter in the hero is derived from the SAME document the tabs
+  // render, and by the same predicate. `bucket === "live"` is what
+  // `landingStatus` (`lib/matches-hub.ts`) and the Overview's live rail both
+  // use — the wave's own defect class 2 is two sections of one page counting
+  // the same thing two ways, and the old page's `liveNow.length` came from a
+  // different query altogether.
+  const divisionCount = hub.divisions.length;
+  const entrantCount = hub.divisions.reduce((n, d) => n + d.entrantCount, 0);
+  const liveCount = hub.matches.filter((m) => m.bucket === "live").length;
+
+  const shareLabels: ShareBarLabels = {
+    share: t(dict, "share.share"),
+    whatsapp: t(dict, "share.whatsapp"),
+    whatsappAria: t(dict, "share.whatsappAria"),
+    copy: t(dict, "share.copy"),
+    copied: t(dict, "share.copied"),
+  };
+  const sharePath = `/shared/${org.slug}/${competition.slug}`;
 
   return (
     // Pro orgs with branding.colors.primary re-theme this whole subtree —
@@ -92,7 +170,10 @@ export default async function CompetitionHomePage({ params }: Props) {
       </nav>
 
       {/* Hero — court slab; banner photo (Pro) sits under a slab-tinted wash */}
-      <section className="relative mb-6 overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
+      <section
+        data-testid="mh-hero"
+        className="relative mb-6 overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg"
+      >
         {branding.banner ? (
           <>
             {/* competition branding.banner — raw jsonb (z.record(string, unknown)),
@@ -134,43 +215,79 @@ export default async function CompetitionHomePage({ params }: Props) {
                 {org.name}
               </p>
               <h1 className="mt-1 font-display text-4xl font-bold uppercase leading-none tracking-tight sm:text-5xl">
-                {competition.name}
+                {hub.name}
               </h1>
-              {dateLine ? <p className="mt-2 text-sm text-court-muted">{dateLine}</p> : null}
+              {/* `hub.info`'s startsOn/endsOn are CALENDAR dates (pg `date`), so
+                  this formats in UTC. The line this replaced was
+                  `new Date(d).toLocaleDateString("en-GB", …)` with no zone at
+                  all, which formats in whatever zone the Node process runs in:
+                  right in production only because fly.toml sets no TZ and the
+                  machine is UTC. Under TZ=America/New_York it rendered
+                  "4 September 2026" for a competition starting on the 5th.
+                  `competitionDateLine` fixes the zone internally so no caller
+                  can choose it — see its own header for the full reasoning. */}
+              {competitionDateLine(hub.info) ? (
+                <p data-testid="mh-hero-dates" className="mt-2 text-sm text-court-muted">
+                  {competitionDateLine(hub.info)}
+                </p>
+              ) : null}
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <ShareBar
-                  path={`/shared/${org.slug}/${competition.slug}`}
-                  title={competition.name}
-                />
-                {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen. */}
+                <ShareBar path={sharePath} title={hub.name} labels={shareLabels} />
+                {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
+                    The `▸` stays OUT of the dictionary string: a decorative
+                    glyph inside translated copy is what gets mangled per
+                    locale (Task 6 ruling 24). */}
                 <Link
-                  href={`/shared/${org.slug}/${competition.slug}/present`}
-                  className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink"
+                  data-testid="mh-hero-present"
+                  href={hub.info.presentHref}
+                  className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink"
                 >
-                  Present ▸
+                  {t(dict, "landing.present")} ▸
                 </Link>
               </div>
             </div>
-            {registrationOpen ? (
+            {/* Gated on the DOCUMENT's flag, which is the same
+                `publicRegistrationInfo` read the Overview and Info tabs show
+                their own register links from. The page no longer calls that
+                usecase itself — a second read is a second answer. */}
+            {hub.info.registrationOpen ? (
               <Link
-                href={`/shared/${org.slug}/${competition.slug}/register`}
-                className="shrink-0 rounded-lg bg-surface px-4 py-2 text-sm font-semibold text-accent-strong shadow transition hover:bg-accent-soft"
+                data-testid="mh-hero-register"
+                href={hub.info.registerHref}
+                className="inline-flex min-h-11 shrink-0 items-center rounded-lg bg-surface px-4 py-2 text-sm font-semibold text-accent-strong shadow transition hover:bg-accent-soft"
               >
-                Register now
+                {t(dict, "landing.register")}
               </Link>
             ) : null}
           </div>
           <div className="flex flex-wrap gap-2 text-xs font-medium">
-            <span className="rounded-full bg-white/12 px-3 py-1 backdrop-blur">
-              {divisions.length} division{divisions.length === 1 ? "" : "s"}
-            </span>
-            <span className="rounded-full bg-white/12 px-3 py-1 backdrop-blur">
-              {totalEntrants} entrant{totalEntrants === 1 ? "" : "s"}
-            </span>
-            {liveNow.length > 0 ? (
-              <span className="flex items-center gap-1.5 rounded-full bg-emerald-400/20 px-3 py-1 text-emerald-200 backdrop-blur">
+            {divisionCount === 0 ? (
+              // A hero with no counters reads as a page that failed to load.
+              // This says the true thing instead — and it is the sentence the
+              // dictionary already carries for it.
+              <span data-testid="mh-hero-no-divisions" className={CHIP}>
+                {t(dict, "landing.noDivisions")}
+              </span>
+            ) : (
+              <>
+                <span data-testid="mh-hero-divisions" className={CHIP}>
+                  {plural(dict, "landing.divisions", divisionCount, locale)}
+                </span>
+                {/* No entrants chip without divisions: `entrantCount` is a sum
+                    OVER the divisions, so with none it is not "0 entrants", it
+                    is a number about nothing. */}
+                <span data-testid="mh-hero-entrants" className={CHIP}>
+                  {plural(dict, "landing.entrants", entrantCount, locale)}
+                </span>
+              </>
+            )}
+            {liveCount > 0 ? (
+              <span
+                data-testid="mh-hero-live"
+                className="flex items-center gap-1.5 rounded-full bg-emerald-400/20 px-3 py-1 text-emerald-200 backdrop-blur"
+              >
                 <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                {liveNow.length} live now
+                {plural(dict, "landing.liveCount", liveCount, locale)}
               </span>
             ) : null}
           </div>
@@ -178,238 +295,29 @@ export default async function CompetitionHomePage({ params }: Props) {
         <div aria-hidden className="h-1 bg-accent" />
       </section>
 
-      {liveNow.length > 0 ? (
-        <section className="mb-6">
-          <h2 className="mb-2 flex items-center gap-2 font-display text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">
-            <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-500" />
-            Live now
-          </h2>
-          <ul className="flex gap-3 overflow-x-auto pb-1">
-            {liveNow.map((f) => {
-              const division = divisions.find((d) => d.id === f.division_id);
-              return (
-                <li key={f.id} className="min-w-60 shrink-0">
-                  <Link
-                    href={`/shared/${org.slug}/${competition.slug}/${division?.slug}/fixtures/${f.id}`}
-                    className="block rounded-xl bg-court p-3.5 text-sm text-court-ink shadow-md ring-1 ring-emerald-400/40 transition hover:-translate-y-0.5 hover:ring-emerald-400"
-                  >
-                    <p className="text-[11px] uppercase tracking-wide text-court-muted">
-                      {division?.name}
-                    </p>
-                    <p className="mt-1.5 font-display text-xl font-semibold tabular-nums leading-tight">
-                      {f.summary?.headline ?? "In play"}
-                    </p>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
-
-      {competition.description ? (
-        <section className="mb-6">
-          {/* Markdown → sanitized HTML — the editor's Preview runs this
-              exact pipeline, so what organisers saw is what ships. */}
-          <CompetitionProse html={await renderProse(competition.description)} />
-        </section>
-      ) : null}
-
-      <section>
-        <h2 className="mb-3 font-display text-2xl font-semibold uppercase tracking-wide text-ink">
-          Divisions
-        </h2>
-        {divisions.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-zinc-300 bg-surface p-6 text-center text-sm text-ink-muted">
-            No divisions published yet.
-          </p>
-        ) : (
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {divisions.map((d) => (
-              <li key={d.id}>
-                <Link
-                  href={`/shared/${org.slug}/${competition.slug}/${d.slug}`}
-                  className="group flex h-full flex-col justify-between rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-accent-line hover:shadow-md"
-                >
-                  <div className="flex items-start gap-3">
-                    <span
-                      aria-hidden
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft font-display text-base font-bold uppercase text-accent-strong"
-                    >
-                      {(d.sport_name ?? d.sport_key).slice(0, 1)}
-                    </span>
-                    <p className="min-w-0 flex-1 font-display text-xl font-semibold leading-tight text-ink">
-                      {d.name}
-                    </p>
-                    <ChevronRight
-                      aria-hidden
-                      className="mt-1 h-4 w-4 shrink-0 text-zinc-300 transition group-hover:translate-x-0.5 group-hover:text-accent"
-                    />
-                  </div>
-                  <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-                    <span>{d.sport_name ?? d.sport_key}</span>
-                    <span className="rounded-full bg-accent-soft px-2 py-0.5 uppercase text-accent-strong">
-                      {d.variant_key}
-                    </span>
-                    <span>{d.entrant_count} entrants</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 capitalize ${
-                        d.status === "in_play" || d.status === "active"
-                          ? "bg-emerald-50 text-emerald-700"
-                          : "bg-zinc-100 text-zinc-600"
-                      }`}
-                    >
-                      {d.status}
-                    </span>
-                  </p>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {sponsors.length > 0
-        ? (() => {
-            // Perimeter board (v10): sponsors render the way a venue shows
-            // them — panels on the court-slab band that bookends the hero.
-            // Tier is encoded physically: title = "presented by" lockup on
-            // the board, gold/silver = sized panels, partners = the quiet
-            // ticker line beneath. The board itself is the Pro presentation:
-            // free (un-tiered) orgs keep the modest flat chip strip so a
-            // community sponsor never reads like a paid title placement.
-            const titleRow = tiered ? sponsors.filter((s) => s.tier === "title") : [];
-            const boardRows = tiered
-              ? sponsors.filter((s) => s.tier === "gold" || s.tier === "silver")
-              : [];
-            const tickerRows = tiered ? sponsors.filter((s) => s.tier === "partner") : [];
-
-            const PANEL: Record<SponsorTier, { text: string; logo: number; logoCls: string }> = {
-              title: { text: "font-display text-3xl font-bold uppercase tracking-tight sm:text-4xl", logo: 48, logoCls: "h-12 w-12" },
-              gold: { text: "font-display text-xl font-semibold uppercase tracking-tight", logo: 32, logoCls: "h-8 w-8" },
-              silver: { text: "text-sm font-semibold text-court-muted", logo: 24, logoCls: "h-6 w-6" },
-              partner: { text: "text-sm font-semibold text-court-muted", logo: 20, logoCls: "h-5 w-5" },
-            };
-            const c = (s: (typeof sponsors)[number]) => PANEL[tiered ? s.tier : "partner"];
-            // One shared logo site (public-image-contract pins this pair).
-            // Logos sit on a light chip so dark marks survive the slab.
-            const sponsorLogo = (s: (typeof sponsors)[number]) =>
-              s.logo ? (
-                <span className="shrink-0 rounded bg-white/95 p-0.5">
-                  <Image
-                    src={s.logo}
-                    alt=""
-                    width={c(s).logo}
-                    height={c(s).logo}
-                    className={`${c(s).logoCls} object-contain`}
-                  />
-                </span>
-              ) : null;
-            // Table rows go through the tracked /s redirect; blob-shim
-            // entries (id null) link straight out.
-            const hrefFor = (s: (typeof sponsors)[number]) =>
-              s.url ? (s.id ? `/s/${s.id}` : s.url) : null;
-            const linked = (s: (typeof sponsors)[number], node: React.ReactNode) => {
-              const href = hrefFor(s);
-              // New tab: the reader keeps their place at the competition;
-              // `sponsored` marks the paid placement for crawlers.
-              return href ? (
-                <a
-                  href={href}
-                  target="_blank"
-                  rel="nofollow noopener sponsored"
-                  className="transition hover:opacity-85"
-                >
-                  {node}
-                </a>
-              ) : (
-                node
-              );
-            };
-
-            return (
-              <section className="mt-10">
-                <h2 className="mb-3 text-xs font-medium uppercase tracking-[0.18em] text-ink-muted">
-                  Sponsors
-                </h2>
-                {titleRow.length > 0 || boardRows.length > 0 ? (
-                  <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
-                    {/* Accent line mirrors the hero's — the two slabs bookend the page. */}
-                    <div aria-hidden className="h-1 bg-accent" />
-                    {titleRow.length > 0 ? (
-                      <div
-                        className={`px-6 py-6 text-center ${boardRows.length > 0 ? "border-b border-white/10" : ""}`}
-                      >
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-court-muted">
-                          Presented by
-                        </p>
-                        <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-10 gap-y-3">
-                          {titleRow.map((s) => (
-                            <span key={s.name}>
-                              {linked(
-                                s,
-                                <span className="flex items-center gap-3.5">
-                                  {sponsorLogo(s)}
-                                  <span className={PANEL.title.text}>{s.name}</span>
-                                </span>,
-                              )}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                    {boardRows.length > 0 ? (
-                      <ul className="flex flex-wrap items-center justify-center gap-2 px-4 py-3.5">
-                        {boardRows.map((s) => (
-                          <li key={s.name}>
-                            {linked(
-                              s,
-                              <span
-                                className={`flex items-center gap-2.5 rounded-lg bg-white/5 px-5 py-2.5 ring-1 ring-white/10 transition hover:bg-white/10 ${c(s).text}`}
-                              >
-                                {sponsorLogo(s)}
-                                {s.name}
-                              </span>,
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
-                ) : null}
-                {tickerRows.length > 0 ? (
-                  <p className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-ink-muted">
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.22em]">
-                      Partners
-                    </span>
-                    {tickerRows.map((s, i) => (
-                      <span key={s.name} className="inline-flex items-baseline gap-x-3">
-                        {i > 0 ? <span aria-hidden>·</span> : null}
-                        {linked(s, <span>{s.name}</span>)}
-                      </span>
-                    ))}
-                  </p>
-                ) : null}
-                {!tiered ? (
-                  // Free strip: quiet light chips, no board, no hierarchy.
-                  <ul className="flex flex-wrap items-center gap-3">
-                    {sponsors.map((s) => (
-                      <li key={s.name}>
-                        {linked(
-                          s,
-                          <span className="flex items-center gap-2 rounded-lg border border-zinc-200/80 bg-surface px-3 py-2 text-sm text-zinc-600 shadow-sm">
-                            {sponsorLogo(s)}
-                            {s.name}
-                          </span>,
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </section>
-            );
-          })()
-        : null}
+      {/* THE MOUNT. Everything that was below the hero on this page — the
+          live-now rail, the competition's prose, the divisions grid, the
+          sponsor board — is now a panel of this root, drawn from the hub
+          document. The slots are `undefined` rather than an element that
+          renders nothing, which is the caller contract both `OverviewTab` and
+          `InfoTab` state: a heading over an absent block reads as content that
+          failed to load. */}
+      <CompetitionLanding
+        initial={hub}
+        dict={dict}
+        locale={locale}
+        sponsorsSlot={
+          sponsors.length > 0 ? (
+            <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} />
+          ) : undefined
+        }
+        descriptionSlot={descriptionHtml ? <CompetitionProse html={descriptionHtml} /> : undefined}
+        // The Info tab's own share block. The hero's bar is the prominent one;
+        // this is the one a spectator who scrolled into "everything about this
+        // competition" expects to find there, and leaving the slot empty would
+        // have shipped that section dead.
+        shareSlot={<ShareBar path={sharePath} title={hub.name} labels={shareLabels} />}
+      />
     </div>
   );
 }
