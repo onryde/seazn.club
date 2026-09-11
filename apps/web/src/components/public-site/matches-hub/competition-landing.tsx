@@ -181,6 +181,31 @@ export function CompetitionLanding({
   const tabs = doc.tabs.filter((id): id is LandingTabId => id !== "gallery");
   const active = activeTab(tabs, manualTab, deepLinked);
 
+  // FORGET a choice that has stopped being renderable, rather than merely
+  // ignoring it for this render (review M2 — AGENTS.md 13's "check both
+  // directions" applied to the reconciliation above).
+  //
+  // `activeTab` already moves the spectator off a tab whose data disappeared.
+  // Keeping the dead choice in state meant that when the data came BACK on a
+  // later poll — a leader board repopulating, a withdrawn standings table
+  // republished — `active` jumped to it with no spectator action, mid-read.
+  // Being moved once because the thing you were reading no longer exists is
+  // unavoidable; being yanked out of the Overview five minutes later because it
+  // exists again is not, and the spectator has no idea why it happened.
+  //
+  // The trade is that a transient blip loses the choice permanently. That is
+  // the cheaper mistake: a failed poll keeps the last good document
+  // (`use-live-competition.ts` swallows and holds), so reaching here at all
+  // means the document really no longer carries the tab.
+  //
+  // A render-phase update, not an effect: React's own sanctioned "adjust state
+  // when the props change" pattern (`useBoardActions` clears its optimistic
+  // overrides the same way). It discards the in-progress render and re-runs
+  // from the top, which converges immediately — `manualTab` is null on the
+  // second pass and the condition is false. An effect here would cost an extra
+  // committed render and trip `react-hooks/set-state-in-effect`.
+  if (manualTab !== null && !tabs.includes(manualTab)) setManualTab(null);
+
   return (
     <div data-testid="mh-root" data-transport={transport} className="min-w-0 space-y-4">
       <PublicTabRail

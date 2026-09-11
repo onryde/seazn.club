@@ -556,4 +556,69 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
     expect(activeId()).toBe("mh-tab-panel-overview");
   });
+
+  it("and when that tab's data comes BACK, the spectator is NOT yanked into it", async () => {
+    // Review M2 — the other direction, which the first cut left untested and
+    // got wrong. `activeTab` ignoring a dead choice is not the same as
+    // forgetting it: with the choice still in state, a leader board
+    // repopulating or a withdrawn table being republished moved the spectator
+    // mid-read, with no action of theirs and no way to tell why.
+    //
+    // Being moved once because what you were reading no longer exists is
+    // unavoidable. Being moved back into it five minutes later is not.
+    const withTable = hubDoc({
+      realtime: false,
+      matches: ONE_LIVE.matches,
+      tables: [tableView("t8-s1-overall", "premier")],
+    });
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(ONE_LIVE); // tick 1: table withdrawn
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(withTable); //    tick 2: republished
+    const island = mount(withTable);
+    const rail = island.tree().find((el) => Array.isArray(propsOf(el)["tabs"]));
+    (propsOf(rail!)["onChange"] as (id: string) => void)("table");
+
+    const activeId = () =>
+      propsOf(island.tree().find((el) => String(propsOf(el)["role"]) === "tabpanel")!)[
+        "data-testid"
+      ];
+    expect(activeId()).toBe("mh-tab-panel-table"); // positive pair: the tap took
+
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+    expect(activeId()).toBe("mh-tab-panel-overview"); // moved off, as it must be
+
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+    // The Table tab is back on the rail — the spectator can return to it — but
+    // they were not taken there.
+    const railIds = island
+      .tree()
+      .filter((el) => Array.isArray(propsOf(el)["tabs"]))
+      .flatMap((el) => (propsOf(el)["tabs"] as { id: string }[]).map((x) => x.id));
+    expect(railIds).toContain("table");
+    expect(activeId()).toBe("mh-tab-panel-overview");
+  });
+
+  it("the clock feeding the cards ticks every 30s, not every second", () => {
+    // Review M1: the deviation was sound and undefended — a mutant to 1 Hz
+    // survived 21/21. Nothing on this panel is second-resolution (`MatchCard`'s
+    // sentence is minute/hour granular, the ladder turns on kick-off instants)
+    // while 1 Hz re-renders every standings table on the active panel once a
+    // second for as long as the tab is open.
+    //
+    // `useLiveCompetition` also arms an interval, so this asserts the SET of
+    // cadences rather than a single call — which is also what catches a slip in
+    // either direction (1_000, or an hour).
+    const spy = vi.spyOn(global, "setInterval");
+    mount(ONE_LIVE);
+    const cadences = [...new Set(spy.mock.calls.map(([, ms]) => ms))].sort((a, b) => a! - b!);
+    // Two timers, and naming both is what makes the list exact rather than a
+    // containment check: HUB_POLL_MS is the hub's own poll (this document has a
+    // live match, so it is the fast cadence, not HUB_IDLE_POLL_MS), and 30_000
+    // is the clock this test is about. An extra timer nobody meant to arm is
+    // visible here too.
+    expect(cadences).toEqual([HUB_POLL_MS, 30_000]);
+    // Stated separately so the failure message says which rule broke when the
+    // clock slips back to 1 Hz — the exact mutant that survived review.
+    expect(cadences).not.toContain(1_000);
+    spy.mockRestore();
+  });
 });
