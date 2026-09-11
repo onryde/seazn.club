@@ -351,4 +351,122 @@ describe("StandingsTableView — phone composition", () => {
     const f = floors(full);
     expect(f.wide, "a full table still widens from `md`").toBeGreaterThan(f.phone);
   });
+
+  it("a preview keeps played and points and drops the rest, so the NAME gets the width", () => {
+    // Found the same way the fold above was: by looking at a screenshot of the
+    // built page at 320. The compact set (P W L Pts) left the name column 98px,
+    // which renders "Summit…" and "Riversid…" — a standings table that cannot
+    // say who is top. Nothing overflowed, so no clipping scan could see it.
+    const previewed = html({ preview: 2 });
+    const full = html();
+
+    // The head cells carry `data-col`, so the shown set is readable directly
+    // rather than inferred from widths.
+    const cols = (h: string) =>
+      [...h.matchAll(/data-col="([a-z]+)"[^>]*class="([^"]*)"/g)]
+        .filter(([, , cls]) => !/\bhidden\b/.test(cls!))
+        .map(([, key]) => key!);
+
+    // `rank` is structural — it is the position, not a metric, and it shows in
+    // both. Keeping it in both lists rather than filtering it out is what makes
+    // the two sets comparable line by line.
+    expect([...new Set(cols(previewed))]).toEqual(["rank", "played", "points"]);
+    // The positive pair, and the one that matters: the FULL table is unchanged,
+    // so this narrows the teaser rather than the product. Without it a mutant
+    // that narrowed both would pass the line above.
+    expect([...new Set(cols(full))]).toEqual(["rank", "played", "won", "lost", "points"]);
+
+    // And the width actually moves: the floor a preview demands is smaller by
+    // the two columns it dropped, which is what hands the remainder to the
+    // name. Asserting the columns alone cannot see this — the earlier fold bug
+    // hid columns and kept booking their width.
+    const floorOf = (h: string) => Number(h.match(/--sv-min:\s*(\d+)px/)![1]);
+    expect(floorOf(full) - floorOf(previewed)).toBe(64); // W and L at 32px each
+  });
+
+  it("the LAST visible column gets an end gutter at each width, and it is a different column at each", () => {
+    // Measured at 320 on the built page: the points value sat 2px from the
+    // card's own border, because `px-0.5` is right between columns and wrong at
+    // the end of a row. The `#` column has carried `pl-2` since it was written;
+    // this is its missing other half.
+    //
+    // The fixture ends on `points` below `md` (the long tail folds) and on `gd`
+    // from `md` up — which is the real shape, not a contrivance:
+    // `standingsColumns` pushes points and THEN the derived cascade columns, so
+    // assuming "points is last" would be wrong for any division with a cascade.
+    // `standingsColumns` (`lib/public-site.ts:249-253`) pushes points and THEN
+    // every derived cascade column, so a division with a cascade ends on a
+    // DERIVED column from `md` up and on points below it. The base fixture ends
+    // on points at both widths, which cannot tell the two apart — so this case
+    // gets the real shape.
+    const cascaded: TableViewT = {
+      ...view,
+      columns: [
+        ...view.columns,
+        { key: "nrr", abbr: "NRR", title: "Net run rate", compact: false },
+      ],
+      rows: view.rows.map((r) => ({ ...r, cells: [...r.cells, "+1.000"] })),
+    };
+    const full = renderToStaticMarkup(
+      <StandingsTableView view={cascaded} dict={dict} testid={TESTID} />,
+    );
+    const pad = (h: string, col: string) =>
+      h.match(new RegExp(`<th[^>]*data-col="${col}"[^>]*class="([^"]*)"`))![1]!
+        .split(" ")
+        .filter((c) => c.includes("pr-"))
+        .join(" ");
+
+    // Last below `md`, not last above it: padded on a phone, back to the
+    // between-columns value from `md`.
+    expect(pad(full, "points")).toBe("pr-2 md:pr-0.5");
+    // Last above `md` only: the mirror image.
+    expect(pad(full, "nrr")).toBe("pr-0.5 md:pr-2");
+    // Neither: no gutter at any width. Without this pair the two above pass on
+    // a component that pads every column.
+    expect(pad(full, "won")).toBe("pr-0.5");
+
+    // Exactly ONE `pr-*` per cell. Layering `pr-2` over `px-0.5` leaves the
+    // winner to stylesheet order — a class present rather than a class in
+    // effect, which is the trap AGENTS.md names.
+    // The numeric columns only — `rank` is structural, carries `pl-2` and owns
+    // no right padding at all.
+    const numeric = [...full.matchAll(/<t[hd][^>]*data-col="([a-z]+)"[^>]*class="([^"]*)"/g)].filter(
+      ([, key]) => key !== "rank",
+    );
+    expect(numeric.length).toBeGreaterThan(0);
+    for (const [, key, cls] of numeric) {
+      const unconditional = cls!.split(" ").filter((c) => c.startsWith("pr-"));
+      expect(unconditional, `${key}: ${cls}`).toHaveLength(1);
+      expect(cls, key).not.toContain("px-0.5");
+    }
+
+    // A preview folds at every width, so its last visible column is the same
+    // one at both — one unconditional gutter, no `md:` variant.
+    expect(pad(html({ preview: 2 }), "points")).toBe("pr-2");
+
+    // And where the two ARE the same column — no cascade, points last at both
+    // widths — one unconditional gutter and no `md:` variant either.
+    expect(pad(html(), "points")).toBe("pr-2");
+  });
+
+  it("falls back to the compact set for a table that names neither column", () => {
+    // A preview with no numbers at all is worse than a crowded one, so the
+    // narrowing is conditional on there being something to narrow TO. Without
+    // this rung a sport whose table uses different keys would preview as a list
+    // of names — and it would look deliberate.
+    const odd: TableViewT = {
+      ...view,
+      columns: [
+        { key: "frames", abbr: "F", title: "Frames", compact: true },
+        { key: "aggregate", abbr: "Agg", title: "Aggregate", compact: true },
+      ],
+      rows: view.rows.map((r) => ({ ...r, cells: ["2", "6"] })),
+    };
+    const h = renderToStaticMarkup(
+      <StandingsTableView view={odd} dict={dict} testid={TESTID} preview={2} />,
+    );
+    expect(h).toContain(`data-col="frames"`);
+    expect(h).toContain(`data-col="aggregate"`);
+    expect(h).not.toMatch(/data-col="frames"[^>]*class="[^"]*\bhidden\b/);
+  });
 });
