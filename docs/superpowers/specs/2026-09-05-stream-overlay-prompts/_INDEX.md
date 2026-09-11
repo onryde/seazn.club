@@ -2229,3 +2229,72 @@ brand mark appeared to sit under the away name. That is W1's layout, not W2's
 band, and the measurement above cannot confirm or deny it. It is worth its own
 look with a realistic long club name, in canvas coordinates. `ovl-detail`
 itself reported `clipped: false` at both name lengths.
+
+## 2026-09-11 — W2 Tasks 4 and 5: the slab, and the gates around it
+
+The moment slab ships, with its queue, its motion, its e2e and a committed
+capture harness. `stream-overlay.spec.ts` 19/19 run WHOLE; `mobile.spec.ts`
+298/298 across the seven widths; 607 unit tests under `src/components/overlay`;
+mutation sweep 9/9 on the queue.
+
+**W2-F28 — THERE ARE THREE THEMES, and the slab was written against two.**
+`slate` is a registry entry in its own right but it paints no scorebug: it
+COMPOSITES one, `defaultThemeFor(sportKey)` (§4a). Reading `props.style` alone
+therefore gave the slab the BAR's geometry under `?style=slate` while the BUG
+was the thing on screen — wrong for TEN of the eleven sports, and right for
+cricket only by accident, since cricket is the one sport whose default IS the
+bar. `slabPlacementFor(style, sportKey)` now answers it, declared beside
+`defaultThemeFor` so the two cannot drift, and tested in both directions.
+
+**Found by reading the owner's overlay contact sheet**, which shows three themes
+per sport. Not by any test, not by the type system — `ThemeId` includes `slate`
+and a ternary over it compiles perfectly. **An artefact that shows the product's
+real shape caught what the code's own vocabulary hid.**
+
+**W2-F29 — a clipping slot, not a clipping canvas.** "Clipped behind the bug"
+(§6) needs the clipping WINDOW to sit at the emergence point. An `inset: 0` slot
+cannot hide anything: `translateX(-100%)` of a 185 px slab still leaves it on a
+1920 px canvas, painted over the scorebug. The slot is now positioned per
+placement and the slab sits at its near edge.
+
+**W2-F30 — `data-phase` flips when the transition STARTS, not when it ends.**
+Every screenshot taken on the attribute alone was a MOTION FRAME. A slab halfway
+out from behind the scorebug photographs exactly like one whose text overflows
+its box — which is precisely the bug it was reported as, until the boxes were
+measured (slab 185×216, headline 119 wide inside 66 px of padding: it fits). The
+capture harness now waits for the computed transform to come to rest.
+
+**The generalisation, and it is the wave's most reusable lesson: when a
+screenshot shows something wrong, measure before believing the picture.** A
+motion frame, a stale build and a genuine layout fault are three different
+things that produce the same image.
+
+**W2-F31 — §5 and §3 disagree about where the bar's slab goes, and the ARITHMETIC
+settles it.** §5 says "centred under the bar's detail band", radius `0 0 6 6`.
+§3 puts the bar at `bottom: 54` standing 177 tall (126 main + 51 detail), so
+there are 54 px of canvas beneath it and the slab is 216 tall. The literal
+reading does not fit. Built as an interim: slab ABOVE the bar, bottom tucked
+behind its top edge, corners rounded at the top. **The sheet has NOT been
+amended** — rewriting an owner-approved section to match what was built is not
+this wave's call. Raised with the owner; awaiting a ruling.
+
+**W2-F32 — a serial spec file's shared rig is a coupling, not a convenience.**
+The moments tests appended to `stream-overlay.spec.ts`'s shared hockey fixture
+and got `422 ALREADY_DECIDED`, because a test ABOVE them decides it. Reordering
+would have worked that day and broken the next time somebody added a test; the
+describe now seeds its own rig.
+
+**W2-F33 — the coverage gate's lists are DERIVED, and the derivation can fail
+silently.** Wicket kinds, card colours and suspension classes all come from the
+modules. `enumMembers` reads `.options` or `.enum` — whichever this zod version
+exposes — and THROWS when neither yields members, because an empty list turns
+every sweep into a vacuous pass. Proven by emptying it: the throw fires at
+import and the suite goes red rather than green-with-a-hole. **A derived list is
+only as good as the read that derives it; assert the read is not empty.**
+
+**W2-F34 — W1's contact sheet could not be reproduced.** It was captured ad hoc
+and left no harness, so W2 re-derived the entire rig to shoot five frames.
+`e2e/overlay-moments.capture.ts` is committed for exactly that reason, and the
+`gallery` project's `testMatch` widened from one file to any `*.capture.ts` —
+before which a second harness was matched by NO project and could not be invoked
+at all. **A visual gate that cannot be re-run is a screenshot, not a gate.**

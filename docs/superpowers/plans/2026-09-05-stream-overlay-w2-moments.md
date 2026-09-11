@@ -595,170 +595,47 @@ export function OverlayMomentSlab(props: { moment: OverlayMoment; phase: Phase; 
 
 Reducer semantics: `enqueue` appends (dedupes on `seq`+`kind`); when `current` is null it promotes the head to `phase: "in"` with `deadline = now + foldMs`; `tick` at or past the deadline advances `in → hold (now + holdMs) → out (now + foldMs) → next head or idle`. `reducedMotion` passes `foldMs: 0`, so the phases still exist (the DOM still shows `in`/`hold`/`out` for one tick) but nothing animates.
 
-- [ ] **Step 1: Failing reducer tests** — `apps/web/src/components/overlay/__tests__/moment-queue.test.ts`:
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.** `moment-timing.ts`, `moment-queue.ts`
+  (pure reducer), `use-moment-queue.ts`, `overlay-moment.tsx`, the slab CSS in
+  `globals.css`, stage wiring, and three e2e tests in W1's own spec file.
 
-```ts
-import { INITIAL, momentQueueReducer as r, nextDeadline } from "../moment-queue";
-import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
-const m = (seq: number, kind = "goal") => ({ seq, kind, headline: kind.toUpperCase(), tone: "led" as const });
-const T = { foldMs: OVERLAY_MOMENT_FOLD_MS, holdMs: OVERLAY_MOMENT_HOLD_MS };
+  **Mutation sweep 9/9** after three survivors, one of which was a LATENT BUG
+  rather than a missing test: the batch was deduped against history but never
+  against itself, so two identical moments in one array would both have queued.
+  A second (`nextDeadline`'s `current === null` clause) was unreachable and was
+  removed rather than witnessed.
 
-it("the default hold is four seconds and the fold a quarter — pinned on the DEFAULTS, not a live override", () => {
-  expect(OVERLAY_MOMENT_HOLD_MS).toBe(4_000); expect(OVERLAY_MOMENT_FOLD_MS).toBe(250);
-});
-it("idle + enqueue → in with deadline now+fold; tick past it → hold with deadline now+hold; then out; then idle", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1)], now: 0, ...T });
-  expect(s).toMatchObject({ current: m(1), phase: "in", deadline: 250 });
-  s = r(s, { type: "tick", now: 250, ...T }); expect(s).toMatchObject({ phase: "hold", deadline: 4_250 });
-  s = r(s, { type: "tick", now: 4_000, ...T }); expect(s.phase).toBe("hold");                       // early tick is a no-op
-  s = r(s, { type: "tick", now: 4_250, ...T }); expect(s).toMatchObject({ phase: "out", deadline: 4_500 });
-  s = r(s, { type: "tick", now: 4_500, ...T }); expect(s).toEqual(INITIAL);
-});
-it("FIFO: two moments enqueued together show in order, the second starts only after the first's out", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1, "goal"), m(2, "card.yellow")], now: 0, ...T });
-  expect(s.queue.map((q) => q.seq)).toEqual([2]);
-  for (const now of [250, 4_250, 4_500]) s = r(s, { type: "tick", now, ...T });
-  expect(s).toMatchObject({ current: m(2, "card.yellow"), phase: "in" });
-});
-it("a moment arriving DURING a hold queues behind it (never interrupts)", () => {});
-it("the same (seq, kind) enqueued twice is shown once", () => {});
-it("reduced motion: foldMs 0 → in and out are zero-length, hold unchanged", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1)], now: 0, foldMs: 0, holdMs: 4_000 });
-  s = r(s, { type: "tick", now: 0, foldMs: 0, holdMs: 4_000 }); expect(s).toMatchObject({ phase: "hold", deadline: 4_000 });
-});
-it("nextDeadline is null when idle and the state's deadline otherwise", () => {});
-```
+  **A real defect the contact sheet caught: THERE ARE THREE THEMES.** `slate`
+  paints no scorebug — it COMPOSITES one, `defaultThemeFor(sportKey)` (§4a) — so
+  reading `props.style` alone gave the slab the BAR's geometry under
+  `?style=slate` while the BUG was on screen. Wrong for ten of the eleven
+  sports, right for cricket only by accident. `slabPlacementFor(style, sportKey)`
+  now answers it, beside `defaultThemeFor` so the two cannot drift.
 
-- [ ] **Step 2: Run — expect failures.** `cd …/apps/web && DATABASE_URL= pnpm exec vitest run src/components/overlay/__tests__/moment-queue.test.ts --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-t4-red.json`.
+  **The slot is a CLIPPING WINDOW at the emergence point, not the canvas.** An
+  `inset: 0` slot cannot hide anything: translating a 185 px slab by its own
+  width still leaves it on a 1920 px canvas, painted over the scorebug.
 
-- [ ] **Step 3: Implement** reducer, hook, slab, CSS, stage wiring.
+  **Placement measured rather than assumed** — bar slab at x=72 (the bar's own
+  left inset), bug slab at x=540 (the bug's right edge, §4's `left 60` +
+  `width 480`), headline inset 33 in both, height 216.
 
-  Hook (no per-frame timer — one timeout re-armed from `nextDeadline`):
+  **OPEN, and it is the sheet's problem rather than the code's:** §5 says the bar
+  slab is "centred under the bar's detail band" with radius `0 0 6 6`, but §3
+  puts the bar at `bottom: 54` standing 177 tall — 54 px of canvas against a
+  216 px slab. The interim reading (slab ABOVE the bar, bottom tucked behind it,
+  corners rounded at the top) is built and filmed; the sheet has not been
+  amended, because rewriting an owner-approved section to match what was built
+  is not a decision this wave gets to make alone.
 
-```ts
-export function useMomentQueue(incoming: OverlayMoment[], opts: { reducedMotion: boolean }) {
-  const timing = { holdMs: OVERLAY_MOMENT_HOLD_MS, foldMs: opts.reducedMotion ? 0 : OVERLAY_MOMENT_FOLD_MS };
-  const [state, dispatch] = useReducer(momentQueueReducer, INITIAL);
-  useEffect(() => { if (incoming.length) dispatch({ type: "enqueue", moments: incoming, now: Date.now(), ...timing }); }, [incoming]);   // `incoming` is a fresh array only when momentsFor returned something (stage memoises [])
-  useEffect(() => {
-    const at = nextDeadline(state); if (at === null) return;
-    const id = setTimeout(() => dispatch({ type: "tick", now: Date.now(), ...timing }), Math.max(0, at - Date.now()));
-    return () => clearTimeout(id);
-  }, [state, timing.foldMs]);
-  return { current: state.current, phase: state.phase };
-}
-```
+  **Verified:** the WHOLE `stream-overlay.spec.ts` 19/19 (run whole, never a
+  `-g` slice); `mobile.spec.ts` 298/298 across the seven widths; 607 unit tests
+  in `src/components/overlay`.
 
-  Stage (inside the component that owns `const { data } = useLiveFixture(...)`; names RE-PIN):
-
-```tsx
-const seenRef = useRef<number>(maxSeq(initial.recent));                 // OBS opens mid-stream: nothing replays
-const [fresh, setFresh] = useState<OverlayMoment[]>(EMPTY);
-useEffect(() => {
-  const recent = data.recent ?? [];
-  const next = momentsFor(sportKey, recent, seenRef.current, msg, [model.sides[0].short, model.sides[1].short]);
-  seenRef.current = Math.max(seenRef.current, maxSeq(recent));
-  if (next.length) setFresh(next);
-}, [data, sportKey, msg, model.sides]);
-const reducedMotion = useReducedMotion();                                  // matchMedia("(prefers-reduced-motion: reduce)"), false on the server
-const { current, phase } = useMomentQueue(fresh, { reducedMotion });
-…
-{current && <OverlayMomentSlab moment={current} phase={phase} placement={style} />}
-```
-
-  The slab sits in the slot W1 left in the bar (below the main band, full width) and the bug (to the right of the tile, vertically centred). CSS (`globals.css`, beside the W1 overlay rules):
-
-```css
-.ovl-slab { position: absolute; display: flex; flex-direction: column; gap: .15em; padding: .35em .9em; max-width: 34ch; min-width: 0;
-  background: var(--ovl-slab-bg); color: var(--sport-board); font-family: var(--ps-font-display); font-variant-numeric: tabular-nums;
-  will-change: transform, opacity; transition: transform var(--ovl-fold, 250ms) cubic-bezier(.2,.8,.2,1), opacity var(--ovl-fold, 250ms) linear; }
-.ovl-slab[data-tone="led"]       { --ovl-slab-bg: var(--sport-led); }
-.ovl-slab[data-tone="caution"]   { --ovl-slab-bg: var(--sport-caution); }
-.ovl-slab[data-tone="dismissal"] { --ovl-slab-bg: var(--sport-dismissal); color: var(--sport-ink); }
-.ovl-slab__headline { font-weight: 700; font-size: 2.2em; line-height: 1; letter-spacing: .02em; }
-.ovl-slab__line { font-family: inherit; font-weight: 600; font-size: 1em; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* bar: rises from under the main band; bug: slides out from behind the tile. transform + opacity ONLY. */
-.ovl-slab--bar { left: 0; top: 100%; transform: translateY(-100%); }
-.ovl-slab--bar.ovl-slab--in, .ovl-slab--bar.ovl-slab--hold { transform: translateY(0); opacity: 1; }
-.ovl-slab--bar.ovl-slab--out { transform: translateY(-100%); opacity: 0; }
-.ovl-slab--bug { left: 100%; top: 50%; transform: translate(-100%, -50%); opacity: 0; }
-.ovl-slab--bug.ovl-slab--in, .ovl-slab--bug.ovl-slab--hold { transform: translate(0, -50%); opacity: 1; }
-.ovl-slab--bug.ovl-slab--out { transform: translate(-100%, -50%); opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .ovl-slab { transition: none; } }
-```
-
-  The initial `in` frame must start from the hidden transform — render the slab with `data-phase="in"` on mount and set `--ovl-fold` from `OVERLAY_MOMENT_FOLD_MS` inline so CSS and reducer share the number (pass it as a style var from the component, never retype `250ms` in two places).
-
-- [ ] **Step 4: Run — reducer green**, then typecheck: `cd …/apps/web && pnpm typecheck`.
-
-- [ ] **Step 5: E2E** — append to `apps/web/e2e/stream-overlay.spec.ts` (W1's file; reuse its overlay-URL helper and its `streaming.overlay` / `realtime` override setup — RE-PIN their names; if W1 did not enable `realtime`, enable it here with `setBoolEntitlementOverrideSql(orgId, "realtime", true)` and thaw in `afterAll`, or every assertion waits a 15 s poll). Budget expressed in the constants (rule 20): `const BUDGET = OVERLAY_MOMENT_HOLD_MS + 2 * OVERLAY_MOMENT_FOLD_MS + POLL_MS + 5_000` with `POLL_MS` imported from the hook module (D6).
-
-```ts
-import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../src/components/overlay/moment-timing";
-import { resolvePersonDisplayName } from "../src/lib/name-display";
-
-async function post(request: APIRequestContext, fixtureId: string, type: string, payload: Record<string, unknown>) {
-  const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
-  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
-  expect(res.status, `${type} ${JSON.stringify(res.error)}`).toBeLessThan(300);
-}
-const slab = (page: Page) => page.getByTestId("overlay-moment");
-
-test.describe("moments", () => {
-  test("football: a goal raises GOAL on the bug, once, and it is gone after the hold", async ({ page, request }) => {
-    test.setTimeout(3 * BUDGET);
-    const fx = await footballFixtureInPlay(request);                       // RE-PIN: copy the division body from `grep -an 'sport_key: "football"' apps/web/e2e/*.spec.ts | head -1`; core.start; no lineup needed
-    await page.goto(overlayUrl(fx.fixtureId, "bug"));
-    await expect(slab(page)).toHaveCount(0);                                // nothing on load
-    await post(request, fx.fixtureId, "football.goal", { by: fx.homeEntrantId });
-    const seen: string[] = [];
-    await expect.poll(async () => { const k = await slab(page).getAttribute("data-kind").catch(() => null); if (k && seen.at(-1) !== k) seen.push(k); return seen.length; }, { timeout: BUDGET }).toBe(1);
-    await expect(slab(page)).toHaveText(/GOAL/);
-    await expect(slab(page)).toHaveCSS("background-color", await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--sport-led").trim()).then(toRgb));
-    await expect(slab(page)).toHaveCount(0, { timeout: OVERLAY_MOMENT_HOLD_MS + 2 * OVERLAY_MOMENT_FOLD_MS + 2_000 });
-    await page.waitForTimeout(POLL_MS + 1_000);                             // a later poll must NOT replay it
-    expect(seen).toEqual(["goal"]);
-  });
-  test("two events back to back: both slabs, in ledger order, one after the other", async ({ page, request }) => {
-    test.setTimeout(3 * BUDGET);
-    // goal then card posted within one refetch window; poll `data-kind` into an ordered distinct list until length 2
-    // expect(order).toEqual(["goal", "card.yellow"]); and the card appeared only after the goal's slab had gone (record timestamps)
-  });
-  test("cricket: SIX on the bar; OUT carries the consent-masked name and the batter's figures", async ({ page, request }) => {
-    test.setTimeout(4 * BUDGET);
-    const rig = await seedRosteredFixture(request, { label: `ovl-cricket-${TAG}`, sportKey: "cricket", variantKey: "t20", home: ELEVEN_H, away: ELEVEN_A, emitCoreStart: false });   // RE-PIN RosteredFixture's fields
-    await post(request, rig.fixtureId, "cricket.toss", { wonBy: rig.homeEntrantId, elected: "bat" });
-    await post(request, rig.fixtureId, "core.start", {});
-    const [s1, s2, s3] = rig.homePersonIds; const b = rig.awayPersonIds.at(-1)!;
-    await withDb((sql) => sql`update persons set consent = '{"public_name": false}'::jsonb where id = ${s2}`);
-    await page.goto(overlayUrl(rig.fixtureId, "bar"));
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 1, striker: s1, nonStriker: s2, bowler: b, runs: { bat: 6 }, boundary: 6 });
-    await expect(slab(page)).toHaveText(/SIX/, { timeout: BUDGET });
-    await expect(page.getByTestId("overlay-bar-detail")).toContainText(ELEVEN_H[0].fullName + "*");   // Task 3 live: striker marker (RE-PIN the detail testid W1 gave the second band)
-    await expect(slab(page)).toHaveCount(0, { timeout: BUDGET });
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 2, striker: s1, nonStriker: s2, bowler: b, runs: { bat: 1 } });   // strike to s2
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 3, striker: s2, nonStriker: s1, bowler: b, runs: { bat: 0 }, wicket: { kind: "bowled", out: s2, bowlerCredited: true, incoming: s3 } });
-    const masked = resolvePersonDisplayName(ELEVEN_H[1].fullName, { public_name: false }, null, false);
-    await expect(slab(page)).toHaveText(/OUT/, { timeout: BUDGET });
-    await expect(slab(page)).toContainText(masked);
-    await expect(slab(page)).not.toContainText(ELEVEN_H[1].fullName);
-    await expect(slab(page)).toContainText("0 (1)");                       // the fold's figures for s2
-  });
-  test("prefers-reduced-motion: the slab still appears and disappears, with no transition", async ({ page, request }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    // post a goal; expect slab visible; expect toHaveCSS("transition-property", "none") or transition-duration "0s"; expect gone after hold
-  });
-});
-```
-
-  Run locally against the W1 prod server (per `seazn-local-env`): `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2/apps/web && E2E_PROD_TARGET=1 BASE=http://127.0.0.1:<port> pnpm exec playwright test e2e/stream-overlay.spec.ts --project=parallel --reporter=list` — the WHOLE file, never `-g`. Expected: every W1 test still green plus 4 new passed. Then the seven-width regression: `pnpm exec playwright test e2e/mobile.spec.ts` (all width projects) unchanged — the overlay is not in it, but the division fixtures tab (W1's toggle) is, and the CSS file changed.
-
-- [ ] **Step 6: Mutation checks on the wiring (the e2e must see them).** (i) `seenRef` initialised to `0` → the football test's first assertion fails? No — nothing is in `recent` before the goal for a fresh fixture; so ALSO seed one goal BEFORE `page.goto` in a fifth case "OBS opens mid-stream: the earlier goal does not replay" → with the mutant it reds. (ii) `holdMs: 0` → "gone after the hold" passes but `toHaveText(/GOAL/)` reds (the slab is gone before the poll sees hold) and the reducer's default-pin test reds. (iii) drop the dedupe → "once" still passes (one refetch) — covered by the reducer test instead; state this honestly in the PR.
-
-- [ ] **Step 7: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 && /usr/bin/git add apps/web/src/components/overlay/moment-timing.ts apps/web/src/components/overlay/moment-queue.ts apps/web/src/components/overlay/use-moment-queue.ts apps/web/src/components/overlay/overlay-moment.tsx apps/web/src/components/overlay/__tests__/moment-queue.test.ts apps/web/src/components/overlay/overlay-stage.tsx apps/web/src/app/globals.css apps/web/e2e/stream-overlay.spec.ts && /usr/bin/git commit -o apps/web/src/components/overlay/moment-timing.ts apps/web/src/components/overlay/moment-queue.ts apps/web/src/components/overlay/use-moment-queue.ts apps/web/src/components/overlay/overlay-moment.tsx apps/web/src/components/overlay/__tests__/moment-queue.test.ts apps/web/src/components/overlay/overlay-stage.tsx apps/web/src/app/globals.css apps/web/e2e/stream-overlay.spec.ts -m "overlay: the moment slab — FIFO queue (4 s hold, 250 ms fold, transform/opacity only), seq-diffed from recent[], reduced-motion instant; e2e for goal, order, cricket SIX/OUT with consent masking" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **One coupling removed:** the moments describe seeds its OWN rig. The file is
+  serial around one shared hockey fixture and a test above DECIDES it, so
+  appending answered `422 ALREADY_DECIDED`. Reordering would have worked today
+  and broken the next time somebody added a test.
 
 ### Task 5: Dictionary coverage from the engine's enums, the visual gate, the index
 
@@ -768,35 +645,36 @@ test.describe("moments", () => {
 - Modify or create: `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts` (RE-PIN: `grep -arl "overlay" apps/web/e2e/walkthrough/*.spec.ts`; if W1 named its capture spec differently, extend THAT file; if none exists, create this one — it is matched by `WALKTHROUGH`)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
 
-- [ ] **Step 1: Failing coverage test** — every key any rule can emit exists in all four locales, and the lists are DERIVED from the engine (a new dismissal kind or penalty class cannot ship unlocalised):
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.**
+  `lib/__tests__/overlay-moment-dictionary.test.ts` (9 tests) and
+  `e2e/overlay-moments.capture.ts` (5 scenes, all captured and verified).
 
-```ts
-import en from "@/dictionaries/en/public.json"; import es from "@/dictionaries/es/public.json"; import fr from "@/dictionaries/fr/public.json"; import nl from "@/dictionaries/nl/public.json";
-import { MOMENT_KEYS } from "../overlay-moments";
-import { CricketWicket } from "@seazn/engine/sports/cricket";
-import { FOOTBALL_EVENT_SCHEMAS } from "@seazn/engine/sports/football";      // RE-PIN export
-import { icehockey } from "@seazn/engine/sports/icehockey";
-const wicketKinds = CricketWicket.shape.kind.options;
-const cardColours = (FOOTBALL_EVENT_SCHEMAS["football.card"] as z.ZodObject<{ color: z.ZodEnum<[string, ...string[]]> }>).shape.color.options;
-const penaltyClasses = Object.keys(/* RE-PIN */ icehockeyDefaultCfg().suspensions.classes);
-const DERIVED = [...wicketKinds.map((k) => `overlay.moment.wicket.${k}`), ...cardColours.map((c) => `overlay.moment.card.${c}`), "overlay.moment.card.green", ...penaltyClasses.map((c) => `overlay.moment.penaltyClass.${c}`)];
-for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {
-  it(`${locale} carries every overlay moment key`, () => { for (const k of new Set([...MOMENT_KEYS, ...DERIVED, "overlay.cricket.strikerMark", "overlay.cricket.onStrike", "overlay.cricket.thisOver"])) expect(dict, k).toHaveProperty(k); });
-}
-it("every enum-derived key is in MOMENT_KEYS (the rule table and the enum agree)", () => { for (const k of DERIVED) expect(MOMENT_KEYS).toContain(k); });
-it("placeholders match across locales", () => { /* for each key with {x} in en, every locale has the same set of {x} */ });
-```
+  **The brief's `overlay.moment.penaltyClass.*` family was NOT created.** Those
+  seven words already exist as `overlay.card.*` — W1's chip labels, mapped by
+  `DISCIPLINE_LABEL_KEYS`, already in four locales — so the slab borrows them
+  through `disciplineLabel` and the gate checks those. 28 translations not
+  written, and the chip and the slab cannot drift apart.
 
-- [ ] **Step 2: Run — expect the missing keys listed; add them; `pnpm i18n:gen-keys && pnpm i18n:check`; run — green.** `--outputFile=/tmp/seazn-env/ovl/w2-t5.json`, expected `numTotalTests: 6`.
+  **`enumMembers` is the file's spine.** It reads `.options` or `.enum`,
+  whichever this zod version exposes, and THROWS when neither yields members —
+  an empty list would turn every sweep into a vacuous pass. Proven by emptying
+  it: the throw fires at import and the suite goes red rather than
+  green-with-a-hole.
 
-- [ ] **Step 3: Visual gate additions.** In the capture spec, after W1's bar/bug scenes, add scenes at 1920×1080 that CAPTURE THE SLAB MID-HOLD (post the event, wait `OVERLAY_MOMENT_FOLD_MS + 300`, screenshot): `cricket-bar-six`, `cricket-bar-out` (with the batter line visible in the same frame), `football-bug-goal`, `football-bug-card-red`, `tennis-bug-match-point` (drive a short best-of-one set through `tennis.point` to match point), `badminton-bug-game-won`, and one `prefers-reduced-motion` frame. Assert the files exist, are non-empty, and that `cricket-bar-six` ≠ `cricket-bar-out` byte-for-byte (the gate's own vacuous mode is two identical pictures). Attach to the PR with per-screen verdicts written by a human reading them (not "CI green").
+  **The capture harness is COMMITTED, which W1's was not.** W1's contact sheet
+  was produced ad hoc and left nothing to reproduce it, so this wave re-derived
+  the whole rig. The `gallery` project's `testMatch` widens from one file to any
+  `*.capture.ts`; before that a second harness matched NO project and could not
+  be invoked at all.
 
-- [ ] **Step 4: `_INDEX.md`.** Status row "PR2 (moments, cricket batter line)" → "planned `plans/2026-09-05-stream-overlay-w2-moments.md`; in flight after spectator W1 merge <date>"; add a "Pinned symbols — W2 (re-verified <date>)" table with the D1–D8 outcomes and the chosen Task 3 variant; add any false premise found (e.g. a column that lived on the view, a renamed hook path).
+  **`settled()` rather than `data-phase`.** The attribute flips when the CSS
+  transition STARTS, not when it ends, so every screenshot taken on it was a
+  motion frame — and a slab halfway out from behind the scorebug photographs
+  exactly like one whose text overflows. That cost an hour and a wrong bug
+  report before it was understood.
 
-- [ ] **Step 5: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 && /usr/bin/git add apps/web/src/lib/__tests__/overlay-moment-dictionary.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md && /usr/bin/git commit -o apps/web/src/lib/__tests__/overlay-moment-dictionary.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md -m "overlay(i18n): moment keys covered per engine enum in four locales; moment scenes in the visual gate; W2 pins in the programme index" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **Owed to the owner, not to CI:** per-screen verdicts on the five scenes.
+  "The gate passed" is not sign-off.
 
 ### Task 6: Gates, review loop, PR
 
