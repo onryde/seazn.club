@@ -46,9 +46,7 @@ jobs:
   # both vitest invocations fork their own workers — running them concurrently
   # on one runner buys contention and heap pressure, and this repo's
   # timing-sensitive suites go red under load. Separate jobs get separate
-  # runners and cannot contend with each other. The DB-free jobs below use
-  # GitHub-hosted runners so they spend the included Actions minutes and leave
-  # Blacksmith capacity for the DB/Docker/Playwright-heavy jobs.
+  # runners and cannot contend with each other.
   #
   # New floor is smoke-db (350s on the same run), so do not split these finer
   # expecting more wall clock — measure smoke-db first.
@@ -334,7 +332,7 @@ jobs:
   # -------------------------------------------------------------------------
   engine:
     name: Engine coverage + sim matrix
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # paths-filter reads the PR's changed files via the API; the repo's
     # default GITHUB_TOKEN is restricted and 403s without this.
     permissions:
@@ -450,7 +448,7 @@ jobs:
 
   container:
     name: docker build + TS 7 musl exec
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -513,7 +511,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-db:
     name: Smoke — DB + Redis suites (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     services:
       postgres:
@@ -713,10 +711,10 @@ jobs:
       # `integration` job carries the same pair; `cache-from`/`cache-to:
       # type=gha` need it too.
       #
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile
@@ -903,7 +901,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-db-usecases:
     name: Smoke — usecases [i-z] (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     services:
       postgres:
@@ -991,10 +989,10 @@ jobs:
       - name: Sync sport catalog from the engine registry
         run: npm run sync:sports
 
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile
@@ -1179,7 +1177,7 @@ jobs:
   # -------------------------------------------------------------------------
   smoke-e2e:
     name: Smoke — build + server + e2e (Postgres container)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     services:
       postgres:
@@ -1256,15 +1254,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       # Backgrounded. Nothing before the `wait:` below reads this image, and at
       # 17s it was pure serial time in front of a 61s build.
       - name: Build the placement service image
         id: image
         background: true
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           file: services/placement/Dockerfile

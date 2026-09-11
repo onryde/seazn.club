@@ -91,10 +91,10 @@ concurrency:
 jobs:
   # `runs-on` for all three jobs reads the E2E_RUNNER repo variable (Settings
   # -> Secrets and variables -> Actions -> Variables), so the runner can
-  # change without editing this file. Falls back to ubuntu-latest (a stock
-  # GitHub-hosted runner) when unset — NOT the blacksmith-4vcpu-ubuntu-2404
-  # label this previously hardcoded, so set E2E_RUNNER explicitly to keep
-  # today's runner rather than silently moving to ubuntu-latest.
+  # change without editing this file. Defaults to ubuntu-latest (a stock
+  # GitHub-hosted runner) when unset. Blacksmith runners and their builder
+  # actions were removed repo-wide; the builder steps below are stock
+  # docker/* actions unconditionally now.
   # ---------------------------------------------------------------------
   # Specs that only touch state they create (own competitions/divisions) —
   # safe at several workers, tests within a file too. See
@@ -201,8 +201,8 @@ jobs:
           # Three workers is chosen against the three long files specifically:
           # it lets them run CONCURRENTLY instead of serially, which collapses
           # that tail to roughly the longest of them. It is also the honest
-          # ceiling here — the runner is `blacksmith-4vcpu` and shares those 4
-          # vCPUs with Postgres and the standalone Next server, so 4 workers
+          # ceiling here — the runner is `ubuntu-latest` (4 vCPUs) and shares
+          # those 4 vCPUs with Postgres and the standalone Next server, so 4 workers
           # would contend with the server under test and buy flake rather than
           # speed.
           - group: walkthrough
@@ -407,56 +407,16 @@ jobs:
       # which is the opposite of its purpose. Same pattern as ci.yml's smoke
       # job and placement-ci.yml's `integration` job; the image build is
       # cached (type=gha) and shared with them.
-      # These three jobs' `runs-on` is variable-driven —
-      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
-      # the runner that was actually chosen rather than assume one. E2E_RUNNER
-      # is UNSET today, which means every leg lands on stock ubuntu-latest
-      # while these steps asked for Blacksmith's builder. Blacksmith's actions
-      # are a fork of docker/*, so the stock pair is the like-for-like
-      # substitute; the `with:` block is identical on both paths on purpose.
-      - name: Setup Blacksmith Builder
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        uses: useblacksmith/setup-docker-builder@v1
-
-      - name: Set up Docker Buildx (stock runner)
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       #
-      # Backgrounded, alongside the production build above. `background:` on a
-      # `uses:` step is NOT documented anywhere — it was measured on this repo
-      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
-      # backgrounded `run:` step both completed and the `wait:` resolved).
-      #
-      # One caveat from that same probe, and the reason nothing here reads this
-      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
-      # cache step printed an EMPTY `cache-hit` after the wait, where
-      # actions/cache sets 'false' on a miss. So do not background a step whose
-      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
-      # step in this repo, and it is deliberately left in the foreground.
       # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output.
+      # image in the local daemon, which is a side effect, not an output. It
+      # stays in the foreground (not backgrounded like the production build
+      # above) — an undocumented backgrounded `uses:` step was measured on
+      # this repo to lose its outputs (probe run 32011114196).
       - name: Build the placement service image
         id: image
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        background: true
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-
-      # The stock-runner twin. No `background:` — that key is a Blacksmith
-      # runner extension, not documented GitHub Actions (this file's own note
-      # above records it as measured here rather than specified), so it is not
-      # relied on where Blacksmith is not the runner. The cost is that this
-      # build is serial with what follows it on a stock runner; correctness
-      # first, and the whole point of E2E_RUNNER is that the fast path is the
-      # Blacksmith one above.
-      - name: Build the placement service image (stock runner)
-        id: image_stock
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -851,56 +811,16 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      # These three jobs' `runs-on` is variable-driven —
-      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
-      # the runner that was actually chosen rather than assume one. E2E_RUNNER
-      # is UNSET today, which means every leg lands on stock ubuntu-latest
-      # while these steps asked for Blacksmith's builder. Blacksmith's actions
-      # are a fork of docker/*, so the stock pair is the like-for-like
-      # substitute; the `with:` block is identical on both paths on purpose.
-      - name: Setup Blacksmith Builder
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        uses: useblacksmith/setup-docker-builder@v1
-
-      - name: Set up Docker Buildx (stock runner)
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       #
-      # Backgrounded, alongside the production build above. `background:` on a
-      # `uses:` step is NOT documented anywhere — it was measured on this repo
-      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
-      # backgrounded `run:` step both completed and the `wait:` resolved).
-      #
-      # One caveat from that same probe, and the reason nothing here reads this
-      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
-      # cache step printed an EMPTY `cache-hit` after the wait, where
-      # actions/cache sets 'false' on a miss. So do not background a step whose
-      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
-      # step in this repo, and it is deliberately left in the foreground.
       # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output.
+      # image in the local daemon, which is a side effect, not an output. It
+      # stays in the foreground (not backgrounded like the production build
+      # above) — an undocumented backgrounded `uses:` step was measured on
+      # this repo to lose its outputs (probe run 32011114196).
       - name: Build the placement service image
         id: image
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        background: true
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-
-      # The stock-runner twin. No `background:` — that key is a Blacksmith
-      # runner extension, not documented GitHub Actions (this file's own note
-      # above records it as measured here rather than specified), so it is not
-      # relied on where Blacksmith is not the runner. The cost is that this
-      # build is serial with what follows it on a stock runner; correctness
-      # first, and the whole point of E2E_RUNNER is that the fast path is the
-      # Blacksmith one above.
-      - name: Build the placement service image (stock runner)
-        id: image_stock
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
         uses: docker/build-push-action@v6
         with:
           context: services/placement
@@ -1172,56 +1092,16 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      # These three jobs' `runs-on` is variable-driven —
-      # `${{ vars.E2E_RUNNER || 'ubuntu-latest' }}` — so the builder must match
-      # the runner that was actually chosen rather than assume one. E2E_RUNNER
-      # is UNSET today, which means every leg lands on stock ubuntu-latest
-      # while these steps asked for Blacksmith's builder. Blacksmith's actions
-      # are a fork of docker/*, so the stock pair is the like-for-like
-      # substitute; the `with:` block is identical on both paths on purpose.
-      - name: Setup Blacksmith Builder
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        uses: useblacksmith/setup-docker-builder@v1
-
-      - name: Set up Docker Buildx (stock runner)
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       #
-      # Backgrounded, alongside the production build above. `background:` on a
-      # `uses:` step is NOT documented anywhere — it was measured on this repo
-      # (probe run 32011114196: a backgrounded actions/cache@v4 plus a
-      # backgrounded `run:` step both completed and the `wait:` resolved).
-      #
-      # One caveat from that same probe, and the reason nothing here reads this
-      # step's outputs: a backgrounded `uses:` step LOSES them. The probe's
-      # cache step printed an EMPTY `cache-hit` after the wait, where
-      # actions/cache sets 'false' on a miss. So do not background a step whose
-      # `outputs` are consumed — ci.yml's dorny/paths-filter is the one such
-      # step in this repo, and it is deliberately left in the foreground.
       # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output.
+      # image in the local daemon, which is a side effect, not an output. It
+      # stays in the foreground (not backgrounded like the production build
+      # above) — an undocumented backgrounded `uses:` step was measured on
+      # this repo to lose its outputs (probe run 32011114196).
       - name: Build the placement service image
         id: image
-        if: contains(vars.E2E_RUNNER, 'blacksmith')
-        background: true
-        uses: useblacksmith/build-push-action@v2
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
-
-      # The stock-runner twin. No `background:` — that key is a Blacksmith
-      # runner extension, not documented GitHub Actions (this file's own note
-      # above records it as measured here rather than specified), so it is not
-      # relied on where Blacksmith is not the runner. The cost is that this
-      # build is serial with what follows it on a stock runner; correctness
-      # first, and the whole point of E2E_RUNNER is that the fast path is the
-      # Blacksmith one above.
-      - name: Build the placement service image (stock runner)
-        id: image_stock
-        if: ${{ !contains(vars.E2E_RUNNER, 'blacksmith') }}
         uses: docker/build-push-action@v6
         with:
           context: services/placement
