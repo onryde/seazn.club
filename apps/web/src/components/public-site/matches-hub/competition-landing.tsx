@@ -162,10 +162,10 @@ export interface CompetitionLandingProps {
    */
   dict: PublicDict;
   locale: Locale;
-  /** The org's sponsor board — an async server component, so it arrives as a
-   *  slot. Reaches the Overview and the Info tab; only one panel is ever
-   *  mounted, so it is never rendered twice. */
-  sponsorsSlot?: ReactNode;
+  // NO `sponsorsSlot`. The sponsor board is not a panel of this root any more:
+  // `page.tsx` renders it BELOW this whole component, so it is present on every
+  // tab rather than only on the two that happened to have a slot for it
+  // (owner ruling 2026-09-12; `sponsors-board.tsx`'s header has the reasoning).
   /** The competition's own prose, sanitised server-side. */
   descriptionSlot?: ReactNode;
   /** The share bar — a client island with a clipboard and a toast. Info only:
@@ -191,7 +191,6 @@ export function CompetitionLanding({
   initial,
   dict,
   locale,
-  sponsorsSlot,
   descriptionSlot,
   shareSlot,
 }: CompetitionLandingProps) {
@@ -298,7 +297,6 @@ export function CompetitionLanding({
           dict,
           locale,
           now,
-          sponsorsSlot,
           descriptionSlot,
           shareSlot,
         })}
@@ -312,7 +310,6 @@ export interface PanelArgs {
   dict: PublicDict;
   locale: Locale;
   now: number;
-  sponsorsSlot?: ReactNode;
   descriptionSlot?: ReactNode;
   shareSlot?: ReactNode;
 }
@@ -343,7 +340,6 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
           dict={a.dict}
           locale={a.locale}
           now={a.now}
-          sponsorsSlot={a.sponsorsSlot}
           descriptionSlot={a.descriptionSlot}
         />
       );
@@ -363,7 +359,6 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
           locale={a.locale}
           descriptionSlot={a.descriptionSlot}
           shareSlot={a.shareSlot}
-          sponsorsSlot={a.sponsorsSlot}
         />
       );
     default: {

@@ -61,7 +61,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, plural, t } from "@/lib/i18n";
 import { hubDict } from "@/lib/hub-dict";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
-import { SponsorsBoard } from "@/components/public-site/sponsors-board";
+import { SponsorsBoard, SponsorsHeroTitle } from "@/components/public-site/sponsors-board";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
 // ONE producer for the competition's date line, shared with the Info tab that
 // renders the same two dates a tab away. Two implementations of "1 September
@@ -274,6 +274,13 @@ export default async function CompetitionHomePage({ params }: Props) {
                   {competitionDateLine(hub.info)}
                 </p>
               ) : null}
+              {/* The title sponsor, under the competition name (owner ruling
+                  2026-09-12, Option B). It renders `null` when there is no
+                  title tier — including for every free org, which has none by
+                  construction — so no predicate is needed here and an absent
+                  sponsor costs no space. The rest of the board is below the
+                  tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
+              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} />
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <ShareBar path={sharePath} title={hub.name} labels={shareLabels} />
                 {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
@@ -339,12 +346,13 @@ export default async function CompetitionHomePage({ params }: Props) {
       </section>
 
       {/* THE MOUNT. Everything that was below the hero on this page — the
-          live-now rail, the competition's prose, the divisions grid, the
-          sponsor board — is now a panel of this root, drawn from the hub
-          document. The slots are `undefined` rather than an element that
-          renders nothing, which is the caller contract both `OverviewTab` and
-          `InfoTab` state: a heading over an absent block reads as content that
-          failed to load. */}
+          live-now rail, the competition's prose, the divisions grid — is now a
+          panel of this root, drawn from the hub document. The slots are
+          `undefined` rather than an element that renders nothing, which is the
+          caller contract both `OverviewTab` and `InfoTab` state: a heading over
+          an absent block reads as content that failed to load.
+
+          The sponsor board is deliberately NOT among them — see below. */}
       <CompetitionLanding
         initial={hub}
         // The HUB SLICE, not the whole dictionary. `CompetitionLanding` is a
@@ -355,11 +363,6 @@ export default async function CompetitionHomePage({ params }: Props) {
         // slice honest, not the prefix list.
         dict={hubDict(dict)}
         locale={locale}
-        sponsorsSlot={
-          sponsors.length > 0 ? (
-            <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} />
-          ) : undefined
-        }
         descriptionSlot={descriptionHtml ? <CompetitionProse html={descriptionHtml} /> : undefined}
         // The Info tab's own share block. The hero's bar is the prominent one;
         // this is the one a spectator who scrolled into "everything about this
@@ -367,6 +370,19 @@ export default async function CompetitionHomePage({ params }: Props) {
         // have shipped that section dead.
         shareSlot={<ShareBar path={sharePath} title={hub.name} labels={shareLabels} />}
       />
+
+      {/* THE PERIMETER BOARD, on the PAGE rather than inside a tab.
+          A sponsor board that lives in the Overview and Info panels vanishes
+          the moment a spectator taps Matches, Table, Stats or Teams — which is
+          most of the surface, and all of the surface a game is actually watched
+          on. Below the panel it is present on every tab, spans the full content
+          width (a perimeter board is the width of the ground, not a column),
+          and is the last thing on the page, where a board at a venue sits.
+
+          Mounted unconditionally: it returns `null` when it has nothing to draw
+          — no sponsors at all, or a tiered org whose only sponsor is the title
+          tier now rendered in the hero. */}
+      <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} />
     </div>
   );
 }

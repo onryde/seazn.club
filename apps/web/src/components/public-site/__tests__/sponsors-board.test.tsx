@@ -20,7 +20,7 @@ import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { ResolvedSponsor } from "@/server/usecases/sponsors";
-import { SponsorsBoard, sponsorHref } from "../sponsors-board";
+import { SponsorsBoard, SponsorsHeroTitle, sponsorHref } from "../sponsors-board";
 
 const DICTS: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
 
@@ -38,9 +38,22 @@ const GOLD = s({ name: "Halston Tyres", tier: "gold", id: "sp-gold", url: "https
 const SILVER = s({ name: "Cobb Dairy", tier: "silver" });
 const PARTNER = s({ name: "Vale Physio", tier: "partner", id: "sp-partner", url: "https://vale.example" });
 
-const render = (over: { sponsors?: ResolvedSponsor[]; tiered?: boolean; locale?: string } = {}) =>
+type Over = { sponsors?: ResolvedSponsor[]; tiered?: boolean; locale?: string };
+
+const render = (over: Over = {}) =>
   renderToStaticMarkup(
     <SponsorsBoard
+      sponsors={over.sponsors ?? [TITLE, GOLD, SILVER, PARTNER]}
+      tiered={over.tiered ?? true}
+      dict={DICTS[over.locale ?? "en"]!}
+    />,
+  );
+
+/** The hero lockup. Takes the SAME whole list as the board — neither component
+ *  is handed a slice, so the page cannot split it wrongly. */
+const renderHero = (over: Over = {}) =>
+  renderToStaticMarkup(
+    <SponsorsHeroTitle
       sponsors={over.sponsors ?? [TITLE, GOLD, SILVER, PARTNER]}
       tiered={over.tiered ?? true}
       dict={DICTS[over.locale ?? "en"]!}
@@ -64,14 +77,67 @@ describe("sponsorHref", () => {
   });
 });
 
-describe("SponsorsBoard — the tiered board", () => {
-  it("draws the title sentence, the sized panels and the partner ticker, each in its own section", () => {
-    const h = render();
+// ── THE SPLIT (owner ruling 2026-09-12, Option B) ──────────────────────────
+// The title tier is drawn in the HERO and everyone else on the board, and both
+// components take the org's whole list. So the first thing to pin is that each
+// one draws its own tiers and nothing else: a component that rendered the
+// whole list would look correct in isolation and print every sponsor twice on
+// the page.
+describe("SponsorsHeroTitle — the hero lockup", () => {
+  it("draws the title sponsor as the whole SENTENCE, and nobody else", () => {
+    const h = renderHero();
+    // The key is "Presented by {sponsor}" — a sentence in all four locales, so
+    // it is never split into a label above and a name below. A fixed lockup
+    // pins English word order into the markup.
+    expect(h).toContain(`data-testid="mh-hero-sponsor"`);
+    expect(h).toContain("Presented by Northbank Bank");
+    // The negative pair, and it is the one that catches a component rendering
+    // the list it was handed rather than its own tier.
+    for (const name of ["Halston Tyres", "Cobb Dairy", "Vale Physio"]) {
+      expect(h, name).not.toContain(name);
+    }
+  });
 
-    // The title lockup is the SENTENCE, not a label plus a name: the key is
-    // "Presented by {sponsor}" and the lift stopped splitting it.
-    const title = h.slice(h.indexOf(`data-testid="mh-sponsors-title"`));
-    expect(title).toContain("Presented by Northbank Bank");
+  it("renders NOTHING when there is no title sponsor, so the caller needs no predicate", () => {
+    expect(renderHero({ sponsors: [GOLD, SILVER, PARTNER] })).toBe("");
+    expect(renderHero({ sponsors: [] })).toBe("");
+  });
+
+  it("renders nothing for an un-tiered org even when a row still carries a title tier", () => {
+    // Bought, then downgraded. Without Pro `sponsors.tiers` there is no title
+    // tier to sell, so the hero placement does not come back.
+    expect(renderHero({ tiered: false })).toBe("");
+  });
+
+  it("draws every title sponsor when an org sold more than one", () => {
+    const second = s({ name: "Kestrel Kit", tier: "title" });
+    const h = renderHero({ sponsors: [TITLE, second] });
+    expect(h).toContain("Presented by Northbank Bank");
+    expect(h).toContain("Presented by Kestrel Kit");
+  });
+
+  it("carries min-w-0 down the whole chain, and wraps rather than truncating", () => {
+    // A long sponsor name in a flex child that cannot shrink is the shape that
+    // put 106px of horizontal overflow on a phone once already. And the name is
+    // what the sponsor paid for, so it WRAPS — `truncate` would cut it off.
+    const h = renderHero({ sponsors: [TITLE] });
+    expect(h).toContain("flex-wrap");
+    expect(h).not.toContain("truncate");
+    // Every element between the root and the text, not just the root: a
+    // `min-w-0` that reaches only the outermost box does nothing.
+    expect(h.match(/min-w-0/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("marks the hero link as sponsored and opens it away from the competition", () => {
+    expect(renderHero({ sponsors: [TITLE] })).toMatch(
+      /<a href="\/s\/sp-title" target="_blank" rel="nofollow noopener sponsored"/,
+    );
+  });
+});
+
+describe("SponsorsBoard — the tiered board", () => {
+  it("draws the sized panels and the partner ticker, each in its own section", () => {
+    const h = render();
 
     const panels = h.slice(h.indexOf(`data-testid="mh-sponsors-panels"`), h.indexOf(`data-testid="mh-sponsors-partners"`));
     expect(panels).toContain("Halston Tyres");
@@ -84,6 +150,19 @@ describe("SponsorsBoard — the tiered board", () => {
     const partners = h.slice(h.indexOf(`data-testid="mh-sponsors-partners"`));
     expect(partners).toContain("Vale Physio");
     expect(partners).not.toContain("Halston Tyres");
+  });
+
+  it("leaves the TITLE sponsor to the hero — it is not on the board in any form", () => {
+    // The other half of the split, and the half a half-done move breaks: the
+    // board is handed the whole list and must ignore the title row rather than
+    // reproduce it as a panel, a ticker entry or a second "Presented by".
+    const h = render();
+    expect(h).not.toContain("Northbank Bank");
+    expect(h).not.toContain("Presented by");
+    expect(h).not.toContain(`data-testid="mh-sponsors-title"`);
+    // Positive pair: the rest of the list IS on the board, so this is the
+    // title row being excluded rather than the board failing to render.
+    expect(h).toContain("Halston Tyres");
   });
 
   it("keeps the flat strip off a tiered board entirely", () => {
@@ -99,25 +178,21 @@ describe("SponsorsBoard — the tiered board", () => {
     expect(onlyPartners).not.toContain(`data-testid="mh-sponsors-board"`);
     expect(onlyPartners).toContain(`data-testid="mh-sponsors-partners"`);
 
-    const onlyTitle = render({ sponsors: [TITLE] });
-    expect(onlyTitle).toContain(`data-testid="mh-sponsors-title"`);
-    expect(onlyTitle).not.toContain(`data-testid="mh-sponsors-panels"`);
-    expect(onlyTitle).not.toContain(`data-testid="mh-sponsors-partners"`);
-
     const onlyPanels = render({ sponsors: [GOLD] });
     expect(onlyPanels).toContain(`data-testid="mh-sponsors-panels"`);
-    expect(onlyPanels).not.toContain(`data-testid="mh-sponsors-title"`);
+    expect(onlyPanels).not.toContain(`data-testid="mh-sponsors-partners"`);
   });
 
-  // The divider between the title lockup and the panels below it only earns
-  // its place when there is something below.
-  it("rules off the title lockup only when panels follow it", () => {
-    expect(render({ sponsors: [TITLE, GOLD] })).toMatch(
-      /data-testid="mh-sponsors-title"[^>]*class="[^"]*border-b/,
-    );
-    expect(render({ sponsors: [TITLE] })).not.toMatch(
-      /data-testid="mh-sponsors-title"[^>]*class="[^"]*border-b/,
-    );
+  it("renders NOTHING — not an empty heading — when it has no tier of its own to draw", () => {
+    // This board owns an `<h2>`, so an empty one reads as content that failed
+    // to load. Returning null is what lets `page.tsx` mount it unconditionally
+    // instead of duplicating the "is there anything to show" question.
+    //
+    // A tiered org whose ONLY sponsor is the title one reaches exactly this
+    // state: the hero has the sponsor and the board has nobody.
+    expect(render({ sponsors: [TITLE] })).toBe("");
+    expect(render({ sponsors: [] })).toBe("");
+    expect(render({ sponsors: [], tiered: false })).toBe("");
   });
 });
 
@@ -142,31 +217,36 @@ describe("SponsorsBoard — the free strip", () => {
   });
 
   it("draws no display type at all on the flat strip", () => {
-    const flat = render({ sponsors: [TITLE], tiered: false });
-    expect(flat).not.toContain("text-3xl");
+    const flat = render({ sponsors: [GOLD], tiered: false });
+    expect(flat).not.toContain("font-display");
     // The tiered render of the same single sponsor is the differential half:
     // without it this only proves the string is absent from some markup.
-    expect(render({ sponsors: [TITLE] })).toContain("text-3xl");
+    expect(render({ sponsors: [GOLD] })).toContain("font-display");
   });
 
-  // The ONE place the per-sponsor tier lookup is still reachable when the org
-  // is not tiered — and the mutation sweep is how that was found. Dropping
-  // `tiered ?` from the panel lookup survived every other assertion in this
-  // file, because the three tiered SECTIONS are already empty by then, so the
-  // sizing table is only consulted from the logo. A free org with a
-  // title-tier row and a logo would have shown a 48px mark on a strip whose
-  // every other mark is 20px.
-  it("sizes a title-tier sponsor's logo like a partner's when the org is not tiered", () => {
+  // A title-tier row on a free org's strip must be the same size as every
+  // other chip — the mutation sweep found the earlier version of this, where
+  // dropping the `tiered ?` guard from the sizing lookup survived every other
+  // assertion in the file because the tiered SECTIONS were empty by then and
+  // the table was reached only from the logo. A free org would have shown an
+  // oversized mark on a strip whose every other mark is 20px.
+  //
+  // Since the split the differential half lives in the HERO rather than on the
+  // board, which is a sharper pair than the old one: the same sponsor row, the
+  // same logo, sized by which PLACEMENT drew it.
+  it("sizes a title-tier sponsor's logo like a partner's on a free org's strip", () => {
     const titleWithLogo = s({ name: "Northbank Bank", tier: "title", logo: "/uploads/nb.png" });
 
     const flat = render({ sponsors: [titleWithLogo], tiered: false });
     expect(flat).toContain("h-5 w-5");
-    expect(flat).not.toContain("h-12 w-12");
+    expect(flat).toContain("width=\"20\"");
+    expect(flat).not.toContain("h-10 w-10");
 
-    // Differential half — the same sponsor, tiered, gets the title size.
-    const board = render({ sponsors: [titleWithLogo] });
-    expect(board).toContain("h-12 w-12");
-    expect(board).not.toContain("h-5 w-5");
+    // Differential half — the same sponsor, tiered, gets the hero's size.
+    const hero = renderHero({ sponsors: [titleWithLogo] });
+    expect(hero).toContain("h-10 w-10");
+    expect(hero).toContain("width=\"40\"");
+    expect(hero).not.toContain("h-5 w-5");
   });
 });
 
@@ -208,9 +288,12 @@ describe("SponsorsBoard — links and logos", () => {
       "utf8",
     );
     expect(contract).toContain("components/public-site/sponsors-board.tsx");
-    // Not just the path — the helper the width/height pair is matched on, so a
-    // rename that silences the contract reds here too.
-    expect(contract).toContain("panel(s).logo");
+    // Not just the path — the parameter the width/height pair is matched on, so
+    // a rename that silences the contract reds here too. Both dimensions are
+    // the SAME identifier since the board and the hero were given one logo
+    // site, which is why they cannot drift apart.
+    expect(contract).toContain('width: "px"');
+    expect(contract).toContain('height: "px"');
     // …and not just the NAMES. Re-review N3: emptying the contract's two
     // width/height assertion bodies left both suites 24/24 green, because a
     // hollowed contract still mentions this file and still mentions the helper.
@@ -233,7 +316,9 @@ describe("SponsorsBoard — four locales", () => {
   for (const locale of ["en", "es", "fr", "nl"]) {
     it(`${locale}: the heading, the title sentence and the partner label all come from the dictionary`, () => {
       const dict = DICTS[locale] as Record<string, string>;
-      const h = render({ locale });
+      // Both placements, because the sentence and the two labels no longer live
+      // in one component and a per-component check would leave one untested.
+      const h = render({ locale }) + renderHero({ locale });
 
       expect(h).toContain(dict["landing.sponsors"]!);
       expect(h).toContain(dict["landing.partners"]!);

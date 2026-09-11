@@ -101,14 +101,13 @@ const dict = en as Dict;
 
 const render = (
   initial: CompetitionHubDocT,
-  over: { sponsorsSlot?: ReactNode; descriptionSlot?: ReactNode; shareSlot?: ReactNode } = {},
+  over: { descriptionSlot?: ReactNode; shareSlot?: ReactNode } = {},
 ) =>
   renderToStaticMarkup(
     <CompetitionLanding
       initial={initial}
       dict={dict}
       locale="en"
-      sponsorsSlot={over.sponsorsSlot}
       descriptionSlot={over.descriptionSlot}
       shareSlot={over.shareSlot}
     />,
@@ -246,15 +245,39 @@ describe("CompetitionLanding — first paint", () => {
   it("the slots reach the Overview panel, and the Info panel gets the share bar as well", () => {
     const slots = {
       descriptionSlot: <p>ABOUT THIS CUP</p>,
-      sponsorsSlot: <p>SPONSOR BOARD</p>,
       shareSlot: <p>SHARE BAR</p>,
     };
     const overview = render(docAll, slots);
     expect(overview).toContain("ABOUT THIS CUP");
-    expect(overview).toContain("SPONSOR BOARD");
     // The share bar belongs to Info — the Overview has no slot for it, and a
     // root that handed it to both would render it twice on one competition.
     expect(overview).not.toContain("SHARE BAR");
+  });
+
+  it("this root takes NO sponsor slot — the board is the page's, below every tab", () => {
+    // Owner ruling 2026-09-12 (Option B). A slot here put the board inside the
+    // Overview and Info panels, so sponsors vanished on the four tabs a
+    // spectator actually watches a game on. `page.tsx` renders it below this
+    // whole component now.
+    //
+    // Asserted on the PROPS the two panels are BUILT with, not only on the
+    // markup: a slot left declared here and never passed renders nothing and
+    // looks exactly like a markup-only assertion passing.
+    const args = {
+      doc: docAll,
+      dict,
+      locale: "en" as const,
+      now: Date.parse("2026-09-05T12:00:00.000Z"),
+      descriptionSlot: <p>ABOUT THIS CUP</p>,
+      shareSlot: <p>SHARE BAR</p>,
+    };
+    for (const id of ["overview", "info"] as const) {
+      const el = panelFor(id, args) as ReactElement;
+      expect(Object.keys(el.props as Record<string, unknown>), id).not.toContain("sponsorsSlot");
+    }
+    expect(render(docAll, { descriptionSlot: <p>ABOUT THIS CUP</p> })).not.toContain(
+      `data-testid="mh-sponsors"`,
+    );
   });
 });
 
@@ -351,7 +374,6 @@ describe("activeTab — which tab wins, and what happens when its data disappear
       dict,
       locale: "en" as const,
       now: Date.parse("2026-09-05T12:00:00.000Z"),
-      sponsorsSlot: <p>SPONSOR BOARD</p>,
       descriptionSlot: <p>ABOUT THIS CUP</p>,
       shareSlot: <p>SHARE BAR</p>,
     };
@@ -359,12 +381,12 @@ describe("activeTab — which tab wins, and what happens when its data disappear
     // a switch and not a uniform `TAB_PANELS` table — and pinning them here is
     // what makes the difference a contract rather than an accident.
     const expected = [
-      ["overview", OverviewTab, ["doc", "dict", "locale", "now", "sponsorsSlot", "descriptionSlot"]],
+      ["overview", OverviewTab, ["doc", "dict", "locale", "now", "descriptionSlot"]],
       ["matches", MatchesTab, ["doc", "dict", "locale", "now"]],
       ["table", TableTab, ["doc", "dict"]],
       ["stats", StatsTab, ["doc", "dict"]],
       ["teams", TeamsTab, ["doc", "dict"]],
-      ["info", InfoTab, ["doc", "dict", "locale", "descriptionSlot", "shareSlot", "sponsorsSlot"]],
+      ["info", InfoTab, ["doc", "dict", "locale", "descriptionSlot", "shareSlot"]],
     ] as const;
     for (const [id, Component, props] of expected) {
       const el = panelFor(id, args);

@@ -696,7 +696,6 @@ describe("InfoTab", () => {
   type Slots = Partial<{
     descriptionSlot: ReactNode;
     shareSlot: ReactNode;
-    sponsorsSlot: ReactNode;
   }>;
   const render = (d: CompetitionHubDocT = infoDoc, slots: Slots = {}) =>
     renderToStaticMarkup(<InfoTab doc={d} dict={dict} locale="en" {...slots} />);
@@ -967,16 +966,14 @@ describe("InfoTab", () => {
     expect(h).toContain(">Present<");
   });
 
-  it("the three SLOTS render when given and take their chrome with them when not (positive and negative pairs)", () => {
-    // The page owns the description prose, the share bar and the sponsor board
-    // — each is an async server component or a client island with its own
-    // data — so this tab positions them and renders nothing of its own around
-    // an absent one. A heading with no content under it is the shape review
-    // taught us to refuse.
+  it("both SLOTS render when given and take their chrome with them when not (positive and negative pairs)", () => {
+    // The page owns the description prose and the share bar — one an async
+    // server component, one a client island — so this tab positions them and
+    // renders nothing of its own around an absent one. A heading with no
+    // content under it is the shape review taught us to refuse.
     const withSlots = render(infoDoc, {
       descriptionSlot: <p data-testid="probe-description">Prose</p>,
       shareSlot: <p data-testid="probe-share">Bar</p>,
-      sponsorsSlot: <p data-testid="probe-sponsors">Board</p>,
     });
     expect(withSlots).toContain(`data-testid="mh-info-description"`);
     expect(withSlots).toContain(`data-testid="probe-description"`);
@@ -985,14 +982,11 @@ describe("InfoTab", () => {
     // The share row's own heading, and its level — same rank rule as the
     // calendar heading above (review F10).
     expect(withSlots).toMatch(/<h2[^>]*>Share this competition<\/h2>/);
-    expect(withSlots).toContain(`data-testid="mh-info-sponsors"`);
-    expect(withSlots).toContain(`data-testid="probe-sponsors"`);
 
     const bare = render();
     expect(bare).not.toContain(`data-testid="mh-info-description"`);
     expect(bare).not.toContain(`data-testid="mh-info-share"`);
     expect(bare).not.toContain("Share this competition");
-    expect(bare).not.toContain(`data-testid="mh-info-sponsors"`);
     // …and the rows the document itself owns are still there, so "no slots"
     // is not "no tab".
     expect(bare).toContain(`data-testid="mh-info-dates"`);
@@ -1003,7 +997,6 @@ describe("InfoTab", () => {
     const h = render(infoDoc, {
       descriptionSlot: <p data-testid="probe-description">Prose</p>,
       shareSlot: <p data-testid="probe-share">Bar</p>,
-      sponsorsSlot: <p data-testid="probe-sponsors">Board</p>,
     });
     const order = [
       "mh-info-description",
@@ -1013,12 +1006,23 @@ describe("InfoTab", () => {
       "mh-info-calendars",
       "mh-info-share",
       "mh-info-present",
-      "mh-info-sponsors",
     ].map((id) => h.indexOf(`data-testid="${id}"`));
     // Presence FIRST: a missing row is `-1`, which sorts to the front, and the
     // first row of this list is the one that would sort there anyway.
     expect(order.every((i) => i > -1)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("there is NO sponsor row on this tab — the board is the PAGE's, below every tab", () => {
+    // Owner ruling 2026-09-12 (Option B). The board used to be a slot here and
+    // on the Overview, which meant a competition's sponsors vanished the moment
+    // a spectator tapped Matches, Table, Stats or Teams — most of the surface.
+    // `page.tsx` renders it below the whole tab panel now.
+    expect(render()).not.toContain(`data-testid="mh-info-sponsors"`);
+    // The PROP being gone rather than merely unpassed is `tsc`'s to enforce —
+    // `InfoTabProps` no longer declares it, so a caller that passes one is a
+    // compile error. There is no runtime witness for an absent prop, and a
+    // reflective one over an empty object would pass whatever the type said.
   });
 
   it("the root carries min-w-0, and every link on the tab is a 44px tap target", () => {

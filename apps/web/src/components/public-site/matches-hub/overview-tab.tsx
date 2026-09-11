@@ -21,7 +21,7 @@
 // 768 (`md`): still one column; the grids inside it widen — next-up 3-up,
 //   table previews 2-up.
 // 1024 (`lg`): the column splits into a main column (status, live rail, next
-//   up, description) and a side rail (table previews, register CTA, sponsors).
+//   up, description) and a side rail (table previews, register CTA).
 //   The ladder still picks what leads the main column.
 //
 // The split is `display: contents` plus explicit CSS `order`, and it is one
@@ -65,8 +65,8 @@ export interface OverviewTabProps {
    *  "Starts in 2 hours" is stable across a server render and its hydration. */
   now: number;
   /**
-   * The org's sponsor board. An async server component (`resolveSponsors` plus
-   * a `sponsors.tiers` entitlement read), so it cannot be built here.
+   * The competition's own prose — HTML from the database, sanitised on the
+   * server. This tab only decides where it sits.
    *
    * ⚠️ CALLER CONTRACT — PASS `undefined`, NEVER AN ELEMENT THAT MAY RENDER
    * NOTHING. This tab keys the section on whether the slot was GIVEN, because
@@ -77,18 +77,16 @@ export interface OverviewTabProps {
    * composition exists to forbid, and on a `dates` document it would be the
    * only section on the tab.
    *
-   * The page being replaced already gets this right and is the precedent to
-   * copy: `app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:352`
-   * renders its board only when `sponsors.length > 0`. `InfoTab` has the
-   * identical shape (`info-tab.tsx:204,286`), so this is ONE contract for both,
-   * not two — and `overview-tab.test.tsx` characterises it, so a caller that
-   * breaks it is at least breaking a documented rule rather than a silent one.
+   * `page.tsx` gets this right: it passes the prose only when there is prose to
+   * pass, and `overview-tab.test.tsx` characterises the contract, so a caller
+   * that breaks it is at least breaking a documented rule rather than a silent
+   * one.
+   *
+   * There is NO `sponsorsSlot` here any more. The sponsor board is rendered by
+   * `page.tsx` below the whole tab panel, so it is present on every tab rather
+   * than only on this one and Info (owner ruling 2026-09-12 — the reasoning is
+   * in `sponsors-board.tsx`'s header).
    */
-  sponsorsSlot?: ReactNode;
-  /** The competition's own prose — HTML from the database, sanitised on the
-   *  server. This tab only decides where it sits. Same caller contract as
-   *  `sponsorsSlot`: `undefined` when there is no prose, never an element that
-   *  renders nothing. */
   descriptionSlot?: ReactNode;
   // NO `onOpenTab`. The brief declares one and then, in its own Step 3, argues
   // itself out of the only use it had: the table preview's "Full division" link
@@ -102,16 +100,10 @@ export interface OverviewTabProps {
 
 // ------------------------------------------------------------- the sections
 
-/** Everything this tab can show below the status line. Six ids, and the ladder
+/** Everything this tab can show below the status line. Five ids, and the ladder
  *  in `overviewPlan` is the only thing that decides which of them appear and in
  *  what order. */
-export type OverviewSection =
-  | "live"
-  | "next"
-  | "tables"
-  | "register"
-  | "description"
-  | "sponsors";
+export type OverviewSection = "live" | "next" | "tables" | "register" | "description";
 
 /** Which column a section belongs to from `lg` up. The status line is not in
  *  here: it is always first in the main column, and that is not a ladder
@@ -122,12 +114,12 @@ const MAIN_COLUMN: ReadonlySet<OverviewSection> = new Set<OverviewSection>([
   "description",
 ]);
 
-/** `order-1` … `order-6`, written as LITERALS so Tailwind's scanner sees all
- *  six — an `order-${n}` template is invisible to it and the classes would
- *  simply not exist in the stylesheet. Six is the whole domain
- *  (`OverviewSection` has six members), so an index can never fall off the end.
- *  Same trick `standings-table-view.tsx`'s `COLUMN_SIZES` uses. */
-const ORDER_CLASS = ["order-1", "order-2", "order-3", "order-4", "order-5", "order-6"] as const;
+/** `order-1` … `order-5`, written as LITERALS so Tailwind's scanner sees all
+ *  five — an `order-${n}` template is invisible to it and the classes would
+ *  simply not exist in the stylesheet. Five is the whole domain
+ *  (`OverviewSection` has five members), so an index can never fall off the
+ *  end. Same trick `standings-table-view.tsx`'s `COLUMN_SIZES` uses. */
+const ORDER_CLASS = ["order-1", "order-2", "order-3", "order-4", "order-5"] as const;
 
 // The ladders themselves. Named constants rather than inline arrays because
 // three of the six rungs share one, and sharing it is the POINT: `next` and
@@ -154,25 +146,21 @@ const LIVE_ORDER = [
   "tables",
   "register",
   "description",
-  "sponsors",
 ] as const satisfies readonly OverviewSection[];
 const NEXT_ORDER = [
   "next",
   "tables",
   "register",
   "description",
-  "sponsors",
 ] as const satisfies readonly OverviewSection[];
 const FINISHED_ORDER = [
   "tables",
   "register",
   "description",
-  "sponsors",
 ] as const satisfies readonly OverviewSection[];
 const PRESEASON_ORDER = [
   "register",
   "description",
-  "sponsors",
 ] as const satisfies readonly OverviewSection[];
 
 /**
@@ -470,7 +458,6 @@ export function OverviewTab({
   dict,
   locale,
   now,
-  sponsorsSlot,
   descriptionSlot,
 }: OverviewTabProps) {
   const status = landingStatus({
@@ -697,7 +684,6 @@ export function OverviewTab({
     // follows it: a heading over an absent block reads as content that failed
     // to load rather than content that does not exist.
     description: descriptionSlot ?? null,
-    sponsors: sponsorsSlot ?? null,
   };
 
   // The ladder's order, minus the sections with nothing in it. Numbered over

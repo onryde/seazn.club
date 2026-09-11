@@ -153,6 +153,7 @@ const doc = (over: { locale?: string } = {}): CompetitionHubDocT =>
 
 const TITLE_SPONSOR = { id: "sp1", name: "Northbank Bank", url: "https://nb.example", logo: null, tier: "title" as const };
 const PARTNER_SPONSOR = { id: "sp2", name: "Vale Physio", url: null, logo: null, tier: "partner" as const };
+const GOLD_SPONSOR = { id: "sp3", name: "Harbour Motors", url: null, logo: null, tier: "gold" as const };
 
 const render = async (): Promise<string> =>
   renderToStaticMarkup(
@@ -307,12 +308,15 @@ describe("the competition page mounts the landing", () => {
     expect(props.initial).toBe(hub);
     expect(props.locale).toBe("en");
     expect((props.dict as Record<string, string>)["landing.present"]).toBe(en["landing.present"]);
-    // All three slots, each a real element — `shareSlot` in particular, whose
-    // only consumer is the Info panel.
-    for (const slot of ["sponsorsSlot", "descriptionSlot", "shareSlot"]) {
+    // Both slots, each a real element — `shareSlot` in particular, whose only
+    // consumer is the Info panel. There is no sponsor slot: the board is
+    // rendered BELOW this mount (see its own test), so it reaches every tab
+    // rather than only the two that had a slot for it.
+    for (const slot of ["descriptionSlot", "shareSlot"]) {
       expect(isValidElement(props[slot]), slot).toBe(true);
     }
     expect((props.shareSlot as ReactElement).type).toBe(ShareBar);
+    expect(Object.keys(props)).not.toContain("sponsorsSlot");
   });
 
   // Both hrefs come off the document rather than being rebuilt from the slugs,
@@ -347,20 +351,16 @@ describe("the competition page mounts the landing", () => {
     expect(h).toContain(`data-testid="mh-hero-present"`);
   });
 
-  it("passes the sponsor board and the competition's prose down as slots, and omits them when there is nothing to show", async () => {
-    stub.hasFeature.mockResolvedValue(true);
-    stub.resolveSponsors.mockResolvedValue([TITLE_SPONSOR, PARTNER_SPONSOR]);
+  it("passes the competition's prose down as a slot, and omits it when there is nothing to show", async () => {
     stub.getPublicCompetition.mockResolvedValue(shell({ description: "Since 1894." }));
 
-    const withBoth = await render();
-    expect(withBoth).toContain(`data-testid="mh-sponsors"`);
-    expect(withBoth).toContain("<p>Since 1894.</p>");
+    const withProse = await render();
+    expect(withProse).toContain("<p>Since 1894.</p>");
     expect(stub.renderProse).toHaveBeenCalledWith("Since 1894.");
-    // The Overview's own chrome around each slot.
-    expect(withBoth).toContain(`data-testid="mh-sec-description"`);
-    expect(withBoth).toContain(`data-testid="mh-sec-sponsors"`);
+    // The Overview's own chrome around the slot.
+    expect(withProse).toContain(`data-testid="mh-sec-description"`);
 
-    // The caller contract both tabs state: `undefined`, never an element that
+    // The caller contract the tab states: `undefined`, never an element that
     // renders nothing — a heading over an absent block reads as content that
     // failed to load.
     vi.clearAllMocks();
@@ -368,8 +368,7 @@ describe("the competition page mounts the landing", () => {
     stub.getPublicCompetitionHub.mockResolvedValue(doc());
     stub.resolveSponsors.mockResolvedValue([]);
     stub.hasFeature.mockResolvedValue(false);
-    const withNeither = await render();
-    expect(withNeither).not.toContain(`data-testid="mh-sponsors"`);
+    const without = await render();
     expect(stub.renderProse).not.toHaveBeenCalled();
     // The CHROME, not just the content. `CompetitionProse` returns null for
     // empty html, so a page that passed an element unconditionally would look
@@ -377,8 +376,90 @@ describe("the competition page mounts the landing", () => {
     // nothing in it — which is exactly the "content that failed to load" the
     // slot contract exists to prevent. A mutation sweep found this: asserting
     // only `renderProse` was not called left it alive.
-    expect(withNeither).not.toContain(`data-testid="mh-sec-description"`);
-    expect(withNeither).not.toContain(`data-testid="mh-sec-sponsors"`);
+    expect(without).not.toContain(`data-testid="mh-sec-description"`);
+  });
+
+  // ── SPONSOR PLACEMENT (owner ruling 2026-09-12, Option B) ────────────────
+  // The regression this closes: W2 Task 12 handed the board to
+  // `CompetitionLanding` as a slot, and the landing put it inside the Overview
+  // and Info panels. A competition's sponsors therefore disappeared the moment
+  // a spectator tapped Matches, Table, Stats or Teams — most of the surface,
+  // and all of the surface a game is actually watched on.
+  it("renders the perimeter board BELOW the whole tab panel, not inside a tab", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([GOLD_SPONSOR, PARTNER_SPONSOR]);
+
+    const h = await render();
+    expect(h).toContain(`data-testid="mh-sponsors"`);
+    // Position, not just presence: the board is AFTER the tab panel's root, so
+    // it is outside it and therefore on every tab. A board inside the Overview
+    // panel would satisfy a bare `toContain` and be exactly the regression.
+    const board = h.indexOf(`data-testid="mh-sponsors"`);
+    const panel = h.indexOf(`data-testid="mh-root"`);
+    expect(panel, "the landing root is in the markup").toBeGreaterThan(-1);
+    expect(board).toBeGreaterThan(panel);
+    // And it is not ALSO in a tab — the old slot rendered it in two panels'
+    // worth of chrome, so the count is the assertion that catches a half-move.
+    expect(h.match(/data-testid="mh-sponsors"/g)?.length).toBe(1);
+    expect(h).not.toContain(`data-testid="mh-sec-sponsors"`);
+    expect(h).not.toContain(`data-testid="mh-info-sponsors"`);
+  });
+
+  it("puts the TITLE sponsor in the hero and leaves the rest on the board", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([TITLE_SPONSOR, GOLD_SPONSOR]);
+
+    const h = await render();
+    // The hero lockup carries the whole "Presented by {sponsor}" sentence —
+    // `landing.presentedBy` is a sentence in all four locales, so it is never
+    // split into a label and a name.
+    const hero = h.slice(h.indexOf(`data-testid="mh-hero"`), h.indexOf(`data-testid="mh-root"`));
+    expect(hero).toContain(`data-testid="mh-hero-sponsor"`);
+    expect(hero).toContain("Northbank Bank");
+    // Gold stays on the board and is NOT in the hero; the title sponsor is not
+    // repeated on the board. Each assertion is the other's negative pair — one
+    // alone passes on a page that renders both sponsors in both places.
+    expect(hero).not.toContain("Harbour Motors");
+    const board = h.slice(h.indexOf(`data-testid="mh-sponsors"`));
+    expect(board).toContain("Harbour Motors");
+    expect(board).not.toContain("Northbank Bank");
+  });
+
+  it("a free org gets no hero lockup even when a row still carries a title tier", async () => {
+    // Bought, then downgraded. Without `sponsors.tiers` there is no title tier
+    // to sell, so the row falls back to the modest flat strip rather than
+    // keeping a paid placement the org is no longer paying for.
+    stub.hasFeature.mockResolvedValue(false);
+    stub.resolveSponsors.mockResolvedValue([TITLE_SPONSOR]);
+
+    const h = await render();
+    expect(h).not.toContain(`data-testid="mh-hero-sponsor"`);
+    expect(h).toContain(`data-testid="mh-sponsors-flat"`);
+    expect(h).toContain("Northbank Bank");
+  });
+
+  it("draws no board at all when the only sponsor is the title one, which is in the hero", async () => {
+    // The board owns a heading, so an empty one reads as content that failed to
+    // load. It returns null instead — which is why the page may mount it
+    // unconditionally.
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([TITLE_SPONSOR]);
+
+    const h = await render();
+    expect(h).toContain(`data-testid="mh-hero-sponsor"`);
+    expect(h).not.toContain(`data-testid="mh-sponsors"`);
+  });
+
+  it("draws nothing when the org has no sponsors", async () => {
+    stub.hasFeature.mockResolvedValue(false);
+    stub.resolveSponsors.mockResolvedValue([]);
+
+    const h = await render();
+    expect(h).not.toContain(`data-testid="mh-sponsors"`);
+    expect(h).not.toContain(`data-testid="mh-hero-sponsor"`);
+    // Positive pair: the hero is still there, so this is the board being
+    // absent rather than the page failing to render.
+    expect(h).toContain(`data-testid="mh-hero"`);
   });
 
   it("reads the sponsor tier entitlement for this competition and hands the answer to the board", async () => {
@@ -393,7 +474,10 @@ describe("the competition page mounts the landing", () => {
     stub.getPublicCompetition.mockResolvedValue(shell());
     stub.getPublicCompetitionHub.mockResolvedValue(doc());
     stub.hasFeature.mockResolvedValue(true);
-    stub.resolveSponsors.mockResolvedValue([TITLE_SPONSOR]);
+    // A GOLD row, deliberately: the title tier is drawn in the hero now, so a
+    // title-only fixture would prove the entitlement reached the board by way
+    // of a board that does not render.
+    stub.resolveSponsors.mockResolvedValue([GOLD_SPONSOR]);
     const tiered = await render();
     expect(stub.resolveSponsors).toHaveBeenCalledWith("o1", "c1", { tiered: true });
     expect(tiered).toContain(`data-testid="mh-sponsors-board"`);
