@@ -832,6 +832,19 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
     expect(report2.gate).toBe("skipped");
     expect(report2.gate).not.toBe("green");
     expect((report2.warnings ?? []).join(" | ")).toContain("--keep reused existing seed");
+    // B07a T3 fix round 1 — the short circuit reports the pack's §7A
+    // adaptations too. This matters more than the main return does: `--keep`
+    // is the DEFAULT (`bench.ts`'s `keep: !values.wipe`), so the ORDINARY
+    // repeat run lands here, and omitting the field would render the "never
+    // measured" state over a pack that was loaded and hashed to get this far.
+    // Derived from the pack, never typed in, so editing `_tiny`'s meta moves
+    // this assertion with it.
+    const declaredOnReuse = tinyPack().meta.adaptations;
+    expect(declaredOnReuse.length, "fixture guard: _tiny must declare adaptations").toBeGreaterThan(0);
+    expect(report2.adaptations ?? []).toHaveLength(declaredOnReuse.length);
+    for (const a of declaredOnReuse) {
+      expect((report2.adaptations ?? []).join(" | ")).toContain(a.what);
+    }
     // The load-bearing assertion: still exactly ONE competition ever created.
     expect(competitionPosts(server.calls)).toHaveLength(1);
     expect(server.competitions).toHaveLength(1);
@@ -900,6 +913,14 @@ describe("runTinySuite — --keep idempotence (T4)", () => {
     expect(refusal).toContain("--keep cannot reuse competition");
     expect(refusal).toContain("bench-tiny-series");
     expect(refusal).toContain("--wipe");
+    // B07a T3 fix round 1 — the refusal return carries them as well. The pack
+    // LOADED here; it is precisely the CHANGED pack that caused the refusal,
+    // so "this run never measured its adaptations" would be false. Derived
+    // from the EDITED pack this run actually read, not from `_tiny` on disk.
+    const declaredOnStale = packB.pack.meta.adaptations;
+    expect(declaredOnStale.length, "fixture guard: the edited pack must declare adaptations").toBeGreaterThan(0);
+    expect(report2.adaptations ?? []).toHaveLength(declaredOnStale.length);
+    expect((report2.adaptations ?? []).join(" | ")).toContain(declaredOnStale[0]!.what);
     // The load-bearing assertions: the FIRST run seeded, the second created
     // nothing at all — no second POST, so no 409 to explain.
     expect(competitionPosts(server.calls)).toHaveLength(1);

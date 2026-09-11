@@ -116,6 +116,7 @@ import { hashPack } from "../pack-hash.ts";
 import {
   fixtureKey,
   type Pack,
+  type PackAdaptation,
   type PackDivision,
   type PackExpectedMatch,
   type PackClaim,
@@ -1516,6 +1517,26 @@ function specialStandingsDelta(
   }
 }
 
+/**
+ * B07a T3 — one `PackAdaptation` as the single line of prose the report
+ * carries for it.
+ *
+ * Exported, and a named function rather than an inline lambda at its three
+ * call sites, because the `where` branch otherwise has NO witness anywhere:
+ * `where` is optional in the schema, and neither `_tiny` (15 rows) nor
+ * `suite11` (13) declares a row without one — so deleting the guard would
+ * render a literal `[undefined]` into every report and no pack in the tree
+ * would notice. Its test drives both sides directly.
+ *
+ * BOTH required fields, never just `what`: `PackAdaptation` splits
+ * what-was-reshaped from why precisely because "what" with no "why" is the
+ * unreviewable list those two required fields exist to forbid, and a report
+ * carrying half of each row would rebuild exactly that.
+ */
+export function formatAdaptation(a: PackAdaptation): string {
+  return `${a.what} — WHY: ${a.why}${a.where === undefined ? "" : ` [${a.where}]`}`;
+}
+
 export async function runPackSuite(
   input: PackSuiteInput,
   opts: RunPackSuiteOptions,
@@ -1632,6 +1653,11 @@ export async function runPackSuite(
         timings: { seedMs: Math.round(performance.now() - seedStart) },
         keep,
         solver: { requestedEngine: engine },
+        // B07a T3 — the pack LOADED here (it is precisely the CHANGED pack
+        // that caused this refusal), so its §7A list is known and is a fact
+        // about this run like any other. Omitting it would render the
+        // "never measured" state over a pack sitting in memory.
+        adaptations: pack.meta.adaptations.map(formatAdaptation),
         errors: [message],
         ...(warnings.length > 0 ? { warnings } : {}),
       };
@@ -1665,6 +1691,12 @@ export async function runPackSuite(
         timings,
         keep,
         solver: { requestedEngine: engine },
+        // B07a T3 — and this is the one that matters most: `--keep` is the
+        // DEFAULT (`bench.ts`'s `keep: !values.wipe`), so a repeat run lands
+        // HERE, not on the main return. The pack was loaded and hashed to
+        // get this far; reporting "never measured" while its adaptations sit
+        // in memory is the silence this field exists to break.
+        adaptations: pack.meta.adaptations.map(formatAdaptation),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
     }
@@ -4864,19 +4896,14 @@ export async function runPackSuite(
     // saying what was RESHAPED to get there — the other half of the same
     // honesty claim, and the half a thin-data pack leans on hardest.
     //
-    // BOTH of `PackAdaptation`'s required fields, never just `what`: the
-    // schema splits what-was-reshaped from why precisely because "what" with
-    // no "why" is the shape that turns into an unreviewable list, and a
-    // report carrying half of each row would rebuild exactly that. `where` is
-    // optional in the pack and is appended only where the pack declared it.
-    //
-    // Written on EVERY run that got a pack — empty included. A run that
-    // loaded a pack has measured this, and `[]` is that pack saying it
-    // reshaped nothing; the field stays absent only on the stage-0 refusal
-    // above, which never read a pack at all.
-    adaptations: pack.meta.adaptations.map(
-      (a) => `${a.what} — WHY: ${a.why}${a.where === undefined ? "" : ` [${a.where}]`}`,
-    ),
+    // Written on EVERY return that got a pack, empty list included: a run
+    // that loaded a pack HAS measured this, and `[]` is that pack saying it
+    // reshaped nothing. The two `--keep` short circuits above carry it for
+    // the same reason — `--keep` is the DEFAULT (`bench.ts`'s
+    // `keep: !values.wipe`), so those, not this one, are the ordinary
+    // re-run shape. The field is absent on exactly one return in this
+    // function: the stage-0 refusal, which gives up before a pack exists.
+    adaptations: pack.meta.adaptations.map(formatAdaptation),
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),

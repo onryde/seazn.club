@@ -12,7 +12,7 @@
 // the two places the key is written: the log line and the returned report.
 import { describe, expect, it } from "vitest";
 import pino from "pino";
-import { runPackSuite } from "../run-suite.ts";
+import { formatAdaptation, runPackSuite } from "../run-suite.ts";
 import { TINY_PACK_PATH } from "../tiny.ts";
 
 const silent = pino({ level: "silent" });
@@ -47,6 +47,38 @@ describe("runPackSuite is suite-agnostic", () => {
     });
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).join(" ")).toMatch(/pack:/);
+  });
+
+  it("formats an adaptation with what, why AND its where locator", () => {
+    // B07a T3 fix round 1. Both required fields and the optional locator, in
+    // one asserted string rather than three `toContain`s — a swapped pair or
+    // a dropped separator lands on a wrong whole line, which is the point.
+    expect(
+      formatAdaptation({
+        what: "team and doubles events dropped",
+        why: "the product models no team tie",
+        where: "divisions[1].stages[0]",
+      }),
+    ).toBe(
+      "team and doubles events dropped — WHY: the product models no team tie [divisions[1].stages[0]]",
+    );
+  });
+
+  it("omits the bracket entirely for an adaptation that declares no where", () => {
+    // The branch this test exists for. `where` is OPTIONAL in the schema, and
+    // NEITHER shipped pack leaves it out — `_tiny` declares it on all 15 rows
+    // and `suite11` on all 13 — so no pack in the tree witnesses this side.
+    // Delete the `=== undefined` guard and every report silently grows a
+    // literal "[undefined]"; nothing else in the suite would notice.
+    const line = formatAdaptation({
+      what: "no leaderboards for three-dart average",
+      why: "not representable by the generic module at any fidelity tier",
+    });
+    expect(line).toBe(
+      "no leaderboards for three-dart average — WHY: not representable by the generic module at any fidelity tier",
+    );
+    expect(line).not.toContain("[");
+    expect(line).not.toContain("undefined");
   });
 
   it("an explicit input packPath still wins over the definition's", async () => {
