@@ -1487,7 +1487,7 @@ describe("PackSchema — pre-freeze reservations (venues, officials, claim invit
           assignments: [{ divisionRef: "d-main", fixtureExtKey: "rr-r1-c1", roleKey: "referee" }],
         },
       ];
-      p.claimInvites = [{ person: "p-ana", email: "ana@example.com" }];
+      p.claimInvites = [{ person: "p-ana", email: "delivered+ana@resend.dev" }];
       const divisions = p.divisions as Record<string, unknown>[];
       (divisions[0] as Record<string, unknown>).scheduleConfig = {
         matchMinutes: 30,
@@ -1503,7 +1503,7 @@ describe("PackSchema — pre-freeze reservations (venues, officials, claim invit
     expect(p.venues?.[0]?.courts.map((c) => c.ref)).toEqual(["c-1", "c-2"]);
     expect(p.venues?.[0]?.courts[1]?.tags).toEqual([]);
     expect(p.officials?.[0]?.roleKeys).toEqual(["referee", "umpire"]);
-    expect(p.claimInvites?.[0]?.email).toBe("ana@example.com");
+    expect(p.claimInvites?.[0]?.email).toBe("delivered+ana@resend.dev");
   });
 
   it("court refs are unique across ALL venues, because scheduleConfig names them unqualified", () => {
@@ -1590,14 +1590,14 @@ describe("PackSchema — pre-freeze reservations (venues, officials, claim invit
     );
     expectIssue(
       withReservations((p) => {
-        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-ana", email: "other@example.com" });
+        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-ana", email: "delivered+other@resend.dev" });
       }),
       ["claimInvites", 1, "person"],
       /already has a claim invite/i,
     );
     expectIssue(
       withReservations((p) => {
-        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-bo", email: "ANA@example.com" });
+        (p.claimInvites as Record<string, unknown>[]).push({ person: "p-bo", email: "delivered+ANA@resend.dev" });
       }),
       ["claimInvites", 1, "email"],
       /invited twice/i,

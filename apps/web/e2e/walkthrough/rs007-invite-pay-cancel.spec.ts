@@ -130,7 +130,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
   let connect: ConnectClaim | null = null;
 
   const CAPTAIN_NAME = `Test Captain ${TAG}`;
-  const CAPTAIN_EMAIL = `captain-${TAG}@example.com`;
+  const CAPTAIN_EMAIL = `delivered+captain-${TAG}@resend.dev`;
   // A survives (first added -> gets the ONE capacity slot -> pays).
   // B is waitlisted at submit (second added -> capacity already taken),
   // then promoted by the organiser WITHOUT ever paying -> the uncharged
@@ -361,7 +361,7 @@ test("RS007 witness — cancelling one of two cart entries drops the subtotal to
 
     await anon.getByRole("radio", { name: MATES_A[0]! }).check();
     await anon.locator("#reg-who-name").fill(MATES_A[0]!);
-    await anon.locator("#reg-who-email").fill(`mate-${TAG}@example.com`);
+    await anon.locator("#reg-who-email").fill(`delivered+mate-${TAG}@resend.dev`);
     await anon.locator("#reg-consent-privacy").check();
     await anon.getByRole("button", { name: /confirm my spot/i }).click();
     await expect(

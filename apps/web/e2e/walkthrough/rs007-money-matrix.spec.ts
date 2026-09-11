@@ -393,7 +393,7 @@ test("S1 singles — an individual entrant who cancels inside the refund window 
       compSlug: comp.slug,
       entrantKind: "individual",
       captainName: NAME,
-      captainEmail: `solo-${TAG}@example.com`,
+      captainEmail: `delivered+solo-${TAG}@resend.dev`,
       shotPrefix: "s1",
     });
     const { anon, rid, token } = entry;
@@ -491,7 +491,7 @@ test("S2 doubles — a partner joins by invite link, then the organiser raises t
       entrantKind: "pair",
       entryName: PARTNER,
       captainName: CAPTAIN,
-      captainEmail: `paircap-${TAG}@example.com`,
+      captainEmail: `delivered+paircap-${TAG}@resend.dev`,
       // Both halves, by name: the pair's roster rows are empty at the details
       // step regardless of what was typed on the entries step (#17), and the
       // partner must be individually pickable on the join page for the invite
@@ -526,7 +526,7 @@ test("S2 doubles — a partner joins by invite link, then the organiser raises t
 
     await anon.getByRole("radio", { name: PARTNER }).check();
     await anon.locator("#reg-who-name").fill(PARTNER);
-    await anon.locator("#reg-who-email").fill(`partner-${TAG}@example.com`);
+    await anon.locator("#reg-who-email").fill(`delivered+partner-${TAG}@resend.dev`);
     await anon.locator("#reg-consent-privacy").check();
     await anon.getByRole("button", { name: /confirm my spot/i }).click();
     await expect(
@@ -667,7 +667,7 @@ test("S3 organiser cancellation — a team withdrawn from the hub is refunded, a
       entrantKind: "team",
       entryName: TEAM,
       captainName: CAPTAIN,
-      captainEmail: `teamcap-${TAG}@example.com`,
+      captainEmail: `delivered+teamcap-${TAG}@resend.dev`,
       mates: [`Rowan Vale ${TAG}`],
       shotPrefix: "s3",
     });
@@ -778,7 +778,7 @@ test("S4 refund lock — cancelling after the lock refunds nothing automatically
       compSlug: comp.slug,
       entrantKind: "individual",
       captainName: NAME,
-      captainEmail: `late-${TAG}@example.com`,
+      captainEmail: `delivered+late-${TAG}@resend.dev`,
       shotPrefix: "s4",
     });
     const { anon, rid, token } = entry;
@@ -935,7 +935,7 @@ test("S5 manual approval — a vetted entry that pays and then cancels past the 
       compSlug: comp.slug,
       entrantKind: "individual",
       captainName: NAME,
-      captainEmail: `vetted-${TAG}@example.com`,
+      captainEmail: `delivered+vetted-${TAG}@resend.dev`,
       shotPrefix: "s5",
     });
     const { anon, rid, token } = entry;

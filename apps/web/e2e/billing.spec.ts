@@ -97,7 +97,7 @@ test.describe.serial("billing", () => {
     // usually only asks for an email before "Start trial". Fill what's shown.
     const email = frame.getByLabel(/email/i).first();
     if (await email.isVisible({ timeout: 15_000 }).catch(() => false)) {
-      await email.fill(`e2e-checkout-${TAG}@example.com`);
+      await email.fill(`delivered+e2e-checkout-${TAG}@resend.dev`);
     }
     const card = frame.getByPlaceholder(/1234 1234/).first();
     if (await card.isVisible({ timeout: 2_000 }).catch(() => false)) {

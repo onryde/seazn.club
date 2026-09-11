@@ -9,7 +9,7 @@ import { TAG, apiJson, activeOrg, loginUi } from "./helpers";
 // Serial: creates a player user (magic-link budget) and leans on the shared
 // Pro org.
 
-const playerEmail = `e2e-player-${TAG}@example.com`;
+const playerEmail = `delivered+e2e-player-${TAG}@resend.dev`;
 
 interface Person {
   id: string;
@@ -199,7 +199,7 @@ test.describe("player accounts (PROMPT-53)", () => {
   }) => {
     // Re-inviting a claimed person is a clean 409.
     const again = await apiJson(request, `/api/v1/persons/${ada.id}/claim-invites`, "POST", {
-      email: "someone-else@example.com",
+      email: "delivered+someone-else@resend.dev",
     });
     expect(again.status).toBe(409);
     expect(again.error?.message).toContain("already claimed");

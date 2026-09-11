@@ -307,7 +307,7 @@ test("team tab: an email invite is really accepted, the new member's role change
   const API_READS = 10;
   test.setTimeout(Math.max(60_000, 15_000 + NAVIGATIONS * 6_000 + API_READS * 1_500));
 
-  const memberEmail = `e2e-w2-member-${TAG}-${Math.random().toString(36).slice(2, 6)}@example.com`;
+  const memberEmail = `delivered+e2e-w2-member-${TAG}-${Math.random().toString(36).slice(2, 6)}@resend.dev`;
   const invitesUrl = `/api/orgs/${org.orgId}/invites`;
   const readInvites = async () =>
     (await apiJson<InviteRow[]>(page.request, invitesUrl)).data ?? [];

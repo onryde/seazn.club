@@ -95,7 +95,7 @@ test.describe.serial("official marks & match reports", () => {
     await apiJson(page.request, `/api/v1/fixtures/${fixture.id}/officials`, "PATCH", {
       set: [{ official_id: off.data!.id, role_key: "referee", locked: false }],
     });
-    const officialEmail = `e2e-official-${TAG}@example.com`;
+    const officialEmail = `delivered+e2e-official-${TAG}@resend.dev`;
     const invite = await apiJson<{ claim_url: string }>(
       page.request,
       `/api/v1/officials/${off.data!.id}/invite`,

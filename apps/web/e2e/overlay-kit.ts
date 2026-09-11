@@ -143,7 +143,7 @@ export async function signInAs(page: Page, email: string): Promise<void> {
  */
 export async function seedOverlayFixture(page: Page): Promise<OverlayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `ovl-${tag}@example.com`;
+  const ownerEmail = `delivered+ovl-${tag}@resend.dev`;
   const orgSlug = `ovl-org-${tag}`;
 
   const { orgId } = await withDb(async (sql) => {

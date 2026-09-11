@@ -116,7 +116,7 @@ interface Rig {
  *  AUTH_STATE's shared Pro org or its budget. */
 async function seedOrgOnPlan(plan: PlanArg): Promise<Rig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `eg-${plan}-${tag}@example.com`;
+  const ownerEmail = `delivered+eg-${plan}-${tag}@resend.dev`;
   const orgSlug = `eg-${plan}-org-${tag}`;
   const compSlug = `eg-${plan}-cup-${tag}`;
   const subscriptionPlan = plan === "event_pass" || plan === "event_pass_l" ? "community" : plan;

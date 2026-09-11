@@ -92,7 +92,7 @@ async function seedRig(opts: {
     const moduleVersion = await ensureSports(sql);
     const [{ id: ownerId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified)
-      values (${`rs003-owner-${TAG}-${tag}@example.com`}, ${"RS003 Owner " + tag}, true)
+      values (${`delivered+rs003-owner-${TAG}-${tag}@resend.dev`}, ${"RS003 Owner " + tag}, true)
       returning id`;
     const orgSlug = `rs003-org-${TAG}-${tag}`;
     const [{ id: orgId }] = await sql<{ id: string }[]>`
@@ -154,7 +154,7 @@ function cart(over: Record<string, unknown> = {}) {
   return {
     contact: {
       name: who,
-      email: `${who.toLowerCase().replace(/\W+/g, "-")}@example.com`,
+      email: `delivered+${who.toLowerCase().replace(/\W+/g, "-")}@resend.dev`,
     },
     privacy_consent: true,
     ...over,
@@ -316,7 +316,7 @@ test.describe("RS003 public registration API", () => {
       cart({
         contact: {
           name: "Self Twice",
-          email: `self-twice-${randomBytes(3).toString("hex")}@example.com`,
+          email: `delivered+self-twice-${randomBytes(3).toString("hex")}@resend.dev`,
           dob: "1990-05-05",
         },
         entries: [

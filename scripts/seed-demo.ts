@@ -748,7 +748,7 @@ async function main() {
   const PLAN = account === "community" ? PLAN_COMMUNITY : PLAN_PRO;
 
   if (phase === "setup") {
-    const email = `smoke-${account}-${1000 + rnd(9000)}@example.com`;
+    const email = `delivered+smoke-${account}-${1000 + rnd(9000)}@resend.dev`;
     const reg = await call("/api/auth/signup", "POST", {
       email,
       password: PASSWORD,
@@ -1232,7 +1232,7 @@ async function seedRegistrationDemo(): Promise<void> {
 
   const contact = () => {
     const name = person();
-    const email = `${name.toLowerCase().replace(/\s+/g, ".")}${rnd(9000)}@example.com`;
+    const email = `delivered+${name.toLowerCase().replace(/\s+/g, ".")}${rnd(9000)}@resend.dev`;
     return { name, email };
   };
 

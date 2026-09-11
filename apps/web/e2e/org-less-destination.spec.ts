@@ -51,7 +51,7 @@ test.describe("the org-less bounce keeps where you were going", () => {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
     try {
-      const email = `e2e-orgless-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+      const email = `delivered+e2e-orgless-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
 
       // The PRODUCER, not a hand-typed URL: `loginUi` mints the same magic
       // link the auth routes email and appends `next` the way they do, so
@@ -106,7 +106,7 @@ test.describe("the org-less bounce keeps where you were going", () => {
     const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const page = await ctx.newPage();
     try {
-      const email = `e2e-orgless-plain-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+      const email = `delivered+e2e-orgless-plain-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
       // Sign in carrying a SAFE, non-settings destination. That matters for a
       // reason this test originally got wrong and which no unit test can see:
       //

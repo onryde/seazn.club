@@ -167,7 +167,7 @@ test.describe("public poster.pdf — locale", () => {
   test("a French-locale org's day-one poster renders the localized copy, not English", async ({
     page,
   }) => {
-    await loginUi(page, `poster-fr-${Date.now()}@example.com`, "/");
+    await loginUi(page, `delivered+poster-fr-${Date.now()}@resend.dev`, "/");
     const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
       name: `Poster FR ${Date.now()}`,
     });

@@ -672,7 +672,7 @@ function officialsRawPack(): unknown {
         assignments: [],
       },
     ],
-    claimInvites: [{ person: "p-a", email: "ada.claim@example.com" }],
+    claimInvites: [{ person: "p-a", email: "delivered+ada.claim@resend.dev" }],
     expected: {
       matches: [
         {
@@ -739,12 +739,12 @@ describe("buildSeedPlan — officials", () => {
 
   it("resolves claimInvites[] to {personRef, email}", () => {
     const plan = buildSeedPlan(officialsPack());
-    expect(plan.claimInvites).toEqual([{ personRef: "p-a", email: "ada.claim@example.com" }]);
+    expect(plan.claimInvites).toEqual([{ personRef: "p-a", email: "delivered+ada.claim@resend.dev" }]);
   });
 
   it("refuses a claim invite naming an official-lane person, naming the person", () => {
     const raw = officialsRawPack() as { claimInvites: unknown[] };
-    raw.claimInvites.push({ person: "p-ref1", email: "robin.claim@example.com" });
+    raw.claimInvites.push({ person: "p-ref1", email: "delivered+robin.claim@resend.dev" });
     const bad = PackSchema.parse(raw); // schema-legal: checkReservations only checks the ref is KNOWN
     expect(() => buildSeedPlan(bad)).toThrow(/p-ref1/);
     expect(() => buildSeedPlan(bad)).toThrow(/lane is "official"/);

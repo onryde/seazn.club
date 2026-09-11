@@ -117,7 +117,7 @@ test("football v3: opting in to scoring.swap_off_step_enforcement makes the OFF 
 }) => {
   test.setTimeout(120_000);
 
-  const email = `e2e-swapoff-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  const email = `delivered+e2e-swapoff-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
   await loginUi(page, email);
   // requirePageAuth on any server page is what auto-provisions "My
   // organization" for a member of none — activeOrg needs that to have
@@ -190,7 +190,7 @@ test("football v3: opting in to scoring.swap_off_step_enforcement does not block
   // lines ~1263-1277) — this proves the SAME thing against the real server,
   // which that render-level test structurally cannot: a fabricated ok
   // verdict there is not proof the server ever produces one.
-  const email = `e2e-swapoff-ok-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  const email = `delivered+e2e-swapoff-ok-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
   await loginUi(page, email);
   await page.goto("/dashboard", { waitUntil: "load" });
   const org = await activeOrg(page);

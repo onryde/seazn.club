@@ -211,8 +211,8 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
   const control = (name: string) => row().getByRole("button", { name });
   const claimButton = (p: Page) => p.getByRole("button", { name: /This is me — claim/ });
 
-  const ownerEmail = `claimant-a-${s}@example.com`;
-  const strangerEmail = `claimant-b-${s}@example.com`;
+  const ownerEmail = `delivered+claimant-a-${s}@resend.dev`;
+  const strangerEmail = `delivered+claimant-b-${s}@resend.dev`;
 
   /** Send an invite through the organiser's own dialog; return the one-time
    *  link it prints. */

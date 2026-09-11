@@ -35,7 +35,7 @@ const queue = (page: Page) => page.getByRole("region", { name: "Possible duplica
 test("an organiser merges a suggested duplicate, then undoes it", async ({ page }) => {
   failOnNativeDialog(page);
 
-  await loginUi(page, `dupmerge-${STAMP}@example.com`, "/");
+  await loginUi(page, `delivered+dupmerge-${STAMP}@resend.dev`, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", {
     name: `Duplicate Review ${STAMP}`,
   });

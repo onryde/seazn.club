@@ -575,8 +575,8 @@ const TINY_CLAIM_INVITES: NonNullable<PackInput["claimInvites"]> = [
   // One star per division — proves the seeding layer's claim-invite mapping
   // generalises past a single division, the same reason T5 added d-badminton
   // to buildSeedPlan's own coverage.
-  { person: "p-ana", email: "ana.alvarez.claim@example.com" },
-  { person: "p-cho", email: "cho.minjun.claim@example.com" },
+  { person: "p-ana", email: "delivered+ana.alvarez.claim@resend.dev" },
+  { person: "p-cho", email: "delivered+cho.minjun.claim@resend.dev" },
 ];
 
 const TINY_ADAPTATIONS: PackInput["meta"]["adaptations"] = [

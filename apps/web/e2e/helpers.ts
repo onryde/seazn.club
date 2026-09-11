@@ -200,8 +200,8 @@ export function failOnNativeDialog(page: Page): void {
 
 // Shared test tag so parallel/rerun state never collides.
 export const TAG = Date.now().toString(36);
-export const proEmail = () => `e2e-pro-${TAG}@example.com`;
-export const communityEmail = () => `e2e-community-${TAG}@example.com`;
+export const proEmail = () => `delivered+e2e-pro-${TAG}@resend.dev`;
+export const communityEmail = () => `delivered+e2e-community-${TAG}@resend.dev`;
 
 // True when the server under test is a production build (e.g. staging): it
 // never dev-exposes login/claim links, so auth helpers mint tokens straight in
@@ -1032,7 +1032,7 @@ export async function seedBareRegistrationSql(
   const { randomBytes } = await import("node:crypto");
   const suffix = Math.random().toString(36).slice(2, 8);
   const displayName = opts.displayName ?? `Bare Entry ${suffix}`;
-  const contactEmail = opts.contactEmail ?? `bare-${suffix}@example.com`;
+  const contactEmail = opts.contactEmail ?? `delivered+bare-${suffix}@resend.dev`;
   const status = opts.status ?? "pending";
   const amountCents = opts.amountCents ?? 0;
   const currency = opts.currency ?? "usd";

@@ -94,7 +94,7 @@ test("device links are Pro-only", async ({ browser }) => {
   const ctx = await browser.newContext();
   try {
     const page = await ctx.newPage();
-    await page.goto(await mintLoginPathBySql(`e2e-dlgate-${TAG}@example.com`));
+    await page.goto(await mintLoginPathBySql(`delivered+e2e-dlgate-${TAG}@resend.dev`));
     await page.waitForURL(/\/(me|onboarding|o\/)/, { timeout: 15_000 });
     await page.close();
     const req = ctx.request;

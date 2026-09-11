@@ -229,7 +229,7 @@ function selectIn(scope: Locator, label: string): Locator {
 const RUN = randomBytes(3).toString("hex");
 const PKG_NAME = `Gold Match Sponsor ${TAG}-${RUN}`;
 const SPONSOR_NAME = `Riverside Sports Ltd ${RUN}`;
-const SPONSOR_EMAIL = `sponsor-${TAG}-${RUN}@example.com`;
+const SPONSOR_EMAIL = `delivered+sponsor-${TAG}-${RUN}@resend.dev`;
 /** The test's own input and the cents it must arrive as. Small on purpose:
  *  legs 3 and 4 move this for real. */
 const PRICE_MAJOR = "2.50";

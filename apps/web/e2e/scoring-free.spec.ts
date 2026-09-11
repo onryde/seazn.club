@@ -93,7 +93,7 @@ for (const width of [320, 768, 1280]) {
     // A FRESH org on the community plan — never the shared Pro account this
     // project's storageState carries. The whole point is that the plan no
     // longer decides anything here.
-    const email = `e2e-free-${TAG}-${width}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+    const email = `delivered+e2e-free-${TAG}-${width}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
     await loginUi(page, email);
     // requirePageAuth on any server page auto-provisions "My organization" for
     // a member of none; `activeOrg` needs that to have already happened.
@@ -259,7 +259,7 @@ test("a stored band does not cost a hydration pass on the next page load", async
   });
   page.on("pageerror", (err) => record(err.message));
 
-  const email = `e2e-hyd-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  const email = `delivered+e2e-hyd-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
   await loginUi(page, email);
   await page.goto("/dashboard", { waitUntil: "load" });
   const org = await activeOrg(page);
@@ -322,7 +322,7 @@ function uiFor(locale: (typeof LOCALES)[number]): Record<string, string> {
 // interaction an eyeball on an English screenshot cannot see.
 test("the band-1 label fits the chip at 320 in every locale", async ({ page }) => {
   test.setTimeout(240_000);
-  const email = `w1loc-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  const email = `delivered+w1loc-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
   await loginUi(page, email);
   await page.goto("/dashboard", { waitUntil: "load" });
   const org = await activeOrg(page);

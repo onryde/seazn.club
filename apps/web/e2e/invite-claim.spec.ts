@@ -29,7 +29,7 @@ test.describe("email invite auto-login (claim)", () => {
 
   test("a brand-new invitee is signed in and joined in one POST", async ({ page, browser }) => {
     const org = await activeOrg(page);
-    const email = `e2e-claim-${Date.now()}@example.com`;
+    const email = `delivered+e2e-claim-${Date.now()}@resend.dev`;
     const token = await emailInvite(page, org.id, "viewer", email);
 
     const ctx = await anon(browser);
@@ -52,7 +52,7 @@ test.describe("email invite auto-login (claim)", () => {
 
   test("a re-issued invite to a now-VERIFIED account will not auto-login", async ({ page, browser }) => {
     const org = await activeOrg(page);
-    const email = `e2e-claim-verify-${Date.now()}@example.com`;
+    const email = `delivered+e2e-claim-verify-${Date.now()}@resend.dev`;
 
     // First claim creates the account and verifies the address.
     const first = await emailInvite(page, org.id, "viewer", email);
@@ -83,7 +83,7 @@ test.describe("email invite auto-login (claim)", () => {
 
   test("the join page one-tap button signs a new invitee in", async ({ page, browser }) => {
     const org = await activeOrg(page);
-    const email = `e2e-claim-ui-${Date.now()}@example.com`;
+    const email = `delivered+e2e-claim-ui-${Date.now()}@resend.dev`;
     const token = await emailInvite(page, org.id, "viewer", email);
 
     const ctx = await anon(browser);

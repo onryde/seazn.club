@@ -309,7 +309,7 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
     // The run tag is THIS layer's parameter (seed.ts header comment) — it
     // lands on both the sign-in email and the competition name, never
     // invented by seed-plan.ts.
-    expect(calls).toContainEqual({ method: "SIGNIN", path: "bench-riverside-abc123@example.com", body: undefined });
+    expect(calls).toContainEqual({ method: "SIGNIN", path: "delivered+bench-riverside-abc123@resend.dev", body: undefined });
     const compCall = calls.find((c) => c.path === "/api/v1/competitions");
     expect((compCall?.body as { name: string }).name).toBe("Riverside Cup abc123");
 
@@ -800,7 +800,7 @@ function fakeOfficialsTransport(config: OfficialsFakeConfig): { transport: SeedT
           return {
             id: `claim-${personId}`,
             person_id: personId,
-            email: "official-invite-default@example.com",
+            email: "delivered+official-invite-default@resend.dev",
             expires_at: "2099-01-01T00:00:00Z",
             claimed_at: null,
             revoked_at: null,
@@ -831,7 +831,7 @@ function fakeOfficialsTransport(config: OfficialsFakeConfig): { transport: SeedT
 
 describe("officialInviteEmail", () => {
   it("derives a stable email from the official's ref and the run tag — never a bare literal", () => {
-    expect(officialInviteEmail("off-dee", "abc123")).toBe("bench-official-off-dee-abc123@example.com");
+    expect(officialInviteEmail("off-dee", "abc123")).toBe("delivered+bench-official-off-dee-abc123@resend.dev");
   });
 
   it("two different officials in the same run never collide", () => {
@@ -845,7 +845,7 @@ describe("officialInviteEmail", () => {
   it("sanitizes a ref character that is legal in a PackRef but not in an email local-part", () => {
     // ":" is legal per PackRef's own regex (pack-schema.ts:176-180) but not
     // a valid unquoted email local-part character.
-    expect(officialInviteEmail("off:dee", "abc")).toBe("bench-official-off-dee-abc@example.com");
+    expect(officialInviteEmail("off:dee", "abc")).toBe("delivered+bench-official-off-dee-abc@resend.dev");
   });
 });
 
@@ -873,7 +873,7 @@ describe("seedOfficialsAndClaims", () => {
       assignments: [],
     },
   ];
-  const claimInvites: SeedPlanClaimInvite[] = [{ personRef: "p-ana", email: "ana.alvarez.claim@example.com" }];
+  const claimInvites: SeedPlanClaimInvite[] = [{ personRef: "p-ana", email: "delivered+ana.alvarez.claim@resend.dev" }];
   const fixtureIdByKey = new Map([[fixtureKey("d-tiny", "rr-r1-c1"), "fixture-r1"]]);
   const personIdByRef = new Map([["p-ana", "person-ana"]]);
 
@@ -885,7 +885,7 @@ describe("seedOfficialsAndClaims", () => {
       fixtureIdByKey,
       personIdByRef,
       primaryDivisionId: "div-tiny",
-      email: "bench-tiny-abc@example.com",
+      email: "delivered+bench-tiny-abc@resend.dev",
       runTag: "abc",
       transport,
       ...overrides,
@@ -914,7 +914,7 @@ describe("seedOfficialsAndClaims", () => {
       "person-ana": {
         id: "claim-1",
         person_id: "person-ana",
-        email: "ana.alvarez.claim@example.com",
+        email: "delivered+ana.alvarez.claim@resend.dev",
         expires_at: "2099-01-15T00:00:00Z",
         claimed_at: null,
         revoked_at: null,
@@ -1046,14 +1046,14 @@ describe("seedOfficialsAndClaims", () => {
     const result = await seedOfficialsAndClaims(baseInput(transport));
 
     const mintCall = calls.find((c) => c.method === "POST" && c.path === "/api/v1/persons/person-ana/claim-invites");
-    expect(mintCall?.body).toEqual({ email: "ana.alvarez.claim@example.com" });
+    expect(mintCall?.body).toEqual({ email: "delivered+ana.alvarez.claim@resend.dev" });
     expect(calls.some((c) => c.method === "GET" && c.path === "/api/v1/persons/person-ana/claim-invites")).toBe(true);
 
     const read = result.claimInviteByPersonRef.get("p-ana");
     expect(read).toEqual({
       id: "claim-1",
       person_id: "person-ana",
-      email: "ana.alvarez.claim@example.com",
+      email: "delivered+ana.alvarez.claim@resend.dev",
       expires_at: "2099-01-15T00:00:00Z",
       claimed_at: null,
       revoked_at: null,
@@ -1066,7 +1066,7 @@ describe("seedOfficialsAndClaims", () => {
   it("throws naming the ref when a claim invite targets a person with no resolved id", async () => {
     const { transport } = fakeOfficialsTransport(HAPPY_CONFIG);
     await expect(
-      seedOfficialsAndClaims({ ...baseInput(transport), claimInvites: [{ personRef: "p-ghost", email: "ghost@example.com" }] }),
+      seedOfficialsAndClaims({ ...baseInput(transport), claimInvites: [{ personRef: "p-ghost", email: "delivered+ghost@resend.dev" }] }),
     ).rejects.toThrow(/p-ghost/);
   });
 
@@ -1152,7 +1152,7 @@ describe("runOfficialsAutoAssign", () => {
   ): RunOfficialsAutoAssignInput {
     return {
       base: "http://bench.example",
-      email: "bench-tiny-abc@example.com",
+      email: "delivered+bench-tiny-abc@resend.dev",
       primaryDivisionId: "div-tiny",
       autoOfficials,
       transport,

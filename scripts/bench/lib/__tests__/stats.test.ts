@@ -93,7 +93,7 @@ function baseInput(
 ): ReadPlayerStatsBaselineInput {
   return {
     base: "http://bench.example",
-    email: "bench-tiny-abc@example.com",
+    email: "delivered+bench-tiny-abc@resend.dev",
     orgId: "org-1",
     divisionId: "div-tiny",
     roster: ROSTER,

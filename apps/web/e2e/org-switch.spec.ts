@@ -19,7 +19,7 @@ import { loginUi, apiJson, TAG, setEntitlementOverrideSql } from "./helpers";
 test.use({ storageState: { cookies: [], origins: [] } });
 
 async function seedTwoOrgUser(page: import("@playwright/test").Page) {
-  const email = `e2e-switch-${TAG}-${Math.random().toString(36).slice(2, 7)}@example.com`;
+  const email = `delivered+e2e-switch-${TAG}-${Math.random().toString(36).slice(2, 7)}@resend.dev`;
   await loginUi(page, email, "/dashboard");
   let orgsA = await apiJson<{ id: string; slug: string; name: string }[]>(page.request, "/api/orgs");
   if (!orgsA.data?.length) {

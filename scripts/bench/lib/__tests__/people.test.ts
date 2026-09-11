@@ -35,7 +35,7 @@ function invite(n: number, kind: MintedInvite["kind"] = "player"): MintedInvite 
     ref: `p-${n}`,
     kind,
     personId: `person-${n}`,
-    email: `claimant${n}@example.com`,
+    email: `delivered+claimant${n}@resend.dev`,
     token: `pc_token${n}`,
   };
 }
@@ -151,7 +151,7 @@ describe("acceptClaimInvites", () => {
   it("signs in as the INVITED address, not as whoever seeded the invite", async () => {
     const { transport, calls } = claimWorld();
     await acceptClaimInvites({ base: BASE, invites: [invite(1)], limit: 1, transport });
-    expect(calls).toContain("SIGNIN claimant1@example.com");
+    expect(calls).toContain("SIGNIN delivered+claimant1@resend.dev");
   });
 
   it("reds when the acceptance is attempted from the wrong session", async () => {
@@ -159,7 +159,7 @@ describe("acceptClaimInvites", () => {
     // that signed in once and accepted everything would look identical to a
     // correct one here — this is what tells them apart.
     const { transport } = claimWorld();
-    const wrongEmail = [{ ...invite(1), email: "claimant1@example.com" }, { ...invite(2), email: "claimant1@example.com" }];
+    const wrongEmail = [{ ...invite(1), email: "delivered+claimant1@resend.dev" }, { ...invite(2), email: "delivered+claimant1@resend.dev" }];
     const r = await acceptClaimInvites({ base: BASE, invites: wrongEmail, limit: 2, transport });
     expect(r.accepted).toBe(1);
     expect(r.rejected).toEqual([{ person: "p-2", status: 403, detail: expect.stringContaining("sent to") }]);
@@ -199,7 +199,7 @@ describe("acceptClaimInvites", () => {
     // satisfying an `accepted > 0` guard — report the negative case as PROVEN.
     // That is the vacuous pass arriving by the back door.
     const { transport } = claimWorld({
-      signInFailsFor: ["claimant1@example.com"],
+      signInFailsFor: ["delivered+claimant1@resend.dev"],
       acceptAnyToken: true,
     });
     const r = await acceptClaimInvites({ base: BASE, invites: [invite(1), invite(2)], limit: 2, transport });

@@ -1590,7 +1590,7 @@ export async function runPackSuite(
     // on why `--keep` needs a FIXED tag and `--wipe` keeps the original
     // random one.
     const runTag = keep ? "keep" : randomUUID().slice(0, 8);
-    const email = `bench-${plan.org.slug}-${runTag}@example.com`;
+    const email = `delivered+bench-${plan.org.slug}-${runTag}@resend.dev`;
 
     const s: Session = newSession();
     const seedStart = performance.now();
