@@ -2563,3 +2563,19 @@ build with no ladder the name box cannot shrink, so `available` degenerates to
 the full width and the guard fires too, blaming the FIXTURE for a defect in the
 CODE (class 20 — two error lines, one event, and the misleading one must not
 come first).
+
+**Ruling 32 — per-screen visual sign-off, 2026-09-12.** Owner: *"screen sign
+off is good"*, on three frames shot at 1920×1080 by
+`overlay-moments.capture.ts` and shown individually, not as a contact sheet
+(class 11: "CI green" is not sign-off):
+
+| Frame | What it had to show |
+|---|---|
+| `bar-name-ladder` | Both names past what the bar can hold ⇒ both at their codes (ROY / NOR), scores right-aligned INSIDE their cells, nothing over the brand. Pre-fix this exact frame had the home score painted inside the away cell and the away name 80 px off the canvas. |
+| `hockey-bar-penalty-stroke` | `GOAL` over "<taker> · Penalty stroke" — ruling 31's parity with football, with a name in front of the label rather than the label alone. |
+| `cricket-bar-out` | The wave's regression surface: the crease band, the dismissal slab flush to the bar's top edge, and the names stepped down — the frame that shows the RIV-vs-"Riverside" trade the short-name rung would buy back. |
+
+The other six frames (cricket six, hockey bug goal/red, football penalty,
+hockey open-play goal, reduced motion) were shot in the same run and asserted
+in the same step; the harness's own vacuity floor moved 5 → 8, and all nine
+files are byte-distinct.
