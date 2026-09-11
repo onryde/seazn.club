@@ -182,12 +182,33 @@ one cost a red run or a wrong answer; none is derivable from the schema.
   — treat a certificate red as a candidate bench/product finding, not
   automatically a pack bug.
 
-- **Two product gaps a pack cannot work around, found by suite 11.** There is
-  no route to forfeit an existing fixture: `forfeited` is a fixture status but
-  its only writer is the bracket generator, stamping byes it created itself
-  (`stages.ts:1351`). And a stream cannot express one either — in
-  `resultMode: "score"` a result card with no scores and no tally is refused
-  (`generic.ts:119-120`). Encoded the only way available (an administrative
-  1-0), a walkover then becomes INDISTINGUISHABLE from a played 1-0, so the
-  expected outcome method must be `"regulation"`. If your sport's event had a
-  withdrawal, budget for this.
+- **A walkover is `core.forfeit`, NOT a result card. Suite 11 got this wrong
+  and the correction is the important part of the entry.** This playbook
+  previously said there was "no route to forfeit an existing fixture" and that
+  a pack had to encode a walkover as an administrative 1-0. Both halves were
+  false, and the 1-0 is actively harmful: leaderboard expectations derive from
+  the streams, so a score nobody played flows into player stats as real, under
+  the name of a real person.
+
+  What is actually true. `forfeited` is a fixture status with more than one
+  writer — the bracket generator stamps byes (`stages.ts:1351`), AND
+  `append-event.ts:127` derives it from ANY active `core.forfeit` in the
+  ledger, which is how `withdrawal.ts:102` records one. The scoring door
+  (`usecases/scoring.ts`) applies no event-type allowlist: the sport module's
+  own reducer is the only validator, so a pack may post `core.forfeit` on any
+  fixture exactly like any other event.
+
+  Encode it as:
+
+      { "type": "core.forfeit", "payload": { "by": "@e-<the side that did not play>", "reason": "walkover" } }
+
+  and expect `outcome.kind` `"award"` with `method` equal to your `reason` —
+  since 2026-09-11 every sport module carries the reason through
+  (`core/forfeit-reason.test.ts` sweeps all of them; `boardgame` is the one
+  declared exemption, because its outcome method is its own typed enum). NO
+  score is recorded, which is the whole point.
+
+  The one true constraint from the original entry, kept: in
+  `resultMode: "score"` a RESULT CARD with no scores and no tally is refused
+  (`generic.ts:119-120`) — which is a reason to use the forfeit event, not a
+  reason to invent a 1-0.
