@@ -12,6 +12,8 @@
 // a pack declares `perSide`, and come from the fixture STATE route.
 import { describe, expect, it } from "vitest";
 import { compareMatches } from "../oracle.ts";
+import type { PackExpectedOutcome } from "../pack-schema.ts";
+import { resolveExpectedOutcome } from "../suites/run-suite.ts";
 
 const won = (winner: string, loser: string, method?: string) =>
   ({ kind: "win" as const, winner, loser, ...(method === undefined ? {} : { method }) });
@@ -312,5 +314,116 @@ describe("compareMatches — an award's method", () => {
       ],
     );
     expect(result.mismatches).toEqual([]);
+  });
+});
+
+// B07a Task 2 (extended) — the WIRING, not the comparator.
+//
+// `compareMatches` takes entrant ids; `expected.matches` carries pack refs.
+// `resolveExpectedOutcome` is the real translator between them, and it
+// rebuilds each outcome FIELD BY FIELD, so any field it fails to name is
+// dropped before the comparator can ever compare it. A unit test on the
+// comparator alone cannot see that — which is exactly how an award's
+// `method` came to be compared by code that never received one.
+//
+// So these drive the REAL producer into the REAL consumer: pack refs in one
+// end, a mismatch verdict out the other, with no hand-built row in between.
+describe("resolveExpectedOutcome → compareMatches — the real producer into the real consumer", () => {
+  const entrantIdByRef = new Map([
+    ["ref-more", "en-more"],
+    ["ref-lenus", "en-lenus"],
+  ]);
+
+  const resolve = (outcome: PackExpectedOutcome) => {
+    const unresolved: string[] = [];
+    const resolved = resolveExpectedOutcome(outcome, entrantIdByRef, unresolved);
+    expect(unresolved).toEqual([]);
+    if (resolved === undefined) throw new Error("resolveExpectedOutcome dropped a row it could resolve");
+    return resolved;
+  };
+
+  it("carries an award's reason through the ref→id rebuild and into the verdict", () => {
+    // The shape suite 11 declares at `se-r0-i19`: a walkover. If the rebuild
+    // drops `method`, the comparator receives no declared reason, asserts
+    // nothing, and this fixture passes while recorded as a disqualification.
+    const result = compareMatches(
+      [
+        {
+          fixtureExtKey: "se-r0-i19",
+          outcome: resolve({ kind: "award", winner: "ref-more", method: "walkover" }),
+        },
+      ],
+      [
+        {
+          extKey: "se-r0-i19",
+          status: "forfeited",
+          roundNo: 0,
+          outcome: awarded("en-more", "disqualification"),
+        },
+      ],
+    );
+    expect(result.mismatches[0]).toMatchObject({
+      field: "method",
+      expected: "walkover",
+      actual: "disqualification",
+    });
+  });
+
+  it("passes that same award when the live reason IS the declared one", () => {
+    const result = compareMatches(
+      [
+        {
+          fixtureExtKey: "se-r0-i19",
+          outcome: resolve({ kind: "award", winner: "ref-more", method: "walkover" }),
+        },
+      ],
+      [
+        {
+          extKey: "se-r0-i19",
+          status: "forfeited",
+          roundNo: 0,
+          outcome: awarded("en-more", "walkover"),
+        },
+      ],
+    );
+    expect(result.mismatches).toEqual([]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("carries a win's loser and method through the same rebuild", () => {
+    // The other arm of the same function, pinned so a future edit cannot
+    // quietly drop `loser` the way the award arm dropped `method` — which
+    // would make this whole task's comparator change inert.
+    const outcome = resolve({
+      kind: "win",
+      winner: "ref-more",
+      loser: "ref-lenus",
+      method: "regulation",
+    });
+    expect(outcome).toEqual({ kind: "win", winner: "en-more", loser: "en-lenus", method: "regulation" });
+
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r0-i0", outcome }],
+      [
+        {
+          extKey: "se-r0-i0",
+          status: "finalized",
+          roundNo: 0,
+          outcome: won("en-more", "en-azmeen", "regulation"),
+        },
+      ],
+    );
+    expect(result.mismatches[0]).toMatchObject({ field: "loser", expected: "en-lenus", actual: "en-azmeen" });
+  });
+
+  it("reports an unresolvable ref rather than resolving it to nothing", () => {
+    const unresolved: string[] = [];
+    const resolved = resolveExpectedOutcome(
+      { kind: "award", winner: "ref-nobody", method: "walkover" },
+      entrantIdByRef,
+      unresolved,
+    );
+    expect(resolved).toBeUndefined();
+    expect(unresolved).toEqual(["ref-nobody"]);
   });
 });
