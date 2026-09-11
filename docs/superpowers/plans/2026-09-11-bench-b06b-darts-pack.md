@@ -43,7 +43,9 @@ Both live under `scripts/bench/packs/build-packs/data/` and are committed in Tas
 **`suite11-pdc-womens-series-2024.json`** — PDC Women's Series 2024, Event 1 (23 Mar 2024, Wigan).
 - 111 entrants, 127 rows = 110 contested matches + 17 byes. 584 legs.
 - Final: Fallon Sherrock 5–4 Beau Greaves.
-- Board numbers and match times are being merged in by a follow-up pass (Task 5 consumes them).
+- **A full real timetable: 16 boards, and both a START and an END time for every one of the 110 contested matches.** Boards agree across three independent DartConnect endpoints. Starts come from the per-match recap pages (`match_start_date`), NOT from the completion feed — that feed publishes only `complete_date`/`complete_time`, with `sched_time` null on all 110, so taking it as a start would have shifted every match by its own length. Times are Europe/London = GMT on 2024-03-23 (BST began the 31st), established four independent ways.
+- **`matchNo` restarts per round** (63 duplicates across 127 rows); `round` + `matchNo` is unique. Div A's `matchNo` is event-wide unique. Fixture keys must therefore carry the round in BOTH divisions.
+- **The real timetable contains exactly one same-board overlap:** board 2, R3 Pinch v Frauenfelder 12:23–12:40 against R4 Hedman v Sherrock 12:32–12:43, both recorded on board 2 by all three feeds. Verified by an independent sweep of all 16 boards; every other consecutive same-board pair is clean and peak concurrency is exactly 16, matching the board count. Entrant clashes: zero.
 
 **Cross-division overlap — the careers oracle's subject:** Fallon Sherrock and Noa-Lynn van Leuven appear in BOTH divisions. Sherrock won Div B and lost in Div A's first round. Beau Greaves qualified for the Worlds and declined, so she is Div B only.
 
@@ -61,7 +63,8 @@ Record these in the PR body. Each was verified against the tree, not assumed.
 4. **A bye fixture omits the away side rather than nulling it** — `bracket.ts:184-186` builds `{...base, home: real, award: real}` with no `away` key at all. Any assertion written against `away === null` will not fire.
 5. **`schedule_locked` semantics changed.** A lock is now honoured on EVERY scheduling mode unconditionally (`schemas.ts:1954-2000`); `only_unlocked` no longer gates it and a new `ignore_locks` (`:1998`) is the sole override. The final-session pins therefore hold on any mode the run uses.
 6. **`max_fixtures_per_day` moved** to `packages/engine/src/scheduling/constraints.ts:93-97`; the API admits it via an imported `HardConstraint` at `schemas.ts:1668`, not `:1577`.
-7. **`_tiny` carries `historicalAssignment: []`.** Suite 11 is the FIRST pack to exercise the feasibility certificate with real data. `lib/certificate.ts` has never run against a populated assignment outside its own unit fixtures — treat a certificate red as a candidate product/bench finding, not a pack bug, until §6.3's order is worked (check the historical assignment against encoded constraints BEFORE reading any solver INFEASIBLE as a finding).
+7. **`_tiny` carries `historicalAssignment: []`.** Suite 11 is the FIRST pack to exercise the feasibility certificate with real data. `certify` (`lib/certificate.ts:129`) returns `SKIPPED_NO_HISTORY` when the division declares no history, so every bench run to date has skipped it. Treat a certificate red as a candidate product/bench finding, not a pack bug, until §6.3's order is worked (check the historical assignment against encoded constraints BEFORE reading any solver INFEASIBLE as a finding).
+8. **The real Div B timetable violates its own court constraint, once.** Board 2 carries two overlapping matches (see the dataset notes above). This is a fact about the source, not a transcription error — three feeds agree. It is left VERBATIM in `historicalAssignment`, which makes suite 11's certificate check a genuine test rather than a formality: a certificate that reports this history as clean is broken. Because `certify` has never run against a populated history, whether a violating history REDS the run or merely reports is unknown until Task 9 — determine it there and record the answer. Shifting either match to make the certificate happy would be inventing an attributed fact, and is forbidden.
 
 ---
 
@@ -196,6 +199,58 @@ describe("suite 11 raw data — Div B (PDC Women's Series 2024 Event 1)", () => 
     expect(final.p1).toBe("Fallon Sherrock");
     expect(final.p2).toBe("Beau Greaves");
     expect([final.legsP1, final.legsP2]).toEqual([5, 4]);
+  });
+
+  it("matchNo restarts per round, so round+matchNo is the unique key", () => {
+    // Div A numbers 1..95 event-wide; Div B restarts. A fixture key built from
+    // matchNo alone collides 63 times here and silently overwrites streams.
+    const bare = new Set(womens.matches.map((m: { matchNo: number }) => m.matchNo));
+    expect(bare.size).toBeLessThan(womens.matches.length);
+    const keyed = new Set(womens.matches.map((m: { round: string; matchNo: number }) => `${m.round}-${m.matchNo}`));
+    expect(keyed.size).toBe(womens.matches.length);
+  });
+
+  it("every contested match has a board and both ends of its clock", () => {
+    for (const m of womens.matches) {
+      if (m.walkover) continue;
+      expect(typeof m.board, `match ${m.round}-${m.matchNo}`).toBe("number");
+      expect(m.startTime, `match ${m.round}-${m.matchNo}`).toBeTruthy();
+      expect(m.endTime, `match ${m.round}-${m.matchNo}`).toBeTruthy();
+      expect(new Date(m.startTime).getTime()).toBeLessThan(new Date(m.endTime).getTime());
+    }
+  });
+
+  it("the real timetable overlaps on board 2 exactly once, and nowhere else", () => {
+    // This is a fact about the source, not a defect to fix. Pinned so that a
+    // later data edit which "tidies" it away has to argue with a test, and so
+    // that a SECOND overlap appearing is caught rather than absorbed.
+    const byBoard = new Map<number, { startTime: string; endTime: string; round: string; matchNo: number }[]>();
+    for (const m of womens.matches) {
+      if (m.walkover) continue;
+      byBoard.set(m.board, [...(byBoard.get(m.board) ?? []), m]);
+    }
+    const overlaps: string[] = [];
+    for (const [board, ms] of byBoard) {
+      ms.sort((a, b) => (a.startTime < b.startTime ? -1 : 1));
+      for (let i = 1; i < ms.length; i++) {
+        if (ms[i].startTime < ms[i - 1].endTime) overlaps.push(`board ${board}: ${ms[i - 1].round}-${ms[i - 1].matchNo} / ${ms[i].round}-${ms[i].matchNo}`);
+      }
+    }
+    expect(overlaps).toEqual(["board 2: R3-2 / R4-2"]);
+  });
+
+  it("no player is on two boards at once", () => {
+    const byPlayer = new Map<string, { startTime: string; endTime: string }[]>();
+    for (const m of womens.matches) {
+      if (m.walkover) continue;
+      for (const name of [m.p1, m.p2]) byPlayer.set(name, [...(byPlayer.get(name) ?? []), m]);
+    }
+    for (const [name, ms] of byPlayer) {
+      ms.sort((a, b) => (a.startTime < b.startTime ? -1 : 1));
+      for (let i = 1; i < ms.length; i++) {
+        expect(ms[i].startTime >= ms[i - 1].endTime, `${name} double-booked`).toBe(true);
+      }
+    }
   });
 });
 
@@ -662,11 +717,15 @@ The published timetable is SESSION-level: afternoon sessions start 12:30 GMT, ev
 
 Do not invent a length: derive it from the session's own span and match count so a four-match session and a two-match session differ, and so the derivation moves if the data does.
 
-- [ ] **Step 4: Div B's timetable**
+- [ ] **Step 4: Div B's timetable — resolved, and it is fully real**
 
-Consume the board/time data from the follow-up research pass. Two branches, and which one applies is a fact about the source, not a choice:
-- If DartConnect publishes match START times, use them verbatim and set `court` from the board number. Div B becomes a genuine multi-court packing case with a full certificate.
-- If it publishes match END times only, `startsAt` cannot be taken from them without lying. Derive starts by subtracting the published duration where one exists, and where none does, record Div B's certificate as PARTIAL in `meta.adaptations[]` and the report. A derived start presented as real is exactly the invention this pack must not contain.
+The follow-up research pass settled this: DartConnect publishes a genuine START (`match_start_date` on the per-match recap pages) as well as an end, for all 110 contested matches, on 16 named boards. So Div B needs no derivation at all — `startsAt`, `endsAt` and `court` are all verbatim, and Div B is a real 16-court packing case against Div A's single court.
+
+Two traps, both already paid for:
+- **Do not take the times from the completion feed.** `complete_date`/`complete_time` on the board-management endpoint are match ENDS, and `sched_time` is null on all 110 — no scheduled start was ever published. Using that feed as a start silently shifts every match by its own length, and every downstream check still passes.
+- **Times are Europe/London, which was GMT on 2024-03-23** (BST began the 31st). DartConnect stores naive US-Eastern and renders into the event zone; the rendered value is the correct one. Write the wall clock unchanged with `Z`.
+
+Encode the board-2 overlap **verbatim**. It is real (three feeds agree), and it is what makes this the certificate's first genuine test. Do not shift either match; do not drop `court` from those two rows to make the check pass. If the certificate reds the whole run rather than reporting, that is Task 9's finding to record and put to the owner — not a licence to edit the data.
 
 - [ ] **Step 5: The scheduleConfig, per division**
 
