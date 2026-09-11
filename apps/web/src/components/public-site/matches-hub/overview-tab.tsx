@@ -618,17 +618,29 @@ export function OverviewTab({
                     the testids are unique per view, the "Full division" links
                     point at different divisions. Only the screen said so.
 
-                    Shown only on a MULTI-division document, matching the rule
-                    the Teams tab already follows — with one division the name
-                    is noise, because there is nothing to tell it apart from. */}
-                {doc.divisions.length > 1 ? (
-                  <h4
-                    data-testid={`mh-table-preview-${view.id}-division`}
-                    className="mb-1 min-w-0 truncate text-sm font-semibold text-ink-muted"
-                  >
-                    {view.divisionName}
-                  </h4>
-                ) : null}
+                    UNCONDITIONAL, and the earlier version of this comment was
+                    wrong twice over (final review C4). It claimed the name was
+                    shown "only on a MULTI-division document, matching the rule
+                    the Teams tab already follows". There is no such rule:
+                    `teams-tab.tsx` never reads `doc.divisions` at all, and its
+                    division heading is unconditional, as are `table-tab.tsx`'s
+                    and `stats-tab.tsx`'s. The Overview was the ONLY surface
+                    with the gate, so a single-division competition showed the
+                    division name on Table, Stats and Teams and not here — a
+                    real inconsistency that a false appeal to consistency hid.
+                    Four tabs now agree because the fifth dropped the gate.
+
+                    `<h3>`, not `<h4>` (final review C2). The section's own
+                    heading is the `<h2>` above, so `<h4>` skipped a level, and
+                    it skipped it INTO `StandingsTableView`'s `<h3>` caption
+                    below — the Overview's outline ran h2 → h4 → h3 while the
+                    Table tab nests the same two facts the other way up. */}
+                <h3
+                  data-testid={`mh-table-preview-${view.id}-division`}
+                  className="mb-1 min-w-0 truncate text-sm font-semibold text-ink-muted"
+                >
+                  {view.divisionName}
+                </h3>
                 <StandingsTableView
                   view={view}
                   dict={dict}

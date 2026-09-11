@@ -65,6 +65,7 @@ vi.mock("@/lib/supabase-browser", () => ({ supabaseBrowser: () => ({ channel: rt
 
 import { fetchCompetitionHub } from "../competition-hub-data";
 import { HUB_POLL_MS } from "../use-live-competition";
+import { readTabParam, writeTabParam } from "../use-tab-param";
 import { OverviewTab } from "../matches-hub/overview-tab";
 import { MatchesTab } from "../matches-hub/matches-tab";
 import { TableTab } from "../matches-hub/table-tab";
@@ -74,6 +75,7 @@ import { InfoTab } from "../matches-hub/info-tab";
 import {
   CompetitionLanding,
   activeTab,
+  arrivalTab,
   panelFor,
   type LandingTabId,
 } from "../matches-hub/competition-landing";
@@ -362,6 +364,82 @@ describe("activeTab — which tab wins, and what happens when its data disappear
       ((panelFor("overview", args) as ReactElement).props as Record<string, unknown>).shareSlot,
     ).toBeUndefined();
     expect(() => panelFor("gallery" as LandingTabId, args)).toThrow(/gallery/);
+  });
+
+  it("a tap's own URL write is NOT an arrival — the real round trip, not a stub of it", () => {
+    // Final review C1, and the reason this test drives the REAL functions
+    // against a REAL mutable location: the defect lived precisely in the blind
+    // spot this file's own header declares. `renderToStaticMarkup` and
+    // `_hook-harness` both answer `useTabParam` with the server snapshot, so
+    // every existing test here saw `deepLinked === null` and could not see that
+    // `onChange` writes the tap into `?tab=` and `useTabParam` reads it back on
+    // the very next render. A harness that stubs the thing under test proves
+    // the stub.
+    //
+    // So: one window whose `history.replaceState` really rewrites
+    // `location.search`, the way a browser does, and then the actual
+    // `writeTabParam` / `readTabParam` pair.
+    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup", search: "" };
+    vi.stubGlobal("window", {
+      location: loc,
+      history: {
+        replaceState: (_s: unknown, _t: unknown, next: string) => {
+          const u = new URL(next);
+          loc.href = u.toString();
+          loc.search = u.search;
+        },
+      },
+    });
+    try {
+      const tabs: LandingTabId[] = ["overview", "matches", "stats", "info"];
+
+      // 1. Arrival with no parameter: no arrival, so the default leads.
+      expect(readTabParam()).toBeNull();
+      expect(arrivalTab(readTabParam(), null)).toBeNull();
+      expect(activeTab(tabs, null, arrivalTab(readTabParam(), null))).toBe("overview");
+
+      // 2. The spectator taps Stats. The tap goes into the URL — that is
+      //    deliberate, it is what makes a shared link land where they are.
+      writeTabParam("stats");
+      expect(readTabParam()).toBe("stats");
+      expect(loc.href).toContain("tab=stats"); // the round trip really happened
+
+      // 3. …and the very next render reads it back. Before the fix this was
+      //    indistinguishable from `?tab=stats` in the link they clicked.
+      const selfWritten = "stats";
+      expect(arrivalTab(readTabParam(), selfWritten)).toBeNull();
+
+      // 4. The poll empties `doc.leaders`, so Stats is gone from the rail. The
+      //    render-phase clear nulls `manualTab`; the URL still says stats.
+      const withoutStats: LandingTabId[] = ["overview", "matches", "info"];
+      expect(activeTab(withoutStats, null, arrivalTab(readTabParam(), selfWritten))).toBe(
+        "overview",
+      );
+
+      // 5. THE DEFECT: a later poll republishes the board. Feeding the live
+      //    parameter straight in pulls the spectator into Stats mid-read —
+      //    verbatim the behaviour the render-phase clear exists to prevent.
+      expect(activeTab(tabs, null, readTabParam())).toBe("stats"); // what it used to do
+      expect(activeTab(tabs, null, arrivalTab(readTabParam(), selfWritten))).toBe("overview");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("arrivalTab discounts only OUR write, never a genuine arrival", () => {
+    // Narrower than "stop reading the URL after the first tap" on purpose:
+    // `useTabParam` subscribes to `popstate` so Back/Forward still moves the
+    // page, and a blunt `hasTapped` flag would throw that away for the session.
+    expect(arrivalTab("stats", null)).toBe("stats"); // arrived, never tapped
+    expect(arrivalTab("stats", "stats")).toBeNull(); // our own echo
+    // Tapped Teams, then the URL became something else (a Back, a rewrite by
+    // another island): that IS an arrival again and must survive.
+    expect(arrivalTab("matches", "teams")).toBe("matches");
+    // No arrival at all, whatever we last wrote.
+    expect(arrivalTab(null, "teams")).toBeNull();
+    expect(arrivalTab(null, null)).toBeNull();
+    // `null === null` must not read as an echo — covered above, and stated
+    // because it is the one pair where the identity test alone would be wrong.
   });
 
   it("an EMPTY tab list cannot crash the page — it opens on Overview", () => {

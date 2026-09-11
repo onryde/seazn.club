@@ -160,6 +160,27 @@ describe("MatchesTab", () => {
     expect(render()).toMatch(/^<div data-testid="mh-matches" class="min-w-0 space-y-3"/);
   });
 
+  it("the day heading is an <h2> — this panel's only heading cannot skip a level under the page h1", () => {
+    // Final review C2, and the assertion Table, Stats, Teams and Info already
+    // carry (`table-tab.test.tsx:196-202`, `stats-teams-info-tabs.test.tsx:213`).
+    // The day heading is the ONLY heading on this whole panel — the filter and
+    // division rails carry none — so at `<h3>` the Matches tab ran h1 → h3
+    // straight off the page's own `<h1>`, with no `<h2>` anywhere.
+    // `info-tab.tsx:168-175` writes the rule this broke.
+    //
+    // Both the LEVEL and the tag name were unpinned before this: `<h3>` → `<h2>`
+    // and `<h3>` → `<span>` each survived the whole suite.
+    const h = render();
+    expect(h).toMatch(/<h2 class="font-display text-sm font-semibold text-ink">/);
+    // No level below h2 anywhere on the panel, so nothing can reintroduce the
+    // skip by demoting this one and adding another.
+    expect(h).not.toContain("<h3");
+    expect(h).not.toContain("<h4");
+    // Positive pair: the heading still says what it said — this is an outline
+    // change, not a copy change, and the visual size is deliberately unchanged.
+    expect(h).toContain("Saturday 5 September");
+  });
+
   it("the EMPTY arm carries the same root handle — a handle on one arm only is not a handle", () => {
     // The absolute-empty state returns early, so its root is a different
     // element in the source. Task 10's Stats tab found exactly this and put the

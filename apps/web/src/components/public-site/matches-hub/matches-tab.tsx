@@ -358,7 +358,20 @@ export function MatchesTab({
             return (
               <section key={g.key} data-testid={`mh-day-${g.key}`}>
                 <div className="mb-2 flex flex-wrap items-baseline gap-x-2">
-                  <h3 className="font-display text-sm font-semibold text-ink">
+                  {/* `<h2>`, not `<h3>` (final review C2). The day heading is
+                      the ONLY heading on this whole panel — the filter and
+                      division rails carry none — so at `<h3>` the Matches tab
+                      ran h1 → h3 straight off the page's own `<h1>`, with no
+                      `<h2>` anywhere. `info-tab.tsx:168-175` writes the rule
+                      this breaks, and Table, Stats, Teams and Info all put an
+                      `<h2>` directly under the page heading and assert it.
+
+                      Promoted rather than given a new heading above it: the
+                      days ARE this panel's top-level sections, so `<h2>` is
+                      what they already were semantically, and no new copy is
+                      owed. The visual size is unchanged — `text-sm` stays, the
+                      level is an outline fact, not a paint one. */}
+                  <h2 className="font-display text-sm font-semibold text-ink">
                     {dated
                       ? // en-GB, in every locale. `format.ts:10` pins `LOCALE`
                         // and `fmtDate` takes no locale parameter — a
@@ -366,7 +379,7 @@ export function MatchesTab({
                         // here. The copy AROUND this heading is translated.
                         fmtDate(g.tz, first.scheduledAt, DAY_OPTS)
                       : t(dict, "matchesHub.unscheduled")}
-                  </h3>
+                  </h2>
                   {showZoneCaption(g, viewerZone) ? (
                     <span className="text-xs text-ink-muted">
                       {t(dict, "matchesHub.timesIn", {

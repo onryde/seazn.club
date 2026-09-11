@@ -995,6 +995,59 @@ describe("OverviewTab — next up and the table previews", () => {
     expect(h).not.toContain(`data-testid="mh-tables-more"`);
   });
 
+  it("every preview names its DIVISION, on one-division documents as well as many", () => {
+    // Final review C3 + C4. Commit 746583e97 fixed a defect found by driving
+    // the built page — two divisions both running a league stage render two
+    // tables whose captions both read "League" — in two halves. The
+    // screen-reader half was pinned; the SIGHTED half was not, and replacing
+    // its gate with `false` kept 329/329 green while restoring the exact
+    // defect. A guard nothing kills is not tested.
+    //
+    // The gate itself is gone (C4): it was justified as "matching the rule the
+    // Teams tab already follows", and no such rule exists — Teams, Table and
+    // Stats all render their division heading unconditionally. The Overview was
+    // the only surface with the gate, so a single-division competition showed
+    // the division name on three tabs and not here.
+    const two = hubDoc({
+      matches: docUpcoming4.matches,
+      tables: [
+        tableView("premier-league", "premier", { caption: "League" }),
+        tableView("sunday-league", "sunday-league", { caption: "League" }),
+      ],
+    });
+    const h = render(two);
+    // Both captions read "League", which is the document the defect needed —
+    // so the division name is the ONLY thing telling the two tables apart.
+    expect(h.match(/League/g)!.length).toBeGreaterThanOrEqual(2);
+    const named = (id: string) =>
+      h.slice(h.indexOf(`data-testid="mh-table-preview-${id}-division"`)).match(/>([^<]+)</)?.[1];
+    expect(named("premier-league")).toBe("Premier");
+    expect(named("sunday-league")).toBe("Sunday League");
+
+    // And on a ONE-division document it is still there — four tabs agree.
+    const one = hubDoc({
+      matches: docUpcoming4.matches,
+      tables: [tableView("premier-league", "premier")],
+    });
+    const single = render(one);
+    expect(single.match(/data-testid="mh-table-preview-[a-z-]+-division"/g)).toHaveLength(1);
+    expect(single).toContain(`data-testid="mh-table-preview-premier-league-division"`);
+  });
+
+  it("the preview division name is an <h3> — the section's own heading is the h2 above it", () => {
+    // Final review C2. At `<h4>` the Overview's outline ran h2 → h4 → h3,
+    // skipping a level INTO `StandingsTableView`'s `<h3>` caption below it,
+    // while the Table tab nests the same two facts the other way up. Both the
+    // level and the tag name were unpinned: `<h4>` → `<h3>` and `<h4>` →
+    // `<span>` each survived the whole suite.
+    const h = render(docUpcoming4);
+    expect(h).toMatch(/<h3[^>]*data-testid="mh-table-preview-t8-s1-overall-division"/);
+    // The section heading above it is the `<h2>`, so the two are a real
+    // parent/child pair rather than two independent literals.
+    expect(h).toMatch(/<h2[^>]*id="mh-tables-label"/);
+    expect(h).not.toContain("<h4");
+  });
+
   it("every table the document publishes gets its own preview, with its own id", () => {
     // A per-table id sourced from the DIVISION collides the moment a division
     // publishes an overall table and a pool table, which is the ordinary shape

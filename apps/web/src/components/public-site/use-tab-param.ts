@@ -70,6 +70,30 @@ export function readTabParam(): string | null {
   return new URLSearchParams(window.location.search).get("tab");
 }
 
+/**
+ * Put the chosen tab back in the URL, so what a spectator shares is what they
+ * are looking at.
+ *
+ * `replaceState`, never `pushState`: a tab is not a page, and stacking history
+ * entries would make Back walk the tab bar instead of leaving the competition.
+ * It deliberately does not fire `popstate` — the tap has already moved the
+ * caller's own state, and a store update would be a second, redundant render.
+ *
+ * ⚠️ WHAT THIS CREATES, and the reason it lives beside `readTabParam` instead
+ * of in each caller: after this runs, `readTabParam()` returns OUR OWN WRITE.
+ * The parameter stops being an arrival fact and becomes an echo, and a caller
+ * that keeps treating it as "the tab this spectator arrived on" is reading its
+ * own output as input. That is exactly the defect the final review found in
+ * `competition-landing.tsx` — see `arrivalTab` there. The two halves of the
+ * round trip are in one file so the next reader meets the hazard at the same
+ * time as the mechanism.
+ */
+export function writeTabParam(tab: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set("tab", tab);
+  window.history.replaceState(null, "", url.toString());
+}
+
 /** The SERVER snapshot, always null. React renders this on the server and again
  *  on the hydrating client's first pass, so the markup cannot mismatch; the
  *  browser value arrives on the frame after. A caller that must open on the

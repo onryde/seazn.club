@@ -29,7 +29,7 @@ import type {
   CompetitionHubTabIdT,
 } from "@/server/public-site/competition-hub-schema";
 import { PublicTabRail } from "../tab-rail";
-import { useTabParam } from "../use-tab-param";
+import { useTabParam, writeTabParam } from "../use-tab-param";
 import { useLiveCompetition } from "../use-live-competition";
 import { useNow } from "../match-centre/use-now";
 import { OverviewTab } from "./overview-tab";
@@ -66,10 +66,19 @@ export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery">;
  *   • `?tab=gallery`, which type-checks against the document's own union and
  *     is nonetheless not renderable here.
  *
- * The tap is considered FIRST and the deep link second, so a tap wins for good
- * — no later re-render drags a spectator back to the tab they arrived on — but
- * a tap that stops being renderable falls back through the deep link rather
- * than jumping straight to the default.
+ * The tap is considered FIRST and the arrival second, so a tap wins for good —
+ * no later re-render drags a spectator back to the tab they arrived on.
+ *
+ * WHAT THIS LADDER DOES *NOT* DO, corrected after the final review said the
+ * opposite: it does not "fall back through the deep link" when a tap stops
+ * being renderable. It cannot, and the earlier version of this sentence
+ * described a rung that is unreachable by construction. `onChange` writes the
+ * tap into `?tab=`, so the arrival value is gone from the URL the moment a
+ * spectator taps anything, and `arrivalTab` (below) then correctly reports
+ * "no arrival". The two rungs are therefore mutually exclusive in practice —
+ * the tap if there is one, otherwise the arrival — which is the same shape
+ * `tabs.tsx` writes as `picked ?? fromUrl`. The `find` is still the right code:
+ * it is what drops EITHER value when the tab it names is not renderable.
  *
  * The final `"overview"` is a crash guard, not a rule. `tabs` cannot be empty
  * for any parseable document (`deriveHubTabs` always emits `overview` and
@@ -81,11 +90,48 @@ export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery">;
 export function activeTab(
   tabs: readonly LandingTabId[],
   manualTab: string | null,
-  deepLinked: string | null,
+  arrived: string | null,
 ): LandingTabId {
   const renderable = new Set<string>(tabs);
-  const chosen = [manualTab, deepLinked].find((id) => id !== null && renderable.has(id));
+  const chosen = [manualTab, arrived].find((id) => id !== null && renderable.has(id));
   return (chosen as LandingTabId | undefined) ?? tabs[0] ?? "overview";
+}
+
+/**
+ * The tab this spectator ARRIVED on — which is not the same thing as the tab
+ * currently in the URL, and conflating the two was the final review's C1.
+ *
+ * `onChange` writes every tap into `?tab=` (deliberately: what a spectator
+ * shares should be what they are looking at), and `useTabParam` re-reads
+ * `window.location.search` on every render. So from the first tap onward the
+ * live parameter is OUR OWN WRITE echoed back, and a component that keeps
+ * feeding it to `activeTab` is reading its own output as an input. Two things
+ * broke, and the second is a live defect a spectator can feel:
+ *
+ *   • the render-phase `setManualTab(null)` below forgot the STATE and not the
+ *     URL, so when a withdrawn tab's data was republished on a later poll the
+ *     echoed parameter matched again and pulled the spectator into that tab
+ *     MID-READ — verbatim the defect that clear was added to fix;
+ *   • the arrival rung of `activeTab` could only ever hold the same id as the
+ *     tap rung, so it was dead by construction.
+ *
+ * Neutralising our own write is enough, and is deliberately narrower than "stop
+ * reading the URL after the first tap": `useTabParam` subscribes to `popstate`
+ * so that Back/Forward still moves the page, and a blunt `hasTapped` flag would
+ * throw that away for the rest of the session. Only the exact value we last
+ * wrote is discounted.
+ *
+ * NOTE the consequence, rather than leaving it to be rediscovered: our write
+ * DESTROYS the original arrival value, so after a tap there is no arrival to
+ * fall back to. That is why the ladder above says the two rungs are mutually
+ * exclusive instead of claiming a fallback chain.
+ */
+export function arrivalTab(deepLinked: string | null, selfWritten: string | null): string | null {
+  // `null` self-written means nothing has been tapped yet, and a null deep link
+  // is no arrival — neither case can be an echo, and `null === null` must not
+  // be read as one.
+  if (deepLinked === null || selfWritten === null) return deepLinked;
+  return deepLinked === selfWritten ? null : deepLinked;
 }
 
 export interface CompetitionLandingProps {
@@ -164,22 +210,28 @@ export function CompetitionLanding({
   // and no `react-hooks/set-state-in-effect` warning.
   const [manualTab, setManualTab] = useState<LandingTabId | null>(null);
 
-  // `history.replaceState`, never `push` — a tab is not a page in the browser's
-  // history sense, and stacking entries would make Back walk the tab bar
-  // instead of leaving the competition. It deliberately does not fire
-  // `popstate`, which is why `useTabParam`'s store does not need to hear about
-  // it: the tap has already moved `manualTab`, which outranks the URL.
+  // The URL write is `writeTabParam` (`use-tab-param.ts`), which carries the
+  // `replaceState`-never-`pushState` reasoning and, more importantly, the
+  // hazard it creates: what it writes is what `useTabParam` reads straight back
+  // on the next render. `selfWritten` plus `arrivalTab` is what stops that echo
+  // being mistaken for a spectator's arrival.
+  // The last value THIS component put in the URL, remembered so the parameter
+  // it reads back can be told apart from one a spectator arrived with — see
+  // `arrivalTab`. Kept separately from `manualTab` on purpose: `manualTab` is
+  // cleared when its tab stops being renderable, and the URL is not, so a
+  // single piece of state cannot answer both questions.
+  const [selfWritten, setSelfWritten] = useState<string | null>(null);
+
   const onChange = useCallback((tab: LandingTabId) => {
     setManualTab(tab);
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", tab);
-    window.history.replaceState(null, "", url.toString());
+    setSelfWritten(tab);
+    writeTabParam(tab);
   }, []);
 
   // Derived from THIS render's document, so a competition that publishes its
   // first standings table between ticks grows a Table tab without a reload.
   const tabs = doc.tabs.filter((id): id is LandingTabId => id !== "gallery");
-  const active = activeTab(tabs, manualTab, deepLinked);
+  const active = activeTab(tabs, manualTab, arrivalTab(deepLinked, selfWritten));
 
   // FORGET a choice that has stopped being renderable, rather than merely
   // ignoring it for this render (review M2 — AGENTS.md 13's "check both
