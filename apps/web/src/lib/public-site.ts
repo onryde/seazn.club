@@ -289,7 +289,10 @@ export interface SetBreakdown {
   sets: SetScore[];
 }
 
-const GAME_UNIT_SPORTS = new Set(["badminton", "tabletennis"]);
+/** The sports whose "set" is called a GAME. Exported since W2: the moment layer
+ *  picks GAME POINT over SET POINT from this same set, and a second copy of the
+ *  membership is how the two surfaces come to disagree. */
+export const GAME_UNIT_SPORTS = new Set(["badminton", "tabletennis"]);
 
 /** The kernel headline carries the open set's points — "1 — 0 (14–11)". The
  *  public match page renders those in the per-set scoreboard card instead, so
