@@ -183,12 +183,21 @@ describe("the payload projection", () => {
     expect(out.every((e) => e.payload.side === undefined)).toBe(true);
   });
 
-  it("cricket: the wicket names the DISMISSED batter, through the resolver", () => {
+  it("cricket: the wicket names the DISMISSED batter — a RUN OUT, so it is not the striker", () => {
+    // The striker and the dismissed batter are DIFFERENT PEOPLE here, and
+    // deliberately: a run out is the ordinary case where they diverge. With
+    // `out === striker` this assertion passes against a projector reading
+    // either field, which is the shape a mutation sweep found and this case
+    // exists to deny. Only the dismissed batter is in the resolver, so reading
+    // the striker yields no name at all.
     const out = build("cricket", [
       ["cricket.toss", { wonBy: "H", elected: "bat" }],
       ["core.start", {}],
-      ball(0, 1, "H-p1", "A-p1", 0, { wicket: { kind: "bowled", out: "H-p1", bowlerCredited: true } }),
+      ball(0, 1, "H-p2", "A-p1", 0, {
+        wicket: { kind: "runout", out: "H-p1", fielder: "A-p1", bowlerCredited: false },
+      }),
     ]);
+    expect(out.at(-1)!.payload).toMatchObject({ wicketKind: "runout" });
     expect(out.at(-1)!.payload.person).toEqual({ name: "H. One", masked: true });
   });
 
@@ -237,10 +246,14 @@ describe("personIdsIn", () => {
     const stream = active("cricket", [
       ["cricket.toss", { wonBy: "H", elected: "bat" }],
       ["core.start", {}],
-      ball(0, 1, "H-p1", "A-p1", 0, { wicket: { kind: "bowled", out: "H-p1", bowlerCredited: true } }),
+      ball(0, 1, "H-p2", "A-p1", 0, {
+        wicket: { kind: "runout", out: "H-p1", fielder: "A-p1", bowlerCredited: false },
+      }),
     ]);
-    // The ball records striker, nonStriker AND bowler; only the dismissed
-    // batter is named on air, so only that id may be looked up.
+    // The ball records a striker (H-p2), a non-striker, a bowler and a fielder;
+    // only the DISMISSED batter (H-p1) is ever spoken, so only that id may be
+    // looked up. Three of the four ids on this payload are wrong answers, and
+    // each of them is a different person from the right one.
     expect(personIdsIn(recentWindow(stream), SIDES)).toEqual(["H-p1"]);
   });
 
