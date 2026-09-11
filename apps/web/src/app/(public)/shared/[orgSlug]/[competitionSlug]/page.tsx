@@ -183,6 +183,14 @@ export default async function CompetitionHomePage({ params }: Props) {
     copy: t(dict, "share.copy"),
     copied: t(dict, "share.copied"),
   };
+  // From the SHELL's slugs, deliberately, while `presentHref`/`registerHref`
+  // below come off the document. The two cannot differ today (both resolve to
+  // the route params), so this is a rule for the ~30s window above, and the
+  // rule is not "one authority" but "the right authority for the job": a share
+  // URL is copied into WhatsApp and kept, so it wants the NEWEST slug, which is
+  // the shell's; the document's hrefs are in-product navigation, where a stale
+  // slug costs one permanent redirect (`sharedRenameTarget`) and consistency
+  // with the rest of the document is worth more.
   const sharePath = `/shared/${org.slug}/${competition.slug}`;
 
   return (

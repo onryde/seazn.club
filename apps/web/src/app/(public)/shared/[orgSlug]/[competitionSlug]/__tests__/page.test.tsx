@@ -247,6 +247,31 @@ describe("the competition page mounts the landing", () => {
     expect(stub.getPublicCompetitionHub).toHaveBeenCalledWith("riverside", "autumn-cup");
   });
 
+  // ── THE SHELL READ IS SEQUENCED BEHIND THE HUB, NOT RACED WITH IT ────────
+  // `getPublicCompetitionHub` awaits `getPublicCompetition` itself, so running
+  // the two concurrently is two cold misses on one `unstable_cache` key —
+  // next@16.2.9 has no in-flight registry for that (`unstable-cache.js:209-219`),
+  // so the shell query runs twice on a cold entry.
+  //
+  // CONCURRENCY, not order, is what this asserts: the hub mock yields a
+  // macrotask before it looks, so a `Promise.all` kills it whichever way round
+  // the array is written — both calls are made before the timer fires. An
+  // order-only assertion would pass on `Promise.all([hub, shell])`, which is
+  // just as concurrent and just as wrong.
+  it("does not race the shell read against the hub that already performs it", async () => {
+    let shellCallsDuringHub = -1;
+    stub.getPublicCompetitionHub.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      shellCallsDuringHub = stub.getPublicCompetition.mock.calls.length;
+      return doc();
+    });
+
+    await render();
+
+    expect(shellCallsDuringHub, "shell reads in flight while the hub was running").toBe(0);
+    expect(stub.getPublicCompetition).toHaveBeenCalledTimes(1);
+  });
+
   // The hero's title is the DOCUMENT's, like everything below it. The two can
   // only differ while the page's 30s cache and the hub's own are out of step
   // (a competition renamed in between) — and in that window the honest thing
