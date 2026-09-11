@@ -1127,3 +1127,188 @@ test.describe("cricket crease band (W2 Task 3)", () => {
     }
   });
 });
+
+test.describe("§1's name ladder on the bar (W2-F45)", () => {
+  // "Team names never wrap and never truncate on the overlay… a name longer
+  // than the cell can hold at 45 px falls to the entrant's short name, then to
+  // the three-letter code; this is the only size step." (`_THEMES.md` §1.)
+  //
+  // W1 rendered `side.name` unconditionally and the ladder was never built.
+  //
+  // BOTH SIDES ARE LONG, AND THAT IS THE WHOLE FIXTURE. Measured on the
+  // pre-fix build at 1920×1080, one long name and one short one does NOT
+  // reproduce anything: the team cells are `flex: 1 1 auto`, so the long side
+  // simply GROWS (297→1506) and the short side shrinks to its own content
+  // (1506→1708). Nothing spills and every assertion below would pass on the
+  // defect. It is when BOTH bases exceed the bar that the cells shrink and the
+  // unshrinkable names overflow them — pre-fix, measured:
+  //
+  //   home cell  297→1062   home name 339→1438   home score 1462→1501
+  //   away cell 1062→1708   away name 1104→2000  brand      1708→1848
+  //
+  // — the home score painted inside the away cell, and the away name ran 80 px
+  // past the canvas, across the brand mark. That is the defect, and it took a
+  // measurement to find the fixture that shows it.
+  //
+  // ONLY A BROWSER CAN SEE THIS. `apps/web` vitest is `environment: "node"`:
+  // `pickNameRung` is arithmetic and is unit-tested, the probes are asserted in
+  // the markup, and the MEASUREMENT — the thing the ladder actually is — has no
+  // other gate than this one.
+  const HOME_LONG = "Royal Kingsbridge & Wandsworth Wanderers Athletic Club Reserves"; // ROY
+  const AWAY_LONG = "Northbridge Athletic & Riverside Wanderers Reserve XI"; // NOR
+  let crowded: OverlayRig;
+  let roomy: OverlayRig;
+
+  /** Renames both entrants BEFORE anything reads the public row.
+   *  `getPublicFixture` is `unstable_cache`-wrapped at 30 s and the overlay page
+   *  takes its entrant names from it, so a rename after the first read is
+   *  invisible for up to half a minute — which is how the rig's `stream_url`
+   *  write first failed. */
+  async function named(browser: Browser, home: string, away: string): Promise<OverlayRig> {
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    try {
+      const rig = await seedOverlayFixture(ownerPage);
+      await grantOverlay(rig.orgId);
+      for (const [id, name] of [
+        [rig.homeEntrantId, home],
+        [rig.awayEntrantId, away],
+      ] as const) {
+        const res = await apiJson(ownerPage.request, `/api/v1/entrants/${id}`, "PATCH", {
+          display_name: name,
+        });
+        if (res.status >= 300) {
+          throw new Error(`ladder rig: PATCH entrant -> ${res.status} ${JSON.stringify(res.error)}`);
+        }
+      }
+      return rig;
+    } finally {
+      await owner.close();
+    }
+  }
+
+  /** The OBS canvas one-to-one. `anonPage` takes the project's viewport, which
+   *  scales `.ovl-canvas` by `min(vw/1920, vh/1080)` — uniformly, so the ladder
+   *  behaves identically, but every box in a failure message is then in scaled
+   *  px and cannot be read against §3's inset block or against the measurements
+   *  recorded above. Pinned here so the numbers a reader sees are the sheet's. */
+  async function anonAtCanvas(browser: Browser): Promise<Page> {
+    const ctx = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
+      viewport: { width: 1920, height: 1080 },
+    });
+    return ctx.newPage();
+  }
+
+  /** Every non-absolute child of a team cell that paints outside it, described.
+   *  `.ovl-led` is `position: absolute` and is inset deliberately. */
+  async function spill(page: Page, testid: string): Promise<string[]> {
+    return page.evaluate((id) => {
+      const cell = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+      if (!cell) return ["no cell"];
+      const outer = cell.getBoundingClientRect();
+      return [...cell.children]
+        .filter((c) => getComputedStyle(c).position !== "absolute")
+        .map((c) => ({ el: (c as HTMLElement).className, box: c.getBoundingClientRect() }))
+        .filter((c) => c.box.right > outer.right + 1 || c.box.left < outer.left - 1)
+        .map(
+          (c) =>
+            `${c.el} ${Math.round(c.box.left)}→${Math.round(c.box.right)} outside ${Math.round(outer.left)}→${Math.round(outer.right)}`,
+        );
+    }, testid);
+  }
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(300_000);
+    crowded = await named(browser, HOME_LONG, AWAY_LONG);
+    roomy = await named(browser, "Rye", "Deal Town");
+  });
+
+  test("two names the bar cannot hold BOTH fall to their codes, and nothing leaves its cell", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const anon = await anonAtCanvas(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${crowded.fixtureId}?style=bar`);
+      const home = anon.locator('[data-testid="ovl-side-home"] [data-testid="ovl-team-name"]');
+      const away = anon.locator('[data-testid="ovl-side-away"] [data-testid="ovl-team-name"]');
+      await expect(home).toBeVisible({ timeout: 30_000 });
+
+      // THE DEFECT ITSELF, FIRST. Run against the pre-fix build this prints,
+      // verbatim, for the home row:
+      //   ovl-team-name  339→1438 outside 297→1062
+      //   ovl-team-score 1462→1501 outside 297→1062
+      // — the name 376 px past its cell and the score painted inside the AWAY
+      // cell. The away row is the same story one worse (name 1104→2000, across
+      // the brand at 1708 and off the 1920 canvas); it is not reached because
+      // the home row fails first.
+      for (const row of ["ovl-side-home", "ovl-side-away"]) {
+        expect(await spill(anon, row), `${row}: content painted outside its cell`).toEqual([]);
+      }
+      // THE VACUITY GUARD, ON BOTH SIDES. If either name fitted, the step
+      // below would pass on a bar with no ladder at all — which is exactly what
+      // an earlier draft of this test did. Read from the page: the full name's
+      // own probe against the room its cell gives it.
+      //
+      // AFTER the spill check, deliberately. On a build with no ladder the name
+      // box cannot shrink, so `available` degenerates to the full width and this
+      // guard fires too — with a message blaming the FIXTURE for a defect in the
+      // CODE. Ordered this way the reader gets the boxes first (AGENTS.md 20:
+      // two error lines, one event, and the misleading one must not come first).
+      for (const row of ["ovl-side-home", "ovl-side-away"]) {
+        const m = await anon.evaluate((id) => {
+          const box = document.querySelector<HTMLElement>(`[data-testid="${id}"] .ovl-team-name`);
+          const probe = box?.querySelector<HTMLElement>(".ovl-team-name-probe");
+          if (!box || !probe) return null;
+          const next = box.nextElementSibling as HTMLElement | null;
+          const gap = parseFloat(getComputedStyle(box.parentElement!).columnGap) || 0;
+          const slack =
+            next === null
+              ? 0
+              : next.getBoundingClientRect().left - box.getBoundingClientRect().right - gap;
+          return {
+            full: probe.getBoundingClientRect().width,
+            available: box.getBoundingClientRect().width + Math.max(0, slack),
+          };
+        }, row);
+        expect(m, `${row}: the probes are not in the DOM — the ladder is not mounted`).not.toBeNull();
+        expect(
+          m!.full,
+          `${row}: the full name fits in ${Math.round(m!.available)}px — this fixture cannot witness the step down`,
+        ).toBeGreaterThan(m!.available);
+      }
+
+      // The step itself, on both sides and to DIFFERENT codes — one row cannot
+      // witness a per-side ladder.
+      await expect(home).toHaveText("ROY", { timeout: 15_000 });
+      await expect(away).toHaveText("NOR");
+
+    } finally {
+      await anon.context().close();
+    }
+  });
+
+  test("names that FIT are left exactly as they are — the bar does not code everything", async ({
+    browser,
+  }) => {
+    // The positive pair, and it is not optional: every assertion in the test
+    // above is satisfied by a bar that renders three letters unconditionally.
+    // "Rye" is also its own three letters in a different case, so this pins
+    // that a name which fits is not upper-cased on the way through.
+    test.setTimeout(120_000);
+    const anon = await anonAtCanvas(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${roomy.fixtureId}?style=bar`);
+      const home = anon.locator('[data-testid="ovl-side-home"] [data-testid="ovl-team-name"]');
+      const away = anon.locator('[data-testid="ovl-side-away"] [data-testid="ovl-team-name"]');
+      await expect(home).toHaveText("Rye", { timeout: 30_000 });
+      await expect(away).toHaveText("Deal Town");
+      for (const row of ["ovl-side-home", "ovl-side-away"]) {
+        expect(await spill(anon, row), `${row}: content painted outside its cell`).toEqual([]);
+      }
+    } finally {
+      await anon.context().close();
+    }
+  });
+});

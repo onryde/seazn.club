@@ -18,7 +18,7 @@ import { CricketWicket } from "@seazn/engine/sports/cricket";
 import { buildOverlayRecent, replayDerived } from "@/server/overlay/recent";
 import { DISCIPLINE_LABEL_KEYS } from "@/lib/public-site";
 import type { RecentEvent, RecentPerson } from "@/lib/overlay-recent-types";
-import { MOMENT_KEYS, MOMENT_RULES, maxSeq, momentsFor } from "../overlay-moments";
+import { GOAL_KIND_KEYS, MOMENT_KEYS, MOMENT_RULES, maxSeq, momentsFor } from "../overlay-moments";
 import en from "@/dictionaries/en/public.json";
 
 const msg = ((key: string, vars?: Record<string, string | number>) =>
@@ -247,7 +247,9 @@ describe("football, hockey and ice hockey", () => {
     // line mentions a penalty": the bare `overlay.moment.penalty` this once
     // emitted also mentions one, and would pass a weaker assertion while
     // dropping the scorer — which was the defect.
-    expect(got[2]!.line).toBe('overlay.moment.penaltyLine{"name":"H. Two"}');
+    expect(got[2]!.line).toBe(
+      'overlay.moment.goalKindLine{"name":"H. Two","kind":"overlay.moment.goalKind.penalty"}',
+    );
     expect(got.every((m) => m.tone === "led")).toBe(true);
   });
 
@@ -264,8 +266,101 @@ describe("football, hockey and ice hockey", () => {
     expect(got[0]).toMatchObject({
       kind: "goal",
       headline: "overlay.moment.goal",
-      line: "overlay.moment.penalty",
+      line: "overlay.moment.goalKind.penalty",
     });
+  });
+
+  it("a HOCKEY penalty stroke names its taker AND says stroke — football's parity", () => {
+    // The defect this closes: `PeriodGoal` is a `z.strictObject` with NO
+    // `penalty` field, so the football branch could never fire for hockey and
+    // a stroke reached air as a bare name — indistinguishable from a goal
+    // scored in open play.
+    const recent = recentOf("hockey", [
+      ["core.start", {}],
+      ["hockey.goal", { by: "H", person: "H-p1" }],
+      ["hockey.goal", { by: "H", person: "H-p2", kind: "stroke" }],
+      ["hockey.goal", { by: "H", person: "H-p1", kind: "pc" }],
+    ]);
+    const got = of("hockey", recent);
+    // Open play FIRST, so "the line carries the kind" cannot pass by every
+    // line carrying one.
+    expect(got[0]!.line).toBe("H. One");
+    expect(got[1]!.line).toBe(
+      'overlay.moment.goalKindLine{"name":"H. Two","kind":"overlay.moment.goalKind.stroke"}',
+    );
+    // And a SECOND kind, whose key differs from the first: one row cannot
+    // witness a table.
+    expect(got[2]!.line).toBe(
+      'overlay.moment.goalKindLine{"name":"H. One","kind":"overlay.moment.goalKind.penaltyCorner"}',
+    );
+    expect(got.every((m) => m.headline === "overlay.moment.goal")).toBe(true);
+  });
+
+  it("an ICE HOCKEY penalty shot, power play and short-handed goal each say which", () => {
+    const recent = recentOf("icehockey", [
+      ["core.start", {}],
+      ["icehockey.goal", { by: "H", person: "H-p1", kind: "ps" }],
+      ["icehockey.goal", { by: "H", person: "H-p2", kind: "pp" }],
+      ["icehockey.goal", { by: "A", person: "A-p1", kind: "sh" }],
+    ]);
+    expect(of("icehockey", recent).map((m) => m.line)).toEqual([
+      'overlay.moment.goalKindLine{"name":"H. One","kind":"overlay.moment.goalKind.penaltyShot"}',
+      'overlay.moment.goalKindLine{"name":"H. Two","kind":"overlay.moment.goalKind.powerPlay"}',
+      'overlay.moment.goalKindLine{"name":"A. One","kind":"overlay.moment.goalKind.shortHanded"}',
+    ]);
+  });
+
+  it("`og` stays a HEADLINE and adds no suffix, on the period kernel too", () => {
+    // `og` is in `cfg.goalKinds` for both period sports, so the table's
+    // exclusion of it is a real decision rather than an absence. Without this
+    // the sweep below would be satisfied by a table that named `og` as well,
+    // and an own goal would read "OWN GOAL / H. One · Own goal".
+    const recent = recentOf("hockey", [
+      ["core.start", {}],
+      ["hockey.goal", { by: "H", person: "H-p1", kind: "og" }],
+    ]);
+    const got = of("hockey", recent);
+    expect(got[0]!.headline).toBe("overlay.moment.ownGoal");
+    expect(got[0]!.line).toBe("H. One");
+  });
+
+  it("a period goal with a nameless taker shows the KIND alone, never an empty line", () => {
+    // `person` is optional in `PeriodGoal`, and a club that records the goal
+    // without the scorer is ordinary. The stroke must still say stroke.
+    const recent = recentOf("hockey", [
+      ["core.start", {}],
+      ["hockey.goal", { by: "H", kind: "stroke" }],
+    ]);
+    expect(of("hockey", recent)[0]!.line).toBe("overlay.moment.goalKind.stroke");
+  });
+
+  it("every goal kind the PERIOD SPORTS declare has a line key — a new kind is a missing key", () => {
+    // TWO sources of truth, neither of them this file: the KINDS come from each
+    // module's own parsed config (as the suspension sweep above does), and the
+    // KEY each one maps to comes from the overlay's own exported table. A
+    // literal typed here would be a third copy, and would keep asserting
+    // yesterday's answer after either moved.
+    //
+    // `fg` and `og` are excluded BY THIS ASSERTION rather than by the table
+    // quietly not naming them — a plain goal has nothing to add, and an own
+    // goal is the headline (pinned separately above).
+    for (const key of ["hockey", "icehockey"]) {
+      const kinds = (cfgFor(key) as { goalKinds: string[] }).goalKinds.filter(
+        (k) => k !== "fg" && k !== "og",
+      );
+      expect(kinds.length, `${key} declares no goal kinds — the probe is vacuous`).toBeGreaterThan(0);
+      for (const kind of kinds) {
+        const dictKey = GOAL_KIND_KEYS[kind];
+        expect(dictKey, `${key} declares goal kind "${kind}" and no key names it`).toBeDefined();
+        const recent = recentOf(key, [
+          ["core.start", {}],
+          [`${key}.goal`, { by: "H", person: "H-p1", kind }],
+        ]);
+        expect(of(key, recent)[0]!.line, `${key} goal kind ${kind} reaches air as a bare name`).toBe(
+          `overlay.moment.goalKindLine{"name":"H. One","kind":"${dictKey}"}`,
+        );
+      }
+    }
   });
 
   it("yellow cautions; red and a second yellow dismiss — and each has its own headline", () => {

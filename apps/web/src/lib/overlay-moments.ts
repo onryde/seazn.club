@@ -120,25 +120,64 @@ const ball: MomentRule = (ev, { msg }) => {
 };
 
 /**
+ * How a goal was scored, where the sport says — ONE table for both families.
+ *
+ * The two express it differently and neither can be read as the other:
+ * football's `FootballGoal` has a boolean `penalty` and NO `kind` at all, while
+ * the period kernel's `PeriodGoal` (`sports/period/kernel.ts`) has no `penalty`
+ * field and carries a `kind` validated against `cfg.goalKinds`. `recent.ts`
+ * already projects both (`kind` and `penalty`), so the mapping is the only
+ * thing that was missing — and until it existed a hockey penalty stroke, the
+ * exact counterpart of the football penalty the line names, reached air as a
+ * bare scorer's name.
+ *
+ * `"penalty"` is football's boolean, read as a pseudo-kind so the line composes
+ * in ONE place. No period sport declares a goal kind of that name, so the two
+ * cannot collide.
+ *
+ * `fg` and `og` are ABSENT BY DESIGN: a plain goal has nothing to add, and an
+ * own goal is the HEADLINE (`overlay.moment.ownGoal`), not a suffix. The test
+ * holds this table against hockey's and ice hockey's own declared `goalKinds`
+ * minus that pair, so a federation sheet growing a kind reds here rather than
+ * putting a goal on air with its set piece silently dropped.
+ */
+export const GOAL_KIND_KEYS: Readonly<Record<string, string>> = {
+  penalty: "overlay.moment.goalKind.penalty", // football — `penalty: true`
+  stroke: "overlay.moment.goalKind.stroke", // hockey — penalty stroke
+  pc: "overlay.moment.goalKind.penaltyCorner", // hockey — penalty corner
+  ps: "overlay.moment.goalKind.penaltyShot", // ice hockey — penalty shot
+  pp: "overlay.moment.goalKind.powerPlay", // ice hockey — power play
+  sh: "overlay.moment.goalKind.shortHanded", // ice hockey — short-handed
+};
+
+/**
  * Football's goal and the period kernel's, which the server already projects
  * through one shape.
  *
- * A PENALTY GOAL NAMES ITS SCORER **AND** SAYS IT WAS A PENALTY (owner ruling,
- * 2026-09-11). The first build read `penalty` as a REPLACEMENT for the name and
- * put "Penalty" on the line alone — so the one goal a crowd most wants a name
- * against was the only goal that never carried one. Both halves now go on the
- * line together, and the single-fact forms survive as fallbacks for the halves
- * that can genuinely be missing: a scorer the visibility rules masked away, or
- * a penalty the pad recorded with no person at all (`scorer` is optional in
- * `FOOTBALL_EVENT_SCHEMAS`).
+ * A GOAL NAMES ITS SCORER **AND** SAYS HOW IT WAS SCORED (owner ruling,
+ * 2026-09-11, extended to the period sports 2026-09-11). The first build read
+ * `penalty` as a REPLACEMENT for the name and put "Penalty" on the line alone —
+ * so the one goal a crowd most wants a name against was the only goal that
+ * never carried one. Both halves now go on the line together, and each half
+ * survives alone for the cases where the other is genuinely missing: a scorer
+ * the visibility rules masked away, or a goal the pad recorded with no person
+ * at all (`scorer`/`person` are optional in both schemas).
+ *
+ * ONE COMPOSITION, not one per sport. `overlay.moment.goalKindLine` is a
+ * template so a locale can reorder the two halves; a `[label, who].join(" · ")`
+ * here would freeze the order in code for every language at once.
  */
 const goal: MomentRule = (ev, { msg }) => {
   const who = name(ev);
-  const line = ev.payload.penalty
-    ? who === undefined
-      ? msg("overlay.moment.penalty")
-      : msg("overlay.moment.penaltyLine", { name: who })
-    : who;
+  const kind = ev.payload.penalty === true ? "penalty" : ev.payload.kind;
+  const key = typeof kind === "string" ? GOAL_KIND_KEYS[kind] : undefined;
+  const label = key === undefined ? undefined : msg(key);
+  const line =
+    label === undefined
+      ? who
+      : who === undefined
+        ? label
+        : msg("overlay.moment.goalKindLine", { name: who, kind: label });
   return {
     kind: "goal",
     tone: "led",
@@ -299,8 +338,8 @@ export const MOMENT_KEYS: readonly string[] = [
   ...Object.values(WICKET_KEYS),
   "overlay.moment.goal",
   "overlay.moment.ownGoal",
-  "overlay.moment.penalty",
-  "overlay.moment.penaltyLine",
+  "overlay.moment.goalKindLine",
+  ...Object.values(GOAL_KIND_KEYS),
   ...Object.values(CARDS).map((c) => c.key),
   "overlay.moment.penaltyHeadline",
   "overlay.moment.ace",

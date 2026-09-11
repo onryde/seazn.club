@@ -14,7 +14,7 @@ import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harn
 import { OverlaySlate, slateStateOf } from "../overlay-slate";
 import { OVERLAY_THEMES, defaultThemeFor, type OverlayThemeProps } from "../theme-registry";
 import { t } from "@/lib/i18n-runtime";
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DICT = join(HERE, "../../../dictionaries");
@@ -55,8 +55,8 @@ const BASE_MODEL: OverlayModel = {
   voided: false,
   header: { context: "overlay.header.live" },
   sides: [
-    { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
-    { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
+    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "2", led: false, serving: false },
+    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "1", led: true, serving: false },
   ],
   cellsKind: "none",
   cells: [],

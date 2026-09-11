@@ -346,37 +346,43 @@ export async function seedCricketOverlayFixture(page: Page): Promise<OverlayRig>
 }
 
 /**
- * A LIVE FOOTBALL fixture, rostered, with nothing on the ledger but `core.start`
- * (stream overlay W2, ruling 28).
+ * A LIVE ROSTERED fixture with nothing on the ledger but `core.start` — the
+ * shared body behind the two rigs below (stream overlay W2, rulings 28 and 31).
  *
- * It exists for ONE state the other two rigs cannot reach: a penalty goal.
- * `PeriodGoal` is a `strictObject` with no `penalty` field at all — hockey and
- * ice hockey express a stroke or a penalty corner through `kind`
- * (`hockey.ts:132`, `["fg","pc","stroke","og"]`), which the moment rules do not
- * read. `payload.penalty` is football's alone, so football is the only sport
- * whose goal can produce the `overlay.moment.penaltyLine` slab.
+ * It exists for ONE state the hockey and cricket rigs cannot reach: a goal that
+ * says HOW it was scored, with the scorer NAMED. Football expresses that as
+ * `penalty: true`; the period kernel's `PeriodGoal` has no `penalty` field at
+ * all and expresses a stroke, a penalty corner, a power play or a penalty shot
+ * through `kind`, validated against `cfg.goalKinds`. Both now reach the same
+ * slab (`GOAL_KIND_KEYS`), so both need a rostered rig — hence ONE body and two
+ * named entry points below.
  *
  * ROSTERED, not `skipLineups`: the whole point is that the line carries the
  * taker's NAME, and a name on air comes from the fixture line-up through the
- * public-site consent resolver. A rosterless seed would photograph a line with
- * nobody on it and prove the opposite of what it was shot for.
+ * public-site consent resolver (`readPublicLineups`). A rosterless seed would
+ * photograph a line with nobody on it and prove the opposite of what it was
+ * shot for — which is exactly why `seedOverlayFixture`'s hockey cards are
+ * nameless and cannot stand in for this.
  *
  * The goal itself is NOT seeded here. A moment fires on arrival, and the
  * overlay deliberately replays nothing on mount — so the caller opens the page
  * first and sends the goal while it is watching.
  */
-export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig> {
+async function seedRosteredOverlayRig(
+  page: Page,
+  spec: { sportKey: string; variantKey: string; prefix: string; label: string; squad: number },
+): Promise<OverlayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
-  const ownerEmail = `delivered+ovlf-${tag}@resend.dev`;
-  const orgSlug = `ovlf-org-${tag}`;
+  const ownerEmail = `delivered+${spec.prefix}-${tag}@resend.dev`;
+  const orgSlug = `${spec.prefix}-org-${tag}`;
 
   const { orgId } = await withDb(async (sql) => {
     const [{ id: userId }] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified)
-      values (${ownerEmail}, ${"Overlay Football Owner " + tag}, true) returning id`;
+      values (${ownerEmail}, ${`Overlay ${spec.label} Owner ` + tag}, true) returning id`;
     const [{ id: newOrgId }] = await sql<{ id: string }[]>`
       insert into organizations (name, slug, status, created_by)
-      values (${"Overlay Football Org " + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+      values (${`Overlay ${spec.label} Org ` + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
     await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
     const [{ id: subId }] = await sql<{ id: string }[]>`
       insert into subscriptions (owner_user_id, plan_key, status)
@@ -388,14 +394,14 @@ export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig
   await signInAs(page, ownerEmail);
   const request = page.request;
 
-  // Eleven a side: `11-a-side` inherits the eleven-slot position catalog, and a
-  // short roster cannot hold a legal line-up.
-  const home = Array.from({ length: 11 }, (_, i) => ({ fullName: `Home ${i + 1} ${tag}` }));
-  const away = Array.from({ length: 11 }, (_, i) => ({ fullName: `Away ${i + 1} ${tag}` }));
+  // A FULL side: a variant inherits its sport's position catalog, and a short
+  // roster cannot hold a legal line-up.
+  const home = Array.from({ length: spec.squad }, (_, i) => ({ fullName: `Home ${i + 1} ${tag}` }));
+  const away = Array.from({ length: spec.squad }, (_, i) => ({ fullName: `Away ${i + 1} ${tag}` }));
   const seeded = await seedRosteredFixture(request, {
-    label: `Overlay Football ${tag}`,
-    sportKey: "football",
-    variantKey: "11-a-side",
+    label: `Overlay ${spec.label} ${tag}`,
+    sportKey: spec.sportKey,
+    variantKey: spec.variantKey,
     home,
     away,
     entrantKind: "team",
@@ -403,7 +409,7 @@ export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig
 
   const takerName = `Home 9 ${tag}`;
   const taker = seeded.personIds[takerName];
-  if (taker === undefined) throw new Error(`football seed: no person for "${takerName}"`);
+  if (taker === undefined) throw new Error(`${spec.prefix} seed: no person for "${takerName}"`);
 
   await sendEvent(request, seeded.fixtureId, "core.start", {});
 
@@ -413,7 +419,7 @@ export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig
   );
   const div = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${seeded.divisionId}`);
   if (!comp.data?.slug || !div.data?.slug) {
-    throw new Error(`football seed: slugs missing (comp ${comp.status}, div ${div.status})`);
+    throw new Error(`${spec.prefix} seed: slugs missing (comp ${comp.status}, div ${div.status})`);
   }
 
   return {
@@ -429,6 +435,36 @@ export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig
     awayEntrantId: seeded.awayEntrantId,
     offenderIds: [taker],
   };
+}
+
+/** A LIVE ROSTERED FOOTBALL fixture — `offenderIds[0]` is the penalty taker. */
+export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig> {
+  return seedRosteredOverlayRig(page, {
+    sportKey: "football",
+    variantKey: "11-a-side",
+    prefix: "ovlf",
+    label: "Football",
+    squad: 11,
+  });
+}
+
+/**
+ * A LIVE ROSTERED FIELD HOCKEY fixture — `offenderIds[0]` takes the stroke
+ * (ruling 31, 2026-09-11).
+ *
+ * Distinct from `seedOverlayFixture`, which is also hockey: that one is
+ * `skipLineups` on purpose (the pad's rosterless case) and therefore can never
+ * put a NAME on air, which is the half of the stroke line this rig exists to
+ * photograph.
+ */
+export async function seedHockeyGoalOverlayFixture(page: Page): Promise<OverlayRig> {
+  return seedRosteredOverlayRig(page, {
+    sportKey: "hockey",
+    variantKey: "fih-outdoor",
+    prefix: "ovlh",
+    label: "Hockey",
+    squad: 11,
+  });
 }
 
 /** Lift `streaming.overlay` for this rig's org. No cache invalidation is

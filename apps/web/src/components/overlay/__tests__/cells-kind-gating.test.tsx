@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 
 /** Fix round 5 — both themes now resolve the brand wordmark through `msg`
  *  (`overlay.brand`, I5). Returning the key keeps every assertion below about
@@ -35,8 +35,8 @@ function classesOf(el: ReturnType<typeof walk>[number]): string {
 }
 
 const SIDES_PERIOD: OverlayModel["sides"] = [
-  { short: "RED", name: "Redbridge United", big: "1", led: false, serving: false },
-  { short: "BLU", name: "Blue Harbour", big: "0", led: false, serving: false },
+  { short: "RED", name: "Redbridge United", ladder: nameLadder({ id: "x", name: "Redbridge United" }), big: "1", led: false, serving: false },
+  { short: "BLU", name: "Blue Harbour", ladder: nameLadder({ id: "x", name: "Blue Harbour" }), big: "0", led: false, serving: false },
 ];
 
 /** A period-kernel sport (football) live, mid-match, WITH a period cell
@@ -55,8 +55,8 @@ const periodModel = (clock?: string): OverlayModel => ({
 });
 
 const SIDES_SET: OverlayModel["sides"] = [
-  { short: "MIL", name: "Milton Keynes Rovers", big: "21", led: false, serving: true },
-  { short: "NOR", name: "Northbridge Athletic", big: "18", led: true, serving: false },
+  { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "21", led: false, serving: true },
+  { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "18", led: true, serving: false },
 ];
 
 /** A set-kernel sport (badminton/volleyball family) live, mid-match, no

@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { OverlayBar } from "../overlay-bar";
 import { OverlayBug } from "../overlay-bug";
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CSS = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
@@ -29,8 +29,8 @@ const BASE_MODEL: OverlayModel = {
   voided: false,
   header: { context: "overlay.header.live" },
   sides: [
-    { short: "MIL", name: "Milton Keynes Rovers", big: "2", led: false, serving: false },
-    { short: "NOR", name: "Northbridge Athletic", big: "1", led: true, serving: false },
+    { short: "MIL", name: "Milton Keynes Rovers", ladder: nameLadder({ id: "x", name: "Milton Keynes Rovers" }), big: "2", led: false, serving: false },
+    { short: "NOR", name: "Northbridge Athletic", ladder: nameLadder({ id: "x", name: "Northbridge Athletic" }), big: "1", led: true, serving: false },
   ],
   cellsKind: "none",
   cells: [],

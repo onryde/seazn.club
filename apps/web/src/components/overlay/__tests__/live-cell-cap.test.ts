@@ -94,12 +94,35 @@ describe("the live cell's 480 px cap (_THEMES.md §3)", () => {
     // The negative pair. Capping the caption and truncating the names would
     // satisfy "the score is not squeezed" while breaking §1's ladder, which
     // is unchanged and applies to names.
+    //
+    // AMENDED FOR W2-F45. This once also asserted `not.toContain("overflow:
+    // hidden")` — written before the ladder existed, when the name's only
+    // defence was that nothing clipped it. That reading had it exactly
+    // backwards: with no clip and no ladder a 34-character name SPILLED, and
+    // the measured result was the away name painted across the brand mark.
+    // §1 forbids an ELLIPSIS, which is `text-overflow`, and that prohibition
+    // stands. The clip is the mechanical floor beneath the ladder — it holds
+    // the one frame before `TeamName` has measured, and never the resting
+    // state.
     const body = ruleBody(".ovl-team-name");
-    expect(body, "§1's ladder shrinks a long name, it never clips one").toContain("white-space: nowrap");
-    expect(body).not.toContain("text-overflow");
-    expect(body).not.toContain("overflow: hidden");
+    expect(body, "§1's ladder shrinks a long name, it never wraps one").toContain("white-space: nowrap");
+    expect(body, "§1 forbids an ellipsis — the step down is a whole shorter name").not.toContain("text-overflow");
+    expect(body, "a name that cannot shrink spills into the next cell").toContain("min-width: 0");
+    expect(body, "the floor under the ladder, for the frame before it measures").toContain("overflow: hidden");
     // And the team cells are still the ones that absorb the width the cap
     // gives back — the whole reason the cap is worth having.
     expect(ruleBody(".ovl-team-cell")).toContain("flex: 1 1 auto");
+  });
+
+  it("the bar renders the LADDER, not the name — a CSS floor is not the rule", () => {
+    // The wiring half, and the reason the amendment above is not a weakening:
+    // `overflow: hidden` alone would satisfy every assertion in this file and
+    // put a clipped name on air forever. §1's answer is a whole shorter name.
+    const bar = readFileSync(join(HERE, "../overlay-bar.tsx"), "utf8");
+    expect(bar, "the bar reads `side.name` again — the ladder is bypassed").not.toMatch(
+      /className="ovl-team-name"[^>]*>\{side\.name\}/,
+    );
+    expect(bar).toContain("<TeamName ladder={side.ladder} />");
+    expect(bar, "the rungs are measured, not counted").toContain("pickNameRung");
   });
 });
