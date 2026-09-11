@@ -128,6 +128,7 @@
 // `apps/web` — every wire shape below is a hand mirror, cited against the
 // real schema/usecase it copies.
 import { newSession, request, signIn, type RequestOptions, type Session } from "./http.ts";
+import { SETTLED_AT_GENERATION } from "./board.ts";
 import { fixtureKey, type PackCourt, type PackStream, type PackVenue } from "./pack-schema.ts";
 import type { MintedInvite } from "./people.ts";
 import type {
@@ -236,7 +237,7 @@ interface GenerateOut {
   // `created`/`existing` (stages.ts:1038-1039) are not surfaced here —
   // nothing in this task's return shape needs the idempotency diff; a later
   // task owns idempotent re-seeding (brief: "do NOT build idempotence").
-  fixtures: { id: string; ext_key?: string | null }[];
+  fixtures: { id: string; ext_key?: string | null; status?: string | null }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +252,16 @@ export interface GeneratedFixtureRef {
   readonly divisionRef: string;
   readonly extKey: string | null | undefined;
   readonly id: string;
+  /** The status `/generate` gave it. Carried because a bracket settles its own
+   *  BYES at creation — `stages.ts:1351` stamps `forfeited` on any generated
+   *  game with an `award` — and a settled fixture legitimately has no stream:
+   *  there is no opponent and no event to fold. Optional so the dozens of
+   *  hand-built refs in tests that predate byes keep compiling; absent reads
+   *  as `scheduled`, which is the strict side. */
+  readonly status?: string | null;
 }
+
+
 
 /**
  * Matches every `PackStream` to the real fixture it names, by
@@ -276,7 +286,7 @@ export function bindStreamFixtures(
   streams: readonly PackStream[],
   fixtures: readonly GeneratedFixtureRef[],
 ): ReadonlyMap<string, string> {
-  const byKey = new Map<string, string>();
+  const byKey = new Map<string, GeneratedFixtureRef>();
   for (const f of fixtures) {
     // `FixtureRow.ext_key` is typed `string | null | undefined`
     // (apps/web/src/server/usecases/stages.ts:205) ONLY because "dozens of
@@ -295,19 +305,19 @@ export function bindStreamFixtures(
           `(${JSON.stringify(f.extKey)}) — a real /generate response always sets one; cannot bind any stream to it`,
       );
     }
-    byKey.set(fixtureKey(f.divisionRef, f.extKey), f.id);
+    byKey.set(fixtureKey(f.divisionRef, f.extKey), f);
   }
 
   const result = new Map<string, string>();
   const unmatched: string[] = [];
   for (const stream of streams) {
     const key = fixtureKey(stream.divisionRef, stream.fixtureExtKey);
-    const id = byKey.get(key);
-    if (id === undefined) {
+    const found = byKey.get(key);
+    if (found === undefined) {
       unmatched.push(`division "${stream.divisionRef}" ext_key "${stream.fixtureExtKey}"`);
       continue;
     }
-    result.set(key, id);
+    result.set(key, found.id);
   }
   if (unmatched.length > 0) {
     throw new Error(
@@ -315,11 +325,24 @@ export function bindStreamFixtures(
     );
   }
 
+  // An unclaimed fixture is usually a missing stream — but not always. A
+  // bracket settles its own byes at creation (`stages.ts:1351`), and a bye has
+  // no opponent and no events, so `PackStream` cannot express one: `home` and
+  // `away` are both required and `events` is `.min(1)`. Suite 11 is the first
+  // pack with byes (49 of them across two 128-slot draws) and this guard
+  // refused the whole seed.
+  //
+  // So the exemption is POSITIVE — the fixture must actually be settled — and
+  // the strict half is unchanged: an unclaimed fixture still sitting at
+  // `scheduled` is a missing stream and still throws, naming both sides.
+  // Exempting "unclaimed" wholesale would have hidden exactly the defect this
+  // guard was written for.
   const unclaimed = [...byKey.entries()].filter(([key]) => !result.has(key));
-  if (unclaimed.length > 0) {
+  const unclaimedScheduled = unclaimed.filter(([, f]) => !SETTLED_AT_GENERATION.has(f.status ?? "scheduled"));
+  if (unclaimedScheduled.length > 0) {
     throw new Error(
-      `seedSuite: ${unclaimed.length} generated fixture(s) were claimed by no stream: ` +
-        unclaimed.map(([key, id]) => `${key} -> fixture ${id}`).join("; "),
+      `seedSuite: ${unclaimedScheduled.length} generated fixture(s) were claimed by no stream: ` +
+        unclaimedScheduled.map(([key, f]) => `${key} -> fixture ${f.id} (${f.status ?? "scheduled"})`).join("; "),
     );
   }
 
@@ -669,7 +692,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
           const out = await t.request<GenerateOut>(base, s, `/api/v1/stages/${stageId}/generate`, {
             method: "POST",
           });
-          for (const f of out.fixtures) generated.push({ divisionRef: d.ref, extKey: f.ext_key, id: f.id });
+          for (const f of out.fixtures) generated.push({ divisionRef: d.ref, extKey: f.ext_key, id: f.id, status: f.status });
         }),
       );
     }),

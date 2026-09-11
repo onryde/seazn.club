@@ -265,6 +265,65 @@ describe("certify — the wiring guards", () => {
   });
 });
 
+// B06b — a published timetable can genuinely contradict itself. Suite 11's
+// sources put two matches on one board at overlapping times, agreed by three
+// independent feeds, and no `matchMinutes` reconciles that: any width above
+// the gap reports it and any width below is shorter than every real match,
+// which would make the whole check vacuous. A breach landing ONLY on rows the
+// pack declared gets its own branch and does not gate.
+describe("certify — HISTORY_SELF_CONFLICT, the declared-source-conflict branch", () => {
+  /** Both fixtures of the double-booking, declared. `doubleBookedHistory()`
+   *  moves `fx-1` (`r1-b`) onto `fx-0`'s (`r1-a`) court and instant, so the
+   *  finding names both and both must be declared. */
+  const bothDeclared = (): PackHistoricalAssignment[] =>
+    historyRows().map((row) =>
+      row.fixtureExtKey === "r1-a" || row.fixtureExtKey === "r1-b"
+        ? { ...row, knownConflict: "three independent feeds agree the real timetable double-books this board" }
+        : row,
+    );
+
+  it("reports without gating when every breach lands on a declared row", () => {
+    const v = certify(input({ historical: bothDeclared(), historyBoard: doubleBookedHistory() }));
+
+    expect(v.branch).toBe("HISTORY_SELF_CONFLICT");
+    expect(v.red).toBe(false);
+    // The reason carries the pack's own words, so a reader is not left to
+    // guess why a breach was waived.
+    expect(v.reason).toMatch(/three independent feeds/);
+    // And the findings are still REPORTED — waived is not hidden.
+    expect(v.violations.length).toBeGreaterThan(0);
+  });
+
+  it("STILL reds when even one fixture of the breach is undeclared", () => {
+    // The positive pair, and the whole reason the declaration is per-ROW: an
+    // exemption spread over breaches nobody looked at is a disarmed gate.
+    const onlyOne = historyRows().map((row) =>
+      row.fixtureExtKey === "r1-a" ? { ...row, knownConflict: "half the story" } : row,
+    );
+
+    const v = certify(input({ historical: onlyOne, historyBoard: doubleBookedHistory() }));
+
+    expect(v.branch).toBe("PACK_AUTHORING_BUG");
+    expect(v.red).toBe(true);
+  });
+
+  it("is unreachable for a pack that declares nothing — the old behaviour, unchanged", () => {
+    const v = certify(input({ historyBoard: doubleBookedHistory() }));
+
+    expect(v.branch).toBe("PACK_AUTHORING_BUG");
+    expect(v.red).toBe(true);
+  });
+
+  it("does not fire on a CLEAN history that happens to carry a declaration", () => {
+    // A declaration is permission for a breach that occurs, never an assertion
+    // that one must. A clean board certifies FEASIBLE regardless.
+    const v = certify(input({ historical: bothDeclared() }));
+
+    expect(v.branch).toBe("FEASIBLE");
+    expect(v.red).toBe(false);
+  });
+});
+
 describe("certify — branch 2, PACK_AUTHORING_BUG", () => {
   it("PACK_AUTHORING_BUG when the REAL timetable violates our own encoding", () => {
     const v = certify(input({ historyBoard: doubleBookedHistory(), solverStatus: "infeasible" }));

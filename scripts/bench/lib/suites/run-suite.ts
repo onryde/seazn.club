@@ -149,6 +149,7 @@ import { certify } from "../certificate.ts";
 import { assessBelievability, assessEngineDelta, type BelievabilityReport } from "../believability.ts";
 import {
   judgeDivision,
+  renderHistoryBoard,
   type Board,
   type BoardFixture,
   type CertificateVerdict,
@@ -844,6 +845,19 @@ function leagueBoundStreamCount(pack: Pack, plan: SeedPlan): number {
   return count;
 }
 
+/**
+ * B06b — does this pack have a league stage at all?
+ *
+ * `fixtureCountIssue` deliberately NAMES a missing league expectation rather
+ * than no-op'ing silently, and its own test pins that. But suite 11 is
+ * knockout-only in both divisions, so there is no league count to check and
+ * that note reddened the whole run. Both intents hold once severity is the
+ * caller's decision: the absence is still REPORTED, just not gated.
+ */
+export function packDeclaresLeagueStage(plan: SeedPlan): boolean {
+  return plan.divisions.some((d) => d.stages.some((s) => s.kind === "league"));
+}
+
 export function fixtureCountIssue(
   actual: number,
   plan: SeedPlan,
@@ -1262,7 +1276,30 @@ export function resolveScheduleLocks(
       ? undefined
       : seeded.fixtureIdByKey.get(fixtureKey(ref, stream.fixtureExtKey));
 
-  if (fixtureId === undefined || typeof startAt !== "string" || courtId === undefined) {
+  // B06b — PIN AT THE FIXTURE'S OWN HISTORICAL START when the pack declares
+  // one. Pinning the first stream's fixture at the DIVISION's `startAt` is
+  // only coherent when the pack's first stream is also its first match, which
+  // is true of `_tiny` by construction and false of any real tournament:
+  // suite 11 pinned a first-round match at 12:30 on a day the tournament
+  // played an evening session only, and the certificate correctly reported
+  // `pin_moved`. A pin that contradicts history tests nothing about pin
+  // integrity — it only re-reports the disagreement it created.
+  const historyRow =
+    stream === undefined
+      ? undefined
+      : (pack.historicalAssignment ?? []).find(
+          (h) => h.divisionRef === ref && h.fixtureExtKey === stream.fixtureExtKey,
+        );
+  const historicalCourtId =
+    historyRow?.court === undefined
+      ? undefined
+      : seeded.courtIdByRef.get(
+          pack.venues?.flatMap((v) => v.courts).find((c) => c.name === historyRow.court)?.ref ?? "",
+        );
+  const pinnedAt = historyRow?.startsAt ?? startAt;
+  const pinnedCourtId = historicalCourtId ?? courtId;
+
+  if (fixtureId === undefined || typeof pinnedAt !== "string" || pinnedCourtId === undefined) {
     notes.push(
       `no fixture was pinned in "${ref}" — ` +
         `fixture=${fixtureId ?? `unresolved (stream ${stream?.fixtureExtKey ?? "none declared"})`}, ` +
@@ -1272,7 +1309,13 @@ export function resolveScheduleLocks(
     );
     return { locks, notes };
   }
-  locks.set(ref, { fixtureId, scheduledAt: startAt, courtId });
+  locks.set(ref, { fixtureId, scheduledAt: pinnedAt, courtId: pinnedCourtId });
+  if (historyRow !== undefined) {
+    notes.push(
+      `pinned "${stream?.fixtureExtKey ?? "?"}" at its OWN historical start ${pinnedAt} ` +
+        `rather than the division's startAt — a pin that contradicts history checks nothing`,
+    );
+  }
   return { locks, notes };
 }
 
@@ -1859,7 +1902,17 @@ export async function runPackSuite(
     // `seeded.fixtureIdByKey.size` stopped being the right number the moment
     // `d-tiny` grew a second, non-league stage.
     const countIssue = fixtureCountIssue(leagueBoundStreamCount(pack, plan), plan);
-    if (countIssue !== null) errors.push(countIssue);
+    if (countIssue !== null) {
+      // B06b — a knockout-only pack has no league fixture count to check, and
+      // that is NO SUBJECT rather than a defect: suite 11 is knockout in both
+      // divisions and this note reddened its entire run. `fixtureCountIssue`
+      // still NAMES the absence (its own test pins that it never no-ops
+      // silently) — severity is decided here instead, so the note is reported
+      // without gating. A league stage that EXISTS and declares no
+      // expectation still reds, unchanged.
+      if (packDeclaresLeagueStage(plan)) errors.push(countIssue);
+      else warnings.push(`${countIssue} — this pack declares no league stage, so there is nothing to check`);
+    }
     timings.seedMs = Math.round(performance.now() - seedStart);
 
     // B03 prompt's acceptance line: `pino: suite_seeded (org, persons,
@@ -2134,18 +2187,40 @@ export async function runPackSuite(
             "and the fetched board's unplaced count is the only placement evidence this division has";
           scheduleErrors.push(metricsNote);
         }
+        // B06b — the history board, rendered from the pack's declared
+        // timetable. Until suite 11 no pack declared one, so this was
+        // `undefined` and `certify` answered SKIPPED_NO_HISTORY; the first
+        // pack with rows made it throw, deliberately, because "a fallback
+        // that let the run continue would certify a timetable against nothing
+        // and report FEASIBLE". That work is now done rather than smoothed
+        // over — see `renderHistoryBoard`.
+        //
+        // Still `undefined` when the pack declares nothing, so `_tiny` keeps
+        // its SKIPPED_NO_HISTORY verdict exactly as before.
+        let historyBoard: Board | undefined;
+        if (board !== undefined && (pack.historicalAssignment ?? []).some((h) => h.divisionRef === ref)) {
+          const declaredMinutes = pack.divisions.find((d) => d.ref === ref)?.scheduleConfig?.matchMinutes;
+          const rendered = renderHistoryBoard({
+            board,
+            historical: pack.historicalAssignment ?? [],
+            divisionRef: ref,
+            matchMinutes: typeof declaredMinutes === "number" ? declaredMinutes : 60,
+          });
+          historyBoard = rendered.board;
+          // Unmatched rows are reported, never dropped: a history row naming a
+          // court or fixture the board does not carry is judged by nothing, and
+          // a certificate that quietly skipped it would read as FEASIBLE.
+          if (rendered.unmatched.length > 0) {
+            scheduleErrors.push(
+              `certificate: ${ref} history has ${rendered.unmatched.length} unmatched row(s): ` +
+                `${rendered.unmatched.slice(0, 5).join("; ")}`,
+            );
+          }
+        }
         try {
           certificate = certify({
             historical: pack.historicalAssignment,
-            // NO PACK THE BENCH RUNS TODAY DECLARES HISTORY — `_tiny` has no
-            // real-world timetable (design §7), so this is `undefined` and
-            // `certify` answers SKIPPED_NO_HISTORY. The first pack that DOES
-            // declare rows makes `certify` throw here, loudly, and that throw
-            // is routed into `scheduleErrors` below rather than smoothed over:
-            // rendering history into a `Board` is a real piece of work, and a
-            // fallback that let the run continue would certify a timetable
-            // against nothing and report FEASIBLE.
-            historyBoard: undefined,
+            historyBoard,
             constraints,
             solverStatus: outcome.solverStatus,
             placed: metrics?.placed ?? 0,
@@ -2972,12 +3047,29 @@ export async function runPackSuite(
           { streams: divisionAStreams.length },
           `${suiteKey}: folding division A's streams through the single-event scoring route (B05 T1)`,
         );
+        // B06b — fold in DEPENDENCY WAVES, not one flat `Promise.all`. A
+        // bracket fixture's entrants are written by its feeders' decisions, so
+        // posting round 2 concurrently with round 1 refuses every later round
+        // with `WRONG_PHASE — fixture has an unassigned entrant (bye/TBD)`.
+        // The round comes off the REAL board rather than being parsed out of
+        // the generator's `se-r{n}-i{m}` ext key: the key format is the
+        // product's, and reading `round_no` keeps this correct for any stage
+        // kind rather than for the ones whose keys happen to encode a round.
+        const divisionAId = seeded.divisionIdByRef.get(division0.ref);
+        const roundByFixtureKey = new Map<string, number>();
+        if (divisionAId !== undefined) {
+          for (const f of await fetchDivisionFixtures(base, s, divisionAId, input.oracleTransport)) {
+            if (f.ext_key == null || f.round_no == null) continue;
+            roundByFixtureKey.set(fixtureKey(division0.ref, f.ext_key), f.round_no);
+          }
+        }
         const sim = await simulateDivisionStreams({
           base,
           session: s,
           streams: divisionAStreams,
           fixtureIdByKey: seeded.fixtureIdByKey,
           refIdByKey,
+          roundByFixtureKey,
           ...(input.simTransport === undefined
             ? {}
             : { transport: input.simTransport }),

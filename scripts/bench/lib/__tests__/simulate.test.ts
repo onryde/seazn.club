@@ -167,6 +167,102 @@ describe("resolvePayloadRefs", () => {
 // simulateDivisionStreams — the fold
 // ---------------------------------------------------------------------------
 
+// B06b — a bracket's fixtures are NOT independent of each other. A knockout
+// fixture's entrants are written by its feeders' decisions, so folding round 2
+// concurrently with round 1 refuses every later round with `WRONG_PHASE —
+// fixture has an unassigned entrant (bye/TBD)`. Suite 11 lost 63 of 95
+// fixtures to this; `_tiny` could never see it, because its only
+// multi-fixture stage is a league and its knockout is a single fixture.
+describe("simulateDivisionStreams — dependency waves", () => {
+  /** Records the ORDER events reached the transport, and holds each call open
+   *  until every call of its round has arrived — so a flat `Promise.all`
+   *  interleaves rounds observably instead of racing to a lucky order. */
+  function orderRecordingTransport(): { transport: SimTransport; order: string[] } {
+    const order: string[] = [];
+    return {
+      order,
+      transport: {
+        async raw(_b, _s, path) {
+          order.push(path);
+          // One macrotask of slack: enough for any concurrently-started
+          // sibling to land before this one resolves.
+          await new Promise((r) => setTimeout(r, 0));
+          return ok201();
+        },
+      },
+    };
+  }
+
+  const bracket = () => {
+    const streams = [
+      stream("d-ko", "se-r1-i0", [ev("core.start")]),
+      stream("d-ko", "se-r0-i0", [ev("core.start")]),
+      stream("d-ko", "se-r0-i1", [ev("core.start")]),
+    ];
+    const fixtureIdByKey = new Map([
+      [fixtureKey("d-ko", "se-r0-i0"), "fx-r0a"],
+      [fixtureKey("d-ko", "se-r0-i1"), "fx-r0b"],
+      [fixtureKey("d-ko", "se-r1-i0"), "fx-r1"],
+    ]);
+    const roundByFixtureKey = new Map([
+      [fixtureKey("d-ko", "se-r0-i0"), 1],
+      [fixtureKey("d-ko", "se-r0-i1"), 1],
+      [fixtureKey("d-ko", "se-r1-i0"), 2],
+    ]);
+    return { streams, fixtureIdByKey, roundByFixtureKey };
+  };
+
+  it("folds every round-1 fixture BEFORE any round-2 fixture, even when the streams arrive out of order", async () => {
+    const { transport, order } = orderRecordingTransport();
+    const { streams, fixtureIdByKey, roundByFixtureKey } = bracket();
+
+    const result = await simulateDivisionStreams(
+      baseInput({ streams, fixtureIdByKey, roundByFixtureKey, transport }),
+    );
+
+    expect(result.eventsSent).toBe(3);
+    // The round-2 fixture is FIRST in the stream array and must still be last
+    // on the wire.
+    expect(order.map((p) => (p.includes("fx-r1") ? "r2" : "r1"))).toEqual(["r1", "r1", "r2"]);
+  });
+
+  it("without the round map, behaves exactly as before — one flat wave", async () => {
+    const { transport, order } = orderRecordingTransport();
+    const { streams, fixtureIdByKey } = bracket();
+
+    await simulateDivisionStreams(baseInput({ streams, fixtureIdByKey, transport }));
+
+    // Concurrent across all three, so the round-2 fixture (first in the array)
+    // reaches the wire first. This is the OLD behaviour, kept for leagues —
+    // and it is exactly what broke suite 11.
+    expect(order[0]).toContain("fx-r1");
+  });
+
+  it("keeps a stream whose fixture has no round in its own first wave rather than dropping it", async () => {
+    const { transport, order } = orderRecordingTransport();
+    const { streams, fixtureIdByKey, roundByFixtureKey } = bracket();
+    // An unmapped fixture is a binding anomaly `bindStreamFixtures` should
+    // have refused; folding it first surfaces it instead of hiding it.
+    roundByFixtureKey.delete(fixtureKey("d-ko", "se-r0-i1"));
+
+    const result = await simulateDivisionStreams(
+      baseInput({ streams, fixtureIdByKey, roundByFixtureKey, transport }),
+    );
+
+    expect(result.eventsSent).toBe(3);
+    expect(order[0]).toContain("fx-r0b");
+  });
+
+  it("folds nothing, and returns a clean empty result, for an empty stream list", async () => {
+    const { transport, order } = orderRecordingTransport();
+    const result = await simulateDivisionStreams(
+      baseInput({ streams: [], fixtureIdByKey: new Map(), roundByFixtureKey: new Map(), transport }),
+    );
+    expect(result.eventsSent).toBe(0);
+    expect(order).toEqual([]);
+  });
+});
+
 describe("simulateDivisionStreams — expected_seq discipline", () => {
   it("sends expected_seq as the event's 0-based array index — the FIRST call is 0, never 1", async () => {
     const seqs: number[] = [];

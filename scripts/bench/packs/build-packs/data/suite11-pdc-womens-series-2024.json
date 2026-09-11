@@ -1,0 +1,2267 @@
+{
+  "meta": {
+    "series": "PDC Women's Series 2024",
+    "eventChosen": "Event 1",
+    "eventDate": "2024-03-23",
+    "venue": "Robin Park Tennis Court, Wigan, England",
+    "whyChosen": "It is the joint-largest and a fully complete draw: DartConnect (the PDC's official scoring provider for the series) publishes all seven knockout rounds with leg scores for every one of the 110 matches, DartConnect's own event record reports match_count 110 / completed_match_count 110 / player_count 111 with no unplayed or unscored match, and the bracket feed and the separate matches API agree on all 110 results with zero discrepancies, while Wikipedia independently reproduces the last eight matches and BBC Sport and Sky Sports both filed reports on this specific event.",
+    "fieldSize": 111,
+    "sources": [
+      "https://en.wikipedia.org/wiki/2024_PDC_Women%27s_Series",
+      "https://en.wikipedia.org/w/index.php?title=2024_PDC_Women%27s_Series&action=raw",
+      "https://tv.dartconnect.com/event/pdcwomseries24e01/brackets/52152",
+      "https://tv.dartconnect.com/event/pdcwomseries24e01/matches",
+      "https://tv.dartconnect.com/api/event/pdcwomseries24e01/entries",
+      "https://tv.dartconnect.com/api/event/pdcwomseries24e01/matches",
+      "https://tv.dartconnect.com/event/pdcwomseries24e02/brackets/52152",
+      "https://tv.dartconnect.com/event/pdcwomseries24e03/brackets/52152",
+      "https://tv.dartconnect.com/event/pdcwomseries24e04/brackets/52152",
+      "https://en.wikipedia.org/w/index.php?title=2025_PDC_World_Darts_Championship&action=raw",
+      "https://www.pdc.tv/tournament/womens-series-1-2-2 (fetched; client-rendered SPA shell, yielded no event text)",
+      "https://www.pdc.tv/news/2024/03/23/sherrock-van-leuven-triumph-2024-pdc-womens-series-begins (fetched; SPA shell, yielded no article text)",
+      "https://www.pdc.tv/news/2024/03/22/womens-series-entries-above-three-figures-ahead-opening-weekend (fetched; SPA shell, yielded no article text)",
+      "https://leaderboard.dartconnect.com/leaderboard (fetched; SPA shell, no per-player data)",
+      "https://checkin.dartconnect.com/tournaments/pdcwomseries24e01 (fetched; HTTP 404)",
+      "https://pdpa.co.uk/event/pdc-womens-series-2024-ws-1/ (fetched; HTTP 404 — PDPA 2024 event pages are gone)"
+    ],
+    "fetchedOn": "2026-09-10",
+    "unknowns": [
+      "Byes are DERIVED, not published. DartConnect records no bye rows. The 17 R1 byes are the Last-64 entrants who were not Last-128 winners; this is verified exactly (47 R1 matches -> 47 winners, all 47 present in the Last 64, 0 R1 losers reappearing, 47+17=64 slots). Their notional R1 draw-sheet slot is not published, so matchNo 48-64 are assigned in Last-64 bracket order rather than from a published draw position.",
+      "Player-name order is normalised. Every source used prints 'Surname, Forename' (e.g. 'Sherrock, Fallon'); names here are rendered 'Forename Surname' with spelling and characters preserved verbatim, including the U+2019 curly apostrophe in 'Chloe O’Brien'. No diacritic was added or removed; note DartConnect itself prints some names without diacritics (e.g. 'Barbora Hospodarska').",
+      "Country values are DartConnect's own entry-list values, not a home-nation authority. Six players are recorded as 'United Kingdom' (a generic GB flag rather than an England/Scotland/Wales/Northern Ireland home nation): Rowena Sidley, Trina Gulliver, Kim Holden, Angela Kirkwood, Natasha Eaves, Anna Madigan. Anastasia Dobromyslova is recorded as 'World' (null country code). DartConnect's own WDF-nation summary for the same event disagrees slightly (Ireland 9 vs 8, Netherlands 13 vs 14) and totals 110 of the 111 entrants.",
+      "Venue is from Wikipedia only ('Robin Park Tennis Court' in Wigan, wikilinked to Robin Park Arena). PDC's own event and news pages are client-rendered SPAs that returned no venue text, and PDPA's 2024 event pages now return 404, so the exact venue name is not corroborated by a PDC source. Wikipedia gives the co-located Event 2 as 'Robin Park Arena', so the two names may denote different halls on the same site.",
+      "bestOfLegs is not stated per round by any source; it is inferred, but from three agreeing lines of evidence: DartConnect's tournament match_format is legs_limit 7 / legs_mode BEST-OF; every winner in R1-R4 finished on exactly 4 legs with a loser maximum of 3 (best of 7), and every winner in QF/SF/F on exactly 5 with a loser maximum of 4 (best of 9); and Wikipedia labels the QF, SF and Final bracket 'best of 9 legs'. The exact round at which the PDC switched format is therefore evidenced but not quoted from a rulebook.",
+      "No walkover or withdrawal is recorded by the source for any of the 110 contested matches, so every contested match here has walkover:false. DartConnect's per-match 'wo' flag is set on 60 matches that all carry full leg scores, so it does not denote a walkover and was deliberately not used.",
+      "Leg scores are match leg totals only. Per-leg detail (leg-by-leg winners, checkouts) is not published in the feeds used. Board numbers, match start times and three-dart averages ARE published by DartConnect but fall outside the requested schema and were not carried into this file.",
+      "Match order within each round follows DartConnect's own match_number (contiguous 1..n, no gaps). Whether that ordering equals the printed draw-sheet position is not stated by the source.",
+      "Board numbers and match start/end times are now carried (see meta.boards): all 110 contested matches have a board (1-16) and a published start, end and duration; the 17 derived bye rows carry none of these fields, because DartConnect records no row for them at all. What is still missing: (1) no SCHEDULED start is published for any match — sched_time is null on all 110 rows of the board-management-tool feed — so every time here is an ACTUAL observed time, and the file cannot say what time a match was due on the board versus when it actually threw; (2) times are minute-resolution as published (the recap pages print HH:MM AM/PM), so start+durationMin and endTime disagree by one minute on 19 of the 110 rows and the board-management-tool's second-resolution complete_date disagrees with endTime by up to two minutes on 9 rows — all of it seconds rounding, not conflicting data, but a scheduler must not treat these timestamps as exact to the second; (3) no changeover, board-call or walk-on allowance is published, so the gap between one match ending and the next starting on the same board is observed, not a stated turnaround rule; (4) the three-dart averages that DartConnect publishes alongside these fields are still deliberately not carried. (5) The published data is NOT a conflict-free board timetable and was not adjusted to become one: on 93 of the 94 consecutive same-board pairs the next match starts at or after the previous one's end (turnaround gaps 0 to 38 minutes, median 5), but board 2 carries one genuine overlap — R3 Donna Pinch v Kyana Frauenfelder is published as 12:23-12:40 and R4 Deta Hedman v Fallon Sherrock as 12:32-12:43, both on board 2 in all three DartConnect feeds. Nothing was invented or shifted to remove it; treat it as evidence that the published board number is the assignment recorded at match creation and the published start is when the match was opened on the scoring device, neither of which is guaranteed to be the physical board or the first dart. Peak concurrency across the day is exactly 16, equal to the board count."
+    ],
+    "boards": {
+      "count": 16,
+      "numbers": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "source": "https://tv.dartconnect.com/api/board-management-tool/pdcwomseries24e01/matches (POST, field board_number); independently confirmed board-for-board on all 110 matches by https://tv.dartconnect.com/api/event/pdcwomseries24e01/matches (POST, fields bn/bns) and https://tv.dartconnect.com/api/event/pdcwomseries24e01/bracket/51294 (POST, field bn) — three DartConnect endpoints, zero disagreements.",
+      "timesSource": "https://recap.dartconnect.com/games/{matchId} for each of the 110 matches (Inertia props matchInfo.match_start_date / match_end_date / match_length; matchId is the 'mi' value from https://tv.dartconnect.com/api/event/pdcwomseries24e01/matches).",
+      "timesAre": "BOTH ends are published and distinct: startTime is the match START and endTime the match END. Verified two ways. (1) The recap page publishes match_start_date and match_end_date as separate values whose difference equals its own published match_length for 91 of 110 rows and is within one minute for the other 19 (both sources round seconds to the minute). (2) The board-management-tool endpoint publishes only a completion time (complete_date/complete_time, and sched_time is null for all 110 — no scheduled start was ever published); its complete_time equals the recap's match_end_date, not match_start_date, on 101 of 110 rows and is within two minutes on the other 9. So the completion feed alone would have been END times; the start times here come from the recap pages, which publish the start separately.",
+      "timezone": "Europe/London, which on 2024-03-23 was GMT = UTC+00:00 (British Summer Time did not begin until 2024-03-31), so the local wall-clock times published by DartConnect are written here unchanged with a Z suffix. Established four ways: (a) DartConnect's own tournament record for this event declares \"timezone\":\"Europe/London\" (Inertia prop tournamentInfo.timezone on https://tv.dartconnect.com/event/pdcwomseries24e01/matches); (b) the board-management-tool feed returns the same instant twice — a raw stored value complete_date '2024-03-23 06:26:56' and a rendered complete_time '10:26' — a constant +4h on all 110 rows, i.e. DartConnect stores naive America/New_York (EDT = UTC-4 on that date) and renders into the event's Europe/London zone, and it is the rendered value that is used here; (c) same-day Event 2 at the same venue occupies 14:55-19:13 in the same rendered frame, immediately after Event 1's 10:09-14:35, which only makes sense as a UK double-session day (in the raw stored frame Event 1 would have started at 06:09 local); (d) PDC's own preview of the weekend puts live PDCTV coverage of this session at 'approximately 1000 GMT', matching the first published start of 10:09."
+    }
+  },
+  "roundFormat": [
+    {
+      "round": "R1",
+      "label": "Last 128",
+      "bestOfLegs": 7,
+      "matchCount": 64
+    },
+    {
+      "round": "R2",
+      "label": "Last 64",
+      "bestOfLegs": 7,
+      "matchCount": 32
+    },
+    {
+      "round": "R3",
+      "label": "Last 32",
+      "bestOfLegs": 7,
+      "matchCount": 16
+    },
+    {
+      "round": "R4",
+      "label": "Last 16",
+      "bestOfLegs": 7,
+      "matchCount": 8
+    },
+    {
+      "round": "QF",
+      "label": "Quarter-final",
+      "bestOfLegs": 9,
+      "matchCount": 4
+    },
+    {
+      "round": "SF",
+      "label": "Semi-final",
+      "bestOfLegs": 9,
+      "matchCount": 2
+    },
+    {
+      "round": "F",
+      "label": "Final",
+      "bestOfLegs": 9,
+      "matchCount": 1
+    }
+  ],
+  "field": [
+    {
+      "name": "Adriana van Wijgerden-Vermaat",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Aletta Wajer",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Amy Grant",
+      "country": "England"
+    },
+    {
+      "name": "Anastasia Dobromyslova",
+      "country": "World"
+    },
+    {
+      "name": "Anca Zijlstra",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Angela Kirkwood",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Ann Chilton",
+      "country": "England"
+    },
+    {
+      "name": "Anna Madigan",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Annmarie Potts",
+      "country": "Wales"
+    },
+    {
+      "name": "Aoife McCormack",
+      "country": "Ireland"
+    },
+    {
+      "name": "Aurora Fochesato",
+      "country": "Italy"
+    },
+    {
+      "name": "Barbora Hospodarska",
+      "country": "Czechia"
+    },
+    {
+      "name": "Beau Greaves",
+      "country": "England"
+    },
+    {
+      "name": "Becky Taylor",
+      "country": "England"
+    },
+    {
+      "name": "Brieg Ramsey",
+      "country": "Ireland"
+    },
+    {
+      "name": "Carly Townsend",
+      "country": "England"
+    },
+    {
+      "name": "Casey Gallagher",
+      "country": "England"
+    },
+    {
+      "name": "Chelsea Campbell",
+      "country": "Ireland"
+    },
+    {
+      "name": "Chloe O’Brien",
+      "country": "Scotland"
+    },
+    {
+      "name": "Chris Savvery",
+      "country": "Wales"
+    },
+    {
+      "name": "Courtney Hine",
+      "country": "England"
+    },
+    {
+      "name": "Crissy Manley",
+      "country": "England"
+    },
+    {
+      "name": "Danielle Evans",
+      "country": "England"
+    },
+    {
+      "name": "Debbie McBride",
+      "country": "Scotland"
+    },
+    {
+      "name": "Debra Watling",
+      "country": "England"
+    },
+    {
+      "name": "Denise Cassidy",
+      "country": "Ireland"
+    },
+    {
+      "name": "Desiree Geel",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Deta Hedman",
+      "country": "England"
+    },
+    {
+      "name": "Donna Pinch",
+      "country": "England"
+    },
+    {
+      "name": "Eireann van Wijgerden",
+      "country": "Ireland"
+    },
+    {
+      "name": "Eleanor Cairns",
+      "country": "England"
+    },
+    {
+      "name": "Eloise Milburn",
+      "country": "England"
+    },
+    {
+      "name": "Emma Evans",
+      "country": "England"
+    },
+    {
+      "name": "Eve Watson",
+      "country": "Wales"
+    },
+    {
+      "name": "Evonne Taylor",
+      "country": "England"
+    },
+    {
+      "name": "Fallon Sherrock",
+      "country": "England"
+    },
+    {
+      "name": "Felicia Blay",
+      "country": "England"
+    },
+    {
+      "name": "Fiona Roberts",
+      "country": "Ireland"
+    },
+    {
+      "name": "Gemma Bowen",
+      "country": "Wales"
+    },
+    {
+      "name": "Gemma Hayter",
+      "country": "England"
+    },
+    {
+      "name": "Grace Crane",
+      "country": "Northern Ireland"
+    },
+    {
+      "name": "Hannah Meek",
+      "country": "England"
+    },
+    {
+      "name": "Hayley Selman",
+      "country": "England"
+    },
+    {
+      "name": "Hilary Kirkbride",
+      "country": "England"
+    },
+    {
+      "name": "Ingibjorg Magnusdottir",
+      "country": "Iceland"
+    },
+    {
+      "name": "Isobel Niklas",
+      "country": "Northern Ireland"
+    },
+    {
+      "name": "Jackie Wilkinson",
+      "country": "England"
+    },
+    {
+      "name": "Jacqueline Maiden",
+      "country": "England"
+    },
+    {
+      "name": "Jan Robbins",
+      "country": "Wales"
+    },
+    {
+      "name": "Jane Biggs",
+      "country": "England"
+    },
+    {
+      "name": "Jane Monaghan",
+      "country": "England"
+    },
+    {
+      "name": "Jane Robson",
+      "country": "England"
+    },
+    {
+      "name": "Jo Andrews",
+      "country": "England"
+    },
+    {
+      "name": "Jodie Rowlands",
+      "country": "England"
+    },
+    {
+      "name": "Josie Paterson",
+      "country": "England"
+    },
+    {
+      "name": "Kaori Sagawa",
+      "country": "Japan"
+    },
+    {
+      "name": "Karen Webber",
+      "country": "England"
+    },
+    {
+      "name": "Katie Sheldon",
+      "country": "Ireland"
+    },
+    {
+      "name": "Kelly Streef",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Kim Holden",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Kirsi Viinikainen",
+      "country": "Finland"
+    },
+    {
+      "name": "Kirsty Chubb",
+      "country": "England"
+    },
+    {
+      "name": "Kirsty Hutchinson",
+      "country": "England"
+    },
+    {
+      "name": "Kyana Frauenfelder",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Lainey Webb",
+      "country": "Wales"
+    },
+    {
+      "name": "Laura Patton",
+      "country": "England"
+    },
+    {
+      "name": "Laura Turner",
+      "country": "England"
+    },
+    {
+      "name": "Laura van den Berg",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Lauren Bloomfield",
+      "country": "England"
+    },
+    {
+      "name": "Leanne Topper",
+      "country": "Wales"
+    },
+    {
+      "name": "Lisa Ashton",
+      "country": "England"
+    },
+    {
+      "name": "Lorraine Hyde",
+      "country": "Scotland"
+    },
+    {
+      "name": "Lorraine Winstanley",
+      "country": "England"
+    },
+    {
+      "name": "Maret Liiri",
+      "country": "Finland"
+    },
+    {
+      "name": "Maria O'Brien",
+      "country": "England"
+    },
+    {
+      "name": "Marian Conway",
+      "country": "England"
+    },
+    {
+      "name": "Marie Fitton",
+      "country": "England"
+    },
+    {
+      "name": "Michelle Andrews",
+      "country": "England"
+    },
+    {
+      "name": "Michelle Binns",
+      "country": "England"
+    },
+    {
+      "name": "Mikuru Suzuki",
+      "country": "Japan"
+    },
+    {
+      "name": "Monica Cleere",
+      "country": "England"
+    },
+    {
+      "name": "Mozhgan Rahmani",
+      "country": "Iran (Islamic Republic of)"
+    },
+    {
+      "name": "Nanako Shimizu",
+      "country": "Japan"
+    },
+    {
+      "name": "Natalie Davey",
+      "country": "England"
+    },
+    {
+      "name": "Natasha Eaves",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Nathalie Van Marm",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Noa-Lynn van Leuven",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Phonsawan Whillis",
+      "country": "Thailand"
+    },
+    {
+      "name": "Priscilla Steenbergen",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Quintey Bieman",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Rhian O'Sullivan",
+      "country": "Wales"
+    },
+    {
+      "name": "Rhiannon Graham",
+      "country": "Wales"
+    },
+    {
+      "name": "Robyn Byrne",
+      "country": "Ireland"
+    },
+    {
+      "name": "Roos van der Velde",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Ros Hemmings",
+      "country": "England"
+    },
+    {
+      "name": "Rowena Sidley",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Samantha Kirton",
+      "country": "England"
+    },
+    {
+      "name": "Sarah Brown",
+      "country": "England"
+    },
+    {
+      "name": "Sharona Veld",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Silke Lowe",
+      "country": "Germany"
+    },
+    {
+      "name": "Snezana Veljkovic",
+      "country": "Sweden"
+    },
+    {
+      "name": "Stacey Ellis",
+      "country": "England"
+    },
+    {
+      "name": "Steph Clarke",
+      "country": "England"
+    },
+    {
+      "name": "Tammy Mackenzie",
+      "country": "England"
+    },
+    {
+      "name": "Teri-Frances Kidwell",
+      "country": "England"
+    },
+    {
+      "name": "Tracy North",
+      "country": "England"
+    },
+    {
+      "name": "Trina Gulliver",
+      "country": "United Kingdom"
+    },
+    {
+      "name": "Vanessa Zuidema",
+      "country": "Netherlands"
+    },
+    {
+      "name": "Vicky Pruim",
+      "country": "Sweden"
+    },
+    {
+      "name": "Wendy Reinstadtler",
+      "country": "England"
+    },
+    {
+      "name": "Yukie Sakaguchi",
+      "country": "Japan"
+    }
+  ],
+  "matches": [
+    {
+      "round": "R1",
+      "matchNo": 1,
+      "p1": "Maret Liiri",
+      "p2": "Samantha Kirton",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T10:12:00Z",
+      "endTime": "2024-03-23T10:26:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R1",
+      "matchNo": 2,
+      "p1": "Kim Holden",
+      "p2": "Sharona Veld",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T10:31:00Z",
+      "endTime": "2024-03-23T10:48:00Z",
+      "durationMin": 17
+    },
+    {
+      "round": "R1",
+      "matchNo": 3,
+      "p1": "Crissy Manley",
+      "p2": "Donna Pinch",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:28:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 4,
+      "p1": "Kyana Frauenfelder",
+      "p2": "Ann Chilton",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T10:32:00Z",
+      "endTime": "2024-03-23T11:00:00Z",
+      "durationMin": 29
+    },
+    {
+      "round": "R1",
+      "matchNo": 5,
+      "p1": "Anna Madigan",
+      "p2": "Courtney Hine",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T11:04:00Z",
+      "endTime": "2024-03-23T11:28:00Z",
+      "durationMin": 24
+    },
+    {
+      "round": "R1",
+      "matchNo": 6,
+      "p1": "Deta Hedman",
+      "p2": "Hayley Selman",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:24:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R1",
+      "matchNo": 7,
+      "p1": "Evonne Taylor",
+      "p2": "Kirsty Hutchinson",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T10:32:00Z",
+      "endTime": "2024-03-23T10:50:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 8,
+      "p1": "Gemma Bowen",
+      "p2": "Eloise Milburn",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T10:54:00Z",
+      "endTime": "2024-03-23T11:04:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R1",
+      "matchNo": 9,
+      "p1": "Denise Cassidy",
+      "p2": "Fallon Sherrock",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:20:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R1",
+      "matchNo": 10,
+      "p1": "Ingibjorg Magnusdottir",
+      "p2": "Anca Zijlstra",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T10:25:00Z",
+      "endTime": "2024-03-23T10:38:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R1",
+      "matchNo": 11,
+      "p1": "Carly Townsend",
+      "p2": "Angela Kirkwood",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T10:46:00Z",
+      "endTime": "2024-03-23T10:58:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R1",
+      "matchNo": 12,
+      "p1": "Lorraine Hyde",
+      "p2": "Anastasia Dobromyslova",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:25:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R1",
+      "matchNo": 13,
+      "p1": "Vanessa Zuidema",
+      "p2": "Eireann van Wijgerden",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T10:33:00Z",
+      "endTime": "2024-03-23T10:51:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 14,
+      "p1": "Monica Cleere",
+      "p2": "Silke Lowe",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T11:00:00Z",
+      "endTime": "2024-03-23T11:17:00Z",
+      "durationMin": 17
+    },
+    {
+      "round": "R1",
+      "matchNo": 15,
+      "p1": "Emma Evans",
+      "p2": "Mikuru Suzuki",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:22:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R1",
+      "matchNo": 16,
+      "p1": "Tracy North",
+      "p2": "Isobel Niklas",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T10:25:00Z",
+      "endTime": "2024-03-23T10:38:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R1",
+      "matchNo": 17,
+      "p1": "Stacey Ellis",
+      "p2": "Laura van den Berg",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T10:43:00Z",
+      "endTime": "2024-03-23T11:04:00Z",
+      "durationMin": 21
+    },
+    {
+      "round": "R1",
+      "matchNo": 18,
+      "p1": "Robyn Byrne",
+      "p2": "Marian Conway",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:29:00Z",
+      "durationMin": 19
+    },
+    {
+      "round": "R1",
+      "matchNo": 19,
+      "p1": "Lauren Bloomfield",
+      "p2": "Katie Sheldon",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T10:31:00Z",
+      "endTime": "2024-03-23T10:42:00Z",
+      "durationMin": 11
+    },
+    {
+      "round": "R1",
+      "matchNo": 20,
+      "p1": "Debbie McBride",
+      "p2": "Josie Paterson",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T10:46:00Z",
+      "endTime": "2024-03-23T11:00:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R1",
+      "matchNo": 21,
+      "p1": "Yukie Sakaguchi",
+      "p2": "Jane Biggs",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T10:13:00Z",
+      "endTime": "2024-03-23T10:31:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 22,
+      "p1": "Teri-Frances Kidwell",
+      "p2": "Casey Gallagher",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T10:33:00Z",
+      "endTime": "2024-03-23T10:51:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 23,
+      "p1": "Kirsty Chubb",
+      "p2": "Debra Watling",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T10:54:00Z",
+      "endTime": "2024-03-23T11:15:00Z",
+      "durationMin": 21
+    },
+    {
+      "round": "R1",
+      "matchNo": 24,
+      "p1": "Beau Greaves",
+      "p2": "Lainey Webb",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T10:09:00Z",
+      "endTime": "2024-03-23T10:17:00Z",
+      "durationMin": 8
+    },
+    {
+      "round": "R1",
+      "matchNo": 25,
+      "p1": "Jan Robbins",
+      "p2": "Nathalie Van Marm",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T10:24:00Z",
+      "endTime": "2024-03-23T10:54:00Z",
+      "durationMin": 30
+    },
+    {
+      "round": "R1",
+      "matchNo": 26,
+      "p1": "Hilary Kirkbride",
+      "p2": "Jackie Wilkinson",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T10:58:00Z",
+      "endTime": "2024-03-23T11:18:00Z",
+      "durationMin": 20
+    },
+    {
+      "round": "R1",
+      "matchNo": 27,
+      "p1": "Brieg Ramsey",
+      "p2": "Chris Savvery",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T10:10:00Z",
+      "endTime": "2024-03-23T10:22:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R1",
+      "matchNo": 28,
+      "p1": "Lisa Ashton",
+      "p2": "Desiree Geel",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T10:26:00Z",
+      "endTime": "2024-03-23T10:35:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R1",
+      "matchNo": 29,
+      "p1": "Danielle Evans",
+      "p2": "Karen Webber",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T10:38:00Z",
+      "endTime": "2024-03-23T11:01:00Z",
+      "durationMin": 23
+    },
+    {
+      "round": "R1",
+      "matchNo": 30,
+      "p1": "Vicky Pruim",
+      "p2": "Natalie Davey",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T10:12:00Z",
+      "endTime": "2024-03-23T10:21:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R1",
+      "matchNo": 31,
+      "p1": "Sarah Brown",
+      "p2": "Aoife McCormack",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T10:24:00Z",
+      "endTime": "2024-03-23T10:32:00Z",
+      "durationMin": 8
+    },
+    {
+      "round": "R1",
+      "matchNo": 32,
+      "p1": "Amy Grant",
+      "p2": "Natasha Eaves",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T10:38:00Z",
+      "endTime": "2024-03-23T10:54:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R1",
+      "matchNo": 33,
+      "p1": "Becky Taylor",
+      "p2": "Noa-Lynn van Leuven",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:23:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R1",
+      "matchNo": 34,
+      "p1": "Rowena Sidley",
+      "p2": "Annmarie Potts",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T10:26:00Z",
+      "endTime": "2024-03-23T10:43:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R1",
+      "matchNo": 35,
+      "p1": "Eve Watson",
+      "p2": "Priscilla Steenbergen",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T10:46:00Z",
+      "endTime": "2024-03-23T11:01:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R1",
+      "matchNo": 36,
+      "p1": "Felicia Blay",
+      "p2": "Quintey Bieman",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:21:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R1",
+      "matchNo": 37,
+      "p1": "Tammy Mackenzie",
+      "p2": "Maria O'Brien",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T10:26:00Z",
+      "endTime": "2024-03-23T10:41:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R1",
+      "matchNo": 38,
+      "p1": "Trina Gulliver",
+      "p2": "Michelle Binns",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T10:45:00Z",
+      "endTime": "2024-03-23T11:10:00Z",
+      "durationMin": 25
+    },
+    {
+      "round": "R1",
+      "matchNo": 39,
+      "p1": "Grace Crane",
+      "p2": "Phonsawan Whillis",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:40:00Z",
+      "durationMin": 29
+    },
+    {
+      "round": "R1",
+      "matchNo": 40,
+      "p1": "Eleanor Cairns",
+      "p2": "Jane Monaghan",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T10:43:00Z",
+      "endTime": "2024-03-23T11:03:00Z",
+      "durationMin": 20
+    },
+    {
+      "round": "R1",
+      "matchNo": 41,
+      "p1": "Wendy Reinstadtler",
+      "p2": "Marie Fitton",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T11:06:00Z",
+      "endTime": "2024-03-23T11:16:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R1",
+      "matchNo": 42,
+      "p1": "Snezana Veljkovic",
+      "p2": "Laura Patton",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:32:00Z",
+      "durationMin": 22
+    },
+    {
+      "round": "R1",
+      "matchNo": 43,
+      "p1": "Jodie Rowlands",
+      "p2": "Michelle Andrews",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T10:38:00Z",
+      "endTime": "2024-03-23T11:04:00Z",
+      "durationMin": 26
+    },
+    {
+      "round": "R1",
+      "matchNo": 44,
+      "p1": "Gemma Hayter",
+      "p2": "Leanne Topper",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T11:07:00Z",
+      "endTime": "2024-03-23T11:25:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R1",
+      "matchNo": 45,
+      "p1": "Adriana van Wijgerden-Vermaat",
+      "p2": "Rhian O'Sullivan",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T10:11:00Z",
+      "endTime": "2024-03-23T10:20:00Z",
+      "durationMin": 8
+    },
+    {
+      "round": "R1",
+      "matchNo": 46,
+      "p1": "Nanako Shimizu",
+      "p2": "Mozhgan Rahmani",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T10:23:00Z",
+      "endTime": "2024-03-23T10:49:00Z",
+      "durationMin": 26
+    },
+    {
+      "round": "R1",
+      "matchNo": 47,
+      "p1": "Lorraine Winstanley",
+      "p2": "Jacqueline Maiden",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T10:55:00Z",
+      "endTime": "2024-03-23T11:11:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R1",
+      "matchNo": 48,
+      "p1": "Laura Turner",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 49,
+      "p1": "Hannah Meek",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 50,
+      "p1": "Rhiannon Graham",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 51,
+      "p1": "Aletta Wajer",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 52,
+      "p1": "Jane Robson",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 53,
+      "p1": "Kelly Streef",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 54,
+      "p1": "Fiona Roberts",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 55,
+      "p1": "Chelsea Campbell",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 56,
+      "p1": "Jo Andrews",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 57,
+      "p1": "Kaori Sagawa",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 58,
+      "p1": "Barbora Hospodarska",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 59,
+      "p1": "Chloe O’Brien",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 60,
+      "p1": "Steph Clarke",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 61,
+      "p1": "Kirsi Viinikainen",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 62,
+      "p1": "Aurora Fochesato",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 63,
+      "p1": "Ros Hemmings",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R1",
+      "matchNo": 64,
+      "p1": "Roos van der Velde",
+      "p2": null,
+      "legsP1": null,
+      "legsP2": null,
+      "walkover": true,
+      "notes": "bye"
+    },
+    {
+      "round": "R2",
+      "matchNo": 1,
+      "p1": "Laura Turner",
+      "p2": "Hannah Meek",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T10:53:00Z",
+      "endTime": "2024-03-23T11:11:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R2",
+      "matchNo": 2,
+      "p1": "Samantha Kirton",
+      "p2": "Kim Holden",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T11:15:00Z",
+      "endTime": "2024-03-23T11:36:00Z",
+      "durationMin": 22
+    },
+    {
+      "round": "R2",
+      "matchNo": 3,
+      "p1": "Rhiannon Graham",
+      "p2": "Donna Pinch",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T11:33:00Z",
+      "endTime": "2024-03-23T12:00:00Z",
+      "durationMin": 27
+    },
+    {
+      "round": "R2",
+      "matchNo": 4,
+      "p1": "Kyana Frauenfelder",
+      "p2": "Courtney Hine",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T12:05:00Z",
+      "endTime": "2024-03-23T12:18:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 5,
+      "p1": "Aletta Wajer",
+      "p2": "Deta Hedman",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T11:08:00Z",
+      "endTime": "2024-03-23T11:22:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 6,
+      "p1": "Evonne Taylor",
+      "p2": "Gemma Bowen",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T11:29:00Z",
+      "endTime": "2024-03-23T11:38:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R2",
+      "matchNo": 7,
+      "p1": "Jane Robson",
+      "p2": "Fallon Sherrock",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T11:05:00Z",
+      "endTime": "2024-03-23T11:14:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R2",
+      "matchNo": 8,
+      "p1": "Anca Zijlstra",
+      "p2": "Angela Kirkwood",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T11:18:00Z",
+      "endTime": "2024-03-23T11:33:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R2",
+      "matchNo": 9,
+      "p1": "Kelly Streef",
+      "p2": "Anastasia Dobromyslova",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T11:22:00Z",
+      "endTime": "2024-03-23T11:42:00Z",
+      "durationMin": 19
+    },
+    {
+      "round": "R2",
+      "matchNo": 10,
+      "p1": "Vanessa Zuidema",
+      "p2": "Silke Lowe",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T11:47:00Z",
+      "endTime": "2024-03-23T12:01:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 11,
+      "p1": "Fiona Roberts",
+      "p2": "Mikuru Suzuki",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T11:09:00Z",
+      "endTime": "2024-03-23T11:23:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R2",
+      "matchNo": 12,
+      "p1": "Tracy North",
+      "p2": "Laura van den Berg",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T11:27:00Z",
+      "endTime": "2024-03-23T11:44:00Z",
+      "durationMin": 17
+    },
+    {
+      "round": "R2",
+      "matchNo": 13,
+      "p1": "Chelsea Campbell",
+      "p2": "Robyn Byrne",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T11:04:00Z",
+      "endTime": "2024-03-23T11:17:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 14,
+      "p1": "Katie Sheldon",
+      "p2": "Josie Paterson",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T11:22:00Z",
+      "endTime": "2024-03-23T11:34:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R2",
+      "matchNo": 15,
+      "p1": "Jo Andrews",
+      "p2": "Yukie Sakaguchi",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T11:19:00Z",
+      "endTime": "2024-03-23T11:42:00Z",
+      "durationMin": 23
+    },
+    {
+      "round": "R2",
+      "matchNo": 16,
+      "p1": "Casey Gallagher",
+      "p2": "Debra Watling",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T11:46:00Z",
+      "endTime": "2024-03-23T12:06:00Z",
+      "durationMin": 20
+    },
+    {
+      "round": "R2",
+      "matchNo": 17,
+      "p1": "Kaori Sagawa",
+      "p2": "Beau Greaves",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T11:24:00Z",
+      "endTime": "2024-03-23T11:35:00Z",
+      "durationMin": 11
+    },
+    {
+      "round": "R2",
+      "matchNo": 18,
+      "p1": "Nathalie Van Marm",
+      "p2": "Hilary Kirkbride",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T11:38:00Z",
+      "endTime": "2024-03-23T11:54:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R2",
+      "matchNo": 19,
+      "p1": "Barbora Hospodarska",
+      "p2": "Chris Savvery",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T11:11:00Z",
+      "endTime": "2024-03-23T11:20:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R2",
+      "matchNo": 20,
+      "p1": "Lisa Ashton",
+      "p2": "Karen Webber",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T11:24:00Z",
+      "endTime": "2024-03-23T11:37:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R2",
+      "matchNo": 21,
+      "p1": "Chloe O’Brien",
+      "p2": "Vicky Pruim",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T10:56:00Z",
+      "endTime": "2024-03-23T11:05:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R2",
+      "matchNo": 22,
+      "p1": "Aoife McCormack",
+      "p2": "Natasha Eaves",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T11:16:00Z",
+      "endTime": "2024-03-23T11:29:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R2",
+      "matchNo": 23,
+      "p1": "Steph Clarke",
+      "p2": "Noa-Lynn van Leuven",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T11:04:00Z",
+      "endTime": "2024-03-23T11:11:00Z",
+      "durationMin": 7
+    },
+    {
+      "round": "R2",
+      "matchNo": 24,
+      "p1": "Annmarie Potts",
+      "p2": "Eve Watson",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T11:16:00Z",
+      "endTime": "2024-03-23T11:32:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R2",
+      "matchNo": 25,
+      "p1": "Kirsi Viinikainen",
+      "p2": "Felicia Blay",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T11:13:00Z",
+      "endTime": "2024-03-23T11:30:00Z",
+      "durationMin": 17
+    },
+    {
+      "round": "R2",
+      "matchNo": 26,
+      "p1": "Maria O'Brien",
+      "p2": "Trina Gulliver",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T11:35:00Z",
+      "endTime": "2024-03-23T11:49:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 27,
+      "p1": "Aurora Fochesato",
+      "p2": "Grace Crane",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T11:21:00Z",
+      "endTime": "2024-03-23T11:41:00Z",
+      "durationMin": 21
+    },
+    {
+      "round": "R2",
+      "matchNo": 28,
+      "p1": "Eleanor Cairns",
+      "p2": "Wendy Reinstadtler",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T11:44:00Z",
+      "endTime": "2024-03-23T12:00:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R2",
+      "matchNo": 29,
+      "p1": "Ros Hemmings",
+      "p2": "Snezana Veljkovic",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T11:29:00Z",
+      "endTime": "2024-03-23T11:52:00Z",
+      "durationMin": 23
+    },
+    {
+      "round": "R2",
+      "matchNo": 30,
+      "p1": "Michelle Andrews",
+      "p2": "Gemma Hayter",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T11:55:00Z",
+      "endTime": "2024-03-23T12:09:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R2",
+      "matchNo": 31,
+      "p1": "Roos van der Velde",
+      "p2": "Rhian O'Sullivan",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T11:17:00Z",
+      "endTime": "2024-03-23T11:30:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "R2",
+      "matchNo": 32,
+      "p1": "Mozhgan Rahmani",
+      "p2": "Lorraine Winstanley",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T11:33:00Z",
+      "endTime": "2024-03-23T11:44:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R3",
+      "matchNo": 1,
+      "p1": "Laura Turner",
+      "p2": "Kim Holden",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T11:53:00Z",
+      "endTime": "2024-03-23T12:16:00Z",
+      "durationMin": 23
+    },
+    {
+      "round": "R3",
+      "matchNo": 2,
+      "p1": "Donna Pinch",
+      "p2": "Kyana Frauenfelder",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T12:23:00Z",
+      "endTime": "2024-03-23T12:40:00Z",
+      "durationMin": 17
+    },
+    {
+      "round": "R3",
+      "matchNo": 3,
+      "p1": "Deta Hedman",
+      "p2": "Evonne Taylor",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T11:44:00Z",
+      "endTime": "2024-03-23T12:07:00Z",
+      "durationMin": 23
+    },
+    {
+      "round": "R3",
+      "matchNo": 4,
+      "p1": "Fallon Sherrock",
+      "p2": "Anca Zijlstra",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T11:48:00Z",
+      "endTime": "2024-03-23T12:02:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R3",
+      "matchNo": 5,
+      "p1": "Anastasia Dobromyslova",
+      "p2": "Silke Lowe",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T12:10:00Z",
+      "endTime": "2024-03-23T12:32:00Z",
+      "durationMin": 22
+    },
+    {
+      "round": "R3",
+      "matchNo": 6,
+      "p1": "Mikuru Suzuki",
+      "p2": "Laura van den Berg",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T11:50:00Z",
+      "endTime": "2024-03-23T12:06:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R3",
+      "matchNo": 7,
+      "p1": "Robyn Byrne",
+      "p2": "Katie Sheldon",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T12:02:00Z",
+      "endTime": "2024-03-23T12:12:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R3",
+      "matchNo": 8,
+      "p1": "Yukie Sakaguchi",
+      "p2": "Debra Watling",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T12:16:00Z",
+      "endTime": "2024-03-23T12:31:00Z",
+      "durationMin": 15
+    },
+    {
+      "round": "R3",
+      "matchNo": 9,
+      "p1": "Beau Greaves",
+      "p2": "Nathalie Van Marm",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 9,
+      "startTime": "2024-03-23T12:05:00Z",
+      "endTime": "2024-03-23T12:12:00Z",
+      "durationMin": 7
+    },
+    {
+      "round": "R3",
+      "matchNo": 10,
+      "p1": "Chris Savvery",
+      "p2": "Lisa Ashton",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 10,
+      "startTime": "2024-03-23T11:54:00Z",
+      "endTime": "2024-03-23T12:03:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R3",
+      "matchNo": 11,
+      "p1": "Vicky Pruim",
+      "p2": "Aoife McCormack",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 11,
+      "startTime": "2024-03-23T11:49:00Z",
+      "endTime": "2024-03-23T12:00:00Z",
+      "durationMin": 11
+    },
+    {
+      "round": "R3",
+      "matchNo": 12,
+      "p1": "Noa-Lynn van Leuven",
+      "p2": "Annmarie Potts",
+      "legsP1": 4,
+      "legsP2": 0,
+      "walkover": false,
+      "notes": null,
+      "board": 12,
+      "startTime": "2024-03-23T11:42:00Z",
+      "endTime": "2024-03-23T11:51:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R3",
+      "matchNo": 13,
+      "p1": "Kirsi Viinikainen",
+      "p2": "Maria O'Brien",
+      "legsP1": 4,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 13,
+      "startTime": "2024-03-23T11:59:00Z",
+      "endTime": "2024-03-23T12:15:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R3",
+      "matchNo": 14,
+      "p1": "Aurora Fochesato",
+      "p2": "Wendy Reinstadtler",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 14,
+      "startTime": "2024-03-23T12:04:00Z",
+      "endTime": "2024-03-23T12:23:00Z",
+      "durationMin": 19
+    },
+    {
+      "round": "R3",
+      "matchNo": 15,
+      "p1": "Snezana Veljkovic",
+      "p2": "Gemma Hayter",
+      "legsP1": 3,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 15,
+      "startTime": "2024-03-23T12:17:00Z",
+      "endTime": "2024-03-23T12:35:00Z",
+      "durationMin": 19
+    },
+    {
+      "round": "R3",
+      "matchNo": 16,
+      "p1": "Rhian O'Sullivan",
+      "p2": "Lorraine Winstanley",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 16,
+      "startTime": "2024-03-23T11:54:00Z",
+      "endTime": "2024-03-23T12:06:00Z",
+      "durationMin": 12
+    },
+    {
+      "round": "R4",
+      "matchNo": 1,
+      "p1": "Kim Holden",
+      "p2": "Kyana Frauenfelder",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T12:47:00Z",
+      "endTime": "2024-03-23T13:11:00Z",
+      "durationMin": 24
+    },
+    {
+      "round": "R4",
+      "matchNo": 2,
+      "p1": "Deta Hedman",
+      "p2": "Fallon Sherrock",
+      "legsP1": 0,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T12:32:00Z",
+      "endTime": "2024-03-23T12:43:00Z",
+      "durationMin": 11
+    },
+    {
+      "round": "R4",
+      "matchNo": 3,
+      "p1": "Anastasia Dobromyslova",
+      "p2": "Mikuru Suzuki",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T12:42:00Z",
+      "endTime": "2024-03-23T12:58:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "R4",
+      "matchNo": 4,
+      "p1": "Katie Sheldon",
+      "p2": "Yukie Sakaguchi",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T12:40:00Z",
+      "endTime": "2024-03-23T12:54:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "R4",
+      "matchNo": 5,
+      "p1": "Beau Greaves",
+      "p2": "Lisa Ashton",
+      "legsP1": 4,
+      "legsP2": 1,
+      "walkover": false,
+      "notes": null,
+      "board": 5,
+      "startTime": "2024-03-23T12:32:00Z",
+      "endTime": "2024-03-23T12:41:00Z",
+      "durationMin": 9
+    },
+    {
+      "round": "R4",
+      "matchNo": 6,
+      "p1": "Aoife McCormack",
+      "p2": "Noa-Lynn van Leuven",
+      "legsP1": 1,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 6,
+      "startTime": "2024-03-23T12:29:00Z",
+      "endTime": "2024-03-23T12:39:00Z",
+      "durationMin": 10
+    },
+    {
+      "round": "R4",
+      "matchNo": 7,
+      "p1": "Kirsi Viinikainen",
+      "p2": "Wendy Reinstadtler",
+      "legsP1": 2,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 7,
+      "startTime": "2024-03-23T12:30:00Z",
+      "endTime": "2024-03-23T12:48:00Z",
+      "durationMin": 18
+    },
+    {
+      "round": "R4",
+      "matchNo": 8,
+      "p1": "Gemma Hayter",
+      "p2": "Lorraine Winstanley",
+      "legsP1": 4,
+      "legsP2": 3,
+      "walkover": false,
+      "notes": null,
+      "board": 8,
+      "startTime": "2024-03-23T12:43:00Z",
+      "endTime": "2024-03-23T12:57:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "QF",
+      "matchNo": 1,
+      "p1": "Kim Holden",
+      "p2": "Fallon Sherrock",
+      "legsP1": 1,
+      "legsP2": 5,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T13:18:00Z",
+      "endTime": "2024-03-23T13:32:00Z",
+      "durationMin": 14
+    },
+    {
+      "round": "QF",
+      "matchNo": 2,
+      "p1": "Mikuru Suzuki",
+      "p2": "Katie Sheldon",
+      "legsP1": 3,
+      "legsP2": 5,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T13:13:00Z",
+      "endTime": "2024-03-23T13:35:00Z",
+      "durationMin": 22
+    },
+    {
+      "round": "QF",
+      "matchNo": 3,
+      "p1": "Beau Greaves",
+      "p2": "Noa-Lynn van Leuven",
+      "legsP1": 5,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 3,
+      "startTime": "2024-03-23T13:02:00Z",
+      "endTime": "2024-03-23T13:15:00Z",
+      "durationMin": 13
+    },
+    {
+      "round": "QF",
+      "matchNo": 4,
+      "p1": "Wendy Reinstadtler",
+      "p2": "Gemma Hayter",
+      "legsP1": 2,
+      "legsP2": 5,
+      "walkover": false,
+      "notes": null,
+      "board": 4,
+      "startTime": "2024-03-23T13:07:00Z",
+      "endTime": "2024-03-23T13:23:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "SF",
+      "matchNo": 1,
+      "p1": "Fallon Sherrock",
+      "p2": "Katie Sheldon",
+      "legsP1": 5,
+      "legsP2": 2,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T13:47:00Z",
+      "endTime": "2024-03-23T14:02:00Z",
+      "durationMin": 16
+    },
+    {
+      "round": "SF",
+      "matchNo": 2,
+      "p1": "Beau Greaves",
+      "p2": "Gemma Hayter",
+      "legsP1": 5,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 2,
+      "startTime": "2024-03-23T13:43:00Z",
+      "endTime": "2024-03-23T14:02:00Z",
+      "durationMin": 19
+    },
+    {
+      "round": "F",
+      "matchNo": 1,
+      "p1": "Fallon Sherrock",
+      "p2": "Beau Greaves",
+      "legsP1": 5,
+      "legsP2": 4,
+      "walkover": false,
+      "notes": null,
+      "board": 1,
+      "startTime": "2024-03-23T14:16:00Z",
+      "endTime": "2024-03-23T14:35:00Z",
+      "durationMin": 19
+    }
+  ]
+}

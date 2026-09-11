@@ -1,0 +1,3249 @@
+{
+ "meta": {
+  "event": "2025 PDC World Darts Championship",
+  "venue": "Alexandra Palace, London",
+  "firstDay": "2024-12-15",
+  "lastDay": "2025-01-03",
+  "fieldSize": 96,
+  "seedCount": 32,
+  "sources": [
+   "https://en.wikipedia.org/w/index.php?title=2025_PDC_World_Darts_Championship&action=raw",
+   "https://en.wikipedia.org/w/api.php?action=expandtemplates (Template:PDCFlag, for player nationalities)",
+   "https://www.skysports.com/darts/news/12288/13282913/world-darts-championship-luke-littler-sets-up-final-showdown-with-michael-van-gerwen-after-sublime-showing-vs-stephen-bunting",
+   "https://www.espn.com/darts/story/_/id/43274391/world-darts-championship-luke-littler-thrashes-michael-van-gerwen-first-title"
+  ],
+  "fetchedOn": "2026-09-10",
+  "unknowns": [
+   "Session label for 2 January 2025 (matches 93 and 94, both semi-finals) is not published in the Wikipedia schedule: that day's table is the only one carrying no session caption. Recorded as session: null rather than guessed. Both semi-finals were played on that single day.",
+   "Match 35 (Ian White v Sandro Eric Sosing, first round, 20 December 2024) was a walkover, so it has no set score and no leg scores. It is assigned to the 20 December afternoon session as printed in the schedule table, but no darts were thrown.",
+   "Per-set leg scores are published for all 94 played matches; the only null setScores is the walkover (match 35).",
+   "Exact clock start times per session are given by the source as 12:30 GMT (afternoon) and 19:00 GMT (evening), except the final at 19:30 GMT; these are not carried in this dataset beyond the afternoon/evening label."
+  ],
+  "notes": [
+   "matchNo 1-95 is Wikipedia's own event-wide schedule numbering (chronological across the whole tournament, not restarted per round); it is unique and stable, and sessions[].matches reference it.",
+   "Beau Greaves (England) qualified via the Women's World Matchplay but DECLINED her place, choosing the 2024 WDF World Darts Championship after a PDC ruling barred playing both World Championships in the same year. She is therefore NOT among the 96 and does not appear in field[]. Her spot was reallocated to the PDC Tour Card Holder qualifier.",
+   "Two women did play: Noa-Lynn van Leuven (Netherlands) and Fallon Sherrock (England), both via the PDC Women's Series; both lost in the first round.",
+   "Dom Taylor was originally 17th on the Pro Tour list but was suspended by the Darts Regulation Authority after a failed drugs test; Robert Owen replaced him. Jeffrey de Graaf qualified via both the Pro Tour and PDC Nordic & Baltic and was drawn as a Pro Tour qualifier, so he is listed here under his drawn route (international qualifier / PDC Nordic & Baltic per the source's own qualifier list).",
+   "Source spelling inconsistencies normalised: 'Jeffrey De Graaf' -> 'Jeffrey de Graaf' and 'Dimitri Van Den Bergh' -> 'Dimitri Van den Bergh' (the source prints both casings). 'Mensur Suljovic' is printed WITHOUT diacritics in the source's qualifier list and schedule tables, so that is the form recorded here; his Wikipedia article title is the diacritic form 'Mensur Suljović'.",
+   "Verified: all 32 second-round matches pair exactly one of the 32 seeds against a first-round winner, and every round's entrants are exactly the previous round's winners.",
+   "Verified: for all 94 played matches, the per-set leg scores reconcile with the reported set score.",
+   "Non-playing days inside the tournament span are recorded in sessions[] with noPlay: true - 24, 25, 26 December 2024 (Christmas break) and 31 December 2024 (New Year's Eve)."
+  ]
+ },
+ "roundFormat": [
+  {
+   "round": "R1",
+   "label": "First round",
+   "bestOfSets": 5,
+   "matchCount": 32
+  },
+  {
+   "round": "R2",
+   "label": "Second round",
+   "bestOfSets": 5,
+   "matchCount": 32
+  },
+  {
+   "round": "R3",
+   "label": "Third round",
+   "bestOfSets": 7,
+   "matchCount": 16
+  },
+  {
+   "round": "R4",
+   "label": "Fourth round",
+   "bestOfSets": 7,
+   "matchCount": 8
+  },
+  {
+   "round": "QF",
+   "label": "Quarter-finals",
+   "bestOfSets": 9,
+   "matchCount": 4
+  },
+  {
+   "round": "SF",
+   "label": "Semi-finals",
+   "bestOfSets": 11,
+   "matchCount": 2
+  },
+  {
+   "round": "F",
+   "label": "Final",
+   "bestOfSets": 13,
+   "matchCount": 1
+  }
+ ],
+ "seeds": [
+  {
+   "seed": 1,
+   "name": "Luke Humphries",
+   "country": "England"
+  },
+  {
+   "seed": 2,
+   "name": "Michael Smith",
+   "country": "England"
+  },
+  {
+   "seed": 3,
+   "name": "Michael van Gerwen",
+   "country": "Netherlands"
+  },
+  {
+   "seed": 4,
+   "name": "Luke Littler",
+   "country": "England"
+  },
+  {
+   "seed": 5,
+   "name": "Rob Cross",
+   "country": "England"
+  },
+  {
+   "seed": 6,
+   "name": "Dave Chisnall",
+   "country": "England"
+  },
+  {
+   "seed": 7,
+   "name": "Jonny Clayton",
+   "country": "Wales"
+  },
+  {
+   "seed": 8,
+   "name": "Stephen Bunting",
+   "country": "England"
+  },
+  {
+   "seed": 9,
+   "name": "Damon Heta",
+   "country": "Australia"
+  },
+  {
+   "seed": 10,
+   "name": "Gerwyn Price",
+   "country": "Wales"
+  },
+  {
+   "seed": 11,
+   "name": "Dimitri Van den Bergh",
+   "country": "Belgium"
+  },
+  {
+   "seed": 12,
+   "name": "Nathan Aspinall",
+   "country": "England"
+  },
+  {
+   "seed": 13,
+   "name": "Danny Noppert",
+   "country": "Netherlands"
+  },
+  {
+   "seed": 14,
+   "name": "Gary Anderson",
+   "country": "Scotland"
+  },
+  {
+   "seed": 15,
+   "name": "Chris Dobey",
+   "country": "England"
+  },
+  {
+   "seed": 16,
+   "name": "James Wade",
+   "country": "England"
+  },
+  {
+   "seed": 17,
+   "name": "Peter Wright",
+   "country": "Scotland"
+  },
+  {
+   "seed": 18,
+   "name": "Josh Rock",
+   "country": "Northern Ireland"
+  },
+  {
+   "seed": 19,
+   "name": "Ross Smith",
+   "country": "England"
+  },
+  {
+   "seed": 20,
+   "name": "Ryan Searle",
+   "country": "England"
+  },
+  {
+   "seed": 21,
+   "name": "Andrew Gilding",
+   "country": "England"
+  },
+  {
+   "seed": 22,
+   "name": "Martin Schindler",
+   "country": "Germany"
+  },
+  {
+   "seed": 23,
+   "name": "Joe Cullen",
+   "country": "England"
+  },
+  {
+   "seed": 24,
+   "name": "Mike De Decker",
+   "country": "Belgium"
+  },
+  {
+   "seed": 25,
+   "name": "Dirk van Duijvenbode",
+   "country": "Netherlands"
+  },
+  {
+   "seed": 26,
+   "name": "Daryl Gurney",
+   "country": "Northern Ireland"
+  },
+  {
+   "seed": 27,
+   "name": "Gabriel Clemens",
+   "country": "Germany"
+  },
+  {
+   "seed": 28,
+   "name": "Gian van Veen",
+   "country": "Netherlands"
+  },
+  {
+   "seed": 29,
+   "name": "Ritchie Edhouse",
+   "country": "England"
+  },
+  {
+   "seed": 30,
+   "name": "Brendan Dolan",
+   "country": "Northern Ireland"
+  },
+  {
+   "seed": 31,
+   "name": "Krzysztof Ratajski",
+   "country": "Poland"
+  },
+  {
+   "seed": 32,
+   "name": "Raymond van Barneveld",
+   "country": "Netherlands"
+  }
+ ],
+ "field": [
+  {
+   "name": "Luke Humphries",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 1,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Michael Smith",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 2,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Michael van Gerwen",
+   "country": "Netherlands",
+   "entryRoute": "seed",
+   "seed": 3,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Luke Littler",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 4,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Rob Cross",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 5,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Dave Chisnall",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 6,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Jonny Clayton",
+   "country": "Wales",
+   "entryRoute": "seed",
+   "seed": 7,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Stephen Bunting",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 8,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Damon Heta",
+   "country": "Australia",
+   "entryRoute": "seed",
+   "seed": 9,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Gerwyn Price",
+   "country": "Wales",
+   "entryRoute": "seed",
+   "seed": 10,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Dimitri Van den Bergh",
+   "country": "Belgium",
+   "entryRoute": "seed",
+   "seed": 11,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Nathan Aspinall",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 12,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Danny Noppert",
+   "country": "Netherlands",
+   "entryRoute": "seed",
+   "seed": 13,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Gary Anderson",
+   "country": "Scotland",
+   "entryRoute": "seed",
+   "seed": 14,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Chris Dobey",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 15,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "James Wade",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 16,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Peter Wright",
+   "country": "Scotland",
+   "entryRoute": "seed",
+   "seed": 17,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Josh Rock",
+   "country": "Northern Ireland",
+   "entryRoute": "seed",
+   "seed": 18,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Ross Smith",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 19,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Ryan Searle",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 20,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Andrew Gilding",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 21,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Martin Schindler",
+   "country": "Germany",
+   "entryRoute": "seed",
+   "seed": 22,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Joe Cullen",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 23,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Mike De Decker",
+   "country": "Belgium",
+   "entryRoute": "seed",
+   "seed": 24,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Dirk van Duijvenbode",
+   "country": "Netherlands",
+   "entryRoute": "seed",
+   "seed": 25,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Daryl Gurney",
+   "country": "Northern Ireland",
+   "entryRoute": "seed",
+   "seed": 26,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Gabriel Clemens",
+   "country": "Germany",
+   "entryRoute": "seed",
+   "seed": 27,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Gian van Veen",
+   "country": "Netherlands",
+   "entryRoute": "seed",
+   "seed": 28,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Ritchie Edhouse",
+   "country": "England",
+   "entryRoute": "seed",
+   "seed": 29,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Brendan Dolan",
+   "country": "Northern Ireland",
+   "entryRoute": "seed",
+   "seed": 30,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Krzysztof Ratajski",
+   "country": "Poland",
+   "entryRoute": "seed",
+   "seed": 31,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Raymond van Barneveld",
+   "country": "Netherlands",
+   "entryRoute": "seed",
+   "seed": 32,
+   "qualifierEvent": "PDC Order of Merit (top 32)"
+  },
+  {
+   "name": "Cameron Menzies",
+   "country": "Scotland",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Wessel Nijman",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Jermaine Wattimena",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ricardo Pietreczko",
+   "country": "Germany",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Luke Woodhouse",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ryan Joyce",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Niels Zonneveld",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Alan Soutar",
+   "country": "Scotland",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Madars Razma",
+   "country": "Latvia",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Callan Rydz",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Wesley Plaisier",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Martin Lukeman",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Kevin Doets",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Richard Veenstra",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Scott Williams",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Kim Huybrechts",
+   "country": "Belgium",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "William O'Connor",
+   "country": "Republic of Ireland",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Karel Sedláček",
+   "country": "Czech Republic",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Stephen Burton",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Thibault Tricole",
+   "country": "France",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Connor Scutt",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Mensur Suljovic",
+   "country": "Austria",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ian White",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Jim Williams",
+   "country": "Wales",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Florian Hempel",
+   "country": "Germany",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ryan Meikle",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Chris Landman",
+   "country": "Netherlands",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Nick Kenny",
+   "country": "Wales",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "James Hurrell",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Mickey Mansell",
+   "country": "Northern Ireland",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ricky Evans",
+   "country": "England",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Robert Owen",
+   "country": "Wales",
+   "entryRoute": "PDC ProTour",
+   "seed": null,
+   "qualifierEvent": "2024 PDC Pro Tour Order of Merit"
+  },
+  {
+   "name": "Ryusei Azemoto",
+   "country": "Japan",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Asian Tour"
+  },
+  {
+   "name": "Keane Barry",
+   "country": "Republic of Ireland",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Development Tour"
+  },
+  {
+   "name": "Stefan Bellmont",
+   "country": "Switzerland",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "West Europe Qualifier"
+  },
+  {
+   "name": "Stowe Buntz",
+   "country": "United States",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "CDC Pro Tour"
+  },
+  {
+   "name": "Matt Campbell",
+   "country": "Canada",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC TCH Qualifier"
+  },
+  {
+   "name": "Cameron Carolissen",
+   "country": "South Africa",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "African Qualifier"
+  },
+  {
+   "name": "Joe Comito",
+   "country": "Australia",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "DPA Pro Tour"
+  },
+  {
+   "name": "Leonard Gates",
+   "country": "United States",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "CDC Pro Tour"
+  },
+  {
+   "name": "Tomoya Goto",
+   "country": "Japan",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDJ Japan Tour"
+  },
+  {
+   "name": "Kai Gotthardt",
+   "country": "Germany",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Europe Super League"
+  },
+  {
+   "name": "Jeffrey de Graaf",
+   "country": "Sweden",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Nordic & Baltic"
+  },
+  {
+   "name": "Romeo Grbavac",
+   "country": "Croatia",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "East Europe Qualifier"
+  },
+  {
+   "name": "Rhys Griffin",
+   "country": "Wales",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC TCH Qualifier"
+  },
+  {
+   "name": "Lourence Ilagan",
+   "country": "Philippines",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Asian Tour"
+  },
+  {
+   "name": "Christian Kist",
+   "country": "Netherlands",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Challenge Tour"
+  },
+  {
+   "name": "Nitin Kumar",
+   "country": "India",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "India Qualifier"
+  },
+  {
+   "name": "Darius Labanauskas",
+   "country": "Lithuania",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Nordic & Baltic"
+  },
+  {
+   "name": "Lok Yin Lee",
+   "country": "Hong Kong",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Asian Championship Qualifier"
+  },
+  {
+   "name": "Noa-Lynn van Leuven",
+   "country": "Netherlands",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Women's Series"
+  },
+  {
+   "name": "Jim Long",
+   "country": "Canada",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "CDC Pro Tour"
+  },
+  {
+   "name": "Gordon Mathers",
+   "country": "Australia",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "Oceanic Masters"
+  },
+  {
+   "name": "Alexander Merkx",
+   "country": "Netherlands",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Challenge Tour"
+  },
+  {
+   "name": "Paolo Nebrida",
+   "country": "Philippines",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Asian Tour"
+  },
+  {
+   "name": "Ben Robb",
+   "country": "New Zealand",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "DPNZ Qualifier"
+  },
+  {
+   "name": "Fallon Sherrock",
+   "country": "England",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Women's Series"
+  },
+  {
+   "name": "Dylan Slevin",
+   "country": "Republic of Ireland",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC TCH Qualifier"
+  },
+  {
+   "name": "Sandro Eric Sosing",
+   "country": "Philippines",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "Asian Championship"
+  },
+  {
+   "name": "Niko Springer",
+   "country": "Germany",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Development Tour"
+  },
+  {
+   "name": "Rashad Sweeting",
+   "country": "The Bahamas",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "CDLC Tour"
+  },
+  {
+   "name": "Alexis Toylo",
+   "country": "Philippines",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC Asian Tour"
+  },
+  {
+   "name": "Xiaochen Zong",
+   "country": "China",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC China Championship"
+  },
+  {
+   "name": "Jeffrey de Zwaan",
+   "country": "Netherlands",
+   "entryRoute": "international qualifier",
+   "seed": null,
+   "qualifierEvent": "PDC TCH Qualifier"
+  }
+ ],
+ "matches": [
+  {
+   "round": "R1",
+   "matchNo": 1,
+   "date": "2024-12-15",
+   "session": "evening",
+   "p1": "Thibault Tricole",
+   "p2": "Joe Comito",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "2-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Thibault Tricole"
+  },
+  {
+   "round": "R1",
+   "matchNo": 2,
+   "date": "2024-12-15",
+   "session": "evening",
+   "p1": "Jermaine Wattimena",
+   "p2": "Stefan Bellmont",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-1",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Jermaine Wattimena"
+  },
+  {
+   "round": "R1",
+   "matchNo": 3,
+   "date": "2024-12-15",
+   "session": "evening",
+   "p1": "Kim Huybrechts",
+   "p2": "Keane Barry",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "2-3",
+    "1-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Keane Barry"
+  },
+  {
+   "round": "R2",
+   "matchNo": 4,
+   "date": "2024-12-15",
+   "session": "evening",
+   "p1": "Luke Humphries",
+   "p2": "Thibault Tricole",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-0",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 1,
+   "seedP2": null,
+   "winner": "Luke Humphries"
+  },
+  {
+   "round": "R1",
+   "matchNo": 5,
+   "date": "2024-12-16",
+   "session": "afternoon",
+   "p1": "Wesley Plaisier",
+   "p2": "Ryusei Azemoto",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "1-3",
+    "3-2",
+    "1-3",
+    "3-1",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Wesley Plaisier"
+  },
+  {
+   "round": "R1",
+   "matchNo": 6,
+   "date": "2024-12-16",
+   "session": "afternoon",
+   "p1": "Luke Woodhouse",
+   "p2": "Lourence Ilagan",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-0",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Luke Woodhouse"
+  },
+  {
+   "round": "R1",
+   "matchNo": 7,
+   "date": "2024-12-16",
+   "session": "afternoon",
+   "p1": "Alan Soutar",
+   "p2": "Kai Gotthardt",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "1-3",
+    "0-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Kai Gotthardt"
+  },
+  {
+   "round": "R2",
+   "matchNo": 8,
+   "date": "2024-12-16",
+   "session": "afternoon",
+   "p1": "James Wade",
+   "p2": "Jermaine Wattimena",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "1-3",
+    "0-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 16,
+   "seedP2": null,
+   "winner": "Jermaine Wattimena"
+  },
+  {
+   "round": "R1",
+   "matchNo": 9,
+   "date": "2024-12-16",
+   "session": "evening",
+   "p1": "Niels Zonneveld",
+   "p2": "Robert Owen",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-0",
+    "2-3",
+    "1-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Robert Owen"
+  },
+  {
+   "round": "R1",
+   "matchNo": 10,
+   "date": "2024-12-16",
+   "session": "evening",
+   "p1": "Connor Scutt",
+   "p2": "Ben Robb",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Connor Scutt"
+  },
+  {
+   "round": "R1",
+   "matchNo": 11,
+   "date": "2024-12-16",
+   "session": "evening",
+   "p1": "Cameron Menzies",
+   "p2": "Leonard Gates",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "0-3",
+    "3-2",
+    "0-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Leonard Gates"
+  },
+  {
+   "round": "R2",
+   "matchNo": 12,
+   "date": "2024-12-16",
+   "session": "evening",
+   "p1": "Gerwyn Price",
+   "p2": "Keane Barry",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 10,
+   "seedP2": null,
+   "winner": "Gerwyn Price"
+  },
+  {
+   "round": "R1",
+   "matchNo": 13,
+   "date": "2024-12-17",
+   "session": "afternoon",
+   "p1": "James Hurrell",
+   "p2": "Jim Long",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "James Hurrell"
+  },
+  {
+   "round": "R1",
+   "matchNo": 14,
+   "date": "2024-12-17",
+   "session": "afternoon",
+   "p1": "Kevin Doets",
+   "p2": "Noa-Lynn van Leuven",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "1-3",
+    "3-1",
+    "3-1",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Kevin Doets"
+  },
+  {
+   "round": "R1",
+   "matchNo": 15,
+   "date": "2024-12-17",
+   "session": "afternoon",
+   "p1": "Ryan Joyce",
+   "p2": "Darius Labanauskas",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-0",
+    "0-3",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ryan Joyce"
+  },
+  {
+   "round": "R2",
+   "matchNo": 16,
+   "date": "2024-12-17",
+   "session": "afternoon",
+   "p1": "Mike De Decker",
+   "p2": "Luke Woodhouse",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "0-3",
+    "1-3",
+    "3-0",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 24,
+   "seedP2": null,
+   "winner": "Luke Woodhouse"
+  },
+  {
+   "round": "R1",
+   "matchNo": 17,
+   "date": "2024-12-17",
+   "session": "evening",
+   "p1": "Jeffrey de Graaf",
+   "p2": "Rashad Sweeting",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "1-3",
+    "3-2",
+    "3-0",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Jeffrey de Graaf"
+  },
+  {
+   "round": "R1",
+   "matchNo": 18,
+   "date": "2024-12-17",
+   "session": "evening",
+   "p1": "Ricardo Pietreczko",
+   "p2": "Xiaochen Zong",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ricardo Pietreczko"
+  },
+  {
+   "round": "R1",
+   "matchNo": 19,
+   "date": "2024-12-17",
+   "session": "evening",
+   "p1": "Ryan Meikle",
+   "p2": "Fallon Sherrock",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "0-3",
+    "3-0",
+    "3-0",
+    "2-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ryan Meikle"
+  },
+  {
+   "round": "R2",
+   "matchNo": 20,
+   "date": "2024-12-17",
+   "session": "evening",
+   "p1": "Peter Wright",
+   "p2": "Wesley Plaisier",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-2",
+    "3-2",
+    "0-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 17,
+   "seedP2": null,
+   "winner": "Peter Wright"
+  },
+  {
+   "round": "R1",
+   "matchNo": 21,
+   "date": "2024-12-18",
+   "session": "evening",
+   "p1": "Jim Williams",
+   "p2": "Paolo Nebrida",
+   "setsP1": 2,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "3-1",
+    "1-3",
+    "3-0",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Paolo Nebrida"
+  },
+  {
+   "round": "R1",
+   "matchNo": 22,
+   "date": "2024-12-18",
+   "session": "evening",
+   "p1": "Madars Razma",
+   "p2": "Christian Kist",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "2-3",
+    "3-1",
+    "3-1",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Madars Razma"
+  },
+  {
+   "round": "R1",
+   "matchNo": 23,
+   "date": "2024-12-18",
+   "session": "evening",
+   "p1": "Ricky Evans",
+   "p2": "Gordon Mathers",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "3-1",
+    "0-3",
+    "3-1",
+    "1-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ricky Evans"
+  },
+  {
+   "round": "R2",
+   "matchNo": 24,
+   "date": "2024-12-18",
+   "session": "evening",
+   "p1": "Nathan Aspinall",
+   "p2": "Leonard Gates",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "2-3",
+    "3-1",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 12,
+   "seedP2": null,
+   "winner": "Nathan Aspinall"
+  },
+  {
+   "round": "R1",
+   "matchNo": 25,
+   "date": "2024-12-19",
+   "session": "afternoon",
+   "p1": "Chris Landman",
+   "p2": "Lok Yin Lee",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "0-3",
+    "0-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Lok Yin Lee"
+  },
+  {
+   "round": "R1",
+   "matchNo": 26,
+   "date": "2024-12-19",
+   "session": "afternoon",
+   "p1": "Callan Rydz",
+   "p2": "Romeo Grbavac",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Callan Rydz"
+  },
+  {
+   "round": "R1",
+   "matchNo": 27,
+   "date": "2024-12-19",
+   "session": "afternoon",
+   "p1": "Martin Lukeman",
+   "p2": "Nitin Kumar",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "2-3",
+    "3-1",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Martin Lukeman"
+  },
+  {
+   "round": "R2",
+   "matchNo": 28,
+   "date": "2024-12-19",
+   "session": "afternoon",
+   "p1": "Gabriel Clemens",
+   "p2": "Robert Owen",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "0-3",
+    "3-1",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 27,
+   "seedP2": null,
+   "winner": "Robert Owen"
+  },
+  {
+   "round": "R1",
+   "matchNo": 29,
+   "date": "2024-12-19",
+   "session": "evening",
+   "p1": "Nick Kenny",
+   "p2": "Stowe Buntz",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Nick Kenny"
+  },
+  {
+   "round": "R1",
+   "matchNo": 30,
+   "date": "2024-12-19",
+   "session": "evening",
+   "p1": "Mensur Suljovic",
+   "p2": "Matt Campbell",
+   "setsP1": 2,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "3-2",
+    "0-3",
+    "3-2",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Matt Campbell"
+  },
+  {
+   "round": "R1",
+   "matchNo": 31,
+   "date": "2024-12-19",
+   "session": "evening",
+   "p1": "Scott Williams",
+   "p2": "Niko Springer",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "0-3",
+    "3-1",
+    "3-1",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Scott Williams"
+  },
+  {
+   "round": "R2",
+   "matchNo": 32,
+   "date": "2024-12-19",
+   "session": "evening",
+   "p1": "Michael Smith",
+   "p2": "Kevin Doets",
+   "setsP1": 2,
+   "setsP2": 3,
+   "setScores": [
+    "3-0",
+    "1-3",
+    "3-0",
+    "0-3",
+    "4-6"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 2,
+   "seedP2": null,
+   "winner": "Kevin Doets"
+  },
+  {
+   "round": "R1",
+   "matchNo": 33,
+   "date": "2024-12-20",
+   "session": "afternoon",
+   "p1": "Stephen Burton",
+   "p2": "Alexander Merkx",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "1-3",
+    "1-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Alexander Merkx"
+  },
+  {
+   "round": "R1",
+   "matchNo": 34,
+   "date": "2024-12-20",
+   "session": "afternoon",
+   "p1": "Wessel Nijman",
+   "p2": "Cameron Carolissen",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "3-0",
+    "3-2",
+    "0-3",
+    "2-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Wessel Nijman"
+  },
+  {
+   "round": "R1",
+   "matchNo": 35,
+   "date": "2024-12-20",
+   "session": "afternoon",
+   "p1": "Ian White",
+   "p2": "Sandro Eric Sosing",
+   "setsP1": null,
+   "setsP2": null,
+   "setScores": null,
+   "walkover": true,
+   "notes": "Walkover: Sandro Eric Sosing withdrew before the match on medical grounds; he was subsequently diagnosed with Guillain-Barre syndrome. Ian White advanced. No darts thrown, so no set or leg scores exist.",
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ian White"
+  },
+  {
+   "round": "R2",
+   "matchNo": 36,
+   "date": "2024-12-20",
+   "session": "afternoon",
+   "p1": "Stephen Bunting",
+   "p2": "Kai Gotthardt",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "1-3",
+    "3-2",
+    "3-0",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 8,
+   "seedP2": null,
+   "winner": "Stephen Bunting"
+  },
+  {
+   "round": "R1",
+   "matchNo": 37,
+   "date": "2024-12-20",
+   "session": "evening",
+   "p1": "Mickey Mansell",
+   "p2": "Tomoya Goto",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "2-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Mickey Mansell"
+  },
+  {
+   "round": "R1",
+   "matchNo": 38,
+   "date": "2024-12-20",
+   "session": "evening",
+   "p1": "Florian Hempel",
+   "p2": "Jeffrey de Zwaan",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "1-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Florian Hempel"
+  },
+  {
+   "round": "R1",
+   "matchNo": 39,
+   "date": "2024-12-20",
+   "session": "evening",
+   "p1": "William O'Connor",
+   "p2": "Dylan Slevin",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "1-3",
+    "3-1",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Dylan Slevin"
+  },
+  {
+   "round": "R2",
+   "matchNo": 40,
+   "date": "2024-12-20",
+   "session": "evening",
+   "p1": "Michael van Gerwen",
+   "p2": "James Hurrell",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 3,
+   "seedP2": null,
+   "winner": "Michael van Gerwen"
+  },
+  {
+   "round": "R1",
+   "matchNo": 41,
+   "date": "2024-12-21",
+   "session": "afternoon",
+   "p1": "Karel Sedláček",
+   "p2": "Rhys Griffin",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "2-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Rhys Griffin"
+  },
+  {
+   "round": "R1",
+   "matchNo": 42,
+   "date": "2024-12-21",
+   "session": "afternoon",
+   "p1": "Richard Veenstra",
+   "p2": "Alexis Toylo",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "2-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Alexis Toylo"
+  },
+  {
+   "round": "R2",
+   "matchNo": 43,
+   "date": "2024-12-21",
+   "session": "afternoon",
+   "p1": "Brendan Dolan",
+   "p2": "Lok Yin Lee",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-2",
+    "3-0",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 30,
+   "seedP2": null,
+   "winner": "Brendan Dolan"
+  },
+  {
+   "round": "R2",
+   "matchNo": 44,
+   "date": "2024-12-21",
+   "session": "afternoon",
+   "p1": "Chris Dobey",
+   "p2": "Alexander Merkx",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "0-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 15,
+   "seedP2": null,
+   "winner": "Chris Dobey"
+  },
+  {
+   "round": "R2",
+   "matchNo": 45,
+   "date": "2024-12-21",
+   "session": "evening",
+   "p1": "Danny Noppert",
+   "p2": "Ryan Joyce",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-1",
+    "2-3",
+    "1-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 13,
+   "seedP2": null,
+   "winner": "Ryan Joyce"
+  },
+  {
+   "round": "R2",
+   "matchNo": 46,
+   "date": "2024-12-21",
+   "session": "evening",
+   "p1": "Raymond van Barneveld",
+   "p2": "Nick Kenny",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "1-3",
+    "2-3",
+    "3-0",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 32,
+   "seedP2": null,
+   "winner": "Nick Kenny"
+  },
+  {
+   "round": "R2",
+   "matchNo": 47,
+   "date": "2024-12-21",
+   "session": "evening",
+   "p1": "Luke Littler",
+   "p2": "Ryan Meikle",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-2",
+    "1-3",
+    "3-1",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 4,
+   "seedP2": null,
+   "winner": "Luke Littler"
+  },
+  {
+   "round": "R2",
+   "matchNo": 48,
+   "date": "2024-12-21",
+   "session": "evening",
+   "p1": "Damon Heta",
+   "p2": "Connor Scutt",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "2-3",
+    "3-0",
+    "3-2",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 9,
+   "seedP2": null,
+   "winner": "Damon Heta"
+  },
+  {
+   "round": "R2",
+   "matchNo": 49,
+   "date": "2024-12-22",
+   "session": "afternoon",
+   "p1": "Ryan Searle",
+   "p2": "Matt Campbell",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 20,
+   "seedP2": null,
+   "winner": "Ryan Searle"
+  },
+  {
+   "round": "R2",
+   "matchNo": 50,
+   "date": "2024-12-22",
+   "session": "afternoon",
+   "p1": "Dirk van Duijvenbode",
+   "p2": "Madars Razma",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-0",
+    "2-3",
+    "0-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 25,
+   "seedP2": null,
+   "winner": "Madars Razma"
+  },
+  {
+   "round": "R2",
+   "matchNo": 51,
+   "date": "2024-12-22",
+   "session": "afternoon",
+   "p1": "Joe Cullen",
+   "p2": "Wessel Nijman",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 23,
+   "seedP2": null,
+   "winner": "Joe Cullen"
+  },
+  {
+   "round": "R2",
+   "matchNo": 52,
+   "date": "2024-12-22",
+   "session": "afternoon",
+   "p1": "Ritchie Edhouse",
+   "p2": "Ian White",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-1",
+    "1-3",
+    "1-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 29,
+   "seedP2": null,
+   "winner": "Ian White"
+  },
+  {
+   "round": "R2",
+   "matchNo": 53,
+   "date": "2024-12-22",
+   "session": "evening",
+   "p1": "Martin Schindler",
+   "p2": "Callan Rydz",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "1-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 22,
+   "seedP2": null,
+   "winner": "Callan Rydz"
+  },
+  {
+   "round": "R2",
+   "matchNo": 54,
+   "date": "2024-12-22",
+   "session": "evening",
+   "p1": "Ross Smith",
+   "p2": "Paolo Nebrida",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "2-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 19,
+   "seedP2": null,
+   "winner": "Paolo Nebrida"
+  },
+  {
+   "round": "R2",
+   "matchNo": 55,
+   "date": "2024-12-22",
+   "session": "evening",
+   "p1": "Gary Anderson",
+   "p2": "Jeffrey de Graaf",
+   "setsP1": 0,
+   "setsP2": 3,
+   "setScores": [
+    "1-3",
+    "0-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 14,
+   "seedP2": null,
+   "winner": "Jeffrey de Graaf"
+  },
+  {
+   "round": "R2",
+   "matchNo": 56,
+   "date": "2024-12-22",
+   "session": "evening",
+   "p1": "Dimitri Van den Bergh",
+   "p2": "Dylan Slevin",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-2",
+    "3-2",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 11,
+   "seedP2": null,
+   "winner": "Dimitri Van den Bergh"
+  },
+  {
+   "round": "R2",
+   "matchNo": 57,
+   "date": "2024-12-23",
+   "session": "afternoon",
+   "p1": "Krzysztof Ratajski",
+   "p2": "Alexis Toylo",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "2-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 31,
+   "seedP2": null,
+   "winner": "Krzysztof Ratajski"
+  },
+  {
+   "round": "R2",
+   "matchNo": 58,
+   "date": "2024-12-23",
+   "session": "afternoon",
+   "p1": "Andrew Gilding",
+   "p2": "Martin Lukeman",
+   "setsP1": 3,
+   "setsP2": 1,
+   "setScores": [
+    "3-0",
+    "0-3",
+    "3-2",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 21,
+   "seedP2": null,
+   "winner": "Andrew Gilding"
+  },
+  {
+   "round": "R2",
+   "matchNo": 59,
+   "date": "2024-12-23",
+   "session": "afternoon",
+   "p1": "Josh Rock",
+   "p2": "Rhys Griffin",
+   "setsP1": 3,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-2",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 18,
+   "seedP2": null,
+   "winner": "Josh Rock"
+  },
+  {
+   "round": "R2",
+   "matchNo": 60,
+   "date": "2024-12-23",
+   "session": "afternoon",
+   "p1": "Jonny Clayton",
+   "p2": "Mickey Mansell",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "2-3",
+    "3-0",
+    "3-0",
+    "1-3",
+    "6-5"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 7,
+   "seedP2": null,
+   "winner": "Jonny Clayton"
+  },
+  {
+   "round": "R2",
+   "matchNo": 61,
+   "date": "2024-12-23",
+   "session": "evening",
+   "p1": "Gian van Veen",
+   "p2": "Ricardo Pietreczko",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "0-3",
+    "3-1",
+    "0-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 28,
+   "seedP2": null,
+   "winner": "Ricardo Pietreczko"
+  },
+  {
+   "round": "R2",
+   "matchNo": 62,
+   "date": "2024-12-23",
+   "session": "evening",
+   "p1": "Daryl Gurney",
+   "p2": "Florian Hempel",
+   "setsP1": 3,
+   "setsP2": 2,
+   "setScores": [
+    "1-3",
+    "3-1",
+    "0-3",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 26,
+   "seedP2": null,
+   "winner": "Daryl Gurney"
+  },
+  {
+   "round": "R2",
+   "matchNo": 63,
+   "date": "2024-12-23",
+   "session": "evening",
+   "p1": "Dave Chisnall",
+   "p2": "Ricky Evans",
+   "setsP1": 2,
+   "setsP2": 3,
+   "setScores": [
+    "3-1",
+    "2-3",
+    "1-3",
+    "3-0",
+    "5-6"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 6,
+   "seedP2": null,
+   "winner": "Ricky Evans"
+  },
+  {
+   "round": "R2",
+   "matchNo": 64,
+   "date": "2024-12-23",
+   "session": "evening",
+   "p1": "Rob Cross",
+   "p2": "Scott Williams",
+   "setsP1": 1,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "2-3",
+    "1-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 5,
+   "seedP2": null,
+   "winner": "Scott Williams"
+  },
+  {
+   "round": "R3",
+   "matchNo": 65,
+   "date": "2024-12-27",
+   "session": "afternoon",
+   "p1": "Damon Heta",
+   "p2": "Luke Woodhouse",
+   "setsP1": 3,
+   "setsP2": 4,
+   "setScores": [
+    "2-3",
+    "3-1",
+    "3-2",
+    "3-2",
+    "1-3",
+    "0-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 9,
+   "seedP2": null,
+   "winner": "Luke Woodhouse"
+  },
+  {
+   "round": "R3",
+   "matchNo": 66,
+   "date": "2024-12-27",
+   "session": "afternoon",
+   "p1": "Jonny Clayton",
+   "p2": "Daryl Gurney",
+   "setsP1": 4,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "3-1",
+    "3-0",
+    "1-3",
+    "0-3",
+    "1-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 7,
+   "seedP2": 26,
+   "winner": "Jonny Clayton"
+  },
+  {
+   "round": "R3",
+   "matchNo": 67,
+   "date": "2024-12-27",
+   "session": "afternoon",
+   "p1": "Stephen Bunting",
+   "p2": "Madars Razma",
+   "setsP1": 4,
+   "setsP2": 1,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "2-3",
+    "3-0",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 8,
+   "seedP2": null,
+   "winner": "Stephen Bunting"
+  },
+  {
+   "round": "R3",
+   "matchNo": 68,
+   "date": "2024-12-27",
+   "session": "evening",
+   "p1": "Gerwyn Price",
+   "p2": "Joe Cullen",
+   "setsP1": 4,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "3-2",
+    "3-1",
+    "1-3",
+    "1-3",
+    "1-3",
+    "6-5"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 10,
+   "seedP2": 23,
+   "winner": "Gerwyn Price"
+  },
+  {
+   "round": "R3",
+   "matchNo": 69,
+   "date": "2024-12-27",
+   "session": "evening",
+   "p1": "Jermaine Wattimena",
+   "p2": "Peter Wright",
+   "setsP1": 2,
+   "setsP2": 4,
+   "setScores": [
+    "1-3",
+    "0-3",
+    "3-2",
+    "0-3",
+    "3-0",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": 17,
+   "winner": "Peter Wright"
+  },
+  {
+   "round": "R3",
+   "matchNo": 70,
+   "date": "2024-12-27",
+   "session": "evening",
+   "p1": "Luke Humphries",
+   "p2": "Nick Kenny",
+   "setsP1": 4,
+   "setsP2": 0,
+   "setScores": [
+    "3-2",
+    "3-1",
+    "3-1",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 1,
+   "seedP2": null,
+   "winner": "Luke Humphries"
+  },
+  {
+   "round": "R3",
+   "matchNo": 71,
+   "date": "2024-12-28",
+   "session": "afternoon",
+   "p1": "Ryan Joyce",
+   "p2": "Ryan Searle",
+   "setsP1": 4,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "3-2",
+    "1-3",
+    "2-3",
+    "3-0",
+    "2-3",
+    "4-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": 20,
+   "winner": "Ryan Joyce"
+  },
+  {
+   "round": "R3",
+   "matchNo": 72,
+   "date": "2024-12-28",
+   "session": "afternoon",
+   "p1": "Scott Williams",
+   "p2": "Ricardo Pietreczko",
+   "setsP1": 1,
+   "setsP2": 4,
+   "setScores": [
+    "2-3",
+    "1-3",
+    "3-1",
+    "0-3",
+    "2-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Ricardo Pietreczko"
+  },
+  {
+   "round": "R3",
+   "matchNo": 73,
+   "date": "2024-12-28",
+   "session": "afternoon",
+   "p1": "Nathan Aspinall",
+   "p2": "Andrew Gilding",
+   "setsP1": 4,
+   "setsP2": 0,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 12,
+   "seedP2": 21,
+   "winner": "Nathan Aspinall"
+  },
+  {
+   "round": "R3",
+   "matchNo": 74,
+   "date": "2024-12-28",
+   "session": "evening",
+   "p1": "Chris Dobey",
+   "p2": "Josh Rock",
+   "setsP1": 4,
+   "setsP2": 2,
+   "setScores": [
+    "1-3",
+    "3-1",
+    "1-3",
+    "3-0",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 15,
+   "seedP2": 18,
+   "winner": "Chris Dobey"
+  },
+  {
+   "round": "R3",
+   "matchNo": 75,
+   "date": "2024-12-28",
+   "session": "evening",
+   "p1": "Michael van Gerwen",
+   "p2": "Brendan Dolan",
+   "setsP1": 4,
+   "setsP2": 2,
+   "setScores": [
+    "2-3",
+    "3-1",
+    "3-0",
+    "3-0",
+    "1-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 3,
+   "seedP2": 30,
+   "winner": "Michael van Gerwen"
+  },
+  {
+   "round": "R3",
+   "matchNo": 76,
+   "date": "2024-12-28",
+   "session": "evening",
+   "p1": "Luke Littler",
+   "p2": "Ian White",
+   "setsP1": 4,
+   "setsP2": 1,
+   "setScores": [
+    "3-2",
+    "1-3",
+    "3-0",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 4,
+   "seedP2": null,
+   "winner": "Luke Littler"
+  },
+  {
+   "round": "R3",
+   "matchNo": 77,
+   "date": "2024-12-29",
+   "session": "afternoon",
+   "p1": "Jeffrey de Graaf",
+   "p2": "Paolo Nebrida",
+   "setsP1": 4,
+   "setsP2": 1,
+   "setScores": [
+    "1-3",
+    "3-0",
+    "3-2",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Jeffrey de Graaf"
+  },
+  {
+   "round": "R3",
+   "matchNo": 78,
+   "date": "2024-12-29",
+   "session": "afternoon",
+   "p1": "Kevin Doets",
+   "p2": "Krzysztof Ratajski",
+   "setsP1": 4,
+   "setsP2": 3,
+   "setScores": [
+    "0-3",
+    "0-3",
+    "3-1",
+    "3-0",
+    "2-3",
+    "3-2",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": 31,
+   "winner": "Kevin Doets"
+  },
+  {
+   "round": "R3",
+   "matchNo": 79,
+   "date": "2024-12-29",
+   "session": "afternoon",
+   "p1": "Dimitri Van den Bergh",
+   "p2": "Callan Rydz",
+   "setsP1": 0,
+   "setsP2": 4,
+   "setScores": [
+    "0-3",
+    "2-3",
+    "2-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 11,
+   "seedP2": null,
+   "winner": "Callan Rydz"
+  },
+  {
+   "round": "R3",
+   "matchNo": 80,
+   "date": "2024-12-29",
+   "session": "evening",
+   "p1": "Ricky Evans",
+   "p2": "Robert Owen",
+   "setsP1": 2,
+   "setsP2": 4,
+   "setScores": [
+    "3-1",
+    "2-3",
+    "3-2",
+    "2-3",
+    "2-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Robert Owen"
+  },
+  {
+   "round": "R4",
+   "matchNo": 81,
+   "date": "2024-12-29",
+   "session": "evening",
+   "p1": "Jonny Clayton",
+   "p2": "Gerwyn Price",
+   "setsP1": 2,
+   "setsP2": 4,
+   "setScores": [
+    "1-3",
+    "1-3",
+    "3-0",
+    "3-1",
+    "1-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 7,
+   "seedP2": 10,
+   "winner": "Gerwyn Price"
+  },
+  {
+   "round": "R4",
+   "matchNo": 82,
+   "date": "2024-12-29",
+   "session": "evening",
+   "p1": "Luke Humphries",
+   "p2": "Peter Wright",
+   "setsP1": 1,
+   "setsP2": 4,
+   "setScores": [
+    "2-3",
+    "3-2",
+    "2-3",
+    "2-3",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 1,
+   "seedP2": 17,
+   "winner": "Peter Wright"
+  },
+  {
+   "round": "R4",
+   "matchNo": 83,
+   "date": "2024-12-30",
+   "session": "afternoon",
+   "p1": "Kevin Doets",
+   "p2": "Chris Dobey",
+   "setsP1": 3,
+   "setsP2": 4,
+   "setScores": [
+    "1-3",
+    "3-1",
+    "0-3",
+    "3-2",
+    "3-2",
+    "1-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": 15,
+   "winner": "Chris Dobey"
+  },
+  {
+   "round": "R4",
+   "matchNo": 84,
+   "date": "2024-12-30",
+   "session": "afternoon",
+   "p1": "Robert Owen",
+   "p2": "Callan Rydz",
+   "setsP1": 3,
+   "setsP2": 4,
+   "setScores": [
+    "3-1",
+    "3-2",
+    "2-3",
+    "0-3",
+    "0-3",
+    "3-1",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": null,
+   "winner": "Callan Rydz"
+  },
+  {
+   "round": "R4",
+   "matchNo": 85,
+   "date": "2024-12-30",
+   "session": "afternoon",
+   "p1": "Ricardo Pietreczko",
+   "p2": "Nathan Aspinall",
+   "setsP1": 0,
+   "setsP2": 4,
+   "setScores": [
+    "1-3",
+    "0-3",
+    "0-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": null,
+   "seedP2": 12,
+   "winner": "Nathan Aspinall"
+  },
+  {
+   "round": "R4",
+   "matchNo": 86,
+   "date": "2024-12-30",
+   "session": "evening",
+   "p1": "Stephen Bunting",
+   "p2": "Luke Woodhouse",
+   "setsP1": 4,
+   "setsP2": 0,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "3-1",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 8,
+   "seedP2": null,
+   "winner": "Stephen Bunting"
+  },
+  {
+   "round": "R4",
+   "matchNo": 87,
+   "date": "2024-12-30",
+   "session": "evening",
+   "p1": "Michael van Gerwen",
+   "p2": "Jeffrey de Graaf",
+   "setsP1": 4,
+   "setsP2": 2,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "0-3",
+    "1-3",
+    "3-0",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 3,
+   "seedP2": null,
+   "winner": "Michael van Gerwen"
+  },
+  {
+   "round": "R4",
+   "matchNo": 88,
+   "date": "2024-12-30",
+   "session": "evening",
+   "p1": "Luke Littler",
+   "p2": "Ryan Joyce",
+   "setsP1": 4,
+   "setsP2": 3,
+   "setScores": [
+    "3-1",
+    "2-3",
+    "3-1",
+    "1-3",
+    "3-1",
+    "2-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 4,
+   "seedP2": null,
+   "winner": "Luke Littler"
+  },
+  {
+   "round": "QF",
+   "matchNo": 89,
+   "date": "2025-01-01",
+   "session": "afternoon",
+   "p1": "Chris Dobey",
+   "p2": "Gerwyn Price",
+   "setsP1": 5,
+   "setsP2": 3,
+   "setScores": [
+    "2-3",
+    "1-3",
+    "3-1",
+    "3-2",
+    "3-2",
+    "3-0",
+    "2-3",
+    "3-1"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 15,
+   "seedP2": 10,
+   "winner": "Chris Dobey"
+  },
+  {
+   "round": "QF",
+   "matchNo": 90,
+   "date": "2025-01-01",
+   "session": "afternoon",
+   "p1": "Michael van Gerwen",
+   "p2": "Callan Rydz",
+   "setsP1": 5,
+   "setsP2": 3,
+   "setScores": [
+    "3-2",
+    "0-3",
+    "3-2",
+    "1-3",
+    "3-2",
+    "3-1",
+    "1-3",
+    "3-2"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 3,
+   "seedP2": null,
+   "winner": "Michael van Gerwen"
+  },
+  {
+   "round": "QF",
+   "matchNo": 91,
+   "date": "2025-01-01",
+   "session": "evening",
+   "p1": "Peter Wright",
+   "p2": "Stephen Bunting",
+   "setsP1": 2,
+   "setsP2": 5,
+   "setScores": [
+    "1-3",
+    "1-3",
+    "2-3",
+    "0-3",
+    "3-0",
+    "3-1",
+    "0-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 17,
+   "seedP2": 8,
+   "winner": "Stephen Bunting"
+  },
+  {
+   "round": "QF",
+   "matchNo": 92,
+   "date": "2025-01-01",
+   "session": "evening",
+   "p1": "Luke Littler",
+   "p2": "Nathan Aspinall",
+   "setsP1": 5,
+   "setsP2": 2,
+   "setScores": [
+    "3-0",
+    "3-1",
+    "2-3",
+    "3-2",
+    "3-1",
+    "2-3",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 4,
+   "seedP2": 12,
+   "winner": "Luke Littler"
+  },
+  {
+   "round": "SF",
+   "matchNo": 93,
+   "date": "2025-01-02",
+   "session": null,
+   "p1": "Chris Dobey",
+   "p2": "Michael van Gerwen",
+   "setsP1": 1,
+   "setsP2": 6,
+   "setScores": [
+    "1-3",
+    "2-3",
+    "3-0",
+    "0-3",
+    "1-3",
+    "2-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 15,
+   "seedP2": 3,
+   "winner": "Michael van Gerwen"
+  },
+  {
+   "round": "SF",
+   "matchNo": 94,
+   "date": "2025-01-02",
+   "session": null,
+   "p1": "Stephen Bunting",
+   "p2": "Luke Littler",
+   "setsP1": 1,
+   "setsP2": 6,
+   "setScores": [
+    "2-3",
+    "1-3",
+    "2-3",
+    "1-3",
+    "3-1",
+    "2-3",
+    "1-3"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 8,
+   "seedP2": 4,
+   "winner": "Luke Littler"
+  },
+  {
+   "round": "F",
+   "matchNo": 95,
+   "date": "2025-01-03",
+   "session": "evening",
+   "p1": "Luke Littler",
+   "p2": "Michael van Gerwen",
+   "setsP1": 7,
+   "setsP2": 3,
+   "setScores": [
+    "3-1",
+    "3-0",
+    "3-1",
+    "3-1",
+    "1-3",
+    "3-2",
+    "2-3",
+    "3-0",
+    "1-3",
+    "3-0"
+   ],
+   "walkover": false,
+   "notes": null,
+   "seedP1": 4,
+   "seedP2": 3,
+   "winner": "Luke Littler"
+  }
+ ],
+ "sessions": [
+  {
+   "date": "2024-12-15",
+   "session": "evening",
+   "matches": [
+    1,
+    2,
+    3,
+    4
+   ]
+  },
+  {
+   "date": "2024-12-16",
+   "session": "afternoon",
+   "matches": [
+    5,
+    6,
+    7,
+    8
+   ]
+  },
+  {
+   "date": "2024-12-16",
+   "session": "evening",
+   "matches": [
+    9,
+    10,
+    11,
+    12
+   ]
+  },
+  {
+   "date": "2024-12-17",
+   "session": "afternoon",
+   "matches": [
+    13,
+    14,
+    15,
+    16
+   ]
+  },
+  {
+   "date": "2024-12-17",
+   "session": "evening",
+   "matches": [
+    17,
+    18,
+    19,
+    20
+   ]
+  },
+  {
+   "date": "2024-12-18",
+   "session": "evening",
+   "matches": [
+    21,
+    22,
+    23,
+    24
+   ]
+  },
+  {
+   "date": "2024-12-19",
+   "session": "afternoon",
+   "matches": [
+    25,
+    26,
+    27,
+    28
+   ]
+  },
+  {
+   "date": "2024-12-19",
+   "session": "evening",
+   "matches": [
+    29,
+    30,
+    31,
+    32
+   ]
+  },
+  {
+   "date": "2024-12-20",
+   "session": "afternoon",
+   "matches": [
+    33,
+    34,
+    35,
+    36
+   ]
+  },
+  {
+   "date": "2024-12-20",
+   "session": "evening",
+   "matches": [
+    37,
+    38,
+    39,
+    40
+   ]
+  },
+  {
+   "date": "2024-12-21",
+   "session": "afternoon",
+   "matches": [
+    41,
+    42,
+    43,
+    44
+   ]
+  },
+  {
+   "date": "2024-12-21",
+   "session": "evening",
+   "matches": [
+    45,
+    46,
+    47,
+    48
+   ]
+  },
+  {
+   "date": "2024-12-22",
+   "session": "afternoon",
+   "matches": [
+    49,
+    50,
+    51,
+    52
+   ]
+  },
+  {
+   "date": "2024-12-22",
+   "session": "evening",
+   "matches": [
+    53,
+    54,
+    55,
+    56
+   ]
+  },
+  {
+   "date": "2024-12-23",
+   "session": "afternoon",
+   "matches": [
+    57,
+    58,
+    59,
+    60
+   ]
+  },
+  {
+   "date": "2024-12-23",
+   "session": "evening",
+   "matches": [
+    61,
+    62,
+    63,
+    64
+   ]
+  },
+  {
+   "date": "2024-12-24",
+   "session": null,
+   "matches": [],
+   "noPlay": true
+  },
+  {
+   "date": "2024-12-25",
+   "session": null,
+   "matches": [],
+   "noPlay": true
+  },
+  {
+   "date": "2024-12-26",
+   "session": null,
+   "matches": [],
+   "noPlay": true
+  },
+  {
+   "date": "2024-12-27",
+   "session": "afternoon",
+   "matches": [
+    65,
+    66,
+    67
+   ]
+  },
+  {
+   "date": "2024-12-27",
+   "session": "evening",
+   "matches": [
+    68,
+    69,
+    70
+   ]
+  },
+  {
+   "date": "2024-12-28",
+   "session": "afternoon",
+   "matches": [
+    71,
+    72,
+    73
+   ]
+  },
+  {
+   "date": "2024-12-28",
+   "session": "evening",
+   "matches": [
+    74,
+    75,
+    76
+   ]
+  },
+  {
+   "date": "2024-12-29",
+   "session": "afternoon",
+   "matches": [
+    77,
+    78,
+    79
+   ]
+  },
+  {
+   "date": "2024-12-29",
+   "session": "evening",
+   "matches": [
+    80,
+    81,
+    82
+   ]
+  },
+  {
+   "date": "2024-12-30",
+   "session": "afternoon",
+   "matches": [
+    83,
+    84,
+    85
+   ]
+  },
+  {
+   "date": "2024-12-30",
+   "session": "evening",
+   "matches": [
+    86,
+    87,
+    88
+   ]
+  },
+  {
+   "date": "2024-12-31",
+   "session": null,
+   "matches": [],
+   "noPlay": true
+  },
+  {
+   "date": "2025-01-01",
+   "session": "afternoon",
+   "matches": [
+    89,
+    90
+   ]
+  },
+  {
+   "date": "2025-01-01",
+   "session": "evening",
+   "matches": [
+    91,
+    92
+   ]
+  },
+  {
+   "date": "2025-01-02",
+   "session": null,
+   "matches": [
+    93,
+    94
+   ]
+  },
+  {
+   "date": "2025-01-03",
+   "session": "evening",
+   "matches": [
+    95
+   ]
+  }
+ ]
+}

@@ -63,7 +63,7 @@
 // `CheckerReport.findings` as well, or one disagreement is reported twice.
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { encodeConstraints, type Board, type BoardCourt, type BoardFixture, type CheckerFinding, type EncodedConstraints } from "./board.ts";
+import { encodeConstraints, SETTLED_AT_GENERATION, type Board, type BoardCourt, type BoardFixture, type CheckerFinding, type EncodedConstraints } from "./board.ts";
 import { BenchHttpError, raw, type RawResult, type Session } from "./http.ts";
 import { defaultTransport, type SeedTransport } from "./seed.ts";
 
@@ -169,6 +169,7 @@ interface WireFixture {
   court_name?: string | null;
   venue_id?: string | null;
   officials?: readonly unknown[];
+  status?: string | null;
   schedule_locked?: boolean;
 }
 
@@ -993,7 +994,20 @@ async function runDivision(
       fixtures: after.map((f) => toBoardFixture(f, division, encoded!.matchMinutes, sink)),
       courts: venues.flatMap((v) => (v.courts ?? []).map((c) => toBoardCourt(v.id, c))),
     };
-    outcome.unplacedCount = board.fixtures.filter((f) => f.start === undefined).length;
+    // B06b — a fixture the GENERATOR already settled was never scheduled and
+    // never will be: a bracket bye is born `forfeited` with an award
+    // (`stages.ts:1351`). Counting those as unplaced redded suite 11 with
+    // "unplaced fixtures = 32" (Div A's byes) and "= 17" (Div B's) on a board
+    // where every real fixture was placed. The exemption is POSITIVE — the
+    // fixture must actually carry a settled status — so a genuinely unplaced
+    // `scheduled` fixture still reds, which is the trigger this count exists
+    // for. `_tiny` has no byes, so nothing could see it before now.
+    const settledIds = new Set(
+      after.filter((f) => SETTLED_AT_GENERATION.has(f.status ?? "scheduled")).map((f) => f.id),
+    );
+    outcome.unplacedCount = board.fixtures.filter(
+      (f) => f.start === undefined && !settledIds.has(f.fixtureId),
+    ).length;
 
     // NO DECLARED-BUT-NONE RED HERE, deliberately (ruling R21). This driver
     // carried one, and so does `checker.ts`'s officials rule; two reds for one

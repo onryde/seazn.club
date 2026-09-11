@@ -5,6 +5,7 @@
 // error AFTER pre-flight, and a key dispatched but not listed was rejected by
 // argument validation before it ever ran. One table now answers both.
 import { describe, expect, it } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
 import { SUITE_REGISTRY, lookupSuite, suiteKeys } from "../registry.ts";
 
 describe("suite registry", () => {
@@ -30,5 +31,33 @@ describe("suite registry", () => {
     for (const def of SUITE_REGISTRY.values()) {
       expect(typeof def.run).toBe("function");
     }
+  });
+
+  it("every registered pack file exists on disk", () => {
+    // The registry is the only thing between `--suite <key>` and a pack, so a
+    // path that resolves to nothing fails deep inside pre-flight rather than
+    // at argument validation.
+    for (const def of SUITE_REGISTRY.values()) {
+      expect(existsSync(def.packPath), `${def.key} -> ${def.packPath}`).toBe(true);
+    }
+  });
+
+  it("every pack declares the suite key it is filed under", () => {
+    // B06a finding 3, one layer out: the runner used to default a missing
+    // `packPath` to `_tiny`'s, so a suite folded the proof pack while
+    // reporting under its own name. The inverse is just as silent — a registry
+    // row pointing at the wrong pack — and this is what catches it.
+    for (const [key, def] of SUITE_REGISTRY) {
+      const pack = JSON.parse(readFileSync(def.packPath, "utf8")) as { suite: string };
+      expect(pack.suite, `${key} -> ${def.packPath}`).toBe(key);
+    }
+  });
+
+  it("registers suite 11 in programme order, after _tiny", () => {
+    // Insertion order, not alphabetical: `suiteKeys()` drives `--help` and the
+    // unknown-suite error text, and those read best in the order the programme
+    // built them.
+    expect(suiteKeys()).toEqual(["_tiny", "suite11"]);
+    expect(lookupSuite("suite11")?.title).toBe("PDC Worlds (darts)");
   });
 });

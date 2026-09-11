@@ -21,13 +21,22 @@
 // `seq` field at all, on purpose — see that same header note).
 //
 // ---------------------------------------------------------------------------
-// Sequential per fixture, concurrent across fixtures (_RULES.md §3)
+// Sequential per fixture, concurrent across fixtures IN A WAVE (_RULES.md §3)
 // ---------------------------------------------------------------------------
 // One fixture's events are folded with a plain sequential loop (`await`ed one
 // at a time) — sending event N+1 before event N's response is back would
 // race the real ledger's own optimistic-concurrency check. Multiple
 // fixtures' streams are independent of each other (different rows, no shared
 // ledger), so they run concurrently via `Promise.all`.
+//
+// CORRECTED IN B06b: that independence claim holds for a LEAGUE and is FALSE
+// for a BRACKET. A knockout fixture's entrants are written by its feeders'
+// decisions, so fixture N+1 depends on fixture N, and one flat `Promise.all`
+// refused all 63 of suite 11's later-round fixtures with `WRONG_PHASE —
+// fixture has an unassigned entrant (bye/TBD)`. It survived five waves because
+// `_tiny`'s only multi-fixture stage is a league and its knockout is a single
+// fixture. Callers now pass `roundByFixtureKey` and folding proceeds round by
+// round — see that field's doc comment.
 //
 // ---------------------------------------------------------------------------
 // A refusal is a FINDING, never a silent skip and never a retry (D5)
@@ -117,6 +126,26 @@ export interface SimulateStreamsInput {
    *  note 6's `@`-sigil is ONE namespace across both kinds, so a single map
    *  is exactly as authoritative as two. */
   readonly refIdByKey: ReadonlyMap<string, string>;
+  /**
+   * B06b — DEPENDENCY WAVES. Keyed by `fixtureKey(divisionRef, extKey)`, the
+   * value is the fixture's `round_no` off the real board.
+   *
+   * This file's header says fixtures "are independent of each other (different
+   * rows, no shared ledger)", and for a LEAGUE that is true. For a BRACKET it
+   * is false: a knockout fixture's entrants are written by its feeders'
+   * decisions, so fixture N+1 genuinely depends on fixture N. Folding all of
+   * them through one `Promise.all` refuses every later round with
+   * `WRONG_PHASE — fixture has an unassigned entrant (bye/TBD)`.
+   *
+   * Nothing caught this for five waves because `_tiny`'s only multi-fixture
+   * stage is a league and its knockout is a single fixture. Suite 11 is the
+   * first real bracket, and all nine remaining pack sessions are brackets too.
+   *
+   * When given, streams fold round by round — ascending, awaited between
+   * rounds, still concurrent WITHIN a round, so a league (one round number, or
+   * this map omitted) behaves exactly as before.
+   */
+  readonly roundByFixtureKey?: ReadonlyMap<string, number>;
   readonly transport?: SimTransport;
 }
 
@@ -244,13 +273,41 @@ async function foldOneStream(
   return { streamKey, fixtureId, eventsSent };
 }
 
+/**
+ * Split streams into dependency waves. One wave when no round map is given —
+ * which is every league, and is byte-for-byte the old behaviour.
+ *
+ * A stream whose fixture is absent from the map keeps its own wave position by
+ * landing in wave `-1`, folded FIRST rather than dropped: an unmapped fixture
+ * is a binding anomaly `bindStreamFixtures` should already have refused, and
+ * silently reordering it would hide that.
+ */
+function dependencyWaves(
+  streams: readonly PackStream[],
+  roundByFixtureKey: ReadonlyMap<string, number> | undefined,
+): readonly (readonly PackStream[])[] {
+  if (roundByFixtureKey === undefined) return streams.length > 0 ? [streams] : [];
+  const byRound = new Map<number, PackStream[]>();
+  for (const s of streams) {
+    const round = roundByFixtureKey.get(fixtureKey(s.divisionRef, s.fixtureExtKey)) ?? -1;
+    byRound.set(round, [...(byRound.get(round) ?? []), s]);
+  }
+  return [...byRound.entries()].sort((a, b) => a[0] - b[0]).map(([, group]) => group);
+}
+
 export async function simulateDivisionStreams(input: SimulateStreamsInput): Promise<SimulateResult> {
   const t = input.transport ?? defaultSimTransport;
   const start = performance.now();
-  // Concurrent ACROSS fixtures — see this file's header comment.
-  const streamResults = await Promise.all(
-    input.streams.map((s) => foldOneStream(input.base, input.session, s, input.fixtureIdByKey, input.refIdByKey, t)),
-  );
+  // Concurrent ACROSS fixtures WITHIN a wave, sequential BETWEEN waves — see
+  // `roundByFixtureKey`'s doc comment for why a bracket cannot be one wave.
+  const streamResults: SimulateStreamResult[] = [];
+  for (const wave of dependencyWaves(input.streams, input.roundByFixtureKey)) {
+    streamResults.push(
+      ...(await Promise.all(
+        wave.map((s) => foldOneStream(input.base, input.session, s, input.fixtureIdByKey, input.refIdByKey, t)),
+      )),
+    );
+  }
   const wallMs = Math.round(performance.now() - start);
   const eventsSent = streamResults.reduce((sum, r) => sum + r.eventsSent, 0);
   const findings = streamResults.flatMap((r) => (r.finding ? [r.finding] : []));

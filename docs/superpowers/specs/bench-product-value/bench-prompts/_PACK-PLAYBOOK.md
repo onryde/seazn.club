@@ -121,3 +121,73 @@ Oracles: <champion; table rows w/ points+GD/NRR/etc; leaders w/ counts;
 Known adaptations expected: <e.g. bench-as-organizer R16 seeding>
 Size estimate: <matches, events, persons>
 ```
+
+## What the pilot learned (B06b, suite 11 — darts)
+
+The pilot's real deliverable is a playbook the next nine pack sessions can
+trust, so every correction below was paid for while authoring suite 11. Each
+one cost a red run or a wrong answer; none is derivable from the schema.
+
+- **A PAYLOAD ref is sigilled `@`; a STRUCTURAL ref is bare.** `streams[].home`,
+  `streams[].away` and every `expected.*` ref are bare; `generic.score.by`,
+  `person`, and anything else inside an event `payload` carry `@`
+  (`pack-schema.ts` header note 6). **Nothing but stage 0 can catch a missing
+  sigil** — `PackSchema` treats an unsigilled payload string as a literal by
+  design, so it parses clean and then folds against an entrant the engine has
+  never heard of. Suite 11 shipped its first draft with all 205 streams broken
+  this way, and stage 0 named every one of them offline in seconds.
+
+- **Fixture ext keys belong to the PRODUCT for any generated stage.** A
+  knockout emits `se-r{round}-i{index}` (`bracket.ts:170`, `:197`), a round
+  robin `rr-r{round}-c{court}` (`roundrobin.ts:140`), americano
+  `am-r{round}-c{court}`. A pack cannot mint its own for those stages — it must
+  reconstruct the structure and read the keys off it. Round 0 of a knockout
+  emits a fixture for EVERY pair INCLUDING the byes, so a 128-slot draw is 127
+  fixtures whatever the entrant count.
+
+- **`slotOrder` is a list of SEED NUMBERS, not entrant ids**
+  (`bracket.ts:135-152`), resolved through `seedOrder` (`roundrobin.ts:62`),
+  which falls back to the product's **input order** for unseeded entrants —
+  something no pack controls. **Seed every entrant** so the draw is a pure
+  function of the pack, and record the artificial numbers as an adaptation.
+  Prefer `slotOrder` over `byes` whenever the real bracket is recoverable:
+  `byeEntrants` hands the pairings to the product, which will pair entrants who
+  never met while the pack still asserts the real results.
+
+- **Let the engine derive the score.** In `generic`, a `generic.result` card
+  with NO `p1Score`/`p2Score` settles from the running tally
+  (`generic.ts:110-114`). Encoding the totals on the settling card makes
+  `expected.matches` compare the pack against itself — a tautology that passes
+  forever. The same instinct applies to every module: carry the raw units, let
+  the engine produce the outcome.
+
+- **Derive expected values from the streams you just built**, never from a
+  table typed into the builder. A leaderboard transcribed by hand freezes what
+  the author believed on the day; one recomputed from the pack's own events
+  moves when the data moves. Pick entries whose counts DIFFER, or a comparator
+  returning a constant passes.
+
+- **Real data can violate your own constraints, and that is not a bug to
+  edit out.** Suite 11's published Div B timetable double-books one board.
+  Three independent feeds agree, so it is a fact about the event; shifting a
+  match to make the feasibility certificate happy would invent an attributed
+  fact. Carry it verbatim and let the certificate report it — §6.3's order
+  (check the history against the encoded constraints BEFORE reading any solver
+  INFEASIBLE as a finding) exists exactly for this.
+
+- **The feasibility certificate had never run against real data before suite
+  11.** `certify` returns `SKIPPED_NO_HISTORY` when a division declares no
+  `historicalAssignment` (`certificate.ts:129`), and `_tiny` declares `[]`. So
+  a pack with a populated timetable is exercising that path for the first time
+  — treat a certificate red as a candidate bench/product finding, not
+  automatically a pack bug.
+
+- **Two product gaps a pack cannot work around, found by suite 11.** There is
+  no route to forfeit an existing fixture: `forfeited` is a fixture status but
+  its only writer is the bracket generator, stamping byes it created itself
+  (`stages.ts:1351`). And a stream cannot express one either — in
+  `resultMode: "score"` a result card with no scores and no tally is refused
+  (`generic.ts:119-120`). Encoded the only way available (an administrative
+  1-0), a walkover then becomes INDISTINGUISHABLE from a played 1-0, so the
+  expected outcome method must be `"regulation"`. If your sport's event had a
+  withdrawal, budget for this.

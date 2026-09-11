@@ -92,6 +92,25 @@ import type {
   CourtExceptionRow,
   CourtHoursRow,
 } from "@seazn/engine/scheduling";
+import type { PackHistoricalAssignment } from "./pack-schema.ts";
+
+/**
+ * Statuses a fixture can be BORN in. A bracket generates a bye already
+ * decided — `stages.ts:1351` stamps `forfeited` on any generated game carrying
+ * an `award` — and such a fixture is never scheduled and never scored.
+ *
+ * ONE authority, because two consumers need the same fact and a second copy is
+ * how they drift: `seed.ts` exempts these from "every generated fixture owes a
+ * stream", and `schedule.ts` exempts them from the unplaced count. Suite 11
+ * has 49 of them and both guards redded on it.
+ */
+export const SETTLED_AT_GENERATION: ReadonlySet<string> = new Set([
+  "forfeited",
+  "decided",
+  "finalized",
+  "cancelled",
+  "abandoned",
+]);
 
 // ---------------------------------------------------------------------------
 // The board — one division as the PRODUCT reports it, after apply
@@ -375,6 +394,12 @@ export interface CheckerReport {
 export type CertificateBranch =
   | "SKIPPED_NO_HISTORY"
   | "PACK_AUTHORING_BUG"
+  /** B06b — the real timetable breaches the encoding, and every breach lands
+   *  only on rows the pack DECLARED as known conflicts
+   *  (`PackHistoricalAssignment.knownConflict`). The pack is right, the source
+   *  data contradicts itself, and no encoding can reconcile them. Reported,
+   *  never red. */
+  | "HISTORY_SELF_CONFLICT"
   | "PRODUCT_DEFECT"
   | "UNPLACED"
   | "FEASIBLE";
@@ -1103,4 +1128,78 @@ export function encodeConstraints(input: {
     declaresOfficials: input.declaresOfficials === true,
     unmodelled,
   };
+}
+
+// ---------------------------------------------------------------------------
+// B06b — the history board the feasibility certificate needs
+// ---------------------------------------------------------------------------
+/**
+ * Render a pack's `historicalAssignment` into a `Board`, so §6.3's check can
+ * run the REAL timetable through the same constraint code the solver's
+ * proposal goes through. Without it `certify` throws, which is what B04 left
+ * deliberately: "rendering history into a `Board` is a real piece of work, and
+ * a fallback that let the run continue would certify a timetable against
+ * nothing and report FEASIBLE" (`run-suite.ts`'s own note). Suite 11 is the
+ * first pack to declare history, so this is that work.
+ *
+ * The COURTS come from the live board unchanged — hours and exceptions are
+ * what the pack declared and what the product stored, and the history has to
+ * be judged against the same calendar as the proposal. Only the placement
+ * moves.
+ *
+ * A fixture with no historical row stays UNPLACED rather than inheriting the
+ * solver's placement. That is the honest rendering — a bye is never
+ * scheduled in reality — and it matters: silently leaving the proposal's start
+ * on an unmatched fixture would judge the SOLVER's choice and report it as
+ * history.
+ */
+export function renderHistoryBoard(input: {
+  readonly board: Board;
+  readonly historical: readonly PackHistoricalAssignment[];
+  readonly divisionRef: string;
+  /** Used only when a row omits `endsAt`. A published session timetable often
+   *  gives starts alone; a duration is then the division's own match length,
+   *  never a guess made here. */
+  readonly matchMinutes: number;
+}): { board: Board; placed: number; unmatched: readonly string[] } {
+  const rows = new Map(
+    input.historical.filter((h) => h.divisionRef === input.divisionRef).map((h) => [h.fixtureExtKey, h] as const),
+  );
+  // Courts resolve by NAME: `PackHistoricalAssignment.court` is the court's
+  // printed name (it describes a real venue, not the pack's ref space), and
+  // the board carries both. A name the board does not know leaves `courtId`
+  // undefined, which the court rules then cannot judge — reported as
+  // unmatched rather than dropped.
+  const courtIdByName = new Map(input.board.courts.map((c) => [c.name, c.courtId] as const));
+  const unmatched: string[] = [];
+  let placed = 0;
+  const fixtures = input.board.fixtures.map((f) => {
+    const row = f.extKey === undefined ? undefined : rows.get(f.extKey);
+    if (row === undefined) {
+      return { ...f, start: undefined, end: undefined, courtId: undefined, courtName: undefined };
+    }
+    const start = Date.parse(row.startsAt);
+    if (Number.isNaN(start)) {
+      unmatched.push(`${f.extKey ?? f.fixtureId}: unparseable startsAt "${row.startsAt}"`);
+      return { ...f, start: undefined, end: undefined, courtId: undefined, courtName: undefined };
+    }
+    const end = row.endsAt === undefined ? start + input.matchMinutes * 60_000 : Date.parse(row.endsAt);
+    const courtId = row.court === undefined ? undefined : courtIdByName.get(row.court);
+    if (row.court !== undefined && courtId === undefined) {
+      unmatched.push(`${f.extKey ?? f.fixtureId}: court "${row.court}" is not on this division's board`);
+    }
+    placed++;
+    return {
+      ...f,
+      start,
+      end: Number.isNaN(end) ? start + input.matchMinutes * 60_000 : end,
+      ...(courtId === undefined ? { courtId: undefined } : { courtId }),
+      ...(row.court === undefined ? { courtName: undefined } : { courtName: row.court }),
+    };
+  });
+  // A declared row naming a fixture the board does not carry at all is the
+  // other direction, and just as silent if unreported.
+  const boardKeys = new Set(input.board.fixtures.map((f) => f.extKey).filter((k): k is string => k !== undefined));
+  for (const key of rows.keys()) if (!boardKeys.has(key)) unmatched.push(`${key}: declared in history but not on the board`);
+  return { board: { ...input.board, fixtures }, placed, unmatched };
 }

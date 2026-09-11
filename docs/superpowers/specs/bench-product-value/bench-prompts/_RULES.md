@@ -102,7 +102,8 @@ no placement container BY DESIGN). `PLACEMENT_SERVICE_HOST` overrides
 Follow `_PACK-PLAYBOOK.md` exactly — research → build → validate →
 record. Sources cited in pack meta; adaptations in `meta.adaptations[]`
 (§7A protocol: adapt / escalate / drop — adaptations never red).
-PackSchema is FROZEN after B06; additive needs escalate to the owner in
+PackSchema is FROZEN after **B06b** (the darts pack), NOT B06a — B06a was
+framework only. Additive needs escalate to the owner in
 the PR, never land silently.
 
 ## 5. Agent topology (owner policy, current)

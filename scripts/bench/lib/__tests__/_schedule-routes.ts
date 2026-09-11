@@ -41,6 +41,10 @@ export interface FakeFixtureRow {
   court_id: string | null;
   officials: unknown[];
   schedule_locked: boolean;
+  /** B06b — a bracket BYE is born `forfeited` (`stages.ts:1351`) and is never
+   *  scheduled. Absent means `scheduled`, which is the strict side, so every
+   *  test written before byes existed keeps its old meaning. */
+  status?: string;
 }
 
 /** T7a: a court's weekly hours and dated exceptions, snake_case exactly as
@@ -143,6 +147,7 @@ export interface FakeScheduleWorld {
   entrantsOfDivision(divisionId: string): readonly string[];
   /** Called from the fake's own `/generate` handler with what it returned. */
   addFixtures(stageId: string, rows: readonly { id: string; ext_key: string }[]): void;
+  setStatus(fixtureId: string, status: string): void;
   setOfficials(fixtureId: string, set: unknown[]): void;
   /** T7a: `PUT /orgs/{id}/courts/{courtId}/calendar` — a FULL replace, same
    *  as the product's. Exposed so a test can populate a court's calendar
@@ -234,6 +239,10 @@ export function makeScheduleWorld(options: FakeScheduleOptions = {}): FakeSchedu
           schedule_locked: false,
         });
       });
+    },
+    setStatus(fixtureId: string, status: string) {
+      const row = fixtures.get(fixtureId);
+      if (row !== undefined) row.status = status;
     },
     setOfficials(fixtureId, set) {
       const row = fixtures.get(fixtureId);

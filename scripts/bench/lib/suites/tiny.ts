@@ -42,6 +42,7 @@ export {
   findExistingSeed,
   fixtureCountIssue,
   isRoundRobinStage,
+  packDeclaresLeagueStage,
   KEEP_BRANDING_KEY,
   registrationDivisionsOf,
   resolveScheduleLocks,

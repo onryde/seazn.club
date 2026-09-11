@@ -42,6 +42,7 @@ import { buildSeedPlan, type SeedPlan } from "../seed-plan.ts";
 import type { SeedTransport } from "../seed.ts";
 import {
   fixtureCountIssue,
+  packDeclaresLeagueStage,
   findExistingSeed,
   KEEP_BRANDING_KEY,
   runTinySuite,
@@ -268,6 +269,39 @@ describe("fixtureCountIssue — addendum 1's comparison, on the testable side of
     const issue = fixtureCountIssue(9, plan());
     expect(issue).toContain("expected 7 fixture(s) total across 3 league stage(s)");
     expect(issue).toContain("got 9");
+  });
+
+  // B06b — `fixtureCountIssue` still NAMES a missing league expectation (the
+  // test below this block pins that it never no-ops silently). What changed is
+  // who decides SEVERITY: suite 11 is knockout-only in both divisions, so
+  // there is no league count to check and that note must not red the run.
+  // `packDeclaresLeagueStage` is what the caller splits on.
+  it("packDeclaresLeagueStage is false for a knockout-only pack and true for _tiny", () => {
+    expect(packDeclaresLeagueStage(plan())).toBe(true);
+
+    const pack = tinyPack();
+    const knockoutOnly = {
+      ...pack,
+      divisions: pack.divisions.map((d) => ({
+        ...d,
+        stages: d.stages.map((s) => ({ ...s, kind: "knockout" as const })),
+      })),
+    } as Pack;
+    expect(packDeclaresLeagueStage(buildSeedPlan(knockoutOnly))).toBe(false);
+  });
+
+  it("a pack with ONE league stage among knockouts still declares one", () => {
+    // The boundary that matters: `some`, not `every`. A mixed pack owes its
+    // league count exactly as much as an all-league pack does.
+    const pack = tinyPack();
+    const mixed = {
+      ...pack,
+      divisions: pack.divisions.map((d, i) => ({
+        ...d,
+        stages: d.stages.map((s) => (i === 0 ? s : { ...s, kind: "knockout" as const })),
+      })),
+    } as Pack;
+    expect(packDeclaresLeagueStage(buildSeedPlan(mixed))).toBe(true);
   });
 
   it("degrades to the ORIGINAL single-entry sentence for a one-league-stage pack — no shape change for every pack before T5", () => {
