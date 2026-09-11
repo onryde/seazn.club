@@ -116,7 +116,7 @@ describe("generic — score mode (v1 parity)", () => {
 describe("generic — core event mapping (spec 03 §2 table)", () => {
   it("maps core.forfeit to an award for the other side", () => {
     const state = fold(winLossCfg, stream(["core.start"], ["core.forfeit", { by: "H", reason: "no-show" }]));
-    expect(state.outcome).toEqual({ kind: "award", winner: "A" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
     const [home, away] = generic.standingsDelta(state.outcome!, winLossCfg, league, state);
     expect(home).toMatchObject({ lost: 1, points: 0 });
     expect(away).toMatchObject({ won: 1, points: 3 });
@@ -213,7 +213,7 @@ describe("generic — running tally (W4)", () => {
       scoreCfg,
       stream(["generic.score", { by: "H", points: 4 }], ["core.forfeit", { by: "H", reason: "no-show" }]),
     );
-    expect(state.outcome).toEqual({ kind: "award", winner: "A" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "A", method: "no-show" });
     expect(generic.summary(state).headline).toBe("L — W/O");
   });
 

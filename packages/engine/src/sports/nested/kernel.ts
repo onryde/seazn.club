@@ -12,7 +12,13 @@
 // the same set ledger the rally path banks (mirrors setbased summary mode).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, resolveVoids, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import {
+  forfeitOf,
+  isStrictFold,
+  resolveVoids,
+  type CoreEv,
+  type EventEnvelope,
+} from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import { DurationSeconds, GameTime, compareGameTime } from "../../core/time.ts";
 import {
@@ -1366,7 +1372,7 @@ function applySetSummary(
 // Forfeit / abandon — mirror setbased.
 // ---------------------------------------------------------------------------
 
-function applyForfeit(state: NestedState, by: string): NestedState {
+function applyForfeit(state: NestedState, by: string, reason: string): NestedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1374,7 +1380,7 @@ function applyForfeit(state: NestedState, by: string): NestedState {
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide] },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
   };
 }
 
@@ -2106,7 +2112,7 @@ export function makeNestedModule(
             isStrictFold(ctx),
           );
         case "core.forfeit":
-          return applyForfeit(state, (ev.payload as { by: string }).by);
+          return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
         case "core.abandon":
           return applyAbandon(state);
         case "core.finalize":

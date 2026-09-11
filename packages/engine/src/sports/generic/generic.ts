@@ -4,7 +4,7 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, forfeitOf, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   EntrantId,
@@ -558,9 +558,9 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
         if (state.phase !== "pre" && state.phase !== "live") {
           throw new EngineError("WRONG_PHASE", "match already over");
         }
-        const by = (ev.payload as { by: string }).by;
+        const { by, reason } = forfeitOf(ev.payload);
         const winner = state.entrants[opponent(sideOf(state, by))];
-        return { ...state, phase: "done", outcome: { kind: "award", winner } };
+        return { ...state, phase: "done", outcome: { kind: "award", winner, method: reason } };
       }
       case "core.abandon": {
         if (state.phase !== "pre" && state.phase !== "live") {

@@ -287,6 +287,7 @@ describe("football golden (c): forfeit award 3-0", () => {
       kind: "award",
       winner: "H",
       score: { home: 3, away: 0 },
+      method: "no-show",
     });
     expect(football.summary(state).headline).toBe("3 — 0");
     const [home, away] = football.standingsDelta(state.outcome!, leagueCfg, league, state);

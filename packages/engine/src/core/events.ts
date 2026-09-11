@@ -51,6 +51,15 @@ export const CoreStart = z.strictObject({}); // scheduled → in_play
 export const CoreVoid = z.strictObject({}); // target id travels in envelope.voids
 export const CoreForfeit = z.strictObject({ by: EntrantId, reason: z.string().min(1) });
 export const CoreAbandon = z.strictObject({ reason: z.string().min(1) });
+
+/** The one reader for a `core.forfeit` payload. Every sport module used to cast
+ *  it inline as `{ by: string }`, which is why the REQUIRED `reason` was
+ *  silently dropped in all eight of them — the cast named the field it wanted
+ *  and the compiler had nothing to say about the one it did not. Parsing here
+ *  instead means a module cannot read `by` without the reason coming with it. */
+export function forfeitOf(payload: unknown): { by: string; reason: string } {
+  return CoreForfeit.parse(payload);
+}
 export const CoreFinalize = z.strictObject({}); // locks ledger
 export const CoreNote = z.strictObject({ text: z.string().min(1) }); // no state effect
 // Jul3/07 §4 — MOTM/MVP and friends: append-only, undoable via core.void,

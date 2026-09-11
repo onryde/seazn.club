@@ -9,6 +9,7 @@ import {
   type CoreEv,
   type EventEnvelope,
   type FoldContext,
+  forfeitOf,
 } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import { GameTime, addDuration, compareGameTime, gameTimeOf } from "../../core/time.ts";
@@ -1616,7 +1617,7 @@ function applyShootoutKick(
   };
 }
 
-function applyForfeit(state: FootballState, by: string): FootballState {
+function applyForfeit(state: FootballState, by: string, reason: string): FootballState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1630,7 +1631,7 @@ function applyForfeit(state: FootballState, by: string): FootballState {
     ...sweepEndOfMatch(state), // W4a — the match is over, whatever phase it was in
     phase: "done",
     goals,
-    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals, method: reason },
   };
 }
 
@@ -2114,7 +2115,7 @@ function applyEvent(
     case "football.shot":
       return applyShot(state, parsePayload(FootballShot, ev.payload, ev.type));
     case "core.forfeit":
-      return applyForfeit(state, (ev.payload as { by: string }).by);
+      return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
     case "core.abandon":
       return applyAbandon(state);
     case "core.finalize":

@@ -5,7 +5,7 @@
 // those totals — result logic never peeks at ball events.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import { playingSquad, type LineupPolicy, type SquadState } from "../../core/lineup.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
@@ -3613,12 +3613,12 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
         return applyPlayerLine(state, parsePayload(CricketPlayerLine, ev.payload, ev.type));
       case "core.forfeit": {
         if (state.phase === "done" || state.phase === "final") wrongPhase("match already over");
-        const by = (ev.payload as { by: string }).by;
+        const { by, reason } = forfeitOf(ev.payload);
         const winner = opponent(sideOf(state, by));
         return {
           ...state,
           phase: "done",
-          outcome: { kind: "award", winner: state.entrants[winner] },
+          outcome: { kind: "award", winner: state.entrants[winner], method: reason },
           margin: null,
         };
       }
