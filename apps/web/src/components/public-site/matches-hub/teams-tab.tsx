@@ -7,19 +7,24 @@
 // `maskPublicEntrantNames`, already carrying its resolved badge and its own
 // `?tab=entrants` href. Nothing here re-derives a name or a link.
 //
-// What it does decide is written out where it happens:
+// What it does decide is the tab-level EMPTY sentence, which the hub itself
+// cannot reach. Everything else it lays out.
 //
-//  • the tab-level EMPTY sentence, which the hub itself cannot reach;
-//  • the CREST, which is a three-armed decision the document does not make —
-//    badge, painted monogram, or neutral monogram (see `Crest`);
-//  • the monogram's INK, derived from the tile's own colour rather than fixed
-//    (see `monogramInk`).
+// THE CREST IS NO LONGER THIS FILE'S. It shipped here as a private `Crest`
+// with its own 32px class and its own WCAG ink derivation, on the argument
+// that `EntityLogo` "has no arm for an entrant's own colour, and adding one
+// would change every surface that renders a badge". Adding one changed none of
+// them — the arm only exists for a caller that passes a colour — and the split
+// had a cost: `Side.colour` reached `match-card.tsx` and was read by nothing,
+// so the same badge-less club was painted here and grey on every match card of
+// the same page. `Crest`, `CREST_CLASS` and `monogramInk` now live in
+// `components/ui/entity-logo.tsx`, gate and reasoning intact, and this file
+// asks for `size={32}` like any other caller.
 //
 // NO `"use client"` — nothing here is stateful, so Task 11 can render it in a
 // server component.
 import Link from "next/link";
-import { initials } from "@/components/ui/entity-logo";
-import { contrastRatio } from "@/lib/contrast";
+import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { CompetitionHubDocT, TeamCardT } from "@/server/public-site/competition-hub-schema";
@@ -41,140 +46,6 @@ function byDivision(teams: readonly TeamCardT[]): TeamCardT[][] {
     else groups.set(tm.divisionId, [tm]);
   }
   return [...groups.values()];
-}
-
-/** The two inks a monogram may be set in. Fixed values rather than theme
- *  tokens, because the ratio below is computed against them: a token that
- *  resolves at paint time cannot be measured here. `#0f172a` is `slate-900`,
- *  the ink `EntityLogo`'s own neutral tile sits near. */
-const LIGHT_INK = "#ffffff";
-const DARK_INK = "#0f172a";
-
-/**
- * Every value CSS will actually paint as a colour here, and nothing else.
- *
- * NOT the same rule as `lib/contrast.ts`'s: `expandHex` (`contrast.ts:18`) is
- * `hex.trim().replace(/^#/, "")` — it strips an OPTIONAL leading hash BEFORE
- * validating the character set — so `"123456"` measures perfectly well there.
- * It is not a CSS colour. `style="background:123456"` is a declaration the
- * browser DROPS, which leaves the tile transparent and paints white initials on
- * the card's white ground: invisible, and invisible only for the entrants whose
- * colour came in without a hash. Review F1.
- *
- * That value is reachable rather than theoretical — `colour` is
- * `team_display_v.colors.home_primary` (`competition-hub.ts:335-338`) and the
- * v1 API takes `colors` as an unvalidated `z.record(z.string(), z.string())` on
- * both write paths (`server/api-v1/schemas.ts:3169`, `:3180`). The club-hub
- * picker is an `<input type="color">`; the API is not.
- *
- * So the gate is on what goes into the STYLE, not on what `expandHex` will
- * tolerate, and the hash is ADDED rather than demanded: a bare `"123456"` is
- * unambiguously six hex digits, and rendering the club's actual navy beats
- * degrading it to grey over a punctuation mark. `components/v2/club-hub/
- * kit-style.ts:7` takes the stricter line (`/^#[0-9a-f]{6}$/i`, refuse) for a
- * value it round-trips through a form; this one only has to paint.
- */
-const CSS_HEX = /^#?(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
-
-/**
- * How to paint an entrant's monogram tile, or null to leave it neutral.
- *
- * TWO reasons this is a function and not `style={{ background: colour }}`,
- * which is what the brief asked for:
- *
- * 1. `entrants.colour` is free text (`TeamCard.colour` is
- *    `z.string().nullable()`), and a bad value has two distinct ways to hurt:
- *    `lib/contrast.ts`'s `expandHex` THROWS on anything outside its charset —
- *    measured: `relativeLuminance("puce")` raises `not a hex colour: puce`,
- *    which would take the whole spectator page down — and anything CSS cannot
- *    parse paints nothing at all, which is the quieter, worse one (see
- *    `CSS_HEX` above). One gate closes both: nothing that fails it reaches
- *    either `contrastRatio` or `style`.
- * 2. A fixed ink is wrong for half the colour wheel. White on `#123456` is
- *    12.7:1; white on a club's yellow `#ffdd00` is 1.3:1, which is not text.
- *    The ink is picked by the WCAG ratio itself rather than by a luminance
- *    threshold typed in here, using the repo's own formula — the same
- *    derivation `_THEMES.md §5` makes for the moments slab, so a red-branded
- *    org and a yellow-branded one both get a readable monogram.
- *
- * Returned as a pair rather than as two calls, so the background a ratio was
- * computed against and the ink it chose cannot come apart.
- *
- * ONE GATE, NOT TWO. Round 1 wrapped the ratio in a `try`/`catch` as well, and
- * the fix round's own sweep showed the pair covering for each other exactly as
- * AGENTS.md 3 describes: with the `catch` present, dropping `CSS_HEX`'s charset
- * survived (everything it then let through threw and was swallowed), and with
- * the charset present, dropping the `catch` survived (nothing could throw). Two
- * guards, neither killable. So the `catch` is gone and `CSS_HEX` is the single
- * rule — it is the one that belongs here, because what this function owes is a
- * string CSS will paint, not a string `contrast.ts` will measure.
- *
- * What the `catch` was insurance against — `lib/contrast.ts` NARROWING its
- * accepted set under us, which would put a throw in a public page render — is
- * now an assertion instead of dead code: the suite calls `contrastRatio` itself
- * on every colour this gate accepts and requires it not to throw. That reds if
- * the two rules ever diverge, which the `catch` never would have.
- */
-export function monogramInk(colour: string | null): { bg: string; ink: string } | null {
-  if (!colour) return null;
-  const raw = colour.trim();
-  if (!CSS_HEX.test(raw)) return null;
-  // The ratio is measured against the NORMALISED value, not the raw input. The
-  // two agree today (`expandHex` strips the hash it needs, so a mutant reading
-  // `raw` here is equivalent — recorded rather than papered over with a
-  // contrived test), and measuring what is actually painted is the invariant
-  // worth stating.
-  const bg = raw.startsWith("#") ? raw : `#${raw}`;
-  return {
-    bg,
-    ink: contrastRatio(bg, LIGHT_INK) >= contrastRatio(bg, DARK_INK) ? LIGHT_INK : DARK_INK,
-  };
-}
-
-// One geometry for all three crest arms — a badge, a painted monogram and a
-// neutral one are the same box at the same size, and three copies of these
-// classes is how they stop being.
-const CREST_CLASS =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md align-middle text-[10px] font-semibold";
-
-/** Badge → the image. Colour → a monogram painted in it. Neither → a neutral
- *  monogram. `aria-hidden` throughout, exactly as `EntityLogo` does it: the
- *  entrant's NAME is beside the crest, so announcing initials as well reads
- *  the same team twice.
- *
- *  Not `EntityLogo` itself, which is otherwise THE badge renderer here: its
- *  fallback chain ends in a fixed slate tile and has no arm for an entrant's
- *  own colour, and adding one would change every surface that renders a badge.
- *  This tile is the Teams tab's, and the shared component keeps its contract. */
-function Crest({ team }: { team: TeamCardT }) {
-  if (team.badgeUrl) {
-    return (
-      // eslint-disable-next-line @next/next/no-img-element
-      <img
-        src={team.badgeUrl}
-        alt=""
-        aria-hidden
-        className={`${CREST_CLASS} bg-white object-contain`}
-      />
-    );
-  }
-  const paint = monogramInk(team.colour);
-  if (paint) {
-    return (
-      <span
-        aria-hidden
-        className={CREST_CLASS}
-        style={{ background: paint.bg, color: paint.ink }}
-      >
-        {initials(team.name)}
-      </span>
-    );
-  }
-  return (
-    <span aria-hidden className={`${CREST_CLASS} bg-slate-100 text-slate-500`}>
-      {initials(team.name)}
-    </span>
-  );
 }
 
 export function TeamsTab({ doc, dict }: TeamsTabProps) {
@@ -241,7 +112,17 @@ export function TeamsTab({ doc, dict }: TeamsTabProps) {
                     href={tm.href}
                     className="flex min-h-11 min-w-0 items-center gap-2 rounded-xl border border-zinc-100 bg-white px-3 py-2 shadow-sm transition hover:border-accent hover:shadow"
                   >
-                    <Crest team={tm} />
+                    {/* 32, the size this card's crest has always been — a
+                        card here is a crest, a name and sometimes a seed
+                        chip, so the badge is most of what tells one card
+                        from the next. `colour` is what makes a badge-less
+                        club its own colour rather than the neutral tile. */}
+                    <EntityLogo
+                      src={tm.badgeUrl}
+                      name={tm.name}
+                      colour={tm.colour}
+                      size={32}
+                    />
                     {/* `truncate` needs `min-w-0` on the whole ancestor chain —
                         the card, the cell and this span all carry it. `title`
                         so the full name is still reachable on a pointer. */}

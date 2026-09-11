@@ -49,13 +49,12 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
-import { contrastRatio } from "@/lib/contrast";
 import type { Dict } from "@/lib/i18n-constants";
 import { deriveHubTabs } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { InfoTab, calendarSlug, competitionDateLine } from "../matches-hub/info-tab";
 import { StatsTab } from "../matches-hub/stats-tab";
-import { TeamsTab, monogramInk } from "../matches-hub/teams-tab";
+import { TeamsTab } from "../matches-hub/teams-tab";
 import { board, calendarFor, division, hubDoc, info, leader, m, team } from "./hub-fixtures";
 
 const dict = en as Dict;
@@ -541,20 +540,12 @@ describe("TeamsTab", () => {
     expect(rowHtml(h, "mh-team-e4")).toContain("color:#0f172a");
     expect(rowHtml(h, "mh-team-e4")).toContain("background:#ffdd00");
 
-    // The predicate itself, exported because the arms it has are not all
-    // reachable from a document the builder can produce. `entrants.colour` is
-    // `z.string().nullable()` — free text from a form — and
-    // `contrast.ts:expandHex` THROWS on anything that is not a hex colour, so
-    // an unvalidated value reaching it would take the whole spectator page
-    // down. Measured, not assumed: `relativeLuminance("puce")` raises
-    // `not a hex colour: puce`.
-    expect(monogramInk(null)).toBeNull();
-    expect(monogramInk("puce")).toBeNull();
-    expect(monogramInk("")).toBeNull();
-    expect(monogramInk("#123456")).toEqual({ bg: "#123456", ink: "#ffffff" });
-    expect(monogramInk("#ffdd00")).toEqual({ bg: "#ffdd00", ink: "#0f172a" });
-    // Three-digit hex is a colour too (`expandHex` accepts `#abc`).
-    expect(monogramInk("#fff")).toEqual({ bg: "#fff", ink: "#0f172a" });
+    // The PREDICATE's own table — every refused value, the charset, the
+    // fullwidth hash, and the two invariants that replaced the round-1
+    // `try`/`catch` — moved with the function into
+    // `components/ui/__tests__/entity-logo.test.tsx` when `Crest` collapsed
+    // into `EntityLogo`. One copy, not two that drift. What stays here is the
+    // claim this tab owes: that a card RENDERS the pair it was given.
   });
 
   it("a colour with NO hash is normalised before it reaches `style` — measuring it is not the same as painting it", () => {
@@ -567,44 +558,22 @@ describe("TeamsTab", () => {
     // arrived without a hash. `server/api-v1/schemas.ts:3169,3180` take club
     // `colors` as an unvalidated `z.record(z.string(), z.string())`, so that is
     // a value the product accepts today.
-    expect(monogramInk("123456")).toEqual({ bg: "#123456", ink: "#ffffff" });
-    expect(monogramInk("ffdd00")).toEqual({ bg: "#ffdd00", ink: "#0f172a" });
-    expect(monogramInk("  #123456  ")).toEqual({ bg: "#123456", ink: "#ffffff" });
-    // Still refused: the charset and the length are the gate, the hash is not.
-    expect(monogramInk("#12345")).toBeNull();
-    expect(monogramInk("1234567")).toBeNull();
-    expect(monogramInk("#12345g")).toBeNull();
-    expect(monogramInk("rebeccapurple")).toBeNull();
-
-    // TWO INVARIANTS over the whole table at once, not a sample of either.
     //
-    // (a) whatever the gate lets through is a string CSS paints. A widened gate
-    //     reds here rather than shipping a blank tile.
-    // (b) whatever the gate lets through is a string `lib/contrast.ts` MEASURES
-    //     without throwing. This is the assertion that replaced the round-1
-    //     `try`/`catch`: the catch and the gate's charset clause were covering
-    //     for each other and neither was killable (AGENTS.md 3), so the belt is
-    //     now a test. `contrast.ts` belongs to the overlay wave and is moving;
-    //     the day it narrows its accepted set, this reds instead of putting a
-    //     500 on every public competition page.
-    for (const raw of [
-      "#123456", "123456", "  #ffdd00 ", "#fff", "fff", "#FFDD00", "FFF",
-      "puce", "", "#12345", "1234567", "#12345g", "rgb(1,2,3)", "rebeccapurple",
-    ]) {
-      const paint = monogramInk(raw);
-      if (!paint) continue;
-      expect(paint.bg, raw).toMatch(/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i);
-      expect(() => contrastRatio(paint.bg, "#ffffff"), raw).not.toThrow();
-    }
-
-    // And through the component, which is where it would have been visible:
-    // the style attribute carries a `#`, on a document whose colour has none.
-    const h = render(
-      hubDoc({ teams: [team("e9", "Hashless Harriers", null, "123456")] }),
-    );
+    // The gate's own input table lives with the gate, in
+    // `components/ui/__tests__/entity-logo.test.tsx`. What this asserts is the
+    // half that is this tab's: that the normalisation is reached THROUGH a
+    // rendered card, which is where the defect would have been visible.
+    const h = render(hubDoc({ teams: [team("e9", "Hashless Harriers", null, "123456")] }));
     expect(rowHtml(h, "mh-team-e9")).toContain("background:#123456");
     expect(rowHtml(h, "mh-team-e9")).not.toContain("background:123456");
     expect(rowHtml(h, "mh-team-e9")).toContain(">HH<");
+
+    // And the refusal arm through the same path, so "the card paints what it
+    // was given" has its negative: a value CSS cannot parse leaves no `style`
+    // on the card at all rather than an empty one.
+    const bad = render(hubDoc({ teams: [team("e8", "Puce Piranhas", null, "puce")] }));
+    expect(rowHtml(bad, "mh-team-e8")).not.toContain("style=");
+    expect(rowHtml(bad, "mh-team-e8")).toContain(">PP<");
   });
 
   it("every card links to ITS OWN division's entrants tab, and the card is the 44px tap target", () => {
