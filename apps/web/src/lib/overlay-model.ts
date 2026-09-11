@@ -23,6 +23,7 @@ import {
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import { cricketDetail } from "@/lib/overlay-cricket";
 import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme";
 
 /**
@@ -405,6 +406,13 @@ export function disciplineTone(classKey: string): SportTone | undefined {
  */
 function detailOf(input: OverlayModelInput, codes: [string, string], live: boolean): OverlayDetailLine[] {
   const lines: OverlayDetailLine[] = [];
+  // W2 Task 3 — the crease, FIRST in the band. For cricket it is the band's
+  // whole reason to exist: this sport carries no serving side, no strength and
+  // no discipline list, so before W2 its `detail` was always empty and the
+  // second band never rendered at all. No `tone`: these are not card chips.
+  if (live) {
+    for (const text of cricketDetail(input.data.cricketLive, input.msg)) lines.push({ text });
+  }
   const serving = servingSide(input.data.summary);
   if (live && serving) {
     lines.push({ text: input.msg("overlay.detail.serving", { side: serving === "home" ? codes[0] : codes[1] }) });

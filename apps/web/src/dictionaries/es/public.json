@@ -455,5 +455,7 @@
   "overlay.moment.matchPoint": "PUNTO DE PARTIDO",
   "overlay.moment.setWon": "SET {n}",
   "overlay.moment.gameWon": "JUEGO {n}",
-  "overlay.moment.setWonLine": "{short} {home}–{away}"
+  "overlay.moment.setWonLine": "{short} {home}–{away}",
+  "overlay.cricket.strikerMark": "*",
+  "overlay.cricket.thisOver": "este over"
 }

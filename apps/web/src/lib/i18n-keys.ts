@@ -3059,6 +3059,8 @@ export type DictionaryKey =
   | "overlay.chase.need"
   | "overlay.chase.needBalls"
   | "overlay.chase.revised"
+  | "overlay.cricket.strikerMark"
+  | "overlay.cricket.thisOver"
   | "overlay.detail.card"
   | "overlay.detail.serving"
   | "overlay.header.ended"

@@ -5,6 +5,7 @@
 import { api } from "@/lib/client";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
+import type { OverlayCricketLive } from "@/lib/overlay-cricket";
 
 export interface LiveFixtureData {
   status: string;
@@ -82,6 +83,12 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  before any poll has happened, and `[]` there would assert "this fixture has
    *  no recent events" when the truth is "none have been loaded". */
   recent?: RecentEvent[];
+  /** W2 Task 3 — the crease: who is batting with their figures, the bowler's
+   *  analysis and this over's glyphs, from the engine's own scorecard. Absent
+   *  for every sport but cricket, and for a cricket fixture between innings or
+   *  before its first ball. `cricket` above carries the SCORE; this carries the
+   *  people. */
+  cricketLive?: OverlayCricketLive | null;
 }
 
 export interface PublicRealtimeToken {

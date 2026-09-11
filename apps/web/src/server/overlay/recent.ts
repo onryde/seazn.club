@@ -33,7 +33,8 @@ import {
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { activeInnings } from "@seazn/engine/sports/cricket";
+import { activeInnings, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
+import { liveFromScorecard, type OverlayCricketLive } from "@/lib/overlay-cricket";
 import { servingSide, setBreakdown } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import { readPublicLineups } from "@/server/public-site/public-lineups";
@@ -509,4 +510,60 @@ export async function loadRecentPersonOf(
     for (const person of list) byId.set(person.personId, { name: person.name, masked: person.masked });
   }
   return (id: unknown) => (typeof id === "string" ? byId.get(id) : undefined);
+}
+
+/**
+ * The cricket bar's second band (W2 Task 3) — the batters at the crease and the
+ * bowler's analysis, through `deriveCricketScorecard`: the ENGINE'S own public
+ * spectator seam, already used by the match centre.
+ *
+ * THE CONFIG MUST BE PARSED. Measured 2026-09-11: handed the raw
+ * `resolveFixtureCfg` output — which is exactly what `loadFoldInputs` carries,
+ * because `foldMatch` takes it unparsed — `deriveCricketScorecard` throws
+ * `Cannot read properties of undefined (reading 'enabled')`. `loadMatchCentre`
+ * hit the same wall and answered it with `safeParse` plus a fallback to the raw
+ * value; the fallback is NOT available here, because raw is precisely what
+ * throws. So a config this module's schema rejects yields NO band rather than a
+ * 500 on a live broadcast.
+ *
+ * Best effort throughout, like everything else on this path: a club is on air,
+ * and a missing second band is a smaller loss than a dark overlay.
+ */
+export function overlayCricketLive(
+  inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
+  active: readonly EventEnvelope[],
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayCricketLive | null {
+  if (inputs.sportKey !== "cricket") return null;
+  const parsed = inputs.module.configSchema.safeParse(inputs.cfg);
+  if (!parsed.success) {
+    log.warn({ sportKey: inputs.sportKey }, "overlay: cricket cfg did not parse, serving no crease band");
+    return null;
+  }
+  try {
+    const scorecard = deriveCricketScorecard({
+      events: active as never,
+      cfg: parsed.data as never,
+      lineups: inputs.lineups,
+    });
+    return liveFromScorecard(scorecard, (id) => personOf(id)?.name);
+  } catch (err) {
+    log.warn({ err }, "overlay: cricket scorecard failed, serving no crease band");
+    return null;
+  }
+}
+
+/** The person ids the cricket band will publish — the two at the crease and the
+ *  bowler. Collected the same way `personIdsIn` does it: by asking the real
+ *  producer, so the lookup cannot drift from what is rendered. */
+export function cricketPersonIdsIn(
+  inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
+  active: readonly EventEnvelope[],
+): string[] {
+  const asked = new Set<string>();
+  overlayCricketLive(inputs, active, (id) => {
+    if (typeof id === "string") asked.add(id);
+    return undefined;
+  });
+  return [...asked];
 }
