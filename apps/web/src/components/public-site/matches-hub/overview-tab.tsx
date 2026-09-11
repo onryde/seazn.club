@@ -526,15 +526,27 @@ export function OverviewTab({
                 className="min-w-[260px] max-w-[320px] shrink-0"
                 data-testid={`mh-live-now-card-${match.fixtureId}`}
               >
-                {/* NO `compact`: the prop does not exist. Task 7's review
-                    deleted it after it shipped dead — declared in the brief,
-                    with no branch in the card's markup, so this exact caller
-                    would have passed it and got an identical card back with
-                    nothing red to say so (`match-card.tsx:52-57`). The `<li>`'s
-                    floor and ceiling ARE the rail's density; a real dense
-                    variant comes back with a markup branch and a test proving
-                    the two differ. */}
-                <MatchCard match={match} dict={dict} locale={locale} now={now} />
+                {/* STILL no `compact`: the prop does not exist. Task 7's
+                    review deleted it after it shipped dead — declared in the
+                    brief, with no branch in the card's markup, so this exact
+                    caller would have passed it and got an identical card back
+                    with nothing red to say so. The `<li>`'s floor and ceiling
+                    ARE the rail's density.
+
+                    `crestSize={32}` is the one thing the rail does ask the
+                    card for, and it is the shape `compact` should have had: it
+                    reaches `EntityLogo`'s `size`, and both suites render the
+                    two values and assert they differ. A rail card is a hero —
+                    two names, a score, the whole 260-320px card — where every
+                    other card on this page is a row whose NAME is the
+                    identifier, so those stay at the card's own 24. */}
+                <MatchCard
+                  match={match}
+                  dict={dict}
+                  locale={locale}
+                  now={now}
+                  crestSize={32}
+                />
               </li>
             ))}
           </ul>

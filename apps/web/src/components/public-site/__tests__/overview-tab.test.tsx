@@ -117,6 +117,16 @@ const classesOf = (h: string, testid: string): string[] =>
     .match(/class="([^"]*)"/)?.[1]
     ?.split(" ") ?? [];
 
+/** One `<li>`'s markup, from its testid to the first `</li>` after it. Task
+ *  10's `stats-teams-info-tabs.test.tsx` idiom: a claim about ONE card read off
+ *  the whole panel is satisfied by any other card saying the same thing, and
+ *  this file renders two rails at once on purpose. No card nests a list. */
+const cardHtml = (h: string, testid: string): string => {
+  const at = h.indexOf(`data-testid="${testid}"`);
+  expect(at, `${testid} is in the markup`).toBeGreaterThan(-1);
+  return h.slice(at, h.indexOf("</li>", at));
+};
+
 /**
  * Which section landed at which CSS `order`, in the order the ladder put them.
  *
@@ -615,6 +625,24 @@ describe("OverviewTab — the Live-now rail", () => {
     expect(classes).toContain("shrink-0");
     expect(classes).toContain("min-w-[260px]");
     expect(classes).toContain("max-w-[320px]");
+  });
+
+  it("a rail card's crest is 32; a next-up card's is 24 — both off ONE render", () => {
+    // The rail is the only place on this page where a card is a hero rather
+    // than a row: two names, a score, and the whole 260-320px card. Next up is
+    // a three-column grid of rows, where the NAME is the identifier and a
+    // bigger badge costs name width — so the two sizes are a DECISION, and a
+    // decision read off one render is the only way to see that the rail did not
+    // simply inherit whatever the card defaults to.
+    //
+    // `LIVE_AND_NEXT` is the document that carries both, which is why this is
+    // not two renders compared across tests: on `docLive2` there is no next-up
+    // section at all and the comparison would be against nothing.
+    const h = render(hubDoc({ matches: LIVE_AND_NEXT }));
+    expect(cardHtml(h, "mh-live-now-card-l1")).toContain("h-8 w-8");
+    expect(cardHtml(h, "mh-live-now-card-l1")).not.toContain("h-6 w-6");
+    expect(cardHtml(h, "mh-next-up-card-u1")).toContain("h-6 w-6");
+    expect(cardHtml(h, "mh-next-up-card-u1")).not.toContain("h-8 w-8");
   });
 
   it("a competition with live matches in only one division still shows every one of them", () => {
