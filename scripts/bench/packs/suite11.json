@@ -172,8 +172,8 @@
         }
       ],
       "scheduleConfig": {
-        "startAt": "2024-12-15T12:30:00.000Z",
-        "matchMinutes": 75,
+        "startAt": "2024-12-15T19:00:00.000Z",
+        "matchMinutes": 65,
         "gapMinutes": 0,
         "courts": [
           "@c-ally-pally-stage"
@@ -348,8 +348,8 @@
         }
       ],
       "scheduleConfig": {
-        "startAt": "2024-03-23T10:00:00.000Z",
-        "matchMinutes": 20,
+        "startAt": "2024-03-23T10:09:00Z",
+        "matchMinutes": 12,
         "gapMinutes": 0,
         "courts": [
           "@c-robin-park-board-1",
@@ -3937,6 +3937,47 @@
     },
     {
       "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i3",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-nick-kenny",
+      "away": "e-a-stowe-buntz",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nick-kenny",
+            "points": 1,
+            "person": "@p-nick-kenny"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nick-kenny",
+            "points": 1,
+            "person": "@p-nick-kenny"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nick-kenny",
+            "points": 1,
+            "person": "@p-nick-kenny"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i5",
       "stageRef": "s-worlds-main",
       "home": "e-a-jermaine-wattimena",
@@ -3968,96 +4009,6 @@
             "by": "@e-a-jermaine-wattimena",
             "points": 1,
             "person": "@p-jermaine-wattimena"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i45",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-kim-huybrechts",
-      "away": "e-a-keane-barry",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kim-huybrechts",
-            "points": 1,
-            "person": "@p-kim-huybrechts"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-keane-barry",
-            "points": 1,
-            "person": "@p-keane-barry"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-keane-barry",
-            "points": 1,
-            "person": "@p-keane-barry"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-keane-barry",
-            "points": 1,
-            "person": "@p-keane-barry"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i0",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-luke-humphries",
-      "away": "e-a-thibault-tricole",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
           }
         },
         {
@@ -4125,47 +4076,6 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i15",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-luke-woodhouse",
-      "away": "e-a-lourence-ilagan",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-woodhouse",
-            "points": 1,
-            "person": "@p-luke-woodhouse"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-woodhouse",
-            "points": 1,
-            "person": "@p-luke-woodhouse"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-woodhouse",
-            "points": 1,
-            "person": "@p-luke-woodhouse"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i9",
       "stageRef": "s-worlds-main",
       "home": "e-a-alan-soutar",
@@ -4215,10 +4125,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i2",
+      "fixtureExtKey": "se-r0-i11",
       "stageRef": "s-worlds-main",
-      "home": "e-a-james-wade",
-      "away": "e-a-jermaine-wattimena",
+      "home": "e-a-madars-razma",
+      "away": "e-a-christian-kist",
       "provenance": "real",
       "events": [
         {
@@ -4227,74 +4137,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jermaine-wattimena",
+            "by": "@e-a-christian-kist",
             "points": 1,
-            "person": "@p-jermaine-wattimena"
+            "person": "@p-christian-kist"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jermaine-wattimena",
+            "by": "@e-a-madars-razma",
             "points": 1,
-            "person": "@p-jermaine-wattimena"
+            "person": "@p-madars-razma"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jermaine-wattimena",
+            "by": "@e-a-madars-razma",
             "points": 1,
-            "person": "@p-jermaine-wattimena"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i59",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-niels-zonneveld",
-      "away": "e-a-robert-owen",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-niels-zonneveld",
-            "points": 1,
-            "person": "@p-niels-zonneveld"
+            "person": "@p-madars-razma"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-robert-owen",
+            "by": "@e-a-madars-razma",
             "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-robert-owen",
-            "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-robert-owen",
-            "points": 1,
-            "person": "@p-robert-owen"
+            "person": "@p-madars-razma"
           }
         },
         {
@@ -4346,239 +4215,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i29",
+      "fixtureExtKey": "se-r0-i15",
       "stageRef": "s-worlds-main",
-      "home": "e-a-cameron-menzies",
-      "away": "e-a-leonard-gates",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-leonard-gates",
-            "points": 1,
-            "person": "@p-leonard-gates"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-cameron-menzies",
-            "points": 1,
-            "person": "@p-cameron-menzies"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-leonard-gates",
-            "points": 1,
-            "person": "@p-leonard-gates"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-leonard-gates",
-            "points": 1,
-            "person": "@p-leonard-gates"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i22",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-gerwyn-price",
-      "away": "e-a-keane-barry",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i49",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-james-hurrell",
-      "away": "e-a-jim-long",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-james-hurrell",
-            "points": 1,
-            "person": "@p-james-hurrell"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-james-hurrell",
-            "points": 1,
-            "person": "@p-james-hurrell"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-james-hurrell",
-            "points": 1,
-            "person": "@p-james-hurrell"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i33",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-kevin-doets",
-      "away": "e-a-noa-lynn-van-leuven",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-noa-lynn-van-leuven",
-            "points": 1,
-            "person": "@p-noa-lynn-van-leuven"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i21",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-ryan-joyce",
-      "away": "e-a-darius-labanauskas",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-darius-labanauskas",
-            "points": 1,
-            "person": "@p-darius-labanauskas"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i7",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-mike-de-decker",
-      "away": "e-a-luke-woodhouse",
+      "home": "e-a-luke-woodhouse",
+      "away": "e-a-lourence-ilagan",
       "provenance": "real",
       "events": [
         {
@@ -4603,107 +4243,9 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-mike-de-decker",
-            "points": 1,
-            "person": "@p-mike-de-decker"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
             "by": "@e-a-luke-woodhouse",
             "points": 1,
             "person": "@p-luke-woodhouse"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i53",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-jeffrey-de-graaf",
-      "away": "e-a-rashad-sweeting",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-rashad-sweeting",
-            "points": 1,
-            "person": "@p-rashad-sweeting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
-            "points": 1,
-            "person": "@p-jeffrey-de-graaf"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
-            "points": 1,
-            "person": "@p-jeffrey-de-graaf"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
-            "points": 1,
-            "person": "@p-jeffrey-de-graaf"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i27",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-ricardo-pietreczko",
-      "away": "e-a-xiaochen-zong",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
           }
         },
         {
@@ -4771,10 +4313,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i3",
+      "fixtureExtKey": "se-r0-i19",
       "stageRef": "s-worlds-main",
-      "home": "e-a-peter-wright",
-      "away": "e-a-wesley-plaisier",
+      "home": "e-a-ian-white",
+      "away": "e-a-sandro-eric-sosing",
       "provenance": "real",
       "events": [
         {
@@ -4783,33 +4325,9 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-peter-wright",
+            "by": "@e-a-ian-white",
             "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-wesley-plaisier",
-            "points": 1,
-            "person": "@p-wesley-plaisier"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
+            "person": "@p-ian-white"
           }
         },
         {
@@ -4820,10 +4338,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i55",
+      "fixtureExtKey": "se-r0-i21",
       "stageRef": "s-worlds-main",
-      "home": "e-a-jim-williams",
-      "away": "e-a-paolo-nebrida",
+      "home": "e-a-ryan-joyce",
+      "away": "e-a-darius-labanauskas",
       "provenance": "real",
       "events": [
         {
@@ -4832,425 +4350,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-paolo-nebrida",
+            "by": "@e-a-ryan-joyce",
             "points": 1,
-            "person": "@p-paolo-nebrida"
+            "person": "@p-ryan-joyce"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jim-williams",
+            "by": "@e-a-darius-labanauskas",
             "points": 1,
-            "person": "@p-jim-williams"
+            "person": "@p-darius-labanauskas"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-paolo-nebrida",
+            "by": "@e-a-ryan-joyce",
             "points": 1,
-            "person": "@p-paolo-nebrida"
+            "person": "@p-ryan-joyce"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jim-williams",
+            "by": "@e-a-ryan-joyce",
             "points": 1,
-            "person": "@p-jim-williams"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-paolo-nebrida",
-            "points": 1,
-            "person": "@p-paolo-nebrida"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i11",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-madars-razma",
-      "away": "e-a-christian-kist",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-christian-kist",
-            "points": 1,
-            "person": "@p-christian-kist"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-madars-razma",
-            "points": 1,
-            "person": "@p-madars-razma"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-madars-razma",
-            "points": 1,
-            "person": "@p-madars-razma"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-madars-razma",
-            "points": 1,
-            "person": "@p-madars-razma"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i57",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-ricky-evans",
-      "away": "e-a-gordon-mathers",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricky-evans",
-            "points": 1,
-            "person": "@p-ricky-evans"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gordon-mathers",
-            "points": 1,
-            "person": "@p-gordon-mathers"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricky-evans",
-            "points": 1,
-            "person": "@p-ricky-evans"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gordon-mathers",
-            "points": 1,
-            "person": "@p-gordon-mathers"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricky-evans",
-            "points": 1,
-            "person": "@p-ricky-evans"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i14",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-nathan-aspinall",
-      "away": "e-a-leonard-gates",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-leonard-gates",
-            "points": 1,
-            "person": "@p-leonard-gates"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i51",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-chris-landman",
-      "away": "e-a-lok-yin-lee",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-chris-landman",
-            "points": 1,
-            "person": "@p-chris-landman"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-lok-yin-lee",
-            "points": 1,
-            "person": "@p-lok-yin-lee"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-lok-yin-lee",
-            "points": 1,
-            "person": "@p-lok-yin-lee"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-lok-yin-lee",
-            "points": 1,
-            "person": "@p-lok-yin-lee"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i63",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-callan-rydz",
-      "away": "e-a-romeo-grbavac",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i31",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-martin-lukeman",
-      "away": "e-a-nitin-kumar",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nitin-kumar",
-            "points": 1,
-            "person": "@p-nitin-kumar"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-martin-lukeman",
-            "points": 1,
-            "person": "@p-martin-lukeman"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-martin-lukeman",
-            "points": 1,
-            "person": "@p-martin-lukeman"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-martin-lukeman",
-            "points": 1,
-            "person": "@p-martin-lukeman"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i29",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-gabriel-clemens",
-      "away": "e-a-robert-owen",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-robert-owen",
-            "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-robert-owen",
-            "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gabriel-clemens",
-            "points": 1,
-            "person": "@p-gabriel-clemens"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-robert-owen",
-            "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i3",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-nick-kenny",
-      "away": "e-a-stowe-buntz",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nick-kenny",
-            "points": 1,
-            "person": "@p-nick-kenny"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nick-kenny",
-            "points": 1,
-            "person": "@p-nick-kenny"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nick-kenny",
-            "points": 1,
-            "person": "@p-nick-kenny"
+            "person": "@p-ryan-joyce"
           }
         },
         {
@@ -5367,10 +4493,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i16",
+      "fixtureExtKey": "se-r0-i27",
       "stageRef": "s-worlds-main",
-      "home": "e-a-michael-smith",
-      "away": "e-a-kevin-doets",
+      "home": "e-a-ricardo-pietreczko",
+      "away": "e-a-xiaochen-zong",
       "provenance": "real",
       "events": [
         {
@@ -5379,9 +4505,148 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-michael-smith",
+            "by": "@e-a-ricardo-pietreczko",
             "points": 1,
-            "person": "@p-michael-smith"
+            "person": "@p-ricardo-pietreczko"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricardo-pietreczko",
+            "points": 1,
+            "person": "@p-ricardo-pietreczko"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricardo-pietreczko",
+            "points": 1,
+            "person": "@p-ricardo-pietreczko"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i29",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-cameron-menzies",
+      "away": "e-a-leonard-gates",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-leonard-gates",
+            "points": 1,
+            "person": "@p-leonard-gates"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-cameron-menzies",
+            "points": 1,
+            "person": "@p-cameron-menzies"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-leonard-gates",
+            "points": 1,
+            "person": "@p-leonard-gates"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-leonard-gates",
+            "points": 1,
+            "person": "@p-leonard-gates"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i31",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-martin-lukeman",
+      "away": "e-a-nitin-kumar",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nitin-kumar",
+            "points": 1,
+            "person": "@p-nitin-kumar"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-martin-lukeman",
+            "points": 1,
+            "person": "@p-martin-lukeman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-martin-lukeman",
+            "points": 1,
+            "person": "@p-martin-lukeman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-martin-lukeman",
+            "points": 1,
+            "person": "@p-martin-lukeman"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i33",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-kevin-doets",
+      "away": "e-a-noa-lynn-van-leuven",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-noa-lynn-van-leuven",
+            "points": 1,
+            "person": "@p-noa-lynn-van-leuven"
           }
         },
         {
@@ -5395,14 +4660,6 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-michael-smith",
-            "points": 1,
-            "person": "@p-michael-smith"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
             "by": "@e-a-kevin-doets",
             "points": 1,
             "person": "@p-kevin-doets"
@@ -5414,6 +4671,47 @@
             "by": "@e-a-kevin-doets",
             "points": 1,
             "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i35",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-richard-veenstra",
+      "away": "e-a-alexis-toylo",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-alexis-toylo",
+            "points": 1,
+            "person": "@p-alexis-toylo"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-alexis-toylo",
+            "points": 1,
+            "person": "@p-alexis-toylo"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-alexis-toylo",
+            "points": 1,
+            "person": "@p-alexis-toylo"
           }
         },
         {
@@ -5465,10 +4763,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i47",
+      "fixtureExtKey": "se-r0-i39",
       "stageRef": "s-worlds-main",
-      "home": "e-a-wessel-nijman",
-      "away": "e-a-cameron-carolissen",
+      "home": "e-a-karel-sedlacek",
+      "away": "e-a-rhys-griffin",
       "provenance": "real",
       "events": [
         {
@@ -5477,115 +4775,25 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-wessel-nijman",
+            "by": "@e-a-rhys-griffin",
             "points": 1,
-            "person": "@p-wessel-nijman"
+            "person": "@p-rhys-griffin"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-wessel-nijman",
+            "by": "@e-a-rhys-griffin",
             "points": 1,
-            "person": "@p-wessel-nijman"
+            "person": "@p-rhys-griffin"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-cameron-carolissen",
+            "by": "@e-a-rhys-griffin",
             "points": 1,
-            "person": "@p-cameron-carolissen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-cameron-carolissen",
-            "points": 1,
-            "person": "@p-cameron-carolissen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-wessel-nijman",
-            "points": 1,
-            "person": "@p-wessel-nijman"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i19",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-ian-white",
-      "away": "e-a-sandro-eric-sosing",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ian-white",
-            "points": 1,
-            "person": "@p-ian-white"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i4",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-stephen-bunting",
-      "away": "e-a-kai-gotthardt",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kai-gotthardt",
-            "points": 1,
-            "person": "@p-kai-gotthardt"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
+            "person": "@p-rhys-griffin"
           }
         },
         {
@@ -5694,6 +4902,414 @@
     },
     {
       "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i45",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-kim-huybrechts",
+      "away": "e-a-keane-barry",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kim-huybrechts",
+            "points": 1,
+            "person": "@p-kim-huybrechts"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-keane-barry",
+            "points": 1,
+            "person": "@p-keane-barry"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-keane-barry",
+            "points": 1,
+            "person": "@p-keane-barry"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-keane-barry",
+            "points": 1,
+            "person": "@p-keane-barry"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i47",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-wessel-nijman",
+      "away": "e-a-cameron-carolissen",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-wessel-nijman",
+            "points": 1,
+            "person": "@p-wessel-nijman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-wessel-nijman",
+            "points": 1,
+            "person": "@p-wessel-nijman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-cameron-carolissen",
+            "points": 1,
+            "person": "@p-cameron-carolissen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-cameron-carolissen",
+            "points": 1,
+            "person": "@p-cameron-carolissen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-wessel-nijman",
+            "points": 1,
+            "person": "@p-wessel-nijman"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i49",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-james-hurrell",
+      "away": "e-a-jim-long",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-james-hurrell",
+            "points": 1,
+            "person": "@p-james-hurrell"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-james-hurrell",
+            "points": 1,
+            "person": "@p-james-hurrell"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-james-hurrell",
+            "points": 1,
+            "person": "@p-james-hurrell"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i51",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-chris-landman",
+      "away": "e-a-lok-yin-lee",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-chris-landman",
+            "points": 1,
+            "person": "@p-chris-landman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-lok-yin-lee",
+            "points": 1,
+            "person": "@p-lok-yin-lee"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-lok-yin-lee",
+            "points": 1,
+            "person": "@p-lok-yin-lee"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-lok-yin-lee",
+            "points": 1,
+            "person": "@p-lok-yin-lee"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i53",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-jeffrey-de-graaf",
+      "away": "e-a-rashad-sweeting",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-rashad-sweeting",
+            "points": 1,
+            "person": "@p-rashad-sweeting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i55",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-jim-williams",
+      "away": "e-a-paolo-nebrida",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jim-williams",
+            "points": 1,
+            "person": "@p-jim-williams"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jim-williams",
+            "points": 1,
+            "person": "@p-jim-williams"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i57",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-ricky-evans",
+      "away": "e-a-gordon-mathers",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricky-evans",
+            "points": 1,
+            "person": "@p-ricky-evans"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gordon-mathers",
+            "points": 1,
+            "person": "@p-gordon-mathers"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricky-evans",
+            "points": 1,
+            "person": "@p-ricky-evans"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gordon-mathers",
+            "points": 1,
+            "person": "@p-gordon-mathers"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricky-evans",
+            "points": 1,
+            "person": "@p-ricky-evans"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r0-i59",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-niels-zonneveld",
+      "away": "e-a-robert-owen",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-niels-zonneveld",
+            "points": 1,
+            "person": "@p-niels-zonneveld"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i61",
       "stageRef": "s-worlds-main",
       "home": "e-a-william-o-connor",
@@ -5743,10 +5359,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i24",
+      "fixtureExtKey": "se-r0-i63",
       "stageRef": "s-worlds-main",
-      "home": "e-a-michael-van-gerwen",
-      "away": "e-a-james-hurrell",
+      "home": "e-a-callan-rydz",
+      "away": "e-a-romeo-grbavac",
       "provenance": "real",
       "events": [
         {
@@ -5755,25 +5371,25 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-michael-van-gerwen",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-michael-van-gerwen"
+            "person": "@p-callan-rydz"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-michael-van-gerwen",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-michael-van-gerwen"
+            "person": "@p-callan-rydz"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-michael-van-gerwen",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-michael-van-gerwen"
+            "person": "@p-callan-rydz"
           }
         },
         {
@@ -5784,10 +5400,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i39",
+      "fixtureExtKey": "se-r1-i0",
       "stageRef": "s-worlds-main",
-      "home": "e-a-karel-sedlacek",
-      "away": "e-a-rhys-griffin",
+      "home": "e-a-luke-humphries",
+      "away": "e-a-thibault-tricole",
       "provenance": "real",
       "events": [
         {
@@ -5796,205 +5412,25 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-rhys-griffin",
+            "by": "@e-a-luke-humphries",
             "points": 1,
-            "person": "@p-rhys-griffin"
+            "person": "@p-luke-humphries"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-rhys-griffin",
+            "by": "@e-a-luke-humphries",
             "points": 1,
-            "person": "@p-rhys-griffin"
+            "person": "@p-luke-humphries"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-rhys-griffin",
+            "by": "@e-a-luke-humphries",
             "points": 1,
-            "person": "@p-rhys-griffin"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r0-i35",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-richard-veenstra",
-      "away": "e-a-alexis-toylo",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-alexis-toylo",
-            "points": 1,
-            "person": "@p-alexis-toylo"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-alexis-toylo",
-            "points": 1,
-            "person": "@p-alexis-toylo"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-alexis-toylo",
-            "points": 1,
-            "person": "@p-alexis-toylo"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i25",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-brendan-dolan",
-      "away": "e-a-lok-yin-lee",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-brendan-dolan",
-            "points": 1,
-            "person": "@p-brendan-dolan"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-brendan-dolan",
-            "points": 1,
-            "person": "@p-brendan-dolan"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-brendan-dolan",
-            "points": 1,
-            "person": "@p-brendan-dolan"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i18",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-chris-dobey",
-      "away": "e-a-alexander-merkx",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-chris-dobey",
-            "points": 1,
-            "person": "@p-chris-dobey"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-chris-dobey",
-            "points": 1,
-            "person": "@p-chris-dobey"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-alexander-merkx",
-            "points": 1,
-            "person": "@p-alexander-merkx"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-chris-dobey",
-            "points": 1,
-            "person": "@p-chris-dobey"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i10",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-danny-noppert",
-      "away": "e-a-ryan-joyce",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-danny-noppert",
-            "points": 1,
-            "person": "@p-danny-noppert"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
+            "person": "@p-luke-humphries"
           }
         },
         {
@@ -6054,10 +5490,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i8",
+      "fixtureExtKey": "se-r1-i2",
       "stageRef": "s-worlds-main",
-      "home": "e-a-luke-littler",
-      "away": "e-a-ryan-meikle",
+      "home": "e-a-james-wade",
+      "away": "e-a-jermaine-wattimena",
       "provenance": "real",
       "events": [
         {
@@ -6066,33 +5502,25 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-luke-littler",
+            "by": "@e-a-jermaine-wattimena",
             "points": 1,
-            "person": "@p-luke-littler"
+            "person": "@p-jermaine-wattimena"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-meikle",
+            "by": "@e-a-jermaine-wattimena",
             "points": 1,
-            "person": "@p-ryan-meikle"
+            "person": "@p-jermaine-wattimena"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-luke-littler",
+            "by": "@e-a-jermaine-wattimena",
             "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
+            "person": "@p-jermaine-wattimena"
           }
         },
         {
@@ -6103,10 +5531,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i6",
+      "fixtureExtKey": "se-r1-i3",
       "stageRef": "s-worlds-main",
-      "home": "e-a-damon-heta",
-      "away": "e-a-connor-scutt",
+      "home": "e-a-peter-wright",
+      "away": "e-a-wesley-plaisier",
       "provenance": "real",
       "events": [
         {
@@ -6115,33 +5543,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-connor-scutt",
+            "by": "@e-a-peter-wright",
             "points": 1,
-            "person": "@p-connor-scutt"
+            "person": "@p-peter-wright"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-damon-heta",
+            "by": "@e-a-peter-wright",
             "points": 1,
-            "person": "@p-damon-heta"
+            "person": "@p-peter-wright"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-damon-heta",
+            "by": "@e-a-wesley-plaisier",
             "points": 1,
-            "person": "@p-damon-heta"
+            "person": "@p-wesley-plaisier"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-damon-heta",
+            "by": "@e-a-peter-wright",
             "points": 1,
-            "person": "@p-damon-heta"
+            "person": "@p-peter-wright"
           }
         },
         {
@@ -6152,10 +5580,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i11",
+      "fixtureExtKey": "se-r1-i4",
       "stageRef": "s-worlds-main",
-      "home": "e-a-ryan-searle",
-      "away": "e-a-matt-campbell",
+      "home": "e-a-stephen-bunting",
+      "away": "e-a-kai-gotthardt",
       "provenance": "real",
       "events": [
         {
@@ -6164,25 +5592,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-searle",
+            "by": "@e-a-kai-gotthardt",
             "points": 1,
-            "person": "@p-ryan-searle"
+            "person": "@p-kai-gotthardt"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-searle",
+            "by": "@e-a-stephen-bunting",
             "points": 1,
-            "person": "@p-ryan-searle"
+            "person": "@p-stephen-bunting"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-searle",
+            "by": "@e-a-stephen-bunting",
             "points": 1,
-            "person": "@p-ryan-searle"
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
           }
         },
         {
@@ -6242,10 +5678,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i23",
+      "fixtureExtKey": "se-r1-i6",
       "stageRef": "s-worlds-main",
-      "home": "e-a-joe-cullen",
-      "away": "e-a-wessel-nijman",
+      "home": "e-a-damon-heta",
+      "away": "e-a-connor-scutt",
       "provenance": "real",
       "events": [
         {
@@ -6254,25 +5690,131 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-joe-cullen",
+            "by": "@e-a-connor-scutt",
             "points": 1,
-            "person": "@p-joe-cullen"
+            "person": "@p-connor-scutt"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-joe-cullen",
+            "by": "@e-a-damon-heta",
             "points": 1,
-            "person": "@p-joe-cullen"
+            "person": "@p-damon-heta"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-joe-cullen",
+            "by": "@e-a-damon-heta",
             "points": 1,
-            "person": "@p-joe-cullen"
+            "person": "@p-damon-heta"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-damon-heta",
+            "points": 1,
+            "person": "@p-damon-heta"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i7",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-mike-de-decker",
+      "away": "e-a-luke-woodhouse",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-woodhouse",
+            "points": 1,
+            "person": "@p-luke-woodhouse"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-woodhouse",
+            "points": 1,
+            "person": "@p-luke-woodhouse"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-mike-de-decker",
+            "points": 1,
+            "person": "@p-mike-de-decker"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-woodhouse",
+            "points": 1,
+            "person": "@p-luke-woodhouse"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i8",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-luke-littler",
+      "away": "e-a-ryan-meikle",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ryan-meikle",
+            "points": 1,
+            "person": "@p-ryan-meikle"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
           }
         },
         {
@@ -6332,10 +5874,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i31",
+      "fixtureExtKey": "se-r1-i10",
       "stageRef": "s-worlds-main",
-      "home": "e-a-martin-schindler",
-      "away": "e-a-callan-rydz",
+      "home": "e-a-danny-noppert",
+      "away": "e-a-ryan-joyce",
       "provenance": "real",
       "events": [
         {
@@ -6344,25 +5886,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-danny-noppert",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-danny-noppert"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-ryan-joyce",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-ryan-joyce"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-ryan-joyce",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-ryan-joyce"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ryan-joyce",
+            "points": 1,
+            "person": "@p-ryan-joyce"
           }
         },
         {
@@ -6373,10 +5923,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i27",
+      "fixtureExtKey": "se-r1-i11",
       "stageRef": "s-worlds-main",
-      "home": "e-a-ross-smith",
-      "away": "e-a-paolo-nebrida",
+      "home": "e-a-ryan-searle",
+      "away": "e-a-matt-campbell",
       "provenance": "real",
       "events": [
         {
@@ -6385,25 +5935,25 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-paolo-nebrida",
+            "by": "@e-a-ryan-searle",
             "points": 1,
-            "person": "@p-paolo-nebrida"
+            "person": "@p-ryan-searle"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-paolo-nebrida",
+            "by": "@e-a-ryan-searle",
             "points": 1,
-            "person": "@p-paolo-nebrida"
+            "person": "@p-ryan-searle"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-paolo-nebrida",
+            "by": "@e-a-ryan-searle",
             "points": 1,
-            "person": "@p-paolo-nebrida"
+            "person": "@p-ryan-searle"
           }
         },
         {
@@ -6414,10 +5964,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i26",
+      "fixtureExtKey": "se-r1-i12",
       "stageRef": "s-worlds-main",
-      "home": "e-a-gary-anderson",
-      "away": "e-a-jeffrey-de-graaf",
+      "home": "e-a-rob-cross",
+      "away": "e-a-scott-williams",
       "provenance": "real",
       "events": [
         {
@@ -6426,25 +5976,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
+            "by": "@e-a-rob-cross",
             "points": 1,
-            "person": "@p-jeffrey-de-graaf"
+            "person": "@p-rob-cross"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
+            "by": "@e-a-scott-williams",
             "points": 1,
-            "person": "@p-jeffrey-de-graaf"
+            "person": "@p-scott-williams"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jeffrey-de-graaf",
+            "by": "@e-a-scott-williams",
             "points": 1,
-            "person": "@p-jeffrey-de-graaf"
+            "person": "@p-scott-williams"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-scott-williams",
+            "points": 1,
+            "person": "@p-scott-williams"
           }
         },
         {
@@ -6455,10 +6013,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i30",
+      "fixtureExtKey": "se-r1-i13",
       "stageRef": "s-worlds-main",
-      "home": "e-a-dimitri-van-den-bergh",
-      "away": "e-a-dylan-slevin",
+      "home": "e-a-gian-van-veen",
+      "away": "e-a-ricardo-pietreczko",
       "provenance": "real",
       "events": [
         {
@@ -6467,25 +6025,188 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-dimitri-van-den-bergh",
+            "by": "@e-a-ricardo-pietreczko",
             "points": 1,
-            "person": "@p-dimitri-van-den-bergh"
+            "person": "@p-ricardo-pietreczko"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-dimitri-van-den-bergh",
+            "by": "@e-a-gian-van-veen",
             "points": 1,
-            "person": "@p-dimitri-van-den-bergh"
+            "person": "@p-gian-van-veen"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-dimitri-van-den-bergh",
+            "by": "@e-a-ricardo-pietreczko",
             "points": 1,
-            "person": "@p-dimitri-van-den-bergh"
+            "person": "@p-ricardo-pietreczko"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ricardo-pietreczko",
+            "points": 1,
+            "person": "@p-ricardo-pietreczko"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i14",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-nathan-aspinall",
+      "away": "e-a-leonard-gates",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-leonard-gates",
+            "points": 1,
+            "person": "@p-leonard-gates"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i15",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-andrew-gilding",
+      "away": "e-a-martin-lukeman",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-andrew-gilding",
+            "points": 1,
+            "person": "@p-andrew-gilding"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-martin-lukeman",
+            "points": 1,
+            "person": "@p-martin-lukeman"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-andrew-gilding",
+            "points": 1,
+            "person": "@p-andrew-gilding"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-andrew-gilding",
+            "points": 1,
+            "person": "@p-andrew-gilding"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i16",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-michael-smith",
+      "away": "e-a-kevin-doets",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-michael-smith",
+            "points": 1,
+            "person": "@p-michael-smith"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-michael-smith",
+            "points": 1,
+            "person": "@p-michael-smith"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
           }
         },
         {
@@ -6545,10 +6266,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i15",
+      "fixtureExtKey": "se-r1-i18",
       "stageRef": "s-worlds-main",
-      "home": "e-a-andrew-gilding",
-      "away": "e-a-martin-lukeman",
+      "home": "e-a-chris-dobey",
+      "away": "e-a-alexander-merkx",
       "provenance": "real",
       "events": [
         {
@@ -6557,33 +6278,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-andrew-gilding",
+            "by": "@e-a-chris-dobey",
             "points": 1,
-            "person": "@p-andrew-gilding"
+            "person": "@p-chris-dobey"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-martin-lukeman",
+            "by": "@e-a-chris-dobey",
             "points": 1,
-            "person": "@p-martin-lukeman"
+            "person": "@p-chris-dobey"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-andrew-gilding",
+            "by": "@e-a-alexander-merkx",
             "points": 1,
-            "person": "@p-andrew-gilding"
+            "person": "@p-alexander-merkx"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-andrew-gilding",
+            "by": "@e-a-chris-dobey",
             "points": 1,
-            "person": "@p-andrew-gilding"
+            "person": "@p-chris-dobey"
           }
         },
         {
@@ -6692,55 +6413,6 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i13",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-gian-van-veen",
-      "away": "e-a-ricardo-pietreczko",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gian-van-veen",
-            "points": 1,
-            "person": "@p-gian-van-veen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ricardo-pietreczko",
-            "points": 1,
-            "person": "@p-ricardo-pietreczko"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i21",
       "stageRef": "s-worlds-main",
       "home": "e-a-daryl-gurney",
@@ -6788,6 +6460,252 @@
             "by": "@e-a-daryl-gurney",
             "points": 1,
             "person": "@p-daryl-gurney"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i22",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-gerwyn-price",
+      "away": "e-a-keane-barry",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i23",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-joe-cullen",
+      "away": "e-a-wessel-nijman",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i24",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-michael-van-gerwen",
+      "away": "e-a-james-hurrell",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-michael-van-gerwen",
+            "points": 1,
+            "person": "@p-michael-van-gerwen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-michael-van-gerwen",
+            "points": 1,
+            "person": "@p-michael-van-gerwen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-michael-van-gerwen",
+            "points": 1,
+            "person": "@p-michael-van-gerwen"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i25",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-brendan-dolan",
+      "away": "e-a-lok-yin-lee",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-brendan-dolan",
+            "points": 1,
+            "person": "@p-brendan-dolan"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-brendan-dolan",
+            "points": 1,
+            "person": "@p-brendan-dolan"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-brendan-dolan",
+            "points": 1,
+            "person": "@p-brendan-dolan"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i26",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-gary-anderson",
+      "away": "e-a-jeffrey-de-graaf",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jeffrey-de-graaf",
+            "points": 1,
+            "person": "@p-jeffrey-de-graaf"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i27",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-ross-smith",
+      "away": "e-a-paolo-nebrida",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-paolo-nebrida",
+            "points": 1,
+            "person": "@p-paolo-nebrida"
           }
         },
         {
@@ -6855,10 +6773,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r1-i12",
+      "fixtureExtKey": "se-r1-i29",
       "stageRef": "s-worlds-main",
-      "home": "e-a-rob-cross",
-      "away": "e-a-scott-williams",
+      "home": "e-a-gabriel-clemens",
+      "away": "e-a-robert-owen",
       "provenance": "real",
       "events": [
         {
@@ -6867,33 +6785,286 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-rob-cross",
+            "by": "@e-a-robert-owen",
             "points": 1,
-            "person": "@p-rob-cross"
+            "person": "@p-robert-owen"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-scott-williams",
+            "by": "@e-a-robert-owen",
             "points": 1,
-            "person": "@p-scott-williams"
+            "person": "@p-robert-owen"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-scott-williams",
+            "by": "@e-a-gabriel-clemens",
             "points": 1,
-            "person": "@p-scott-williams"
+            "person": "@p-gabriel-clemens"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-scott-williams",
+            "by": "@e-a-robert-owen",
             "points": 1,
-            "person": "@p-scott-williams"
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i30",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-dimitri-van-den-bergh",
+      "away": "e-a-dylan-slevin",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-dimitri-van-den-bergh",
+            "points": 1,
+            "person": "@p-dimitri-van-den-bergh"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-dimitri-van-den-bergh",
+            "points": 1,
+            "person": "@p-dimitri-van-den-bergh"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-dimitri-van-den-bergh",
+            "points": 1,
+            "person": "@p-dimitri-van-den-bergh"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r1-i31",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-martin-schindler",
+      "away": "e-a-callan-rydz",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i0",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-luke-humphries",
+      "away": "e-a-nick-kenny",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-humphries",
+            "points": 1,
+            "person": "@p-luke-humphries"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-humphries",
+            "points": 1,
+            "person": "@p-luke-humphries"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-humphries",
+            "points": 1,
+            "person": "@p-luke-humphries"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-humphries",
+            "points": 1,
+            "person": "@p-luke-humphries"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i1",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-jermaine-wattimena",
+      "away": "e-a-peter-wright",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jermaine-wattimena",
+            "points": 1,
+            "person": "@p-jermaine-wattimena"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jermaine-wattimena",
+            "points": 1,
+            "person": "@p-jermaine-wattimena"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i2",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-stephen-bunting",
+      "away": "e-a-madars-razma",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-madars-razma",
+            "points": 1,
+            "person": "@p-madars-razma"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
           }
         },
         {
@@ -6977,10 +7148,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i10",
+      "fixtureExtKey": "se-r2-i4",
       "stageRef": "s-worlds-main",
-      "home": "e-a-jonny-clayton",
-      "away": "e-a-daryl-gurney",
+      "home": "e-a-luke-littler",
+      "away": "e-a-ian-white",
       "provenance": "real",
       "events": [
         {
@@ -6989,301 +7160,41 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jonny-clayton",
+            "by": "@e-a-luke-littler",
             "points": 1,
-            "person": "@p-jonny-clayton"
+            "person": "@p-luke-littler"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jonny-clayton",
+            "by": "@e-a-ian-white",
             "points": 1,
-            "person": "@p-jonny-clayton"
+            "person": "@p-ian-white"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jonny-clayton",
+            "by": "@e-a-luke-littler",
             "points": 1,
-            "person": "@p-jonny-clayton"
+            "person": "@p-luke-littler"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-daryl-gurney",
+            "by": "@e-a-luke-littler",
             "points": 1,
-            "person": "@p-daryl-gurney"
+            "person": "@p-luke-littler"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-daryl-gurney",
+            "by": "@e-a-luke-littler",
             "points": 1,
-            "person": "@p-daryl-gurney"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-daryl-gurney",
-            "points": 1,
-            "person": "@p-daryl-gurney"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jonny-clayton",
-            "points": 1,
-            "person": "@p-jonny-clayton"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i2",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-stephen-bunting",
-      "away": "e-a-madars-razma",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-madars-razma",
-            "points": 1,
-            "person": "@p-madars-razma"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i11",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-gerwyn-price",
-      "away": "e-a-joe-cullen",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-joe-cullen",
-            "points": 1,
-            "person": "@p-joe-cullen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-joe-cullen",
-            "points": 1,
-            "person": "@p-joe-cullen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-joe-cullen",
-            "points": 1,
-            "person": "@p-joe-cullen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i1",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-jermaine-wattimena",
-      "away": "e-a-peter-wright",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jermaine-wattimena",
-            "points": 1,
-            "person": "@p-jermaine-wattimena"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-jermaine-wattimena",
-            "points": 1,
-            "person": "@p-jermaine-wattimena"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i0",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-luke-humphries",
-      "away": "e-a-nick-kenny",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-humphries",
-            "points": 1,
-            "person": "@p-luke-humphries"
+            "person": "@p-luke-littler"
           }
         },
         {
@@ -7473,6 +7384,79 @@
     },
     {
       "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i8",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-kevin-doets",
+      "away": "e-a-krzysztof-ratajski",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-krzysztof-ratajski",
+            "points": 1,
+            "person": "@p-krzysztof-ratajski"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-krzysztof-ratajski",
+            "points": 1,
+            "person": "@p-krzysztof-ratajski"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-krzysztof-ratajski",
+            "points": 1,
+            "person": "@p-krzysztof-ratajski"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-kevin-doets",
+            "points": 1,
+            "person": "@p-kevin-doets"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i9",
       "stageRef": "s-worlds-main",
       "home": "e-a-chris-dobey",
@@ -7528,6 +7512,152 @@
             "by": "@e-a-chris-dobey",
             "points": 1,
             "person": "@p-chris-dobey"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i10",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-jonny-clayton",
+      "away": "e-a-daryl-gurney",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jonny-clayton",
+            "points": 1,
+            "person": "@p-jonny-clayton"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jonny-clayton",
+            "points": 1,
+            "person": "@p-jonny-clayton"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jonny-clayton",
+            "points": 1,
+            "person": "@p-jonny-clayton"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-daryl-gurney",
+            "points": 1,
+            "person": "@p-daryl-gurney"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-daryl-gurney",
+            "points": 1,
+            "person": "@p-daryl-gurney"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-daryl-gurney",
+            "points": 1,
+            "person": "@p-daryl-gurney"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-jonny-clayton",
+            "points": 1,
+            "person": "@p-jonny-clayton"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r2-i11",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-gerwyn-price",
+      "away": "e-a-joe-cullen",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-joe-cullen",
+            "points": 1,
+            "person": "@p-joe-cullen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-gerwyn-price",
+            "points": 1,
+            "person": "@p-gerwyn-price"
           }
         },
         {
@@ -7603,63 +7733,6 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i4",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-luke-littler",
-      "away": "e-a-ian-white",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-ian-white",
-            "points": 1,
-            "person": "@p-ian-white"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i13",
       "stageRef": "s-worlds-main",
       "home": "e-a-jeffrey-de-graaf",
@@ -7707,128 +7780,6 @@
             "by": "@e-a-jeffrey-de-graaf",
             "points": 1,
             "person": "@p-jeffrey-de-graaf"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i8",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-kevin-doets",
-      "away": "e-a-krzysztof-ratajski",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-krzysztof-ratajski",
-            "points": 1,
-            "person": "@p-krzysztof-ratajski"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-krzysztof-ratajski",
-            "points": 1,
-            "person": "@p-krzysztof-ratajski"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-krzysztof-ratajski",
-            "points": 1,
-            "person": "@p-krzysztof-ratajski"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-kevin-doets",
-            "points": 1,
-            "person": "@p-kevin-doets"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r2-i15",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-dimitri-van-den-bergh",
-      "away": "e-a-callan-rydz",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
           }
         },
         {
@@ -7904,10 +7855,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r3-i5",
+      "fixtureExtKey": "se-r2-i15",
       "stageRef": "s-worlds-main",
-      "home": "e-a-jonny-clayton",
-      "away": "e-a-gerwyn-price",
+      "home": "e-a-dimitri-van-den-bergh",
+      "away": "e-a-callan-rydz",
       "provenance": "real",
       "events": [
         {
@@ -7916,49 +7867,33 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-gerwyn-price",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-gerwyn-price"
+            "person": "@p-callan-rydz"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-gerwyn-price",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-gerwyn-price"
+            "person": "@p-callan-rydz"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jonny-clayton",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-jonny-clayton"
+            "person": "@p-callan-rydz"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-jonny-clayton",
+            "by": "@e-a-callan-rydz",
             "points": 1,
-            "person": "@p-jonny-clayton"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-gerwyn-price",
-            "points": 1,
-            "person": "@p-gerwyn-price"
+            "person": "@p-callan-rydz"
           }
         },
         {
@@ -8016,6 +7951,177 @@
             "by": "@e-a-peter-wright",
             "points": 1,
             "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r3-i1",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-stephen-bunting",
+      "away": "e-a-luke-woodhouse",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r3-i2",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-luke-littler",
+      "away": "e-a-ryan-joyce",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ryan-joyce",
+            "points": 1,
+            "person": "@p-ryan-joyce"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ryan-joyce",
+            "points": 1,
+            "person": "@p-ryan-joyce"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-ryan-joyce",
+            "points": 1,
+            "person": "@p-ryan-joyce"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r3-i3",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-ricardo-pietreczko",
+      "away": "e-a-nathan-aspinall",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
           }
         },
         {
@@ -8099,10 +8205,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r3-i7",
+      "fixtureExtKey": "se-r3-i5",
       "stageRef": "s-worlds-main",
-      "home": "e-a-robert-owen",
-      "away": "e-a-callan-rydz",
+      "home": "e-a-jonny-clayton",
+      "away": "e-a-gerwyn-price",
       "provenance": "real",
       "events": [
         {
@@ -8111,155 +8217,49 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-robert-owen",
+            "by": "@e-a-gerwyn-price",
             "points": 1,
-            "person": "@p-robert-owen"
+            "person": "@p-gerwyn-price"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-robert-owen",
+            "by": "@e-a-gerwyn-price",
             "points": 1,
-            "person": "@p-robert-owen"
+            "person": "@p-gerwyn-price"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-jonny-clayton",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-jonny-clayton"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-jonny-clayton",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-jonny-clayton"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-callan-rydz",
+            "by": "@e-a-gerwyn-price",
             "points": 1,
-            "person": "@p-callan-rydz"
+            "person": "@p-gerwyn-price"
           }
         },
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-robert-owen",
+            "by": "@e-a-gerwyn-price",
             "points": 1,
-            "person": "@p-robert-owen"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-callan-rydz",
-            "points": 1,
-            "person": "@p-callan-rydz"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r3-i3",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-ricardo-pietreczko",
-      "away": "e-a-nathan-aspinall",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r3-i1",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-stephen-bunting",
-      "away": "e-a-luke-woodhouse",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
+            "person": "@p-gerwyn-price"
           }
         },
         {
@@ -8335,10 +8335,156 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r3-i2",
+      "fixtureExtKey": "se-r3-i7",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-robert-owen",
+      "away": "e-a-callan-rydz",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-robert-owen",
+            "points": 1,
+            "person": "@p-robert-owen"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-callan-rydz",
+            "points": 1,
+            "person": "@p-callan-rydz"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r4-i0",
+      "stageRef": "s-worlds-main",
+      "home": "e-a-peter-wright",
+      "away": "e-a-stephen-bunting",
+      "provenance": "real",
+      "events": [
+        {
+          "type": "core.start"
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-peter-wright",
+            "points": 1,
+            "person": "@p-peter-wright"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-stephen-bunting",
+            "points": 1,
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.result",
+          "payload": {}
+        }
+      ]
+    },
+    {
+      "divisionRef": "d-worlds",
+      "fixtureExtKey": "se-r4-i1",
       "stageRef": "s-worlds-main",
       "home": "e-a-luke-littler",
-      "away": "e-a-ryan-joyce",
+      "away": "e-a-nathan-aspinall",
       "provenance": "real",
       "events": [
         {
@@ -8355,9 +8501,17 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-joyce",
+            "by": "@e-a-luke-littler",
             "points": 1,
-            "person": "@p-ryan-joyce"
+            "person": "@p-luke-littler"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-nathan-aspinall",
+            "points": 1,
+            "person": "@p-nathan-aspinall"
           }
         },
         {
@@ -8371,14 +8525,6 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-joyce",
-            "points": 1,
-            "person": "@p-ryan-joyce"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
             "by": "@e-a-luke-littler",
             "points": 1,
             "person": "@p-luke-littler"
@@ -8387,9 +8533,9 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-ryan-joyce",
+            "by": "@e-a-nathan-aspinall",
             "points": 1,
-            "person": "@p-ryan-joyce"
+            "person": "@p-nathan-aspinall"
           }
         },
         {
@@ -8570,83 +8716,10 @@
     },
     {
       "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r4-i0",
+      "fixtureExtKey": "se-r5-i0",
       "stageRef": "s-worlds-main",
-      "home": "e-a-peter-wright",
-      "away": "e-a-stephen-bunting",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-peter-wright",
-            "points": 1,
-            "person": "@p-peter-wright"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r4-i1",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-luke-littler",
-      "away": "e-a-nathan-aspinall",
+      "home": "e-a-stephen-bunting",
+      "away": "e-a-luke-littler",
       "provenance": "real",
       "events": [
         {
@@ -8671,14 +8744,6 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-nathan-aspinall",
-            "points": 1,
-            "person": "@p-nathan-aspinall"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
             "by": "@e-a-luke-littler",
             "points": 1,
             "person": "@p-luke-littler"
@@ -8695,9 +8760,17 @@
         {
           "type": "generic.score",
           "payload": {
-            "by": "@e-a-nathan-aspinall",
+            "by": "@e-a-stephen-bunting",
             "points": 1,
-            "person": "@p-nathan-aspinall"
+            "person": "@p-stephen-bunting"
+          }
+        },
+        {
+          "type": "generic.score",
+          "payload": {
+            "by": "@e-a-luke-littler",
+            "points": 1,
+            "person": "@p-luke-littler"
           }
         },
         {
@@ -8779,79 +8852,6 @@
             "by": "@e-a-michael-van-gerwen",
             "points": 1,
             "person": "@p-michael-van-gerwen"
-          }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
-        }
-      ]
-    },
-    {
-      "divisionRef": "d-worlds",
-      "fixtureExtKey": "se-r5-i0",
-      "stageRef": "s-worlds-main",
-      "home": "e-a-stephen-bunting",
-      "away": "e-a-luke-littler",
-      "provenance": "real",
-      "events": [
-        {
-          "type": "core.start"
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-stephen-bunting",
-            "points": 1,
-            "person": "@p-stephen-bunting"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
-          }
-        },
-        {
-          "type": "generic.score",
-          "payload": {
-            "by": "@e-a-luke-littler",
-            "points": 1,
-            "person": "@p-luke-littler"
           }
         },
         {
@@ -15506,665 +15506,760 @@
       "fixtureExtKey": "se-r0-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-15T19:00:00.000Z"
+      "startsAt": "2024-12-15T19:00:00.000Z",
+      "endsAt": "2024-12-15T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i5",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-15T20:05:00.000Z"
+      "startsAt": "2024-12-15T20:05:00.000Z",
+      "endsAt": "2024-12-15T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i45",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-15T21:10:00.000Z"
+      "startsAt": "2024-12-15T21:10:00.000Z",
+      "endsAt": "2024-12-15T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-15T22:15:00.000Z"
+      "startsAt": "2024-12-15T22:15:00.000Z",
+      "endsAt": "2024-12-15T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i7",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T12:30:00.000Z"
+      "startsAt": "2024-12-16T12:30:00.000Z",
+      "endsAt": "2024-12-16T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i15",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T13:52:00.000Z"
+      "startsAt": "2024-12-16T13:35:00.000Z",
+      "endsAt": "2024-12-16T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i9",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T15:14:00.000Z"
+      "startsAt": "2024-12-16T14:40:00.000Z",
+      "endsAt": "2024-12-16T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i2",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T16:36:00.000Z"
+      "startsAt": "2024-12-16T15:45:00.000Z",
+      "endsAt": "2024-12-16T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i59",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T19:00:00.000Z"
+      "startsAt": "2024-12-16T19:00:00.000Z",
+      "endsAt": "2024-12-16T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i13",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T20:05:00.000Z"
+      "startsAt": "2024-12-16T20:05:00.000Z",
+      "endsAt": "2024-12-16T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i29",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T21:10:00.000Z"
+      "startsAt": "2024-12-16T21:10:00.000Z",
+      "endsAt": "2024-12-16T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i22",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-16T22:15:00.000Z"
+      "startsAt": "2024-12-16T22:15:00.000Z",
+      "endsAt": "2024-12-16T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i49",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T12:30:00.000Z"
+      "startsAt": "2024-12-17T12:30:00.000Z",
+      "endsAt": "2024-12-17T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i33",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T13:52:00.000Z"
+      "startsAt": "2024-12-17T13:35:00.000Z",
+      "endsAt": "2024-12-17T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i21",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T15:14:00.000Z"
+      "startsAt": "2024-12-17T14:40:00.000Z",
+      "endsAt": "2024-12-17T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i7",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T16:36:00.000Z"
+      "startsAt": "2024-12-17T15:45:00.000Z",
+      "endsAt": "2024-12-17T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i53",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T19:00:00.000Z"
+      "startsAt": "2024-12-17T19:00:00.000Z",
+      "endsAt": "2024-12-17T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i27",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T20:05:00.000Z"
+      "startsAt": "2024-12-17T20:05:00.000Z",
+      "endsAt": "2024-12-17T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i17",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T21:10:00.000Z"
+      "startsAt": "2024-12-17T21:10:00.000Z",
+      "endsAt": "2024-12-17T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i3",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-17T22:15:00.000Z"
+      "startsAt": "2024-12-17T22:15:00.000Z",
+      "endsAt": "2024-12-17T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i55",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-18T19:00:00.000Z"
+      "startsAt": "2024-12-18T19:00:00.000Z",
+      "endsAt": "2024-12-18T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i11",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-18T20:05:00.000Z"
+      "startsAt": "2024-12-18T20:05:00.000Z",
+      "endsAt": "2024-12-18T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i57",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-18T21:10:00.000Z"
+      "startsAt": "2024-12-18T21:10:00.000Z",
+      "endsAt": "2024-12-18T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i14",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-18T22:15:00.000Z"
+      "startsAt": "2024-12-18T22:15:00.000Z",
+      "endsAt": "2024-12-18T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i51",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T12:30:00.000Z"
+      "startsAt": "2024-12-19T12:30:00.000Z",
+      "endsAt": "2024-12-19T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i63",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T13:52:00.000Z"
+      "startsAt": "2024-12-19T13:35:00.000Z",
+      "endsAt": "2024-12-19T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i31",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T15:14:00.000Z"
+      "startsAt": "2024-12-19T14:40:00.000Z",
+      "endsAt": "2024-12-19T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i29",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T16:36:00.000Z"
+      "startsAt": "2024-12-19T15:45:00.000Z",
+      "endsAt": "2024-12-19T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i3",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T19:00:00.000Z"
+      "startsAt": "2024-12-19T19:00:00.000Z",
+      "endsAt": "2024-12-19T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i23",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T20:05:00.000Z"
+      "startsAt": "2024-12-19T20:05:00.000Z",
+      "endsAt": "2024-12-19T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i25",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T21:10:00.000Z"
+      "startsAt": "2024-12-19T21:10:00.000Z",
+      "endsAt": "2024-12-19T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i16",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-19T22:15:00.000Z"
+      "startsAt": "2024-12-19T22:15:00.000Z",
+      "endsAt": "2024-12-19T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i37",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T12:30:00.000Z"
+      "startsAt": "2024-12-20T12:30:00.000Z",
+      "endsAt": "2024-12-20T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i47",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T13:52:00.000Z"
+      "startsAt": "2024-12-20T13:35:00.000Z",
+      "endsAt": "2024-12-20T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i19",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T15:14:00.000Z"
+      "startsAt": "2024-12-20T14:40:00.000Z",
+      "endsAt": "2024-12-20T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i4",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T16:36:00.000Z"
+      "startsAt": "2024-12-20T15:45:00.000Z",
+      "endsAt": "2024-12-20T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i41",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T19:00:00.000Z"
+      "startsAt": "2024-12-20T19:00:00.000Z",
+      "endsAt": "2024-12-20T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i43",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T20:05:00.000Z"
+      "startsAt": "2024-12-20T20:05:00.000Z",
+      "endsAt": "2024-12-20T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i61",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T21:10:00.000Z"
+      "startsAt": "2024-12-20T21:10:00.000Z",
+      "endsAt": "2024-12-20T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i24",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-20T22:15:00.000Z"
+      "startsAt": "2024-12-20T22:15:00.000Z",
+      "endsAt": "2024-12-20T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i39",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T12:30:00.000Z"
+      "startsAt": "2024-12-21T12:30:00.000Z",
+      "endsAt": "2024-12-21T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r0-i35",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T13:52:00.000Z"
+      "startsAt": "2024-12-21T13:35:00.000Z",
+      "endsAt": "2024-12-21T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i25",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T15:14:00.000Z"
+      "startsAt": "2024-12-21T14:40:00.000Z",
+      "endsAt": "2024-12-21T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i18",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T16:36:00.000Z"
+      "startsAt": "2024-12-21T15:45:00.000Z",
+      "endsAt": "2024-12-21T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i10",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T19:00:00.000Z"
+      "startsAt": "2024-12-21T19:00:00.000Z",
+      "endsAt": "2024-12-21T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T20:05:00.000Z"
+      "startsAt": "2024-12-21T20:05:00.000Z",
+      "endsAt": "2024-12-21T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i8",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T21:10:00.000Z"
+      "startsAt": "2024-12-21T21:10:00.000Z",
+      "endsAt": "2024-12-21T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i6",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-21T22:15:00.000Z"
+      "startsAt": "2024-12-21T22:15:00.000Z",
+      "endsAt": "2024-12-21T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i11",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T12:30:00.000Z"
+      "startsAt": "2024-12-22T12:30:00.000Z",
+      "endsAt": "2024-12-22T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i5",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T13:52:00.000Z"
+      "startsAt": "2024-12-22T13:35:00.000Z",
+      "endsAt": "2024-12-22T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i23",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T15:14:00.000Z"
+      "startsAt": "2024-12-22T14:40:00.000Z",
+      "endsAt": "2024-12-22T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i9",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T16:36:00.000Z"
+      "startsAt": "2024-12-22T15:45:00.000Z",
+      "endsAt": "2024-12-22T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i31",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T19:00:00.000Z"
+      "startsAt": "2024-12-22T19:00:00.000Z",
+      "endsAt": "2024-12-22T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i27",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T20:05:00.000Z"
+      "startsAt": "2024-12-22T20:05:00.000Z",
+      "endsAt": "2024-12-22T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i26",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T21:10:00.000Z"
+      "startsAt": "2024-12-22T21:10:00.000Z",
+      "endsAt": "2024-12-22T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i30",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-22T22:15:00.000Z"
+      "startsAt": "2024-12-22T22:15:00.000Z",
+      "endsAt": "2024-12-22T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i17",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T12:30:00.000Z"
+      "startsAt": "2024-12-23T12:30:00.000Z",
+      "endsAt": "2024-12-23T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i15",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T13:52:00.000Z"
+      "startsAt": "2024-12-23T13:35:00.000Z",
+      "endsAt": "2024-12-23T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i19",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T15:14:00.000Z"
+      "startsAt": "2024-12-23T14:40:00.000Z",
+      "endsAt": "2024-12-23T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i20",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T16:36:00.000Z"
+      "startsAt": "2024-12-23T15:45:00.000Z",
+      "endsAt": "2024-12-23T16:50:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i13",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T19:00:00.000Z"
+      "startsAt": "2024-12-23T19:00:00.000Z",
+      "endsAt": "2024-12-23T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i21",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T20:05:00.000Z"
+      "startsAt": "2024-12-23T20:05:00.000Z",
+      "endsAt": "2024-12-23T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i28",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T21:10:00.000Z"
+      "startsAt": "2024-12-23T21:10:00.000Z",
+      "endsAt": "2024-12-23T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r1-i12",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-23T22:15:00.000Z"
+      "startsAt": "2024-12-23T22:15:00.000Z",
+      "endsAt": "2024-12-23T23:20:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i3",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T12:30:00.000Z"
+      "startsAt": "2024-12-27T12:30:00.000Z",
+      "endsAt": "2024-12-27T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i10",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T14:20:00.000Z"
+      "startsAt": "2024-12-27T13:35:00.000Z",
+      "endsAt": "2024-12-27T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i2",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T16:10:00.000Z"
+      "startsAt": "2024-12-27T14:40:00.000Z",
+      "endsAt": "2024-12-27T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i11",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T19:00:00.000Z"
+      "startsAt": "2024-12-27T19:00:00.000Z",
+      "endsAt": "2024-12-27T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T20:26:00.000Z"
+      "startsAt": "2024-12-27T20:05:00.000Z",
+      "endsAt": "2024-12-27T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-27T21:52:00.000Z"
+      "startsAt": "2024-12-27T21:10:00.000Z",
+      "endsAt": "2024-12-27T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i5",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T12:30:00.000Z"
+      "startsAt": "2024-12-28T12:30:00.000Z",
+      "endsAt": "2024-12-28T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i6",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T14:20:00.000Z"
+      "startsAt": "2024-12-28T13:35:00.000Z",
+      "endsAt": "2024-12-28T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i7",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T16:10:00.000Z"
+      "startsAt": "2024-12-28T14:40:00.000Z",
+      "endsAt": "2024-12-28T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i9",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T19:00:00.000Z"
+      "startsAt": "2024-12-28T19:00:00.000Z",
+      "endsAt": "2024-12-28T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i12",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T20:26:00.000Z"
+      "startsAt": "2024-12-28T20:05:00.000Z",
+      "endsAt": "2024-12-28T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i4",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-28T21:52:00.000Z"
+      "startsAt": "2024-12-28T21:10:00.000Z",
+      "endsAt": "2024-12-28T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i13",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T12:30:00.000Z"
+      "startsAt": "2024-12-29T12:30:00.000Z",
+      "endsAt": "2024-12-29T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i8",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T14:20:00.000Z"
+      "startsAt": "2024-12-29T13:35:00.000Z",
+      "endsAt": "2024-12-29T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i15",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T16:10:00.000Z"
+      "startsAt": "2024-12-29T14:40:00.000Z",
+      "endsAt": "2024-12-29T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r2-i14",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T19:00:00.000Z"
+      "startsAt": "2024-12-29T19:00:00.000Z",
+      "endsAt": "2024-12-29T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i5",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T20:26:00.000Z"
+      "startsAt": "2024-12-29T20:05:00.000Z",
+      "endsAt": "2024-12-29T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-29T21:52:00.000Z"
+      "startsAt": "2024-12-29T21:10:00.000Z",
+      "endsAt": "2024-12-29T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i4",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T12:30:00.000Z"
+      "startsAt": "2024-12-30T12:30:00.000Z",
+      "endsAt": "2024-12-30T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i7",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T14:20:00.000Z"
+      "startsAt": "2024-12-30T13:35:00.000Z",
+      "endsAt": "2024-12-30T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i3",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T16:10:00.000Z"
+      "startsAt": "2024-12-30T14:40:00.000Z",
+      "endsAt": "2024-12-30T15:45:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T19:00:00.000Z"
+      "startsAt": "2024-12-30T19:00:00.000Z",
+      "endsAt": "2024-12-30T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i6",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T20:26:00.000Z"
+      "startsAt": "2024-12-30T20:05:00.000Z",
+      "endsAt": "2024-12-30T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r3-i2",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2024-12-30T21:52:00.000Z"
+      "startsAt": "2024-12-30T21:10:00.000Z",
+      "endsAt": "2024-12-30T22:15:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r4-i2",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-01T12:30:00.000Z"
+      "startsAt": "2025-01-01T12:30:00.000Z",
+      "endsAt": "2025-01-01T13:35:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r4-i3",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-01T15:15:00.000Z"
+      "startsAt": "2025-01-01T13:35:00.000Z",
+      "endsAt": "2025-01-01T14:40:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r4-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-01T19:00:00.000Z"
+      "startsAt": "2025-01-01T19:00:00.000Z",
+      "endsAt": "2025-01-01T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r4-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-01T21:10:00.000Z"
+      "startsAt": "2025-01-01T20:05:00.000Z",
+      "endsAt": "2025-01-01T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r5-i1",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-02T19:00:00.000Z"
+      "startsAt": "2025-01-02T19:00:00.000Z",
+      "endsAt": "2025-01-02T20:05:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r5-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-02T21:10:00.000Z"
+      "startsAt": "2025-01-02T20:05:00.000Z",
+      "endsAt": "2025-01-02T21:10:00.000Z"
     },
     {
       "divisionRef": "d-worlds",
       "fixtureExtKey": "se-r6-i0",
       "venue": "Alexandra Palace",
       "court": "Ally Pally Stage",
-      "startsAt": "2025-01-03T19:30:00.000Z"
+      "startsAt": "2025-01-03T19:30:00.000Z",
+      "endsAt": "2025-01-03T20:35:00.000Z"
     },
     {
       "divisionRef": "d-womens",

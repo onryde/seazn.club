@@ -400,6 +400,24 @@ function extKey(bracket: BracketShape, m: { round: string; matchNo: number }): s
   return key;
 }
 
+/** Round, then index, off the generated key this file minted itself
+ *  (`se-r{round}-i{index}`). Streams are emitted in DEPENDENCY order rather
+ *  than in the datasets' own order, which for Div A is CHRONOLOGICAL and
+ *  interleaves rounds — the real tournament played a second-round match on
+ *  opening night. The bench now folds a bracket in dependency waves anyway,
+ *  but a pack that only folds correctly under one concurrency policy is a
+ *  pack with a hidden dependency on its runner. */
+function keyOrder(a: StreamInput, b: StreamInput): number {
+  const parse = (k: string): [number, number] => {
+    const m = /^se-r(\d+)-i(\d+)$/.exec(k);
+    if (m === null) throw new Error(`stream key "${k}" is not a generated bracket key`);
+    return [Number(m[1]), Number(m[2])];
+  };
+  const [ar, ai] = parse(a.fixtureExtKey);
+  const [br, bi] = parse(b.fixtureExtKey);
+  return ar - br || ai - bi;
+}
+
 function buildStreams(): NonNullable<PackInput["streams"]> {
   const out: StreamInput[] = [];
   for (const m of WORLDS.matches) {
@@ -428,7 +446,11 @@ function buildStreams(): NonNullable<PackInput["streams"]> {
       events: [{ type: "core.start" }, ...scoreEvents(womensUnits(m), "b"), { type: "generic.result", payload: {} }],
     });
   }
-  return out;
+  // Per division, so the two divisions stay grouped the way every consumer
+  // (and the report) reads them.
+  const a = out.filter((st) => st.divisionRef === DIV_A).sort(keyOrder);
+  const b = out.filter((st) => st.divisionRef === DIV_B).sort(keyOrder);
+  return [...a, ...b];
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +505,35 @@ const ALLY_PALLY = "v-ally-pally";
 const ALLY_PALLY_STAGE = "c-ally-pally-stage";
 const ROBIN_PARK = "v-robin-park";
 const boardRef = (n: number): string => `c-robin-park-board-${n}`;
+
+/**
+ * THE CHECKER JUDGES OCCUPANCY AS `[start, start + matchMinutes)` AND NEVER
+ * reads `BoardFixture.end` (`checker.ts:42-43`, ruling R12). So a history
+ * board's spacing and the division's `matchMinutes` are not two independent
+ * numbers — they are one number, and a pack that picks them separately reports
+ * its own real timetable as a pile of double-bookings. Suite 11's first live
+ * run did exactly that: 65-minute slots against a declared 75-minute match
+ * length produced 27 phantom court clashes and 5 `outside_court_hours`.
+ *
+ * So Div A's match length is DERIVED as the tightest session the real
+ * timetable contains, and the slots are then exactly that long. Change the
+ * session clock or the match counts and this moves with them.
+ */
+function worldsMatchMinutes(): number {
+  let tightest = Number.POSITIVE_INFINITY;
+  for (const session of WORLDS.sessions) {
+    const count = (session.matches ?? []).length;
+    if (session.noPlay === true || count === 0) continue;
+    const byNo = new Map(WORLDS.matches.map((m) => [m.matchNo, m] as const));
+    const isFinal = (session.matches ?? []).some((n) => byNo.get(n)?.round === "F");
+    const evening = isFinal || session.session === null || session.session === "evening";
+    const open = isFinal ? FINAL_OPEN : evening ? EVENING_OPEN : AFTERNOON_OPEN;
+    const close = evening ? EVENING_CLOSE : AFTERNOON_CLOSE;
+    tightest = Math.min(tightest, Math.floor((close - open) / count));
+  }
+  if (!Number.isFinite(tightest)) throw new Error("no playing session found to derive a match length from");
+  return tightest;
+}
 
 /** Div A's published session clock, in minutes from midnight (GMT). */
 const AFTERNOON_OPEN = 12 * 60 + 30;
@@ -543,16 +594,26 @@ function worldsHistorical(): HistoricalInput[] {
     const evening = isFinal || session.session === null || session.session === "evening";
     const open = isFinal ? FINAL_OPEN : evening ? EVENING_OPEN : AFTERNOON_OPEN;
     const close = evening ? EVENING_CLOSE : AFTERNOON_CLOSE;
-    const slot = Math.floor((close - open) / nos.length);
+    // Exactly `matchMinutes` apart, back to back from the session's published
+    // open — the same number the checker uses as occupancy width, so the real
+    // timetable cannot breach the pack's own encoding.
+    const slot = worldsMatchMinutes();
+    if (open + nos.length * slot > close) {
+      throw new Error(
+        `session ${session.date} needs ${nos.length} x ${slot}min from ${open} but the court closes at ${close}`,
+      );
+    }
     nos.forEach((no, i) => {
       const m = byNo.get(no);
       if (m === undefined) throw new Error(`session ${session.date} names unknown match ${no}`);
+      const start = open + i * slot;
       rows.push({
         divisionRef: DIV_A,
         fixtureExtKey: extKey(WORLDS_BRACKET, m),
         venue: "Alexandra Palace",
         court: "Ally Pally Stage",
-        startsAt: isoAt(session.date, open + i * slot),
+        startsAt: isoAt(session.date, start),
+        endsAt: isoAt(session.date, start + slot),
       });
     });
   }
@@ -629,12 +690,17 @@ function worldsMaxMatchesPerEntrantPerDay(): number {
 }
 
 function worldsScheduleConfig(): Record<string, unknown> {
-  const firstDay = WORLDS.sessions.filter((s) => s.noPlay !== true)[0];
+  // The EARLIEST historical start, not the first day's afternoon open: 15
+  // December was an evening-only session, so an afternoon `startAt` claims a
+  // window the tournament never used.
+  const earliest = worldsHistorical()
+    .map((h) => h.startsAt)
+    .sort()[0];
   return {
-    startAt: isoAt(firstDay.date, AFTERNOON_OPEN),
-    // A best-of-7-sets darts match runs a little over an hour; the packing
-    // pressure comes from the court hours, not from this number.
-    matchMinutes: 75,
+    startAt: earliest,
+    // One number, shared with the history board's slot length — see
+    // `worldsMatchMinutes`. Not a guess about how long a darts match takes.
+    matchMinutes: worldsMatchMinutes(),
     gapMinutes: 0,
     courts: [`@${ALLY_PALLY_STAGE}`],
     constraints: {
@@ -649,13 +715,55 @@ function worldsScheduleConfig(): Record<string, unknown> {
   };
 }
 
+/**
+ * Div B's occupancy width, derived from the real board turnarounds.
+ *
+ * Same one-number rule as Div A (`worldsMatchMinutes`), but the constraint
+ * runs the other way: Div B's timetable is entirely real, so `matchMinutes`
+ * must be small enough that back-to-back matches on a board do not read as
+ * clashes — and large enough that the ONE genuine same-board overlap still
+ * does. Taking the tightest turnaround among the pairs that genuinely do NOT
+ * overlap gives exactly that: every honest pair is adjacent at worst, and the
+ * real overlap (a 9-minute gap against a 17-minute match) still reds.
+ *
+ * A hand-picked 20 reported 30 clashes on a timetable containing one.
+ */
+function womensMatchMinutes(): number {
+  const byBoard = new Map<number, WomensMatch[]>();
+  for (const m of WOMENS.matches) {
+    if (m.walkover || m.board === undefined) continue;
+    byBoard.set(m.board, [...(byBoard.get(m.board) ?? []), m]);
+  }
+  let tightestHonest = Number.POSITIVE_INFINITY;
+  for (const ms of byBoard.values()) {
+    ms.sort((a, b) => ((a.startTime as string) < (b.startTime as string) ? -1 : 1));
+    for (let i = 1; i < ms.length; i++) {
+      const prev = ms[i - 1];
+      const next = ms[i];
+      // Skip the pair that really does overlap — including it would shrink the
+      // width until the genuine clash disappeared, which is the one thing this
+      // certificate exists to catch.
+      if ((next.startTime as string) < (prev.endTime as string)) continue;
+      const gap = Math.round(
+        (Date.parse(next.startTime as string) - Date.parse(prev.startTime as string)) / 60_000,
+      );
+      tightestHonest = Math.min(tightestHonest, gap);
+    }
+  }
+  if (!Number.isFinite(tightestHonest)) throw new Error("no non-overlapping board pair to derive a width from");
+  return tightestHonest;
+}
+
 function womensScheduleConfig(): Record<string, unknown> {
   const boards = [...new Set(WOMENS.matches.filter((m) => m.board !== undefined).map((m) => m.board as number))].sort(
     (a, b) => a - b,
   );
+  const earliest = womensHistorical()
+    .map((h) => h.startsAt)
+    .sort()[0];
   return {
-    startAt: isoAt(WOMENS.meta.eventDate, 10 * 60),
-    matchMinutes: 20,
+    startAt: earliest,
+    matchMinutes: womensMatchMinutes(),
     gapMinutes: 0,
     courts: boards.map((n) => `@${boardRef(n)}`),
   };

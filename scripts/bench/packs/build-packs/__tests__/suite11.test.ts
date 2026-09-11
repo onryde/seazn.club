@@ -198,6 +198,28 @@ describe("suite11 — the draw", () => {
     expect(humphries?.seed).toBe(1);
   });
 
+  it("emits streams in DEPENDENCY order, never the datasets' own order", () => {
+    // Div A's dataset is CHRONOLOGICAL and the real tournament played a
+    // second-round match on opening night, so the dataset's order interleaves
+    // rounds. Folded in that order concurrently, every later round is refused
+    // `WRONG_PHASE — fixture has an unassigned entrant`.
+    for (const divisionRef of ["d-worlds", "d-womens"]) {
+      const rounds = streamsOf(divisionRef).map((s) => Number(/^se-r(\d+)/.exec(s.fixtureExtKey)![1]));
+      expect([...rounds].sort((a, b) => a - b), divisionRef).toEqual(rounds);
+    }
+    // The positive pair: the interleaving really is present in the source, or
+    // the monotonic assertion above passes for the wrong reason.
+    // `expected.matches` is still built by walking the dataset, so it is that
+    // chronological order — and the real tournament played a second-round
+    // match on opening night, so it is NOT round-monotonic.
+    const asAuthored = (committed.expected.matches ?? [])
+      .filter((m) => m.divisionRef === "d-worlds")
+      .map((m) => Number(/^se-r(\d+)/.exec(m.fixtureExtKey)![1]));
+    expect([...asAuthored].sort((a, b) => a - b)).not.toEqual(asAuthored);
+    // Specifically: a round-1 fixture appears before the last round-0 one.
+    expect(asAuthored.indexOf(1)).toBeLessThan(asAuthored.lastIndexOf(0));
+  });
+
   it("mints no fixture keys of its own — every key is the product's se-r{r}-i{i}", () => {
     const keys = (committed.streams ?? []).map((s) => `${s.divisionRef}/${s.fixtureExtKey}`);
     expect(new Set(keys).size).toBe(keys.length);

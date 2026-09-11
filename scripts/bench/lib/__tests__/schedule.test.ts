@@ -804,6 +804,51 @@ describe("runScheduleLayer — the board", () => {
     expect(r.outcomes[0].unplacedCount).toBe(1);
   });
 
+  // B06b — a bracket BYE is born `forfeited` with an award
+  // (`stages.ts:1351`) and is never scheduled. Counting it as unplaced redded
+  // suite 11 with "unplaced fixtures = 32" on a board where every real fixture
+  // was placed. `_tiny` has no byes, so nothing could see this before.
+  it("does NOT count a generator-settled bye as unplaced", async () => {
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { metrics: { ...OK_METRICS, placed: 1, total: 1 } },
+          fixturesAfter: [
+            fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1" }),
+            fx({ id: "bye", scheduled_at: null, status: "forfeited" }),
+          ],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    expect(r.outcomes[0].unplacedCount).toBe(0);
+  });
+
+  it("STILL counts an unplaced fixture that is merely scheduled — the exemption is positive", async () => {
+    // The pair for the case above. An exemption written as "ignore anything
+    // with no start" would have silently disarmed the gate this count exists
+    // for, which is a genuinely unplaced fixture.
+    const { transport } = fakeTransport({
+      divisions: {
+        "div-a": {
+          auto: { metrics: { ...OK_METRICS, placed: 1, total: 2 } },
+          fixturesAfter: [
+            fx({ id: "f1", scheduled_at: "2099-01-01T09:00:00.000Z", court_id: "court-1" }),
+            fx({ id: "f2", scheduled_at: null, status: "scheduled" }),
+            fx({ id: "bye", scheduled_at: null, status: "forfeited" }),
+          ],
+        },
+      },
+    });
+
+    const r = await runScheduleLayer(layer({ transport }));
+
+    // One, not two: the bye is exempt and the scheduled one is not.
+    expect(r.outcomes[0].unplacedCount).toBe(1);
+  });
+
   it("carries entrants, round, pool, ext_key and the lock flag off the fetched row", async () => {
     const { transport } = fakeTransport({
       divisions: {

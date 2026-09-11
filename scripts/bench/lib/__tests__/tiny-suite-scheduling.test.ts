@@ -813,12 +813,13 @@ describe("runTinySuite — a thrown guard is routed to the verdict, never swallo
     }
   });
 
-  it("a declared history with no rendered board: certify throws, and the throw becomes a red reason", async () => {
-    // The certificate's own wiring guard. Rendering `historicalAssignment`
-    // rows into a `Board` is real work no pack the bench runs today needs, so
-    // the first pack that declares history REDS here — loudly, naming the
-    // wiring fault — rather than being certified against nothing and reported
-    // FEASIBLE.
+  it("a declared history is RENDERED into a board and certified — B06b closed the wiring gap", async () => {
+    // This test used to pin the DEFERRAL: rendering `historicalAssignment`
+    // into a `Board` was real work no pack needed, so the first pack to
+    // declare history redded loudly rather than being "certified against
+    // nothing and reported FEASIBLE". Suite 11 is that pack, so the work is
+    // done and the expectation inverts — the certificate now reaches a real
+    // branch instead of a wiring fault.
     const { packPath, dir } = writeVariantPack((pack) => {
       const streams = pack.streams as Record<string, unknown>[];
       const first = streams[0]!;
@@ -842,17 +843,53 @@ describe("runTinySuite — a thrown guard is routed to the verdict, never swallo
         packPath,
         transport: server.transport,
       });
-      expect(report.gate).toBe("red");
       const row = rowFor(report, "d-tiny");
-      expect(row?.scheduleErrors.join(" | ")).toMatch(
-        /certificate: .*no historyBoard was rendered.*bench wiring fault/,
-      );
-      // NO fallback verdict: the certificate is absent rather than reported
-      // as a branch it never reached.
-      expect(row?.certificate).toBeUndefined();
-      expect(row?.red).toBe(true);
+      // The wiring fault is GONE, and named explicitly so this cannot pass by
+      // the reason merely changing shape.
+      expect(row?.scheduleErrors.join(" | ")).not.toMatch(/no historyBoard was rendered/);
+      // And a real verdict was reached rather than the certificate being
+      // absent — which is what "certified against nothing" would look like.
+      expect(row?.certificate?.branch).toBeDefined();
+      expect(row?.certificate?.branch).not.toBe("SKIPPED_NO_HISTORY");
       // The division with no history of its own is untouched.
       expect(rowFor(report, "d-badminton")?.certificate?.branch).toBe("SKIPPED_NO_HISTORY");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a history row naming a court the board does not carry is REPORTED, never dropped", async () => {
+    // The silent direction. A court NAME is the one part of a history row
+    // `PackSchema` cannot check — it refuses an unknown `fixtureExtKey`
+    // (pack-schema.ts:2269) but `court` is free text describing a real venue.
+    // An unresolvable court leaves the row judged by no court rule at all, so
+    // a renderer that dropped it quietly would report FEASIBLE.
+    const { packPath, dir } = writeVariantPack((pack) => {
+      const streams = pack.streams as Record<string, unknown>[];
+      const first = streams[0]!;
+      pack.historicalAssignment = [
+        {
+          divisionRef: first.divisionRef,
+          fixtureExtKey: first.fixtureExtKey,
+          venue: "Bench Tiny Venue",
+          court: "No Such Court",
+          startsAt: "2099-01-01T09:00:00.000Z",
+        },
+      ];
+    });
+    try {
+      const server = makeFakeServer();
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath,
+        transport: server.transport,
+      });
+      const row = rowFor(report, "d-tiny");
+      expect(row?.scheduleErrors.join(" | ")).toMatch(/court "No Such Court" is not on this division's board/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

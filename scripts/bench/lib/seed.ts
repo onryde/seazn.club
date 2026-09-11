@@ -128,6 +128,7 @@
 // `apps/web` — every wire shape below is a hand mirror, cited against the
 // real schema/usecase it copies.
 import { newSession, request, signIn, type RequestOptions, type Session } from "./http.ts";
+import { SETTLED_AT_GENERATION } from "./board.ts";
 import { fixtureKey, type PackCourt, type PackStream, type PackVenue } from "./pack-schema.ts";
 import type { MintedInvite } from "./people.ts";
 import type {
@@ -260,9 +261,7 @@ export interface GeneratedFixtureRef {
   readonly status?: string | null;
 }
 
-/** Statuses a fixture can be born in. A bracket generates a bye already
- *  decided; everything else arrives `scheduled` and owes a stream. */
-const SETTLED_AT_GENERATION = new Set(["forfeited", "decided", "finalized", "cancelled", "abandoned"]);
+
 
 /**
  * Matches every `PackStream` to the real fixture it names, by
