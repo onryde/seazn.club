@@ -2173,6 +2173,27 @@ async function solveBuild(input: BuildInput): Promise<BuildResult> {
   // Every other `ERROR` (a transport fault, an unmapped status the service
   // itself could not name) genuinely offers no such promise.
   if (outcome.status === "ERROR") {
+    // LOG IT. A refusal is the one failure on this path that arrives as a
+    // RESOLVED response rather than a rejection, so the `catch` above — the
+    // only arm here that logged — never sees it. Until this line existed the
+    // code was read to pick a status name and the rest of the object, the
+    // service's own human-readable `message` included, was dropped: the
+    // service knew exactly why it refused, wrote it down, and BOTH sides threw
+    // it away. The caller then saw `solver_unavailable` with no explanation in
+    // any log, on either side of the wire.
+    //
+    // That cost a wave. B06b's suite 11 reported "the optimized scheduling
+    // path does not survive a real fixture count" on exactly this evidence,
+    // and a 30 s control run falsified it — the build was returning in 849 ms
+    // against a 30_000 ms wall, so it had never been a timeout. The refusal's
+    // own message would have named the real fault on the first run.
+    //
+    // Same curated shape as the `catch` arm's log: the service's fields, not a
+    // raw dump of the response.
+    log.warn(
+      { code: outcome.error?.code, message: outcome.error?.message },
+      "buildSchedule: the placement service refused the request, falling back to greedy",
+    );
     return greedy(outcome.error?.code === "SOLVER_BUSY" ? "solver_busy" : "solver_unavailable", true);
   }
 
