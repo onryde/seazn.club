@@ -5,6 +5,7 @@
 //
 // B06b adds suite 11 by adding a row here. Nothing in `bench.ts` changes.
 import { TINY_PACK_PATH, runTinySuite } from "./tiny.ts";
+import { SUITE11_PACK_PATH, runSuite11 } from "./suite11.ts";
 import type { SuiteDefinition, SuiteKey } from "./types.ts";
 
 const DEFINITIONS: readonly SuiteDefinition[] = [
@@ -13,6 +14,12 @@ const DEFINITIONS: readonly SuiteDefinition[] = [
     title: "Tiny proof suite",
     packPath: TINY_PACK_PATH,
     run: runTinySuite,
+  },
+  {
+    key: "suite11",
+    title: "PDC Worlds (darts)",
+    packPath: SUITE11_PACK_PATH,
+    run: runSuite11,
   },
 ];
 

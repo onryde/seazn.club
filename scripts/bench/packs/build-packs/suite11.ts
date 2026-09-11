@@ -82,11 +82,6 @@ interface WomensMatch {
   endTime?: string;
 }
 
-interface RawSource {
-  url?: string;
-  label?: string;
-}
-
 function load<T>(file: string): T {
   return JSON.parse(readFileSync(fileURLToPath(new URL(`./data/${file}`, import.meta.url)), "utf8")) as T;
 }
@@ -235,7 +230,7 @@ const worldsWinner = (m: WorldsMatch): string =>
   m.winner ?? ((m.setsP1 ?? 0) > (m.setsP2 ?? 0) ? m.p1 : m.p2);
 
 const womensWinner = (m: WomensMatch): string =>
-  m.p2 === null ? m.p1 : (m.legsP1 ?? 0) > (m.legsP2 ?? 0) ? m.p1 : (m.p2 as string);
+  m.p2 === null ? m.p1 : (m.legsP1 ?? 0) > (m.legsP2 ?? 0) ? m.p1 : m.p2;
 
 const BRACKET_SIZE = 128;
 
@@ -708,14 +703,14 @@ function expectedMatches(): ExpectedMatchInput[] {
   for (const m of WOMENS.matches) {
     if (m.p2 === null) continue;
     const winner = womensWinner(m);
-    const loser = winner === m.p1 ? (m.p2 as string) : m.p1;
+    const loser = winner === m.p1 ? m.p2 : m.p1;
     rows.push({
       divisionRef: DIV_B,
       fixtureExtKey: extKey(WOMENS_BRACKET, m),
       outcome: { kind: "win", winner: entrantRef("b", winner), loser: entrantRef("b", loser), method: "regulation" },
       perSide: [
-        { entrant: entrantRef("b", m.p1), line: String(m.legsP1 as number) },
-        { entrant: entrantRef("b", m.p2 as string), line: String(m.legsP2 as number) },
+        { entrant: entrantRef("b", m.p1), line: String(m.legsP1) },
+        { entrant: entrantRef("b", m.p2), line: String(m.legsP2) },
       ],
     });
   }
