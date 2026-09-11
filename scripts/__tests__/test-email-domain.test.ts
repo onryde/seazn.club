@@ -29,6 +29,28 @@ import { join } from "node:path";
  *
  * `apps/web/src/**` unit fixtures are deliberately out of scope. They are
  * arguments to pure functions and never reach a mailer.
+ *
+ * --- ONE DELIBERATE EXEMPTION: `@bench.invalid` -------------------------
+ *
+ * Suite 11's claim invites mint `<slug>@bench.invalid`
+ * (`scripts/bench/packs/build-packs/suite11.ts:960-968`), and Resend refuses
+ * `.invalid` for exactly the same reason it refuses `example.com`. That is
+ * allowed to stand, and the allowance is stated here rather than left as a
+ * silent hole in the pattern below.
+ *
+ * The reason is the pack's contents. Suite 11 is built from REAL NAMED PUBLIC
+ * FIGURES, and `.invalid` is reserved by RFC 2606 — it can never resolve, so
+ * no configuration error, now or later, can turn one of those addresses into
+ * mail at a real person. `resend.dev` is a live domain whose non-delivery is a
+ * property of Resend's simulator rather than of DNS. For a pack of invented
+ * names the two are equivalent; for this one the stronger guarantee is worth
+ * keeping, and it costs nothing because no test runner holds a key (see
+ * above), so these addresses never reach Resend to be refused.
+ *
+ * If that trade is ever revisited, change it HERE and in `suite11.ts`
+ * together — and regenerate `scripts/bench/packs/suite11.json`, which is a
+ * build artifact of that builder and carries the pack hash the bench
+ * short-circuits on.
  */
 
 const ROOTS = ["scripts", "apps/web/e2e"] as const;
@@ -55,7 +77,7 @@ describe("test email addresses", () => {
     expect(FILES.length).toBeGreaterThan(100);
   });
 
-  it("mints no address Resend refuses", () => {
+  it("mints no address Resend refuses, except the declared `.invalid` one", () => {
     const offenders: string[] = [];
     for (const file of FILES) {
       const lines = readFileSync(file, "utf8").split("\n");
