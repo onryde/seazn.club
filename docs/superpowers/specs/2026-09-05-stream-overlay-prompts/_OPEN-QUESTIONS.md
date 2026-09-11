@@ -722,3 +722,57 @@ rather than a per-club grant, (a) is the right build and costs little.
 
 **Blocks:** the W1 entitlement task and the console panel task, both of which
 must know which gate they are written against.
+
+## Q22 (owner question, 2026-09-11). Commentary over the video — what can a club add, and where?
+
+**Asked by the owner mid-W2:** "what will happen if Org wants commentary on top
+of the video?" It splits two ways, and the answers are very different. **Owner
+direction the same day: remote AUDIO commentary is deferred to its own wave and
+will be brainstormed separately. This row records the ground so that wave does
+not re-derive it.**
+
+### What already works, with no wave at all
+
+**Tier A (the club's own OBS).** The overlay is a transparent browser source;
+OBS mixes any microphone and renders any text the club likes. Nothing is owed.
+
+**A commentator STANDING BESIDE THE PHONE, on the composited tier.** The
+compositor's audio path is the phone's, through a PulseAudio null sink at
+AAC-LC 128 kbps / 48 kHz on one A/V clock (design §7.2, §11's A/V row), and §12
+open item 7 already recommends the mic live-by-default with a prominent mute.
+A commentator talking next to the camera IS that mic.
+
+### What does NOT work: a REMOTE commentator (deferred — its own wave)
+
+The compositor has exactly ONE audio input. A second voice needs a second
+ingest, an ffmpeg mix and sync against the video, and **U1-S5 constrains the
+transport**: WHIP and WHEP must be used together, so a WHIP audio ingest cannot
+be pulled alongside the RTMPS video the composed tier already uses — it needs
+its own path. That is a wave, not a task.
+
+### What is CHEAP and reaches both tiers: TEXT commentary
+
+The compositor already renders our overlay page over the video, so a commentary
+lower third is a rendering change plus a source of text — **and the ledger
+already has one.** `core.note` is the official's own free-text annotation;
+`lib/timeline-keys.ts` says so outright ("an OFFICIAL'S OWN ANNOTATION —
+rendering that as 'Match event' throws away the only free text in the ledger").
+
+**One decision it needs, and it is W2's to flag.** `recentWindow`
+(`server/overlay/recent.ts`) excludes every `core.*` type on purpose — a void, a
+note, a suspension of play and a substitution are not moments. Text commentary
+means letting `core.note` through EXPLICITLY, which is a product decision rather
+than a one-line relaxation: a note is written by an official for the record, not
+for an audience, and putting it on air unedited is a different product from
+putting it in a timeline.
+
+**Recommendation (mine, as product owner, not a ruling):** scope text commentary
+as a small wave of its own — it reaches Tier A and the composited tier from one
+change, and the hard half is editorial (who writes it, and does it go out raw)
+rather than technical. Remote audio stays deferred per the owner's direction.
+
+### What can never carry it
+
+**Passthrough / simulcast.** There is no compositing step: Cloudflare live
+outputs forward what the club sends. Nothing can be added on that path, in
+either medium.

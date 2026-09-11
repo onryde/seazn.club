@@ -420,214 +420,51 @@ Allowlist (from the modules' declarations read 2026-09-05; the parity test below
 
 Sides' short names: `momentsFor` takes `sides: [string, string]` (the `short` W1's `overlayModel` already computes) so the set-won line can say who.
 
-- [ ] **Step 1: Failing tests** — `apps/web/src/lib/__tests__/overlay-moments.test.ts`. Fold REAL events through the REAL modules to build `recent` (use Task 1's pure `buildOverlayRecent` with `defaultLineupPair` ids and a `personOf` stub) — never a hand-typed `recent` for the positive cases. `msg` = `(key, vars) => key + JSON.stringify(vars ?? {})` so assertions pin keys and params, not English.
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.** `momentsFor`, `MOMENT_RULES`,
+  `MOMENT_KEYS` and `maxSeq` in `apps/web/src/lib/overlay-moments.ts`; 30
+  `overlay.moment.*` keys in all four locales; `i18n-keys.ts` regenerated;
+  parity green. 35 tests, mutation sweep **11/11**, 2986 passed / 0 failed
+  across `src/lib`, `src/server/overlay` and `src/components/public-site`; tsc
+  clean, lint 0 errors.
 
-```ts
-import { describe, expect, it } from "vitest";
-import { cricket } from "@seazn/engine/sports/cricket";
-import { football } from "@seazn/engine/sports/football";
-import { hockey } from "@seazn/engine/sports/hockey";                    // hockey/index.ts exports `hockey` only
-import { icehockey } from "@seazn/engine/sports/icehockey";              // icehockey/index.ts exports `icehockey` only
-import { tennis } from "@seazn/engine/sports/tennis";
-import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
-import { boardgame } from "@seazn/engine/sports/boardgame";
-import { carrom } from "@seazn/engine/sports/carrom";
-import { generic } from "@seazn/engine/sports/generic";
-import { MOMENT_RULES, momentsFor, maxSeq } from "../overlay-moments";
-import { buildOverlayRecent } from "@/server/overlay/recent";  // pure export; the file's `server-only` marker is stubbed under vitest (vitest.config.ts alias)
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+  **Three corrections to the brief, each removing a SECOND AUTHORITY:**
 
-const msg = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ""}`;
-const SIDES: [string, string] = ["H", "A"];
-const MODULES = { cricket, football, hockey, icehockey, tennis, badminton, tabletennis, volleyball, boardgame, carrom, generic } as const;
+  1. **No `overlay.moment.penaltyClass.*` family.** Those seven words already
+     exist as `overlay.card.*` (W1's chip labels, `DISCIPLINE_LABEL_KEYS` in
+     `lib/public-site.ts`) and already ship in four languages. The penalty
+     moment's line goes through `disciplineLabel`, which is the existing
+     resolver. 28 translations not written, and the chip and the slab cannot
+     drift apart.
+  2. **`GAME_UNIT_SPORTS` is EXPORTED, not restated.** The brief's
+     `const GAME_UNIT = new Set([...])` would have been a second copy of a
+     membership `setBreakdown` already owns.
+  3. **Keys are plain strings against W1's `OverlayMsg`, not `MessageKey`.**
+     `MsgFn`'s key type is `keyof typeof ui.json` and rejects every `overlay.*`
+     key — those live in the `public` namespace. W1 hit this first and answered
+     it with `OverlayMsg`; the union's safety is bought back by `MOMENT_KEYS`
+     and a test holding it against the English dictionary.
 
-describe("MOMENT_RULES is derived from the modules' own declarations", () => {
-  for (const [key, mod] of Object.entries(MODULES)) {
-    it(`${key}: every recorded-event key in the allowlist is a key of the module's eventSchemas`, () => {
-      const rules = Object.keys(MOMENT_RULES[key] ?? {}).filter((k) => !k.startsWith("derived."));
-      for (const type of rules) expect(Object.keys(mod.eventSchemas ?? {}), `${key} allowlist names undeclared type ${type}`).toContain(type);
-    });
-  }
-  it("boardgame, carrom and generic have NO entries", () => {
-    for (const key of ["boardgame", "carrom", "generic"]) expect(Object.keys(MOMENT_RULES[key] ?? {})).toEqual([]);
-  });
-  it("an unlisted type yields nothing and does not throw", () => {
-    expect(momentsFor("football", [{ seq: 9, type: "football.shot", at: "", payload: {} }], 0, msg, SIDES)).toEqual([]);
-    expect(momentsFor("some.future.sport", [{ seq: 9, type: "x.y", at: "", payload: {} }], 0, msg, SIDES)).toEqual([]);
-  });
-});
+  **Also corrected:** the card key is `overlay.moment.card.secondYellow`, not
+  `.second_yellow` — this repo's dictionary convention is camelCase
+  (`overlay.card.benchMinor`), and the rule maps the engine's snake_case class
+  to it.
 
-describe("cricket", () => {
-  const lineups = defaultLineupPair(cricket.positions);
-  const cfg = /* RE-PIN: cricket.variants.t20 parsed through the module's config schema, as view-model.test.ts does for generic */;
-  const base = { over: 0, ballInOver: 1, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p11" };
-  const ledger = [
-    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } }),
-    makeEnvelope(2, { type: "core.start", payload: {} }),
-    makeEnvelope(3, { type: "cricket.ball", payload: { ...base, runs: { bat: 6 }, boundary: 6 } }),
-    makeEnvelope(4, { type: "cricket.ball", payload: { ...base, ballInOver: 2, runs: { bat: 1 } } }),
-    makeEnvelope(5, { type: "cricket.ball", payload: { ...base, ballInOver: 3, striker: "H-p2", nonStriker: "H-p1", runs: { bat: 4 }, boundary: 4 } }),
-    makeEnvelope(6, { type: "cricket.ball", payload: { ...base, ballInOver: 4, striker: "H-p2", nonStriker: "H-p1", runs: { bat: 0 }, wicket: { kind: "bowled", out: "H-p2", bowlerCredited: true, incoming: "H-p3" } } }),
-  ];
-  const recent = buildOverlayRecent({ sportKey: "cricket", module: cricket, cfg, lineups, events: ledger, sides: SIDES, personOf: (id) => (id === "H-p2" ? { name: "H. Two", masked: true } : undefined) });
-  it("SIX, FOUR and OUT fire; the single is silent; order is ledger order", () => {
-    const got = momentsFor("cricket", recent, 0, msg, SIDES);
-    expect(got.map((m) => [m.seq, m.kind, m.tone])).toEqual([[3, "six", "led"], [5, "four", "led"], [6, "wicket", "dismissal"]]);
-    expect(got[0]!.headline).toBe("overlay.moment.six");
-  });
-  it("OUT carries the dismissed batter's consent-resolved name, figures from the fold, and the kind key", () => {
-    const out = momentsFor("cricket", recent, 5, msg, SIDES)[0]!;
-    expect(out.line).toBe(`overlay.moment.batterLine${JSON.stringify({ name: "H. Two", runs: 4, balls: 2, kind: "overlay.moment.wicket.bowled" })}`);
-  });
-  it("seq already seen yields nothing; the boundary is sinceSeq EXCLUSIVE", () => {
-    expect(momentsFor("cricket", recent, 6, msg, SIDES)).toEqual([]);
-    expect(momentsFor("cricket", recent, 5, msg, SIDES).map((m) => m.seq)).toEqual([6]);
-  });
-  it("a super-over boundary uses the same rule", () => { /* cricket.superover.ball boundary 6 after a tie → six */ });
-});
+  **Two mutants survived the first pass**, both real:
 
-describe("football / hockey / ice hockey", () => {
-  it("goal → GOAL led with scorer line; own goal → ownGoal key; penalty adds the penalty line", () => {});
-  it("yellow → caution, red and second_yellow → dismissal; the headline key is per colour", () => {});
-  it("hockey green/yellow → caution, red → dismissal; ice hockey minor → caution with class line, match → dismissal", () => {
-    // build through buildOverlayRecent with hockey.suspension.start { by: "H", person: "H-p3", class: "green" } etc.
-  });
-});
+  - **An unknown card colour could be given a GUESSED tone.** The colour and the
+    tone lived in two parallel records, so "a key with no tone" was a state no
+    test could witness — the guard was decoration. The two are now ONE table, so
+    the state cannot be expressed at all.
+  - **A sport with no allowlist fell through to football's rules.** The negative
+    case used a type nobody honours, so "no rules" and "football's rules"
+    answered alike. The case that tells them apart is an unknown sport carrying
+    a type football DOES honour.
 
-describe("racket sports (derived)", () => {
-  it("tennis: ace → ACE; a fresh break point → BREAK POINT once; the saved-then-regained point is a NEW moment; set won → SET 1 with the short and score", () => {
-    // ledger driven to 30–40 on home serve (break, fresh) → 40–40 (nothing) → Ad away (break, fresh again) — two break-point moments, seqs differ
-  });
-  it("tennis: a set point that is also match point reads MATCH POINT only", () => {});
-  it("badminton: 20–19 → GAME POINT (unit from GAME_UNIT_SPORTS); game won → GAME 1", () => {});
-  it("volleyball: 24–23 → SET POINT, a set point that also wins the match → MATCH POINT, set won → SET 1 (owner answer 21 / Q10)", () => {
-    // Drive a real volleyball ledger through buildOverlayRecent to 24–23 and
-    // assert `overlay.moment.setPoint` — NOT `gamePoint`: the differential that
-    // proves the unit comes from GAME_UNIT_SPORTS rather than from "it is a
-    // set-based sport". Then a fifth-set 14–13 for MATCH POINT, and the set
-    // close for SET 1. A test that only asserted "some moment fires" would
-    // pass with badminton's keys wired in by mistake.
-  });
-  it("a non-fresh pointState yields nothing even with a new seq", () => {
-    // hand-typed recent is acceptable for this NEGATIVE case: [{ seq: 12, type: "tennis.point", at: "", payload: {}, derived: { pointState: { kind: "match", side: 0, fresh: false } } }] → []
-  });
-});
-
-describe("maxSeq", () => { it("0 for empty/undefined; the max otherwise", () => {}); });
-```
-
-- [ ] **Step 2: Run — expect failures** (`../overlay-moments` unresolved).
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2/apps/web && DATABASE_URL= pnpm exec vitest run src/lib/__tests__/overlay-moments.test.ts --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-t2-red.json`
-
-- [ ] **Step 3: Implement** `overlay-moments.ts`:
-
-```ts
-import type { MessageKey } from "@/lib/i18n-runtime";              // RE-PIN: the generated-union key type MsgFn takes (scoring-vocab.ts:1147)
-const GAME_UNIT = new Set(["badminton", "tabletennis"]);            // RE-PIN: export GAME_UNIT_SPORTS from lib/public-site.ts:281 and import it instead of restating
-const name = (ev: RecentEvent) => ev.payload.person?.name;
-
-const ball: MomentRule = (ev, { msg }) => {
-  const p = ev.payload;
-  if (p.wicketKind) {
-    const kind = msg(`overlay.moment.wicket.${p.wicketKind}` as MessageKey);
-    const line = name(ev) && p.batterRuns !== undefined && p.batterBalls !== undefined
-      ? msg("overlay.moment.batterLine", { name: name(ev)!, runs: p.batterRuns, balls: p.batterBalls, kind })
-      : kind;
-    return { kind: "wicket", headline: msg("overlay.moment.out"), line, tone: "dismissal", seq: ev.seq };
-  }
-  if (p.boundary === 6) return { kind: "six", headline: msg("overlay.moment.six"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq };
-  if (p.boundary === 4) return { kind: "four", headline: msg("overlay.moment.four"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq };
-  return null;
-};
-const goal: MomentRule = (ev, { msg }) => ({
-  kind: "goal", tone: "led", seq: ev.seq,
-  headline: msg(ev.payload.ownGoal ? "overlay.moment.ownGoal" : "overlay.moment.goal"),
-  ...(ev.payload.penalty ? { line: msg("overlay.moment.penalty") } : name(ev) ? { line: name(ev) } : {}),
-});
-const CARD_TONE: Record<string, OverlayMoment["tone"]> = { yellow: "caution", green: "caution", red: "dismissal", second_yellow: "dismissal" };
-const card = (field: "colour" | "class"): MomentRule => (ev, { msg }) => {
-  const c = ev.payload[field]; if (!c) return null;
-  const tone = CARD_TONE[c]; if (!tone) return null;                                    // an undeclared colour renders nothing
-  return { kind: `card.${c}`, headline: msg(`overlay.moment.card.${c}` as MessageKey), ...(name(ev) ? { line: name(ev) } : {}), tone, seq: ev.seq };
-};
-const PENALTY_TONE: Record<string, OverlayMoment["tone"]> = { minor: "caution", bench_minor: "caution", double_minor: "caution", major: "caution", misconduct: "caution", game_misconduct: "dismissal", match: "dismissal" };
-const penalty: MomentRule = (ev, { msg }) => {
-  const c = ev.payload.class; const tone = c ? PENALTY_TONE[c] : undefined; if (!c || !tone) return null;
-  return { kind: `penalty.${c}`, headline: msg("overlay.moment.penaltyHeadline"), line: [msg(`overlay.moment.penaltyClass.${c}` as MessageKey), name(ev)].filter(Boolean).join(" · "), tone, seq: ev.seq };
-};
-const ace: MomentRule = (ev, { msg }) => (ev.payload.kind === "ace" ? { kind: "ace", headline: msg("overlay.moment.ace"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq } : null);
-const pointState: MomentRule = (ev, { msg, sportKey }) => {
-  const ps = ev.derived?.pointState; if (!ps || !ps.fresh) return null;
-  const key = ps.kind === "match" ? "overlay.moment.matchPoint" : ps.kind === "break" ? "overlay.moment.breakPoint" : GAME_UNIT.has(sportKey) ? "overlay.moment.gamePoint" : "overlay.moment.setPoint";
-  return { kind: `point.${ps.kind}`, headline: msg(key), tone: "led", seq: ev.seq };
-};
-const setWon: MomentRule = (ev, { msg, sportKey, sides }) => {
-  const s = ev.derived?.setWon; if (!s) return null;
-  return { kind: "setWon", headline: msg(GAME_UNIT.has(sportKey) ? "overlay.moment.gameWon" : "overlay.moment.setWon", { n: s.set }), line: msg("overlay.moment.setWonLine", { short: sides[s.winner], home: s.home, away: s.away }), tone: "led", seq: ev.seq };
-};
-export const MOMENT_RULES = {
-  cricket: { "cricket.ball": ball, "cricket.superover.ball": ball },
-  football: { "football.goal": goal, "football.card": card("colour") },
-  hockey: { "hockey.goal": goal, "hockey.suspension.start": card("class") },
-  icehockey: { "icehockey.goal": goal, "icehockey.suspension.start": penalty },
-  tennis: { "tennis.point": ace, "derived.pointState": pointState, "derived.setWon": setWon },
-  badminton: { "derived.pointState": pointState, "derived.setWon": setWon },
-  tabletennis: { "derived.pointState": pointState, "derived.setWon": setWon },
-  // Owner answer 21 (Q10), 2026-09-06: "Ok". Volleyball gets set point and
-  // match point alongside its set-won moment, on the SAME `pointState` probe
-  // the racket sports use — `GAME_UNIT_SPORTS` does not contain volleyball, so
-  // `pointState` picks `overlay.moment.setPoint` (not gamePoint) and `setWon`
-  // picks `overlay.moment.setWon` (not gameWon) with no per-sport branch.
-  volleyball: { "derived.pointState": pointState, "derived.setWon": setWon },
-  boardgame: {}, carrom: {}, generic: {},
-} as const satisfies Record<string, Record<string, MomentRule>>;
-
-export function momentsFor(sportKey, recent, sinceSeq, msg, sides): OverlayMoment[] {
-  const rules = MOMENT_RULES[sportKey as keyof typeof MOMENT_RULES] as Record<string, MomentRule> | undefined;
-  if (!rules) return [];
-  const out: OverlayMoment[] = [];
-  for (const ev of [...recent].sort((a, b) => a.seq - b.seq)) {
-    if (ev.seq <= sinceSeq) continue;
-    const ctx = { msg, sportKey, sides };
-    for (const rule of [rules[ev.type], ev.derived?.setWon ? rules["derived.setWon"] : undefined, ev.derived?.pointState ? rules["derived.pointState"] : undefined]) {
-      const m = rule?.(ev, ctx); if (m) out.push(m);
-    }
-  }
-  return out;
-}
-```
-
-  Order within one event: recorded first (ACE), then set won, then point state — a set-closing point that also opens a match point shows the set first. `MOMENT_KEYS` enumerates: six, four, out, batterLine, `wicket.<k>` for each `CricketWicket` kind, goal, ownGoal, penalty, `card.{yellow,red,second_yellow,green}`, penaltyHeadline, `penaltyClass.<c>` for each ice-hockey class, ace, breakPoint, setPoint, gamePoint, matchPoint, setWon, gameWon, setWonLine. Derive the enum lists in the module from the engine where it exports them (`CricketWicket.shape.kind.options` via `@seazn/engine/sports/cricket`; `CardColor.options` — RE-PIN whether `football/index.ts` exports it, else read `FOOTBALL_EVENT_SCHEMAS["football.card"]`); the ice-hockey classes come from the module's parsed default config (RE-PIN the entry point: `grep -an "configSchema\|parseConfig" packages/engine/src/sport/module.ts`).
-
-  Dictionary keys (English; write es/fr/nl in the same commit with the sport's own vocabulary — "SIX"/"FOUR"/"OUT"/"lbw" stay English in all four, as cricket broadcasters in those languages do; "GOAL" → "GOL"/"BUT"/"GOAL"; "MATCH POINT" → "PUNTO DE PARTIDO"/"BALLE DE MATCH"/"MATCHPUNT"; etc.):
-
-```json
-"overlay.moment.six": "SIX",
-"overlay.moment.four": "FOUR",
-"overlay.moment.out": "OUT",
-"overlay.moment.batterLine": "{name} {runs} ({balls}) · {kind}",
-"overlay.moment.wicket.bowled": "b", "overlay.moment.wicket.caught": "c", "overlay.moment.wicket.lbw": "lbw",
-"overlay.moment.wicket.runout": "run out", "overlay.moment.wicket.stumped": "st", "overlay.moment.wicket.hitwicket": "hit wicket",
-"overlay.moment.wicket.retired": "retired out", "overlay.moment.wicket.obstructed": "obstructing the field",
-"overlay.moment.wicket.timedout": "timed out", "overlay.moment.wicket.hitballtwice": "hit the ball twice",
-"overlay.moment.goal": "GOAL", "overlay.moment.ownGoal": "OWN GOAL", "overlay.moment.penalty": "Penalty",
-"overlay.moment.card.yellow": "YELLOW CARD", "overlay.moment.card.red": "RED CARD", "overlay.moment.card.second_yellow": "SECOND YELLOW", "overlay.moment.card.green": "GREEN CARD",
-"overlay.moment.penaltyHeadline": "PENALTY",
-"overlay.moment.penaltyClass.minor": "Minor", "overlay.moment.penaltyClass.bench_minor": "Bench minor", "overlay.moment.penaltyClass.double_minor": "Double minor",
-"overlay.moment.penaltyClass.major": "Major", "overlay.moment.penaltyClass.misconduct": "Misconduct", "overlay.moment.penaltyClass.game_misconduct": "Game misconduct", "overlay.moment.penaltyClass.match": "Match penalty",
-"overlay.moment.ace": "ACE",
-"overlay.moment.breakPoint": "BREAK POINT", "overlay.moment.setPoint": "SET POINT", "overlay.moment.gamePoint": "GAME POINT", "overlay.moment.matchPoint": "MATCH POINT",
-"overlay.moment.setWon": "SET {n}", "overlay.moment.gameWon": "GAME {n}", "overlay.moment.setWonLine": "{short} {home}–{away}"
-```
-
-  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 && pnpm i18n:gen-keys && pnpm i18n:check` — `i18n-keys.ts` must change; parity must pass.
-
-- [ ] **Step 4: Run — green.** `--outputFile=/tmp/seazn-env/ovl/w2-t2.json`; expected `numTotalTests: 22` (11 parity + 11 behaviour; count from the file), all passed, path under the worktree. `cd …/apps/web && pnpm typecheck` clean (the union now carries the keys). Mutants: delete the `wicketKind` branch of `ball` → "SIX, FOUR and OUT fire" reds; change `ev.seq <= sinceSeq` to `<` → "seq already seen yields nothing" reds; remove the `!ps.fresh` return → "a non-fresh pointState yields nothing" reds; add `"football.shot": goal` → the football parity test STAYS green (it is declared) — so ALSO add a fixture-free assertion that `MOMENT_RULES.football` has exactly the two keys the spec allowlists, and confirm the mutant reds it.
-
-- [ ] **Step 5: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 && /usr/bin/git add apps/web/src/lib/overlay-moments.ts apps/web/src/lib/__tests__/overlay-moments.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts && /usr/bin/git commit -o apps/web/src/lib/overlay-moments.ts apps/web/src/lib/__tests__/overlay-moments.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts -m "overlay: momentsFor — per-sport allowlist keyed by each module's declared event types; overlay.moment.* in en/es/fr/nl, keys regenerated" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **Test-harness facts worth keeping:** the engine refuses `second_yellow` for a
+  player with no prior caution, so the card stream books the player first; and
+  the suspension-tone coverage test derives its class list from each module's
+  own parsed config, so a federation sheet adding a class reds rather than
+  rendering toneless.
 
 ### Task 3: The cricket bar's batter-and-bowler line
 

@@ -2111,3 +2111,55 @@ equivalent.** Each exposed a real gap, and three share one shape worth naming:
 
 **A sweep that kills every mutant on the first pass is not a good sign about
 the code; it is usually a sign about the mutants.**
+
+## 2026-09-11 — W2 Task 2: `momentsFor`, and Q22 raised by the owner
+
+`momentsFor` ships. 35 tests, mutation sweep 11/11, 2986 passed / 0 failed,
+tsc clean, lint 0 errors, i18n parity green across 30 new keys in four locales.
+
+**W2-F21 — three places the brief would have created a SECOND AUTHORITY.** Each
+was caught by reading the tree rather than the brief, and each is the same
+mistake in a different costume:
+
+- The briefed `overlay.moment.penaltyClass.*` family is seven words that ALREADY
+  EXIST as `overlay.card.*` — W1's chip labels, mapped by `DISCIPLINE_LABEL_KEYS`
+  (`lib/public-site.ts`) and already translated into four languages. The moment
+  now goes through `disciplineLabel`, the existing resolver. 28 translations not
+  written, and the chip and the slab cannot come to disagree about what a bench
+  minor is called.
+- The briefed `const GAME_UNIT = new Set(["badminton", "tabletennis"])` would
+  have been a second copy of a membership `setBreakdown` already owns. Exported
+  from `public-site.ts` instead.
+- The brief asserted the module "will not typecheck without" the keys because
+  `MsgFn`'s key type is the generated union. **It is not that union.** `MsgFn`
+  is keyed on `keyof typeof ui.json` (`lib/messages.ts:12`) and rejects every
+  `overlay.*` key, which live in the `public` namespace — W1 hit this first and
+  answered it with `OverlayMsg` (`lib/overlay-model.ts`). Reused rather than
+  re-discovered.
+
+**W2-F22 — two mutants survived the first pass, and one was a DESIGN smell
+rather than a missing test.** An unknown card colour could be given a guessed
+tone, because the colour and the tone lived in two parallel records: "a key with
+no tone" was a state no test could witness, so the guard covering it was
+decoration. The fix was not another test — it was collapsing the two records
+into one, so the state cannot be expressed. The other survivor was ordinary: a
+sport with no allowlist fell through to football's rules, and the negative case
+used a type nobody honours, so "no rules" and "football's rules" answered alike.
+
+**When a mutant survives, ask whether the guard is untestable rather than
+untested. If the impossible state can be made unrepresentable, that beats
+witnessing it.**
+
+**Q22 — the owner asked what happens if a club wants COMMENTARY over the video.**
+Recorded in `_OPEN-QUESTIONS.md` with the ground already established, and the
+owner's direction the same day: **remote audio commentary is deferred to its own
+wave and will be brainstormed separately.** The short version: Tier A already
+does both media through the club's own OBS; a commentator standing beside the
+phone already works on the composited tier, because the compositor's one audio
+path IS the phone mic; a REMOTE commentator needs a second ingest, an ffmpeg mix
+and sync, and U1-S5 constrains the transport; passthrough can carry neither,
+because nothing composites. TEXT commentary is the cheap half and reaches both
+tiers — the ledger already carries free text as `core.note` — but it needs a
+product decision, not a code change: `recentWindow` excludes every `core.*` type
+on purpose, and a note is written by an official for the record rather than for
+an audience.
