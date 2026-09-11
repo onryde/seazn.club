@@ -141,7 +141,15 @@ describe("StandingsTableView — phone composition", () => {
     expect(h).toContain(t(dict, "table.more"));
     // AGENTS.md #23: a scrolling region owes a tabindex, a role and a name,
     // and tabindex cannot follow a media query, so all three are unconditional.
-    expect(h).toMatch(/id="mh-table-t1-scroll"[^>]*role="region"[^>]*tabindex="0"[^>]*aria-label="League"/);
+    // The name carries the DIVISION as well as the caption. It used to be the
+    // caption alone, and this assertion pinned that — which is why nothing
+    // caught the real defect: `caption` is the STAGE name, so a two-division
+    // competition rendered two regions both named "League", and a screen-reader
+    // user had nothing to tell them apart. Found by driving the built page, not
+    // by any test in this wave.
+    expect(h).toMatch(
+      /id="mh-table-t1-scroll"[^>]*role="region"[^>]*tabindex="0"[^>]*aria-label="Div — League"/,
+    );
     // …and the region is addressable as a TESTID, not only as an `id`, because
     // that is the contract Tasks 4/9/11/13 were briefed on. With the `id`
     // alone their `[data-testid="…-scroll"]` selectors match nothing.

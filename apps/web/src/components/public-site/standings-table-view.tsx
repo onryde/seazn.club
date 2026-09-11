@@ -229,7 +229,17 @@ export function StandingsTableView({
             id={`${testid}-scroll`}
             role="region"
             tabIndex={0}
-            aria-label={view.caption}
+            // The DIVISION and the caption, not the caption alone. Found by
+            // driving the built page: a two-division competition renders two of
+            // these regions and both were named "League", because the caption is
+            // the STAGE name and almost every competition calls its league stage
+            // "League". A sighted reader can at least tell them apart by
+            // position; a screen-reader user hears the same name twice with
+            // nothing to distinguish them, which is the worse half of the same
+            // defect. `divisionName` is already on the view, so this costs
+            // nothing and fixes every consumer — the Overview's previews and the
+            // Table tab's groups alike.
+            aria-label={`${view.divisionName} — ${view.caption}`}
             className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
           >
             {/* The two floors ride as custom properties so the `md:` variant

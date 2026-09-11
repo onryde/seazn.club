@@ -609,6 +609,26 @@ export function OverviewTab({
           >
             {doc.tables.slice(0, TABLE_PREVIEWS).map((view) => (
               <li key={view.id} className="min-w-0">
+                {/* WHICH division this table is, and it is only visible by
+                    looking. Driving the built page at 320 showed two previews
+                    captioned "League" and nothing else — `caption` is the STAGE
+                    name, and a competition whose divisions both run a league
+                    stage (the ordinary case) renders two identical-looking
+                    tables. Every test in this wave passed: the markup is right,
+                    the testids are unique per view, the "Full division" links
+                    point at different divisions. Only the screen said so.
+
+                    Shown only on a MULTI-division document, matching the rule
+                    the Teams tab already follows — with one division the name
+                    is noise, because there is nothing to tell it apart from. */}
+                {doc.divisions.length > 1 ? (
+                  <h4
+                    data-testid={`mh-table-preview-${view.id}-division`}
+                    className="mb-1 min-w-0 truncate text-sm font-semibold text-ink-muted"
+                  >
+                    {view.divisionName}
+                  </h4>
+                ) : null}
                 <StandingsTableView
                   view={view}
                   dict={dict}
