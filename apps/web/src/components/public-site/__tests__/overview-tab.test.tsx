@@ -1178,6 +1178,50 @@ describe("OverviewTab — one DOM, branched", () => {
     }
   });
 
+  it("the split only happens when the ladder put something in the MAIN column — and the tables follow it", () => {
+    // Found by the owner looking at 1280, after I had MEASURED that width and
+    // called it clean. On the `finished` rung there is no live rail and no
+    // next-up, and a competition with no description leaves the main column
+    // holding nothing but the one-line status. The split ran anyway:
+    // `grid-template-columns` read back as `648px 320px` — a 648px column 24px
+    // tall beside every table crushed into 320px, with most of the viewport
+    // dead.
+    //
+    // The rule this tab is built on — "a section with nothing to say is ABSENT,
+    // not held open as an empty shell" — had been applied to the sections and
+    // not to the COLUMN holding them. One level too shallow.
+    //
+    // `mh-status` deliberately does NOT count as content: it is one line, it is
+    // not a section, and mistaking it for content is exactly what happened.
+    const finished = hubDoc({
+      matches: [m("done", "completed", "2026-09-01T10:00:00.000Z", "premier")],
+      tables: [tableView("t1", "premier", { rows: [tableRow("e1", 1)] })],
+    });
+    const collapsed = render(finished);
+    expect(tagOf(collapsed, "mh-overview")).toContain('data-split="false"');
+    expect(classesOf(collapsed, "mh-overview")).not.toContain(
+      "lg:grid-cols-[minmax(0,1fr)_20rem]",
+    );
+    // The status line is present — so this is not passing because the panel is
+    // empty, which would make the whole assertion vacuous.
+    expect(collapsed).toContain(`data-testid="mh-status"`);
+
+    // Positive pair: a document whose ladder fills the main column DOES split.
+    const split = render(full);
+    expect(tagOf(split, "mh-overview")).toContain('data-split="true"');
+    expect(classesOf(split, "mh-overview")).toContain("lg:grid-cols-[minmax(0,1fr)_20rem]");
+
+    // And the tables grid follows the same decision rather than a second one:
+    // one column inside the 20rem rail (two would push Points behind a scroll),
+    // two across the full width when there is no rail.
+    const tables = classesOf(split, "mh-tables");
+    expect(tables).toContain("lg:grid-cols-1");
+    expect(tables).toContain("lg:group-data-[split=false]/ov:grid-cols-2");
+    // The root carries the named group the child keys off — assert the PAIR,
+    // because either half alone is a class that silently does nothing.
+    expect(classesOf(split, "mh-overview")).toContain("group/ov");
+  });
+
   it("status, the live rail, next up and the description are the MAIN column; tables, register and sponsors the side rail", () => {
     const h = render(full, { descriptionSlot: <p>ABOUT</p>, sponsorsSlot: <p>SPONSORS</p> });
     const sideAt = h.indexOf(`data-testid="mh-overview-side"`);

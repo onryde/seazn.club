@@ -603,7 +603,21 @@ export function OverviewTab({
               `min-width: auto`. */}
           <ul
             data-testid="mh-tables"
-            className="grid gap-4 md:grid-cols-2 lg:grid-cols-1"
+            // `lg:grid-cols-1` is for the SPLIT layout, where these sit in a
+            // 20rem rail and two columns inside it would push Points behind a
+            // scroll. When the ladder gives the main column nothing the split
+            // does not happen (see `data-split` on the root), and one table
+            // across ~990px strands the numbers an inch from the names — so the
+            // unsplit case goes back to two-up. Keyed off the ANCESTOR's
+            // `data-split` rather than a second prop, so there is one decision
+            // and nothing to drift out of step with it.
+            //
+            // NAMED GROUP, not an arbitrary `[[data-split=false]_&]` selector.
+            // That form works, and its class contains `&`, which React
+            // serialises as `&amp;` — so every string-matching test in this
+            // repo silently misses it. Third time this wave an HTML entity has
+            // broken an assertion that was right about the markup.
+            className="grid gap-4 md:grid-cols-2 lg:grid-cols-1 lg:group-data-[split=false]/ov:grid-cols-2"
             role="list"
             aria-labelledby="mh-tables-label"
           >
@@ -704,10 +718,31 @@ export function OverviewTab({
     </section>
   );
 
+  // THE SPLIT IS CONDITIONAL, and the reason is the same rule this whole tab is
+  // built on. "A section with nothing to say is ABSENT, not held open as an
+  // empty shell" was applied to the sections and not to the COLUMN that holds
+  // them — one level too shallow.
+  //
+  // On the `finished` rung there is no live rail and no next-up, and a
+  // competition with no description gives the main column nothing but the
+  // status line. Driving the built page at 1280 showed the result: a main
+  // column **648px wide and 24px tall** holding the single word "Finished",
+  // with every table crushed into the 320px rail beside it and the majority of
+  // the viewport dead. Measured, not estimated — `grid-template-columns` read
+  // back as `648px 320px`.
+  //
+  // So the second column exists only when the ladder actually put something in
+  // it. `mh-status` does not count: it is one line, it is not a section, and it
+  // is exactly what was being mistaken for content.
+  const mainHasSections = shown.some((id) => MAIN_COLUMN.has(id));
+
   return (
     <div
       data-testid="mh-overview"
-      className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start"
+      data-split={mainHasSections ? "true" : "false"}
+      className={`group/ov grid min-w-0 gap-6 lg:items-start${
+        mainHasSections ? " lg:grid-cols-[minmax(0,1fr)_20rem]" : ""
+      }`}
     >
       <div data-testid="mh-overview-main" className="contents min-w-0 lg:block lg:space-y-6">
         {plan.copy === null ? null : (
