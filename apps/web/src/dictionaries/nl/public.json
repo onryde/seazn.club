@@ -327,6 +327,7 @@
   "landing.presentedBy": "Gepresenteerd door {sponsor}",
   "landing.partners": "Partners",
   "landing.noDivisions": "Nog geen divisies",
+  "landing.metaDescription": "Live uitslagen, standen en toernooischema's van {competition} — georganiseerd door {org} op Seazn Club.",
   "matchesHub.filter.live": "Live",
   "matchesHub.filter.upcoming": "Binnenkort",
   "matchesHub.filter.completed": "Afgerond",

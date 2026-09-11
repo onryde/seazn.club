@@ -59,6 +59,12 @@ export const W2_KEYS = [
   "landing.today",
   "landing.liveNow", "landing.nextUp", "landing.tables", "landing.register", "landing.present", "landing.divisions.one", "landing.divisions.other",
   "landing.entrants.one", "landing.entrants.other", "landing.liveCount.one", "landing.liveCount.other", "landing.sponsors", "landing.presentedBy", "landing.partners", "landing.noDivisions",
+  // The competition page's `<meta name="description">` fallback (Task 12).
+  // `lib/public-meta.ts` used to hardcode the English sentence for all four
+  // locales — the competition twin of `division.metaDescription`, which has
+  // existed here since Task 6. The helper now takes the resolved fallback and
+  // the PAGE resolves it, so this is the only place the sentence lives.
+  "landing.metaDescription",
   // matches hub
   "matchesHub.filter.live", "matchesHub.filter.upcoming", "matchesHub.filter.completed", "matchesHub.filtersLabel", "matchesHub.divisionsLabel", "matchesHub.division.all",
   // NO `matchesHub.startsAt`. It was `"{when}"` — byte-identical in all four
@@ -132,6 +138,10 @@ describe("W2 public dictionary coverage", () => {
       "matchesHub.round": ["round"],
       // matches-hub chrome (Task 11).
       "matchesHub.timesIn": ["tz"],
+      // The competition page's meta description (Task 12) — the page passes
+      // both, so a locale that drops one ships a sentence with a hole in it
+      // straight into every link preview and search result.
+      "landing.metaDescription": ["competition", "org"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

@@ -327,6 +327,7 @@
   "landing.presentedBy": "Presented by {sponsor}",
   "landing.partners": "Partners",
   "landing.noDivisions": "No divisions yet",
+  "landing.metaDescription": "Live scores, standings and brackets for {competition} — hosted by {org} on Seazn Club.",
   "matchesHub.filter.live": "Live",
   "matchesHub.filter.upcoming": "Upcoming",
   "matchesHub.filter.completed": "Completed",

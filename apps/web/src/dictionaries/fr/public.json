@@ -327,6 +327,7 @@
   "landing.presentedBy": "Présenté par {sponsor}",
   "landing.partners": "Partenaires",
   "landing.noDivisions": "Pas encore de divisions",
+  "landing.metaDescription": "Résultats en direct, classements et tableaux de {competition} — organisé par {org} sur Seazn Club.",
   "matchesHub.filter.live": "En direct",
   "matchesHub.filter.upcoming": "À venir",
   "matchesHub.filter.completed": "Terminés",

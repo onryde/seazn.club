@@ -2441,6 +2441,7 @@ export type DictionaryKey =
   | "landing.liveCount.one"
   | "landing.liveCount.other"
   | "landing.liveNow"
+  | "landing.metaDescription"
   | "landing.nextUp"
   | "landing.noDivisions"
   | "landing.partners"
