@@ -443,6 +443,7 @@
   "overlay.moment.goal": "GOAL",
   "overlay.moment.ownGoal": "EIGEN DOELPUNT",
   "overlay.moment.penalty": "Strafschop",
+  "overlay.moment.penaltyLine": "{name} · Strafschop",
   "overlay.moment.card.yellow": "GELE KAART",
   "overlay.moment.card.red": "RODE KAART",
   "overlay.moment.card.secondYellow": "TWEEDE GEEL",

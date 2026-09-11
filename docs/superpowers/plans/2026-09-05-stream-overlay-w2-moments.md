@@ -410,7 +410,7 @@ Allowlist (from the modules' declarations read 2026-09-05; the parity test below
 | sport | recorded type → moment | derived |
 |---|---|---|
 | cricket | `cricket.ball`, `cricket.superover.ball`: `boundary 6` → SIX (led); `boundary 4` → FOUR (led); `wicketKind` → OUT (dismissal), line `"{name} {runs} ({balls}) · {kind}"`; a plain ball → null | — |
-| football | `football.goal` → GOAL (led; own goal → OWN GOAL; `penalty` → line "Penalty"); `football.card` → `colour` yellow → YELLOW CARD (caution), red / second_yellow → RED CARD / SECOND YELLOW (dismissal) | — |
+| football | `football.goal` → GOAL (led; own goal → OWN GOAL; `penalty` → line "{scorer} · Penalty", ruling 28); `football.card` → `colour` yellow → YELLOW CARD (caution), red / second_yellow → RED CARD / SECOND YELLOW (dismissal) | — |
 | hockey | `hockey.goal` → GOAL; `hockey.suspension.start` → `class` green → GREEN CARD (caution), yellow → YELLOW CARD (caution), red → RED CARD (dismissal) | — |
 | icehockey | `icehockey.goal` → GOAL; `icehockey.suspension.start` → PENALTY, line = the class label (minor, bench_minor, double_minor, major, misconduct → caution; game_misconduct, match → dismissal) | — |
 | tennis | `tennis.point` with `kind === "ace"` → ACE (led) | `pointState.fresh`: break → BREAK POINT, set → SET POINT, match → MATCH POINT (led); `setWon` → SET {n}, line "{short} {home}–{away}" |
@@ -674,15 +674,24 @@ Reducer semantics: `enqueue` appends (dedupes on `seq`+`kind`); when `current` i
   report before it was understood.
 
   **Owed to the owner, not to CI:** per-screen verdicts on the five scenes.
-  "The gate passed" is not sign-off.
+  "The gate passed" is not sign-off. **Given 2026-09-11** on the three frames
+  re-shot after the review fixes (ruling 29); the earlier five are superseded.
 
 ### Task 6: Gates, review loop, PR
 
-- [ ] Full `apps/web` vitest from `apps/web` with the DB env and the JSON reporter (`/tmp/seazn-env/ovl/w2-full.json`): paste `numTotalTests / numPassedTests / numFailedTests` and confirm zero `numFailedTestSuites` (a suite that failed to COLLECT reads as `numFailedTests: 0`). Engine suite unchanged (`cd packages/engine && pnpm exec vitest run --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-engine.json`) — W2 must not have touched it; confirm the count equals main's.
-- [ ] `rtk proxy pnpm lint` and read `✖ N problems` yourself; `pnpm typecheck` in both workspaces (the local build no longer typechecks); `pnpm openapi:gen` + `/usr/bin/git status --porcelain openapi` empty; `pnpm i18n:check`.
-- [ ] Smoke locally (`SMOKE_BASE=http://127.0.0.1:<port> node --experimental-strip-types scripts/smoke.ts` per the script's own header) — the new `recent` checks pass.
-- [ ] Reviewer pass (Opus) on the whole branch diff since the W1 merge base, findings written to `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W2-review.md`, fixed inline; never skip because every task review was clean.
-- [ ] Open the PR (only when the owner asks; never unprompted), then `workflow_dispatch` e2e with the PR number; smoke runs on the PR. Per-screen visual verdicts from the owner on the capture scenes.
+**OUTCOME, 2026-09-11.** Gates all green (counts in `W2-review.md`). The
+reviewer pass returned **Needs fixes** with five findings, three of them
+live-broadcast defects, on a branch that was already green and had had a clean
+review on every individual task — fixed in `cbba5f28c`, recorded as W2-F35…F39.
+A sixth item the review raised rather than changed, the penalty goal dropping
+its scorer's name, was ruled the same day and fixed (ruling 28).
+
+
+- [x] Full `apps/web` vitest from `apps/web` with the DB env and the JSON reporter (`/tmp/seazn-env/ovl/w2-full.json`): paste `numTotalTests / numPassedTests / numFailedTests` and confirm zero `numFailedTestSuites` (a suite that failed to COLLECT reads as `numFailedTests: 0`). Engine suite unchanged (`cd packages/engine && pnpm exec vitest run --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-engine.json`) — W2 must not have touched it; confirm the count equals main's.
+- [x] `rtk proxy pnpm lint` and read `✖ N problems` yourself; `pnpm typecheck` in both workspaces (the local build no longer typechecks); `pnpm openapi:gen` + `/usr/bin/git status --porcelain openapi` empty; `pnpm i18n:check`.
+- [x] Smoke locally (`SMOKE_BASE=http://127.0.0.1:<port> node --experimental-strip-types scripts/smoke.ts` per the script's own header) — the new `recent` checks pass.
+- [x] Reviewer pass (Opus) on the whole branch diff since the W1 merge base, findings written to `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W2-review.md`, fixed inline; never skip because every task review was clean.
+- [x] `workflow_dispatch` e2e — **the owner chose dispatch against the BRANCH REF** rather than waiting on a PR number (`gh workflow run e2e.yml --ref feat/stream-w2-moments`; the workflow checks out `github.sha` when `inputs.pr` is empty). Per-screen visual verdicts: **accepted 2026-09-11** on the three re-shot frames (ruling 29). PR still owner-gated.
 
 ---
 

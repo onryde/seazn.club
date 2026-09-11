@@ -443,6 +443,7 @@
   "overlay.moment.goal": "GOAL",
   "overlay.moment.ownGoal": "OWN GOAL",
   "overlay.moment.penalty": "Penalty",
+  "overlay.moment.penaltyLine": "{name} · Penalty",
   "overlay.moment.card.yellow": "YELLOW CARD",
   "overlay.moment.card.red": "RED CARD",
   "overlay.moment.card.secondYellow": "SECOND YELLOW",

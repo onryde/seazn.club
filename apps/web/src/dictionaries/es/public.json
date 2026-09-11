@@ -443,6 +443,7 @@
   "overlay.moment.goal": "GOL",
   "overlay.moment.ownGoal": "GOL EN PROPIA",
   "overlay.moment.penalty": "Penalti",
+  "overlay.moment.penaltyLine": "{name} · Penalti",
   "overlay.moment.card.yellow": "TARJETA AMARILLA",
   "overlay.moment.card.red": "TARJETA ROJA",
   "overlay.moment.card.secondYellow": "SEGUNDA AMARILLA",

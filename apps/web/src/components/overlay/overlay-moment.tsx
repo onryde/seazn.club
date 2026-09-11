@@ -35,7 +35,11 @@ export function OverlayMomentSlab(props: {
       >
         {moment.headline}
       </span>
-      {moment.line === undefined ? null : <span className="ovl-slab__line">{moment.line}</span>}
+      {moment.line === undefined ? null : (
+        <span data-testid="overlay-moment-line" className="ovl-slab__line">
+          {moment.line}
+        </span>
+      )}
     </div>
   );
 }

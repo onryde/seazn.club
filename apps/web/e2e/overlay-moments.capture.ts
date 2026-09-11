@@ -21,7 +21,13 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { grantOverlay, seedCricketOverlayFixture, seedOverlayFixture, sendEvent } from "./overlay-kit";
+import {
+  grantOverlay,
+  seedCricketOverlayFixture,
+  seedFootballOverlayFixture,
+  seedOverlayFixture,
+  sendEvent,
+} from "./overlay-kit";
 import { OVERLAY_MOMENT_FOLD_MS } from "../src/components/overlay/moment-timing";
 
 const DIR = process.env.GALLERY_DIR ?? "";
@@ -129,6 +135,46 @@ test("hockey — goal and red card, on the bug", async ({ page, browser }) => {
   await ctx.close();
 });
 
+test("football — a penalty goal names its taker AND says penalty, on the bar", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(300_000);
+  // Owner ruling 28 (2026-09-11). Football is the ONLY sport that can produce
+  // this slab: `PeriodGoal` has no `penalty` field, so hockey and ice hockey
+  // reach a stroke through `kind`, which the rules do not read.
+  const rig = await seedFootballOverlayFixture(page);
+  await grantOverlay(rig.orgId);
+  const taker = rig.offenderIds[0];
+  const ctx = await browser.newContext({
+    storageState: { cookies: [], origins: [] },
+    viewport: { width: 1920, height: 1080 },
+  });
+  const view = await ctx.newPage();
+  await view.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+  const slab = view.locator('[data-testid="overlay-moment"]');
+
+  await sendEvent(page.request, rig.fixtureId, "football.goal", {
+    by: rig.homeEntrantId,
+    scorer: taker,
+    penalty: true,
+  });
+  await settled(view);
+  await expect(slab).toHaveAttribute("data-kind", "goal");
+  await expect(slab).toHaveAttribute("data-tone", "led");
+
+  // BOTH halves, asserted as a shape rather than as a literal. The defect this
+  // scene exists for put the bare word on the line ALONE, which still "mentions
+  // a penalty" — so the assertion has to see a name in front of it. The name
+  // itself is whatever the public-site consent resolver returns (initialled, as
+  // every other name on air is), so it is never hard-coded here.
+  const line = view.locator('[data-testid="overlay-moment-line"]');
+  await expect(line).toHaveText(/\S.*·\s*Penalty$/);
+
+  await shoot(view, "football-bar-penalty");
+  await ctx.close();
+});
+
 test("reduced motion — the slab still appears, it just does not slide", async ({ page, browser }) => {
   test.setTimeout(300_000);
   const rig = await seedOverlayFixture(page);
@@ -150,7 +196,7 @@ test.afterAll(() => {
   if (!DIR) return;
   // The gate's own vacuous modes, both closed here: no file, an empty file, or
   // several identical pictures.
-  expect(shots.length, "no scene captured — the harness errored before shooting").toBeGreaterThan(4);
+  expect(shots.length, "no scene captured — the harness errored before shooting").toBeGreaterThan(5);
   const digests = new Map<string, string>();
   for (const path of shots) {
     expect(existsSync(path), `${path} was never written`).toBe(true);

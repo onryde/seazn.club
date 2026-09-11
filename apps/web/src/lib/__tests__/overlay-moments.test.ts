@@ -229,7 +229,7 @@ describe("cricket", () => {
 });
 
 describe("football, hockey and ice hockey", () => {
-  it("a goal names its scorer; an own goal changes the HEADLINE; a penalty changes the LINE", () => {
+  it("a goal names its scorer; an own goal changes the HEADLINE; a penalty keeps the name AND says penalty", () => {
     const recent = recentOf("football", [
       ["core.start", {}],
       ["football.goal", { by: "H", scorer: "H-p1" }],
@@ -243,8 +243,29 @@ describe("football, hockey and ice hockey", () => {
       "overlay.moment.goal",
     ]);
     expect(got[0]!.line).toBe("H. One");
-    expect(got[2]!.line).toBe("overlay.moment.penalty");
+    // The owner ruling of 2026-09-11, pinned as a VALUE rather than as "the
+    // line mentions a penalty": the bare `overlay.moment.penalty` this once
+    // emitted also mentions one, and would pass a weaker assertion while
+    // dropping the scorer — which was the defect.
+    expect(got[2]!.line).toBe('overlay.moment.penaltyLine{"name":"H. Two"}');
     expect(got.every((m) => m.tone === "led")).toBe(true);
+  });
+
+  it("a penalty with no nameable scorer falls back to the bare word", () => {
+    // `scorer` is optional in the engine's schema and the visibility rules can
+    // mask a person away, so the half-known case is reachable in production —
+    // and it must still say a penalty was scored rather than show no line.
+    const recent = recentOf("football", [
+      ["core.start", {}],
+      ["football.goal", { by: "H", penalty: true }],
+    ]);
+    const got = of("football", recent);
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({
+      kind: "goal",
+      headline: "overlay.moment.goal",
+      line: "overlay.moment.penalty",
+    });
   });
 
   it("yellow cautions; red and a second yellow dismiss — and each has its own headline", () => {

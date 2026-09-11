@@ -2306,3 +2306,75 @@ and left no harness, so W2 re-derived the entire rig to shoot five frames.
 `gallery` project's `testMatch` widened from one file to any `*.capture.ts` —
 before which a second harness was matched by NO project and could not be invoked
 at all. **A visual gate that cannot be re-run is a screenshot, not a gate.**
+
+## 2026-09-11 — W2 Task 6: the reviewer pass, and the penalty ruling
+
+Full findings text: `W2-review.md` beside this file. Verdict **Needs fixes**;
+three of five findings would have gone on air; all fixed in `cbba5f28c`.
+
+**W2-F35 — a clip window and the box it clips can disagree, and no type sees
+it.** `.ovl-moment-slot--bar` clipped at `x = 0` while `.ovl-slab--bar` sat at
+`left: 72px`; the animations translate by `-100%` of the SLAB's width, so a
+185px slab left its rightmost 72px inside the window — a solid 72 × 216 block
+of `--sport-led` at the canvas edge, twice per moment, on cricket's default
+theme. `--bug` already carried its inset on the slot; only `--bar` split it
+across the two. **Three placements of one component are three chances to
+disagree about which box owns the offset — state it once, on the slot.**
+
+**W2-F36 — a green visual gate proves the SETTLED frame and nothing else.**
+Five screenshots and every capture assertion passed over W2-F35, because the
+defect exists only during the 250 ms in and the 250 ms out. Worse, the
+arithmetic needed no browser: slot origin vs slab origin vs translate basis.
+**Measure the hidden state, not only the resting one — and when the geometry is
+derivable, derive it rather than photographing it.**
+
+**W2-F37 — reduced motion is a DISTINCT execution path, and it deadlocked.**
+With `foldMs: 0` the `out → promote` transition computes `now + 0`, which equals
+the deadline that just fired whenever a tick lands on it. The hook keys its
+effect on `deadline`, sees no change, arms no timer, and `enqueue` never touches
+`deadline` while `current` is set — so the slab freezes and **no further moment
+airs for the rest of the match.** Fixed with a monotonic `revision` in the state
+and in the deps. Neither the capture harness nor e2e could reach it: both run
+with motion enabled. **A timing reducer needs a monotonic tiebreak; equal
+deadlines are reachable whenever a duration can be zero.**
+
+**W2-F38 — a cache can be bypassed with the output still perfectly correct.**
+`cricketLiveOrNull` re-ran `loadFoldInputs` and a full `deriveCricketScorecard`
+on every poll for every viewer, contradicting the comment above it and voiding
+`load.ts`'s "N polls at one ledger position cost one fold" for the one sport
+whose derivation costs the most. No test could have caught it — nothing about
+the answer was wrong. Found by reading the file against its own comment.
+**Performance seams have no red; read them, and re-read them when the code
+around them moves.**
+
+**W2-F39 — "the brief says so" is a reason to RAISE it, not to ship it.** A
+penalty goal put the bare word "Penalty" on the line INSTEAD of the scorer,
+which is what the brief specified — and made the one goal a crowd most wants a
+name against the only goal that never carried one. Recorded by the review rather
+than silently changed, and ruled the same day.
+
+### Owner rulings, 2026-09-11
+
+**Ruling 28 (penalty goals) — show the scorer AND the penalty.** The line is
+`overlay.moment.penaltyLine`, `"{name} · Penalty"`, in all four locales. The two
+single-fact forms survive as fallbacks for the halves that can genuinely be
+missing: a masked scorer, or a penalty the pad recorded with no person
+(`scorer` is optional in `FOOTBALL_EVENT_SCHEMAS`). The test pins the composed
+VALUE, not "the line mentions a penalty" — the bare key also mentions one and
+would pass a weaker assertion while dropping the name, which was the defect.
+
+**Ruling 29 (visual sign-off) — the three re-shot frames are accepted per
+screen.** `cricket-bar-out`, `cricket-bar-six`, `hockey-bug-red`: the bar slab
+sits above the bar, flush at left 72, bottom tucked behind the bar's top edge,
+corners rounded at the top, no stray block at the canvas edge. §5's per-sport
+ink derivation confirmed in both dismissal frames — near-white on cricket's
+`#dc2626`, board ink on hockey's lighter red.
+
+**Ruling 30 (pre-merge e2e) — run it by `workflow_dispatch`.** `e2e.yml`
+triggers on push to `main` only; a feature branch gets no automatic signal ever.
+Dispatch against the branch ref (`gh workflow run e2e.yml --ref <branch>`, which
+checks out `github.sha`) or against a PR number via the `pr` input.
+
+**Also settled 2026-09-11:** the Cloudflare account is already provisioned —
+the capture session's open question is closed, and no account setup is owed by
+R1.

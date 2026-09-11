@@ -58,7 +58,9 @@ export interface OverlayRig {
   fixtureId: string;
   homeEntrantId: string;
   awayEntrantId: string;
-  /** The three offenders, one per class, in `HOCKEY_CARD_TONES` order. */
+  /** The people this rig can NAME on air, in the order its own seed states.
+   *  Hockey: the three offenders, one per class, in `HOCKEY_CARD_TONES` order.
+   *  Cricket: striker, incoming, bowler. Football: the penalty taker. */
   offenderIds: string[];
 }
 
@@ -340,6 +342,92 @@ export async function seedCricketOverlayFixture(page: Page): Promise<OverlayRig>
     homeEntrantId: seeded.homeEntrantId,
     awayEntrantId: seeded.awayEntrantId,
     offenderIds: [striker, incoming, bowler],
+  };
+}
+
+/**
+ * A LIVE FOOTBALL fixture, rostered, with nothing on the ledger but `core.start`
+ * (stream overlay W2, ruling 28).
+ *
+ * It exists for ONE state the other two rigs cannot reach: a penalty goal.
+ * `PeriodGoal` is a `strictObject` with no `penalty` field at all — hockey and
+ * ice hockey express a stroke or a penalty corner through `kind`
+ * (`hockey.ts:132`, `["fg","pc","stroke","og"]`), which the moment rules do not
+ * read. `payload.penalty` is football's alone, so football is the only sport
+ * whose goal can produce the `overlay.moment.penaltyLine` slab.
+ *
+ * ROSTERED, not `skipLineups`: the whole point is that the line carries the
+ * taker's NAME, and a name on air comes from the fixture line-up through the
+ * public-site consent resolver. A rosterless seed would photograph a line with
+ * nobody on it and prove the opposite of what it was shot for.
+ *
+ * The goal itself is NOT seeded here. A moment fires on arrival, and the
+ * overlay deliberately replays nothing on mount — so the caller opens the page
+ * first and sends the goal while it is watching.
+ */
+export async function seedFootballOverlayFixture(page: Page): Promise<OverlayRig> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const ownerEmail = `ovlf-${tag}@example.com`;
+  const orgSlug = `ovlf-org-${tag}`;
+
+  const { orgId } = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${ownerEmail}, ${"Overlay Football Owner " + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by)
+      values (${"Overlay Football Org " + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status)
+      values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return { orgId: newOrgId };
+  });
+
+  await signInAs(page, ownerEmail);
+  const request = page.request;
+
+  // Eleven a side: `11-a-side` inherits the eleven-slot position catalog, and a
+  // short roster cannot hold a legal line-up.
+  const home = Array.from({ length: 11 }, (_, i) => ({ fullName: `Home ${i + 1} ${tag}` }));
+  const away = Array.from({ length: 11 }, (_, i) => ({ fullName: `Away ${i + 1} ${tag}` }));
+  const seeded = await seedRosteredFixture(request, {
+    label: `Overlay Football ${tag}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home,
+    away,
+    entrantKind: "team",
+  });
+
+  const takerName = `Home 9 ${tag}`;
+  const taker = seeded.personIds[takerName];
+  if (taker === undefined) throw new Error(`football seed: no person for "${takerName}"`);
+
+  await sendEvent(request, seeded.fixtureId, "core.start", {});
+
+  const comp = await apiJson<{ slug: string }>(
+    request,
+    `/api/v1/competitions/${seeded.competitionId}`,
+  );
+  const div = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${seeded.divisionId}`);
+  if (!comp.data?.slug || !div.data?.slug) {
+    throw new Error(`football seed: slugs missing (comp ${comp.status}, div ${div.status})`);
+  }
+
+  return {
+    orgId,
+    orgSlug,
+    ownerEmail,
+    competitionId: seeded.competitionId,
+    compSlug: comp.data.slug,
+    divisionId: seeded.divisionId,
+    divSlug: div.data.slug,
+    fixtureId: seeded.fixtureId,
+    homeEntrantId: seeded.homeEntrantId,
+    awayEntrantId: seeded.awayEntrantId,
+    offenderIds: [taker],
   };
 }
 

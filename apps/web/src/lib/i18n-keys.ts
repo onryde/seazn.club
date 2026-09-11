@@ -3084,6 +3084,7 @@ export type DictionaryKey =
   | "overlay.moment.ownGoal"
   | "overlay.moment.penalty"
   | "overlay.moment.penaltyHeadline"
+  | "overlay.moment.penaltyLine"
   | "overlay.moment.setPoint"
   | "overlay.moment.setWon"
   | "overlay.moment.setWonLine"

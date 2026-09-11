@@ -119,19 +119,34 @@ const ball: MomentRule = (ev, { msg }) => {
   return null;
 };
 
-/** Football's goal and the period kernel's, which the server already projects
- *  through one shape. */
-const goal: MomentRule = (ev, { msg }) => ({
-  kind: "goal",
-  tone: "led",
-  seq: ev.seq,
-  headline: msg(ev.payload.ownGoal ? "overlay.moment.ownGoal" : "overlay.moment.goal"),
-  ...(ev.payload.penalty
-    ? { line: msg("overlay.moment.penalty") }
-    : name(ev) === undefined
-      ? {}
-      : { line: name(ev)! }),
-});
+/**
+ * Football's goal and the period kernel's, which the server already projects
+ * through one shape.
+ *
+ * A PENALTY GOAL NAMES ITS SCORER **AND** SAYS IT WAS A PENALTY (owner ruling,
+ * 2026-09-11). The first build read `penalty` as a REPLACEMENT for the name and
+ * put "Penalty" on the line alone — so the one goal a crowd most wants a name
+ * against was the only goal that never carried one. Both halves now go on the
+ * line together, and the single-fact forms survive as fallbacks for the halves
+ * that can genuinely be missing: a scorer the visibility rules masked away, or
+ * a penalty the pad recorded with no person at all (`scorer` is optional in
+ * `FOOTBALL_EVENT_SCHEMAS`).
+ */
+const goal: MomentRule = (ev, { msg }) => {
+  const who = name(ev);
+  const line = ev.payload.penalty
+    ? who === undefined
+      ? msg("overlay.moment.penalty")
+      : msg("overlay.moment.penaltyLine", { name: who })
+    : who;
+  return {
+    kind: "goal",
+    tone: "led",
+    seq: ev.seq,
+    headline: msg(ev.payload.ownGoal ? "overlay.moment.ownGoal" : "overlay.moment.goal"),
+    ...(line === undefined ? {} : { line }),
+  };
+};
 
 /** ONE table, key and tone together. Two parallel records let a colour exist
  *  in one and not the other — an unreachable state that a guard has to cover
@@ -285,6 +300,7 @@ export const MOMENT_KEYS: readonly string[] = [
   "overlay.moment.goal",
   "overlay.moment.ownGoal",
   "overlay.moment.penalty",
+  "overlay.moment.penaltyLine",
   ...Object.values(CARDS).map((c) => c.key),
   "overlay.moment.penaltyHeadline",
   "overlay.moment.ace",
