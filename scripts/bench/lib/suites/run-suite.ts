@@ -4857,6 +4857,26 @@ export async function runPackSuite(
     // this one carried it undefined.
     provenancePct: provenance.realPct,
     provenance,
+    // B07a T3 — `report.adaptations` has been declared since B01 with no
+    // writer, for the same reason `provenancePct` had none until T5 above:
+    // nothing ever mapped the pack's own §7A list into the report. So every
+    // report so far published how much of a pack was GENERATED without ever
+    // saying what was RESHAPED to get there — the other half of the same
+    // honesty claim, and the half a thin-data pack leans on hardest.
+    //
+    // BOTH of `PackAdaptation`'s required fields, never just `what`: the
+    // schema splits what-was-reshaped from why precisely because "what" with
+    // no "why" is the shape that turns into an unreviewable list, and a
+    // report carrying half of each row would rebuild exactly that. `where` is
+    // optional in the pack and is appended only where the pack declared it.
+    //
+    // Written on EVERY run that got a pack — empty included. A run that
+    // loaded a pack has measured this, and `[]` is that pack saying it
+    // reshaped nothing; the field stays absent only on the stage-0 refusal
+    // above, which never read a pack at all.
+    adaptations: pack.meta.adaptations.map(
+      (a) => `${a.what} — WHY: ${a.why}${a.where === undefined ? "" : ` [${a.where}]`}`,
+    ),
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),

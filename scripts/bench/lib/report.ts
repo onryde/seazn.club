@@ -949,6 +949,30 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
     if (suite.provenance !== undefined) lines.push(`- Provenance: ${renderProvenance(suite.provenance)}`);
     else if (suite.provenancePct !== undefined) lines.push(`- Provenance: ${suite.provenancePct}% real`);
+    // B07a T3 — declared since B01 with no writer, exactly as `provenancePct`
+    // had none until B06a T5. Provenance says how much of a pack was
+    // GENERATED rather than observed; this says how much of reality was
+    // RESHAPED to fit the product's model (design §7A), and a thin-data pack's
+    // honesty claim rests on both halves being visible.
+    //
+    // The count is stated even when it is ZERO, and an ABSENT field is a
+    // different state from an empty one: a pre-B07a report never measured
+    // this, while an empty list is a pack asserting it reshaped nothing.
+    // Render silence for both and a pack whose adaptations went missing on
+    // the way here reads as the cleanest pack in the suite.
+    if (suite.adaptations !== undefined) {
+      if (suite.adaptations.length === 0) {
+        lines.push("- Adaptations: 0 adaptations — this pack reshaped nothing.");
+      } else {
+        lines.push(
+          `- Adaptations: ${suite.adaptations.length} adaptations — where reality was reshaped to fit the model:`,
+        );
+        // Every one of them, never a count alone: "2 adaptations" cannot be
+        // told apart from two trivia or from a reshaped draw, and §7A's whole
+        // requirement is prose a human can audit.
+        for (const a of suite.adaptations) lines.push(`  - ${a}`);
+      }
+    }
     // B06a T6 — declared since B01 and written by nothing until claims were
     // actually accepted. Both numbers, never a bare percentage: a report that
     // says invites were minted without saying how many a human could use is
