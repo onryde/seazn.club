@@ -211,6 +211,17 @@ describe("SponsorsBoard — links and logos", () => {
     // Not just the path — the helper the width/height pair is matched on, so a
     // rename that silences the contract reds here too.
     expect(contract).toContain("panel(s).logo");
+    // …and not just the NAMES. Re-review N3: emptying the contract's two
+    // width/height assertion bodies left both suites 24/24 green, because a
+    // hollowed contract still mentions this file and still mentions the helper.
+    // A pointer that only proves the contract SPEAKS of us is satisfied by a
+    // contract that asserts nothing, so the assertions themselves are pinned.
+    for (const assertion of [
+      "toContain(`width={${width}}`)",
+      "toContain(`height={${height}}`)",
+    ]) {
+      expect(contract, `the contract still ASSERTS: ${assertion}`).toContain(assertion);
+    }
   });
 });
 

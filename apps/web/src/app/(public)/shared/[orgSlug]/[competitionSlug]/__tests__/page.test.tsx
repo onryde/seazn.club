@@ -521,12 +521,16 @@ describe("the hero's date line", () => {
     try {
       await render();
     } finally {
+      // BOTH restores in the `finally` (re-review N1). The spy's restore used
+      // to sit after the first assertion, so a render that threw — or that
+      // first assertion failing — left `Date.prototype.toLocaleDateString`
+      // patched for every test that ran after this one in the same file.
       Intl.DateTimeFormat = RealDTF;
+      zoneless.mockRestore();
     }
 
     // 1. Nothing on this page formats a date through the runtime's own zone.
     expect(zoneless).not.toHaveBeenCalled();
-    zoneless.mockRestore();
 
     // 2. `lib/format.ts`'s whole contract — "no helper ever falls back to the
     //    runtime's resolvedOptions zone" — asserted at the page boundary

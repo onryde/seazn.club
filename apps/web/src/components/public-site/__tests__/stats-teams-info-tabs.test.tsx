@@ -761,7 +761,14 @@ describe("InfoTab", () => {
     // over a zone bug is the one kind of test that cannot witness its own
     // subject: `process.env.TZ` set mid-run does not move ICU, so the suite
     // cannot arrange the zone that would make it differential.
-    const ctor = new Set<string | undefined>();
+    // The whole OPTION SHAPE, not just the zone. Re-review N2: recording only
+    // `opts?.timeZone` makes the `toContain("UTC")` below go vacuous the first
+    // time anything else on this tab formats in UTC — the set would carry
+    // "UTC" from some other formatter while the calendar dates quietly used a
+    // different zone. The page's own version of this test
+    // (`[competitionSlug]/__tests__/page.test.tsx:541`) filters on the shape
+    // instead; mirrored here so the two say the same thing.
+    const built: (Intl.DateTimeFormatOptions | undefined)[] = [];
     const Original = Intl.DateTimeFormat;
     const locale = vi.spyOn(Date.prototype, "toLocaleDateString");
     // A `function`, not an arrow: `fmt()` calls `new Intl.DateTimeFormat(…)`
@@ -772,7 +779,7 @@ describe("InfoTab", () => {
       l?: Intl.LocalesArgument,
       o?: Intl.DateTimeFormatOptions,
     ) {
-      ctor.add(o?.timeZone);
+      built.push(o);
       return new Original(l, o);
     } as unknown as typeof Intl.DateTimeFormat);
 
@@ -787,11 +794,17 @@ describe("InfoTab", () => {
     // so a zone-less formula is invisible to the constructor spy and only this
     // assertion sees it. Both halves are needed; neither is redundant.
     expect(locale, "no date is formatted without naming a zone").not.toHaveBeenCalled();
-    expect(ctor.size, "at least one formatter was built").toBeGreaterThan(0);
-    expect([...ctor], "every formatter names its zone, and the calendar dates use UTC").not.toContain(
-      undefined,
-    );
-    expect([...ctor]).toContain("UTC");
+    expect(built.length, "at least one formatter was built").toBeGreaterThan(0);
+    expect(
+      built.filter((o) => o?.timeZone === undefined),
+      "every formatter names its zone",
+    ).toEqual([]);
+    // The calendar-date formatter SPECIFICALLY — matched on `DATE_OPTS`'s own
+    // shape, so another formatter's UTC cannot stand in for this one.
+    expect(
+      built.filter((o) => o?.timeZone === "UTC" && o?.month === "long" && o?.year === "numeric"),
+      "the competition's calendar dates are formatted in UTC",
+    ).not.toEqual([]);
   });
 
   it("the date line covers every combination of the two nullable calendar dates", () => {

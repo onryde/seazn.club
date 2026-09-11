@@ -188,9 +188,17 @@ export default async function CompetitionHomePage({ params }: Props) {
   // the route params), so this is a rule for the ~30s window above, and the
   // rule is not "one authority" but "the right authority for the job": a share
   // URL is copied into WhatsApp and kept, so it wants the NEWEST slug, which is
-  // the shell's; the document's hrefs are in-product navigation, where a stale
-  // slug costs one permanent redirect (`sharedRenameTarget`) and consistency
-  // with the rest of the document is worth more.
+  // the shell's, while the document's hrefs are in-product navigation and
+  // consistency with the rest of the document is worth more there.
+  //
+  // An earlier version of this comment priced the stale-slug case at "one
+  // permanent redirect (`sharedRenameTarget`)". That is FALSE, and re-review N4
+  // is right: `sharedRenameTarget` has three call sites and NEITHER `/present`
+  // nor `/register` is among them — both just `notFound()`. So a stale slug in
+  // those two hrefs costs a 404, not a redirect, which is strictly worse than
+  // the sentence claimed. The conclusion survives on its other half; the
+  // arithmetic did not, and a comment that makes a trade look cheaper than it
+  // is will be read as permission to repeat it.
   const sharePath = `/shared/${org.slug}/${competition.slug}`;
 
   return (
