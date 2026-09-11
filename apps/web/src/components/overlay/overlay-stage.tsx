@@ -8,6 +8,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
+import { maxSeq, momentsFor } from "@/lib/overlay-moments";
+import { useMomentQueue } from "./use-moment-queue";
+import { OverlayMomentSlab } from "./overlay-moment";
+import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import {
   overlayModel,
@@ -55,6 +59,37 @@ export interface OverlayStageProps {
   fit?: boolean;
 }
 
+/** Stable identity: a fresh `[]` every render would re-run the enqueue effect
+ *  on every poll for nothing. */
+const EMPTY_MOMENTS: never[] = [];
+
+/**
+ * SSR-safe `prefers-reduced-motion`, live if the viewer flips it.
+ *
+ * A second copy of the one in `components/v2/board/ai-trace.tsx`, and stated as
+ * such: that one is a v2 board internal, not exported, and reaching into
+ * another wave's component from the overlay to save ten lines buys a coupling
+ * worth more than the duplication. Worth unifying into `lib/` when something
+ * else needs a third.
+ */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    // Guarded for TWO no-DOM callers, not one: the server render, and this
+    // repo's own unit tests — `apps/web` vitest is `environment: "node"` and
+    // the hook harness really does run effects, so an unguarded
+    // `window.matchMedia` here reddened eight stage tests with
+    // `ReferenceError: window is not defined`.
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduced(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return reduced;
+}
+
 export function OverlayStage(props: OverlayStageProps) {
   // One transport, two payloads (Task 1): the overlay endpoint is this
   // stage's fetcher; `MatchCentre` keeps the public JSON. `presentationNowOffsetMs`
@@ -75,6 +110,29 @@ export function OverlayStage(props: OverlayStageProps) {
   // could disagree about the locale mid-broadcast.
   const msg: OverlayMsg = (key, vars) => t(props.dict, key, vars);
 
+  /**
+   * W2 — the moments the slab raises, and the two rules that stop it lying.
+   *
+   * THE BASELINE IS THE MOUNT'S TIP, taken once. OBS opens a browser source
+   * mid-broadcast; without this the whole window would replay the last eight
+   * events at whoever just went live. A lazy `useState` initialiser rather than
+   * a ref, because reading a ref during render is what `react-hooks/refs`
+   * forbids (the score tick above carries the same note).
+   *
+   * AND NOTHING IS RAISED WHILE THE DELAYED TRANSPORT IS CATCHING UP
+   * (`awaitingDelay`, W2-F11). Under `?delay=`, `initial` is the UNDELAYED
+   * server render while `data` walks forward from further back — so the
+   * baseline already sits ahead of the delayed tip and nothing fires until the
+   * stream genuinely passes it. The gate is belt and braces on top of that: a
+   * burst of history arriving in one frame is exactly what it must not do.
+   *
+   * Repeats are the QUEUE's problem, not this one: the transport re-sends the
+   * whole window every poll and `momentQueueReducer` remembers what it has
+   * shown.
+   */
+  const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
+  const reducedMotion = usePrefersReducedMotion();
+
   const model: OverlayModel = overlayModel({
     sportKey: props.sportKey,
     data,
@@ -84,6 +142,20 @@ export function OverlayStage(props: OverlayStageProps) {
     msg,
     decidedTemplates: props.decidedTemplates,
   });
+
+  // The slab's queue. `momentsFor` is pure and cheap; the queue owns every
+  // decision about WHEN, and this hands it the short codes the set-won line
+  // names a winner with — the same `model.sides[].short` the scorebug paints,
+  // never a second derivation.
+  const { current: moment, phase } = useMomentQueue(
+    awaitingDelay
+      ? EMPTY_MOMENTS
+      : momentsFor(props.sportKey, data.recent ?? [], momentBaseline, msg, [
+          model.sides[0].short,
+          model.sides[1].short,
+        ]),
+    { reducedMotion },
+  );
 
   // Score tick: the ONE `big` that changed, and only that one (R13). The
   // previous pair lives in a ref that is read AND written only inside this
@@ -170,8 +242,25 @@ export function OverlayStage(props: OverlayStageProps) {
             let a theme carry its own copy and composite the sport's own
             scorebug; §3's bar and §4's bug ignore both. */}
         <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
-        {/* W2's slab attaches here (R4). Empty and unstyled in W1. */}
-        <div data-testid="ovl-moment-slot" />
+        {/* W2's slab attaches here (R4). The slot CLIPS: the slab slides out
+            from under the scorebug rather than appearing beside it, so the
+            wrapper owns the `overflow: hidden` and the slab owns the
+            transform. The fold duration crosses into CSS as a custom property
+            from `moment-timing.ts`, so the paint and the state machine cannot
+            disagree about how long a fold takes. */}
+        <div
+          data-testid="ovl-moment-slot"
+          className="ovl-moment-slot"
+          style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
+        >
+          {moment === null ? null : (
+            <OverlayMomentSlab
+              moment={moment}
+              phase={phase}
+              placement={props.style === "bug" ? "bug" : "bar"}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

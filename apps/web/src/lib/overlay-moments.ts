@@ -27,15 +27,19 @@
 // the keys it exists to hold. `DISCIPLINE_LABEL_KEYS` states the same rule for
 // the same reason.
 import { GAME_UNIT_SPORTS, disciplineLabel } from "@/lib/public-site";
-import type { OverlayMsg } from "@/lib/overlay-model";
+import type { OverlayMoment as W1OverlayMoment, OverlayMsg } from "@/lib/overlay-model";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 
-/** Spec "Step two", plus `seq` — the React key and the queue's identity. */
-export interface OverlayMoment {
-  kind: string;
-  headline: string;
-  line?: string;
-  tone: "led" | "caution" | "dismissal";
+/**
+ * Spec "Step two", plus `seq` — the React key and the queue's identity.
+ *
+ * EXTENDS W1's declaration rather than restating it. `overlay-model.ts` typed
+ * the shape a wave early so its components could leave room for the slab, and
+ * two independent copies of `{ kind, headline, line?, tone }` would be free to
+ * drift — its `tone` is already the wider `SportTone | "led"`, which is the one
+ * this wave wants (hockey's green card is reachable through it).
+ */
+export interface OverlayMoment extends W1OverlayMoment {
   seq: number;
 }
 

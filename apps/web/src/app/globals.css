@@ -1649,3 +1649,109 @@ body {
   .ovl-slate-warming-dots span { animation: none; opacity: 1; }
   .ovl-slate-content.ovl-slate-fading { animation: none; }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   The moment slab — stream overlay W2, `_THEMES.md` §5 and §6.
+
+   Attached to the bug's right edge or centred under the bar's detail band, and
+   CLIPPED BEHIND ITS HOST: the slot is `overflow: hidden`, so the slab slides
+   out from under the scorebug rather than appearing beside it.
+
+   Transform and opacity only (§6). The fold duration is `--ovl-slab-fold`,
+   handed down from `moment-timing.ts` by the stage, so the CSS and the state
+   machine cannot disagree about how long a fold takes.
+   ─────────────────────────────────────────────────────────────────────────── */
+.ovl-moment-slot {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ovl-slab {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  height: 216px;
+  padding: 0 33px;
+  background: var(--sport-led);
+  color: var(--sport-board);
+  transition: transform var(--ovl-slab-fold, 250ms) ease-out;
+  will-change: transform;
+}
+
+/* §5 — under the bar's detail band, and off the bug's right edge. The bar sits
+   at the bottom of the canvas, so its slab rises from beneath it. */
+.ovl-slab--bar {
+  left: 60px;
+  bottom: 0;
+  border-radius: 0 0 6px 6px;
+}
+.ovl-slab--bug {
+  left: 0;
+  top: 180px;
+  border-radius: 0 12px 12px 0;
+}
+
+/* The three phases. `in` and `hold` are on screen; `out` is folding away. The
+   resting position is off-canvas in the direction the host clips. */
+.ovl-slab--in,
+.ovl-slab--out {
+  transform: translateX(-100%);
+}
+.ovl-slab--hold {
+  transform: translateX(0);
+  transition-timing-function: ease-in;
+}
+
+.ovl-slab__headline {
+  font-family: var(--font-barlow), system-ui, sans-serif;
+  font-size: 96px;
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: 0.02em;
+}
+/* §5 — a two-word headline ("MATCH POINT", "SECOND YELLOW") drops a step and
+   wraps rather than running off the slab. */
+.ovl-slab__headline[data-long] {
+  font-size: 78px;
+  max-width: 690px;
+}
+.ovl-slab__line {
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.ovl-slab[data-tone="caution"] {
+  background: var(--sport-caution);
+}
+.ovl-slab[data-tone="dismissal"] {
+  background: var(--sport-dismissal);
+  /* §5, owner pick 5C — the dismissal ink is DERIVED per sport, because
+     `--sport-dismissal` is a light colour in six palettes and a dark one in
+     five, and no single ink clears 4.5:1 across the eleven. The default is the
+     near-white; the six whose dismissal is light take the board instead. Stated
+     as rules rather than as a new palette token: `SPORT_PALETTES` is
+     overrides-only and shared with the pad, and this is the overlay's question.
+     The TEST derives the expected ink from the palette — this states the
+     outcome, it is not the test's source of truth. */
+  color: #fff5f5;
+}
+.ovl-canvas[data-sport-theme="hockey"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="icehockey"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="tennis"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="badminton"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="tabletennis"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-slab[data-tone="dismissal"] {
+  color: var(--sport-board);
+}
+
+/* §6 — "show and hide with no transition". The PHASES still run: the slab
+   still appears and leaves on the same schedule, it simply does not slide. */
+@media (prefers-reduced-motion: reduce) {
+  .ovl-slab {
+    transition: none;
+  }
+}
