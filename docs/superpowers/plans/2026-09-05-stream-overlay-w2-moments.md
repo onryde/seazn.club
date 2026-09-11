@@ -20,15 +20,16 @@ design as numbers.
 **Status (2026-09-11): TASK 1 IS SHIPPED — the payload half.** `recent` is on
 `OverlayLiveData`, projected in `server/overlay/recent.ts`, consent-resolved,
 mutation-swept (8/8), 40/40 green, tsc and lint clean, openapi regenerated.
-What it does NOT yet carry is `derived` (`setWon` / `pointState`) — split out as
-**Task 1 Step 7** because the payload needs only the fold's own `active` while
-`derived` needs the module, the cfg and the line-up pair to replay prefixes, and
-`FoldedFixture` exposes none of the three. Task 2's racket-sport rules depend on
-it, so Step 7 comes before Task 2.
+**Step 7 is shipped too** — `derived.setWon` and `derived.pointState` ride on
+the same payload, asked of the engine rather than computed. Task 2's
+racket-sport rules have what they need.
 
-**Also unproven and owed:** `recent` reaching a BROWSER. The DB-backed route
-test and the four new smoke checks both need a live DB + server; neither has
-run. A green unit suite is not a working product.
+**Verified end to end against a live DB**: 3947 passed / 0 failed, and the
+DB-backed route test drives ten real badminton appends and reads the engine's
+set point off the route's own JSON. Mutation sweep 17/17.
+
+**Still unproven and owed:** `recent` reaching a BROWSER. The four smoke checks
+need a running server. A green unit suite is not a working product.
 
 **One finding from building it, worth the wave's attention.** The spectator
 timeline was measured against this need before a line was written and CANNOT
@@ -330,32 +331,47 @@ export function loadRecentPersonOf(
   **NOT verified, and owed:** the DB-backed route test and the smoke checks
   both need a live DB + server. `recent` reaching a browser is unproven.
 
-- [ ] **Step 7: `derived` — `setWon` and `pointState`.** Deliberately SPLIT OUT
-  of the commit above rather than dropped. The payload projection needs only
-  the fold's own `active`; `derived` needs the module, the cfg and the line-up
-  pair to replay prefixes, and `FoldedFixture` exposes none of the three.
+- [x] **Step 7: `derived` — SHIPPED 2026-09-11.** `recent` events carry
+  `derived.setWon` (the event closed a set) and `derived.pointState` (one more
+  point by a side would break serve, win the set or win the match), both asked
+  of the module rather than computed here.
 
-  ```ts
-  export interface RecentDerived {
-    setWon?: { set: number; winner: 0 | 1; home: number; away: number };
-    pointState?: { kind: "break" | "set" | "match"; side: 0 | 1; fresh: boolean };
-  }
-  ```
+  **The input question, answered.** `FoldedFixture` CANNOT carry the module: it
+  travels through `unstable_cache` on the overlay path, which serialises, and a
+  module is an object of functions — it would arrive with its methods gone and
+  every `unstable_cache` test in this repo would stay green, because they all
+  double it with a passthrough. So `fold.ts` is split into `loadFoldInputs` +
+  `foldFrom`, `foldFixture` is a thin wrapper over the two, and the overlay's
+  cached entry computes BOTH halves from one load and one `resolveFixtureCfg`.
 
-  Two facts that decide the shape, both re-pinned 2026-09-11:
-  - **`buildTimeline`'s derived pass is the precedent to copy** — it replays
-    `module.init` / `apply` ONCE, incrementally, diffing `module.summary(state)`
-    for closed sets, and degrades by stopping where the module refuses rather
-    than throwing (`timeline.ts`, `derivedComplete`). A per-prefix `foldMatch`
-    is O(n²) over the same ledger and has no such report.
-  - **The synthetic "next point" probe must be gated on the module's OWN
-    `eventSchemas`** — only eight of the eleven modules declare that record, so
-    a probe assuming the key exists runs a type the module never declared.
+  | | |
+  |---|---|
+  | Modify | `server/engine-db/fold.ts` — `FoldInputs`, `loadFoldInputs`, `foldFrom`; `FoldedFixture` unchanged, so `rebuild.ts` and `admin-fixture-config.ts` are untouched |
+  | Modify | `server/overlay/recent.ts` — `diffClosedSets`, `PROBE_POINT`, `probePointState`, `replayDerived` |
+  | Modify | `server/overlay/load.ts` — one cached pass, key bumped to `overlay-fold-v2` |
+  | Modify | `lib/overlay-recent-types.ts` — `RecentDerived`, `RecentEvent.derived?` |
+  | Test | 15 more in `recent.test.ts`, `load.test.ts` rewritten (10), 2 more in the DB-backed route test |
 
-  Where the inputs come from is the open question: either `foldFixture` starts
-  returning `{ module, cfg, lineups }` (additive, but `project.test.ts` builds
-  `FoldedFixture` literals) or `recent.ts` loads them itself inside the same
-  `sql.begin`. Decide at task start, not here.
+  **How it works, and what is deliberately absent.** The replay is
+  `buildTimeline`'s derived pass: ONE incremental walk applying each event once,
+  diffing `setBreakdown(summary, sportKey)` for closed sets, degrading by
+  STOPPING where the module refuses and reporting that rather than swallowing
+  it. The point probe applies a synthetic point for each side and reads the
+  result — so no set rule, tiebreak length or deciding-set variation appears in
+  this codebase, and the probe refuses to run a type the module has not declared
+  in its own `eventSchemas`. It runs from ONE event before the window, or the
+  window's first entry cannot tell a transition from a continuation and every
+  run of a match point reads as fresh.
+
+  **Verified:** 3947 passed / 0 failed against a live DB (label `w2t1`); tsc
+  clean for `apps/web` and `tsconfig.scripts.json`; lint 0 errors; mutation
+  sweep **17/17** across both halves of the task. The DB-backed route test now
+  drives ten real badminton appends under the sport's own `short` variant and
+  reads the engine's set point off the route's JSON.
+
+  **Five of the nine new mutants survived the first pass**, and every one was a
+  real gap rather than an equivalent mutant — recorded in `_INDEX.md` as
+  W2-F20, because three of them are the same shape and it will recur.
 
 ### Task 2: Moment derivation — `momentsFor` and the per-sport allowlist
 

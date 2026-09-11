@@ -2044,3 +2044,61 @@ to make those fields differ, or it asserts nothing about which one was read.**
 
 **Owed and NOT done:** `recent` reaching a browser. The DB-backed route test and
 the four new smoke checks both need a live DB and server, and neither has run.
+
+## 2026-09-11 — W2 Task 1 Step 7: `derived`, and three more findings
+
+`recent` events now carry `setWon` and `pointState`, both asked of the module.
+3947 passed / 0 failed against a live DB; mutation sweep 17/17 across both
+halves; the DB-backed route test drives ten real badminton appends and reads
+the engine's set point off the route's JSON.
+
+**W2-F18 — `unstable_cache` SERIALISES, and every `unstable_cache` double in
+this repo hides it.** The derived replay naturally returns a `Map<number,
+RecentDerived>`. Handed to `unstable_cache`, a Map crosses as `{}` — so the
+slab would have been silently dead in production while every test stayed green,
+because `load.test.ts`, the overlay route test and the two `public-site` tests
+all double the cache with a PASSTHROUGH that hands the value straight back.
+Fixed twice over: the cached value is a plain object keyed by the sequence
+number as a string, and `load.test.ts`'s double now round-trips through JSON,
+which is what makes the difference visible at all. A mutant that put the Map
+back was killed by that one case and by nothing else.
+
+**The same fact decided the task's architecture.** `derived` needs the module,
+the cfg and the line-up pair, and the obvious move — add them to
+`FoldedFixture` — is exactly what this forbids: a module is an object of
+functions and would arrive through the cache with its methods gone. So
+`fold.ts` is split into `loadFoldInputs` + `foldFrom` (`foldFixture` is now a
+thin wrapper over the two, `FoldedFixture` unchanged, `rebuild.ts` and
+`admin-fixture-config.ts` untouched), and the overlay's one cached entry
+computes both halves from ONE load and ONE `resolveFixtureCfg` — which this
+file already required, since read and write folds must stay byte-consistent.
+
+**W2-F19 — the cache key had to move.** The cached VALUE's shape changed under
+an unchanged key, so a live entry written before the deploy would deserialise
+as a `FoldedFixture` where the reader now expects `{ folded, derived }`. Key
+bumped to `overlay-fold-v2`. A value-shape change under a stable cache key is a
+deploy-time defect with no local symptom.
+
+**W2-F20 — five of nine mutants survived the first pass, and none was
+equivalent.** Each exposed a real gap, and three share one shape worth naming:
+
+- **A guard covered only by its NEIGHBOUR.** Removing the "a decided match is
+  at no point state" check changed nothing, because every real module's `apply`
+  throws on a point after the handshake and the probe's own `catch` swallowed
+  it. The guard is not redundant — a TOLERANT module (and `strict: false` is
+  exactly the tolerant mode) would fold a phantom point and announce a match
+  point after the handshake. Witnessed with a stub module whose `apply` never
+  throws. Same for the match-over-set ranking, which no real sport can reach
+  with both sides at a point state, and which was witnessed with a stub where
+  one side's probe closes a set and the other's wins the match.
+- **A test whose premise was arithmetic.** "The window's first entry knows it is
+  a continuation" used six replies, which left the window starting on a rally
+  that was not a set point at all; the case proved nothing. Eight replies put
+  the whole window after the leader reached the set point.
+- **A sport with no coverage whatsoever.** Tennis is the only sport with a
+  BREAK, and removing the serving check killed no test because no tennis case
+  existed. The receiver at 0–40 is now a break point and the server at 40–0 is
+  no point state at all — one case, both directions.
+
+**A sweep that kills every mutant on the first pass is not a good sign about
+the code; it is usually a sign about the mutants.**
