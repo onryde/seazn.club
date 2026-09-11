@@ -161,6 +161,29 @@ const render = async (): Promise<string> =>
     })) as ReactElement,
   );
 
+/** The page's element tree, unrendered — for the props no server render can
+ *  reach. */
+const treeOf = async () =>
+  walk(
+    (await Page({
+      params: Promise.resolve({ orgSlug: "riverside", competitionSlug: "autumn-cup" }),
+    })) as ReactElement,
+  );
+
+/**
+ * BOTH `ShareBar` elements the page creates: the hero's, which `walk` finds as
+ * a child, and the Info tab's, which is a PROP of the mount and therefore not
+ * in the child tree at all.
+ */
+const shareBarsIn = (tree: ReactElement[]): ReactElement[] => {
+  const mount = tree.find((el) => el.type === CompetitionLanding);
+  const slot = mount ? (propsOf(mount) as Record<string, unknown>).shareSlot : undefined;
+  return [
+    ...tree.filter((el) => el.type === ShareBar),
+    ...(isValidElement(slot) && slot.type === ShareBar ? [slot] : []),
+  ];
+};
+
 const forLocale = async (locale: string) => {
   stub.getPublicCompetition.mockResolvedValue(shell({ locale }));
   stub.getPublicCompetitionHub.mockResolvedValue(doc({ locale }));
@@ -203,6 +226,20 @@ describe("the competition page mounts the landing", () => {
     // The share bar is pointed at THIS competition. `origin` is "" until the
     // bar mounts, so the wa.me text carries the bare path.
     expect(h).toContain(encodeURIComponent("/shared/riverside/autumn-cup"));
+  });
+
+  // 44px is the standing mobile tap-target floor. `share-bar.test.tsx` pins it
+  // for the share row three controls away; the hero's own two primary controls
+  // had nothing, and removing `min-h-11` from BOTH survived the whole gate.
+  // Anchored on each testid and terminated on the class attribute, so this
+  // reads the element carrying the href rather than a wrapper.
+  it("gives both hero calls to action a 44px tap target", async () => {
+    const h = await render();
+    for (const testid of ["mh-hero-present", "mh-hero-register"]) {
+      expect(h, testid).toMatch(
+        new RegExp(`data-testid="${testid}" class="[^"]*\\bmin-h-11\\b[^"]*"`),
+      );
+    }
   });
 
   it("asks for the hub with the same slugs it was routed with", async () => {
@@ -419,9 +456,65 @@ describe("the hero's date line", () => {
 
     // Live under `TZ=America/New_York`, inert on a runner at or ahead of UTC.
     // Written as a conditional rather than left out, because the run that CAN
-    // fail is the point and a comment cannot fail.
+    // fail is the point and a comment cannot fail. It is NOT the guard — see
+    // the mechanism test below, which is what protects this at CI's zone.
     const zoneless = new Date(STARTS_ON).toLocaleDateString("en-GB", DATE_OPTS);
     if (zoneless !== dayIn(UTC)) expect(h).not.toContain(zoneless);
+  });
+
+  // ── THE GUARD THAT WORKS AT EVERY RUNNER ZONE ───────────────────────────
+  // Everything above compares RENDERED DAYS, and a rendered day cannot
+  // distinguish the two implementations on a process at or ahead of UTC —
+  // measured by the reviewer at three zones with the zone-less revert planted:
+  // Europe/London 65/65 green, TZ=UTC 65/65 green, TZ=America/New_York killed.
+  // `ci.yml`'s `test` job is `ubuntu-latest` with no `TZ`, so CI is UTC and
+  // every assertion above passes in the broken state there. A guard that only
+  // works when an environment variable happens to be set is a guard someone
+  // deletes.
+  //
+  // So assert the MECHANISM instead. The two implementations are cleanly
+  // separable at any zone, measured on this Node 26 runner:
+  //   • `fmtDate` → one `Intl.DateTimeFormat` construction carrying
+  //     `timeZone: "UTC"`, zero `Date.prototype.toLocaleDateString` calls.
+  //   • `new Date(d).toLocaleDateString("en-GB", …)` → ZERO constructions
+  //     (it does not route through the patchable `Intl` global), one call.
+  //
+  // Both halves are asserted, and the reason for both rather than the cheaper
+  // negative alone: `toLocaleDateString` absence kills the historical revert
+  // but would let `fmtDate(division.tz, …)` through, which is the OTHER wrong
+  // answer this surface can reach (the Info tab's own header lists it).
+  it("formats the competition's dates through an explicit UTC formatter, whatever zone the process runs in", async () => {
+    const built: (Intl.DateTimeFormatOptions | undefined)[] = [];
+    const RealDTF = Intl.DateTimeFormat;
+    const recording = function (locale?: unknown, opts?: Intl.DateTimeFormatOptions) {
+      built.push(opts);
+      return new RealDTF(locale as string | undefined, opts);
+    } as unknown as typeof Intl.DateTimeFormat;
+    recording.supportedLocalesOf = RealDTF.supportedLocalesOf;
+    const zoneless = vi.spyOn(Date.prototype, "toLocaleDateString");
+    Intl.DateTimeFormat = recording;
+    try {
+      await render();
+    } finally {
+      Intl.DateTimeFormat = RealDTF;
+    }
+
+    // 1. Nothing on this page formats a date through the runtime's own zone.
+    expect(zoneless).not.toHaveBeenCalled();
+    zoneless.mockRestore();
+
+    // 2. `lib/format.ts`'s whole contract — "no helper ever falls back to the
+    //    runtime's resolvedOptions zone" — asserted at the page boundary
+    //    rather than trusted.
+    expect(built.filter((o) => o?.timeZone === undefined)).toEqual([]);
+
+    // 3. …and the CALENDAR-date line specifically is UTC, not a division's
+    //    zone. The fixture's divisions and matches are all Europe/London
+    //    (`hub-fixtures.tsx:37`), so a UTC formatter in this render can only be
+    //    the hero's dates — which is also what makes this discriminating.
+    expect(
+      built.filter((o) => o?.timeZone === "UTC" && o?.month === "long" && o?.year === "numeric"),
+    ).not.toEqual([]);
   });
 
   it("collapses a one-day competition to a single date rather than repeating it", async () => {
@@ -534,6 +627,64 @@ describe("every word on this page comes from the org's dictionary", () => {
       expect(h).toContain(esc(dict["landing.presentedBy"]!.replace("{sponsor}", "Northbank Bank")));
       expect(h).not.toContain("{sponsor}");
       expect(h).not.toContain("{count}");
+    });
+
+    // ── THE WORDS THAT NEVER REACH A SERVER RENDER ────────────────────────
+    // `share.share` and `share.copied` are bound by the page and rendered only
+    // after mount — the native-share button appears when the effect finds
+    // `navigator.share`, the toast after a click resolves. So `PAGE_KEYS`
+    // above cannot see them, `share-bar.test.tsx` covers the slots with
+    // FIXTURE labels, and both were provably unwitnessed: hardcoding either
+    // one survived the whole 63-file gate.
+    //
+    // This is exactly the hole `ShareBarLabels`' all-five-or-none shape exists
+    // to close. The interface guarantees all five are PRESENT; only this
+    // asserts the page bound the right VALUES. Read at the prop boundary,
+    // deep-equal over all five, for BOTH bars — and note `DEFAULT_LABELS.copied`
+    // is "Copied ✓", a string that exists in no dictionary at all, so a page
+    // that simply dropped the prop would ship it in French.
+    it(`${locale}: both share bars carry all five of that locale's share words`, async () => {
+      const dict = DICTS[locale]!;
+      stub.getPublicCompetition.mockResolvedValue(shell({ locale }));
+      stub.getPublicCompetitionHub.mockResolvedValue(doc({ locale }));
+
+      const bars = shareBarsIn(await treeOf());
+      expect(bars, "hero bar + the Info tab's slot").toHaveLength(2);
+      for (const bar of bars) {
+        expect(propsOf(bar).labels).toEqual({
+          share: dict["share.share"],
+          whatsapp: dict["share.whatsapp"],
+          whatsappAria: dict["share.whatsappAria"],
+          copy: dict["share.copy"],
+          copied: dict["share.copied"],
+        });
+      }
+    });
+
+    // M5: the hero's empty-competition sentence. The fixture above always
+    // carries two divisions, so this arm's copy was rendered by nothing in
+    // es/fr/nl — the one W2 key that had no renderer at all before this task
+    // landed without the four-locale proof every other page key has.
+    it(`${locale}: a competition with no divisions says so in that locale`, async () => {
+      const dict = DICTS[locale]!;
+      stub.getPublicCompetition.mockResolvedValue(shell({ locale }));
+      stub.getPublicCompetitionHub.mockResolvedValue(
+        hubDoc({
+          locale,
+          divisions: [],
+          info: info({ startsOn: STARTS_ON, endsOn: ENDS_ON }),
+        }),
+      );
+      const h = await render();
+
+      expect(h).toMatch(
+        new RegExp(`data-testid="mh-hero-no-divisions"[^>]*>${esc(dict["landing.noDivisions"]!)}<`),
+      );
+      const english = DICTS.en!["landing.noDivisions"]!;
+      const mine = dict["landing.noDivisions"]!;
+      if (mine !== english && !mine.includes(english) && !english.includes(mine)) {
+        expect(h).not.toContain(esc(english));
+      }
     });
   }
 

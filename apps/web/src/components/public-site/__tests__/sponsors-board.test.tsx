@@ -11,6 +11,8 @@
 //     ">Presented by<" would be asserting the shape this lift deliberately
 //     stopped rendering.
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -185,6 +187,30 @@ describe("SponsorsBoard — links and logos", () => {
     const h = render({ sponsors: [withLogo, SILVER] });
     const imgs = [...h.matchAll(/<img\b/g)];
     expect(imgs).toHaveLength(1);
+  });
+
+  // ── THE POINTER THAT KEEPS THE next/image CONTRACT DISCOVERABLE ──────────
+  // This component's `<Image>` call site is pinned by
+  // `lib/__tests__/public-image-contract.test.ts` (imports `Image`, keeps its
+  // width/height pair, has not reverted to a plain `<img>`) — a source-text
+  // contract, because the repo has no render harness for CLS.
+  //
+  // That file lives in `src/lib/__tests__`, which THIS wave's test gate
+  // (`"src/app/(public)/shared"` + `src/components/public-site`) does not
+  // select. Lifting the board here reddened it, and that was found only by
+  // running wider than the dispatch asked for — luck, not process. So the
+  // pointer is a test rather than a comment: if the contract is repointed away
+  // from this file or deleted, the guard is gone and THIS suite says so, from
+  // inside the gate that actually runs.
+  it("is still named by the public next/image source contract", () => {
+    const contract = readFileSync(
+      join(__dirname, "..", "..", "..", "lib", "__tests__", "public-image-contract.test.ts"),
+      "utf8",
+    );
+    expect(contract).toContain("components/public-site/sponsors-board.tsx");
+    // Not just the path — the helper the width/height pair is matched on, so a
+    // rename that silences the contract reds here too.
+    expect(contract).toContain("panel(s).logo");
   });
 });
 

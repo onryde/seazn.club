@@ -28,11 +28,24 @@
 // ── AND IT IS READ OFF THE DOCUMENT, NOT OFF THE ORG ROW ──────────────────
 // `toLocale(hub.locale)`, not `toLocale(org.default_locale)`. They are the
 // same value in the steady state — `hub.locale` IS the org's, resolved by the
-// builder — but the two reads are cached SEPARATELY (`REVALIDATE_FAST` on the
-// hub, 30s on this page), so an org that changes its default locale has a
-// window where they disagree. Reading the document's own field makes the
-// chrome match the content it wraps by construction, in that window too,
-// instead of only by the two caches happening to agree.
+// builder at `competition-hub.ts:368` — but the shell and the document are two
+// independently-expiring 30s cache entries (`REVALIDATE_FAST = 30`,
+// `data.ts:158`, on both; the page's own `revalidate` is the same number) that
+// share one invalidation tag (`orgTag(orgSlug)`, so a `revalidateTag` busts
+// them together). The drift is therefore TTL-only and bounded at ~30s — not a
+// wider gap — but inside that window the document's pre-resolved strings
+// (`divisionName`, board labels, slot sentences) cannot be re-translated, so
+// matching the chrome to the document is right by construction rather than by
+// the two entries happening to expire together.
+//
+// ONE CONSEQUENCE, and it is a real trade rather than an oversight:
+// `generateMetadata` below resolves from the ORG ROW, because it renders no
+// document and building one to translate a sentence made of the shell's own
+// two fields would be a cache entry's worth of work for nothing. So inside
+// that same ~30s window the `<title>` and `<meta description>` can be in a
+// different language from the body, and can carry a newer competition name
+// than the `<h1>`. The visible page stays self-consistent, which is the half a
+// reader can see; the invisible half is allowed to be up to 30s fresher.
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import type { Metadata } from "next";
@@ -106,12 +119,25 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function CompetitionHomePage({ params }: Props) {
   const { orgSlug, competitionSlug } = await params;
-  // Both reads go through the same `unstable_cache`d shell — `getPublicCompetitionHub`
-  // fetches it too, to derive its tag list — so this is one query, not two.
-  const [data, hub] = await Promise.all([
-    getPublicCompetition(orgSlug, competitionSlug),
-    getPublicCompetitionHub(orgSlug, competitionSlug),
-  ]);
+  // ── THE HUB FIRST, THEN THE SHELL, AND SEQUENTIALLY ─────────────────────
+  // `getPublicCompetitionHub` awaits `getPublicCompetition` itself on every
+  // invocation (`competition-hub.ts:692` — outside its own cached callback,
+  // because `unstable_cache` needs its tag list at call time). So the shell is
+  // read either way and this second call is a warm hit on an entry the line
+  // above has already populated.
+  //
+  // A `Promise.all` here would NOT have been "one query, not two": on a cold
+  // entry `unstable_cache` has no in-flight registry to join. Read on
+  // next@16.2.9 — `unstable-cache.js:209-219` — the miss path is a bare
+  // `await workUnitAsyncStorage.run(innerCacheStore, cb, …)` and the cache
+  // write is queued into `pendingRevalidates` only AFTER it resolves, so two
+  // concurrent misses on the same key both run the callback. Sequencing makes
+  // the single read true by construction instead of claimed.
+  //
+  // Latency is unchanged: the hub is the long pole either way, and the shell
+  // read is inside it.
+  const hub = await getPublicCompetitionHub(orgSlug, competitionSlug);
+  const data = await getPublicCompetition(orgSlug, competitionSlug);
   if (!data) {
     const renamed = await sharedRenameTarget(orgSlug, competitionSlug);
     if (renamed) permanentRedirect(renamed);
