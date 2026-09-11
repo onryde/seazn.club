@@ -1,0 +1,450 @@
+{
+  "runId": "5f26de5513e7e3b5ca623672424bf210da4b523d",
+  "startedAt": "2026-09-11T08:54:43.559Z",
+  "finishedAt": "2026-09-11T08:56:07.302Z",
+  "engine": "both",
+  "base": "http://localhost:3384",
+  "preflight": {
+    "ok": true,
+    "refusals": [],
+    "placement": {
+      "status": "live",
+      "detail": "placement channel to localhost:50484 reached READY within 3s."
+    }
+  },
+  "suites": [
+    {
+      "suite": "suite11",
+      "gate": "red",
+      "timings": {
+        "seedMs": 7051,
+        "scheduleMs": 658,
+        "simMs": 21084,
+        "importMs": 33091
+      },
+      "keep": false,
+      "solver": {
+        "engine": "greedy",
+        "requestedEngine": "both"
+      },
+      "conflictCount": 0,
+      "oracles": [
+        {
+          "name": "entitlement-gate: revise_no_target_community",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: revise_with_target_community",
+          "passed": true,
+          "detail": "not refused for payment (status 201) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: revise_dls_off_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: other_event_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: gated_feature_refusal_names_its_key",
+          "passed": true,
+          "detail": "refused as expected: 402 PAYMENT_REQUIRED, feature_key \"officials.auto\""
+        },
+        {
+          "name": "entitlement-gate: revise_no_target_after_plan",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
+          "passed": true,
+          "detail": "plan_entitlements grants cricket.dls on \"community\" — scoring is free, as ruled (V390__scoring_free.sql; V393__entitlements_v18.sql:63-70)"
+        },
+        {
+          "name": "player-stats: baseline",
+          "passed": true,
+          "detail": "96 roster read(s), 0 division row(s), 0 public row(s) — empty rows is the correct baseline (B03 folds no score events; see lib/stats.ts's header comment)"
+        },
+        {
+          "name": "oracle: discipline carry",
+          "passed": true,
+          "detail": "the pack declares no expected.suspensions rows — the discipline-carry oracle (compareSuspensions) has NO SUBJECT and compared nothing",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "oracle: d-worlds per-match results",
+          "passed": true,
+          "detail": "95 checked, 0 mismatched (r1: 32/32, r2: 32/32, r3: 16/16, r4: 8/8, r5: 4/4, r6: 2/2, r7: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-womens per-match results",
+          "passed": true,
+          "detail": "110 checked, 0 mismatched (r1: 47/47, r2: 32/32, r3: 16/16, r4: 8/8, r5: 4/4, r6: 2/2, r7: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-worlds leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-worlds person cards (scores)",
+          "passed": true,
+          "detail": "each of the 10 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-worlds\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-womens leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-womens person cards (scores)",
+          "passed": true,
+          "detail": "each of the 10 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-womens\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: p-fallon-sherrock career rollup",
+          "passed": true,
+          "detail": "the live ?group=sport rollup carries all 1 of this person's expected.careers metric(s), each in exactly one sport"
+        },
+        {
+          "name": "oracle: p-noa-lynn-van-leuven career rollup",
+          "passed": true,
+          "detail": "the live ?group=sport rollup carries all 1 of this person's expected.careers metric(s), each in exactly one sport"
+        },
+        {
+          "name": "people: claim invites accepted",
+          "passed": true,
+          "detail": "3/3 invites accepted by the invited address",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an invalid claim token is refused",
+          "passed": true,
+          "detail": "a same-shape, same-length token that was never minted drew HTTP 401",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an accepted invite is closed",
+          "passed": true,
+          "detail": "all 3 accepted invites no longer read back as open",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: invites past the limit stay unclaimed",
+          "passed": true,
+          "detail": "this run accepted every invite the pack declares, so nothing proves an UNCLAIMED one survives",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "people: a claimed profile still reports the same stats",
+          "passed": true,
+          "detail": "3 claimed profile(s) report the same divisions and stats as before acceptance",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: folding drafted posts",
+          "passed": true,
+          "detail": "205 draft(s) exist for this run's competition after the folds",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: the named fixtures publish and the rest stay draft",
+          "passed": true,
+          "detail": "95/95 named fixture(s) published, 110 post(s) still draft",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: a republish does not move published_at",
+          "passed": true,
+          "detail": "publishing an already-published post left published_at where it was",
+          "verdict": "pass",
+          "subject": true
+        }
+      ],
+      "provenancePct": 100,
+      "provenance": {
+        "total": 205,
+        "real": 205,
+        "reconstructed": 0,
+        "synthetic": 0,
+        "realPct": 100
+      },
+      "claims": {
+        "total": 3,
+        "accepted": 3
+      },
+      "news": {
+        "drafted": 205,
+        "published": 95
+      },
+      "errors": [
+        "d-womens: certificate PACK_AUTHORING_BUG — the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver"
+      ],
+      "warnings": [
+        "leaderboards.not_derived @ expected.leaderboards: 2 declared expected.leaderboards entries are NOT checked offline: the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a parallel implementation rather than a check. Owed to the seeded HTTP run (B05)",
+        "champions.not_derived @ expected.champions: 2 declared expected.champions entries are NOT checked offline: a champion is the product's stage-completion and progression answer, not the fold's. Owed to the seeded HTTP run (B05)",
+        "finalRanks.not_derived @ expected.finalRanks: 2 declared expected.finalRanks entries are NOT checked offline: a stage's placement order is the product's progression answer, exactly like a champion — a bracket writes a `placementTable`-wrapped row (usecases/stages.ts:2400) that stage 0 has no fixture rows to reproduce. The REFS and the order's internal consistency are checked at parse (PackSchema), including against a sibling expected.tables row where the stage has one. Owed to the seeded HTTP run (B05)",
+        "careers.not_derived @ expected.careers: 2 declared expected.careers entries are NOT checked offline: a career rollup spans divisions and rides the same player-stats fold as a leaderboard, which needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140). Summing the per-division leaderboards here would compute one expected value out of others. Owed to the seeded HTTP run (B05)",
+        "pack declares no league-stage fixture-count expectation to check the 0 generated fixture(s) against — this pack declares no league stage, so there is nothing to check",
+        "suite11: pinned \"se-r0-i1\" at its OWN historical start 2024-12-15T19:00:00.000Z rather than the division's startAt — a pin that contradicts history checks nothing",
+        "oracle: pack declares no expected.suspensions rows — the discipline-carry oracle (compareSuspensions) has no subject and was NOT run"
+      ],
+      "scheduling": [
+        {
+          "divisionRef": "d-worlds",
+          "requestedEngine": "both",
+          "actualEngine": "greedy",
+          "solverStatus": "solver_unavailable",
+          "mode": "build",
+          "budgetExpired": true,
+          "tiersCompleted": 0,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 19835,
+            "worstIdleGapMinutes": 0,
+            "courtImbalanceMinutes": 0,
+            "placed": 95,
+            "total": 95
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 272,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2a — session windows",
+                "reason": "sessionWindows is empty, or nothing was placed — no window was available to contain a fixture within"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "FEASIBLE",
+            "reason": "the real timetable satisfies our encoding and the product placed all 95 fixtures (solver status solver_unavailable)",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 9
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 63
+              }
+            ],
+            "similarityToHistorical": {
+              "sameDayPct": 16,
+              "sameInstantPct": 2,
+              "comparedFixtures": 95,
+              "historicalRows": 95
+            }
+          },
+          "red": false,
+          "reasons": []
+        },
+        {
+          "divisionRef": "d-womens",
+          "requestedEngine": "both",
+          "actualEngine": "greedy",
+          "solverStatus": "not_searched",
+          "notSearchedReason": "too_big",
+          "mode": "build",
+          "budgetExpired": true,
+          "tiersCompleted": 0,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 132,
+            "worstIdleGapMinutes": 0,
+            "courtImbalanceMinutes": 72,
+            "placed": 110,
+            "total": 110
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 303,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2a — session windows",
+                "reason": "sessionWindows is empty, or nothing was placed — no window was available to contain a fixture within"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 4 — day caps",
+                "reason": "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "PACK_AUTHORING_BUG",
+            "reason": "the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver",
+            "red": true,
+            "violations": [
+              {
+                "kind": "court_double_booking",
+                "divisionRef": "d-womens",
+                "fixtureIds": [
+                  "26304728-40ef-4b5a-a9ea-7f0d2527ea55",
+                  "66be94b7-a5ff-420e-95a0-45aadc485419"
+                ],
+                "detail": "court 0d6b9014-0d46-46a6-bd4c-c1ef38c2f91b is occupied by 26304728-40ef-4b5a-a9ea-7f0d2527ea55 (2024-03-23T12:23) and 66be94b7-a5ff-420e-95a0-45aadc485419 (2024-03-23T12:32) at the same time, for 12 minutes each"
+              }
+            ]
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 70
+              }
+            ],
+            "similarityToHistorical": {
+              "sameDayPct": 100,
+              "sameInstantPct": 2,
+              "comparedFixtures": 110,
+              "historicalRows": 110
+            }
+          },
+          "red": true,
+          "reasons": [
+            "d-womens: certificate PACK_AUTHORING_BUG — the real timetable breaches our own encoding (1 findings: court_double_booking) — the pack encoded constraints stricter than reality, so fix the pack, not the solver"
+          ]
+        }
+      ],
+      "engineDelta": {
+        "note": "engine delta omitted: no engine artifact was read for this run, so there is nothing to compare"
+      },
+      "divisionStart": [
+        {
+          "divisionRef": "d-worlds",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        },
+        {
+          "divisionRef": "d-womens",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        }
+      ],
+      "simulation": {
+        "eventsSent": 622,
+        "wallMs": 21084,
+        "eventsPerSecond": 29.501043445266554
+      },
+      "importSimulation": {
+        "eventsSent": 804,
+        "wallMs": 33091,
+        "eventsPerSecond": 24.296636547701794,
+        "chunks": 3
+      }
+    }
+  ],
+  "gate": "red"
+}
