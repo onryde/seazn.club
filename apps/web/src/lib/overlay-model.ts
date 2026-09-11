@@ -23,6 +23,7 @@ import {
   type DecidedOutcomeTemplates,
 } from "@/lib/scoring-vocab";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import { cricketDetail } from "@/lib/overlay-cricket";
 import type { SportTone } from "@/components/v2/scorepad/v3/sport-theme";
 
 /**
@@ -142,6 +143,34 @@ export interface OverlayModel {
   chase?: string;
   result?: string;
 }
+
+/**
+ * Does §3's bar carry its DETAIL BAND? One authority, three readers.
+ *
+ * `overlay-bar.tsx` reads it to decide whether to render the band, and
+ * `overlay-stage.tsx` reads it to place the moment slot — because the slab's
+ * underside has to meet the bar's TOP edge (`_THEMES.md` §5, owner-ruled
+ * 2026-09-11) and the bar's height is 126 or 177 depending on this one
+ * predicate ("an empty detail band is not rendered", §3).
+ *
+ * It was a literal inside `overlay-bar.tsx` and a hard-coded `bottom: 231px`
+ * in the stylesheet — the same fact stated twice, and they disagreed. A
+ * football fixture scoring before its first card, and a cricket fixture before
+ * its first ball, aired the slab floating 51 px above the bar with its
+ * deliberately-square bottom corners exposed.
+ *
+ * Truthiness, not `!== undefined`, so this is EXACTLY the predicate that was
+ * inside the bar: an empty `chase` string rendered no band and must keep
+ * rendering none.
+ *
+ * It lives HERE rather than in `theme-registry.ts` because that module imports
+ * the three theme components, and the bar importing it back would close a
+ * cycle. This is a fact about the MODEL and needs nothing else.
+ */
+export function hasDetailBand(model: OverlayModel): boolean {
+  return model.detail.length > 0 || Boolean(model.chase) || Boolean(model.result);
+}
+
 
 /**
  * W2's slot (R4). A TYPE ONLY in W1 — nothing constructs one, the stage
@@ -405,6 +434,13 @@ export function disciplineTone(classKey: string): SportTone | undefined {
  */
 function detailOf(input: OverlayModelInput, codes: [string, string], live: boolean): OverlayDetailLine[] {
   const lines: OverlayDetailLine[] = [];
+  // W2 Task 3 — the crease, FIRST in the band. For cricket it is the band's
+  // whole reason to exist: this sport carries no serving side, no strength and
+  // no discipline list, so before W2 its `detail` was always empty and the
+  // second band never rendered at all. No `tone`: these are not card chips.
+  if (live) {
+    for (const text of cricketDetail(input.data.cricketLive, input.msg)) lines.push({ text });
+  }
   const serving = servingSide(input.data.summary);
   if (live && serving) {
     lines.push({ text: input.msg("overlay.detail.serving", { side: serving === "home" ? codes[0] : codes[1] }) });

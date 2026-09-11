@@ -269,7 +269,12 @@ export default defineConfig({
     // magic-link rate limit involved). See docs/runbooks/pad-gallery.md.
     {
       name: "gallery",
-      testMatch: /gallery\.capture\.ts/,
+      // ANY `*.capture.ts`, not just the pad's gallery. The naming already
+      // keeps these files out of every other project's `testMatch`, so the
+      // widening is safe; before it, a second capture harness was matched by
+      // NO project and could not be invoked at all. `overlay-moments.capture.ts`
+      // (stream overlay W2) is the second.
+      testMatch: /\.capture\.ts$/,
       // One worker, one sport at a time: the file's own `test.afterAll`
       // writes ONE shared `index.html` manifest into GALLERY_DIR once every
       // sport has captured, which is only race-free if the 12 per-sport

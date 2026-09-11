@@ -16,7 +16,9 @@ starts. Q5–Q9 can be answered during W1. Q10–Q13 are W2 or later.
 to the overlay waves.** They come from the relay signal-path register
 `_FINDINGS-2026-09-10-relay-signal-path.html` and each carries its register id
 so the row is auditable back to it. They sit after Q13, ahead of the struck
-Q14, because two of the three are already ruled and only Q17 is live.
+Q14, because two of the three are already ruled. **Q17 is now ANSWERED
+(2026-09-11) and the live relay questions are Q20 and Q21, both raised by the
+measurements that answered it.**
 
 ---
 
@@ -334,7 +336,7 @@ buffering. Worth doing, worth doing separately.
 
 ---
 
-## Q17 (register U1). What does the PLAYBACK side see while a Cloudflare live input is disconnected?
+## ~~Q17~~ (register U1) ANSWERED 2026-09-11 — the hold window IS `recording.timeoutSeconds`
 
 **What.** Nobody knows. Cloudflare documents `timeoutSeconds` as governing when
 a disconnect starts a new recorded **video**, and it is nested under
@@ -351,22 +353,143 @@ slate has to be driven by reconnect logic rather than by frame starvation — th
 same outcome for a viewer, different code, and much harder to retrofit once R2
 has hardened around the starvation shape.
 
-**Status: BLOCKED, on an owner action.** The code tree references **no
-Cloudflare env var at all**: `CF_ACCOUNT_ID` and `CF_API_TOKEN` appear only in
-`README.md:164-165`, as prerequisites, and nowhere under `apps/`, `packages/` or
-`scripts/` (verified 2026-09-10). Provisioning a Cloudflare account and a
-Stream-scoped API token is an owner action, and until it happens this question is
-unanswerable by anyone — including by reading the docs, because `timeoutSeconds`
-does not describe playback.
+**Status: ANSWERED 2026-09-11.** The owner provisioned the account, subscribed
+to Stream and issued an account-owned token; the spike ran the same evening
+against the live API. Full method and numbers in `_INDEX.md` § "U1 step 2"
+(findings U1-S5 … U1-S8).
 
-**Recommendation (mine, a recommendation and not a ruling): provision the
-account and run this spike before R2's plan is written.** It is the cheapest
-experiment in the programme and it decides the shape of R2's central mechanism.
-Until it is run, design §7.4's no-restart choreography is to be stated as
-**load-bearing and unobserved**, never as a proven property.
+**The answer.** The playback side STARVES, it does not close — for exactly
+`recording.timeoutSeconds`, which turns out to be the control for BOTH the
+recorder and the live playlist. Inside the window the playlist stays live-marked
+and simply stops advancing, so a player runs its buffer down and waits. At the
+deadline the variant gets `EXT-X-ENDLIST` and the master returns `204`.
 
-**Blocks:** design §7.4's text, and it shares its single owner action with R0
-and R1 — see `_STATE.md`, "one owner action gates three items".
+| gap | `timeoutSeconds` | `ENDLIST` | resume lag | recorded videos |
+|---|---|---|---|---|
+| 60 s | 10 | cut +12.2 s | — | 2 |
+| 90 s | 60 | cut +63.1 s | resume +27.1 s | 2 |
+| 20 s | 60 | never | resume **+3.9 s** | **1** |
+
+So the frame-starvation shape this question feared losing is the RIGHT one, and
+the slate is driven by "segments stopped arriving" rather than by a reconnect or
+an error event. An in-window dropout is invisible: one continuous recorded video,
+same URL, under four seconds to recover.
+
+**But the question's own premise moved.** It asks what "the WHEP or RTMPS
+playback connection" sees. **WHEP is not available to this architecture at all**
+(U1-S5): Cloudflare refuses `/webRTC/play` on an RTMPS/SRT-ingested input with
+`409 "Live broadcast not started yet"`, and documents that WHIP and WHEP must be
+used together. The compositor pulls LL-HLS. That is a larger change than this
+question anticipated and is carried in the design's transport amendment (§3).
+
+**Consequential follow-on, now the live one:** `timeoutSeconds` is a product
+decision — it IS the phone-dropout tolerance, and it and the sweep's
+dead-stream threshold are ONE decision. See Q20.
+
+---
+
+## ~~Q20~~ (from U1-S7) RULED 2026-09-11 — 180 s. How long may a phone drop without the stream ending?
+
+**What.** `recording.timeoutSeconds` is now known to BE the dropout tolerance
+(U1-S7), and it accepts 1 … 86 400 s. Inside it a dropout is invisible; beyond
+it the stream is declared over, a second recorded video opens, and recovery
+costs ~27 s on top of the outage. Nothing in the programme has chosen a value.
+
+**Why it is an owner call, not an engineering default.** It trades two real
+things against each other. A long window means a club whose phone dies in a
+tunnel, or whose battery is swapped at half time, resumes as if nothing
+happened. A short one means an abandoned stream is recognised as over sooner,
+and the sweep can reclaim it. The two cannot both be maximised, and the sweep's
+`stale > 90 s` threshold (§6.4) was chosen when this field was believed
+irrelevant to playback — so they must now be decided TOGETHER.
+
+**Recommendation (mine, as product owner, not a ruling):** **180 s.** Long
+enough to cover a half-time phone swap, a walk behind a stand, or a cellular
+handover, which are the realistic failures; short enough that a genuinely
+abandoned Sunday-league stream is not held open for an hour of a club's storage
+and a viewer's spinning player. It also sits comfortably above §6.4's 90 s stale
+threshold rather than fighting it, which means the sweep's "stale" state becomes
+"we think this is over" and `timeoutSeconds` remains "the platform agrees" —
+two observations in the same direction rather than a race.
+
+**OWNER RULING, 2026-09-11: 180 s — the recommendation accepted as put.**
+`recording.timeoutSeconds = 180` on every live input.
+
+**Owed:** §6.4's stale threshold re-derived against the chosen value,
+and R1's adapter pinning it as a named constant with the echo asserted (0 is
+silently swallowed — U1-S8).
+
+---
+
+## ~~Q21~~ (from U1-S4) RULED 2026-09-11 — keep 7 days, delivered by our own cron
+
+**What.** Design §12 sets `deleteRecordingAfterDays = 7` so the prepaid storage
+block recycles. **The API floor is 30** (`400 / 10060`, measured 2026-09-11),
+and so is the other native mechanism: a video's `scheduledDeletion` "must be at
+least 30 days from upload time" (Cloudflare API reference; raised by a peer
+session 2026-09-11 and verified here). **So NO native Cloudflare mechanism can
+express retention under 30 days.** `DELETE /stream/{video_uid}` has no minimum
+age — this spike deleted ten recordings minutes old — so sub-30-day retention is
+OUR CRON OR NOTHING, which promotes the sweep from tidy-up to load-bearing for
+the storage bill.
+
+**The capacity shape, which decides how much this matters.** The block is
+PREPAID CONCURRENT CAPACITY ($5/month per 1,000 stored minutes), not a monthly
+allowance — measured directly: usage read `8.91 / 1000` with ten recordings
+present and returned to `0 / 1000` the moment they were deleted. So retention
+length, not monthly volume, is what fills the block. At the 30-day floor a
+1,000-minute block sustains roughly 11 ninety-minute matches held concurrently,
+i.e. ~11 per month; with an own-sweep at, say, 2 days the same block covers a
+far higher match rate because almost nothing is stored at any instant. That
+asymmetry is the whole argument for lever (c).
+
+**Three levers.**
+(a) Buy more blocks — $5 per 1,000 minutes, linear, solves nothing structurally.
+(b) `recording.mode: "off"` for the COMPOSED tier, whose Cloudflare recording
+nothing reads: RD10 fills `stream_url` from the DESTINATION's VOD URL. Storage
+question disappears for that tier.
+(c) Our own sweep calling `DELETE /stream/{videoId}` at the intended age —
+already inside the Stream:Edit scope the programme holds.
+
+**Recommendation (mine, as product owner, not a ruling): (b) AND (c).** Turn
+recording off for composed, because paying to store a copy nobody reads is pure
+waste; keep (c) as the backstop for passthrough, where a club may genuinely want
+the Cloudflare recording and 30 days is longer than we want to pay for. (a) only
+if a real product reason for keeping composed recordings appears.
+
+**OWNER RULING, 2026-09-11: retention stays 7 days, delivered by lever (c) —
+our own cron issuing `DELETE /stream/{video_uid}`.** Recording is NOT turned off
+(lever (b) declined): the club keeps its Cloudflare recording on both tiers, and
+the 7-day intent from §12 is preserved by deleting at 7 days ourselves rather
+than by a field that cannot express it.
+
+**`deleteRecordingAfterDays: 30` is ALSO set, as a backstop — CONFIRMED by the
+owner 2026-09-11** ("set 30 and we will create a cron to clean up in 7 days").
+It is the lowest value the API accepts, it costs nothing while the cron is
+healthy, and if the sweep ever stops running the recordings expire at 30 days
+instead of never — so a broken sweep becomes a larger bill rather than an
+unbounded one.
+
+**The owner is taking the cron itself.** The `schedule:` half belongs in
+`onryde/seazn.club.workflow` (`d53d87024`); this repo owes only
+`POST /api/cron/relay-sweep` (design §6.3) and the usecase behind it, deleting
+videos older than 7 days via `DELETE /stream/{video_uid}`.
+
+**Owed:** §12's value replaced with "7 days by sweep, 30-day native backstop";
+§6.5's headroom arithmetic re-derived (at a 7-day concurrent window the block
+holds far more monthly volume than the 30-day floor implied); R1's sweep
+deleting videos older than 7 days and its adapter asserting both fields echo
+back; and the `schedule:` workflow raised in `onryde/seazn.club.workflow`, never
+here.
+
+**Note that (c) was not optional in any case** — U1-S9 showed that deleting a
+live input leaves its recordings billing, so a `DELETE /stream/{video_uid}` path
+is required for cleanup correctness whichever retention answer is chosen. And
+the sweep's `schedule:` workflow ships in `onryde/seazn.club.workflow`, not this
+repo (`d53d87024`); a workflow added here fires never and reds nothing.
+
+**Owed once ruled:** §6.5's headroom arithmetic re-derived, §12's value
+replaced, and R1's adapter asserting whichever shape is chosen.
 
 ---
 
@@ -599,3 +722,120 @@ rather than a per-club grant, (a) is the right build and costs little.
 
 **Blocks:** the W1 entitlement task and the console panel task, both of which
 must know which gate they are written against.
+
+## Q22 (owner question, 2026-09-11). Commentary over the video — what can a club add, and where?
+
+**Asked by the owner mid-W2:** "what will happen if Org wants commentary on top
+of the video?" It splits two ways, and the answers are very different. **Owner
+direction the same day: remote AUDIO commentary is deferred to its own wave and
+will be brainstormed separately. This row records the ground so that wave does
+not re-derive it.**
+
+### What already works, with no wave at all
+
+**Tier A (the club's own OBS).** The overlay is a transparent browser source;
+OBS mixes any microphone and renders any text the club likes. Nothing is owed.
+
+**A commentator STANDING BESIDE THE PHONE, on the composited tier.** The
+compositor's audio path is the phone's, through a PulseAudio null sink at
+AAC-LC 128 kbps / 48 kHz on one A/V clock (design §7.2, §11's A/V row), and §12
+open item 7 already recommends the mic live-by-default with a prominent mute.
+A commentator talking next to the camera IS that mic.
+
+### What does NOT work: a REMOTE commentator (deferred — its own wave)
+
+The compositor has exactly ONE audio input. A second voice needs a second
+ingest, an ffmpeg mix and sync against the video, and **U1-S5 constrains the
+transport**: WHIP and WHEP must be used together, so a WHIP audio ingest cannot
+be pulled alongside the RTMPS video the composed tier already uses — it needs
+its own path. That is a wave, not a task.
+
+### What is CHEAP and reaches both tiers: TEXT commentary
+
+The compositor already renders our overlay page over the video, so a commentary
+lower third is a rendering change plus a source of text — **and the ledger
+already has one.** `core.note` is the official's own free-text annotation;
+`lib/timeline-keys.ts` says so outright ("an OFFICIAL'S OWN ANNOTATION —
+rendering that as 'Match event' throws away the only free text in the ledger").
+
+**One decision it needs, and it is W2's to flag.** `recentWindow`
+(`server/overlay/recent.ts`) excludes every `core.*` type on purpose — a void, a
+note, a suspension of play and a substitution are not moments. Text commentary
+means letting `core.note` through EXPLICITLY, which is a product decision rather
+than a one-line relaxation: a note is written by an official for the record, not
+for an audience, and putting it on air unedited is a different product from
+putting it in a timeline.
+
+**Recommendation (mine, as product owner, not a ruling):** scope text commentary
+as a small wave of its own — it reaches Tier A and the composited tier from one
+change, and the hard half is editorial (who writes it, and does it go out raw)
+rather than technical. Remote audio stays deferred per the owner's direction.
+
+### What can never carry it
+
+**Passthrough / simulcast.** There is no compositing step: Cloudflare live
+outputs forward what the club sends. Nothing can be added on that path, in
+either medium.
+
+## ~~Q23~~ (raised by the owner 2026-09-11) RULED — a motion vocabulary is its OWN WAVE, not a slab decision
+
+**Asked:** should the moment slab use Motion (motion.dev) rather than CSS?
+
+**Answered, and the answer is about scope rather than about the slab.** The
+owner accepted the framing: adopting Motion is coherent ONLY as *adopt a motion
+vocabulary across the product* — the slab, W1's score tick / side change / live
+dot, the pad's dock — with `_THEMES.md` §6 rewritten and the e2e-weighted
+testing cost accepted. **That is a wave. It is not W2's, and W2 does not take
+it.** The slab ships on CSS.
+
+### What made it a wave rather than a task
+
+- **There is no animation library anywhere in this repo today.** The first one
+  sets precedent for the pad, the board and the console. That is the decision
+  being made, and it should be made deliberately rather than as a side effect of
+  one slide-in.
+- **It moves behaviour out of unit-test reach.** `apps/web` vitest is
+  `environment: "node"` with no jsdom, which is exactly why W2 is shaped as a
+  PURE reducer plus a thin paint layer, and why `moment-queue.ts` carries 9/9
+  mutation coverage. Motion pushes more of the slab into e2e-only territory,
+  where each assertion costs a browser and a seeded fixture.
+- **It runs in the broadcast path.** An OBS source runs for a whole match on a
+  machine that is also encoding video. `motion/react` is ~34 kB gzipped (the
+  mini `animate()` ~2.6 kB) on a page whose whole job is painting a scorebug.
+  Today's fold is a CSS transform — compositor-only. Motion's WAAPI path is too
+  WHILE it stays on WAAPI-compatible properties; a spring or a layout animation
+  is main-thread per frame.
+
+### What the wave owes, in order
+
+1. **A design conversation before any code** — §6 is an owner-approved section
+   and the vocabulary (durations, easings, whether springs are in the language
+   at all) is a design question, not an implementation one.
+2. **The package choice**: `motion` mini (`animate()`, ~2.6 kB) versus
+   `motion/react` (`<motion.div>`, ~34 kB). The mini package keeps the
+   broadcast-path cost near zero and is probably enough for every motion listed
+   in §6; the React package buys variants and layout animations the product may
+   not need.
+3. **A testing posture, stated up front**: which motions keep a pure,
+   node-testable core (the slab's queue already does) and which become
+   e2e-only, so the wave does not quietly trade mutation coverage for polish.
+4. **The scope list**, which is wider than it looks: the slab, §6's three W1
+   motions, and the pad's own `.pad-*` motions — the pad is a different
+   programme (`2026-08-06-scoringpad-v2-prompts`) with its own rulings, so this
+   needs cross-programme sequencing rather than a single branch.
+
+### The one thing the wave MUST NOT sweep up
+
+**§6's deliberate exception: the football clock is DATA, not decoration.** It is
+the overlay's only timer, it is phase-aware, it re-anchors to the engine's
+snapshot on every push, and `prefers-reduced-motion` does NOT disable it —
+because it is information rather than movement. A motion vocabulary that
+normalises "everything animated goes through one library, and reduced motion
+turns it off" would silently freeze the match clock on air for any viewer with
+that setting. Stated here because it is exactly the kind of thing a tidy-up
+wave gets wrong.
+
+### Not chosen, and cheap if the fold simply feels flat
+
+The fold is `ease-out` at 250 ms. A slight-overshoot cubic-bezier is one line
+and no dependency. Worth shooting both before spending a wave on the question.

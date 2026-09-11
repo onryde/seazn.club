@@ -1341,10 +1341,15 @@ body {
 .ovl-label { font-family: var(--font-geist-sans, system-ui, sans-serif); }
 
 /* Theme A — broadcast bar (_THEMES.md §3) */
-.ovl-bar { position: absolute; left: 72px; right: 72px; bottom: 54px;
+.ovl-bar { position: absolute; left: 72px; right: 72px; bottom: var(--ovl-bar-bottom);
            border-radius: 6px; overflow: hidden;
            box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
-.ovl-bar-main { display: flex; align-items: stretch; height: 126px;
+/* The two band heights are CUSTOM PROPERTIES because §5's slab placement is
+   derived from them (see `.ovl-moment-slot--bar`). Typed as literals in both
+   places they drifted: the slot froze their SUM at 231 while the detail band
+   is conditional, so a bar without one left the slab floating 51 px clear. */
+.ovl-canvas { --ovl-bar-main-h: 126px; --ovl-bar-band-h: 51px; --ovl-bar-bottom: 54px; }
+.ovl-bar-main { display: flex; align-items: stretch; height: var(--ovl-bar-main-h);
                 background: var(--sport-board); }
 /* MAX-WIDTH 480 (product ruling 2026-09-10, `_THEMES.md` §3). The cell has a
    225 px floor and the team cells are `flex: 1 1 auto`, so it GREW with its
@@ -1409,7 +1414,7 @@ body {
              background: var(--sport-board-2); font-size: 30px; font-weight: 600;
              letter-spacing: 0.08em;
              color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
-.ovl-detail-band { display: flex; align-items: center; gap: 33px; height: 51px;
+.ovl-detail-band { display: flex; align-items: center; gap: 33px; height: var(--ovl-bar-band-h);
                    padding: 0 33px; font-size: 24px; font-weight: 500;
                    background: color-mix(in srgb, var(--sport-board) 90%, transparent);
                    color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
@@ -1648,4 +1653,183 @@ body {
      rather than eased over 250ms). */
   .ovl-slate-warming-dots span { animation: none; opacity: 1; }
   .ovl-slate-content.ovl-slate-fading { animation: none; }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   The moment slab — stream overlay W2, `_THEMES.md` §5 and §6.
+
+   Attached to the bug's right edge or centred under the bar's detail band, and
+   CLIPPED BEHIND ITS HOST: the slot is `overflow: hidden`, so the slab slides
+   out from under the scorebug rather than appearing beside it.
+
+   Transform and opacity only (§6). The fold duration is `--ovl-slab-fold`,
+   handed down from `moment-timing.ts` by the stage, so the CSS and the state
+   machine cannot disagree about how long a fold takes.
+   ─────────────────────────────────────────────────────────────────────────── */
+/* The slot is a CLIPPING WINDOW placed at the slab's emergence point, NOT the
+   whole canvas. That is what "clipped behind the bug" (§6) requires: with the
+   window's near edge flush against the scorebug, a slab translated by its own
+   width sits entirely outside it and is hidden. An `inset: 0` slot — the first
+   shape this took — cannot hide anything, because `translateX(-100%)` of a
+   200 px word still leaves it on a 1920 px canvas, painted over the bug. */
+.ovl-moment-slot {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* §4 — the bug is inset left 60, width 480, so its right edge is 540; the rows
+   start below its 48 px header. The slab is the height of the bug's body and
+   emerges rightward from behind it. */
+.ovl-moment-slot--bug {
+  left: 540px;
+  right: 0;
+  top: 102px;
+  height: 216px;
+}
+/* §3 — the bar is inset left/right 72, bottom 54, and stands 177 tall (126 main
+   + 51 detail), so its top edge is 231 from the canvas bottom. The slab sits
+   directly above it, underside tucked behind that edge, and emerges from the
+   left.
+
+   OWNER-RULED 2026-09-11, and `_THEMES.md` §5 now carries the arithmetic: the
+   sheet used to say "centred under the bar's detail band", which is not
+   buildable — 54 px of canvas beneath the bar against a 216 px slab. The
+   rounded corners moved to the TOP for the same reason; the bottom two are
+   never seen. */
+.ovl-moment-slot--bar {
+  /* 72, NOT 0 — the slot's near edge has to be FLUSH with the slab, exactly as
+     `--bug`'s is. With the inset on the slab instead, `translateX(-100%)` of a
+     185 px slab put it at x=-113..72 while the window still clipped at 0, so a
+     solid 72x216 block of `--sport-led` sat at the canvas edge through both
+     fold phases. The slab is at `left: 0` within this window. */
+  left: 72px;
+  right: 0;
+  /* The slab's UNDERSIDE meets the bar's TOP edge (_THEMES §5, owner-ruled
+     2026-09-11), so this is the bar's own bottom inset plus its height — and
+     the bar's height depends on whether §3's detail band renders at all. The
+     stage sets `data-band` from `hasDetailBand`, the one authority the bar
+     itself renders from. Derived, never a frozen sum: moving a band height
+     moves the slab with it. */
+  bottom: calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h));
+  height: 216px;
+}
+
+.ovl-moment-slot--bar[data-band] {
+  bottom: calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h) + var(--ovl-bar-band-h));
+}
+
+.ovl-slab {
+  position: absolute;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  height: 216px;
+  padding: 0 33px;
+  background: var(--sport-led);
+  color: var(--sport-board);
+  will-change: transform;
+}
+
+/* §5 — under the bar's detail band, and off the bug's right edge. The bar sits
+   at the bottom of the canvas, so its slab rises from beneath it. */
+/* Both sit at their slot's near edge; the slot does the placing. */
+.ovl-slab--bar {
+  left: 0;
+  border-radius: 6px 6px 0 0;
+}
+.ovl-slab--bug {
+  left: 0;
+  border-radius: 0 12px 12px 0;
+}
+
+/* The three phases, as KEYFRAMES rather than transitions.
+
+   A transition needs a frame in which the element already exists at its start
+   value, so `in` could only ever mean "mounted, hidden, not yet moving" — the
+   slide then happened at the START OF `hold` and ate 250 ms of the 4000 ms it
+   is supposed to be still for, while `in` painted nothing at all. §6 asks for
+   "→ 0 250 ms ease-out, hold 4000 ms, → -100% 250 ms ease-in", which is
+   exactly 250 sliding + 4000 still + 250 sliding; an animation runs on mount
+   and delivers that.
+
+   The easings were also inverted: the entrance took the `hold` rule's ease-in
+   and the exit fell through to the base ease-out. Both now read as §6 writes
+   them. */
+@keyframes ovl-slab-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes ovl-slab-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+.ovl-slab--in {
+  animation: ovl-slab-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-slab--hold {
+  transform: translateX(0);
+}
+.ovl-slab--out {
+  animation: ovl-slab-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+
+.ovl-slab__headline {
+  font-family: var(--font-barlow), system-ui, sans-serif;
+  font-size: 96px;
+  font-weight: 800;
+  line-height: 0.9;
+  letter-spacing: 0.02em;
+}
+/* §5 — a two-word headline ("MATCH POINT", "SECOND YELLOW") drops a step and
+   wraps rather than running off the slab. */
+.ovl-slab__headline[data-long] {
+  font-size: 78px;
+  max-width: 690px;
+}
+.ovl-slab__line {
+  font-size: 21px;
+  font-weight: 600;
+}
+
+.ovl-slab[data-tone="caution"] {
+  background: var(--sport-caution);
+}
+.ovl-slab[data-tone="dismissal"] {
+  background: var(--sport-dismissal);
+  /* §5, owner pick 5C — the dismissal ink is DERIVED per sport, because
+     `--sport-dismissal` is a light colour in six palettes and a dark one in
+     five, and no single ink clears 4.5:1 across the eleven. The default is the
+     near-white; the six whose dismissal is light take the board instead. Stated
+     as rules rather than as a new palette token: `SPORT_PALETTES` is
+     overrides-only and shared with the pad, and this is the overlay's question.
+     The TEST derives the expected ink from the palette — this states the
+     outcome, it is not the test's source of truth. */
+  color: #fff5f5;
+}
+.ovl-canvas[data-sport-theme="hockey"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="icehockey"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="tennis"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="badminton"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="tabletennis"] .ovl-slab[data-tone="dismissal"],
+.ovl-canvas[data-sport-theme="volleyball"] .ovl-slab[data-tone="dismissal"] {
+  color: var(--sport-board);
+}
+
+/* §6 — "show and hide with no transition". The PHASES still run: the slab
+   still appears and leaves on the same schedule, it simply does not slide. */
+@media (prefers-reduced-motion: reduce) {
+  .ovl-slab--in,
+  .ovl-slab--out {
+    animation: none;
+  }
 }

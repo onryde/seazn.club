@@ -163,7 +163,12 @@ the design's DDL verbatim.
      prepared for. **The two `ingest_rtmps_*` columns are C1 / owner ruling
      R-A (2026-09-10):** the v1 QR contract carries BOTH credential shapes, and
      `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
-     response — both sets are in hand at provision time, so storing one and
+     response — plus a playback twin of each (`rtmpsPlayback`, `srtPlayback`,
+     `webRTCPlayback`) and `playback { hls, dash }`, measured 2026-09-10
+     (U1-S2); persist **`playback.hls`** with the session — it is R2's pull
+     target. Do NOT persist `webRTCPlayback.url`: WHEP is not served for an
+     RTMPS/SRT input (U1-S5, measured 2026-09-11), so that URL is present on
+     every create and permanently unusable here. Both sets are in hand at provision time, so storing one and
      discarding the other is a choice this wave has no reason to make, and
      re-acquiring the discarded half later costs a migration plus a re-issue of
      every live input. Same AES-256-GCM envelope discipline as
@@ -194,10 +199,35 @@ the design's DDL verbatim.
    (C1/R-A added two at once) walks straight past the boundary with the
    static test still green.
 3. **Ports and drivers** `server/relay/ports.ts` (`IngestProvider {
-   createLiveInput, inputStatus, addOutput, deleteInput, storageHeadroom }`,
+   createLiveInput, inputStatus, addOutput, deleteInput, deleteRecordings,
+   storageHeadroom }` — **`deleteRecordings` is not optional: deleting a live
+   input does NOT delete the videos it recorded, and they keep billing against
+   the prepaid block (U1-S9, measured 2026-09-11: ten inputs deleted, zero
+   inputs left, and ten recordings still holding 8.91 minutes). Cleanup that
+   stops at `deleteInput` leaks one recording per session, permanently.** Its
+   test asserts `storage-usage.videoCount` returns to its prior value; deleting
+   the input and asserting a 200 cannot see this),
    `RunnerProvider { create, status, delete }` — shapes per §6.4/§7.1),
-   `server/relay/ingest-cf.ts` (Cloudflare Stream: recording `automatic` +
-   explicit `timeoutSeconds`, `deleteRecordingAfterDays` = 7 (ruling E),
+   `server/relay/ingest-cf.ts` (Cloudflare Stream: `recording: { mode:
+   "automatic", timeoutSeconds }` — and **`deleteRecordingAfterDays` as a
+   TOP-LEVEL sibling of `recording`, NOT a member of it.** Measured 2026-09-10
+   (U1-S1): nested, it is accepted with HTTP 200 and silently dropped, retention
+   is never set, the prepaid storage block never recycles and §6.5 eventually
+   refuses every session — all with green calls.
+   **OWNER-RULED 2026-09-11 (Q20, Q21): `timeoutSeconds = 180`;
+   `deleteRecordingAfterDays = 30` as a BACKSTOP while the relay sweep deletes
+   recordings at 7 days via `DELETE /stream/{video_uid}`.** Both are named
+   constants, and the adapter asserts both echo back equal to what was sent.
+   Ruling E's 7 cannot be expressed natively: the API floor is 30
+   (`400 / 10060 "must be between 30 and 1096 days"`, measured 2026-09-11,
+   U1-S4).** Retention shorter than 30 days needs our own sweep calling
+   `DELETE /stream/{videoId}`, not this field — an owner decision recorded in
+   `_OPEN-QUESTIONS.md`, not a number to invent here.
+   **`timeoutSeconds` IS the phone-dropout tolerance (U1-S7)**, accepts 1…86400,
+   and is silently swallowed to null if sent as 0 (U1-S8) — clamp to ≥ 1.
+   The adapter's test asserts BOTH `deleteRecordingAfterDays` and
+   `timeoutSeconds` come back non-null and equal to what was sent; asserting
+   HTTP 200 cannot see either failure.
    `outputs = [target]` IFF passthrough — §6.4), `server/relay/runner-fly.ts`
    (Machines REST per §7.1: create with `region`, `guest`, `auto_destroy`,
    `env { SESSION_ID, JOB_TOKEN, APP_URL }`; `delete` for hard kill — the
@@ -242,7 +272,17 @@ the design's DDL verbatim.
    (gates in §6.3 order: `requireResourceAuth(fixture, write)` → overlay key →
    relay key (409 `overlay_required` if relay without overlay) → balance ≥ 1
    (402 `no_credits`) → `IngestProvider.storageHeadroom` (503
-   `storage_exhausted`) → insert `requested` (the partial unique index turns a
+   `storage_exhausted`) → insert `requested`
+   — **WATCH: headroom is checked at CREATE and enforced at START.** U1-S3
+   measured that a live input is created successfully at
+   `totalStorageMinutesLimit: 0`, so this guard is the only thing standing
+   between an exhausted block and a session that provisions cleanly and then
+   never goes live. If capacity is consumed between the check and the phone
+   connecting, the session sits in `provisioning`/`warming` with no error to
+   show. The credit is NOT burned (the debit fires at `live`, which is never
+   reached), so this is a silent-stall risk rather than a money one — but the
+   stale-session sweep is what has to end it, and its threshold must therefore
+   cover this case as well as a dropped phone (the partial unique index turns a
    double start into 409 `active_session`, caught and answered with the
    existing session id; the slot-0 input row is inserted in that SAME
    transaction, so a session never exists without its input) → `provisioning`);
@@ -282,10 +322,28 @@ the design's DDL verbatim.
    with `heartbeat_at` older than 90 s → ONE retry (`RunnerProvider.create`
    again on the same session, same creds) then `failed(machine_crash)`; wall
    clock > `max_duration_minutes` → `desired_state = ending`; storage headroom
-   below one retained match → a pino warning with the number (§6.5).
-   Workflow `.github/workflows/relay-sweep.yml` cloned from
-   `registrations-sweep.yml` (every 5 min; same secret; same
-   `PROD_SWEEP_ENABLED` gate).
+   below one retained match → a pino warning with the number (§6.5);
+   **RETENTION (ruling 27): delete every recording older than 7 days via
+   `IngestProvider.deleteRecordings` → `DELETE /stream/{video_uid}`.** This rule
+   IS the storage bill — `deleteRecordingAfterDays: 30` is only the backstop
+   beneath it, and deleting a live input does NOT delete its recordings (U1-S9),
+   so nothing else reclaims them.
+
+   **The `schedule:` workflow is NOT in this repo.** `d53d87024` (PR #757,
+   2026-09-09) moved all 8 scheduled ops workflows to
+   `onryde/seazn.club.workflow`; `origin/main` now carries 11 workflows of which
+   `help-shots.yml` is the only `schedule:`. A `relay-sweep.yml` added here is
+   fired by nothing, CI stays green, and the sweep silently never runs. Raise it
+   in the workflow repo, cloned from `registrations-sweep.yml` there (every
+   5 min; same secret; same `PROD_SWEEP_ENABLED` gate), with `CRON_SECRET`
+   mirrored — `gh secret set` in that repo, `flyctl secrets set` on the app.
+   Those workflows skip-with-warning on a missing secret rather than failing
+   red, so a mismatch looks green while doing nothing: assert the response body,
+   never the run colour.
+
+   **The owner is building the workflow; this repo owes the ROUTE.** Until this
+   scope item ships there is no endpoint — a schedule pointing at
+   `/api/cron/relay-sweep` today POSTs into a 404.
 9. **Replay fill** (ruling F): on the `completed` transition, when
    `fixtures.stream_url` is null AND the target kind is `youtube`, call W1's
    `setFixtureStreamUrl` with the destination's watch URL through

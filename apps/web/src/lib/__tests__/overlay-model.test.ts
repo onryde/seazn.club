@@ -221,6 +221,69 @@ describe("overlayModel — led and serving truth table", () => {
       expect(model.detail, key).toEqual([]);
     }
   });
+
+  // W2 Task 3 — the crease band REACHING the model, which is the only thing
+  // that makes `cricketDetail` more than a well-tested function nothing calls.
+  // Before W2, cricket's `detail` was always empty: the sport carries no
+  // serving side, no strength and no discipline list, so the bar's second band
+  // never rendered for it at all.
+  it("cricket: the crease band reaches OverlayModel.detail, and is ABSENT without it", () => {
+    const base = payload("cricket", [["cricket.toss", { wonBy: "H", elected: "bat" }], ["core.start", {}]], "in_play");
+    expect(project("cricket", base).detail, "no crease block ⇒ no band").toEqual([]);
+
+    const withCrease = {
+      ...base,
+      cricketLive: {
+        batters: [
+          { name: "Sharma", runs: 34, balls: 21, onStrike: true },
+          { name: "Kohli", runs: 12, balls: 9, onStrike: false },
+        ],
+        bowler: { name: "Bumrah", overs: "2.3", maidens: 0, runs: 14, wickets: 1 },
+        thisOver: [
+          { kind: "runs" as const, runs: 1 },
+          { kind: "runs" as const, runs: 4 },
+          { kind: "wicket" as const, dismissal: "bowled" as const },
+        ],
+      },
+    };
+    const model = project("cricket", withCrease as never);
+    // This suite's `msg` returns the KEY, so the two translated fragments
+    // appear as keys — which is the point: the assertion pins the key AND the
+    // composition around it, where an English expectation would pass with the
+    // wrong key wired to the right word.
+    const MARK = "overlay.cricket.strikerMark";
+    const THIS_OVER = "overlay.cricket.thisOver";
+    expect(model.detail.map((d) => d.text)).toEqual([
+      `Sharma${MARK} 34 (21) · Kohli 12 (9)`,
+      `Bumrah 2.3-0-14-1 · ${THIS_OVER} 1 4 W`,
+    ]);
+    // Not card chips — the band's tone is reserved for discipline lines.
+    expect(model.detail.every((d) => d.tone === undefined)).toBe(true);
+  });
+
+  it("cricket: a DECIDED fixture drops the crease band — nobody is at the crease after the handshake", () => {
+    // WITH A VERDICT, deliberately. A decided fixture carrying a null outcome
+    // is VOIDED, and `detail` is emptied by the void guard before the live
+    // guard is ever consulted — so the case would have passed against a build
+    // that renders the crease band after the handshake. Found by a mutant that
+    // removed the live guard and survived.
+    const base = payload(
+      "cricket",
+      [["cricket.toss", { wonBy: "H", elected: "bat" }], ["core.start", {}]],
+      "decided",
+      { kind: "win", winner: "H" },
+    );
+    const model = project("cricket", {
+      ...base,
+      cricketLive: {
+        batters: [{ name: "Sharma", runs: 34, balls: 21, onStrike: true }],
+        thisOver: [],
+      },
+    } as never);
+    expect(model.decided, "the verdict is real, so the void guard is NOT what empties the band").toBe(true);
+    expect(model.voided).toBe(false);
+    expect(model.detail).toEqual([]);
+  });
 });
 
 describe("overlayModel — cells", () => {

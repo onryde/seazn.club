@@ -5,14 +5,40 @@ import {
   foldMatch,
   resolveVoids,
   type EventEnvelope,
+  type LineupPair,
   type MatchOutcome,
   type ScoreSummary,
 } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { loadLineupPair } from "./lineups";
 import { resolveFixtureCfg } from "./fixture-cfg";
 
 type Tx = postgres.TransactionSql;
+
+/**
+ * Everything `foldMatch` needs for one fixture, loaded once.
+ *
+ * Split out of `foldFixture` (2026-09-11) so a SECOND consumer that must replay
+ * the same ledger — the overlay's `recent` derivation, which probes "would the
+ * next point win the set" — reuses these inputs instead of re-reading them.
+ * Two separate loads would also be two separate `resolveFixtureCfg` calls, and
+ * this file already states why that must not happen: read and write folds must
+ * stay byte-consistent or `verifyStateConsistency` flags phantom drift.
+ *
+ * NOT part of `FoldedFixture`, deliberately. `foldFixture`'s result travels
+ * through `unstable_cache` on the overlay path (`server/overlay/load.ts`),
+ * which SERIALISES it — and `module` is an object of functions. It would arrive
+ * on the other side of the cache with its methods gone, and the passthrough
+ * double every `unstable_cache` test in this repo uses would never show it.
+ */
+export interface FoldInputs {
+  sportKey: string;
+  module: AnySportModule;
+  cfg: unknown;
+  lineups: LineupPair;
+  envelopes: EventEnvelope[];
+}
 
 export interface FoldedFixture {
   fixtureId: string;
@@ -55,7 +81,7 @@ interface EventRow {
 // rebuild of match_state from score_events (spec 02 §6: MatchState is a
 // disposable cache = fold(events)). Returns null for a fixture with no events
 // (nothing to derive). Shared by rebuildState + verifyStateConsistency.
-export async function foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixture | null> {
+export async function loadFoldInputs(tx: Tx, fixtureId: string): Promise<FoldInputs | null> {
   const [fixture] = await tx<FixtureRow[]>`
     select division_id, stage_id, home_entrant_id, away_entrant_id, config_snapshot
     from fixtures where id = ${fixtureId}
@@ -127,13 +153,24 @@ export async function foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixt
     select config from stages where id = ${fixture.stage_id}
   `;
   const cfg = resolveFixtureCfg(fixture.config_snapshot, division.config, stage?.config);
+  return { sportKey: division.sport_key, module: sportModule, cfg, lineups, envelopes };
+}
+
+/** The pure half: the fold itself, over inputs already loaded. */
+export function foldFrom(fixtureId: string, inputs: FoldInputs): FoldedFixture {
+  const { module: sportModule, cfg, lineups, envelopes } = inputs;
   const state = foldMatch(sportModule, cfg, lineups, envelopes);
   return {
     fixtureId,
-    lastSeq: events[events.length - 1].seq,
+    lastSeq: envelopes[envelopes.length - 1]!.seq,
     state,
     summary: sportModule.summary(state),
     outcome: sportModule.outcome(state),
     active: resolveVoids(envelopes),
   };
+}
+
+export async function foldFixture(tx: Tx, fixtureId: string): Promise<FoldedFixture | null> {
+  const inputs = await loadFoldInputs(tx, fixtureId);
+  return inputs === null ? null : foldFrom(fixtureId, inputs);
 }

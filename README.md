@@ -174,6 +174,13 @@ Two facts worth knowing before reading the design:
   is disconnected — that is the open question the U1 spike exists to settle, and the
   composited tier's "the encoder never restarts" property rests on the answer.
 
+**Measured behaviour of this API — read before writing against it:**
+[`docs/superpowers/specs/2026-09-11-cloudflare-stream-measured.md`](docs/superpowers/specs/2026-09-11-cloudflare-stream-measured.md).
+Nine findings taken first-hand against the live API, four of which contradicted
+the design and three of which would have shipped green: settings accepted with a
+200 and silently ignored, a healthy manifest that 403s a non-browser client, and
+recordings that keep billing after their live input is deleted.
+
 For any Cloudflare work, load the `cloudflare` skill rather than working from memory:
 limits and API shapes move, and the skill retrieves current docs.
 

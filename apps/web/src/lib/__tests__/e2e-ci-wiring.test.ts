@@ -95,10 +95,14 @@ function projectNamed(config: { projects: ProjectLike[] }, name: string): Projec
   return found;
 }
 
-/** Every e2e spec file, by bare filename. `auth.setup.ts` and
- *  `gallery.capture.ts` are deliberately NOT specs — neither carries
- *  `spec`/`test` in its name, which is how the default `testMatch` keeps the
- *  gallery harness from ever being selected by accident. */
+/** Every e2e spec file, by bare filename. `auth.setup.ts` and the
+ *  `*.capture.ts` harnesses (`gallery.capture.ts`, and W2's
+ *  `overlay-moments.capture.ts`) are deliberately NOT specs — none carries
+ *  `spec`/`test` in its name, which is how the default `testMatch` keeps them
+ *  from ever being selected by accident. The `gallery` project's own
+ *  `testMatch` is `/\.capture\.ts$/`, so adding a harness needs no config
+ *  change; before W2 widened it, a second harness matched NO project and could
+ *  not be invoked at all. */
 function specFiles(): string[] {
   // RECURSIVE, and returns paths RELATIVE TO e2e/ — both load-bearing since
   // the walkthrough specs moved into e2e/walkthrough/.

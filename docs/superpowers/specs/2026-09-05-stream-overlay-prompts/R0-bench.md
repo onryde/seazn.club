@@ -25,8 +25,11 @@ One open technical bet: does a headed Chromium under Xvfb, captured by
 — and at which size? Everything else in Tier B is plumbing. The design's
 Fly cost lines are class [D] estimates (design §9.3, "R0 replaces"); the
 memo turns them into the account's own numbers and picks the Machine size
-R2 wires as default. It also settles the pull path (WHEP latency vs LL-HLS)
-that seeds `delayMs`.
+R2 wires as default. It also measures the pull path that seeds `delayMs` —
+**LL-HLS only: WHEP is not available to an RTMPS/SRT input (U1-S5, measured
+2026-09-11), so there is no WHEP-vs-LL-HLS comparison left to make.** Measure
+LL-HLS with the input's low-latency setting ON and OFF, since it is off by
+default and the difference is the whole latency question.
 
 ## Owner rulings that bind this wave (verbatim, dated)
 
@@ -37,7 +40,8 @@ that seeds `delayMs`.
   Cloud Run dropped (`_INDEX.md` ruling 19, design FS5). **R0 benches Fly
   only.**
 - 2026-09-07, decision B → *"all ok"*: Cloudflare Stream is the front door
-  (SRT in, WHEP/LL-HLS out).
+  (SRT in, **LL-HLS out** — "WHEP out" as recorded on 2026-09-07 is not
+  available for this ingest; U1-S5, 2026-09-11).
 - 2026-09-07, decision G → *"all ok"*: 720p30 only at launch; 1080p is a
   post-R0 price note, not a bench cell.
 - 2026-09-10, ruling R-B (recorded in `_WAVE-2026-09-10-r2-prep.md`; a
@@ -72,7 +76,7 @@ that seeds `delayMs`.
    `config.auto_destroy: true`) — the create/stop/delete calls themselves are
    part of the measurement (create-to-first-frame seconds per size).
    **Multi-camera decode rows (M1, ruling R-B) — beside the 1x cells, not
-   instead of them**: `{ 2, 4 }` concurrent WHEP receivers on ONE relay page at
+   instead of them**: `{ 2, 4 }` concurrent LL-HLS receivers (NOT WHEP — U1-S5) on ONE relay page at
    BOTH guest sizes (the same 720p30 source pulled N times, page compositing
    live, scorebug ticking), 20 min per cell — this sizes COMPUTE, it does not
    soak, so it does not buy four more 3 h runs. Record per receiver: decoded
@@ -191,10 +195,14 @@ recommendation, WHEP vs LL-HLS latency, cost per 3 h, blockers.
 
 1. That `x11grab` at 30 fps on a `shared-cpu-2x` leaves headroom for
    Chromium — the whole bet; measured, never assumed.
-2. That WHEP playback is available on the account's Stream plan — closed as
-   available by the official pricing doc (design §9.2, billing from
-   2026-10-15) but the account may sit on a plan that gates it; record what
-   the API returned.
+2. ~~That WHEP playback is available on the account's Stream plan.~~
+   **FALSIFIED 2026-09-11 (U1-S5) — and not by the plan.** Cloudflare does not
+   serve an RTMPS/SRT-ingested input over WHEP at all: `POST /webRTC/play`
+   returns `409 "Live broadcast not started yet"` for the input's whole life,
+   and the docs state WHIP and WHEP must be used together. The premise that
+   replaces it: that **LL-HLS** pull latency with the input's low-latency
+   setting ON is low enough for the `delayMs` default R2 wires — measured,
+   never assumed, at both settings.
 3. That SwiftShader (software GL) is fast enough for CSS transforms at 720p —
    if not, the memo says which Chromium flags were needed and the CPU cost.
 4. That Fly's `auto_destroy` fires on a non-zero exit — verify on a forced

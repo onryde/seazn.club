@@ -1,0 +1,172 @@
+// The overlay bar's SECOND BAND for cricket (stream overlay W2 Task 3): who is
+// at the crease with their figures, and the bowler's analysis with this over.
+//
+// PURE and CLIENT-SAFE — no `@/server/**` import, which in this app is a build
+// failure rather than a warning. The server projects `OverlayCricketLive` onto
+// the payload; this file is the ONE place it becomes text.
+//
+// NO CRICKET ARITHMETIC LIVES HERE, deliberately. Overs, maidens, strike rates
+// and the ball-by-ball glyphs all come from `deriveCricketScorecard`, the
+// engine's own public spectator seam. An overlay that computed `0.3` from a
+// ball count would be a second implementation of over arithmetic, and the two
+// would disagree the first time a competition declared eight-ball overs.
+//
+// WHAT IS COPY AND WHAT IS NOTATION. Only two strings here are translated: the
+// striker's marker and the words "this over". `2.3-0-14-1`, `4`, `wd`, `nb+2`
+// and `W` are cricket NOTATION — they are the same on a Dutch broadcast as on
+// an English one, which is why they are not dictionary keys.
+import type { BallGlyph, CricketScorecard } from "@seazn/engine/sports/cricket";
+import type { OverlayMsg } from "@/lib/overlay-model";
+
+export interface OverlayCricketBatter {
+  /** Consent-resolved, and ABSENT for a person the line-up never named. A
+   *  nameless batter is dropped from the LINE rather than rendered as a
+   *  placeholder — but it still rides on the wire, because "two batters are in"
+   *  is a fact and only the rendering is a choice. */
+  name?: string;
+  runs: number;
+  balls: number;
+  /**
+   * Carried EXPLICITLY rather than implied by array position.
+   *
+   * Position alone was wrong and was caught by a test that had aimed at
+   * something else: with the striker unnamed and dropped from the line, the
+   * NON-striker became element zero and was marked as on strike. The marker
+   * says who is facing; it cannot be a function of who happens to be
+   * renderable.
+   */
+  onStrike: boolean;
+}
+
+export interface OverlayCricketBowler {
+  name?: string;
+  /** The engine's own string — "0.3", never re-derived from a ball count. */
+  overs: string;
+  /** `null` at fidelity band 2, where the ledger cannot state it. */
+  maidens: number | null;
+  runs: number;
+  wickets: number;
+}
+
+export interface OverlayCricketLive {
+  /** STRIKER FIRST. Empty between innings and before the first ball. */
+  batters: OverlayCricketBatter[];
+  bowler?: OverlayCricketBowler;
+  /** This over's deliveries, as the engine's structured glyphs. Rendering them
+   *  is this file's job; carrying pre-rendered strings on the wire would put
+   *  the notation in two places. */
+  thisOver: BallGlyph[];
+}
+
+/**
+ * The engine's scorecard → the overlay's own live block, with names resolved.
+ *
+ * `nameOf` is the caller's CONSENT-RESOLVED lookup and may answer `undefined`
+ * for a person the line-up never named — a stale ledger reference, or a lineup
+ * gap. That person is dropped rather than given a placeholder: "—* 34 (21)" on
+ * a broadcast graphic is worse than one fewer batter on the line.
+ */
+export function liveFromScorecard(
+  scorecard: CricketScorecard,
+  nameOf: (personId: string) => string | undefined,
+): OverlayCricketLive | null {
+  const live = scorecard.live;
+  if (!live) return null;
+  const innings = scorecard.innings.at(-1);
+  if (!innings) return null;
+
+  const batterOf = (personId: string | null): OverlayCricketBatter | null => {
+    if (personId === null) return null;
+    const line = innings.batting.find((b) => b.person === personId);
+    if (!line) return null;
+    const name = nameOf(personId);
+    return {
+      ...(name === undefined ? {} : { name }),
+      runs: line.runs,
+      balls: line.balls,
+      onStrike: personId === live.striker,
+    };
+  };
+  // Striker first, AND flagged. The order is the reading order; the flag is the
+  // fact — see `OverlayCricketBatter.onStrike`.
+  const batters = [batterOf(live.striker), batterOf(live.nonStriker)].filter(
+    (b): b is OverlayCricketBatter => b !== null,
+  );
+
+  const bowlLine = live.bowler === null ? undefined : innings.bowling.find((b) => b.person === live.bowler);
+  const bowlerName = live.bowler === null ? undefined : nameOf(live.bowler);
+  const bowler: OverlayCricketBowler | undefined =
+    bowlLine === undefined || bowlerName === undefined
+      ? undefined
+      : {
+          name: bowlerName,
+          overs: bowlLine.overs,
+          maidens: bowlLine.maidens,
+          runs: bowlLine.runs,
+          wickets: bowlLine.wickets,
+        };
+
+  return { batters, ...(bowler === undefined ? {} : { bowler }), thisOver: live.thisOver };
+}
+
+/** One delivery, as a scorer would write it. Notation, never copy. */
+function glyph(g: BallGlyph): string {
+  switch (g.kind) {
+    case "runs":
+      // A dot ball is a DOT. "0" on a broadcast graphic reads as a score.
+      return g.runs === 0 ? "·" : String(g.runs);
+    case "wide":
+      // The wide itself is one run; anything beyond it was run.
+      return g.runs > 1 ? `wd+${g.runs - 1}` : "wd";
+    case "noball":
+      return g.runs > 1 ? `nb+${g.runs - 1}` : "nb";
+    case "bye":
+      return `${g.runs}b`;
+    case "legbye":
+      return `${g.runs}lb`;
+    case "penalty":
+      return `${g.runs}p`;
+    case "wicket":
+      return "W";
+  }
+}
+
+/**
+ * The band's two lines. `[]` when nothing is at the crease — between innings,
+ * before the first ball, or a fixture whose ledger cannot say. An empty band is
+ * a designed state; an empty LINE is a gap on air.
+ *
+ * The second line survives an unnamed bowler: the glyphs are the OVER, not the
+ * person, and dropping them with the name would lose the more useful half.
+ */
+export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: OverlayMsg): string[] {
+  // TWO guards, and they ask DIFFERENT questions: "there is no crease block at
+  // all" (between innings, not cricket) versus "there is one, and nobody on it
+  // can be named". The third — `batters.length === 0` — was the redundant one,
+  // since the filter of an empty list is empty, and it is gone.
+  if (!live) return [];
+  const named = live.batters.filter((b) => b.name !== undefined);
+  if (named.length === 0) return [];
+
+  const mark = msg("overlay.cricket.strikerMark");
+  const batters = named
+    .map((b) => `${b.name}${b.onStrike ? mark : ""} ${b.runs} (${b.balls})`)
+    .join(" · ");
+
+  const over =
+    live.thisOver.length === 0
+      ? undefined
+      : `${msg("overlay.cricket.thisOver")} ${live.thisOver.map(glyph).join(" ")}`;
+  const bowler =
+    live.bowler === undefined
+      ? undefined
+      : `${live.bowler.name} ${[
+          live.bowler.overs,
+          ...(live.bowler.maidens === null ? [] : [String(live.bowler.maidens)]),
+          String(live.bowler.runs),
+          String(live.bowler.wickets),
+        ].join("-")}`;
+
+  const second = [bowler, over].filter((part) => part !== undefined).join(" · ");
+  return second === "" ? [batters] : [batters, second];
+}

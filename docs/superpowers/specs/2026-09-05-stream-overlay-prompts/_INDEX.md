@@ -1427,3 +1427,1010 @@ references", is the accurate one and stands: nothing renders it.
   condition ever creates a row) and **E6** (§9a makes ports-and-adapters binding
   while `RunnerProvider` is named and never defined) belong to the design of
   record and are folded there, not here.
+
+## 2026-09-10 — W2 task zero: the RE-PIN, closed
+
+Three read-only scouts, `model: opus`, against `main` `10c7f94cd` in worktree
+`.claude/worktrees/stream-w2` (branch `feat/stream-w2-moments`). The table in
+`W2-moments.md` was last verified on 2026-09-08 at `60c0615b0`; W1 overlay
+(#761), the R2-prep fold (#767) and four other PRs have landed since. Every row
+was re-opened, not re-grepped.
+
+**Verdict in one line: the wave's SHAPE changes. Its scope does not.** The
+moments the owner named all still exist and all still fire; the mechanism that
+was briefed to detect them does not, for the two sports he named first.
+
+### RE-PIN table — outcomes
+
+| Row | Verdict | Pin on `10c7f94cd` |
+|---|---|---|
+| Overlay route (the ONE poll target) | HELD | `apps/web/src/app/api/v1/public/fixtures/[id]/overlay/route.ts:11` |
+| `OverlayLiveData` | HELD | `apps/web/src/components/public-site/live-score-data.ts:59-71` |
+| The projector's emitted field set | **MOVED (semantic)** | `apps/web/src/server/overlay/project.ts:159-178` — emits ONLY `status, summary, outcome, lastSeq, venueTz, clock?, cricket?` |
+| Overlay load path | HELD | `apps/web/src/server/overlay/load.ts:76-81` |
+| `MatchCentreDoc` | HELD (±1) | `apps/web/src/server/public-site/match-centre-schema.ts:84-97`, `timeline` `:87` (was `85-97`) |
+| `publicFixture()` / `match_centre` | MOVED | `apps/web/src/server/usecases/public.ts:433`, spread `:480-481` (was `:392-393`) |
+| `TimelineLine` | HELD | `match-centre-schema.ts:69` — `{seq, at, marker, sideIndex, text, emphasis}`, still NO `type` |
+| `TIMELINE_KEY_FOR` | HELD | `apps/web/src/lib/timeline-keys.ts:60` — many-to-one, inversion lossy |
+| `buildTimeline` / `TimelineArgs` / `personOf` | HELD | `apps/web/src/server/public-site/timeline.ts:587`, `:80-92`, `personOf` `:91` |
+| `loadMatchCentre` | HELD | `apps/web/src/server/public-site/match-centre-load.ts:248` |
+| `useLiveFixture` | MOVED + **WIDENED** | `apps/web/src/components/public-site/match-centre/use-live-fixture.ts:65`; returns FOUR fields `{data, transport, presentationNowOffsetMs, awaitingDelay}` `:42-63` |
+| Overlay's hook call | HELD | `apps/web/src/components/overlay/overlay-stage.tsx:64` |
+| `LiveScoreBody` | MOVED (path) | `apps/web/src/components/public-site/live-score.tsx:103` — not under `match-centre/` |
+| `Side` | HELD | `match-centre-schema.ts:11` |
+| `MatchCentreHeader` | MOVED (range) | `match-centre-schema.ts:14-38` (was `:14-24`); `battingIndex` `:20`; `phase`/`strength` added by W1 |
+| `CricketView.live` | MOVED | `match-centre-schema.ts:55`; all eight fields hold |
+| `CricketBattingRow` / `CricketBowlingRow` | MOVED | `:40` / `:41` (was `:26-27`) |
+| `maskPublicEntrantNames` | MOVED | `apps/web/src/server/public-site/data.ts:565` (was `:510`) |
+| `PublicFixture.last_seq` | MOVED | `apps/web/src/server/public-site/data.ts:284` (was `:206`) |
+| `registry.ts:35,89` | **GONE as briefed** | Those lines are `SportRegistry` and its singleton. The registry declares NO event vocabulary; event types are per-module |
+
+### Findings
+
+**W2-F1 — the moments source is the FALLBACK, and this is now settled.**
+False-premise 1 confirmed false. No raw `score_events.type` reaches the
+overlay's single poll by any path: `projectOverlayLiveData` never sets
+`match_centre`, `TimelineLine` carries no `type`, and `TIMELINE_KEY_FOR` is
+many-to-one so the key cannot be inverted. W2 therefore adds its own
+`recentEvents` projection to `OverlayLiveData`, reading `score_events`
+server-side under `apps/web/src/server/overlay/`. The PR says so in its first
+paragraph, and the wave owes the spectator programme a RECOMMENDATION (never
+"the owner ruled") that raw types be carried.
+
+**W2-F2 — `match_centre` typechecks on the overlay payload and is always
+`undefined` at runtime.** `OverlayLiveData extends LiveFixtureData`, so
+`data.match_centre` compiles clean while the projector never sets it. An
+implementer reaching for it gets a green `tsc` and silence. This is the repo's
+inert-seam class with a type system actively vouching for the dead field.
+Whatever W2 builds must not read it, and the wave should consider narrowing the
+type so the compiler stops lying.
+
+**W2-F3 — CORRECTED 2026-09-11, and it was overstated. The finding applies to
+the BRIEF, not to the PLAN.** `W2-moments.md` scope item 2 briefs
+`MOMENT_TYPES: Record<sportKey, Record<eventType, { tone; headlineKey }>>` — a
+flat type→tone map, which is genuinely falsified below. But the implementation
+plan (`plans/2026-09-05-stream-overlay-w2-moments.md`, Task 2) already specifies
+`MOMENT_RULES: Record<sportKey, Record<string, MomentRule>>` where
+`MomentRule = (ev, ctx) => OverlayMoment | null` — a FUNCTION that inspects the
+payload. It already reads `boundary 6` → SIX, `boundary 4` → FOUR and
+`wicketKind` → OUT off `cricket.ball`, already names `hockey.suspension.start`
+and `icehockey.suspension.start` rather than a `*.card` that does not exist,
+already derives set/match point, and additionally names
+`cricket.superover.ball` (verified at `cricket.ts:408`, sharing the `CricketBall`
+schema) which this re-pin's own scout list missed. **No mechanism change is owed
+in the plan; the brief is what needs correcting.** Per `W2-moments.md`'s own
+rule, a brief/plan conflict is this finding.
+
+What DOES survive from the original finding, and is still owed: **a band-2
+cricket ledger has no `cricket.ball` at all** (only `cricket.player.line`), so
+an OUT at band 2 needs the line diff of W2-F6 — the plan's Task 2 does not
+handle that case. And W2-F4's per-module EVENT-vs-DERIVED table CONFIRMS the
+plan's derived branch rather than correcting it.
+
+The falsified claim, which stands against the brief only:
+**the brief's flat type→tone allowlist cannot express the two sports the
+owner named first.** Scope item 2 briefs `MOMENT_TYPES: Record<sportKey,
+Record<eventType, …>>`. Against the modules:
+
+| concept | reality | pin |
+|---|---|---|
+| cricket four / six / wicket | **no discrete types** — all three are payload fields of `cricket.ball`: `boundary: 4`, `boundary: 6`, `wicket: CricketWicket` | `packages/engine/src/sports/cricket/cricket.ts:407,177,188,168` |
+| football goal / card | `football.goal` / `football.card` — as briefed | `football.ts:438,439` |
+| hockey card | **`hockey.suspension.start`** — there is no `hockey.card` | `period/kernel.ts:1822,1824`; `hockey.ts:45,49` |
+| icehockey card | **`icehockey.suspension.start`** | `period/kernel.ts:1822,1824` |
+
+An allowlist keyed on `"cricket.wicket"` or `"<sport>.card"` would mute every
+cricket dismissal and both hockey codes while staying green — the strings do
+not exist. The allowlist becomes a per-sport MATCHER over `(type, payload)`,
+not a `type → tone` map. Owner scope is unchanged: SIX, OUT, GOAL and the cards
+all still fire.
+
+**W2-F4 — set point and match point are DERIVED in all four racket/net
+modules; set won is an EVENT only at band 0.** No `matchPoint` / `setPoint`
+symbol exists anywhere in `packages/engine/src` or `apps/web/src`.
+
+| module | set point | match point | set won | ace |
+|---|---|---|---|---|
+| tennis | DERIVED | DERIVED | EVENT band 0 `tennis.set_summary`; DERIVED at band 3 | DERIVED — `tennis.point` `meta.kind: "ace"`, a payload field, not a type |
+| badminton | DERIVED | DERIVED | EVENT band 0 `badminton.game.summary` (`partial:true` = NOT won) | n/a |
+| tabletennis | DERIVED | DERIVED | EVENT band 0 `tabletennis.game.summary` | n/a |
+| volleyball | DERIVED | DERIVED | EVENT band 0 `volleyball.set.summary` | n/a |
+
+Evidence: `nested/kernel.ts:200,223,234,363,1565-1569,1702`;
+`setbased/kernel.ts:147,281,1645-1650,1812`. The only summary readers that
+exist are `setBreakdown` (`apps/web/src/lib/public-site.ts:301`) and
+`servingSide` (`:416`) over `ScoreSummary {headline, perSide, detail}`
+(`packages/engine/src/core/types.ts:143`). So the derived branch the brief
+allowed for is the ONLY branch for these, at the bands anyone streams at.
+
+**W2-F5 — false-premise 3 is false, and it falls the safe way.**
+`PublicFixture.last_seq` (`data.ts:284`) is not `max(seq)` over the ledger — it
+is the seq of the last appended row, cached on `match_states.last_seq` and
+upserted per append (`engine-db/append-event.ts:341-345`,
+`V217__match_states.sql:4`), surfaced through `public_fixtures_v`. Seq is
+gapless, `expectedSeq + 1` (`append-event.ts:213`). A void **appends** a
+`core.void` row through the same path (`usecases/scoring.ts:97,236`;
+`core/events.ts:165-190`); the voided row is never mutated. So `last_seq` is
+strictly monotonic and a void increases it. The re-fire the brief feared cannot
+happen. `resolveVoids` still filters at read, so the projection must apply it.
+
+**W2-F6 — a band-2 cricket wicket needs a line DIFF, not a type match.**
+False-premise 5 confirmed false. Band 2 cricket declares exactly one type,
+`cricket.player.line` (`cricket.ts:3358`, map `:3346-3361`); no `cricket.wicket`
+exists at any band. A wicket is `CricketPlayerLine.batting.out: boolean` plus
+optional `batting.dismissal.{kind,bowler,fielder}`, and `bowling.wickets` as a
+count (`cricket.ts:332,341,346-353`). The line is a **cumulative** scorecard row
+re-appended from the `post`-phase panel (`:3326-3330`), so the same person's
+line arrives repeatedly with new totals — the OUT moment fires on `batting.out`
+flipping false→true, and must not re-fire on the next cumulative re-append.
+
+**W2-F7 — neither consent resolver is reachable from the overlay.**
+False-premise 4 confirmed false, and worse than briefed. There are two disjoint
+resolvers: `maskPublicEntrantNames` (`data.ts:565`) for entrant names and
+`resolvePersonDisplayName` (`apps/web/src/lib/name-display.ts:72`) for person
+names, the latter reached through `personOf` (type
+`apps/web/src/server/public-site/match-centre.ts:185`, built `makePersonOf`
+`:214`, wired `:984`) fed by `readPublicLineups`
+(`apps/web/src/server/public-site/public-lineups.ts:25,41`). W2's moment lines
+name PEOPLE, so `personOf` is the one — but `server/overlay/load.ts` and
+`project.ts` do no lineup or person read at all. W2 must ADD that path
+server-side. This was briefed as reuse; it is new work.
+
+**W2-F8 — two one-authority duplicate pairs, confirmed.** False-premise 7
+confirmed false: the overlay payload carries neither `Side.short` nor
+`battingIndex`, and the overlay derives its own of each in the CLIENT from
+`summary` — `shortCode()` (`apps/web/src/lib/overlay-model.ts:187`, three-letter
+fallback `:191`) against wire `Side.short` (`match-centre-schema.ts:11`), and
+`ledEntrantId()` (`overlay-model.ts:439`) → `battingEntrantId()`
+(`apps/web/src/lib/public-site.ts:497`) against wire
+`MatchCentreHeader.battingIndex`, derived server-side at `match-centre.ts:765`.
+Retiring the overlay's copies is NOT a repoint: the wire values would have to
+start arriving on the overlay payload first. Recorded, not actioned by W2.
+
+**W2-F9 — plan/brief conflict on where `recent` lands.** The plan's
+Architecture paragraph puts it on "the public fixture payload"; the brief's F4
+ruling puts it on `OverlayLiveData`, because the overlay no longer polls the
+public fixture route. Per `W2-moments.md`, the brief's rulings win and the
+conflict is this finding. `recentEvents` goes on `OverlayLiveData`.
+
+**W2-F10 — the plan's PRIMARY source for the cricket batter line is
+unreachable.** The plan names `match_centre.cricket.live` as primary with a
+server fallback. Per W2-F1 and W2-F2, `match_centre` never arrives on the
+overlay payload, so the fallback — a server-side `foldMatch` with the real
+cricket module, projecting striker/non-striker `runs(balls)` and bowler
+`O-M-R-W` — is the ONLY source. The primary/fallback framing is struck.
+
+**W2-F11 — the transport grew a field the slab must respect.**
+`useLiveFixture` now returns `awaitingDelay` (I1, 2026-09-10), already
+destructured at `overlay-stage.tsx:64`. A moment raised while the delayed
+transport is still catching up would replay history — precisely what mutant (h)
+exists to kill. The stage's `seenSeq` initialisation and the queue push must
+both gate on it.
+
+**W2-F12 — `HOLD_MS` has a shipped precedent to copy verbatim.**
+False-premise 6 is true and already solved for the pad: five symbols —
+`HOLD_MS_DEFAULT = 12000` (`apps/web/src/components/v2/scorepad/queue.ts:139`),
+`MIN_HOLD_MS = 500` (`:160`), `HOLD_MS_ENV_VAR` (`:143`), the resolver
+(`:161-165`, bad/empty/sub-floor → default, never 0) and the live constant whose
+env read is spelled LITERALLY (`:184`) — plus four tests, including a value
+guard pinned to the DEFAULT (`__tests__/soft-commit.test.ts:83-85`) and a
+source-text guard (`:115-131`) that a dynamic `process.env[VAR]` read cannot
+survive. W2 copies the shape.
+
+### Stale pin found in code (not a defect, worth a one-line fix)
+
+`apps/web/src/server/public-site/public-lineups.ts:10` cites
+`data.ts:510-599` for `maskPublicEntrantNames`, which now begins at `:565`.
+
+### What task zero does NOT close
+
+The plan's Task 1 still carries comment-sketched and empty `it(...)` bodies,
+written that way because these shapes were unpinned. They are now pinned. Those
+bodies must be written into real assertions — and re-reviewed — before Task 1
+starts. An empty `it()` passes vacuously; none may reach a commit.
+
+## 2026-09-10 — U1 spike, step 1: the live input's real shape (MEASURED)
+
+The owner provisioned a Cloudflare account, subscribed to Stream and issued an
+account-owned token (`cfat_` format, `Account → Stream → Edit`). First
+measurement against the real API. One live input was created, read and deleted;
+`live_inputs` is back to 0 and nothing remains on the account.
+
+Method: `POST /accounts/{id}/stream/live_inputs` with the design's own config
+(`recording: { mode: "automatic", timeoutSeconds: 10, requireSignedURLs: false,
+deleteRecordingAfterDays: 7 }`), then `DELETE`. Secrets were never printed —
+only shapes and lengths.
+
+### U1-S1 — `deleteRecordingAfterDays` is TOP-LEVEL, and nesting it is SILENTLY IGNORED
+
+Sent as a member of `recording`. Cloudflare returned HTTP 200, `success: true`,
+and an echoed `recording` block that does **not contain the key at all**:
+
+```
+recording echoed: { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs, timeoutSeconds }
+top-level deleteRecordingAfterDays: null
+```
+
+The field is a sibling of `recording`, not a child. A nested spelling is
+accepted with a 200 and dropped on the floor.
+
+**Why this is not cosmetic.** Design §12 sets `deleteRecordingAfterDays = 7` at
+launch, and §6.5 depends on it: recordings must expire for the prepaid storage
+block to recycle. If R1 sends it nested, retention is never configured,
+recordings accumulate, the block fills, and §6.5's `503 storage_exhausted`
+begins refusing sessions — with a green create call and a 200 in the log at
+every step. R1 must send it top-level AND assert it comes back non-null on the
+create response; a test that only asserts HTTP 200 cannot see this.
+
+### U1-S2 — C1 holds and UNDERCOUNTS: SIX credential objects, not three
+
+The design (§7.6, C1) records that `liveInputs.create()` returns
+`{ uid, rtmps, srt, webRTC }` in one response. It returns those **and a
+playback twin of each**:
+
+| object | keys |
+|---|---|
+| `rtmps` | `url`, `streamKey` |
+| `rtmpsPlayback` | `url`, `streamKey` |
+| `srt` | `url`, `streamId`, `passphrase` |
+| `srtPlayback` | `url`, `streamId`, `passphrase` |
+| `webRTC` | `url` (the WHIP publish endpoint) |
+| `webRTCPlayback` | `url` (the WHEP play endpoint) |
+
+plus `playback: { hls, dash }`, `uid`, `enabled`, `status`, `created`,
+`modified`, `meta`.
+
+**Consequence for R2.** `webRTCPlayback.url` is the compositor's WHEP pull
+target and it is in hand at provision time — the compositor needs no second API
+call and no URL construction to find its source. The same is true of
+`playback.hls` for the LL-HLS fallback path (§3.x transport change). Both should
+be persisted with the session rather than derived later.
+
+Observed non-secret shapes: ingest `rtmps.url` is the shared
+`rtmps://live.cloudflare.com:443/live/` with a per-input `streamKey` (65 chars);
+`srt.url` is `srt://live.cloudflare.com:778` with `streamId` = the input `uid`
+and a 65-char `passphrase`. Playback SRT uses `streamId` = `"play" + uid`.
+The 65-char lengths pin the `*_enc` envelope column sizing in §7.6.
+
+### U1-S3 — creation is NOT gated by zero storage headroom (partial, do not overread)
+
+`storage-usage` reports `totalStorageMinutesLimit: 0` on this account, and the
+create still returned 200. So the design's [B]-rated claim — *an exhausted
+storage block stops NEW live streams from starting* — is **not about input
+creation**, which succeeds regardless.
+
+**This does not falsify the claim.** What was measured is that a live input can
+be CREATED at zero headroom. Whether an ingest connection can be ESTABLISHED, or
+a recording begun, at zero headroom is untested — that needs a real push, which
+is step 2. §6.5's guard is therefore still correctly placed (it refuses before
+the insert, on headroom, not on a create error), but the sentence justifying it
+should say which of the two it rests on. Evidence stays [B] pending step 2.
+
+### What step 1 did NOT answer
+
+**U1 itself is still UNOBSERVED.** The hold window — *does a playback connection
+survive its input disconnecting, and for how long* — requires pushing a feed,
+opening a WHEP connection, cutting the ingest and timing the drop. That is step
+2. Design §7.4's choreography, the ~8 s slate, and the "encoder never restarts"
+property all still rest on it, and §9.2's evidence marker stays **D for the hold
+window**.
+
+`timeoutSeconds: 10` was accepted and echoed inside `recording`, consistent with
+the standing reading that it governs the RECORDER, not a playback hold. Nothing
+observed here contradicts or supports the hold.
+
+## 2026-09-11 — U1 step 2: WHEP IS NOT AVAILABLE TO THIS ARCHITECTURE
+
+**The composited tier cannot pull WHEP, and the design is built on the assumption
+that it can.** Measured against the live API, and confirmed in Cloudflare's own
+documentation.
+
+### U1-S5 — an RTMPS/SRT live input is not playable over WHEP
+
+Method: create a live input, push RTMPS from ffmpeg (`testsrc2` 720p30 + 1 kHz
+tone), confirm Cloudflare reports `status.current.state = "connected"` with
+`ingestProtocol: "rtmp"`, confirm the HLS manifest is serving and advancing, then
+POST a WHEP offer to `webRTCPlayback.url`.
+
+```
+input state:                 connected   (ingestProtocol "rtmp")
+HLS manifest:                200, media-sequence advancing
+WHEP POST /webRTC/play:      409 Conflict — "Live broadcast not started yet"
+```
+
+Repeated across three runs. Cloudflare's WebRTC documentation states the rule
+directly:
+
+> "WHIP and WHEP must be used together: we do not yet support inputs using
+> RTMP/SRT to be played using WHEP, or inputs using WHIP to be recorded and
+> played using HLS/DASH."
+
+**What breaks.** §3's Tier B composed path is *phone (SRT/RTMPS) → Cloudflare
+live input → Fly Machine pulls **WHEP** → relay page → RTMPS to destination*.
+The pull is impossible. The 409 is not a warm-up race or a beta gate — an
+RTMPS-ingested input is never WHEP-playable, at any point in its life.
+
+**The obvious escape hatch is also closed.** Switching the phone to WHIP ingest
+would satisfy WHEP playback but forfeits HLS/DASH playback *and recording* — which
+removes the recording the storage design (§6.5, §12) manages and the replay RD10
+fills `stream_url` from. The same sentence closes both doors.
+
+**So the compositor pulls HLS / LL-HLS.** Consequences that must be re-derived
+rather than assumed:
+
+| What | Was | Now |
+|---|---|---|
+| R2 relay page `<video>` source | WHEP, LL-HLS as fallback | LL-HLS (or HLS) as the ONLY source |
+| Transport-change choreography (§3, the WHEP → LL-HLS fallback and its discontinuity rule) | a real code path | **moot — there is no second transport to fall back FROM** |
+| Glass-to-glass latency | WHEP (sub-second class) | HLS; LL-HLS materially better than plain HLS but not WebRTC-class. **Unmeasured — the latency budget needs re-deriving** |
+| Delivery cost | "WHEP delivery free until 2026-10-15" | **HLS delivery bills NOW** at $1 / 1,000 min. The £0.14-per-match delivery line in §9.2 is no longer zero-rated |
+| LL-HLS beta toggle | never mentioned | **load-bearing.** Off by default (confirmed in the dashboard); the compositor's latency depends on it being ON |
+
+The `webRTC` / `webRTCPlayback` pair still returns on every create (U1-S2) — it
+is simply unusable for this ingest. Persisting `webRTCPlayback.url` with the
+session is therefore pointless until an all-WebRTC tier exists; R1 should persist
+`playback.hls` instead.
+
+### U1-S6 — the edge 403s a non-browser client on the manifest
+
+`GET` the HLS manifest with Python's default `urllib` agent returns
+**403 `error code: 1010`** — Cloudflare's edge rejecting the client by user
+agent — on a manifest that is healthy and serving. The same URL with a browser
+`User-Agent` returns 200 and the playlist.
+
+This is a live trap for the programme, not a probe artefact: **a server-side
+health check, a watchdog, or any `fetch`-based liveness probe of the manifest
+will read a healthy stream as down** unless it sets a browser-like agent. The
+compositor is headless Chromium and is safe; anything in R1's heartbeat or the
+sweep that polls the manifest from Node is not. Whatever polls the manifest sends
+a real `User-Agent` and asserts a 200 against a KNOWN-GOOD stream in test, or the
+guard is decoration.
+
+### U1-S7 — THE HOLD WINDOW IS `recording.timeoutSeconds`, AND IT IS TUNABLE
+
+**U1 is ANSWERED.** The premise §7.4 rests on — *the front door keeps a playback
+path alive for ≥ N seconds while its input is disconnected* — is TRUE, N is
+settable, and the control is the very field this programme withdrew as
+irrelevant on 2026-09-10.
+
+Method: one live input; ffmpeg pushing RTMPS (`testsrc2` 720p30 + 1 kHz tone);
+settle; `SIGKILL` the encoder; poll the HLS master and its variant twice a second
+(re-resolving the master each time, so a resumed broadcast arriving as a new
+variant is visible); restore the encoder; watch. Run three times, varying
+`recording.timeoutSeconds` and the gap, so causation is separated from
+coincidence.
+
+| gap | `timeoutSeconds` | `EXT-X-ENDLIST` | master after | resume lag | recorded videos |
+|---|---|---|---|---|---|
+| 60 s | **10** | cut **+12.2 s** | 200 (finished playlist) | — | 2 |
+| 90 s | **60** | cut **+63.1 s** | **204** from +63.1 s | resume **+27.1 s** | 2 |
+| **20 s** | **60** | **never** | **200 throughout** | resume **+3.9 s** | **1** |
+
+Two points on the line at ≈ `timeoutSeconds + 3 s` (the +3 is this probe's 1–3 s
+poll round trip, not a Cloudflare property), and a third run inside the window
+that behaves exactly as that model predicts. The field is the control.
+
+**The correction this forces.** The design's evidence table says
+`timeoutSeconds` "governs when a disconnect starts a NEW recorded video, which
+describes what the RECORDER does and says nothing about what a playback
+connection sees". The first half is right; the second half is false. It governs
+BOTH, because they are one event: at the deadline the recorded video closes AND
+the live playlist is terminated. Measured: a 40 s pre-cut period produced a first
+recorded video of `state=ready duration=40.02`, ended in the same beat as the
+playlist.
+
+**An IN-WINDOW dropout is invisible.** 20 s gap inside a 60 s window: no
+`ENDLIST`, the master never leaves 200, the manifest resumes advancing **3.9 s**
+after the encoder returns, on the same URL, and Cloudflare records the whole
+thing as **ONE** video. This is the "encoder never restarts" property, measured.
+
+**Inside the window, playback STALLS rather than fails.** The playlist stays
+live-marked but does not advance — no ingest, no new segments. A player runs its
+buffer down and waits. So the slate's trigger is "segments stopped arriving",
+never "playback errored"; a guard written against an error event would never
+fire.
+
+**Beyond the window.** `EXT-X-ENDLIST` on the variant, `204` on the master, and
+a SECOND recorded video on return. The master playback URL still survives and
+re-resolves to the new broadcast — no new URL need be issued — but recovery cost
+**27 s** on top of the 90 s outage, versus 3.9 s for the in-window case.
+
+**Range, asked of the API rather than assumed** (the discipline that caught
+U1-S4): `timeoutSeconds` accepts **1 … 86 400** (24 h) — every value probed at
+1, 5, 30, 60, 300, 3600, 21600 and 86400 was accepted and echoed back intact.
+
+**U1-S8 — `timeoutSeconds: 0` is silently swallowed.** Sent as 0, the API
+returns 200 and echoes `timeoutSeconds: null` — the field reverts to unset,
+NOT to "end immediately". Same shape as U1-S1's nested-field trap. If R1 ever
+computes 0 from config (an unset env var read through `Number()`, say — see the
+repo's standing `Number("") === 0` trap) it gets default behaviour with a green
+call and no warning. The adapter clamps to ≥ 1 and asserts the echo.
+
+**Design consequences.**
+
+- `timeoutSeconds` is a deliberate product decision, not a default to copy. **It
+  IS the phone-dropout tolerance.** Set it to the longest outage a club should
+  survive invisibly. The cost of a high value is that a genuinely abandoned
+  stream stays "live" that much longer before the sweep may call it over — so
+  this number and the sweep's dead-stream threshold are ONE decision, not two.
+- §6.4's disconnect choreography and the ~8 s slate now sit inside a measured
+  envelope instead of a guess.
+- The sweep must not treat a non-advancing manifest as a dead stream before
+  `timeoutSeconds` has elapsed, or it will kill sessions the platform was still
+  holding open.
+- A dropout that crosses the window costs a second recorded video, which is a
+  storage-accounting consequence as well as a viewer-experience one (§6.5).
+
+**Evidence grade: A** — the window's existence, its control, its magnitude at two
+settings, and the in-window and beyond-window behaviours are all measured
+first-hand against the live API on 2026-09-11.
+
+### U1-S9 — deleting a live input does NOT delete its recordings
+
+After the spike, `GET /stream/live_inputs` returned **0** — every input had been
+deleted by its own `finally` block — while `GET /stream/storage-usage` reported
+**10 videos and 8.91 minutes still consumed**. Listing `/stream` showed all ten,
+each still carrying its `liveInput` id pointing at an input that no longer
+exists. They were removed with `DELETE /stream/{videoId}`, after which usage
+returned to `0 / 1000`.
+
+**Why this matters more than it looks.** §6.5's headroom guard and §12's
+retention plan both reason about storage as though it follows the session. It
+does not: the session ends, the input is deleted, and the recording stays,
+billing against the prepaid block until its retention expires — which, per
+U1-S4, is at least 30 days.
+
+So a cleanup path that deletes the live input and stops there **leaks storage
+permanently at the rate of one recording per session**. R1's sweep must delete
+the VIDEO, not just the input, and the test for it asserts
+`storage-usage.videoCount` returns to its prior value — deleting the input and
+asserting a 200 cannot see this.
+
+This is also the mechanical argument for Q21's lever (c): an own-sweep calling
+`DELETE /stream/{videoId}` is not merely a way around the 30-day floor, it is
+required anyway for cleanup correctness.
+
+## 2026-09-11 — owner rulings 26 and 27, and a peer session's two verified findings
+
+### Ruling 26 (Q20, from U1-S7) — the phone-dropout tolerance is 180 s
+
+`recording.timeoutSeconds = 180` on every live input. The owner accepted the
+recommendation as put. It covers a half-time phone swap, a walk behind a stand
+and a cellular handover, and sits above §6.4's 90 s stale threshold so the
+sweep's "stale" reads as *we think this is over* while `timeoutSeconds` is *the
+platform agrees* — two observations in the same direction rather than a race.
+
+**Owed:** §6.4's stale threshold re-derived against 180 s; R1 pinning it as a
+named constant and asserting the echo (0 is silently swallowed — U1-S8).
+
+### Ruling 27 (Q21, from U1-S4) — retention stays 7 days, delivered by our own cron
+
+Recording stays ON for both tiers; lever (b) — switching it off for composed —
+was declined. The 7-day intent survives, delivered by a sweep issuing
+`DELETE /stream/{video_uid}`, because no native Cloudflare mechanism can express
+a value under 30 days.
+
+**`deleteRecordingAfterDays: 30` is also set, as a backstop — CONFIRMED by the
+owner** ("set 30 and we will create a cron to clean up in 7 days"). It is the
+lowest value the API accepts and costs nothing while the sweep is healthy; if
+the sweep stops, recordings expire at 30 days instead of never, so a broken
+sweep is a bigger bill rather than an unbounded one. **The owner is taking the
+cron.** This repo owes the route and the usecase; the `schedule:` workflow is
+raised in `onryde/seazn.club.workflow`.
+
+**Owed:** §12's value; §6.5's arithmetic re-derived for a 7-day concurrent
+window; R1's sweep deleting at 7 days and asserting both fields echo back; the
+`schedule:` workflow raised in `onryde/seazn.club.workflow`.
+
+### Peer findings, received and INDEPENDENTLY VERIFIED 2026-09-11
+
+A peer session working the R1/W2 cron pair sent two findings, explicitly as a
+recommendation and not a ruling. Both were re-pinned here before being acted on,
+as they asked.
+
+**P-1 — both native retention mechanisms are floored at 30 days.** This session
+had measured `deleteRecordingAfterDays` rejecting 7 (`400 / 10060`, U1-S4); the
+peer added the second mechanism, a video's `scheduledDeletion`, which the
+Cloudflare API reference states "must be at least 30 days from upload time"
+(re-fetched and confirmed here). So sub-30-day retention is cron-DELETE-only.
+`DELETE /stream/{video_uid}` carries no minimum age — this session deleted ten
+recordings minutes old (U1-S9) — so the mechanism works. **Directly load-bearing
+for ruling 27, and the reason that ruling needs a sweep rather than a field.**
+
+The peer also pinned that storage is prepaid CONCURRENT capacity rather than a
+monthly allowance, which this session had observed independently (`8.91 / 1000`
+with ten recordings, `0 / 1000` the instant they were deleted) and had stated
+imprecisely in the first draft of Q21. Corrected there.
+
+**P-2 — the `schedule:` workflow half belongs in a DIFFERENT repo.** Verified
+against the tree: `d53d87024` (PR #757, 2026-09-09) "move 8 scheduled ops
+workflows to onryde/seazn.club.workflow" is an ancestor of `origin/main`;
+`origin/main` carries 11 workflow files of which `help-shots.yml` is the ONLY
+`schedule:`; and `onryde/seazn.club.workflow` exists (private, updated
+2026-09-09) holding the eight moved files including `registrations-sweep.yml`.
+The ROUTE half of the idiom is still exactly right —
+`apps/web/src/app/api/cron/registrations/route.ts:13-16` is 503-on-unset →
+401-on-mismatch → one idempotent usecase, re-read and confirmed.
+
+**Why it mattered:** design line 1329 told an implementer to ship "cron pair +
+workflow" from this repo. A `schedule:` workflow added here is fired by nothing,
+CI stays green, and the sweep silently never runs — and after ruling 27 that
+sweep IS the storage bill. Corrected in the design's three cron rows.
+
+The peer's further note that `CRON_SECRET` must be mirrored in both places, and
+that the moved workflows skip-with-warning rather than failing red on a missing
+secret, is recorded as received — it concerns the other repo and was not
+verifiable from here.
+
+**One part of the peer's message did NOT hold, checked rather than assumed.**
+They warned that "the organiser can burn a credit and THEN have the live input
+refuse to start". The debit fires AT `live` (§5.2, and R1's gate order), so a
+session that never starts never reaches the debit and no credit is burned. The
+adjacent risk underneath it is real, though, and is now a watch item in R1:
+headroom is checked at CREATE and enforced at START, and U1-S3 measured that an
+input is created successfully at `totalStorageMinutesLimit: 0` — so a block
+exhausted between the check and the phone connecting yields a session that
+provisions cleanly and never goes live, with no error to show. That is a
+silent-stall risk for the stale sweep to end, not a money one.
+
+---
+
+## 2026-09-11 — W2 Task 1 built: the `recent` window, and five findings
+
+Shipped: `recent` on `OverlayLiveData`, projected in
+`apps/web/src/server/overlay/recent.ts`. 40/40 green in `src/server/overlay`,
+exit 0, paths confirmed in this worktree; `tsc` clean for `apps/web` and
+`tsconfig.scripts.json`; lint 0 errors; `openapi:gen` regenerated and committed.
+`derived` (`setWon` / `pointState`) is SPLIT OUT as Task 1 Step 7, not dropped.
+
+**W2-F13 — the spectator timeline cannot source moments, and now there is a
+reason rather than an absence.** W2-F1 established that no raw
+`score_events.type` reaches the overlay. Building Task 1 found the stronger
+statement: `buildTimeline` runs on this very fixture already —
+`loadMatchCentre` is called inside `publicFixture`, which `server/overlay/load.ts`
+awaits — so its output is genuinely in hand and was tested against this need
+before a line was written. It cannot serve it, for three independent reasons:
+`TimelineLine` is `{ seq, at, marker, sideIndex, text: Msg, emphasis }` and
+carries NO raw event type; `TIMELINE_KEY_FOR` is deliberately many-to-one (the
+three set-based sports share `timeline.setbased.rally`, both hockeys share
+`timeline.periodsport.goal`) so the key cannot be inverted back to a type; and
+**cricket has no entry in that table at all**, so every delivery renders the
+neutral key. A moment must tell a six from a four.
+
+**This is the RECOMMENDATION the wave owes the spectator programme** (never
+"the owner ruled"): carry the raw type on `TimelineLine`. It costs one field and
+would let a second consumer exist.
+
+**W2-F14 — `FoldedFixture.active` IS the void-resolved stream, so the briefed
+second ledger read is not owed.** `engine-db/fold.ts` returns
+`active: resolveVoids(envelopes)`, and `load.ts` already holds it. The plan's
+`loadOverlayRecent(sql, fixture)` would have re-read `score_events`,
+`divisions`, `fixtures`, `stages` and the line-ups that `foldFixture` had just
+read — and, worse, been a SECOND AUTHORITY for which events survived a void.
+Deleted from the plan rather than written. Same shape, same task: the overlay
+PAGE needed no change either — its `initial` is `await loadOverlayLiveData(…)`
+verbatim, so `recent` arrives on first paint with no edit.
+
+**W2-F15 — two engine payload shapes the brief had wrong, both found by folding
+the test streams rather than trusting them.** `CricketWicket.bowlerCredited` is
+REQUIRED (`z.boolean()`, no `.optional()`) — a wicket ball without it is refused
+by `parsePayload` with a bare "invalid cricket.ball payload" and no field name.
+And `core.lineup.substitution` is `{ side, off: PersonId, on: LineupSlot }`, not
+the briefed `{ by, off, on }` — all three keys differ. Neither is visible to a
+hand-typed fixture; both surfaced the moment a real module was asked to accept
+the stream. **Fold the stream, then project it. A fixture on both ends proves
+the fixture.**
+
+**W2-F16 — the JSON reporter said `numTotalTests: 30, numPassedTests: 30,
+numFailedTests: 0` while a suite FAILED TO COLLECT.** A `vi.mock` factory is
+hoisted above the module body, so a factory that READS a top-level `const`
+while building its return value (rather than inside a closure it returns) throws
+`Cannot access 'sqlFn' before initialization`. That arrives as a collection
+failure: the 30 came from the other two files in the run, and the JSON carried
+no trace of the third beyond `numFailedTestSuites: 1`. **The exit code was the
+only honest signal** — it was 1 while every number in the report said green.
+Use `vi.hoisted` for anything a factory reads eagerly, and never read a count
+without also reading the exit code.
+
+**W2-F17 — a mutant survived because the test's right answer and its wrong
+answer were the same person.** The sweep ran 8 mutants over `recent.ts`; 7 died.
+The survivor made the cricket projector name the STRIKER instead of the
+dismissed batter, and survived because both wicket cases dismissed the striker
+himself (`striker: "H-p1"`, `wicket.out: "H-p1"`). Both now use a RUN OUT, where
+the dismissed batter is the non-striker: three of the four person ids on that
+payload are wrong answers and each is a different person from the right one.
+8/8 after the fix. **A projection test that reads two fields of one payload has
+to make those fields differ, or it asserts nothing about which one was read.**
+
+**Owed and NOT done at the time of writing — SETTLED the same day.** Both the
+DB-backed route test and the four smoke checks have since run: the route test
+green against a live DB, and full smoke against a standalone prod server at
+**1034 passed / 0 failed**, the four `recent` checks among them (log lines
+479-482: the array is always present, the engine's own types arrive with kernel
+events excluded, seqs ascend oldest-first, and each of the three seeded
+suspensions projects its own class against the side it was recorded for).
+
+**That smoke run is the only place the REAL `unstable_cache` executed** — every
+vitest suite doubles it — so it is what actually proves W2-F18's serialisation
+fix rather than the repair of its own test double.
+
+## 2026-09-11 — W2 Task 1 Step 7: `derived`, and three more findings
+
+`recent` events now carry `setWon` and `pointState`, both asked of the module.
+3947 passed / 0 failed against a live DB; mutation sweep 17/17 across both
+halves; the DB-backed route test drives ten real badminton appends and reads
+the engine's set point off the route's JSON.
+
+**W2-F18 — `unstable_cache` SERIALISES, and every `unstable_cache` double in
+this repo hides it.** The derived replay naturally returns a `Map<number,
+RecentDerived>`. Handed to `unstable_cache`, a Map crosses as `{}` — so the
+slab would have been silently dead in production while every test stayed green,
+because `load.test.ts`, the overlay route test and the two `public-site` tests
+all double the cache with a PASSTHROUGH that hands the value straight back.
+Fixed twice over: the cached value is a plain object keyed by the sequence
+number as a string, and `load.test.ts`'s double now round-trips through JSON,
+which is what makes the difference visible at all. A mutant that put the Map
+back was killed by that one case and by nothing else.
+
+**The same fact decided the task's architecture.** `derived` needs the module,
+the cfg and the line-up pair, and the obvious move — add them to
+`FoldedFixture` — is exactly what this forbids: a module is an object of
+functions and would arrive through the cache with its methods gone. So
+`fold.ts` is split into `loadFoldInputs` + `foldFrom` (`foldFixture` is now a
+thin wrapper over the two, `FoldedFixture` unchanged, `rebuild.ts` and
+`admin-fixture-config.ts` untouched), and the overlay's one cached entry
+computes both halves from ONE load and ONE `resolveFixtureCfg` — which this
+file already required, since read and write folds must stay byte-consistent.
+
+**W2-F19 — the cache key had to move.** The cached VALUE's shape changed under
+an unchanged key, so a live entry written before the deploy would deserialise
+as a `FoldedFixture` where the reader now expects `{ folded, derived }`. Key
+bumped to `overlay-fold-v2`. A value-shape change under a stable cache key is a
+deploy-time defect with no local symptom.
+
+**W2-F20 — five of nine mutants survived the first pass, and none was
+equivalent.** Each exposed a real gap, and three share one shape worth naming:
+
+- **A guard covered only by its NEIGHBOUR.** Removing the "a decided match is
+  at no point state" check changed nothing, because every real module's `apply`
+  throws on a point after the handshake and the probe's own `catch` swallowed
+  it. The guard is not redundant — a TOLERANT module (and `strict: false` is
+  exactly the tolerant mode) would fold a phantom point and announce a match
+  point after the handshake. Witnessed with a stub module whose `apply` never
+  throws. Same for the match-over-set ranking, which no real sport can reach
+  with both sides at a point state, and which was witnessed with a stub where
+  one side's probe closes a set and the other's wins the match.
+- **A test whose premise was arithmetic.** "The window's first entry knows it is
+  a continuation" used six replies, which left the window starting on a rally
+  that was not a set point at all; the case proved nothing. Eight replies put
+  the whole window after the leader reached the set point.
+- **A sport with no coverage whatsoever.** Tennis is the only sport with a
+  BREAK, and removing the serving check killed no test because no tennis case
+  existed. The receiver at 0–40 is now a break point and the server at 40–0 is
+  no point state at all — one case, both directions.
+
+**A sweep that kills every mutant on the first pass is not a good sign about
+the code; it is usually a sign about the mutants.**
+
+## 2026-09-11 — W2 Task 2: `momentsFor`, and Q22 raised by the owner
+
+`momentsFor` ships. 35 tests, mutation sweep 11/11, 2986 passed / 0 failed,
+tsc clean, lint 0 errors, i18n parity green across 30 new keys in four locales.
+
+**W2-F21 — three places the brief would have created a SECOND AUTHORITY.** Each
+was caught by reading the tree rather than the brief, and each is the same
+mistake in a different costume:
+
+- The briefed `overlay.moment.penaltyClass.*` family is seven words that ALREADY
+  EXIST as `overlay.card.*` — W1's chip labels, mapped by `DISCIPLINE_LABEL_KEYS`
+  (`lib/public-site.ts`) and already translated into four languages. The moment
+  now goes through `disciplineLabel`, the existing resolver. 28 translations not
+  written, and the chip and the slab cannot come to disagree about what a bench
+  minor is called.
+- The briefed `const GAME_UNIT = new Set(["badminton", "tabletennis"])` would
+  have been a second copy of a membership `setBreakdown` already owns. Exported
+  from `public-site.ts` instead.
+- The brief asserted the module "will not typecheck without" the keys because
+  `MsgFn`'s key type is the generated union. **It is not that union.** `MsgFn`
+  is keyed on `keyof typeof ui.json` (`lib/messages.ts:12`) and rejects every
+  `overlay.*` key, which live in the `public` namespace — W1 hit this first and
+  answered it with `OverlayMsg` (`lib/overlay-model.ts`). Reused rather than
+  re-discovered.
+
+**W2-F22 — two mutants survived the first pass, and one was a DESIGN smell
+rather than a missing test.** An unknown card colour could be given a guessed
+tone, because the colour and the tone lived in two parallel records: "a key with
+no tone" was a state no test could witness, so the guard covering it was
+decoration. The fix was not another test — it was collapsing the two records
+into one, so the state cannot be expressed. The other survivor was ordinary: a
+sport with no allowlist fell through to football's rules, and the negative case
+used a type nobody honours, so "no rules" and "football's rules" answered alike.
+
+**When a mutant survives, ask whether the guard is untestable rather than
+untested. If the impossible state can be made unrepresentable, that beats
+witnessing it.**
+
+**Q22 — the owner asked what happens if a club wants COMMENTARY over the video.**
+Recorded in `_OPEN-QUESTIONS.md` with the ground already established, and the
+owner's direction the same day: **remote audio commentary is deferred to its own
+wave and will be brainstormed separately.** The short version: Tier A already
+does both media through the club's own OBS; a commentator standing beside the
+phone already works on the composited tier, because the compositor's one audio
+path IS the phone mic; a REMOTE commentator needs a second ingest, an ffmpeg mix
+and sync, and U1-S5 constrains the transport; passthrough can carry neither,
+because nothing composites. TEXT commentary is the cheap half and reaches both
+tiers — the ledger already carries free text as `core.note` — but it needs a
+product decision, not a code change: `recentWindow` excludes every `core.*` type
+on purpose, and a note is written by an official for the record rather than for
+an audience.
+
+## 2026-09-11 — W2 Task 3: the crease band, and two environment findings
+
+The cricket bar's second band ships and has been SEEN in a browser against a
+real ledger. 9329 passed / 0 failed, mutation sweep 10/10, tsc clean, lint 0
+errors, i18n parity green.
+
+**W2-F23 — variant B, and the brief's own fallback would have forked over
+arithmetic.** Step 0's flowchart offered three sources. A is out (W2-F2:
+`match_centre` never reaches the overlay payload). C — the briefed
+`liveFromFoldState` — computes overs as `Math.floor(balls / ballsPerOver)` from
+the raw fine-innings state, which is a SECOND IMPLEMENTATION of over arithmetic:
+`deriveCricketScorecard` already returns `overs: "0.3"` and `maidens` on its
+`BowlingLine`, and it is the engine's own public spectator seam. C was not
+written. **No cricket arithmetic exists anywhere in this wave.**
+
+Also corrected: the brief typed `thisOver: string[]`. `BallGlyph` is a
+DISCRIMINATED UNION (`{kind:"runs",runs}` / `{kind:"wide",runs}` /
+`{kind:"wicket",dismissal}` …). The wire carries the union and the client
+renders it, so the notation lives in one place.
+
+**W2-F24 — `deriveCricketScorecard` REQUIRES a parsed config, and the usual
+fallback is unavailable.** Handed the raw `resolveFixtureCfg` output — exactly
+what `loadFoldInputs` carries, because `foldMatch` takes cfg unparsed — it
+throws `Cannot read properties of undefined (reading 'enabled')`.
+`loadMatchCentre` hit the same wall and answers it with `safeParse` plus a
+FALLBACK TO RAW; that fallback cannot be copied here, because raw is precisely
+what throws. A config the schema rejects therefore yields no band rather than a
+500 mid-broadcast.
+
+**W2-F25 — a defect found sideways, by a test aimed at something else.** The
+striker's `*` was bound to array position. With the striker unnamed and dropped
+from the line, the NON-striker became element zero and would have been marked as
+facing — the graphic naming the wrong batter. `onStrike` is now carried
+explicitly. **A marker that says WHO cannot be a function of who happens to be
+renderable.**
+
+**W2-F26 — `seazn-env up --server` REUSES an existing standalone build, and only
+warns.** The visual check was run against a bundle built before Task 3 existed.
+The route answered 200, the page rendered, `recent` and the innings block were
+both correct, and `cricketLive` was simply ABSENT — which is indistinguishable
+from a dead seam. The script had printed
+`REUSING the standalone build from 09:58 — it is NOT rebuilt from the current
+tree` and named the fix (`seazn-env rebuild --label <l>`); it was not read.
+
+**What saved it was checking the PAYLOAD, not the picture.** A screenshot of a
+band that renders empty and a screenshot of a band that was never wired are the
+same image. When verifying a new field visually, assert the field on the wire in
+the same run.
+
+**W2-F27 — element boxes on the overlay are NOT comparable, and an overlap scan
+of it is vacuous.** The stage is authored at a fixed 1920×1080 and scaled with
+`transform: scale(min(vw/1920, vh/1080))` from the top-left
+(`overlay-stage.tsx:4-5,116`), so `getBoundingClientRect` returns positions in
+the scaled space: `ovl-side-home`, `ovl-side-away` and `ovl-detail` all reported
+the identical box `x=60 w=480`, and a naive pairwise overlap scan therefore
+reported every pair as overlapping. **Any geometric assertion about this route
+has to work in canvas coordinates, not client rects.**
+
+**OBSERVED AND NOT ESTABLISHED, recorded as an open thread rather than a
+finding.** With very long entrant names (38 characters, from a seed tag) the
+bar's name row and the big score appeared to overlap in the screenshot, and the
+brand mark appeared to sit under the away name. That is W1's layout, not W2's
+band, and the measurement above cannot confirm or deny it. It is worth its own
+look with a realistic long club name, in canvas coordinates. `ovl-detail`
+itself reported `clipped: false` at both name lengths.
+
+## 2026-09-11 — W2 Tasks 4 and 5: the slab, and the gates around it
+
+The moment slab ships, with its queue, its motion, its e2e and a committed
+capture harness. `stream-overlay.spec.ts` 19/19 run WHOLE; `mobile.spec.ts`
+298/298 across the seven widths; 607 unit tests under `src/components/overlay`;
+mutation sweep 9/9 on the queue.
+
+**W2-F28 — THERE ARE THREE THEMES, and the slab was written against two.**
+`slate` is a registry entry in its own right but it paints no scorebug: it
+COMPOSITES one, `defaultThemeFor(sportKey)` (§4a). Reading `props.style` alone
+therefore gave the slab the BAR's geometry under `?style=slate` while the BUG
+was the thing on screen — wrong for TEN of the eleven sports, and right for
+cricket only by accident, since cricket is the one sport whose default IS the
+bar. `slabPlacementFor(style, sportKey)` now answers it, declared beside
+`defaultThemeFor` so the two cannot drift, and tested in both directions.
+
+**Found by reading the owner's overlay contact sheet**, which shows three themes
+per sport. Not by any test, not by the type system — `ThemeId` includes `slate`
+and a ternary over it compiles perfectly. **An artefact that shows the product's
+real shape caught what the code's own vocabulary hid.**
+
+**W2-F29 — a clipping slot, not a clipping canvas.** "Clipped behind the bug"
+(§6) needs the clipping WINDOW to sit at the emergence point. An `inset: 0` slot
+cannot hide anything: `translateX(-100%)` of a 185 px slab still leaves it on a
+1920 px canvas, painted over the scorebug. The slot is now positioned per
+placement and the slab sits at its near edge.
+
+**W2-F30 — `data-phase` flips when the transition STARTS, not when it ends.**
+Every screenshot taken on the attribute alone was a MOTION FRAME. A slab halfway
+out from behind the scorebug photographs exactly like one whose text overflows
+its box — which is precisely the bug it was reported as, until the boxes were
+measured (slab 185×216, headline 119 wide inside 66 px of padding: it fits). The
+capture harness now waits for the computed transform to come to rest.
+
+**The generalisation, and it is the wave's most reusable lesson: when a
+screenshot shows something wrong, measure before believing the picture.** A
+motion frame, a stale build and a genuine layout fault are three different
+things that produce the same image.
+
+**W2-F31 — RESOLVED 2026-09-11 by owner ruling: "above the bar, tucked behind".**
+`_THEMES.md` §5 is amended IN PLACE and now carries the arithmetic below, the
+corrected radii (`6 6 0 0` on the bar — the bottom two corners are never seen),
+the bug's numbers, the clipping-window rule and the `slabPlacementFor` note. The
+built geometry already matched the ruling and did not change. Original finding: §5 says "centred under the bar's detail band", radius `0 0 6 6`.
+§3 puts the bar at `bottom: 54` standing 177 tall (126 main + 51 detail), so
+there are 54 px of canvas beneath it and the slab is 216 tall. The literal
+reading does not fit. Built as an interim: slab ABOVE the bar, bottom tucked
+behind its top edge, corners rounded at the top. The sheet was deliberately left
+unamended until the owner ruled, rather than rewriting an owner-approved section
+to match what had been built.
+
+**Worth keeping as a habit rather than as a fact about slabs:** the conflict was
+only visible once both sections' insets were put in the same sum. §5 and §3 each
+read fine alone. A design sheet split across sections can hold a geometry that
+no canvas satisfies, and only arithmetic finds it.
+
+**W2-F32 — a serial spec file's shared rig is a coupling, not a convenience.**
+The moments tests appended to `stream-overlay.spec.ts`'s shared hockey fixture
+and got `422 ALREADY_DECIDED`, because a test ABOVE them decides it. Reordering
+would have worked that day and broken the next time somebody added a test; the
+describe now seeds its own rig.
+
+**W2-F33 — the coverage gate's lists are DERIVED, and the derivation can fail
+silently.** Wicket kinds, card colours and suspension classes all come from the
+modules. `enumMembers` reads `.options` or `.enum` — whichever this zod version
+exposes — and THROWS when neither yields members, because an empty list turns
+every sweep into a vacuous pass. Proven by emptying it: the throw fires at
+import and the suite goes red rather than green-with-a-hole. **A derived list is
+only as good as the read that derives it; assert the read is not empty.**
+
+**W2-F34 — W1's contact sheet could not be reproduced.** It was captured ad hoc
+and left no harness, so W2 re-derived the entire rig to shoot five frames.
+`e2e/overlay-moments.capture.ts` is committed for exactly that reason, and the
+`gallery` project's `testMatch` widened from one file to any `*.capture.ts` —
+before which a second harness was matched by NO project and could not be invoked
+at all. **A visual gate that cannot be re-run is a screenshot, not a gate.**
+
+## 2026-09-11 — W2 Task 6: the reviewer pass, and the penalty ruling
+
+Full findings text: `W2-review.md` beside this file. Verdict **Needs fixes**;
+three of five findings would have gone on air; all fixed in `cbba5f28c`.
+
+**W2-F35 — a clip window and the box it clips can disagree, and no type sees
+it.** `.ovl-moment-slot--bar` clipped at `x = 0` while `.ovl-slab--bar` sat at
+`left: 72px`; the animations translate by `-100%` of the SLAB's width, so a
+185px slab left its rightmost 72px inside the window — a solid 72 × 216 block
+of `--sport-led` at the canvas edge, twice per moment, on cricket's default
+theme. `--bug` already carried its inset on the slot; only `--bar` split it
+across the two. **Three placements of one component are three chances to
+disagree about which box owns the offset — state it once, on the slot.**
+
+**W2-F36 — a green visual gate proves the SETTLED frame and nothing else.**
+Five screenshots and every capture assertion passed over W2-F35, because the
+defect exists only during the 250 ms in and the 250 ms out. Worse, the
+arithmetic needed no browser: slot origin vs slab origin vs translate basis.
+**Measure the hidden state, not only the resting one — and when the geometry is
+derivable, derive it rather than photographing it.**
+
+**W2-F37 — reduced motion is a DISTINCT execution path, and it deadlocked.**
+With `foldMs: 0` the `out → promote` transition computes `now + 0`, which equals
+the deadline that just fired whenever a tick lands on it. The hook keys its
+effect on `deadline`, sees no change, arms no timer, and `enqueue` never touches
+`deadline` while `current` is set — so the slab freezes and **no further moment
+airs for the rest of the match.** Fixed with a monotonic `revision` in the state
+and in the deps. Neither the capture harness nor e2e could reach it: both run
+with motion enabled. **A timing reducer needs a monotonic tiebreak; equal
+deadlines are reachable whenever a duration can be zero.**
+
+**W2-F38 — a cache can be bypassed with the output still perfectly correct.**
+`cricketLiveOrNull` re-ran `loadFoldInputs` and a full `deriveCricketScorecard`
+on every poll for every viewer, contradicting the comment above it and voiding
+`load.ts`'s "N polls at one ledger position cost one fold" for the one sport
+whose derivation costs the most. No test could have caught it — nothing about
+the answer was wrong. Found by reading the file against its own comment.
+**Performance seams have no red; read them, and re-read them when the code
+around them moves.**
+
+**W2-F39 — "the brief says so" is a reason to RAISE it, not to ship it.** A
+penalty goal put the bare word "Penalty" on the line INSTEAD of the scorer,
+which is what the brief specified — and made the one goal a crowd most wants a
+name against the only goal that never carried one. Recorded by the review rather
+than silently changed, and ruled the same day.
+
+### Owner rulings, 2026-09-11
+
+**Ruling 28 (penalty goals) — show the scorer AND the penalty.** The line is
+`overlay.moment.penaltyLine`, `"{name} · Penalty"`, in all four locales. The two
+single-fact forms survive as fallbacks for the halves that can genuinely be
+missing: a masked scorer, or a penalty the pad recorded with no person
+(`scorer` is optional in `FOOTBALL_EVENT_SCHEMAS`). The test pins the composed
+VALUE, not "the line mentions a penalty" — the bare key also mentions one and
+would pass a weaker assertion while dropping the name, which was the defect.
+
+**Ruling 29 (visual sign-off) — the three re-shot frames are accepted per
+screen.** `cricket-bar-out`, `cricket-bar-six`, `hockey-bug-red`: the bar slab
+sits above the bar, flush at left 72, bottom tucked behind the bar's top edge,
+corners rounded at the top, no stray block at the canvas edge. §5's per-sport
+ink derivation confirmed in both dismissal frames — near-white on cricket's
+`#dc2626`, board ink on hockey's lighter red.
+
+**Ruling 30 (pre-merge e2e) — run it by `workflow_dispatch`.** `e2e.yml`
+triggers on push to `main` only; a feature branch gets no automatic signal ever.
+Dispatch against the branch ref (`gh workflow run e2e.yml --ref <branch>`, which
+checks out `github.sha`) or against a PR number via the `pr` input.
+
+**Also settled 2026-09-11:** the Cloudflare account is already provisioned —
+the capture session's open question is closed, and no account setup is owed by
+R1.
+
+## 2026-09-11 — W2 final review, round two (F2-1…F2-7 in `W2-review.md`)
+
+**W2-F40 — a DERIVED constant is only as good as the thing it was derived FROM,
+and a conditional element is not a constant.** `.ovl-moment-slot--bar`'s
+`bottom: 231px` was `54 + 126 + 51`, and §3 rules that "an empty detail band is
+not rendered" — so the bar is 126 OR 177 and the slab floated 51 px clear of it
+on every fixture that had not yet earned a band (football before its first card,
+cricket before its first ball, anything at `no_result`), square bottom corners
+exposed. **The error was in `_THEMES` §5, written IN THIS WAVE to record the
+owner's placement ruling**, which stated 177 flat. Fixed by deleting the
+duplicated fact: `hasDetailBand` is one authority read by the bar's render and
+by the stage's `data-band`, and the CSS derives both offsets from the two band
+heights. The test asserts the two readers agree IN THE SAME RENDER — either
+alone is satisfied by a constant.
+
+**W2-F41 — a visual gate can be GREEN on a stale bundle.** Confirming F40's fix,
+the capture passed 4/4 and the picture still showed the gap: `seazn-env rebuild`
+reused Turbopack's FS cache, the built chunk still held `bottom:231px` while the
+source held the variables, and the content-hashed filename never moved;
+`up --server` then warned it was "serving whatever was built when it started"
+and did not restart. Needed `rm -rf .next` + `turbo run build --force` + an
+explicit `kill`. **A capture asserts the DOM it photographs; it cannot assert
+that the CSS it photographed is the CSS in the repo.** Third vacuous mode this
+wave, after a harness that errored before shooting and a motion frame read as a
+layout bug.
+
+**W2-F42 — a fix for the EQUAL case leaves the BELOW case open.** R-2 gave the
+queue a `revision` because a repeated deadline armed no timer. A tick landing
+BELOW the deadline still returned `state` itself — same bail-out, same frozen
+slab — reachable when the wall clock steps backwards mid-broadcast. And the
+existing test asserted a tick no-op must NOT churn the revision, i.e. it pinned
+the defect as a requirement. **When a guard is fixed for one boundary, state the
+other two.**
+
+**W2-F43 — a wave task can rest on a harness CI never runs.** Task 3's cricket
+band was proven only by `overlay-moments.capture.ts`, which is `test.skip`
+without `GALLERY_DIR` and whose `gallery` project appears in NO workflow; the
+spec had no cricket case and smoke checks `recent[]` on the hockey rig alone.
+**Before calling a surface covered, name the job that runs the file.**
+
+**W2-F44 — a performance comment is a claim, and this one was wrong twice.**
+"One query for at most three names" described a path that issued two queries and
+was called from two places: four per poll per viewer for cricket, reading the
+same line-up twice. Same class as R-3 and equally invisible — nothing about the
+output was wrong.
+
+**W2-F45 — the bar has NO name cap, and §1's fallback ladder was never built.**
+Found by driving the product, not by any review. §1: a name too long "falls to
+the entrant's short name, then to the three-letter code". `overlay-bar.tsx:54`
+renders `side.name` unconditionally; `side.short` exists and is used only as a
+React key and by the bug. Measured at 1920×1080: the home score paints inside
+the away cell (1046→1156 against a cell starting at 1063) and the away name
+paints over the brand mark (to 1781 in a cell ending at 1708); threshold ≈ 34
+characters at 45 px. **W1's surface and an owner call** — §1 forbids an ellipsis,
+so the fix is the measuring ladder, not a CSS one-liner.

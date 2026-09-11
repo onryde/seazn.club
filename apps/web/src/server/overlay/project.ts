@@ -5,6 +5,8 @@
 // construction (owner ruling 4: "all sports").
 import type { FoldedFixture } from "@/server/engine-db/fold";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
+import type { RecentEvent } from "@/lib/overlay-recent-types";
+import type { OverlayCricketLive } from "@/lib/overlay-cricket";
 
 interface RowSnapshot {
   status: string;
@@ -156,10 +158,20 @@ function cricketOf(state: unknown): OverlayLiveData["cricket"] {
   return { innings };
 }
 
+/**
+ * W2 — `recent` is passed IN rather than derived here, because naming a person
+ * needs the line-up and this projection is pure. It is always set, even to `[]`:
+ * the overlay's moment layer reads `data.recent` on every poll, and an absent
+ * field and an empty one would be two shapes for one fact.
+ */
 export function projectOverlayLiveData(input: {
   row: RowSnapshot;
   folded: FoldedFixture | null;
   venueTz: string;
+  recent?: readonly RecentEvent[];
+  /** W2 Task 3. Passed IN for the same reason `recent` is: naming the people at
+   *  the crease needs the line-up, which this projection cannot read. */
+  cricketLive?: OverlayCricketLive | null;
 }): OverlayLiveData {
   const { row, folded, venueTz } = input;
   const out: OverlayLiveData = {
@@ -168,6 +180,8 @@ export function projectOverlayLiveData(input: {
     outcome: row.outcome,
     lastSeq: row.last_seq,
     venueTz,
+    recent: [...(input.recent ?? [])],
+    ...(input.cricketLive ? { cricketLive: input.cricketLive } : {}),
   };
   if (!folded) return out;
   const clock = clockOf(folded.state, folded.active);

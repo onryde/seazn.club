@@ -41006,7 +41006,7 @@
     },
     "/api/v1/public/fixtures/{id}/overlay": {
       "get": {
-        "summary": "Stream overlay payload: the public live summary plus the folded-state clock (football family) and innings numbers (cricket)",
+        "summary": "Stream overlay payload: the public live summary, the folded-state clock (football family) and innings numbers (cricket), and the last eight surviving ledger events with consent-resolved person names",
         "tags": [
           "public"
         ],

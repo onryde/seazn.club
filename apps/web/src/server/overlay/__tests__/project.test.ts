@@ -144,6 +144,17 @@ describe("projectOverlayLiveData", () => {
     expect(out.venueTz).toBe("Asia/Kolkata");
     expect(out.clock).toBeUndefined();
     expect(out.cricket).toBeUndefined();
+    // W2 — ALWAYS an array. The overlay reads `data.recent` every poll, and an
+    // absent field and an empty one would be two shapes for one fact.
+    expect(out.recent).toEqual([]);
+  });
+
+  it("W2: `recent` is passed IN and reaches the wire — naming a person needs the line-up, which this projection cannot read", () => {
+    const recent = [
+      { seq: 4, type: "football.goal", at: WALL, payload: { side: 0 as const, person: { name: "A. One", masked: true } } },
+    ];
+    const out = projectOverlayLiveData({ row: ROW(4), folded: null, venueTz: "UTC", recent });
+    expect(out.recent).toEqual(recent);
   });
 
   it("football: a stamped goal in a running half anchors the clock at the stamp, on the last event's wall time", () => {

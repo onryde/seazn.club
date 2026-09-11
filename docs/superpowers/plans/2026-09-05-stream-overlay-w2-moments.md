@@ -4,7 +4,7 @@
 
 **Goal:** The overlay reacts to the match. A SIX, FOUR or OUT in cricket, a GOAL or card in football / hockey / ice hockey, an ACE, a break / set / match point and a set won in the racket sports, and a set point, match point or set won in volleyball (owner answer 21 / Q10) each raise a slab in the sport's own colour beside the bug (or under the bar), hold four seconds, fold away, and queue behind one another. The cricket bar's second band carries the batters at the crease and the bowler's figures. Nothing fires on load or reconnect; nothing fires twice; every name passes the public-site consent resolver; a sport whose module declares no such event renders nothing, by construction.
 
-**Architecture:** One additive field on the public fixture payload — `recent: RecentEvent[]`, the last eight void-resolved ledger events with their raw engine type, sequence number, a consent-resolved minimal payload and, for the racket sports, a server-derived `setWon` / `pointState` annotation computed by replaying the module through the real fold and probing "would the next point win the game / set / match" (the engine is the authority; no set rule is retyped). A pure client projection `momentsFor(sportKey, recent, sinceSeq, msg)` turns it into `OverlayMoment[]` through a per-sport allowlist keyed by the module's declared event types. The stage tracks the highest sequence it has seen, starting at the initial payload's tip, so OBS opening mid-stream replays nothing. A FIFO queue reducer drives one slab component whose motion is `transform` / `opacity` only. The cricket line is a client projection of spectator W1's `match_centre.cricket.live` (primary) with a precisely named server fallback.
+**Architecture:** (AMENDED 2026-09-10 by task zero — see the Status block.) One additive field on **`OverlayLiveData`, the overlay endpoint's projection** — `recent: RecentEvent[]`, the last eight void-resolved ledger events with their raw engine type, sequence number, a consent-resolved minimal payload and, for the racket sports, a server-derived `setWon` / `pointState` annotation computed by replaying the module through the real fold and probing "would the next point win the game / set / match" (the engine is the authority; no set rule is retyped). A pure client projection `momentsFor(sportKey, recent, sinceSeq, msg)` turns it into `OverlayMoment[]` through a per-sport allowlist that MATCHES on `(type, payload)`, never on type alone (W2-F3). The stage tracks the highest sequence it has seen, starting at the initial payload's tip, so OBS opening mid-stream replays nothing. A FIFO queue reducer drives one slab component whose motion is `transform` / `opacity` only. The cricket line comes from a server-side `foldMatch` with the real cricket module — the only source, since `match_centre` never reaches the overlay payload (W2-F10).
 
 **Tech Stack:** Next 16 App Router (read `node_modules/next/dist/docs/` before touching a route), React 19, TypeScript 7 native tsc, Tailwind 4 + `globals.css`, zod, `@seazn/engine` (`foldMatch`, `resolveVoids`, per-module `eventSchemas`), postgres.js, vitest (`environment: "node"`, no DOM), Playwright, pnpm workspaces.
 
@@ -17,7 +17,41 @@ design as numbers.
 
 **Spec:** `docs/superpowers/specs/2026-09-05-stream-overlay-design.md` — "Decisions locked" 3–4, "Architecture" §2 (`OverlayModel`, W2 fills `detail` for cricket), §9 Motion (the slab), "Step two — moments" (`OverlayMoment`, the per-sport allowlist), "Tests". Programme index: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`. Wave 1 plan: `docs/superpowers/plans/2026-09-05-stream-overlay-w1.md` (absent when this plan was written; the W1 skeleton below is taken from the spec and every W1 path is re-pinned at execution).
 
-**Status (2026-09-05, main session review; gate re-read 2026-09-08): NOT executable yet, by design — but the GATE IS OPEN: spectator W1 MERGED 2026-09-08 (#743, `main` 60c0615b0). What remains is task zero, below.**
+**Status (2026-09-11): TASK 1 IS SHIPPED — the payload half.** `recent` is on
+`OverlayLiveData`, projected in `server/overlay/recent.ts`, consent-resolved,
+mutation-swept (8/8), 40/40 green, tsc and lint clean, openapi regenerated.
+**Step 7 is shipped too** — `derived.setWon` and `derived.pointState` ride on
+the same payload, asked of the engine rather than computed. Task 2's
+racket-sport rules have what they need.
+
+**Verified end to end against a live DB**: 3947 passed / 0 failed, and the
+DB-backed route test drives ten real badminton appends and reads the engine's
+set point off the route's own JSON. Mutation sweep 17/17.
+
+**Proven over real HTTP, 2026-09-11:** full smoke against a standalone prod
+server — **1034 passed, 0 failed** — with the four new overlay checks among
+them. That run matters beyond the checks themselves: it is the only place the
+REAL `unstable_cache` executed, so the serialisation fix (W2-F18) is proven in
+production shape rather than against a double. A green unit suite is not a working product.
+
+**One finding from building it, worth the wave's attention.** The spectator
+timeline was measured against this need before a line was written and CANNOT
+serve it — `TimelineLine` carries no raw event type, `TIMELINE_KEY_FOR` is
+deliberately many-to-one so the key cannot be inverted, and cricket has no entry
+in that table at all. That settles W2-F1's "the source is the fallback" with a
+reason rather than an absence, and it is the RECOMMENDATION the wave owes the
+spectator programme: carry raw types.
+
+**Status (2026-09-10): TASK ZERO IS CLOSED. Outcomes and findings W2-F1–W2-F12 are in `../specs/2026-09-05-stream-overlay-prompts/_INDEX.md` § “2026-09-10 — W2 task zero: the RE-PIN, closed”, re-verified against `main` `10c7f94cd`. Both gates are open (spectator W1 #743; PR1 / W1 overlay #761). NOT yet executable for one remaining reason: the re-pin falsified three premises this plan is written on, so Task 1's shapes and its placeholder test bodies must be rewritten and re-reviewed first. The wave's SCOPE is unchanged — every moment the owner named still fires. Its MECHANISM changes:**
+
+- **W2-F3 — NO CHANGE OWED HERE (corrected 2026-09-11).** The finding was raised against `W2-moments.md`'s flat `MOMENT_TYPES` map and does not apply to this plan: Task 2 already specifies `MOMENT_RULES` as `(ev, ctx) => OverlayMoment | null` functions that read `boundary`/`wicketKind` off `cricket.ball`, already names `*.suspension.start` rather than a non-existent `*.card`, and additionally names `cricket.superover.ball` (verified `cricket.ts:408`). The BRIEF is what needs correcting.
+- **W2-F4 — CONFIRMS this plan's derived branch** rather than correcting it: set point and match point are DERIVED in tennis, badminton, table tennis and volleyball at every band anyone streams at (`<sport>.set.summary` / `.game.summary` is an EVENT only at band 0), which is exactly what Task 2's `derived.pointState` / `derived.setWon` rules assume.
+- **W2-F6 — a band-2 cricket wicket is a line DIFF**, not a type match: `batting.out` flipping false→true on a cumulative, repeatedly re-appended `cricket.player.line`.
+- **W2-F1/F9/F10 — the source is the fallback, and it lands on `OverlayLiveData`,** not on the public fixture payload (the overlay no longer polls that route). The cricket batter line's “primary” source `match_centre.cricket.live` never arrives on the overlay payload; the server-side fold is the only source.
+- **W2-F7 — CLOSED 2026-09-11.** The lineup/person path is added, and it goes through `readPublicLineups` directly rather than through `personOf`: the overlay publishes `{ name, masked }` and no id at all, so `makePersonOf`'s surrogate-id machinery is not needed here. A person the line-up never named is left UNNAMED rather than given the match centre's `"?"` — an overlay has no scorecard row to fill, and "GOAL" reads correctly on air where "?" does not.
+- **W2-F11 — `useLiveFixture` now returns `awaitingDelay`.** The stage must gate `seenSeq` and the queue push on it or a delayed transport replays history (mutant h).
+- **W2-F2 — do not read `data.match_centre` on the overlay payload.** It typechecks through `OverlayLiveData extends LiveFixtureData` and is always `undefined` at runtime.
+
 This wave WAS blocked on `feat/spectator-surface` W1 merging (done 2026-09-08). Because its input
 shapes are unpinned until then, several test bodies in Task 1 (the
 `buildOverlayRecent` and `loadOverlayRecent` suites) are sketched as comments
@@ -48,7 +82,7 @@ Copied from the spec and the programme rules; every task brief restates the ones
 - **Subagents run Opus or above** (owner ruling "use OPus SubAgent"; `model: opus` on every dispatch). Never silently downgrade.
 - **Every change ships a test that fails without it**; the four kinds (unit, e2e, smoke, regression) are stated per task; mutation checks are run, not described.
 - **e2e runs on push to `main` only.** Before merge use `workflow_dispatch` on `.github/workflows/e2e.yml` with the `pr` input; smoke runs on PRs only. Read `e2e.yml` itself before believing either sentence.
-- **Worktree discipline.** All work in `.claude/worktrees/stream-overlay` on `feat/stream-overlay`; prefix shell commands with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay &&` in the same call; never `git stash` (the stash stack is shared with the main checkout); commit with `/usr/bin/git commit -o <paths>` so the shared index cannot sweep a sibling's files in (`-o` fails with "pathspec did not match" on a NEW file: `/usr/bin/git add <new-file>` first, as its own plain call, then commit; the session's guard also refuses heredocs, `eval`, sourcing and `&&` chains that include git, so every git call is one plain command).
+- **Worktree discipline.** All work in `.claude/worktrees/stream-overlay` on `feat/stream-overlay`; prefix shell commands with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 &&` in the same call; never `git stash` (the stash stack is shared with the main checkout); commit with `/usr/bin/git commit -o <paths>` so the shared index cannot sweep a sibling's files in (`-o` fails with "pathspec did not match" on a NEW file: `/usr/bin/git add <new-file>` first, as its own plain call, then commit; the session's guard also refuses heredocs, `eval`, sourcing and `&&` chains that include git, so every git call is one plain command).
 - **No redirect built from `req.url`** anywhere in this programme (base-commit health note in `_INDEX.md`): W2 adds no route; the existing public route returns JSON.
 - **Sponsor logos are NOT in W2** (owner answer 20 / Q9, 2026-09-06: *"ok for own wave as put it last"*) — they are their own wave, scheduled LAST in the programme, after W1 and W2. The slab is the only thing that appears beside the bug or under the bar in this wave; reserve no space and leave no seam for a logo, because a reserved-but-empty slot is an inert seam and that wave owns sizing, placement and the per-tier rules.
 - **Phone composition rules do not apply to the overlay canvas** (authored at 1920×1080, scaled), but the organiser panel's live preview renders the same component at reduced scale, so the slab must not overflow the 1920×1080 stage at any moment length: `max-width` on the slab, `truncate` with `min-w-0` on its text.
@@ -110,8 +144,8 @@ W2 creates or modifies:
 
 ```
 apps/web/src/lib/overlay-recent-types.ts                     NEW  pure types: RecentEvent, RecentPayload, RecentDerived, OverlayCricketLive (shared client/server)
-apps/web/src/server/public-site/overlay-recent.ts           NEW  loadOverlayRecent (DB) + buildOverlayRecent (pure) + RECENT_PROJECT + probePointState + diffClosedSets
-apps/web/src/server/public-site/__tests__/overlay-recent.test.ts   NEW  DB-backed usecase test (posts through the real producers)
+apps/web/src/server/overlay/recent.ts                       NEW  buildOverlayRecent + recentWindow + personIdsIn + RECENT_PROJECT + loadRecentPersonOf (+ Step 7: probePointState, diffClosedSets)
+apps/web/src/server/overlay/__tests__/recent.test.ts        NEW  pure: every stream FOLDED through the real module before it is projected
 apps/web/src/server/usecases/public.ts                      MOD  publicFixture() returns { …row, recent }
 apps/web/src/server/public-site/data.ts                     MOD  getPublicFixture() returns { …, recent }
 apps/web/src/components/public-site/live-score-data.ts     MOD  LiveFixtureData.recent?: RecentEvent[] (and overlayCricket? only in Task 3 variant B/C)
@@ -141,16 +175,47 @@ docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md  MOD  status 
 
 ### Task 1: The public payload carries the last eight events (`recent`)
 
-**Files:**
+**Files — DESTINATION CORRECTED 2026-09-11 by task zero (W2-F1, W2-F9, W2-F10).**
+`recent` goes on **`OverlayLiveData`, the overlay endpoint's projection**, NOT on
+the public fixture payload: the overlay's ONE poll target is
+`GET /api/v1/public/fixtures/[id]/overlay` and it no longer reads the public
+fixture route at all. Putting it on `publicFixture` would ship a field the
+overlay never receives.
+
 - Create: `apps/web/src/lib/overlay-recent-types.ts`
-- Create: `apps/web/src/server/public-site/overlay-recent.ts`
-- Modify: `apps/web/src/server/usecases/public.ts:263-298` (`publicFixture`)
-- Modify: `apps/web/src/server/public-site/data.ts:689-747` (`getPublicFixture`)
-- Modify: `apps/web/src/components/public-site/live-score-data.ts` (`LiveFixtureData`)
-- Modify: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx` (W1; `initial` gains `recent`)
-- Modify: `scripts/smoke.ts` (one `check`)
-- Test: `apps/web/src/server/public-site/__tests__/overlay-recent.test.ts`
-- Do NOT touch: `apps/web/src/app/api/v1/public/fixtures/[id]/route.ts` (the route already returns whatever `publicFixture` returns), the engine, `live-score.tsx`.
+- Create: `apps/web/src/server/overlay/recent.ts` (**under `server/overlay/`, not
+  `server/public-site/`** — it is the overlay projection's own helper)
+- Modify: `apps/web/src/server/overlay/project.ts:159-178` — the projector
+  currently emits exactly `{ status, summary, outcome, lastSeq, venueTz, clock?,
+  cricket? }`; `recent` is added there or it does not reach the overlay
+- Modify: `apps/web/src/server/overlay/load.ts:76-81` — the ledger read and the
+  **new lineup/person read** (see below)
+- Modify: `apps/web/src/components/public-site/live-score-data.ts:59-71`
+  (`OverlayLiveData`, NOT the shared `LiveFixtureData`)
+- ~~Modify: `apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx`~~ — NO
+  CHANGE NEEDED (measured 2026-09-11): its `initial` is
+  `await loadOverlayLiveData(fixture.id)` verbatim, so `recent` arrives on first
+  paint with no edit here.
+- Modify: `scripts/smoke.ts` (one `check`, against the OVERLAY endpoint)
+- Test: `apps/web/src/server/overlay/__tests__/recent.test.ts`
+- Do NOT touch: `apps/web/src/server/usecases/public.ts`,
+  `apps/web/src/server/public-site/data.ts`, the public fixture route, the
+  engine, `live-score.tsx`.
+
+**New work this task must carry, briefed as reuse and measured as absent
+(W2-F7):** the consent resolver is NOT reachable from the overlay projection.
+`server/overlay/{load,project}.ts` do no lineup or person read at all. Moment
+lines name PEOPLE, so this task adds that path — `personOf` (type
+`server/public-site/match-centre.ts:185`, built by `makePersonOf` `:214`) fed by
+`readPublicLineups` (`server/public-site/public-lineups.ts:25,41`), which is the
+single caller of `resolvePersonDisplayName` (`lib/name-display.ts:72`). Do NOT
+reach for `maskPublicEntrantNames` (`data.ts:565`) — that is the ENTRANT-name
+resolver and a different thing.
+
+**Do NOT read `data.match_centre` on the overlay payload (W2-F2).** It
+typechecks, because `OverlayLiveData extends LiveFixtureData`, and is always
+`undefined` at runtime — the projector never sets it. A green `tsc` proves
+nothing here.
 
 **Interfaces:**
 
@@ -180,296 +245,137 @@ export const OVERLAY_RECENT_WINDOW = 8;
 ```
 
 ```ts
-// apps/web/src/server/public-site/overlay-recent.ts
+// apps/web/src/server/overlay/recent.ts — SHIPPED 2026-09-11. The briefed
+// `loadOverlayRecent(sql, fixture)` does NOT exist and is not owed: the fold
+// already holds the void-resolved stream, so there is nothing to re-read.
+export const RECENT_PROJECT: Readonly<Record<string, Project>>;   // keyed by ENGINE EVENT TYPE
+export function recentWindow(active: readonly EventEnvelope[], window?: number): EventEnvelope[];
+export function personIdsIn(window: readonly EventEnvelope[], sides: readonly [string, string]): string[];
 export function buildOverlayRecent(args: {
-  sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair;
-  events: readonly EventEnvelope[]; sides: [string, string];
-  personOf: (id: unknown) => RecentPerson | undefined;
-  batterFigures?: (personId: string, stateAfter: unknown) => { runs: number; balls: number } | null;
-  window?: number;
+  active: readonly EventEnvelope[]; sides: readonly [string, string];
+  personOf: (id: unknown) => RecentPerson | undefined; window?: number;
 }): RecentEvent[];
-export async function loadOverlayRecent(sql: Sql, fixture: { id: string; division_id: string; home_entrant_id: string | null; away_entrant_id: string | null }): Promise<RecentEvent[]>;
-export const RECENT_PROJECT: Readonly<Record<string, Project>>;      // keyed by ENGINE EVENT TYPE
-export function diffClosedSets(before: unknown, after: unknown): RecentDerived["setWon"] | undefined;
+export function loadRecentPersonOf(
+  sql: Sql, fixtureId: string, divisionId: string, ids: readonly string[],
+): Promise<(id: unknown) => RecentPerson | undefined>;
+// Step 7 adds `diffClosedSets` and the point-state probe beside these.
 ```
 
-- [ ] **Step 1: RE-PIN.** In the rebased tree run and record in `_INDEX.md`: `grep -an "match_centre\|loadMatchCentre" apps/web/src/server/usecases/public.ts apps/web/src/server/public-site/data.ts` (D7); `grep -an "export" apps/web/src/server/public-site/public-lineups.ts` (D4); `grep -an "^export async function scoreEvent" -A 8 apps/web/src/server/usecases/scoring.ts` and `grep -an "export const ScoreEvent\b\|export const PutLineup\b" -A 8 apps/web/src/server/api-v1/schemas.ts` (the producers' input shapes); `grep -an "youth\|player_name_display" db/migration -r | head` (whether the two columns live on `divisions` or only on the view).
+- [x] **Step 1: RE-PIN — DONE 2026-09-11 (task zero).** Outcomes and findings
+  W2-F1…W2-F12 are in `_INDEX.md` § "2026-09-10 — W2 task zero". Pins that this
+  task builds on, all re-verified at `main` `10c7f94cd`:
+  `project.ts:159-178` (the emitted field set), `load.ts:76-81`,
+  `live-score-data.ts:59-71` (`OverlayLiveData`), `timeline.ts:587` +
+  `:80-92` (`buildTimeline`, `personOf` at `:91`), `match-centre.ts:185`/`:214`
+  (`personOf`, `makePersonOf`), `public-lineups.ts:25,41`,
+  `name-display.ts:72`, `data.ts:284` (`PublicFixture.last_seq`),
+  `V216__score_events.sql:8,14` (gapless `seq`, `unique (fixture_id, seq)`),
+  `append-event.ts:213,341-345` (`match_states.last_seq` upserted per append).
+  Two further facts this task must honour: a void **appends** a `core.void` row
+  so `last_seq` is strictly monotonic and cannot re-fire an old moment (W2-F5),
+  and `resolveVoids` still filters at read, so the projection applies it.
+  **The remaining greps in this step were aimed at `usecases/public.ts` and
+  `public-site/data.ts`, which are no longer this task's files — dropped.**
 
-- [ ] **Step 2: Failing tests** — `apps/web/src/server/public-site/__tests__/overlay-recent.test.ts`. DB-backed, following `apps/web/src/server/usecases/__tests__/add-fixture.test.ts:5-17` (`HAS_DB`, `describe.skipIf`) and the `_rig.ts` seeding helpers. Post through the REAL producers (`scoreEvent`, `putLineup`), never SQL inserts into `score_events`.
+- [x] **Step 2-6 — SHIPPED 2026-09-11 as the `recent` window (payload only).**
+  Steps 2 to 6 as written below the line were STALE: they named
+  `server/overlay/recent.ts`, `usecases/public.ts`,
+  `public-site/data.ts` and the `stream-overlay` worktree — the destinations
+  task zero had already struck (W2-F1/F9). They are replaced by what was
+  actually built, which differs from the brief in three ways worth carrying
+  forward.
 
-```ts
-import { describe, expect, it, beforeAll } from "vitest";
-import { sql } from "@/server/db";                                       // RE-PIN the default client's module
-import { resolvePersonDisplayName } from "@/lib/name-display";
-import { publicFixture } from "@/server/usecases/public";
-import { scoreEvent } from "@/server/usecases/scoring";
-import { putLineup, createPerson /* RE-PIN */ } from "@/server/usecases/fixtures";
-import { seedOrg, makeCommunityRig } from "../../usecases/__tests__/_rig";
-import { buildOverlayRecent, diffClosedSets } from "../overlay-recent";
-import type { RecentEvent } from "@/lib/overlay-recent-types";
-import { foldMatch } from "@seazn/engine/core";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
-import { tennis } from "@seazn/engine/sports/tennis";
-import { cricket } from "@seazn/engine/sports/cricket";
+  **What shipped** (`1a4dd53b6` and its parent):
 
-const HAS_DB = !!process.env.DATABASE_URL;
-const recentOf = (doc: unknown) => (doc as { recent: RecentEvent[] }).recent;
+  | | |
+  |---|---|
+  | Create | `apps/web/src/lib/overlay-recent-types.ts` — `RecentPerson`, `RecentPayload`, `RecentEvent`, `OVERLAY_RECENT_WINDOW = 8` |
+  | Create | `apps/web/src/server/overlay/recent.ts` — `RECENT_PROJECT`, `recentWindow`, `personIdsIn`, `buildOverlayRecent`, `loadRecentPersonOf` |
+  | Modify | `server/overlay/project.ts` — `recent` is passed IN and always emitted, even as `[]` |
+  | Modify | `server/overlay/load.ts` — `recentOrEmpty`, best-effort like the fold |
+  | Modify | `components/public-site/live-score-data.ts` — `recent?: RecentEvent[]` on `OverlayLiveData` |
+  | Modify | `server/api-v1/openapi.ts` + the two generated `openapi/*.json` |
+  | Modify | `scripts/smoke.ts` — four checks against the OVERLAY endpoint's own JSON |
+  | Test | `server/overlay/__tests__/recent.test.ts` (17), plus 5 in `load.test.ts` and 2 in `project.test.ts` |
 
-describe("buildOverlayRecent (pure, real modules)", () => {
-  it("EMPTY ledger → []", () => {
-    const lineups = defaultLineupPair(tennis.positions);
-    expect(buildOverlayRecent({ sportKey: "tennis", module: tennis, cfg: tennis.variants.tour /* RE-PIN cfg parse */, lineups, events: [], sides: ["H", "A"], personOf: () => undefined })).toEqual([]);
-  });
-  it("keeps the last 8 module events, oldest first, raw engine type preserved, core.* and lineup events excluded", () => {
-    // 12 tennis points after core.start → 8 entries, all type "tennis.point", seq ascending, none "core.start"
-  });
-  it("a voided event is absent from the window (resolveVoids runs first)", () => {
-    // point at seq 3, core.void { voids: id-of-3 } at seq 4 → no entry with seq 3
-  });
-  it("tennis: the point that makes it 40–30 on the receiver's serve is a BREAK point, fresh; the next point (Ad) is not fresh", () => {
-    // ledger: core.start, then points so that server=home and game reaches 30–40 (away leads) →
-    // last.derived.pointState = { kind: "break", side: 1, fresh: true }; add one more away point? no — add a HOME point → 40–40 → pointState undefined
-    // then away point → Ad away → { kind: "break", side: 1, fresh: true } again (transition after a gap IS fresh)
-  });
-  it("tennis: a set point that also wins the match is MATCH, not SET; a decided match has no pointState", () => {
-    // fold a best-of-1-set ledger (RE-PIN a tennis cfg with bestOf 1 or drive 6-0 games) to 5–0 40–0 → kind "match"; after the winning point → pointState undefined
-  });
-  it("tennis: winning a set annotates setWon on the winning point with the closed set's games", () => {
-    const won = /* the entry whose event closed the set */;
-    expect(won.derived?.setWon).toEqual({ set: 1, winner: 0, home: 6, away: 0 });
-  });
-  it("badminton: 20–19 is a SET point for the leader; the probe never runs a type the module does not declare", () => {
-    // 21-point game; also assert buildOverlayRecent with a module whose eventSchemas lacks "<key>.rally" (spy: { ...badminton, eventSchemas: {} }) yields NO pointState
-  });
-  it("cricket: a boundary ball projects { runs: 6, boundary: 6 }; a wicket ball projects wicketKind, the batter's name and figures; a plain ball projects { runs: 1 }", () => {
-    // lineups = defaultLineupPair(cricket.positions); ids H-p1..; toss + core.start + 3 balls
-    // personOf: (id) => id === "H-p1" ? { name: "H. One", masked: true } : undefined
-  });
-  it("football: goal → { side, person, ownGoal:false, penalty:false }; card → { side, person, colour: 'yellow' }; no derived", () => {});
-  it("diffClosedSets: null/undefined/non-array on either side → undefined; a set closing → the set's ordinal, winner and score", () => {});
-});
+  **Three deviations from the brief, each measured:**
 
-describe.skipIf(!HAS_DB)("loadOverlayRecent through publicFixture (DB)", () => {
-  it("a posted football goal is read back as recent[-1] with type football.goal and seq === last_seq", async () => {
-    const { auth } = await seedOrg();
-    const rig = await makeCommunityRig("football");             // RE-PIN: started division + fixture + entrant ids
-    await scoreEvent(auth, rig.fixtureId, { expectedSeq: 0, type: "core.start", payload: {} });
-    await scoreEvent(auth, rig.fixtureId, { expectedSeq: 1, type: "football.goal", payload: { by: rig.homeEntrantId } });
-    const recent = recentOf(await publicFixture(rig.fixtureId));
-    expect(recent.at(-1)).toMatchObject({ seq: 2, type: "football.goal", payload: { side: 0 } });
-    expect(recent.some((r) => r.type.startsWith("core."))).toBe(false);
-  });
-  it("names on recent are the consent resolver's output, not the stored full name (opt-out AND youth)", async () => {
-    // seed a cricket division with two persons per side (RE-PIN createPerson/putLineup input shapes), one with consent { public_name: false }
-    // post cricket.toss, core.start, one cricket.ball wicket with wicket.out = the opted-out batter
-    const recent = recentOf(await publicFixture(fixtureId));
-    const out = recent.at(-1)!;
-    const expected = resolvePersonDisplayName("Bartholomew Ravindranath", { public_name: false }, null, false);
-    expect(out.payload.person?.name).toBe(expected);              // derived from the resolver, never typed
-    expect(out.payload.person?.name).not.toBe("Bartholomew Ravindranath");
-    expect(out.payload.person?.masked).toBe(true);
-    // second half: flip the division to youth (RE-PIN the column) and post another wicket for a CONSENTING batter → masked too
-  });
-  it("the cached payload is invalidated by the next event (recent grows without waiting for the TTL)", async () => {
-    // publicFixture twice around a scoreEvent; second read's recent.length === first + 1
-  });
-  it("a fixture with an unassigned entrant (bye/TBD) returns recent: [] and does not throw", async () => {});
-});
-```
+  1. **No second ledger read, and no `loadOverlayRecent` at all.**
+     `FoldedFixture.active` IS the void-resolved stream (`engine-db/fold.ts`:
+     `active: resolveVoids(envelopes)`) and `load.ts` already holds it. The
+     briefed loader would have re-read `score_events`, `divisions`, `fixtures`,
+     `stages` and the line-ups that `foldFixture` had just read — and been a
+     second authority for which events survived.
+  2. **The overlay PAGE needed no change.** Its `initial` is
+     `await loadOverlayLiveData(fixture.id)` verbatim, so `recent` arrives on
+     first paint with no edit. The brief listed `page.tsx` as a file to modify.
+  3. **`personIdsIn` runs the projectors rather than listing payload keys.**
+     The briefed `PERSON_KEYS = ["scorer", "person", "striker", …]` drifts from
+     the projectors in both directions and both are defects — too many ids is a
+     privacy floor breached (a cricket ball records a striker, a non-striker, a
+     bowler and a fielder, and only the dismissed batter is ever spoken), too
+     few is a moment that silently loses its name.
 
-- [ ] **Step 3: Run — expect failures** (module not found).
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL=postgresql://postgres@127.0.0.1:54405/seazn_ovl DATABASE_SSL=disable pnpm exec vitest run src/server/public-site/__tests__/overlay-recent.test.ts --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-t1-red.json`
-  Expected: `numFailedTestSuites: 1` (collection error: cannot resolve `../overlay-recent`).
+  **Two engine shapes the brief had wrong**, found by folding the test streams
+  rather than trusting them: `CricketWicket.bowlerCredited` is REQUIRED, and
+  `core.lineup.substitution` is `{ side, off: PersonId, on: LineupSlot }`, not
+  `{ by, off, on }`.
 
-- [ ] **Step 4: Implement** `overlay-recent-types.ts` (as above) and `overlay-recent.ts`:
+  **Mutation sweep, 8 mutants, 8 killed** — but only after a fix: the wicket
+  mutant (name the striker, not the dismissed batter) SURVIVED first time,
+  because both cases dismissed the striker himself, so the right answer and the
+  wrong one were the same person. Both now use a run out.
 
-```ts
-import "server-only";
-import type postgres from "postgres";
-import { foldMatch, isLineupEventType, resolveVoids, type EventEnvelope, type LineupPair, type ScoreSummary } from "@seazn/engine/core";
-import type { AnySportModule } from "@seazn/engine/sport";
-import { activeInnings } from "@seazn/engine/sports/cricket";
-import { resolveModule } from "@/server/engine-db/registry";
-import { loadLineupPair } from "@/server/engine-db/lineups";
-import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
-import { resolvePersonDisplayName } from "@/lib/name-display";
-import { OVERLAY_RECENT_WINDOW, type RecentDerived, type RecentEvent, type RecentPayload, type RecentPerson } from "@/lib/overlay-recent-types";
+  **Verified:** `vitest src/server/overlay` 40/40, exit 0, paths confirmed in
+  this worktree; `tsc` clean for `apps/web` and `tsconfig.scripts.json`; lint
+  0 errors; `openapi:gen` regenerated and committed (the route carries no
+  response schema, so only its summary moved).
 
-type Sql = ReturnType<typeof postgres>;
-type Project = (payload: Record<string, unknown>, ctx: ProjectCtx) => RecentPayload;
-interface ProjectCtx {
-  sideOf: (entrantId: unknown) => 0 | 1 | undefined;
-  personOf: (id: unknown) => RecentPerson | undefined;
-  batterFigures: (personId: string) => { runs: number; balls: number } | null;
-}
-const strip = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+  **Both verified since**: the DB-backed route test runs green against a live
+  DB, and full smoke against a standalone prod server is 1034 passed / 0 failed
+  with all four `recent` checks among them.
 
-const ball: Project = (p, ctx) => {
-  const bat = (p.runs as { bat?: number } | undefined)?.bat;
-  const wicket = p.wicket as { kind?: string; out?: string } | undefined;
-  const fig = typeof wicket?.out === "string" ? ctx.batterFigures(wicket.out) : null;
-  return strip({
-    runs: typeof bat === "number" ? bat : undefined,
-    boundary: p.boundary === 4 || p.boundary === 6 ? p.boundary : undefined,
-    wicketKind: wicket?.kind,
-    person: wicket ? ctx.personOf(wicket.out) : undefined,
-    batterRuns: fig?.runs, batterBalls: fig?.balls,
-  });
-};
-const goal: Project = (p, ctx) => strip({
-  side: ctx.sideOf(p.by), person: ctx.personOf(p.scorer ?? p.person),
-  ownGoal: p.ownGoal === true || p.kind === "og", penalty: p.penalty === true,
-  kind: typeof p.kind === "string" ? p.kind : undefined,
-});
-const card: Project = (p, ctx) => strip({ side: ctx.sideOf(p.by), person: ctx.personOf(p.person), colour: String(p.color) });
-const suspension: Project = (p, ctx) => strip({ side: ctx.sideOf(p.by), person: ctx.personOf(p.person), class: String(p.class) });
-const point: Project = (p, ctx) => strip({ side: ctx.sideOf(p.by), person: ctx.personOf(p.scorer), kind: (p.meta as { kind?: string } | undefined)?.kind });
-const rally: Project = (p, ctx) => strip({ side: ctx.sideOf(p.wonBy), person: ctx.personOf(p.scorer) });
+- [x] **Step 7: `derived` — SHIPPED 2026-09-11.** `recent` events carry
+  `derived.setWon` (the event closed a set) and `derived.pointState` (one more
+  point by a side would break serve, win the set or win the match), both asked
+  of the module rather than computed here.
 
-/** Keyed by the ENGINE'S recorded event type. A type absent here projects to `{}` and is still listed with its raw type — the client allowlist decides. */
-export const RECENT_PROJECT: Readonly<Record<string, Project>> = {
-  "cricket.ball": ball, "cricket.superover.ball": ball,
-  "football.goal": goal, "football.card": card,
-  "hockey.goal": goal, "hockey.suspension.start": suspension,
-  "icehockey.goal": goal, "icehockey.suspension.start": suspension,
-  "tennis.point": point,
-  "badminton.rally": rally, "tabletennis.rally": rally, "volleyball.rally": rally,
-};
+  **The input question, answered.** `FoldedFixture` CANNOT carry the module: it
+  travels through `unstable_cache` on the overlay path, which serialises, and a
+  module is an object of functions — it would arrive with its methods gone and
+  every `unstable_cache` test in this repo would stay green, because they all
+  double it with a passthrough. So `fold.ts` is split into `loadFoldInputs` +
+  `foldFrom`, `foldFixture` is a thin wrapper over the two, and the overlay's
+  cached entry computes BOTH halves from one load and one `resolveFixtureCfg`.
 
-/** The synthetic "next point for side X" — ONLY for kernels that record one; the type must be in the module's own eventSchemas or the probe does not run. */
-const PROBE_POINT: Readonly<Record<string, (by: string) => { type: string; payload: Record<string, unknown> }>> = {
-  tennis: (by) => ({ type: "tennis.point", payload: { by } }),
-  badminton: (by) => ({ type: "badminton.rally", payload: { wonBy: by } }),
-  tabletennis: (by) => ({ type: "tabletennis.rally", payload: { wonBy: by } }),
-  volleyball: (by) => ({ type: "volleyball.rally", payload: { wonBy: by } }),
-};
+  | | |
+  |---|---|
+  | Modify | `server/engine-db/fold.ts` — `FoldInputs`, `loadFoldInputs`, `foldFrom`; `FoldedFixture` unchanged, so `rebuild.ts` and `admin-fixture-config.ts` are untouched |
+  | Modify | `server/overlay/recent.ts` — `diffClosedSets`, `PROBE_POINT`, `probePointState`, `replayDerived` |
+  | Modify | `server/overlay/load.ts` — one cached pass, key bumped to `overlay-fold-v2` |
+  | Modify | `lib/overlay-recent-types.ts` — `RecentDerived`, `RecentEvent.derived?` |
+  | Test | 15 more in `recent.test.ts`, `load.test.ts` rewritten (10), 2 more in the DB-backed route test |
 
-type SetsDetail = { sets?: { home: number; away: number; closed: boolean }[]; games?: { home: number; away: number }; serving?: "home" | "away" | null } | undefined;
-const setsOf = (d: unknown): SetsDetail => (typeof d === "object" && d !== null ? (d as SetsDetail) : undefined);
-const closedCount = (d: SetsDetail) => (Array.isArray(d?.sets) ? d!.sets!.filter((s) => s.closed === true).length : 0);
+  **How it works, and what is deliberately absent.** The replay is
+  `buildTimeline`'s derived pass: ONE incremental walk applying each event once,
+  diffing `setBreakdown(summary, sportKey)` for closed sets, degrading by
+  STOPPING where the module refuses and reporting that rather than swallowing
+  it. The point probe applies a synthetic point for each side and reads the
+  result — so no set rule, tiebreak length or deciding-set variation appears in
+  this codebase, and the probe refuses to run a type the module has not declared
+  in its own `eventSchemas`. It runs from ONE event before the window, or the
+  window's first entry cannot tell a transition from a continuation and every
+  run of a match point reads as fresh.
 
-export function diffClosedSets(before: unknown, after: unknown): RecentDerived["setWon"] | undefined {
-  const b = setsOf(before), a = setsOf(after);
-  if (!Array.isArray(a?.sets)) return undefined;
-  for (let i = 0; i < a!.sets!.length; i++) {
-    const set = a!.sets![i]!;
-    if (set.closed !== true || b?.sets?.[i]?.closed === true) continue;
-    return { set: i + 1, winner: set.home > set.away ? 0 : 1, home: set.home, away: set.away };
-  }
-  return undefined;
-}
+  **Verified:** 3947 passed / 0 failed against a live DB (label `w2t1`); tsc
+  clean for `apps/web` and `tsconfig.scripts.json`; lint 0 errors; mutation
+  sweep **17/17** across both halves of the task. The DB-backed route test now
+  drives ten real badminton appends under the sport's own `short` variant and
+  reads the engine's set point off the route's JSON.
 
-function probePointState(args: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair; prefix: readonly EventEnvelope[]; sides: [string, string]; stateNow: unknown }): Omit<NonNullable<RecentDerived["pointState"]>, "fresh"> | undefined {
-  const mk = PROBE_POINT[args.sportKey];
-  if (!mk || args.module.outcome(args.stateNow) !== null) return undefined;       // decided: nothing is "point"
-  const now = setsOf(args.module.summary(args.stateNow).detail);
-  const closedNow = closedCount(now);
-  const last = args.prefix.at(-1);
-  for (const side of [0, 1] as const) {
-    const probe = mk(args.sides[side]);
-    if (!(probe.type in (args.module.eventSchemas ?? {}))) return undefined;      // derived from the module's declarations, never assumed
-    const env: EventEnvelope = { id: "overlay-probe", fixtureId: last?.fixtureId ?? "probe", seq: (last?.seq ?? 0) + 1, type: probe.type, payload: probe.payload, recordedAt: last?.recordedAt ?? new Date(0).toISOString(), recordedBy: null };
-    let state: unknown;
-    try { state = foldMatch(args.module, args.cfg, args.lineups, [...args.prefix, env]); } catch { continue; }
-    if (args.module.outcome(state)?.kind === "win") return { kind: "match", side };
-    const then = setsOf(args.module.summary(state).detail);
-    if (closedCount(then) > closedNow) return { kind: "set", side };
-    if (args.sportKey === "tennis" && now?.serving && now.serving !== (side === 0 ? "home" : "away")) {
-      const k = side === 0 ? "home" : "away";
-      if ((then?.games?.[k] ?? 0) > (now?.games?.[k] ?? 0)) return { kind: "break", side };
-    }
-  }
-  return undefined;
-}
-
-export function buildOverlayRecent(args: Parameters<typeof buildOverlayRecentImpl>[0]): RecentEvent[] { return buildOverlayRecentImpl(args); }
-function buildOverlayRecentImpl(args: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair; events: readonly EventEnvelope[]; sides: [string, string]; personOf: (id: unknown) => RecentPerson | undefined; window?: number }): RecentEvent[] {
-  const active = resolveVoids(args.events);
-  const indexed = active.map((e, i) => ({ e, i })).filter(({ e }) => !e.type.startsWith("core.") && !isLineupEventType(e.type));
-  const window = indexed.slice(-(args.window ?? OVERLAY_RECENT_WINDOW));
-  if (window.length === 0) return [];
-  const sideOf = (id: unknown): 0 | 1 | undefined => (id === args.sides[0] ? 0 : id === args.sides[1] ? 1 : undefined);
-  const fold = (n: number): unknown => { try { return foldMatch(args.module, args.cfg, args.lineups, active.slice(0, n)); } catch { return null; } };
-  const batterFigures = (state: unknown) => (personId: string) => {
-    if (args.sportKey !== "cricket" || state === null) return null;
-    const inn = activeInnings(state as Parameters<typeof activeInnings>[0]).list.at(-1) as { fine?: { batterRuns: Record<string, number>; batterBalls: Record<string, number> } | null } | undefined;
-    const fine = inn?.fine;
-    return fine ? { runs: fine.batterRuns[personId] ?? 0, balls: fine.batterBalls[personId] ?? 0 } : null;
-  };
-  // Prefix fold BEFORE the window's first event, so `fresh` is true only at a transition even at the window's edge.
-  let prevState = fold(window[0]!.i);
-  let prevPoint = prevState === null ? undefined : probePointState({ ...args, prefix: active.slice(0, window[0]!.i), stateNow: prevState });
-  const out: RecentEvent[] = [];
-  for (const { e, i } of window) {
-    const state = fold(i + 1);
-    const project = RECENT_PROJECT[e.type];
-    const payload = project ? project((e.payload ?? {}) as Record<string, unknown>, { sideOf, personOf: args.personOf, batterFigures: batterFigures(state) }) : {};
-    const derived: RecentDerived = {};
-    if (state !== null && prevState !== null) {
-      const setWon = diffClosedSets(args.module.summary(prevState).detail, args.module.summary(state).detail);
-      if (setWon) derived.setWon = setWon;
-    }
-    const point = state === null ? undefined : probePointState({ ...args, prefix: active.slice(0, i + 1), stateNow: state });
-    if (point) derived.pointState = { ...point, fresh: !(prevPoint && prevPoint.kind === point.kind && prevPoint.side === point.side) };
-    out.push({ seq: e.seq, type: e.type, at: e.recordedAt, payload, ...(Object.keys(derived).length ? { derived } : {}) });
-    prevState = state; prevPoint = point;
-  }
-  return out;
-}
-
-interface EventRow { id: string; seq: number; type: string; payload: unknown; recorded_at: Date; recorded_by: string | null; voids_event_id: string | null }
-const PERSON_KEYS = ["scorer", "person", "striker", "nonStriker", "bowler", "server", "servedBy"] as const;
-
-export async function loadOverlayRecent(sql: Sql, fixture: { id: string; division_id: string; home_entrant_id: string | null; away_entrant_id: string | null }): Promise<RecentEvent[]> {
-  const { home_entrant_id: home, away_entrant_id: away } = fixture;
-  if (!home || !away) return [];                                                   // bye/TBD: nothing can fold (fold.ts D4a)
-  const [division] = await sql<{ sport_key: string; module_version: string; config: unknown; youth: boolean | null; player_name_display: string | null }[]>`
-    select d.sport_key, d.module_version, d.config, dv.youth, dv.player_name_display
-    from divisions d join public_divisions_v dv on dv.id = d.id
-    where d.id = ${fixture.division_id}`;                                        // RE-PIN: data.ts:440 reads dv.youth / dv.player_name_display
-  if (!division) return [];
-  const rows = await sql<EventRow[]>`
-    select id, seq, type, payload, recorded_at, recorded_by, voids_event_id
-    from score_events where fixture_id = ${fixture.id} order by seq`;
-  if (rows.length === 0) return [];
-  const [fx] = await sql<{ config_snapshot: unknown; stage_config: unknown }[]>`
-    select f.config_snapshot, s.config as stage_config from fixtures f join stages s on s.id = f.stage_id where f.id = ${fixture.id}`;
-  const module = resolveModule(division.sport_key, division.module_version);
-  const cfg = resolveFixtureCfg(fx?.config_snapshot, division.config, fx?.stage_config as Record<string, unknown> | null | undefined);
-  const lineups = await sql.begin((tx) => loadLineupPair(tx as postgres.TransactionSql, fixture.id, home, away));
-  const events: EventEnvelope[] = rows.map((r) => ({ id: r.id, fixtureId: fixture.id, seq: r.seq, type: r.type, payload: r.payload, recordedAt: r.recorded_at.toISOString(), recordedBy: r.recorded_by, ...(r.voids_event_id ? { voids: r.voids_event_id } : {}) }));
-  const ids = new Set<string>();
-  for (const e of events.slice(-OVERLAY_RECENT_WINDOW * 2)) {
-    const p = (e.payload ?? {}) as Record<string, unknown>;
-    for (const k of PERSON_KEYS) if (typeof p[k] === "string") ids.add(p[k] as string);
-    const w = p.wicket as { out?: unknown } | undefined;
-    if (typeof w?.out === "string") ids.add(w.out);
-  }
-  // D4 RE-PIN: prefer `readPublicLineups` when it resolves every id here; this query is the named fallback (and covers ids outside the lineup).
-  const persons = ids.size === 0 ? [] : await sql<{ id: string; full_name: string; consent: { public_name?: boolean } | null }[]>`
-    select id, full_name, consent from persons where id = any(${[...ids]}) and merged_into is null`;
-  const byId = new Map(persons.map((p) => [p.id, p]));
-  const personOf = (id: unknown): RecentPerson | undefined => {
-    if (typeof id !== "string") return undefined;
-    const p = byId.get(id); if (!p) return undefined;
-    const name = resolvePersonDisplayName(p.full_name, p.consent, division.player_name_display, division.youth === true);
-    return { name, masked: name !== p.full_name };
-  };
-  return buildOverlayRecent({ sportKey: division.sport_key, module, cfg, lineups, events, sides: [home, away], personOf });
-}
-```
-
-  Wire it: in `publicFixture()` (`public.ts:265-297`), after `if (!row) throw …`: `const recent = await loadOverlayRecent(sql, row).catch((err) => { log.warn({ err, fixtureId }, "overlay recent unavailable"); return []; }); return { ...(await withCourtVenueName(row)), recent };` — inside `cached(...)`, so it is computed once per invalidation and `invalidatePublicCache` (`scoring.ts:507`) already busts it on every event. In `getPublicFixture()` (`data.ts:707-740`) add `recent: await loadOverlayRecent(sql, fixtureRow)` to the cached `detail` and to the return type. In `live-score-data.ts` add `recent?: RecentEvent[]` to `LiveFixtureData`. In the W1 overlay page pass `recent` inside `initial`. RE-PIN the logger import (`grep -arn "log.warn(" apps/web/src/server/public-site/*.ts | head -1`); if the public-site layer has none, `console.warn` with the same structured object.
-
-  `scripts/smoke.ts`: beside `:4932`, `check("public fixture JSON carries recent[] (overlay W2)", Array.isArray(v1data<{ recent?: unknown }>(pub).recent))` and, after the `icehockey.goal` send at `:4935`, re-read and `check("recent tip is the goal", recent.at(-1)?.type === "icehockey.goal")`.
-
-- [ ] **Step 5: Run — green.**
-  Same command with `--outputFile=/tmp/seazn-env/ovl/w2-t1.json`. Expected: `numTotalTests: 14`, `numPassedTests: 14`, `numFailedTests: 0`, `.testResults[0].name` ends with `.claude/worktrees/stream-overlay/apps/web/src/server/public-site/__tests__/overlay-recent.test.ts`. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && pnpm openapi:gen && /usr/bin/git status --porcelain openapi` → empty (no `response` schema on the route; nothing drifts). Mutants, each must red the named test: comment out the `resolvePersonDisplayName` call (return `p.full_name`) → "names on recent are the consent resolver's output"; delete `resolveVoids` (use `args.events`) → "a voided event is absent"; make `fresh` always `true` → "the next point (Ad) is not fresh"; delete the `probe.type in eventSchemas` guard → the badminton spy test. Paste the four red/green pairs into the PR.
-
-- [ ] **Step 6: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/overlay-recent-types.ts apps/web/src/server/public-site/overlay-recent.ts apps/web/src/server/public-site/__tests__/overlay-recent.test.ts apps/web/src/server/usecases/public.ts apps/web/src/server/public-site/data.ts apps/web/src/components/public-site/live-score-data.ts "apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx" scripts/smoke.ts && /usr/bin/git commit -o apps/web/src/lib/overlay-recent-types.ts apps/web/src/server/public-site/overlay-recent.ts apps/web/src/server/public-site/__tests__/overlay-recent.test.ts apps/web/src/server/usecases/public.ts apps/web/src/server/public-site/data.ts apps/web/src/components/public-site/live-score-data.ts "apps/web/src/app/overlay/fixtures/[fixtureId]/page.tsx" scripts/smoke.ts -m "api(public): the public fixture payload carries recent[] — last 8 ledger events, consent-resolved, with set-won and point-state derived by probing the engine fold" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **Five of the nine new mutants survived the first pass**, and every one was a
+  real gap rather than an equivalent mutant — recorded in `_INDEX.md` as
+  W2-F20, because three of them are the same shape and it will recur.
 
 ### Task 2: Moment derivation — `momentsFor` and the per-sport allowlist
 
@@ -504,7 +410,7 @@ Allowlist (from the modules' declarations read 2026-09-05; the parity test below
 | sport | recorded type → moment | derived |
 |---|---|---|
 | cricket | `cricket.ball`, `cricket.superover.ball`: `boundary 6` → SIX (led); `boundary 4` → FOUR (led); `wicketKind` → OUT (dismissal), line `"{name} {runs} ({balls}) · {kind}"`; a plain ball → null | — |
-| football | `football.goal` → GOAL (led; own goal → OWN GOAL; `penalty` → line "Penalty"); `football.card` → `colour` yellow → YELLOW CARD (caution), red / second_yellow → RED CARD / SECOND YELLOW (dismissal) | — |
+| football | `football.goal` → GOAL (led; own goal → OWN GOAL; `penalty` → line "{scorer} · Penalty", ruling 28); `football.card` → `colour` yellow → YELLOW CARD (caution), red / second_yellow → RED CARD / SECOND YELLOW (dismissal) | — |
 | hockey | `hockey.goal` → GOAL; `hockey.suspension.start` → `class` green → GREEN CARD (caution), yellow → YELLOW CARD (caution), red → RED CARD (dismissal) | — |
 | icehockey | `icehockey.goal` → GOAL; `icehockey.suspension.start` → PENALTY, line = the class label (minor, bench_minor, double_minor, major, misconduct → caution; game_misconduct, match → dismissal) | — |
 | tennis | `tennis.point` with `kind === "ace"` → ACE (led) | `pointState.fresh`: break → BREAK POINT, set → SET POINT, match → MATCH POINT (led); `setWon` → SET {n}, line "{short} {home}–{away}" |
@@ -514,221 +420,58 @@ Allowlist (from the modules' declarations read 2026-09-05; the parity test below
 
 Sides' short names: `momentsFor` takes `sides: [string, string]` (the `short` W1's `overlayModel` already computes) so the set-won line can say who.
 
-- [ ] **Step 1: Failing tests** — `apps/web/src/lib/__tests__/overlay-moments.test.ts`. Fold REAL events through the REAL modules to build `recent` (use Task 1's pure `buildOverlayRecent` with `defaultLineupPair` ids and a `personOf` stub) — never a hand-typed `recent` for the positive cases. `msg` = `(key, vars) => key + JSON.stringify(vars ?? {})` so assertions pin keys and params, not English.
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.** `momentsFor`, `MOMENT_RULES`,
+  `MOMENT_KEYS` and `maxSeq` in `apps/web/src/lib/overlay-moments.ts`; 30
+  `overlay.moment.*` keys in all four locales; `i18n-keys.ts` regenerated;
+  parity green. 35 tests, mutation sweep **11/11**, 2986 passed / 0 failed
+  across `src/lib`, `src/server/overlay` and `src/components/public-site`; tsc
+  clean, lint 0 errors.
 
-```ts
-import { describe, expect, it } from "vitest";
-import { cricket } from "@seazn/engine/sports/cricket";
-import { football } from "@seazn/engine/sports/football";
-import { hockey } from "@seazn/engine/sports/hockey";                    // hockey/index.ts exports `hockey` only
-import { icehockey } from "@seazn/engine/sports/icehockey";              // icehockey/index.ts exports `icehockey` only
-import { tennis } from "@seazn/engine/sports/tennis";
-import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
-import { boardgame } from "@seazn/engine/sports/boardgame";
-import { carrom } from "@seazn/engine/sports/carrom";
-import { generic } from "@seazn/engine/sports/generic";
-import { MOMENT_RULES, momentsFor, maxSeq } from "../overlay-moments";
-import { buildOverlayRecent } from "@/server/public-site/overlay-recent";  // pure export; the file's `server-only` marker is stubbed under vitest (vitest.config.ts alias)
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+  **Three corrections to the brief, each removing a SECOND AUTHORITY:**
 
-const msg = (key: string, vars?: Record<string, string | number>) => `${key}${vars ? JSON.stringify(vars) : ""}`;
-const SIDES: [string, string] = ["H", "A"];
-const MODULES = { cricket, football, hockey, icehockey, tennis, badminton, tabletennis, volleyball, boardgame, carrom, generic } as const;
+  1. **No `overlay.moment.penaltyClass.*` family.** Those seven words already
+     exist as `overlay.card.*` (W1's chip labels, `DISCIPLINE_LABEL_KEYS` in
+     `lib/public-site.ts`) and already ship in four languages. The penalty
+     moment's line goes through `disciplineLabel`, which is the existing
+     resolver. 28 translations not written, and the chip and the slab cannot
+     drift apart.
+  2. **`GAME_UNIT_SPORTS` is EXPORTED, not restated.** The brief's
+     `const GAME_UNIT = new Set([...])` would have been a second copy of a
+     membership `setBreakdown` already owns.
+  3. **Keys are plain strings against W1's `OverlayMsg`, not `MessageKey`.**
+     `MsgFn`'s key type is `keyof typeof ui.json` and rejects every `overlay.*`
+     key — those live in the `public` namespace. W1 hit this first and answered
+     it with `OverlayMsg`; the union's safety is bought back by `MOMENT_KEYS`
+     and a test holding it against the English dictionary.
 
-describe("MOMENT_RULES is derived from the modules' own declarations", () => {
-  for (const [key, mod] of Object.entries(MODULES)) {
-    it(`${key}: every recorded-event key in the allowlist is a key of the module's eventSchemas`, () => {
-      const rules = Object.keys(MOMENT_RULES[key] ?? {}).filter((k) => !k.startsWith("derived."));
-      for (const type of rules) expect(Object.keys(mod.eventSchemas ?? {}), `${key} allowlist names undeclared type ${type}`).toContain(type);
-    });
-  }
-  it("boardgame, carrom and generic have NO entries", () => {
-    for (const key of ["boardgame", "carrom", "generic"]) expect(Object.keys(MOMENT_RULES[key] ?? {})).toEqual([]);
-  });
-  it("an unlisted type yields nothing and does not throw", () => {
-    expect(momentsFor("football", [{ seq: 9, type: "football.shot", at: "", payload: {} }], 0, msg, SIDES)).toEqual([]);
-    expect(momentsFor("some.future.sport", [{ seq: 9, type: "x.y", at: "", payload: {} }], 0, msg, SIDES)).toEqual([]);
-  });
-});
+  **Also corrected:** the card key is `overlay.moment.card.secondYellow`, not
+  `.second_yellow` — this repo's dictionary convention is camelCase
+  (`overlay.card.benchMinor`), and the rule maps the engine's snake_case class
+  to it.
 
-describe("cricket", () => {
-  const lineups = defaultLineupPair(cricket.positions);
-  const cfg = /* RE-PIN: cricket.variants.t20 parsed through the module's config schema, as view-model.test.ts does for generic */;
-  const base = { over: 0, ballInOver: 1, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p11" };
-  const ledger = [
-    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } }),
-    makeEnvelope(2, { type: "core.start", payload: {} }),
-    makeEnvelope(3, { type: "cricket.ball", payload: { ...base, runs: { bat: 6 }, boundary: 6 } }),
-    makeEnvelope(4, { type: "cricket.ball", payload: { ...base, ballInOver: 2, runs: { bat: 1 } } }),
-    makeEnvelope(5, { type: "cricket.ball", payload: { ...base, ballInOver: 3, striker: "H-p2", nonStriker: "H-p1", runs: { bat: 4 }, boundary: 4 } }),
-    makeEnvelope(6, { type: "cricket.ball", payload: { ...base, ballInOver: 4, striker: "H-p2", nonStriker: "H-p1", runs: { bat: 0 }, wicket: { kind: "bowled", out: "H-p2", bowlerCredited: true, incoming: "H-p3" } } }),
-  ];
-  const recent = buildOverlayRecent({ sportKey: "cricket", module: cricket, cfg, lineups, events: ledger, sides: SIDES, personOf: (id) => (id === "H-p2" ? { name: "H. Two", masked: true } : undefined) });
-  it("SIX, FOUR and OUT fire; the single is silent; order is ledger order", () => {
-    const got = momentsFor("cricket", recent, 0, msg, SIDES);
-    expect(got.map((m) => [m.seq, m.kind, m.tone])).toEqual([[3, "six", "led"], [5, "four", "led"], [6, "wicket", "dismissal"]]);
-    expect(got[0]!.headline).toBe("overlay.moment.six");
-  });
-  it("OUT carries the dismissed batter's consent-resolved name, figures from the fold, and the kind key", () => {
-    const out = momentsFor("cricket", recent, 5, msg, SIDES)[0]!;
-    expect(out.line).toBe(`overlay.moment.batterLine${JSON.stringify({ name: "H. Two", runs: 4, balls: 2, kind: "overlay.moment.wicket.bowled" })}`);
-  });
-  it("seq already seen yields nothing; the boundary is sinceSeq EXCLUSIVE", () => {
-    expect(momentsFor("cricket", recent, 6, msg, SIDES)).toEqual([]);
-    expect(momentsFor("cricket", recent, 5, msg, SIDES).map((m) => m.seq)).toEqual([6]);
-  });
-  it("a super-over boundary uses the same rule", () => { /* cricket.superover.ball boundary 6 after a tie → six */ });
-});
+  **Two mutants survived the first pass**, both real:
 
-describe("football / hockey / ice hockey", () => {
-  it("goal → GOAL led with scorer line; own goal → ownGoal key; penalty adds the penalty line", () => {});
-  it("yellow → caution, red and second_yellow → dismissal; the headline key is per colour", () => {});
-  it("hockey green/yellow → caution, red → dismissal; ice hockey minor → caution with class line, match → dismissal", () => {
-    // build through buildOverlayRecent with hockey.suspension.start { by: "H", person: "H-p3", class: "green" } etc.
-  });
-});
+  - **An unknown card colour could be given a GUESSED tone.** The colour and the
+    tone lived in two parallel records, so "a key with no tone" was a state no
+    test could witness — the guard was decoration. The two are now ONE table, so
+    the state cannot be expressed at all.
+  - **A sport with no allowlist fell through to football's rules.** The negative
+    case used a type nobody honours, so "no rules" and "football's rules"
+    answered alike. The case that tells them apart is an unknown sport carrying
+    a type football DOES honour.
 
-describe("racket sports (derived)", () => {
-  it("tennis: ace → ACE; a fresh break point → BREAK POINT once; the saved-then-regained point is a NEW moment; set won → SET 1 with the short and score", () => {
-    // ledger driven to 30–40 on home serve (break, fresh) → 40–40 (nothing) → Ad away (break, fresh again) — two break-point moments, seqs differ
-  });
-  it("tennis: a set point that is also match point reads MATCH POINT only", () => {});
-  it("badminton: 20–19 → GAME POINT (unit from GAME_UNIT_SPORTS); game won → GAME 1", () => {});
-  it("volleyball: 24–23 → SET POINT, a set point that also wins the match → MATCH POINT, set won → SET 1 (owner answer 21 / Q10)", () => {
-    // Drive a real volleyball ledger through buildOverlayRecent to 24–23 and
-    // assert `overlay.moment.setPoint` — NOT `gamePoint`: the differential that
-    // proves the unit comes from GAME_UNIT_SPORTS rather than from "it is a
-    // set-based sport". Then a fifth-set 14–13 for MATCH POINT, and the set
-    // close for SET 1. A test that only asserted "some moment fires" would
-    // pass with badminton's keys wired in by mistake.
-  });
-  it("a non-fresh pointState yields nothing even with a new seq", () => {
-    // hand-typed recent is acceptable for this NEGATIVE case: [{ seq: 12, type: "tennis.point", at: "", payload: {}, derived: { pointState: { kind: "match", side: 0, fresh: false } } }] → []
-  });
-});
-
-describe("maxSeq", () => { it("0 for empty/undefined; the max otherwise", () => {}); });
-```
-
-- [ ] **Step 2: Run — expect failures** (`../overlay-moments` unresolved).
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && DATABASE_URL= pnpm exec vitest run src/lib/__tests__/overlay-moments.test.ts --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-t2-red.json`
-
-- [ ] **Step 3: Implement** `overlay-moments.ts`:
-
-```ts
-import type { MessageKey } from "@/lib/i18n-runtime";              // RE-PIN: the generated-union key type MsgFn takes (scoring-vocab.ts:1147)
-const GAME_UNIT = new Set(["badminton", "tabletennis"]);            // RE-PIN: export GAME_UNIT_SPORTS from lib/public-site.ts:281 and import it instead of restating
-const name = (ev: RecentEvent) => ev.payload.person?.name;
-
-const ball: MomentRule = (ev, { msg }) => {
-  const p = ev.payload;
-  if (p.wicketKind) {
-    const kind = msg(`overlay.moment.wicket.${p.wicketKind}` as MessageKey);
-    const line = name(ev) && p.batterRuns !== undefined && p.batterBalls !== undefined
-      ? msg("overlay.moment.batterLine", { name: name(ev)!, runs: p.batterRuns, balls: p.batterBalls, kind })
-      : kind;
-    return { kind: "wicket", headline: msg("overlay.moment.out"), line, tone: "dismissal", seq: ev.seq };
-  }
-  if (p.boundary === 6) return { kind: "six", headline: msg("overlay.moment.six"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq };
-  if (p.boundary === 4) return { kind: "four", headline: msg("overlay.moment.four"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq };
-  return null;
-};
-const goal: MomentRule = (ev, { msg }) => ({
-  kind: "goal", tone: "led", seq: ev.seq,
-  headline: msg(ev.payload.ownGoal ? "overlay.moment.ownGoal" : "overlay.moment.goal"),
-  ...(ev.payload.penalty ? { line: msg("overlay.moment.penalty") } : name(ev) ? { line: name(ev) } : {}),
-});
-const CARD_TONE: Record<string, OverlayMoment["tone"]> = { yellow: "caution", green: "caution", red: "dismissal", second_yellow: "dismissal" };
-const card = (field: "colour" | "class"): MomentRule => (ev, { msg }) => {
-  const c = ev.payload[field]; if (!c) return null;
-  const tone = CARD_TONE[c]; if (!tone) return null;                                    // an undeclared colour renders nothing
-  return { kind: `card.${c}`, headline: msg(`overlay.moment.card.${c}` as MessageKey), ...(name(ev) ? { line: name(ev) } : {}), tone, seq: ev.seq };
-};
-const PENALTY_TONE: Record<string, OverlayMoment["tone"]> = { minor: "caution", bench_minor: "caution", double_minor: "caution", major: "caution", misconduct: "caution", game_misconduct: "dismissal", match: "dismissal" };
-const penalty: MomentRule = (ev, { msg }) => {
-  const c = ev.payload.class; const tone = c ? PENALTY_TONE[c] : undefined; if (!c || !tone) return null;
-  return { kind: `penalty.${c}`, headline: msg("overlay.moment.penaltyHeadline"), line: [msg(`overlay.moment.penaltyClass.${c}` as MessageKey), name(ev)].filter(Boolean).join(" · "), tone, seq: ev.seq };
-};
-const ace: MomentRule = (ev, { msg }) => (ev.payload.kind === "ace" ? { kind: "ace", headline: msg("overlay.moment.ace"), ...(name(ev) ? { line: name(ev) } : {}), tone: "led", seq: ev.seq } : null);
-const pointState: MomentRule = (ev, { msg, sportKey }) => {
-  const ps = ev.derived?.pointState; if (!ps || !ps.fresh) return null;
-  const key = ps.kind === "match" ? "overlay.moment.matchPoint" : ps.kind === "break" ? "overlay.moment.breakPoint" : GAME_UNIT.has(sportKey) ? "overlay.moment.gamePoint" : "overlay.moment.setPoint";
-  return { kind: `point.${ps.kind}`, headline: msg(key), tone: "led", seq: ev.seq };
-};
-const setWon: MomentRule = (ev, { msg, sportKey, sides }) => {
-  const s = ev.derived?.setWon; if (!s) return null;
-  return { kind: "setWon", headline: msg(GAME_UNIT.has(sportKey) ? "overlay.moment.gameWon" : "overlay.moment.setWon", { n: s.set }), line: msg("overlay.moment.setWonLine", { short: sides[s.winner], home: s.home, away: s.away }), tone: "led", seq: ev.seq };
-};
-export const MOMENT_RULES = {
-  cricket: { "cricket.ball": ball, "cricket.superover.ball": ball },
-  football: { "football.goal": goal, "football.card": card("colour") },
-  hockey: { "hockey.goal": goal, "hockey.suspension.start": card("class") },
-  icehockey: { "icehockey.goal": goal, "icehockey.suspension.start": penalty },
-  tennis: { "tennis.point": ace, "derived.pointState": pointState, "derived.setWon": setWon },
-  badminton: { "derived.pointState": pointState, "derived.setWon": setWon },
-  tabletennis: { "derived.pointState": pointState, "derived.setWon": setWon },
-  // Owner answer 21 (Q10), 2026-09-06: "Ok". Volleyball gets set point and
-  // match point alongside its set-won moment, on the SAME `pointState` probe
-  // the racket sports use — `GAME_UNIT_SPORTS` does not contain volleyball, so
-  // `pointState` picks `overlay.moment.setPoint` (not gamePoint) and `setWon`
-  // picks `overlay.moment.setWon` (not gameWon) with no per-sport branch.
-  volleyball: { "derived.pointState": pointState, "derived.setWon": setWon },
-  boardgame: {}, carrom: {}, generic: {},
-} as const satisfies Record<string, Record<string, MomentRule>>;
-
-export function momentsFor(sportKey, recent, sinceSeq, msg, sides): OverlayMoment[] {
-  const rules = MOMENT_RULES[sportKey as keyof typeof MOMENT_RULES] as Record<string, MomentRule> | undefined;
-  if (!rules) return [];
-  const out: OverlayMoment[] = [];
-  for (const ev of [...recent].sort((a, b) => a.seq - b.seq)) {
-    if (ev.seq <= sinceSeq) continue;
-    const ctx = { msg, sportKey, sides };
-    for (const rule of [rules[ev.type], ev.derived?.setWon ? rules["derived.setWon"] : undefined, ev.derived?.pointState ? rules["derived.pointState"] : undefined]) {
-      const m = rule?.(ev, ctx); if (m) out.push(m);
-    }
-  }
-  return out;
-}
-```
-
-  Order within one event: recorded first (ACE), then set won, then point state — a set-closing point that also opens a match point shows the set first. `MOMENT_KEYS` enumerates: six, four, out, batterLine, `wicket.<k>` for each `CricketWicket` kind, goal, ownGoal, penalty, `card.{yellow,red,second_yellow,green}`, penaltyHeadline, `penaltyClass.<c>` for each ice-hockey class, ace, breakPoint, setPoint, gamePoint, matchPoint, setWon, gameWon, setWonLine. Derive the enum lists in the module from the engine where it exports them (`CricketWicket.shape.kind.options` via `@seazn/engine/sports/cricket`; `CardColor.options` — RE-PIN whether `football/index.ts` exports it, else read `FOOTBALL_EVENT_SCHEMAS["football.card"]`); the ice-hockey classes come from the module's parsed default config (RE-PIN the entry point: `grep -an "configSchema\|parseConfig" packages/engine/src/sport/module.ts`).
-
-  Dictionary keys (English; write es/fr/nl in the same commit with the sport's own vocabulary — "SIX"/"FOUR"/"OUT"/"lbw" stay English in all four, as cricket broadcasters in those languages do; "GOAL" → "GOL"/"BUT"/"GOAL"; "MATCH POINT" → "PUNTO DE PARTIDO"/"BALLE DE MATCH"/"MATCHPUNT"; etc.):
-
-```json
-"overlay.moment.six": "SIX",
-"overlay.moment.four": "FOUR",
-"overlay.moment.out": "OUT",
-"overlay.moment.batterLine": "{name} {runs} ({balls}) · {kind}",
-"overlay.moment.wicket.bowled": "b", "overlay.moment.wicket.caught": "c", "overlay.moment.wicket.lbw": "lbw",
-"overlay.moment.wicket.runout": "run out", "overlay.moment.wicket.stumped": "st", "overlay.moment.wicket.hitwicket": "hit wicket",
-"overlay.moment.wicket.retired": "retired out", "overlay.moment.wicket.obstructed": "obstructing the field",
-"overlay.moment.wicket.timedout": "timed out", "overlay.moment.wicket.hitballtwice": "hit the ball twice",
-"overlay.moment.goal": "GOAL", "overlay.moment.ownGoal": "OWN GOAL", "overlay.moment.penalty": "Penalty",
-"overlay.moment.card.yellow": "YELLOW CARD", "overlay.moment.card.red": "RED CARD", "overlay.moment.card.second_yellow": "SECOND YELLOW", "overlay.moment.card.green": "GREEN CARD",
-"overlay.moment.penaltyHeadline": "PENALTY",
-"overlay.moment.penaltyClass.minor": "Minor", "overlay.moment.penaltyClass.bench_minor": "Bench minor", "overlay.moment.penaltyClass.double_minor": "Double minor",
-"overlay.moment.penaltyClass.major": "Major", "overlay.moment.penaltyClass.misconduct": "Misconduct", "overlay.moment.penaltyClass.game_misconduct": "Game misconduct", "overlay.moment.penaltyClass.match": "Match penalty",
-"overlay.moment.ace": "ACE",
-"overlay.moment.breakPoint": "BREAK POINT", "overlay.moment.setPoint": "SET POINT", "overlay.moment.gamePoint": "GAME POINT", "overlay.moment.matchPoint": "MATCH POINT",
-"overlay.moment.setWon": "SET {n}", "overlay.moment.gameWon": "GAME {n}", "overlay.moment.setWonLine": "{short} {home}–{away}"
-```
-
-  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && pnpm i18n:gen-keys && pnpm i18n:check` — `i18n-keys.ts` must change; parity must pass.
-
-- [ ] **Step 4: Run — green.** `--outputFile=/tmp/seazn-env/ovl/w2-t2.json`; expected `numTotalTests: 22` (11 parity + 11 behaviour; count from the file), all passed, path under the worktree. `cd …/apps/web && pnpm typecheck` clean (the union now carries the keys). Mutants: delete the `wicketKind` branch of `ball` → "SIX, FOUR and OUT fire" reds; change `ev.seq <= sinceSeq` to `<` → "seq already seen yields nothing" reds; remove the `!ps.fresh` return → "a non-fresh pointState yields nothing" reds; add `"football.shot": goal` → the football parity test STAYS green (it is declared) — so ALSO add a fixture-free assertion that `MOMENT_RULES.football` has exactly the two keys the spec allowlists, and confirm the mutant reds it.
-
-- [ ] **Step 5: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/overlay-moments.ts apps/web/src/lib/__tests__/overlay-moments.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts && /usr/bin/git commit -o apps/web/src/lib/overlay-moments.ts apps/web/src/lib/__tests__/overlay-moments.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts -m "overlay: momentsFor — per-sport allowlist keyed by each module's declared event types; overlay.moment.* in en/es/fr/nl, keys regenerated" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **Test-harness facts worth keeping:** the engine refuses `second_yellow` for a
+  player with no prior caution, so the card stream books the player first; and
+  the suspension-tone coverage test derives its class list from each module's
+  own parsed config, so a federation sheet adding a class reds rather than
+  rendering toneless.
 
 ### Task 3: The cricket bar's batter-and-bowler line
 
 **Files:**
 - Create: `apps/web/src/lib/overlay-cricket.ts`
 - Modify: `apps/web/src/lib/overlay-model.ts` (W1; `detail` for cricket)
-- Modify (variant B/C only): `apps/web/src/server/public-site/overlay-recent.ts`, `apps/web/src/lib/overlay-recent-types.ts`, `apps/web/src/components/public-site/live-score-data.ts`
+- Modify (variant B/C only): `apps/web/src/server/overlay/recent.ts`, `apps/web/src/lib/overlay-recent-types.ts`, `apps/web/src/components/public-site/live-score-data.ts`
 - Test: `apps/web/src/lib/__tests__/overlay-cricket.test.ts`
 - Do NOT touch: the bar/bug components' layout (W1 already renders `detail[]` as the second band), the engine, the scorecard fold.
 
@@ -811,7 +554,7 @@ describe("cricketDetail from a real fold", () => {
 - [ ] **Step 4: Run — green.** Expected `numTotalTests: 6`, all passed. Re-run the W1 `overlay-model` unit suite (`src/lib/__tests__/overlay-model.test.ts`, RE-PIN) — its cricket case asserted `detail: []` in step one; update THAT assertion to the two lines built from its own fixture (never weaken to "array"). Mutant: swap striker and non-striker in `cricketDetail` → "striker carries the marker and comes first" reds.
 
 - [ ] **Step 5: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/overlay-cricket.ts apps/web/src/lib/__tests__/overlay-cricket.test.ts apps/web/src/lib/overlay-model.ts apps/web/src/lib/__tests__/overlay-model.test.ts && /usr/bin/git commit -o apps/web/src/lib/overlay-cricket.ts apps/web/src/lib/__tests__/overlay-cricket.test.ts apps/web/src/lib/overlay-model.ts apps/web/src/lib/__tests__/overlay-model.test.ts -m "overlay(cricket): the bar's second band carries the batters at the crease and the bowler's figures, from the match-centre live block" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-w2 && /usr/bin/git add apps/web/src/lib/overlay-cricket.ts apps/web/src/lib/__tests__/overlay-cricket.test.ts apps/web/src/lib/overlay-model.ts apps/web/src/lib/__tests__/overlay-model.test.ts && /usr/bin/git commit -o apps/web/src/lib/overlay-cricket.ts apps/web/src/lib/__tests__/overlay-cricket.test.ts apps/web/src/lib/overlay-model.ts apps/web/src/lib/__tests__/overlay-model.test.ts -m "overlay(cricket): the bar's second band carries the batters at the crease and the bowler's figures, from the match-centre live block" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
   (Variant B/C adds the three server/type files to both lists and the subject "…from the scorecard fold" / "…from the folded state".)
 
 ---
@@ -852,170 +595,47 @@ export function OverlayMomentSlab(props: { moment: OverlayMoment; phase: Phase; 
 
 Reducer semantics: `enqueue` appends (dedupes on `seq`+`kind`); when `current` is null it promotes the head to `phase: "in"` with `deadline = now + foldMs`; `tick` at or past the deadline advances `in → hold (now + holdMs) → out (now + foldMs) → next head or idle`. `reducedMotion` passes `foldMs: 0`, so the phases still exist (the DOM still shows `in`/`hold`/`out` for one tick) but nothing animates.
 
-- [ ] **Step 1: Failing reducer tests** — `apps/web/src/components/overlay/__tests__/moment-queue.test.ts`:
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.** `moment-timing.ts`, `moment-queue.ts`
+  (pure reducer), `use-moment-queue.ts`, `overlay-moment.tsx`, the slab CSS in
+  `globals.css`, stage wiring, and three e2e tests in W1's own spec file.
 
-```ts
-import { INITIAL, momentQueueReducer as r, nextDeadline } from "../moment-queue";
-import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
-const m = (seq: number, kind = "goal") => ({ seq, kind, headline: kind.toUpperCase(), tone: "led" as const });
-const T = { foldMs: OVERLAY_MOMENT_FOLD_MS, holdMs: OVERLAY_MOMENT_HOLD_MS };
+  **Mutation sweep 9/9** after three survivors, one of which was a LATENT BUG
+  rather than a missing test: the batch was deduped against history but never
+  against itself, so two identical moments in one array would both have queued.
+  A second (`nextDeadline`'s `current === null` clause) was unreachable and was
+  removed rather than witnessed.
 
-it("the default hold is four seconds and the fold a quarter — pinned on the DEFAULTS, not a live override", () => {
-  expect(OVERLAY_MOMENT_HOLD_MS).toBe(4_000); expect(OVERLAY_MOMENT_FOLD_MS).toBe(250);
-});
-it("idle + enqueue → in with deadline now+fold; tick past it → hold with deadline now+hold; then out; then idle", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1)], now: 0, ...T });
-  expect(s).toMatchObject({ current: m(1), phase: "in", deadline: 250 });
-  s = r(s, { type: "tick", now: 250, ...T }); expect(s).toMatchObject({ phase: "hold", deadline: 4_250 });
-  s = r(s, { type: "tick", now: 4_000, ...T }); expect(s.phase).toBe("hold");                       // early tick is a no-op
-  s = r(s, { type: "tick", now: 4_250, ...T }); expect(s).toMatchObject({ phase: "out", deadline: 4_500 });
-  s = r(s, { type: "tick", now: 4_500, ...T }); expect(s).toEqual(INITIAL);
-});
-it("FIFO: two moments enqueued together show in order, the second starts only after the first's out", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1, "goal"), m(2, "card.yellow")], now: 0, ...T });
-  expect(s.queue.map((q) => q.seq)).toEqual([2]);
-  for (const now of [250, 4_250, 4_500]) s = r(s, { type: "tick", now, ...T });
-  expect(s).toMatchObject({ current: m(2, "card.yellow"), phase: "in" });
-});
-it("a moment arriving DURING a hold queues behind it (never interrupts)", () => {});
-it("the same (seq, kind) enqueued twice is shown once", () => {});
-it("reduced motion: foldMs 0 → in and out are zero-length, hold unchanged", () => {
-  let s = r(INITIAL, { type: "enqueue", moments: [m(1)], now: 0, foldMs: 0, holdMs: 4_000 });
-  s = r(s, { type: "tick", now: 0, foldMs: 0, holdMs: 4_000 }); expect(s).toMatchObject({ phase: "hold", deadline: 4_000 });
-});
-it("nextDeadline is null when idle and the state's deadline otherwise", () => {});
-```
+  **A real defect the contact sheet caught: THERE ARE THREE THEMES.** `slate`
+  paints no scorebug — it COMPOSITES one, `defaultThemeFor(sportKey)` (§4a) — so
+  reading `props.style` alone gave the slab the BAR's geometry under
+  `?style=slate` while the BUG was on screen. Wrong for ten of the eleven
+  sports, right for cricket only by accident. `slabPlacementFor(style, sportKey)`
+  now answers it, beside `defaultThemeFor` so the two cannot drift.
 
-- [ ] **Step 2: Run — expect failures.** `cd …/apps/web && DATABASE_URL= pnpm exec vitest run src/components/overlay/__tests__/moment-queue.test.ts --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-t4-red.json`.
+  **The slot is a CLIPPING WINDOW at the emergence point, not the canvas.** An
+  `inset: 0` slot cannot hide anything: translating a 185 px slab by its own
+  width still leaves it on a 1920 px canvas, painted over the scorebug.
 
-- [ ] **Step 3: Implement** reducer, hook, slab, CSS, stage wiring.
+  **Placement measured rather than assumed** — bar slab at x=72 (the bar's own
+  left inset), bug slab at x=540 (the bug's right edge, §4's `left 60` +
+  `width 480`), headline inset 33 in both, height 216.
 
-  Hook (no per-frame timer — one timeout re-armed from `nextDeadline`):
+  **OPEN, and it is the sheet's problem rather than the code's:** §5 says the bar
+  slab is "centred under the bar's detail band" with radius `0 0 6 6`, but §3
+  puts the bar at `bottom: 54` standing 177 tall — 54 px of canvas against a
+  216 px slab. The interim reading (slab ABOVE the bar, bottom tucked behind it,
+  corners rounded at the top) is built and filmed; the sheet has not been
+  amended, because rewriting an owner-approved section to match what was built
+  is not a decision this wave gets to make alone.
 
-```ts
-export function useMomentQueue(incoming: OverlayMoment[], opts: { reducedMotion: boolean }) {
-  const timing = { holdMs: OVERLAY_MOMENT_HOLD_MS, foldMs: opts.reducedMotion ? 0 : OVERLAY_MOMENT_FOLD_MS };
-  const [state, dispatch] = useReducer(momentQueueReducer, INITIAL);
-  useEffect(() => { if (incoming.length) dispatch({ type: "enqueue", moments: incoming, now: Date.now(), ...timing }); }, [incoming]);   // `incoming` is a fresh array only when momentsFor returned something (stage memoises [])
-  useEffect(() => {
-    const at = nextDeadline(state); if (at === null) return;
-    const id = setTimeout(() => dispatch({ type: "tick", now: Date.now(), ...timing }), Math.max(0, at - Date.now()));
-    return () => clearTimeout(id);
-  }, [state, timing.foldMs]);
-  return { current: state.current, phase: state.phase };
-}
-```
+  **Verified:** the WHOLE `stream-overlay.spec.ts` 19/19 (run whole, never a
+  `-g` slice); `mobile.spec.ts` 298/298 across the seven widths; 607 unit tests
+  in `src/components/overlay`.
 
-  Stage (inside the component that owns `const { data } = useLiveFixture(...)`; names RE-PIN):
-
-```tsx
-const seenRef = useRef<number>(maxSeq(initial.recent));                 // OBS opens mid-stream: nothing replays
-const [fresh, setFresh] = useState<OverlayMoment[]>(EMPTY);
-useEffect(() => {
-  const recent = data.recent ?? [];
-  const next = momentsFor(sportKey, recent, seenRef.current, msg, [model.sides[0].short, model.sides[1].short]);
-  seenRef.current = Math.max(seenRef.current, maxSeq(recent));
-  if (next.length) setFresh(next);
-}, [data, sportKey, msg, model.sides]);
-const reducedMotion = useReducedMotion();                                  // matchMedia("(prefers-reduced-motion: reduce)"), false on the server
-const { current, phase } = useMomentQueue(fresh, { reducedMotion });
-…
-{current && <OverlayMomentSlab moment={current} phase={phase} placement={style} />}
-```
-
-  The slab sits in the slot W1 left in the bar (below the main band, full width) and the bug (to the right of the tile, vertically centred). CSS (`globals.css`, beside the W1 overlay rules):
-
-```css
-.ovl-slab { position: absolute; display: flex; flex-direction: column; gap: .15em; padding: .35em .9em; max-width: 34ch; min-width: 0;
-  background: var(--ovl-slab-bg); color: var(--sport-board); font-family: var(--ps-font-display); font-variant-numeric: tabular-nums;
-  will-change: transform, opacity; transition: transform var(--ovl-fold, 250ms) cubic-bezier(.2,.8,.2,1), opacity var(--ovl-fold, 250ms) linear; }
-.ovl-slab[data-tone="led"]       { --ovl-slab-bg: var(--sport-led); }
-.ovl-slab[data-tone="caution"]   { --ovl-slab-bg: var(--sport-caution); }
-.ovl-slab[data-tone="dismissal"] { --ovl-slab-bg: var(--sport-dismissal); color: var(--sport-ink); }
-.ovl-slab__headline { font-weight: 700; font-size: 2.2em; line-height: 1; letter-spacing: .02em; }
-.ovl-slab__line { font-family: inherit; font-weight: 600; font-size: 1em; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* bar: rises from under the main band; bug: slides out from behind the tile. transform + opacity ONLY. */
-.ovl-slab--bar { left: 0; top: 100%; transform: translateY(-100%); }
-.ovl-slab--bar.ovl-slab--in, .ovl-slab--bar.ovl-slab--hold { transform: translateY(0); opacity: 1; }
-.ovl-slab--bar.ovl-slab--out { transform: translateY(-100%); opacity: 0; }
-.ovl-slab--bug { left: 100%; top: 50%; transform: translate(-100%, -50%); opacity: 0; }
-.ovl-slab--bug.ovl-slab--in, .ovl-slab--bug.ovl-slab--hold { transform: translate(0, -50%); opacity: 1; }
-.ovl-slab--bug.ovl-slab--out { transform: translate(-100%, -50%); opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .ovl-slab { transition: none; } }
-```
-
-  The initial `in` frame must start from the hidden transform — render the slab with `data-phase="in"` on mount and set `--ovl-fold` from `OVERLAY_MOMENT_FOLD_MS` inline so CSS and reducer share the number (pass it as a style var from the component, never retype `250ms` in two places).
-
-- [ ] **Step 4: Run — reducer green**, then typecheck: `cd …/apps/web && pnpm typecheck`.
-
-- [ ] **Step 5: E2E** — append to `apps/web/e2e/stream-overlay.spec.ts` (W1's file; reuse its overlay-URL helper and its `streaming.overlay` / `realtime` override setup — RE-PIN their names; if W1 did not enable `realtime`, enable it here with `setBoolEntitlementOverrideSql(orgId, "realtime", true)` and thaw in `afterAll`, or every assertion waits a 15 s poll). Budget expressed in the constants (rule 20): `const BUDGET = OVERLAY_MOMENT_HOLD_MS + 2 * OVERLAY_MOMENT_FOLD_MS + POLL_MS + 5_000` with `POLL_MS` imported from the hook module (D6).
-
-```ts
-import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../src/components/overlay/moment-timing";
-import { resolvePersonDisplayName } from "../src/lib/name-display";
-
-async function post(request: APIRequestContext, fixtureId: string, type: string, payload: Record<string, unknown>) {
-  const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
-  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: st.data!.last_seq, type, payload });
-  expect(res.status, `${type} ${JSON.stringify(res.error)}`).toBeLessThan(300);
-}
-const slab = (page: Page) => page.getByTestId("overlay-moment");
-
-test.describe("moments", () => {
-  test("football: a goal raises GOAL on the bug, once, and it is gone after the hold", async ({ page, request }) => {
-    test.setTimeout(3 * BUDGET);
-    const fx = await footballFixtureInPlay(request);                       // RE-PIN: copy the division body from `grep -an 'sport_key: "football"' apps/web/e2e/*.spec.ts | head -1`; core.start; no lineup needed
-    await page.goto(overlayUrl(fx.fixtureId, "bug"));
-    await expect(slab(page)).toHaveCount(0);                                // nothing on load
-    await post(request, fx.fixtureId, "football.goal", { by: fx.homeEntrantId });
-    const seen: string[] = [];
-    await expect.poll(async () => { const k = await slab(page).getAttribute("data-kind").catch(() => null); if (k && seen.at(-1) !== k) seen.push(k); return seen.length; }, { timeout: BUDGET }).toBe(1);
-    await expect(slab(page)).toHaveText(/GOAL/);
-    await expect(slab(page)).toHaveCSS("background-color", await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--sport-led").trim()).then(toRgb));
-    await expect(slab(page)).toHaveCount(0, { timeout: OVERLAY_MOMENT_HOLD_MS + 2 * OVERLAY_MOMENT_FOLD_MS + 2_000 });
-    await page.waitForTimeout(POLL_MS + 1_000);                             // a later poll must NOT replay it
-    expect(seen).toEqual(["goal"]);
-  });
-  test("two events back to back: both slabs, in ledger order, one after the other", async ({ page, request }) => {
-    test.setTimeout(3 * BUDGET);
-    // goal then card posted within one refetch window; poll `data-kind` into an ordered distinct list until length 2
-    // expect(order).toEqual(["goal", "card.yellow"]); and the card appeared only after the goal's slab had gone (record timestamps)
-  });
-  test("cricket: SIX on the bar; OUT carries the consent-masked name and the batter's figures", async ({ page, request }) => {
-    test.setTimeout(4 * BUDGET);
-    const rig = await seedRosteredFixture(request, { label: `ovl-cricket-${TAG}`, sportKey: "cricket", variantKey: "t20", home: ELEVEN_H, away: ELEVEN_A, emitCoreStart: false });   // RE-PIN RosteredFixture's fields
-    await post(request, rig.fixtureId, "cricket.toss", { wonBy: rig.homeEntrantId, elected: "bat" });
-    await post(request, rig.fixtureId, "core.start", {});
-    const [s1, s2, s3] = rig.homePersonIds; const b = rig.awayPersonIds.at(-1)!;
-    await withDb((sql) => sql`update persons set consent = '{"public_name": false}'::jsonb where id = ${s2}`);
-    await page.goto(overlayUrl(rig.fixtureId, "bar"));
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 1, striker: s1, nonStriker: s2, bowler: b, runs: { bat: 6 }, boundary: 6 });
-    await expect(slab(page)).toHaveText(/SIX/, { timeout: BUDGET });
-    await expect(page.getByTestId("overlay-bar-detail")).toContainText(ELEVEN_H[0].fullName + "*");   // Task 3 live: striker marker (RE-PIN the detail testid W1 gave the second band)
-    await expect(slab(page)).toHaveCount(0, { timeout: BUDGET });
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 2, striker: s1, nonStriker: s2, bowler: b, runs: { bat: 1 } });   // strike to s2
-    await post(request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver: 3, striker: s2, nonStriker: s1, bowler: b, runs: { bat: 0 }, wicket: { kind: "bowled", out: s2, bowlerCredited: true, incoming: s3 } });
-    const masked = resolvePersonDisplayName(ELEVEN_H[1].fullName, { public_name: false }, null, false);
-    await expect(slab(page)).toHaveText(/OUT/, { timeout: BUDGET });
-    await expect(slab(page)).toContainText(masked);
-    await expect(slab(page)).not.toContainText(ELEVEN_H[1].fullName);
-    await expect(slab(page)).toContainText("0 (1)");                       // the fold's figures for s2
-  });
-  test("prefers-reduced-motion: the slab still appears and disappears, with no transition", async ({ page, request }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    // post a goal; expect slab visible; expect toHaveCSS("transition-property", "none") or transition-duration "0s"; expect gone after hold
-  });
-});
-```
-
-  Run locally against the W1 prod server (per `seazn-local-env`): `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay/apps/web && E2E_PROD_TARGET=1 BASE=http://127.0.0.1:<port> pnpm exec playwright test e2e/stream-overlay.spec.ts --project=parallel --reporter=list` — the WHOLE file, never `-g`. Expected: every W1 test still green plus 4 new passed. Then the seven-width regression: `pnpm exec playwright test e2e/mobile.spec.ts` (all width projects) unchanged — the overlay is not in it, but the division fixtures tab (W1's toggle) is, and the CSS file changed.
-
-- [ ] **Step 6: Mutation checks on the wiring (the e2e must see them).** (i) `seenRef` initialised to `0` → the football test's first assertion fails? No — nothing is in `recent` before the goal for a fresh fixture; so ALSO seed one goal BEFORE `page.goto` in a fifth case "OBS opens mid-stream: the earlier goal does not replay" → with the mutant it reds. (ii) `holdMs: 0` → "gone after the hold" passes but `toHaveText(/GOAL/)` reds (the slab is gone before the poll sees hold) and the reducer's default-pin test reds. (iii) drop the dedupe → "once" still passes (one refetch) — covered by the reducer test instead; state this honestly in the PR.
-
-- [ ] **Step 7: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/components/overlay/moment-timing.ts apps/web/src/components/overlay/moment-queue.ts apps/web/src/components/overlay/use-moment-queue.ts apps/web/src/components/overlay/overlay-moment.tsx apps/web/src/components/overlay/__tests__/moment-queue.test.ts apps/web/src/components/overlay/overlay-stage.tsx apps/web/src/app/globals.css apps/web/e2e/stream-overlay.spec.ts && /usr/bin/git commit -o apps/web/src/components/overlay/moment-timing.ts apps/web/src/components/overlay/moment-queue.ts apps/web/src/components/overlay/use-moment-queue.ts apps/web/src/components/overlay/overlay-moment.tsx apps/web/src/components/overlay/__tests__/moment-queue.test.ts apps/web/src/components/overlay/overlay-stage.tsx apps/web/src/app/globals.css apps/web/e2e/stream-overlay.spec.ts -m "overlay: the moment slab — FIFO queue (4 s hold, 250 ms fold, transform/opacity only), seq-diffed from recent[], reduced-motion instant; e2e for goal, order, cricket SIX/OUT with consent masking" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **One coupling removed:** the moments describe seeds its OWN rig. The file is
+  serial around one shared hockey fixture and a test above DECIDES it, so
+  appending answered `422 ALREADY_DECIDED`. Reordering would have worked today
+  and broken the next time somebody added a test.
 
 ### Task 5: Dictionary coverage from the engine's enums, the visual gate, the index
 
@@ -1025,43 +645,53 @@ test.describe("moments", () => {
 - Modify or create: `apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts` (RE-PIN: `grep -arl "overlay" apps/web/e2e/walkthrough/*.spec.ts`; if W1 named its capture spec differently, extend THAT file; if none exists, create this one — it is matched by `WALKTHROUGH`)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md`
 
-- [ ] **Step 1: Failing coverage test** — every key any rule can emit exists in all four locales, and the lists are DERIVED from the engine (a new dismissal kind or penalty class cannot ship unlocalised):
+- [x] **Steps 1-5 — SHIPPED 2026-09-11.**
+  `lib/__tests__/overlay-moment-dictionary.test.ts` (9 tests) and
+  `e2e/overlay-moments.capture.ts` (5 scenes, all captured and verified).
 
-```ts
-import en from "@/dictionaries/en/public.json"; import es from "@/dictionaries/es/public.json"; import fr from "@/dictionaries/fr/public.json"; import nl from "@/dictionaries/nl/public.json";
-import { MOMENT_KEYS } from "../overlay-moments";
-import { CricketWicket } from "@seazn/engine/sports/cricket";
-import { FOOTBALL_EVENT_SCHEMAS } from "@seazn/engine/sports/football";      // RE-PIN export
-import { icehockey } from "@seazn/engine/sports/icehockey";
-const wicketKinds = CricketWicket.shape.kind.options;
-const cardColours = (FOOTBALL_EVENT_SCHEMAS["football.card"] as z.ZodObject<{ color: z.ZodEnum<[string, ...string[]]> }>).shape.color.options;
-const penaltyClasses = Object.keys(/* RE-PIN */ icehockeyDefaultCfg().suspensions.classes);
-const DERIVED = [...wicketKinds.map((k) => `overlay.moment.wicket.${k}`), ...cardColours.map((c) => `overlay.moment.card.${c}`), "overlay.moment.card.green", ...penaltyClasses.map((c) => `overlay.moment.penaltyClass.${c}`)];
-for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {
-  it(`${locale} carries every overlay moment key`, () => { for (const k of new Set([...MOMENT_KEYS, ...DERIVED, "overlay.cricket.strikerMark", "overlay.cricket.onStrike", "overlay.cricket.thisOver"])) expect(dict, k).toHaveProperty(k); });
-}
-it("every enum-derived key is in MOMENT_KEYS (the rule table and the enum agree)", () => { for (const k of DERIVED) expect(MOMENT_KEYS).toContain(k); });
-it("placeholders match across locales", () => { /* for each key with {x} in en, every locale has the same set of {x} */ });
-```
+  **The brief's `overlay.moment.penaltyClass.*` family was NOT created.** Those
+  seven words already exist as `overlay.card.*` — W1's chip labels, mapped by
+  `DISCIPLINE_LABEL_KEYS`, already in four locales — so the slab borrows them
+  through `disciplineLabel` and the gate checks those. 28 translations not
+  written, and the chip and the slab cannot drift apart.
 
-- [ ] **Step 2: Run — expect the missing keys listed; add them; `pnpm i18n:gen-keys && pnpm i18n:check`; run — green.** `--outputFile=/tmp/seazn-env/ovl/w2-t5.json`, expected `numTotalTests: 6`.
+  **`enumMembers` is the file's spine.** It reads `.options` or `.enum`,
+  whichever this zod version exposes, and THROWS when neither yields members —
+  an empty list would turn every sweep into a vacuous pass. Proven by emptying
+  it: the throw fires at import and the suite goes red rather than
+  green-with-a-hole.
 
-- [ ] **Step 3: Visual gate additions.** In the capture spec, after W1's bar/bug scenes, add scenes at 1920×1080 that CAPTURE THE SLAB MID-HOLD (post the event, wait `OVERLAY_MOMENT_FOLD_MS + 300`, screenshot): `cricket-bar-six`, `cricket-bar-out` (with the batter line visible in the same frame), `football-bug-goal`, `football-bug-card-red`, `tennis-bug-match-point` (drive a short best-of-one set through `tennis.point` to match point), `badminton-bug-game-won`, and one `prefers-reduced-motion` frame. Assert the files exist, are non-empty, and that `cricket-bar-six` ≠ `cricket-bar-out` byte-for-byte (the gate's own vacuous mode is two identical pictures). Attach to the PR with per-screen verdicts written by a human reading them (not "CI green").
+  **The capture harness is COMMITTED, which W1's was not.** W1's contact sheet
+  was produced ad hoc and left nothing to reproduce it, so this wave re-derived
+  the whole rig. The `gallery` project's `testMatch` widens from one file to any
+  `*.capture.ts`; before that a second harness matched NO project and could not
+  be invoked at all.
 
-- [ ] **Step 4: `_INDEX.md`.** Status row "PR2 (moments, cricket batter line)" → "planned `plans/2026-09-05-stream-overlay-w2-moments.md`; in flight after spectator W1 merge <date>"; add a "Pinned symbols — W2 (re-verified <date>)" table with the D1–D8 outcomes and the chosen Task 3 variant; add any false premise found (e.g. a column that lived on the view, a renamed hook path).
+  **`settled()` rather than `data-phase`.** The attribute flips when the CSS
+  transition STARTS, not when it ends, so every screenshot taken on it was a
+  motion frame — and a slab halfway out from behind the scorebug photographs
+  exactly like one whose text overflows. That cost an hour and a wrong bug
+  report before it was understood.
 
-- [ ] **Step 5: Commit.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stream-overlay && /usr/bin/git add apps/web/src/lib/__tests__/overlay-moment-dictionary.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md && /usr/bin/git commit -o apps/web/src/lib/__tests__/overlay-moment-dictionary.test.ts apps/web/src/dictionaries/en/public.json apps/web/src/dictionaries/es/public.json apps/web/src/dictionaries/fr/public.json apps/web/src/dictionaries/nl/public.json apps/web/src/lib/i18n-keys.ts apps/web/e2e/walkthrough/stream-overlay-capture.spec.ts docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md -m "overlay(i18n): moment keys covered per engine enum in four locales; moment scenes in the visual gate; W2 pins in the programme index" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01UdUR7dcxassJ4FExpVfRRr"`
-
----
+  **Owed to the owner, not to CI:** per-screen verdicts on the five scenes.
+  "The gate passed" is not sign-off. **Given 2026-09-11** on the three frames
+  re-shot after the review fixes (ruling 29); the earlier five are superseded.
 
 ### Task 6: Gates, review loop, PR
 
-- [ ] Full `apps/web` vitest from `apps/web` with the DB env and the JSON reporter (`/tmp/seazn-env/ovl/w2-full.json`): paste `numTotalTests / numPassedTests / numFailedTests` and confirm zero `numFailedTestSuites` (a suite that failed to COLLECT reads as `numFailedTests: 0`). Engine suite unchanged (`cd packages/engine && pnpm exec vitest run --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-engine.json`) — W2 must not have touched it; confirm the count equals main's.
-- [ ] `rtk proxy pnpm lint` and read `✖ N problems` yourself; `pnpm typecheck` in both workspaces (the local build no longer typechecks); `pnpm openapi:gen` + `/usr/bin/git status --porcelain openapi` empty; `pnpm i18n:check`.
-- [ ] Smoke locally (`SMOKE_BASE=http://127.0.0.1:<port> node --experimental-strip-types scripts/smoke.ts` per the script's own header) — the new `recent` checks pass.
-- [ ] Reviewer pass (Opus) on the whole branch diff since the W1 merge base, findings written to `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W2-review.md`, fixed inline; never skip because every task review was clean.
-- [ ] Open the PR (only when the owner asks; never unprompted), then `workflow_dispatch` e2e with the PR number; smoke runs on the PR. Per-screen visual verdicts from the owner on the capture scenes.
+**OUTCOME, 2026-09-11.** Gates all green (counts in `W2-review.md`). The
+reviewer pass returned **Needs fixes** with five findings, three of them
+live-broadcast defects, on a branch that was already green and had had a clean
+review on every individual task — fixed in `cbba5f28c`, recorded as W2-F35…F39.
+A sixth item the review raised rather than changed, the penalty goal dropping
+its scorer's name, was ruled the same day and fixed (ruling 28).
+
+
+- [x] Full `apps/web` vitest from `apps/web` with the DB env and the JSON reporter (`/tmp/seazn-env/ovl/w2-full.json`): paste `numTotalTests / numPassedTests / numFailedTests` and confirm zero `numFailedTestSuites` (a suite that failed to COLLECT reads as `numFailedTests: 0`). Engine suite unchanged (`cd packages/engine && pnpm exec vitest run --reporter=json --outputFile=/tmp/seazn-env/ovl/w2-engine.json`) — W2 must not have touched it; confirm the count equals main's.
+- [x] `rtk proxy pnpm lint` and read `✖ N problems` yourself; `pnpm typecheck` in both workspaces (the local build no longer typechecks); `pnpm openapi:gen` + `/usr/bin/git status --porcelain openapi` empty; `pnpm i18n:check`.
+- [x] Smoke locally (`SMOKE_BASE=http://127.0.0.1:<port> node --experimental-strip-types scripts/smoke.ts` per the script's own header) — the new `recent` checks pass.
+- [x] Reviewer pass (Opus) on the whole branch diff since the W1 merge base, findings written to `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/W2-review.md`, fixed inline; never skip because every task review was clean.
+- [x] `workflow_dispatch` e2e — **the owner chose dispatch against the BRANCH REF** rather than waiting on a PR number (`gh workflow run e2e.yml --ref feat/stream-w2-moments`; the workflow checks out `github.sha` when `inputs.pr` is empty). Per-screen visual verdicts: **accepted 2026-09-11** on the three re-shot frames (ruling 29). PR still owner-gated.
 
 ---
 
@@ -1092,10 +722,10 @@ it("placeholders match across locales", () => { /* for each key with {x} in en, 
 |---|---|
 | Delete the `wicketKind` branch in `MOMENT_RULES.cricket["cricket.ball"]` (the "allowlist entry for wicket") | `overlay-moments.test.ts` "SIX, FOUR and OUT fire; the single is silent" (expects `[6, "wicket", "dismissal"]`) and the e2e "cricket: SIX on the bar; OUT carries…" |
 | Break the sequence diff so a moment fires twice (`ev.seq <= sinceSeq` → `<`, or `seenRef` never advanced) | `overlay-moments.test.ts` "seq already seen yields nothing; the boundary is sinceSeq EXCLUSIVE"; e2e "…once, and it is gone after the hold" (`seen` must equal `["goal"]` after a further poll) and "OBS opens mid-stream: the earlier goal does not replay" |
-| Drop the consent call (`personOf` returns `full_name`) | `overlay-recent.test.ts` "names on recent are the consent resolver's output, not the stored full name"; e2e OUT case (`not.toContainText(fullName)`) |
+| Drop the consent call (`personOf` returns `full_name`) | `server/overlay/__tests__/recent.test.ts` "names on recent are the consent resolver's output, not the stored full name"; e2e OUT case (`not.toContainText(fullName)`) |
 | Shorten the hold to 0 (`OVERLAY_MOMENT_HOLD_MS = 0`) | `moment-queue.test.ts` "the default hold is four seconds…" (pins the DEFAULT) and "idle + enqueue → in… hold with deadline now+hold"; e2e `toHaveText(/GOAL/)` reds because the slab is gone before the poll |
-| `fresh` always true | `overlay-recent.test.ts` "…the next point (Ad) is not fresh"; `overlay-moments.test.ts` racket case counts two break-point moments, not three |
-| Remove the `probe.type in eventSchemas` guard | `overlay-recent.test.ts` badminton spy test |
+| `fresh` always true | `server/overlay/__tests__/recent.test.ts` "…the next point (Ad) is not fresh"; `overlay-moments.test.ts` racket case counts two break-point moments, not three |
+| Remove the `probe.type in eventSchemas` guard | `server/overlay/__tests__/recent.test.ts` badminton spy test |
 | Add an undeclared type to an allowlist | the per-module parity test in `overlay-moments.test.ts` |
 
 **Open pins** (each must be closed in `_INDEX.md` before Task 1):
