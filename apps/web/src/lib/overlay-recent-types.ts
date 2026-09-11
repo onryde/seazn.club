@@ -69,6 +69,15 @@ export interface RecentDerived {
    *  final scores. */
   setWon?: { set: number; winner: 0 | 1; home: number; away: number };
   /**
+   * The DISMISSED batter's final figures, for a cricket wicket ball. Derived,
+   * not recorded: the ball payload names who is out, never what they had made,
+   * and a moment line that says "OUT" without the score is not worth reading.
+   *
+   * ABSENT for a COARSE innings (fidelity bands 0 and 1 keep no per-batter
+   * tally), which is the honest answer rather than a pair of zeroes.
+   */
+  batter?: { runs: number; balls: number };
+  /**
    * After this event, ONE more point by `side` would break serve, win the set,
    * or win the match.
    *

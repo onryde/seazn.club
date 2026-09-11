@@ -534,3 +534,82 @@ describe("replayDerived — the guards, each witnessed alone", () => {
     expect(events[0]!.derived?.pointState).toMatchObject({ kind: "set", side: 0, fresh: false });
   });
 });
+
+describe("replayDerived — the dismissed batter's figures", () => {
+  it("a wicket carries the OUT batter's runs and balls, counting the dismissal delivery", () => {
+    // H-p1 faces three: 4, then 0, then run out for 0. Three balls, four runs —
+    // and the figures must be HIS, not the striker's on some other ball and not
+    // the innings total.
+    const { events } = derivedOf("cricket", [
+      ["cricket.toss", { wonBy: "H", elected: "bat" }],
+      ["core.start", {}],
+      ball(0, 1, "H-p1", "A-p1", 4, { boundary: 4 }),
+      ball(0, 2, "H-p1", "A-p1", 0),
+      ball(0, 3, "H-p1", "A-p1", 0, {
+        wicket: { kind: "runout", out: "H-p1", fielder: "A-p2", bowlerCredited: false },
+      }),
+    ]);
+    expect(events.at(-1)!.derived?.batter).toEqual({ runs: 4, balls: 3 });
+  });
+
+  it("a ball that takes no wicket carries no figures at all", () => {
+    const { events } = derivedOf("cricket", [
+      ["cricket.toss", { wonBy: "H", elected: "bat" }],
+      ["core.start", {}],
+      ball(0, 1, "H-p1", "A-p1", 4, { boundary: 4 }),
+    ]);
+    expect(events.at(-1)!.derived).toBeUndefined();
+  });
+
+  it("the NON-striker run out is named, not the striker — they are different people and different figures", () => {
+    const { events } = derivedOf("cricket", [
+      ["cricket.toss", { wonBy: "H", elected: "bat" }],
+      ["core.start", {}],
+      ball(0, 1, "H-p1", "A-p1", 6, { boundary: 6 }),
+      // Striker H-p1 (6 off 1); the non-striker H-p2 has faced nothing.
+      ball(0, 2, "H-p1", "A-p1", 0, {
+        wicket: { kind: "runout", out: "H-p2", fielder: "A-p2", bowlerCredited: false },
+      }),
+    ]);
+    expect(events.at(-1)!.derived?.batter).toEqual({ runs: 0, balls: 0 });
+  });
+
+  it("a COARSE innings carries no per-batter tally, so the figures are ABSENT rather than 0 (0)", () => {
+    // Fidelity bands 0 and 1 keep `fine: null`. No real ledger can be driven
+    // there AND take a wicket ball in one stream, so the two innings shapes are
+    // put in front of the reader directly — a fabricated `0 (0)` on air reads
+    // as a duck, which is a different and wrong fact.
+    const wicket = {
+      over: 0,
+      ballInOver: 1,
+      striker: "H-p1",
+      nonStriker: "H-p2",
+      bowler: "A-p1",
+      runs: { bat: 0 },
+      wicket: { kind: "bowled", out: "H-p1", bowlerCredited: true },
+    };
+    const stub = (fine: unknown) =>
+      ({
+        eventSchemas: {},
+        init: () => ({ innings: [{ fine }], superOver: null }),
+        apply: (s: unknown) => s,
+        summary: () => ({ headline: "", detail: {} }),
+        outcome: () => null,
+      }) as never;
+    const run = (fine: unknown) =>
+      replayDerived({
+        sportKey: "cricket",
+        module: stub(fine),
+        cfg: {},
+        lineups: defaultLineupPair(moduleFor("cricket").positions),
+        active: [makeEnvelope(1, { type: "cricket.ball", payload: wicket } as never)],
+      });
+
+    expect([...run(null).bySeq.values()][0]?.batter).toBeUndefined();
+    // Its positive pair, so "absent" is a decision rather than the code never
+    // reaching the read at all.
+    expect(
+      [...run({ batterRuns: { "H-p1": 7 }, batterBalls: { "H-p1": 3 } }).bySeq.values()][0]?.batter,
+    ).toEqual({ runs: 7, balls: 3 });
+  });
+});

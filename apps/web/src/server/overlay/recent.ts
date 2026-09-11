@@ -33,6 +33,7 @@ import {
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
+import { activeInnings } from "@seazn/engine/sports/cricket";
 import { servingSide, setBreakdown } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import { readPublicLineups } from "@/server/public-site/public-lineups";
@@ -356,6 +357,36 @@ function probePointState(args: {
   return best;
 }
 
+/**
+ * The dismissed batter's figures, read off the state AFTER the ball that got
+ * them — so the dismissal delivery is counted, which is how a scorecard reads.
+ *
+ * `activeInnings` is the engine's own public mirror of "which innings is being
+ * played" (exported for exactly this reason), so a super-over dismissal reads
+ * the super over's innings rather than the main card's last one.
+ *
+ * `fine` is null on a COARSE innings, and `undefined` is then the whole answer:
+ * a band-0 or band-1 ledger records no per-batter tally, and `0 (0)` on air
+ * would be a fabricated score rather than a missing one.
+ */
+function batterFigures(
+  sportKey: string,
+  state: unknown,
+  payload: unknown,
+): { runs: number; balls: number } | undefined {
+  if (sportKey !== "cricket") return undefined;
+  const out = (payload as { wicket?: { out?: unknown } } | null)?.wicket?.out;
+  if (typeof out !== "string") return undefined;
+  const s = state as { innings?: unknown; superOver?: unknown } | null;
+  if (typeof s !== "object" || s === null || !Array.isArray(s.innings)) return undefined;
+  const innings = activeInnings(s as Parameters<typeof activeInnings>[0]).list.at(-1) as
+    | { fine?: { batterRuns?: Record<string, number>; batterBalls?: Record<string, number> } | null }
+    | undefined;
+  const fine = innings?.fine;
+  if (!fine) return undefined;
+  return { runs: fine.batterRuns?.[out] ?? 0, balls: fine.batterBalls?.[out] ?? 0 };
+}
+
 export interface DerivedReplay {
   bySeq: Map<number, RecentDerived>;
   /** False when the module refused the ledger part-way: annotations beyond that
@@ -422,6 +453,8 @@ export function replayDerived(args: {
         const derived: RecentDerived = {};
         const setWon = diffClosedSets(previous, summary, sportKey);
         if (setWon) derived.setWon = setWon;
+        const batter = batterFigures(sportKey, state, event.payload);
+        if (batter) derived.batter = batter;
         if (point) {
           const fresh = !(prevPoint && prevPoint.kind === point.kind && prevPoint.side === point.side);
           derived.pointState = { ...point, fresh };
