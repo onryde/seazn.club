@@ -63,9 +63,24 @@ scorer pad ─ ledger  │ overlay endpoint (foldFixture) ─ useLiveFixture ─
                      └──────────────┬─────────────────────────────┬────────────────┘
 TIER A  OBS Browser Source loads the overlay URL, composites locally ───────────► destination
 TIER B  phone (SRT) ► Cloudflare Stream live input ┬ passthrough: simulcast output ─► destination
-                                                   └ composed: Fly Machine pulls (WHEP) ► relay page
+                                                   └ composed: Fly Machine pulls (LL-HLS) ► relay page
                                                      <video> under OverlayStage ► x11grab ► x264 ► RTMPS
 ```
+
+> **TRANSPORT AMENDMENT — 2026-09-11 (U1-S5, measured + documented).** The
+> composed tier pulls **LL-HLS**, not WHEP. Cloudflare does not serve an
+> RTMPS/SRT-ingested live input over WHEP: `POST /webRTC/play` answers
+> `409 "Live broadcast not started yet"` for the life of the input, and the
+> documentation states "WHIP and WHEP must be used together: we do not yet
+> support inputs using RTMP/SRT to be played using WHEP, or inputs using WHIP to
+> be recorded and played using HLS/DASH". Moving the phone to WHIP is NOT an
+> escape — it would forfeit recording and HLS/DASH, taking §6.5's storage design
+> and RD10's replay with it. Consequences to re-derive, not assume: the latency
+> budget (§9.1 still carries WHEP's 0.2–1 s pull), the delivery cost (§9.2's
+> "WHEP free until 2026-10-15" no longer applies — HLS delivery bills now), and
+> the LL-HLS beta toggle, which is OFF by default per input and is therefore
+> load-bearing for the compositor's latency. Surviving WHEP references below are
+> superseded by this banner.
 
 **Programme DAG** (owner-approved 2026-09-07):
 
@@ -254,6 +269,10 @@ constant, not a measurement, picked so §10's `heartbeat gap p99 < 45 s` is
 three beats and §6.4's `stale > 90 s` is six, rather than tolerances that
 stand in no stated relation to the thing they tolerate. It is pinned here
 because the arithmetic below is DERIVED from it and says nothing without it.
+**(AMENDED 2026-09-11, U1-S5: there is no WHEP rung — an RTMPS/SRT input is
+not WHEP-playable, so the ladder below has ONE transport. The snap rule is kept
+because a `<video>` retry that re-establishes the source is still a
+discontinuity; the WHEP↔LL-HLS transition it was written for cannot occur.)**
 That clamp is right
 for DRIFT and wrong for a DISCONTINUITY: a WHEP → LL-HLS fallback is not
 drift but a step — the ladder falls back after ~5 s, roughly 0.5 s → 6 s in
@@ -843,7 +862,18 @@ create checks headroom through the ingest port and **refuses before it
 inserts** — `503 storage_exhausted` with panel copy (§6.3), no session row —
 never a mid-warming mystery, and never a dead `failed` row in the panel (E5).
 The sweep alerts below one retained match of headroom.
-`deleteRecordingAfterDays` (7 at launch, §12) keeps the block recycling.
+`deleteRecordingAfterDays` keeps the block recycling — **but NOT at 7 days.
+The API floor is 30** (`400 / 10060 "must be between 30 and 1096 days"`,
+measured 2026-09-11, U1-S4), so §12's 7 is impossible and the recycling
+arithmetic behind this guard is 4.3x slower than it was written for: at a 30-day
+floor a 90-minute recorded match holds its minutes for a month, so a
+1,000-minute block sustains roughly 11 matches per month, not the turnover 7-day
+retention implies. Three levers, and the choice is the owner's (recorded in
+`_OPEN-QUESTIONS.md`): buy more blocks; set `recording.mode: "off"` for the
+COMPOSED tier, whose recording nothing reads (RD10 fills `stream_url` from the
+DESTINATION's VOD URL, not Cloudflare's); or run our own retention sweep calling
+`DELETE /stream/{videoId}` at the intended age, which is already within the
+Stream:Edit scope the programme holds. The second and third are not exclusive.
 
 ### 6.6 Token trust domains (G1, review-blocking from R1)
 
@@ -1026,8 +1056,8 @@ be read as a decision.
 
 `app/overlay/fixtures/[fixtureId]/relay/{layout,page}.tsx`, gated by the
 `relay-page` token (`?st=`) + session active + fixture visible → else 404;
-`noindex`; sets no cookies (asserted). Renders `<video>` (WHEP → LL-HLS
-ladder) UNDER the unmodified `<OverlayStage>`. Page states from the element's
+`noindex`; sets no cookies (asserted). Renders `<video>` (**LL-HLS — NOT WHEP;
+see U1-S5**) UNDER the unmodified `<OverlayStage>`. Page states from the element's
 own events: `waiting` → warming slate, `stalled > 8 s` → signal-lost slate,
 `playing` → live; each reported through `window.relayReport` when exposed.
 `measuredLatencyMs` (the page measures it live) auto-tunes `delayMs` through
@@ -1057,29 +1087,36 @@ path.
 ### 7.4 Failure choreography
 
 Phone drop → the front door holds the disconnected input for its hold window
-(length UNOBSERVED — U1, below) → slate within ~8 s → resume with no encoder
-restart, IF that hold is real. Destination rejects the key →
+(length = `recording.timeoutSeconds`, MEASURED — U1, below) → slate within ~8 s
+→ resume with no encoder restart. Destination rejects the key →
 `failed(target_rejected)` in words. Double start → 409 showing the existing
 session. Forgotten stream → `max_duration`. Machine host event → observed in
 the soak; recurring → the port makes another driver a file swap.
 
-**The hold window is UNOBSERVED, and the first leg above RESTS on it (U1).**
-The choreography is left exactly as designed rather than rewritten around a
-guess — it is genuinely gated on the U1 spike, which cannot run until a
-Cloudflare account and a scoped Stream token exist — but every claim in that
-first leg is downgraded here. The premise is behavioural: *the front door
-keeps a playback connection alive for ≥ N seconds while its input is
-disconnected* (§7.1, C2). Nothing in this programme has measured N, or
-observed that the property exists at all. **`timeoutSeconds` is not the
-evidence**: it is nested under `recording` and governs when a disconnect
-starts a NEW recorded video, which describes what the RECORDER does and says
-nothing about what a playback connection sees while the input is away. So the
-~8 s slate, the "no encoder restart", and the invisibility of an in-window
-reconnect are all PREDICTED and unmeasured. If the hold proves shorter than a
-realistic cellular reconnect — or absent — this leg is a restart rather than
-a resume, the destination sees a new encoder on the same key, and §7.1's
-`restart.policy = no` reasoning is what has to carry it. U1 is recorded in the
-corpus's `_OPEN-QUESTIONS.md`, and the spike replaces this paragraph.
+**U1 IS ANSWERED — measured against the live API 2026-09-11 (U1-S7).** The
+hold is real, and `recording.timeoutSeconds` IS its control:
+`EXT-X-ENDLIST` landed at cut **+12.2 s** with the field at 10 and at
+**+63.1 s** with it at 60, and a 20 s dropout inside a 60 s window produced no
+`ENDLIST` at all, a master that never left 200, playback resuming on the same
+URL **3.9 s** after the encoder returned, and **ONE** recorded video rather than
+two. That last fact is the "no encoder restart" property, observed rather than
+predicted. The accepted range is **1 … 86 400 s**.
+
+The 2026-09-10 withdrawal was half right and half wrong, and the wrong half is
+retracted here: `timeoutSeconds` does govern the recorder — a 40 s pre-cut
+period recorded as `duration=40.02` — but the recording and the live playlist
+end in the SAME beat, so it governs playback too.
+
+Three consequences the choreography must carry. **Inside the window playback
+STALLS, it does not fail** — the playlist stays live-marked and simply stops
+advancing, so the slate's trigger is "segments stopped arriving", never a
+playback error event; a guard written against an error would never fire.
+**Beyond the window** the variant gets `ENDLIST`, the master returns `204`, a
+SECOND recorded video opens on return, and recovery cost 27 s on top of the
+outage (against 3.9 s in-window). **And the window is a product decision** — it
+is the phone-dropout tolerance, so it and the sweep's dead-stream threshold are
+one decision, not two: the sweep must not call a non-advancing manifest dead
+before `timeoutSeconds` has elapsed.
 
 ### 7.5 Slate theme
 
@@ -1203,7 +1240,7 @@ relay page.** Destination transcode → glass 8–25 s happens AFTER compositing
 | Bitrate math | 3,000 kbps video + 128 kbps AAC = 1.41 GB/h = 4.22 GB / 3 h | A |
 | x11grab | RGB only, no alpha — forces B3 | A |
 | Audio | AAC-LC 128 kbps 48 kHz through the PulseAudio null sink — one A/V clock | A/B |
-| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC` in ONE response (C1, §7.6); `recording { mode: 'automatic', timeoutSeconds }` is a RECORDING setting — it governs when a disconnect starts a NEW recorded video. **The earlier reading "`timeoutSeconds` IS the reconnect window" is WITHDRAWN (2026-09-10)**: it is not evidence of a playback hold, and the hold §7.4 rests on is U1, unobserved. **`deleteRecordingAfterDays` is TOP-LEVEL, not nested under `recording` — nesting it is accepted with a 200 and silently ignored (U1-S1, measured 2026-09-10)**; the create response also carries a playback twin of every ingest shape (`rtmpsPlayback`, `srtPlayback`, `webRTCPlayback`) plus `playback { hls, dash }` — six credential objects, so R2's WHEP pull URL is in hand at provision time (U1-S2); a live input CREATES successfully at `totalStorageMinutesLimit: 0`, so the storage gate is not on creation (U1-S3, partial — whether INGEST is gated at zero headroom is untested); simulcast live-outputs API (= passthrough; composed must NOT use it) | **A for the response shape and the retention field** (measured against the live API 2026-09-10); B for what `timeoutSeconds` governs; **D for the hold window** (U1 step 2 unrun — no measurement exists) |
+| Cloudflare Stream API | live input returns `rtmps { url, streamKey }` + `srt { url, streamId, passphrase }` + `webRTC` in ONE response (C1, §7.6); `recording { mode: 'automatic', timeoutSeconds }` is a RECORDING setting — it governs when a disconnect starts a NEW recorded video. **The 2026-09-10 withdrawal is itself RETRACTED (2026-09-11, U1-S7): `timeoutSeconds` IS the hold window.** Measured — `EXT-X-ENDLIST` at cut +12.2 s with the field at 10, +63.1 s at 60; a 20 s dropout inside a 60 s window yields no ENDLIST, no non-200, resume in 3.9 s on the same URL and ONE recorded video. Range 1…86400; **`timeoutSeconds: 0` is silently swallowed to null (U1-S8)**. **WHEP IS NOT AVAILABLE to an RTMPS/SRT input (U1-S5): the /webRTC/play endpoint answers 409 "Live broadcast not started yet", and Cloudflare documents that WHIP and WHEP must be used together — so the compositor pulls HLS/LL-HLS, not WHEP.** **The manifest 403s a non-browser User-Agent with `error code: 1010` (U1-S6)**, so any server-side liveness probe of it must send a real agent or it reads a healthy stream as dead. **`deleteRecordingAfterDays` is TOP-LEVEL, not nested under `recording` — nesting it is accepted with a 200 and silently ignored (U1-S1, measured 2026-09-10)**; the create response also carries a playback twin of every ingest shape (`rtmpsPlayback`, `srtPlayback`, `webRTCPlayback`) plus `playback { hls, dash }` — six credential objects, so R2's pull URL (`playback.hls`) is in hand at provision time (U1-S2); the `webRTC*` pair is returned but unusable for this ingest (U1-S5); a live input CREATES successfully at `totalStorageMinutesLimit: 0`, so the storage gate is not on creation (U1-S3, partial — whether INGEST is gated at zero headroom is untested); simulcast live-outputs API (= passthrough; composed must NOT use it) | **A for the response shape and the retention field** (measured against the live API 2026-09-10); **A for the hold window and for what `timeoutSeconds` governs** (three runs against the live API, 2026-09-11 — U1-S7); **A for WHEP's unavailability to RTMPS/SRT** (measured and documented) |
 | Cloudflare Stream pricing (official doc, updated 2026-09-01) | Two dimensions. Ingest + encoding always free; no egress line. Storage prepaid in $5 / 1,000-min blocks (duration rounded to the second; file size irrelevant), consumed by uploads + SRT/RTMP live recordings + reserved `maxDurationSeconds`, NOT by ABR renditions or deleted videos. **Exhausted storage blocks NEW live streams from starting.** Delivery $1 / 1,000 min post-paid, counted for player/HLS/DASH playback, WHEP playback, MP4 downloads and simulcasting via live outputs. Live delivery rounds to the source GOP. Zero-viewer broadcast = $0 delivered. Stream Live WebRTC going GA; **WHEP delivery billing begins 2026-10-15** (free until then). | B |
 | Fly Machines | REST create/start/stop/delete maps 1:1 onto the runner port; per-second billing while running; stopped Machines bill rootfs only; the org already operates Fly (placement) | E / D — R0 replaces with the account's rate card |
 
@@ -1214,7 +1251,7 @@ relay page.** Destination transcode → glass 8–25 s happens AFTER compositing
 | Fly Machine, 3 h [D] | shared-cpu-2x / 4 GB ≈ £0.05–0.10; performance-2x / 4 GB ≈ £0.20–0.30 | — | — |
 | Fly egress ≈ 4.2 GB [D] | ≈ £0.07–0.10 | — | — |
 | Cloudflare delivered minutes (pull or simulcast, 180 × $1 / 1,000) | £0.14 (WHEP free until 2026-10-15) | £0.14 | — |
-| Cloudflare recording storage | ≈ $0.90 / month while retained; pooled per prepaid block (one block ≈ 5.5 retained 3 h matches); retention 7 days ≈ one block per ~20 matches/week | same | — |
+| Cloudflare recording storage | ≈ $0.90 / month while retained; pooled per prepaid block (one block ≈ 5.5 retained 3 h matches). **The "retention 7 days ≈ one block per ~20 matches/week" line is WITHDRAWN (U1-S4, 2026-09-11): the API floor is 30 days**, so a block sustains ~11 ninety-minute matches per MONTH unless recording is switched off for the composed tier or an own-sweep deletes earlier — see §6.5 | same | — |
 | **Total** | **≈ £0.26–0.54 + retention** | **≈ £0.14 + retention** | **£0.00** |
 
 Against a £6 credit: composed ≈ 91–96 % margin, passthrough ≈ 98 %. 1080p ≈

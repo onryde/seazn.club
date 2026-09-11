@@ -165,8 +165,10 @@ the design's DDL verbatim.
      `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` in ONE
      response — plus a playback twin of each (`rtmpsPlayback`, `srtPlayback`,
      `webRTCPlayback`) and `playback { hls, dash }`, measured 2026-09-10
-     (U1-S2); persist `webRTCPlayback.url` with the session, it is R2's WHEP
-     pull target. Both sets are in hand at provision time, so storing one and
+     (U1-S2); persist **`playback.hls`** with the session — it is R2's pull
+     target. Do NOT persist `webRTCPlayback.url`: WHEP is not served for an
+     RTMPS/SRT input (U1-S5, measured 2026-09-11), so that URL is present on
+     every create and permanently unusable here. Both sets are in hand at provision time, so storing one and
      discarding the other is a choice this wave has no reason to make, and
      re-acquiring the discarded half later costs a migration plus a re-issue of
      every live input. Same AES-256-GCM envelope discipline as
@@ -200,13 +202,21 @@ the design's DDL verbatim.
    createLiveInput, inputStatus, addOutput, deleteInput, storageHeadroom }`,
    `RunnerProvider { create, status, delete }` — shapes per §6.4/§7.1),
    `server/relay/ingest-cf.ts` (Cloudflare Stream: `recording: { mode:
-   "automatic", timeoutSeconds }` — and **`deleteRecordingAfterDays: 7`
-   (ruling E) as a TOP-LEVEL sibling of `recording`, NOT a member of it.**
-   Measured 2026-09-10 (U1-S1): nested, it is accepted with HTTP 200 and
-   silently dropped, retention is never set, the prepaid storage block never
-   recycles and §6.5 eventually refuses every session — all with green calls.
-   The adapter's test asserts `deleteRecordingAfterDays` comes back NON-NULL on
-   the create response; asserting HTTP 200 cannot see this failure.
+   "automatic", timeoutSeconds }` — and **`deleteRecordingAfterDays` as a
+   TOP-LEVEL sibling of `recording`, NOT a member of it.** Measured 2026-09-10
+   (U1-S1): nested, it is accepted with HTTP 200 and silently dropped, retention
+   is never set, the prepaid storage block never recycles and §6.5 eventually
+   refuses every session — all with green calls.
+   **Ruling E's value of 7 is IMPOSSIBLE: the API floor is 30
+   (`400 / 10060 "must be between 30 and 1096 days"`, measured 2026-09-11,
+   U1-S4).** Retention shorter than 30 days needs our own sweep calling
+   `DELETE /stream/{videoId}`, not this field — an owner decision recorded in
+   `_OPEN-QUESTIONS.md`, not a number to invent here.
+   **`timeoutSeconds` IS the phone-dropout tolerance (U1-S7)**, accepts 1…86400,
+   and is silently swallowed to null if sent as 0 (U1-S8) — clamp to ≥ 1.
+   The adapter's test asserts BOTH `deleteRecordingAfterDays` and
+   `timeoutSeconds` come back non-null and equal to what was sent; asserting
+   HTTP 200 cannot see either failure.
    `outputs = [target]` IFF passthrough — §6.4), `server/relay/runner-fly.ts`
    (Machines REST per §7.1: create with `region`, `guest`, `auto_destroy`,
    `env { SESSION_ID, JOB_TOKEN, APP_URL }`; `delete` for hard kill — the

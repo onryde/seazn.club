@@ -72,9 +72,15 @@ tail -1` (R2 needs no migration; confirm and say so).
    terminal session maps to 404 here — the page never explains); `robots
    noindex`; sets NO cookies (asserted in the e2e — the cookie banner
    suppression from W1 covers `/overlay/*` by prefix). Renders `<video
-   data-testid="relay-video" autoplay playsinline>` with the WHEP →
-   LL-HLS ladder (WHEP first per the memo; LL-HLS when WHEP fails within 5 s)
-   UNDER the unmodified `<OverlayStage>`; the stage receives `delayMs` from a
+   data-testid="relay-video" autoplay playsinline>` playing **LL-HLS — there is
+   no WHEP rung.** Measured 2026-09-11 (U1-S5): Cloudflare does NOT serve an
+   RTMPS/SRT-ingested live input over WHEP — `POST /webRTC/play` answers
+   `409 "Live broadcast not started yet"` for the life of the input, and the
+   documentation is explicit that "WHIP and WHEP must be used together". The
+   ladder has ONE transport; a reconnect is a `<video>` retry on the same
+   source. Enable **LL-HLS on the live input** (a per-input setting, OFF by
+   default — confirmed in the dashboard) or the compositor pays plain-HLS
+   latency. UNDER the unmodified `<OverlayStage>`; the stage receives `delayMs` from a
    page-level state the supervisor sets (scope 4).
    **M3 — the playback source is read from the `slot = 0`
    `fixture_stream_inputs` row, and R2 only READS it.** R1 writes exactly one
@@ -129,8 +135,9 @@ tail -1` (R2 needs no migration; confirm and say so).
    measuredLatencyMs })` when the supervisor has exposed it (feature-detected;
    absent in a normal browser). `measuredLatencyMs` = the burned-in source
    clock (R0's method) vs `performance.now()` when the memo says it is
-   readable, else the WHEP stats API's `jitterBufferDelay`; the page never
-   guesses.
+   readable, else — since the WHEP stats API is NOT reachable on this transport
+   (U1-S5) — the media element's own `video.buffered` end minus
+   `video.currentTime`, which is the LL-HLS analogue; the page never guesses.
 3. **Slate** — `OVERLAY_THEMES.slate` (`sports: "all"`, the one opaque theme;
    `components/overlay/overlay-slate.tsx`) rendering the three states with
    values from `_THEMES.md` §4a and the `OVERLAY_TOKENS` export (T1b); the
@@ -147,7 +154,9 @@ tail -1` (R2 needs no migration; confirm and say so).
    `delayMs = 3000` a posted goal and the clock advance land TOGETHER in the
    DOM (design §10.2).
    **D3 — the ramp SNAPS on a transport change, and resumes EWMA after.** The
-   ≤ 250 ms-per-beat clamp cannot cross a WHEP → LL-HLS transition: the ladder
+   ≤ 250 ms-per-beat clamp cannot cross a transport discontinuity (as written
+   this meant a WHEP → LL-HLS fall-back, which U1-S5 shows cannot occur; the
+   surviving trigger is a `<video>` retry that re-establishes the source): the ladder
    falls back after 5 s, roughly a 0.5 s → 6 s step, which at ≤ 250 ms per 15 s
    beat is ~22 beats — about **five and a half minutes of score running AHEAD
    of picture**, at exactly the moment the transport degrades and a viewer is
@@ -468,8 +477,11 @@ contents or diffs.
 1. That `x11grab` captures the headed Chromium on `:99` at full 720p without
    a window manager — Xvfb + kiosk usually suffices; if the memo used a WM,
    the Dockerfile carries it.
-2. That WHEP playback works in Chromium under SwiftShader (no GPU) — the memo
-   says; if it fell back to LL-HLS, `delayMs` default comes from that number.
+2. ~~That WHEP playback works in Chromium under SwiftShader (no GPU).~~
+   **FALSIFIED 2026-09-11 (U1-S5) — not because of SwiftShader, but because WHEP
+   is not offered for an RTMPS/SRT input at all.** The live premise that replaces
+   it: that **LL-HLS** playback decodes in Chromium under SwiftShader at 720p30,
+   and `delayMs` default comes from the LL-HLS number in R0's memo.
 3. That puppeteer's `exposeFunction` survives a page-level `location` change —
    it does not; the design's "navigate ONCE" is why. A reconnect is a
    `<video>` element retry, never a navigation.

@@ -1695,3 +1695,149 @@ window**.
 `timeoutSeconds: 10` was accepted and echoed inside `recording`, consistent with
 the standing reading that it governs the RECORDER, not a playback hold. Nothing
 observed here contradicts or supports the hold.
+
+## 2026-09-11 — U1 step 2: WHEP IS NOT AVAILABLE TO THIS ARCHITECTURE
+
+**The composited tier cannot pull WHEP, and the design is built on the assumption
+that it can.** Measured against the live API, and confirmed in Cloudflare's own
+documentation.
+
+### U1-S5 — an RTMPS/SRT live input is not playable over WHEP
+
+Method: create a live input, push RTMPS from ffmpeg (`testsrc2` 720p30 + 1 kHz
+tone), confirm Cloudflare reports `status.current.state = "connected"` with
+`ingestProtocol: "rtmp"`, confirm the HLS manifest is serving and advancing, then
+POST a WHEP offer to `webRTCPlayback.url`.
+
+```
+input state:                 connected   (ingestProtocol "rtmp")
+HLS manifest:                200, media-sequence advancing
+WHEP POST /webRTC/play:      409 Conflict — "Live broadcast not started yet"
+```
+
+Repeated across three runs. Cloudflare's WebRTC documentation states the rule
+directly:
+
+> "WHIP and WHEP must be used together: we do not yet support inputs using
+> RTMP/SRT to be played using WHEP, or inputs using WHIP to be recorded and
+> played using HLS/DASH."
+
+**What breaks.** §3's Tier B composed path is *phone (SRT/RTMPS) → Cloudflare
+live input → Fly Machine pulls **WHEP** → relay page → RTMPS to destination*.
+The pull is impossible. The 409 is not a warm-up race or a beta gate — an
+RTMPS-ingested input is never WHEP-playable, at any point in its life.
+
+**The obvious escape hatch is also closed.** Switching the phone to WHIP ingest
+would satisfy WHEP playback but forfeits HLS/DASH playback *and recording* — which
+removes the recording the storage design (§6.5, §12) manages and the replay RD10
+fills `stream_url` from. The same sentence closes both doors.
+
+**So the compositor pulls HLS / LL-HLS.** Consequences that must be re-derived
+rather than assumed:
+
+| What | Was | Now |
+|---|---|---|
+| R2 relay page `<video>` source | WHEP, LL-HLS as fallback | LL-HLS (or HLS) as the ONLY source |
+| Transport-change choreography (§3, the WHEP → LL-HLS fallback and its discontinuity rule) | a real code path | **moot — there is no second transport to fall back FROM** |
+| Glass-to-glass latency | WHEP (sub-second class) | HLS; LL-HLS materially better than plain HLS but not WebRTC-class. **Unmeasured — the latency budget needs re-deriving** |
+| Delivery cost | "WHEP delivery free until 2026-10-15" | **HLS delivery bills NOW** at $1 / 1,000 min. The £0.14-per-match delivery line in §9.2 is no longer zero-rated |
+| LL-HLS beta toggle | never mentioned | **load-bearing.** Off by default (confirmed in the dashboard); the compositor's latency depends on it being ON |
+
+The `webRTC` / `webRTCPlayback` pair still returns on every create (U1-S2) — it
+is simply unusable for this ingest. Persisting `webRTCPlayback.url` with the
+session is therefore pointless until an all-WebRTC tier exists; R1 should persist
+`playback.hls` instead.
+
+### U1-S6 — the edge 403s a non-browser client on the manifest
+
+`GET` the HLS manifest with Python's default `urllib` agent returns
+**403 `error code: 1010`** — Cloudflare's edge rejecting the client by user
+agent — on a manifest that is healthy and serving. The same URL with a browser
+`User-Agent` returns 200 and the playlist.
+
+This is a live trap for the programme, not a probe artefact: **a server-side
+health check, a watchdog, or any `fetch`-based liveness probe of the manifest
+will read a healthy stream as down** unless it sets a browser-like agent. The
+compositor is headless Chromium and is safe; anything in R1's heartbeat or the
+sweep that polls the manifest from Node is not. Whatever polls the manifest sends
+a real `User-Agent` and asserts a 200 against a KNOWN-GOOD stream in test, or the
+guard is decoration.
+
+### U1-S7 — THE HOLD WINDOW IS `recording.timeoutSeconds`, AND IT IS TUNABLE
+
+**U1 is ANSWERED.** The premise §7.4 rests on — *the front door keeps a playback
+path alive for ≥ N seconds while its input is disconnected* — is TRUE, N is
+settable, and the control is the very field this programme withdrew as
+irrelevant on 2026-09-10.
+
+Method: one live input; ffmpeg pushing RTMPS (`testsrc2` 720p30 + 1 kHz tone);
+settle; `SIGKILL` the encoder; poll the HLS master and its variant twice a second
+(re-resolving the master each time, so a resumed broadcast arriving as a new
+variant is visible); restore the encoder; watch. Run three times, varying
+`recording.timeoutSeconds` and the gap, so causation is separated from
+coincidence.
+
+| gap | `timeoutSeconds` | `EXT-X-ENDLIST` | master after | resume lag | recorded videos |
+|---|---|---|---|---|---|
+| 60 s | **10** | cut **+12.2 s** | 200 (finished playlist) | — | 2 |
+| 90 s | **60** | cut **+63.1 s** | **204** from +63.1 s | resume **+27.1 s** | 2 |
+| **20 s** | **60** | **never** | **200 throughout** | resume **+3.9 s** | **1** |
+
+Two points on the line at ≈ `timeoutSeconds + 3 s` (the +3 is this probe's 1–3 s
+poll round trip, not a Cloudflare property), and a third run inside the window
+that behaves exactly as that model predicts. The field is the control.
+
+**The correction this forces.** The design's evidence table says
+`timeoutSeconds` "governs when a disconnect starts a NEW recorded video, which
+describes what the RECORDER does and says nothing about what a playback
+connection sees". The first half is right; the second half is false. It governs
+BOTH, because they are one event: at the deadline the recorded video closes AND
+the live playlist is terminated. Measured: a 40 s pre-cut period produced a first
+recorded video of `state=ready duration=40.02`, ended in the same beat as the
+playlist.
+
+**An IN-WINDOW dropout is invisible.** 20 s gap inside a 60 s window: no
+`ENDLIST`, the master never leaves 200, the manifest resumes advancing **3.9 s**
+after the encoder returns, on the same URL, and Cloudflare records the whole
+thing as **ONE** video. This is the "encoder never restarts" property, measured.
+
+**Inside the window, playback STALLS rather than fails.** The playlist stays
+live-marked but does not advance — no ingest, no new segments. A player runs its
+buffer down and waits. So the slate's trigger is "segments stopped arriving",
+never "playback errored"; a guard written against an error event would never
+fire.
+
+**Beyond the window.** `EXT-X-ENDLIST` on the variant, `204` on the master, and
+a SECOND recorded video on return. The master playback URL still survives and
+re-resolves to the new broadcast — no new URL need be issued — but recovery cost
+**27 s** on top of the 90 s outage, versus 3.9 s for the in-window case.
+
+**Range, asked of the API rather than assumed** (the discipline that caught
+U1-S4): `timeoutSeconds` accepts **1 … 86 400** (24 h) — every value probed at
+1, 5, 30, 60, 300, 3600, 21600 and 86400 was accepted and echoed back intact.
+
+**U1-S8 — `timeoutSeconds: 0` is silently swallowed.** Sent as 0, the API
+returns 200 and echoes `timeoutSeconds: null` — the field reverts to unset,
+NOT to "end immediately". Same shape as U1-S1's nested-field trap. If R1 ever
+computes 0 from config (an unset env var read through `Number()`, say — see the
+repo's standing `Number("") === 0` trap) it gets default behaviour with a green
+call and no warning. The adapter clamps to ≥ 1 and asserts the echo.
+
+**Design consequences.**
+
+- `timeoutSeconds` is a deliberate product decision, not a default to copy. **It
+  IS the phone-dropout tolerance.** Set it to the longest outage a club should
+  survive invisibly. The cost of a high value is that a genuinely abandoned
+  stream stays "live" that much longer before the sweep may call it over — so
+  this number and the sweep's dead-stream threshold are ONE decision, not two.
+- §6.4's disconnect choreography and the ~8 s slate now sit inside a measured
+  envelope instead of a guess.
+- The sweep must not treat a non-advancing manifest as a dead stream before
+  `timeoutSeconds` has elapsed, or it will kill sessions the platform was still
+  holding open.
+- A dropout that crosses the window costs a second recorded video, which is a
+  storage-accounting consequence as well as a viewer-experience one (§6.5).
+
+**Evidence grade: A** — the window's existence, its control, its magnitude at two
+settings, and the in-window and beyond-window behaviours are all measured
+first-hand against the live API on 2026-09-11.
