@@ -388,7 +388,7 @@ dead-stream threshold are ONE decision. See Q20.
 
 ---
 
-## Q20 (from U1-S7). How long should a phone be allowed to drop without the stream ending?
+## ~~Q20~~ (from U1-S7) RULED 2026-09-11 — 180 s. How long may a phone drop without the stream ending?
 
 **What.** `recording.timeoutSeconds` is now known to BE the dropout tolerance
 (U1-S7), and it accepts 1 … 86 400 s. Inside it a dropout is invisible; beyond
@@ -412,19 +412,36 @@ threshold rather than fighting it, which means the sweep's "stale" state becomes
 "we think this is over" and `timeoutSeconds` remains "the platform agrees" —
 two observations in the same direction rather than a race.
 
-**Owed once ruled:** §6.4's stale threshold re-derived against the chosen value,
+**OWNER RULING, 2026-09-11: 180 s — the recommendation accepted as put.**
+`recording.timeoutSeconds = 180` on every live input.
+
+**Owed:** §6.4's stale threshold re-derived against the chosen value,
 and R1's adapter pinning it as a named constant with the echo asserted (0 is
 silently swallowed — U1-S8).
 
 ---
 
-## Q21 (from U1-S4). Recording retention cannot be 7 days — which lever instead?
+## ~~Q21~~ (from U1-S4) RULED 2026-09-11 — keep 7 days, delivered by our own cron
 
 **What.** Design §12 sets `deleteRecordingAfterDays = 7` so the prepaid storage
-block recycles. **The API floor is 30** (`400 / 10060`, measured). At 30 days a
-1,000-minute block sustains roughly 11 ninety-minute matches per month rather
-than the turnover 7-day retention implied, and §6.5's headroom guard starts
-refusing sessions far earlier than designed.
+block recycles. **The API floor is 30** (`400 / 10060`, measured 2026-09-11),
+and so is the other native mechanism: a video's `scheduledDeletion` "must be at
+least 30 days from upload time" (Cloudflare API reference; raised by a peer
+session 2026-09-11 and verified here). **So NO native Cloudflare mechanism can
+express retention under 30 days.** `DELETE /stream/{video_uid}` has no minimum
+age — this spike deleted ten recordings minutes old — so sub-30-day retention is
+OUR CRON OR NOTHING, which promotes the sweep from tidy-up to load-bearing for
+the storage bill.
+
+**The capacity shape, which decides how much this matters.** The block is
+PREPAID CONCURRENT CAPACITY ($5/month per 1,000 stored minutes), not a monthly
+allowance — measured directly: usage read `8.91 / 1000` with ten recordings
+present and returned to `0 / 1000` the moment they were deleted. So retention
+length, not monthly volume, is what fills the block. At the 30-day floor a
+1,000-minute block sustains roughly 11 ninety-minute matches held concurrently,
+i.e. ~11 per month; with an own-sweep at, say, 2 days the same block covers a
+far higher match rate because almost nothing is stored at any instant. That
+asymmetry is the whole argument for lever (c).
 
 **Three levers.**
 (a) Buy more blocks — $5 per 1,000 minutes, linear, solves nothing structurally.
@@ -439,6 +456,32 @@ recording off for composed, because paying to store a copy nobody reads is pure
 waste; keep (c) as the backstop for passthrough, where a club may genuinely want
 the Cloudflare recording and 30 days is longer than we want to pay for. (a) only
 if a real product reason for keeping composed recordings appears.
+
+**OWNER RULING, 2026-09-11: retention stays 7 days, delivered by lever (c) —
+our own cron issuing `DELETE /stream/{video_uid}`.** Recording is NOT turned off
+(lever (b) declined): the club keeps its Cloudflare recording on both tiers, and
+the 7-day intent from §12 is preserved by deleting at 7 days ourselves rather
+than by a field that cannot express it.
+
+**One addition I am making under that ruling, flagged rather than assumed:
+`deleteRecordingAfterDays: 30` is ALSO set, as a backstop.** It is the lowest
+value the API accepts, it costs nothing while the cron is healthy, and if the
+sweep ever stops running the recordings expire at 30 days instead of never — so
+a broken sweep becomes a larger bill rather than an unbounded one. Say the word
+if you would rather leave the field unset.
+
+**Owed:** §12's value replaced with "7 days by sweep, 30-day native backstop";
+§6.5's headroom arithmetic re-derived (at a 7-day concurrent window the block
+holds far more monthly volume than the 30-day floor implied); R1's sweep
+deleting videos older than 7 days and its adapter asserting both fields echo
+back; and the `schedule:` workflow raised in `onryde/seazn.club.workflow`, never
+here.
+
+**Note that (c) was not optional in any case** — U1-S9 showed that deleting a
+live input leaves its recordings billing, so a `DELETE /stream/{video_uid}` path
+is required for cleanup correctness whichever retention answer is chosen. And
+the sweep's `schedule:` workflow ships in `onryde/seazn.club.workflow`, not this
+repo (`d53d87024`); a workflow added here fires never and reds nothing.
 
 **Owed once ruled:** §6.5's headroom arithmetic re-derived, §12's value
 replaced, and R1's adapter asserting whichever shape is chosen.

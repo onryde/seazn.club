@@ -146,7 +146,7 @@ Facts the design stands on, each verified this session unless marked:
 | `ENTITLEMENT_DOMAINS` is code; a key left out is unadvertised on /pricing | `apps/web/src/lib/entitlement-domains.ts:7` | E fb99bbd4c |
 | `org_entitlement_overrides` exists (V101, admin tools V266); **no add-on SKU concept exists in v18** | `db/migration/deltas/V101__billing.sql:66`, `V266__admin_plan_tools.sql:11` | E fb99bbd4c |
 | Inline paywall card `UpgradeGate` with plan / pass CTA hrefs; one-off Stripe Checkout precedents `POST /api/billing/pass-checkout` and `server/usecases/size-pack-checkout.ts:69` (`getStripe().checkout.sessions.create`) | `apps/web/src/components/upgrade-gate.tsx:252,307,438` | E fb99bbd4c |
-| Cron guard order: **503 when `CRON_SECRET` is unset, then 401 on a bad `x-cron-secret`**; one idempotent row-locked usecase; driven by an Actions-cron workflow | `apps/web/src/app/api/cron/registrations/route.ts:13-16` | E fb99bbd4c |
+| Cron guard order: **503 when `CRON_SECRET` is unset, then 401 on a bad `x-cron-secret`**; one idempotent row-locked usecase. **The ROUTE lives here; the `schedule:` WORKFLOW does NOT** — `d53d87024` (PR #757, 2026-09-09) moved all 8 scheduled ops workflows to `onryde/seazn.club.workflow`, and `origin/main` now carries 11 workflows of which `help-shots.yml` is the only `schedule:` (verified 2026-09-11) | `apps/web/src/app/api/cron/registrations/route.ts:13-16` | E fb99bbd4c; workflow split verified 2026-09-11 |
 | Route conventions: `v1()` / `handler()` (`lib/http.ts:69`), `parseBody`, zod schemas at `server/api-v1/schemas.ts`, `requireResourceAuth(req, kind, id, scope)` at `server/api-v1/auth.ts:352`; OpenAPI `ROUTES` hand-maintained (`server/api-v1/openapi.ts:57`), generator `scripts/openapi-gen.ts`, CI drift step `ci.yml` | E ac85c70 |
 | Client `api()` already unwraps `data` — the documented double-unwrap live bug | `live-score-data.ts:1-4` | E ac85c70 |
 | `apps/web/playwright.config.ts:119` `const WALKTHROUGH = /[\\/]e2e[\\/]walkthrough[\\/]/;` (the file is at `apps/web/`, not `apps/web/e2e/`); `WALKTHROUGH_SPECS` exists on main since PR #723 and `e2e-ci-wiring.test.ts` requires every walkthrough spec named there | E fb99bbd4c |
@@ -862,8 +862,19 @@ create checks headroom through the ingest port and **refuses before it
 inserts** — `503 storage_exhausted` with panel copy (§6.3), no session row —
 never a mid-warming mystery, and never a dead `failed` row in the panel (E5).
 The sweep alerts below one retained match of headroom.
-`deleteRecordingAfterDays` keeps the block recycling — **but NOT at 7 days.
-The API floor is 30** (`400 / 10060 "must be between 30 and 1096 days"`,
+**RETENTION, OWNER-RULED 2026-09-11 (Q21): 7 days, delivered by our own cron
+issuing `DELETE /stream/{video_uid}`, with `deleteRecordingAfterDays: 30` set as
+a backstop.** Recording stays ON for both tiers. The sweep is therefore
+load-bearing for the storage bill, not a tidy-up: if it stops, recordings live
+to the 30-day backstop and the block fills. Its `schedule:` workflow ships in
+`onryde/seazn.club.workflow` (`d53d87024`), never in this repo — a workflow
+added here fires never and reds nothing. Storage is prepaid CONCURRENT capacity
+($5/month per 1,000 stored minutes, measured: usage read `8.91 / 1000` with ten
+recordings and `0 / 1000` the instant they were deleted), so a 7-day window
+keeps the block near empty regardless of monthly match volume — which is the
+whole reason the ruling is affordable.
+
+The native fields cannot express it — **the API floor is 30** (`400 / 10060 "must be between 30 and 1096 days"`,
 measured 2026-09-11, U1-S4), so §12's 7 is impossible and the recycling
 arithmetic behind this guard is 4.3x slower than it was written for: at a 30-day
 floor a 90-minute recorded match holds its minutes for a month, so a
@@ -1251,7 +1262,7 @@ relay page.** Destination transcode → glass 8–25 s happens AFTER compositing
 | Fly Machine, 3 h [D] | shared-cpu-2x / 4 GB ≈ £0.05–0.10; performance-2x / 4 GB ≈ £0.20–0.30 | — | — |
 | Fly egress ≈ 4.2 GB [D] | ≈ £0.07–0.10 | — | — |
 | Cloudflare delivered minutes (pull or simulcast, 180 × $1 / 1,000) | £0.14 (WHEP free until 2026-10-15) | £0.14 | — |
-| Cloudflare recording storage | ≈ $0.90 / month while retained; pooled per prepaid block (one block ≈ 5.5 retained 3 h matches). **The "retention 7 days ≈ one block per ~20 matches/week" line is WITHDRAWN (U1-S4, 2026-09-11): the API floor is 30 days**, so a block sustains ~11 ninety-minute matches per MONTH unless recording is switched off for the composed tier or an own-sweep deletes earlier — see §6.5 | same | — |
+| Cloudflare recording storage | ≈ $0.90 / month while retained; pooled per prepaid block (one block ≈ 5.5 retained 3 h matches). **Re-derived under ruling 27 (2026-09-11).** The block is prepaid CONCURRENT capacity, so what fills it is the retention WINDOW, not monthly volume: at the ruled 7-day sweep a 1,000-minute block holds roughly 11 ninety-minute matches *at any instant*, i.e. ~11 per week, ~44/month. Had retention fallen back to the 30-day native floor (a broken sweep) the same block would sustain only ~11 per MONTH — which is what makes the sweep load-bearing for the bill rather than a tidy-up. See §6.5 | same | — |
 | **Total** | **≈ £0.26–0.54 + retention** | **≈ £0.14 + retention** | **£0.00** |
 
 Against a £6 credit: composed ≈ 91–96 % margin, passthrough ≈ 98 %. 1080p ≈
@@ -1281,7 +1292,7 @@ never cite decoratively).
 | State machines over booleans | lifecycle is an enum with explicit transitions plus a `desired_state`; no `is_live`/`is_ending` flags | `fixture_stream_sessions.state` + `desired_state` (§6.4); the pad reducer (`scorepad/v3`) |
 | Deny by default | 404 ≡ missing (never "forbidden"), RLS enabled with zero client policies, exact-host allowlists | overlay page `notFound()` (§3.1); §6.1 RLS; `streamUrlSchema` (§3.7) |
 | The client never decides | entitlement and visibility are resolved server-side on every render; a client prop is a display hint, never a gate | `hasFeature` on the page and the division page (§3.1, §3.8) |
-| Cron pair idiom | 503 when the secret is unset, then 401 on mismatch, then ONE idempotent row-locked usecase, driven by an Actions-cron workflow | `app/api/cron/registrations/route.ts:13-16` |
+| Cron pair idiom | 503 when the secret is unset, then 401 on mismatch, then ONE idempotent row-locked usecase. **The workflow half ships in `onryde/seazn.club.workflow`, NOT this repo (`d53d87024`, 2026-09-09).** A `schedule:` workflow added here is never fired by anything, CI stays green, and the sweep silently never runs — a failure with no red signal. `CRON_SECRET` is mirrored in both places (`gh secret set` there, `flyctl secrets set` on the app); the moved workflows skip-with-warning on a missing secret rather than failing red, so check the response body, not the run colour | `app/api/cron/registrations/route.ts:13-16` |
 | Money is ledger rows in the same transaction | never a counter column; the debit row is inserted in the transaction that grants the thing paid for, under `for update`; Stripe events idempotent by id | `org_stream_credits` (§5.2); `ai_credit_ledger` V320 + `lib/credits.ts` |
 | i18n: four dictionaries + generated keys | every user-facing string in `en/es/fr/nl`, `pnpm i18n:gen-keys`, zero diff on `lib/i18n-keys.ts` | `dictionaries/*/ui.json`, `public.json` |
 | One DOM, branched for phone | phone is `max-md:*` on the same tree; phone-only is `md:hidden`; never a second tree, never a shrunk desktop | `2026-09-02-scorepad-v3-phone-composition-design.md`; `phone-disclosure.tsx` |
@@ -1381,7 +1392,7 @@ time anyone read them); a prompt names symbols, which survive.
 | **T1** | `T1-theme-and-visual-gate.md` (§4) | `2026-09-07-streaming-t1.md` | now | PR-T1 |
 | **W1** | `W1-step-one.md` corrected in place | existing `2026-09-05-stream-overlay-w1.md` with the Task-0 amendment (§3.2, §3.3) and the Phone tab strip reading the §5.3 gate | now | PR1 |
 | **R0** | `R0-bench.md` (§8) | none — the memo is the deliverable | now | — |
-| **R1** | `R1-relay-core.md` (§5, §6, §7.6: catalogue keys **landed** as `V402__streaming_entitlements.sql`; the `__stream_sessions.sql` tables — version taken by the task that writes it, never here (§6.1); credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron pair + workflow, Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
+| **R1** | `R1-relay-core.md` (§5, §6, §7.6: catalogue keys **landed** as `V402__streaming_entitlements.sql`; the `__stream_sessions.sql` tables — version taken by the task that writes it, never here (§6.1); credits ledger + checkout + webhook, crypto, ports + fakes, tokens, session API, cron ROUTE here + `schedule:` workflow in `onryde/seazn.club.workflow` (never in this repo — `d53d87024`), Phone tab with QR, passthrough live-detect, failed-reason copy, replay fill, Sentry DSN) | `2026-09-07-streaming-r1.md` | prompt now; **plan after PR1 merges** | PR-R1 |
 | **R2** | `R2-compositor.md` (§7: relay page, `slate`, `delayMs` + alignment e2e, container + supervisor, `relay-*` workflows, soak harness, green soak) | `2026-09-07-streaming-r2.md` | prompt now; **plan after the R0 memo** | PR-R2 |
 | W2 | existing `W2-moments.md` (+F3/F4 corrections at Task 0; RE-PIN rows annotated 2026-09-08 @ 60c0615b0) | existing `2026-09-05-stream-overlay-w2-moments.md` — **gate satisfied 2026-09-08** (spectator W1 #743 merged); its task zero = the RE-PIN table on THIS main, with `buildTimeline` / `match_centre.timeline` evaluated as the moments source (F4 still rides the overlay endpoint: the endpoint may embed a projected timeline slice rather than the page double-polling); NOT executable until those rows close | exists; executes after PR1 | PR2 |
 | PR3 | after its artboard | — | deferred | PR3 |

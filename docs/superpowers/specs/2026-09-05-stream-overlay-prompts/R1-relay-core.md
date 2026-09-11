@@ -214,7 +214,11 @@ the design's DDL verbatim.
    (U1-S1): nested, it is accepted with HTTP 200 and silently dropped, retention
    is never set, the prepaid storage block never recycles and §6.5 eventually
    refuses every session — all with green calls.
-   **Ruling E's value of 7 is IMPOSSIBLE: the API floor is 30
+   **OWNER-RULED 2026-09-11 (Q20, Q21): `timeoutSeconds = 180`;
+   `deleteRecordingAfterDays = 30` as a BACKSTOP while the relay sweep deletes
+   recordings at 7 days via `DELETE /stream/{video_uid}`.** Both are named
+   constants, and the adapter asserts both echo back equal to what was sent.
+   Ruling E's 7 cannot be expressed natively: the API floor is 30
    (`400 / 10060 "must be between 30 and 1096 days"`, measured 2026-09-11,
    U1-S4).** Retention shorter than 30 days needs our own sweep calling
    `DELETE /stream/{videoId}`, not this field — an owner decision recorded in
@@ -268,7 +272,17 @@ the design's DDL verbatim.
    (gates in §6.3 order: `requireResourceAuth(fixture, write)` → overlay key →
    relay key (409 `overlay_required` if relay without overlay) → balance ≥ 1
    (402 `no_credits`) → `IngestProvider.storageHeadroom` (503
-   `storage_exhausted`) → insert `requested` (the partial unique index turns a
+   `storage_exhausted`) → insert `requested`
+   — **WATCH: headroom is checked at CREATE and enforced at START.** U1-S3
+   measured that a live input is created successfully at
+   `totalStorageMinutesLimit: 0`, so this guard is the only thing standing
+   between an exhausted block and a session that provisions cleanly and then
+   never goes live. If capacity is consumed between the check and the phone
+   connecting, the session sits in `provisioning`/`warming` with no error to
+   show. The credit is NOT burned (the debit fires at `live`, which is never
+   reached), so this is a silent-stall risk rather than a money one — but the
+   stale-session sweep is what has to end it, and its threshold must therefore
+   cover this case as well as a dropped phone (the partial unique index turns a
    double start into 409 `active_session`, caught and answered with the
    existing session id; the slot-0 input row is inserted in that SAME
    transaction, so a session never exists without its input) → `provisioning`);

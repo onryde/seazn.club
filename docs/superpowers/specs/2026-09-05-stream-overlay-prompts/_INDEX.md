@@ -1866,3 +1866,84 @@ asserting a 200 cannot see this.
 This is also the mechanical argument for Q21's lever (c): an own-sweep calling
 `DELETE /stream/{videoId}` is not merely a way around the 30-day floor, it is
 required anyway for cleanup correctness.
+
+## 2026-09-11 — owner rulings 26 and 27, and a peer session's two verified findings
+
+### Ruling 26 (Q20, from U1-S7) — the phone-dropout tolerance is 180 s
+
+`recording.timeoutSeconds = 180` on every live input. The owner accepted the
+recommendation as put. It covers a half-time phone swap, a walk behind a stand
+and a cellular handover, and sits above §6.4's 90 s stale threshold so the
+sweep's "stale" reads as *we think this is over* while `timeoutSeconds` is *the
+platform agrees* — two observations in the same direction rather than a race.
+
+**Owed:** §6.4's stale threshold re-derived against 180 s; R1 pinning it as a
+named constant and asserting the echo (0 is silently swallowed — U1-S8).
+
+### Ruling 27 (Q21, from U1-S4) — retention stays 7 days, delivered by our own cron
+
+Recording stays ON for both tiers; lever (b) — switching it off for composed —
+was declined. The 7-day intent survives, delivered by a sweep issuing
+`DELETE /stream/{video_uid}`, because no native Cloudflare mechanism can express
+a value under 30 days.
+
+**Added under the ruling, flagged to the owner rather than assumed:**
+`deleteRecordingAfterDays: 30` is also set, as a backstop. It is the lowest
+value the API accepts and costs nothing while the sweep is healthy; if the sweep
+stops, recordings expire at 30 days instead of never, so a broken sweep is a
+bigger bill rather than an unbounded one.
+
+**Owed:** §12's value; §6.5's arithmetic re-derived for a 7-day concurrent
+window; R1's sweep deleting at 7 days and asserting both fields echo back; the
+`schedule:` workflow raised in `onryde/seazn.club.workflow`.
+
+### Peer findings, received and INDEPENDENTLY VERIFIED 2026-09-11
+
+A peer session working the R1/W2 cron pair sent two findings, explicitly as a
+recommendation and not a ruling. Both were re-pinned here before being acted on,
+as they asked.
+
+**P-1 — both native retention mechanisms are floored at 30 days.** This session
+had measured `deleteRecordingAfterDays` rejecting 7 (`400 / 10060`, U1-S4); the
+peer added the second mechanism, a video's `scheduledDeletion`, which the
+Cloudflare API reference states "must be at least 30 days from upload time"
+(re-fetched and confirmed here). So sub-30-day retention is cron-DELETE-only.
+`DELETE /stream/{video_uid}` carries no minimum age — this session deleted ten
+recordings minutes old (U1-S9) — so the mechanism works. **Directly load-bearing
+for ruling 27, and the reason that ruling needs a sweep rather than a field.**
+
+The peer also pinned that storage is prepaid CONCURRENT capacity rather than a
+monthly allowance, which this session had observed independently (`8.91 / 1000`
+with ten recordings, `0 / 1000` the instant they were deleted) and had stated
+imprecisely in the first draft of Q21. Corrected there.
+
+**P-2 — the `schedule:` workflow half belongs in a DIFFERENT repo.** Verified
+against the tree: `d53d87024` (PR #757, 2026-09-09) "move 8 scheduled ops
+workflows to onryde/seazn.club.workflow" is an ancestor of `origin/main`;
+`origin/main` carries 11 workflow files of which `help-shots.yml` is the ONLY
+`schedule:`; and `onryde/seazn.club.workflow` exists (private, updated
+2026-09-09) holding the eight moved files including `registrations-sweep.yml`.
+The ROUTE half of the idiom is still exactly right —
+`apps/web/src/app/api/cron/registrations/route.ts:13-16` is 503-on-unset →
+401-on-mismatch → one idempotent usecase, re-read and confirmed.
+
+**Why it mattered:** design line 1329 told an implementer to ship "cron pair +
+workflow" from this repo. A `schedule:` workflow added here is fired by nothing,
+CI stays green, and the sweep silently never runs — and after ruling 27 that
+sweep IS the storage bill. Corrected in the design's three cron rows.
+
+The peer's further note that `CRON_SECRET` must be mirrored in both places, and
+that the moved workflows skip-with-warning rather than failing red on a missing
+secret, is recorded as received — it concerns the other repo and was not
+verifiable from here.
+
+**One part of the peer's message did NOT hold, checked rather than assumed.**
+They warned that "the organiser can burn a credit and THEN have the live input
+refuse to start". The debit fires AT `live` (§5.2, and R1's gate order), so a
+session that never starts never reaches the debit and no credit is burned. The
+adjacent risk underneath it is real, though, and is now a watch item in R1:
+headroom is checked at CREATE and enforced at START, and U1-S3 measured that an
+input is created successfully at `totalStorageMinutesLimit: 0` — so a block
+exhausted between the check and the phone connecting yields a session that
+provisions cleanly and never goes live, with no error to show. That is a
+silent-stall risk for the stale sweep to end, not a money one.
