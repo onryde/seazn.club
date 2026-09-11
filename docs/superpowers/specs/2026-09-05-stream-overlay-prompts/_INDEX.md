@@ -2434,3 +2434,132 @@ the away cell (1046→1156 against a cell starting at 1063) and the away name
 paints over the brand mark (to 1781 in a cell ending at 1708); threshold ≈ 34
 characters at 45 px. **W1's surface and an owner call** — §1 forbids an ellipsis,
 so the fix is the measuring ladder, not a CSS one-liner.
+
+## 2026-09-12 — W2-F45 and the period sports' goal kinds, both closed
+
+Owner: *"fix both"* (2026-09-11), on the two items W2 raised and did not build.
+Branch `feat/overlay-name-ladder`, rebased on `a0248b639`.
+
+**Ruling 31 — a goal says HOW it was scored, in every sport that records it.**
+Ruling 28 gave football's penalty its scorer's name back. `PeriodGoal`
+(`sports/period/kernel.ts:228`) is a `z.strictObject` with no `penalty` field at
+all, so hockey and ice hockey could never reach that branch: they carry a
+`kind` validated against `cfg.goalKinds` — `["fg","pc","stroke","og"]` for
+hockey (`hockey.ts:132`) and `["fg","pp","sh","ps","og"]` for ice hockey
+(`icehockey.ts:173`) — and nothing read it. A penalty stroke, the exact
+counterpart of the penalty football names, reached air as a bare name.
+
+`GOAL_KIND_KEYS` (`lib/overlay-moments.ts`) is ONE table for both families;
+football's boolean arrives as the pseudo-kind `penalty`, which no period sport
+declares, so the two cannot collide. The line composes once, through
+`overlay.moment.goalKindLine` — a template, so a locale can reorder its halves;
+`[label, who].join(" · ")` would have frozen the order in code for all four at
+once. `overlay.moment.penalty` and `.penaltyLine` are gone: **two composition
+authorities for one sentence is how a bar and a bug come to disagree.**
+
+`fg` and `og` are excluded BY THE TEST, not by the table quietly being short —
+a plain goal has nothing to add and an own goal is the headline. The sweep takes
+its kinds from each module's own parsed config and its keys from the exported
+table, so neither can drift into a third copy in the test.
+
+### W2-F45 — three things the review got wrong, all found by measuring
+
+The finding was real and its FIX was correctly identified. Its evidence was not.
+
+**F45a — one long name reproduces nothing.** The review's measurement
+(`1046→1156`, `to 1781`) could not be reproduced with one long entrant and one
+short one, and the first e2e written against that fixture PASSED ON THE DEFECT.
+The team cells are `flex: 1 1 auto`, so a single long name simply GROWS its cell
+(297→1506) and the other shrinks to its own content (1506→1708) — nothing
+spills. It is when BOTH bases exceed the bar that the cells shrink and the
+unshrinkable names overflow them. Measured on the pre-fix build with two:
+
+```
+home cell  297→1062   home name 339→1438   home score 1462→1501
+away cell 1062→1708   away name 1104→2000  brand      1708→1848
+```
+
+The home score painted inside the away cell and the away name ran 80 px off the
+1920 canvas. **A defect's fixture is part of the finding; "I saw it once" does
+not say what arrangement to write down.**
+
+**F45b — "≈34 characters at 45 px" is not a threshold.** It is not even close:
+a 42-character name measures 524 px against 733 px of room on one fixture and
+the same name fits comfortably on another, because the room a name gets depends
+on the live cell's caption, the score's width, the meta column and whether the
+sport draws a clock. Barlow Condensed also runs ~12.5 px/char, not the 23.2 the
+review derived. **A character count cannot express this rule** — which is
+exactly why §1 says "the cell can hold" and not "N characters".
+
+**F45c — a test that asserted the defect's precondition as a requirement.**
+`live-cell-cap.test.ts` asserted `.ovl-team-name` must NOT contain
+`overflow: hidden` — written when the ladder did not exist, when the name's only
+defence was that nothing clipped it. With no clip and no ladder the name spills,
+which is the defect. §1 forbids an ELLIPSIS (`text-overflow`); the clip is the
+mechanical floor beneath the ladder and lasts one frame. Amended in place with
+the reasoning, and paired with a new assertion that the bar renders the LADDER —
+`overflow: hidden` alone satisfies every CSS assertion in that file and would
+put a clipped name on air forever. **Recurring class 4, again.**
+
+### How the ladder is built
+
+The rung is a MEASUREMENT — CSS offers wrapping and an ellipsis and §1 forbids
+both — so it is split three ways:
+
+- `pickNameRung` (`components/overlay/name-ladder.ts`) is pure arithmetic and is
+  unit-tested. Stepping UP costs `NAME_RUNG_HYSTERESIS_PX`; stepping DOWN is
+  free. **That asymmetry is load-bearing, not polish:** the cell is
+  `flex: 1 1 auto`, so the room a name gets grows with the name rendered, and a
+  rung that fits only because a shorter one is on screen would stop fitting the
+  moment it was taken. The two would then alternate for the length of the
+  broadcast.
+- `availableNameWidth` reads boxes: the name's own box plus the slack the
+  score's `margin-left: auto` is absorbing. That sum is the same number in both
+  states — the space the name may have — so the answer does not depend on which
+  rung happens to be rendered.
+- The bar renders one hidden probe per rung (`position: absolute`,
+  `visibility: hidden`), so every candidate's natural width is readable in ONE
+  pass. `display: none` would give them no box and the ladder would always pick
+  the first. A `ResizeObserver` watches the box AND every probe — the box covers
+  the cell resizing, the probes cover the web font arriving, which changes every
+  width without moving a single box.
+
+`nameLadder` (`lib/overlay-model.ts`) is deduped by value, so a side whose short
+name IS its code gets two rungs rather than a third that renders identically.
+`shortCode` was split: its three-letter half is now `threeLetterCode(name)`, the
+ladder's bottom rung, because `shortCode` prefers the entrant's own short name
+and folding them made the last two rungs differ only in case.
+
+**The middle rung has no data source and that is W1's recorded ruling, not an
+oversight.** `public_entrants_v` carries `display_name` and a `team_display`
+blob with no `short_name`; `teams.short_name` exists (`V206:5`) and never
+reaches the public payload. W1 watch-list 6 resolved this to the three-letter
+fallback and `ui.stream.codeNote` tells the organiser so. The rung is driven in
+both directions by the unit and render tests, so the day that view grows a
+`short_name` it is a wiring change, not a discovery.
+
+**Owner's call, stated with its value.** Cricket's bar has the least room of any
+sport — a wide `142/6` plus its `(20)` meta — so a club called "Riverside
+Cricket Club" now reads **RIV** on air rather than "Riverside". That is §1
+working as written, and it is still a downgrade a viewer sees. Plumbing
+`teams.short_name` into `public_entrants_v` would make the middle rung real and
+put "Riverside" on the bar instead. It is a public-view migration that the
+spectator surface also reads, so it is a wave of its own, not a rider on this
+one. **Recommend taking it** — the cost is one additive column on a view and the
+benefit lands on every long-named club in the sport whose default theme is the
+bar.
+
+### Verification
+
+16678/16755 unit (0 failed, 0 failed suites); the WHOLE `stream-overlay.spec.ts`
+22/22 in a browser (never a `-g` slice — class 21); the capture harness 6/6 with
+9 distinct frames. Mutation-checked: 4 mutants on `pickNameRung`, 4 on the goal
+rule, 3 on the bar's wiring, all killed with the baseline restored and re-run.
+
+**The ladder e2e was run against a build with the fix reverted** — same server,
+same fixture — and fails there naming the boxes above, then green with it
+restored. The spill check is deliberately ordered BEFORE the vacuity guard: on a
+build with no ladder the name box cannot shrink, so `available` degenerates to
+the full width and the guard fires too, blaming the FIXTURE for a defect in the
+CODE (class 20 — two error lines, one event, and the misleading one must not
+come first).

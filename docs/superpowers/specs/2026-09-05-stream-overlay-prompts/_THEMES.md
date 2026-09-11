@@ -22,6 +22,34 @@ nowrap`, the cell grows, the other cell shrinks (`flex: 1 1 auto`). A name
 longer than the cell can hold at 45 px falls to the entrant's short name, then
 to the three-letter code; this is the only size step.
 
+**BUILT 2026-09-12** (W2-F45; it was declared here from W1 and never
+implemented — `overlay-bar.tsx` rendered `side.name` unconditionally).
+`components/overlay/name-ladder.ts` + `TeamName` in the bar. Four things about
+it that are not derivable from the rule as written:
+
+- **The rung is a MEASUREMENT, and "the cell can hold" is the only way to say
+  it.** A character threshold cannot express this: the room a name gets depends
+  on the live cell's caption, the score's width, the meta column and whether the
+  sport draws a clock, and Barlow Condensed runs ~12.5 px/char where the review
+  that found F45 derived 23.2. The same 42-character name overflows on one
+  fixture and fits on another.
+- **Stepping UP costs a hysteresis; stepping DOWN is free.** The cell is
+  `flex: 1 1 auto`, so the room a name gets GROWS with the name rendered — a
+  rung that fits only because a shorter one is on screen stops fitting the
+  moment it is taken, and the two alternate for the length of the broadcast.
+- **`overflow: hidden` on `.ovl-team-name` is the floor beneath the ladder, not
+  a breach of "never truncate".** §1 forbids an ELLIPSIS; the clip holds the one
+  frame before the measurement runs, and the server render is always the full
+  name. A test once asserted the absence of that clip as a requirement — which
+  is what let the name paint across the brand mark.
+- **The middle rung is unreachable today and that is W1's ruling, not a gap.**
+  `public_entrants_v` carries no `short_name` (`teams.short_name` exists at
+  `V206:5` and never reaches the public payload); W1 watch-list 6 resolved this
+  to the three-letter fallback, and `ui.stream.codeNote` tells the organiser so.
+  Consequence worth knowing before signing off a cricket broadcast: cricket's
+  bar has the least room of any sport, so a long club name goes straight to
+  three letters rather than to a short name.
+
 ## 2. Colour — the seven sport tokens
 
 The overlay root receives `sportThemeStyle(sportKey)`
