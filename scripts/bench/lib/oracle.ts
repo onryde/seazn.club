@@ -1245,7 +1245,7 @@ export interface ActualMatchRow {
   readonly perSide?: readonly MatchSideLine[];
 }
 
-export type MatchMismatchField = "status" | "outcome" | "winner" | "method" | "line";
+export type MatchMismatchField = "status" | "outcome" | "winner" | "loser" | "method" | "line";
 
 export interface MatchMismatch {
   readonly fixtureExtKey: string;
@@ -1274,6 +1274,23 @@ const SETTLED_STATUSES = new Set(["decided", "finalized", "forfeited", "abandone
 
 function outcomeWinnerOf(o: MatchOutcome): string | undefined {
   return o.kind === "win" || o.kind === "award" ? o.winner : undefined;
+}
+
+/** The engine declares `loser` on the `win` variant ALONE (`types.ts:115`) —
+ *  an award has a winner and no named loser, and a draw/tie/no_result has
+ *  neither. Every other kind therefore answers `undefined`, which the
+ *  comparator reads as "this shape asserts no losing side" rather than as a
+ *  value that went missing. */
+function outcomeLoserOf(o: MatchOutcome): string | undefined {
+  return o.kind === "win" ? o.loser : undefined;
+}
+
+/** `method` is declared by BOTH variants that can carry one — `win` and
+ *  `award`. The award's arrived when `core.forfeit`'s required `reason`
+ *  started being carried verbatim through the fold, which is what lets a pack
+ *  assert WHY an award happened rather than only that it did. */
+function outcomeMethodOf(o: MatchOutcome): string | undefined {
+  return o.kind === "win" || o.kind === "award" ? o.method : undefined;
 }
 
 /**
@@ -1338,12 +1355,30 @@ function firstMismatch(row: ExpectedMatchRow, live: ActualMatchRow | undefined):
     return at("winner", expectedWinner, actualWinner ?? "(none)");
   }
 
+  // The winner alone cannot see a wrong pairing: swap an opponent and the
+  // same player still wins. This is the cheapest true check on the draw —
+  // nothing else in the bench reads round-0 pairings back.
+  //
+  // The `!== undefined` guard is belt-and-braces rather than a live branch:
+  // the kind equality above already forces both sides to the same variant, so
+  // an expected `loser` is absent only when the actual one is too. It stands
+  // so that a future reordering cannot make a draw report `(none)`.
+  const expectedLoser = outcomeLoserOf(row.outcome);
+  const actualLoser = outcomeLoserOf(got);
+  if (expectedLoser !== undefined && expectedLoser !== actualLoser) {
+    return at("loser", expectedLoser, actualLoser ?? "(none)");
+  }
+
   // Only where the pack declares one: a pack that states no method is not
-  // asserting one, so any live value satisfies it.
-  if (row.outcome.kind === "win" && row.outcome.method !== undefined) {
-    const actualMethod = got.kind === "win" ? got.method : undefined;
-    if (row.outcome.method !== actualMethod) {
-      return at("method", row.outcome.method, actualMethod ?? "(absent)");
+  // asserting one, so any live value satisfies it. Read through a helper that
+  // covers BOTH kinds declaring `method`; while this compared `win` alone, an
+  // award's reason was never checked and a walkover recorded as a
+  // disqualification passed.
+  const expectedMethod = outcomeMethodOf(row.outcome);
+  if (expectedMethod !== undefined) {
+    const actualMethod = outcomeMethodOf(got);
+    if (expectedMethod !== actualMethod) {
+      return at("method", expectedMethod, actualMethod ?? "(absent)");
     }
   }
 

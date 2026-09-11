@@ -140,3 +140,177 @@ describe("compareMatches", () => {
     expect(compareMatches([], []).checked).toBe(0);
   });
 });
+
+// B07a Task 2 — the comparator asked who WON and never who LOST. Swap an
+// opponent and the same player still wins, so a fixture played by the wrong
+// pair passed. B06's D4 said the bench asserts its own draw; nothing read
+// round-0 pairings back, and the loser is the cheapest true check on one.
+//
+// Per the ENGINE's union (`packages/engine/src/core/types.ts:115`), `loser`
+// lives on the `win` variant ALONE, while `method` is declared by BOTH `win`
+// and `award` — so the method comparison, which fired only for `win`, was
+// blind to a walkover recorded as a disqualification.
+const awarded = (winner: string, method?: string) =>
+  ({ kind: "award" as const, winner, ...(method === undefined ? {} : { method }) });
+
+describe("compareMatches — the losing side", () => {
+  const expected = [{ fixtureExtKey: "se-r0-i0", outcome: won("en-more", "en-lenus") }];
+
+  it("reds when the right winner beat the wrong opponent", () => {
+    const result = compareMatches(expected, [
+      {
+        extKey: "se-r0-i0",
+        status: "finalized",
+        roundNo: 0,
+        outcome: won("en-more", "en-azmeen"),
+      },
+    ]);
+    expect(result.mismatches).toHaveLength(1);
+    expect(result.mismatches[0]).toMatchObject({
+      field: "loser",
+      expected: "en-lenus",
+      actual: "en-azmeen",
+    });
+  });
+
+  it("passes when both sides match — the positive pair", () => {
+    const result = compareMatches(expected, [
+      {
+        extKey: "se-r0-i0",
+        status: "finalized",
+        roundNo: 0,
+        outcome: won("en-more", "en-lenus"),
+      },
+    ]);
+    expect(result.mismatches).toEqual([]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("asserts no loser for an outcome shape that has none — never reports `(none)`", () => {
+    // A draw, a tie, a no_result and an award carry no losing side at all.
+    // Reading the field off them regardless would report `(none)` against
+    // every one of these, turning four correct results into four mismatches.
+    for (const outcome of [
+      { kind: "draw" as const },
+      { kind: "tie" as const },
+      { kind: "no_result" as const },
+      awarded("en-more"),
+    ]) {
+      const result = compareMatches(
+        [{ fixtureExtKey: "se-r0-i0", outcome }],
+        [{ extKey: "se-r0-i0", status: "finalized", roundNo: 0, outcome }],
+      );
+      expect(result.mismatches).toEqual([]);
+    }
+  });
+
+  it("reports the winner first when BOTH sides are wrong — the order is the contract", () => {
+    // status → outcome kind → winner → loser → method → line. A reader shown
+    // "loser" for a match whose winner is also wrong is being pointed at the
+    // second-most-useful fact, so the insertion point is pinned, not incidental.
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r0-i0", outcome: won("en-more", "en-lenus") }],
+      [
+        {
+          extKey: "se-r0-i0",
+          status: "finalized",
+          roundNo: 0,
+          outcome: won("en-azmeen", "en-more"),
+        },
+      ],
+    );
+    expect(result.mismatches[0]).toMatchObject({ field: "winner" });
+  });
+
+  it("reports the loser ahead of the method and the scoreline", () => {
+    const result = compareMatches(
+      [
+        {
+          fixtureExtKey: "se-r0-i0",
+          outcome: won("en-more", "en-lenus", "regulation"),
+          perSide: [{ entrant: "en-more", line: "3" }],
+        },
+      ],
+      [
+        {
+          extKey: "se-r0-i0",
+          status: "finalized",
+          roundNo: 0,
+          outcome: won("en-more", "en-azmeen", "shootout"),
+          perSide: [{ entrant: "en-more", line: "2" }],
+        },
+      ],
+    );
+    expect(result.mismatches[0]).toMatchObject({ field: "loser" });
+  });
+});
+
+describe("compareMatches — an award's method", () => {
+  it("reds when a walkover is recorded with a different reason", () => {
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
+      [
+        {
+          extKey: "se-r1-i0",
+          status: "forfeited",
+          roundNo: 1,
+          outcome: awarded("en-more", "disqualification"),
+        },
+      ],
+    );
+    expect(result.mismatches[0]).toMatchObject({
+      field: "method",
+      expected: "walkover",
+      actual: "disqualification",
+    });
+  });
+
+  it("passes when the award's reason matches — the positive pair", () => {
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
+      [
+        {
+          extKey: "se-r1-i0",
+          status: "forfeited",
+          roundNo: 1,
+          outcome: awarded("en-more", "walkover"),
+        },
+      ],
+    );
+    expect(result.mismatches).toEqual([]);
+    expect(result.checked).toBe(1);
+  });
+
+  it("reds when the live award carries no reason at all", () => {
+    // The shape suite 11's walkover had to work around before the engine's
+    // award variant declared `method`: an award with no reason is not a
+    // satisfied assertion, it is an absent one.
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more", "walkover") }],
+      [{ extKey: "se-r1-i0", status: "forfeited", roundNo: 1, outcome: awarded("en-more") }],
+    );
+    expect(result.mismatches[0]).toMatchObject({
+      field: "method",
+      expected: "walkover",
+      actual: "(absent)",
+    });
+  });
+
+  it("lets any live reason stand where the pack declares none", () => {
+    // Same rule the `win` method already followed: a pack that states no
+    // method is not asserting one. Without this guard the comparator would
+    // red every award whose reason the pack simply declined to pin.
+    const result = compareMatches(
+      [{ fixtureExtKey: "se-r1-i0", outcome: awarded("en-more") }],
+      [
+        {
+          extKey: "se-r1-i0",
+          status: "forfeited",
+          roundNo: 1,
+          outcome: awarded("en-more", "walkover"),
+        },
+      ],
+    );
+    expect(result.mismatches).toEqual([]);
+  });
+});
