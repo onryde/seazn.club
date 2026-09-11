@@ -65,7 +65,7 @@ interface Seeded {
 async function seedFixture(opts: {
   visibility?: "public" | "private";
   orgTz?: string | null;
-  sportKey?: "generic" | "football";
+  sportKey?: "generic" | "football" | "badminton";
 } = {}): Promise<Seeded> {
   const { visibility = "public", orgTz = null, sportKey = "generic" } = opts;
   const { auth } = await seedOrg("pro");
@@ -85,8 +85,15 @@ async function seedFixture(opts: {
     // `football.ts:2407`). This read `"std"`, which no sport declares — it
     // only ever resolved against a local database polluted by earlier test
     // runs, and 422'd on CI's clean one. `generic.score` IS declared.
-    variant_key: sportKey === "football" ? "11-a-side" : "score",
-    config: sportKey === "football" ? {} : GENERIC_CONFIG,
+    variant_key:
+      sportKey === "football"
+        ? "11-a-side"
+        : sportKey === "badminton"
+          ? // Badminton's own declared short format — to 11, so a set point is
+            // ten rallies away rather than twenty (`badminton.ts:39-43`).
+            "short"
+          : "score",
+    config: sportKey === "generic" ? GENERIC_CONFIG : {},
   });
   // Football is a team sport — `createEntrants` refuses 'individual' there.
   const kind = sportKey === "football" ? ("team" as const) : ("individual" as const);
@@ -202,6 +209,46 @@ describe.skipIf(!HAS_DB)("GET /public/fixtures/{id}/overlay", () => {
     expect(body.data?.venueTz).toBe("Europe/Amsterdam");
     // The row's own fields still ride alongside the folded ones.
     expect(body.data?.status).toBeDefined();
+
+    // W2 — `recent` over the REAL route, from the REAL ledger. `load.test.ts`
+    // doubles `loadFoldInputs` and `sql`; this is where the window, the
+    // projection and the actual column names have to fit together.
+    const recent = body.data?.recent as { seq: number; type: string; payload: { side?: number } }[];
+    expect(Array.isArray(recent)).toBe(true);
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({ seq: 2, type: "football.goal", payload: { side: 0 } });
+    // The kernel's own events are not moments.
+    expect(recent.some((e) => e.type.startsWith("core."))).toBe(false);
+    // A goal that named no scorer names no person — never an empty one.
+    expect(recent[0]!.payload).not.toHaveProperty("person");
+  });
+
+  it("W2 Step 7 — a real badminton ledger arrives with the ENGINE'S set point on it", async () => {
+    // The whole Step 7 chain in production shape: real appends, real fold,
+    // real replay, real cache boundary, real route. Badminton `short` plays to
+    // 11, so ten unanswered rallies leaves home one point from the set — and
+    // the assertion is that the MODULE said so, not that this test counted.
+    const s = await seedFixture({ sportKey: "badminton" });
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    for (let i = 0; i < 10; i++) {
+      await appendEvent(s.orgId, s.fixtureId, i + 1, {
+        type: "badminton.rally",
+        payload: { wonBy: s.homeEntrantId },
+      });
+    }
+    const { status, body } = await read(await GET(req(s.fixtureId, "/overlay"), ctx(s.fixtureId)));
+    expect(status).toBe(200);
+    const recent = body.data?.recent as {
+      seq: number;
+      type: string;
+      derived?: { pointState?: { kind: string; side: number; fresh: boolean } };
+    }[];
+    // Ten rallies, a window of eight.
+    expect(recent).toHaveLength(8);
+    expect(new Set(recent.map((e) => e.type))).toEqual(new Set(["badminton.rally"]));
+    expect(recent.at(-1)?.derived?.pointState).toMatchObject({ kind: "set", side: 0, fresh: true });
+    // And it is FRESH exactly once — the rallies before it were not set points.
+    expect(recent.filter((e) => e.derived?.pointState).length).toBe(1);
   });
 
   it("still 200s with the row's fields when the fold THROWS (the sibling endpoint would too)", async () => {
