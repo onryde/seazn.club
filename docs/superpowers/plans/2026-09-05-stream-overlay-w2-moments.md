@@ -28,8 +28,11 @@ racket-sport rules have what they need.
 DB-backed route test drives ten real badminton appends and reads the engine's
 set point off the route's own JSON. Mutation sweep 17/17.
 
-**Still unproven and owed:** `recent` reaching a BROWSER. The four smoke checks
-need a running server. A green unit suite is not a working product.
+**Proven over real HTTP, 2026-09-11:** full smoke against a standalone prod
+server — **1034 passed, 0 failed** — with the four new overlay checks among
+them. That run matters beyond the checks themselves: it is the only place the
+REAL `unstable_cache` executed, so the serialisation fix (W2-F18) is proven in
+production shape rather than against a double. A green unit suite is not a working product.
 
 **One finding from building it, worth the wave's attention.** The spectator
 timeline was measured against this need before a line was written and CANNOT
@@ -328,8 +331,9 @@ export function loadRecentPersonOf(
   0 errors; `openapi:gen` regenerated and committed (the route carries no
   response schema, so only its summary moved).
 
-  **NOT verified, and owed:** the DB-backed route test and the smoke checks
-  both need a live DB + server. `recent` reaching a browser is unproven.
+  **Both verified since**: the DB-backed route test runs green against a live
+  DB, and full smoke against a standalone prod server is 1034 passed / 0 failed
+  with all four `recent` checks among them.
 
 - [x] **Step 7: `derived` — SHIPPED 2026-09-11.** `recent` events carry
   `derived.setWon` (the event closed a set) and `derived.pointState` (one more

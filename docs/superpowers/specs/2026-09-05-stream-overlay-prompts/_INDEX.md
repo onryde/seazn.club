@@ -2042,8 +2042,17 @@ payload are wrong answers and each is a different person from the right one.
 8/8 after the fix. **A projection test that reads two fields of one payload has
 to make those fields differ, or it asserts nothing about which one was read.**
 
-**Owed and NOT done:** `recent` reaching a browser. The DB-backed route test and
-the four new smoke checks both need a live DB and server, and neither has run.
+**Owed and NOT done at the time of writing — SETTLED the same day.** Both the
+DB-backed route test and the four smoke checks have since run: the route test
+green against a live DB, and full smoke against a standalone prod server at
+**1034 passed / 0 failed**, the four `recent` checks among them (log lines
+479-482: the array is always present, the engine's own types arrive with kernel
+events excluded, seqs ascend oldest-first, and each of the three seeded
+suspensions projects its own class against the side it was recorded for).
+
+**That smoke run is the only place the REAL `unstable_cache` executed** — every
+vitest suite doubles it — so it is what actually proves W2-F18's serialisation
+fix rather than the repair of its own test double.
 
 ## 2026-09-11 — W2 Task 1 Step 7: `derived`, and three more findings
 
