@@ -75,28 +75,69 @@ file rather than trusting the directory name.
 
 ## The open finding: the solver does not survive a real fixture count
 
-Read this before quoting these reports. The optimized path never ran in
-EITHER leg:
+## The open findings: TWO, and only one of them is a defect
 
-| suite | division | fixtures | courts | `solverStatus` | tiers |
-|---|---|---|---|---|---|
-| `_tiny` | d-tiny | 3 | 2 | **ok**, optimized | 6/6 |
-| `_tiny` | d-tiebreak | 3 | 2 | **ok**, optimized | 6/6 |
-| suite 11 | d-worlds | 95 | 1 | `solver_unavailable` | 0/6, budget expired |
-| suite 11 | d-womens | 110 | 16 | `solver_unavailable` | 0/6, budget expired |
+Read this before quoting these reports. The optimized path never ran in either
+leg — but NOT for one reason, and an earlier revision of this file said it was
+one. The corrected reading, with a 30 s control run added 2026-09-11:
 
-`_tiny` was run in THIS environment, at this label, with this server and this
-placement service, and reached the solver. So this is **not** connectivity and
-**not** a broken environment. It is also not "one court is hard": Div B has
-sixteen boards and a single day and fails identically.
+| suite | division | fixtures | courts | wall 10 s (the legs below) | wall 30 s (control) | build elapsed @30 s |
+|---|---|---|---|---|---|---|
+| `_tiny` | d-tiny | 3 | 2 | **ok**, optimized, 6/6 tiers | — | — |
+| `_tiny` | d-tiebreak | 3 | 2 | **ok**, optimized, 6/6 tiers | — | — |
+| suite 11 | d-worlds | 95 | 1 | `solver_unavailable`, 0/6 | `solver_unavailable`, 0/6 | **849 ms** |
+| suite 11 | d-womens | 110 | 16 | `not_searched` — **`too_big`** | `solver_unavailable`, 0/6 | **496 ms** |
 
-What distinguishes the failing cases is **fixture count**, and 95 is not an
-extreme tournament. The whole bench exists to measure the scheduler, so a
-scheduler that falls back to greedy at realistic volumes is the most valuable
-thing this programme has produced so far. **Recorded for the owner, not
-diagnosed here** — it needs solver knowledge and its own wave.
+### Finding 1 — the admission gate refuses `d-womens`. Tunable, working as designed.
 
-Two consequences for anyone reading these reports:
+`d-womens` never reached the solver at all at the default wall: it was refused
+up front by `canSolveWithin` (`packages/engine/src/scheduling/build.ts:318-340`),
+which admits a board only when
+
+    fixtures x grid.slots <= MAX_SOLVE_ENCODING * (wallMs / AUTO_SOLVER_WALL_MS_AT_MEASUREMENT)
+
+`MAX_SOLVE_ENCODING` is 20_000 and the measurement wall is 8_000 ms, so a 10 s
+wall buys a 25_000 budget against this division's ~44_000 (110 fixtures on a
+~400-slot lattice). At 30 s the budget is 75_000 and the division walks
+through — confirmed by the control run, which moved it off `too_big` exactly
+as the arithmetic predicts. This is a size guard behaving correctly; the
+DEFAULT is simply low for a 110-fixture, 16-board single day.
+
+Anyone re-running this must move **two** walls, not one. They are independent
+settings on opposite sides of the wire, and moving only the first silently
+buys nothing:
+
+- `PLACEMENT_WALL_SECONDS` (web, `usecases/schedule.ts:2015-2033`, default 10)
+  is what feeds `canSolveWithin` — it controls the ADMISSION GATE.
+- `PLACEMENT_WALL_SECONDS_MAX` (service, `services/placement/config.py:70`,
+  default 10) controls the ACTUAL SOLVE TIME, and `main.py:167` applies it as
+  `wall = min(parsed.wall_seconds, self._settings.wall_seconds_max)` — a
+  silent CLAMP, not a refusal. Raise only the web side and the service quietly
+  holds the solve at 10 s while the gate believes it bought 30.
+
+### Finding 2 — `solver_unavailable` is NOT a timeout. Open, and a defect.
+
+Both divisions still report `solver_unavailable` with the budget expired at
+0 of 6 tiers under a wall THREE TIMES larger. The tell is the elapsed column:
+the build hands back a board in **849 ms and 496 ms against a 30_000 ms wall**.
+It never spends the budget, so the wall is not the constraint and no amount of
+raising it will be.
+
+That falsifies the framing an earlier revision of this file published — "the
+optimized path does not survive a real fixture count". Volume is Finding 1's
+story, not this one. This is an ERROR RESPONSE, returned fast.
+
+Narrowed, not diagnosed: `solver_unavailable` has exactly two sources in
+`build.ts` — the catch arm at `:2154`, which writes a `log.warn`, and the
+resolved-`ERROR` arm at `:2176`, which writes nothing. The server log for the
+control run carries two `buildSchedule: start` lines and NO placement warning,
+so the path taken is `:2176` — `solveBuild` RESOLVED, carrying a status that
+`STATUS_BY_WIRE_VALUE` could not map (`placement-client.ts:405` falls back to
+`"ERROR"`). **Recorded for the owner, not diagnosed here** — it needs solver
+knowledge and its own wave, and it now has an entry point rather than a
+hypothesis.
+
+### Two consequences for anyone reading these reports
 
 - The directories are named `placement-live` / `placement-absent`, never
   `solver-live`. The two legs are indistinguishable at the scheduling layer
