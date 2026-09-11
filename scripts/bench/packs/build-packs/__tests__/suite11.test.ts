@@ -343,6 +343,22 @@ describe("suite11 — the historical timetable", () => {
     expect(overlaps).toEqual(["Board 2"]);
   });
 
+  it("declares BOTH rows of the real overlap, and nothing else", () => {
+    // Derived by sweeping every board, not hand-listed — and it must be both
+    // rows, because the certificate's exemption is per-row and requires every
+    // fixture of a finding to be declared.
+    const declared = (committed.historicalAssignment ?? []).filter((h) => h.knownConflict !== undefined);
+    expect(declared.map((h) => h.fixtureExtKey).sort()).toEqual(["se-r2-i1", "se-r3-i1"]);
+    for (const row of declared) {
+      expect(row.divisionRef).toBe("d-womens");
+      expect(row.knownConflict).toMatch(/three independent DartConnect feeds agree/);
+    }
+    // Div A's timetable is derived rather than published, so nothing there may
+    // claim a source conflict — a derived row that breaches the encoding is
+    // OUR arithmetic, which is exactly what the red branch is for.
+    expect((committed.historicalAssignment ?? []).filter((h) => h.divisionRef === "d-worlds" && h.knownConflict)).toEqual([]);
+  });
+
   it("puts the final in its published 19:30 slot", () => {
     const final = rowsOf("d-worlds").find((h) => h.fixtureExtKey === "se-r6-i0");
     expect(final?.startsAt).toBe("2025-01-03T19:30:00.000Z");

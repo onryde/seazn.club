@@ -16907,7 +16907,8 @@
       "venue": "Robin Park Tennis Court, Wigan, England",
       "court": "Board 2",
       "startsAt": "2024-03-23T12:23:00Z",
-      "endsAt": "2024-03-23T12:40:00Z"
+      "endsAt": "2024-03-23T12:40:00Z",
+      "knownConflict": "the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact"
     },
     {
       "divisionRef": "d-womens",
@@ -17035,7 +17036,8 @@
       "venue": "Robin Park Tennis Court, Wigan, England",
       "court": "Board 2",
       "startsAt": "2024-03-23T12:32:00Z",
-      "endsAt": "2024-03-23T12:43:00Z"
+      "endsAt": "2024-03-23T12:43:00Z",
+      "knownConflict": "the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact"
     },
     {
       "divisionRef": "d-womens",

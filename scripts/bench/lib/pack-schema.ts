@@ -1019,6 +1019,25 @@ export const PackHistoricalAssignment = z.strictObject({
   court: z.string().min(1).max(200).optional(),
   startsAt: z.iso.datetime({ offset: true }),
   endsAt: z.iso.datetime({ offset: true }).optional(),
+  /**
+   * B06b — this row is KNOWN to breach the pack's own encoding, and the string
+   * says why. A published timetable can genuinely contradict itself: suite
+   * 11's sources put two matches on one board at overlapping times, agreed by
+   * three independent feeds.
+   *
+   * Without this, the feasibility certificate can only call such a history a
+   * `PACK_AUTHORING_BUG` — "the pack encoded constraints stricter than
+   * reality" — which is false when the pack matches reality exactly and
+   * reality self-conflicts. With it, `certify` reports the breach on its own
+   * branch instead of gating, and `_RULES.md` §1's "adaptations never red"
+   * holds for source data as well as for reshaping.
+   *
+   * DELIBERATELY PER-ROW, and deliberately not a division-level or pack-level
+   * flag: a pack must name the exact rows it knows about, so the exemption
+   * cannot be spread over breaches nobody looked at. A finding touching any
+   * row that does NOT carry this still reds the run.
+   */
+  knownConflict: z.string().min(1).max(500).optional(),
 });
 export type PackHistoricalAssignment = z.infer<typeof PackHistoricalAssignment>;
 

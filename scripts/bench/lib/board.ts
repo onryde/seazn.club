@@ -394,6 +394,12 @@ export interface CheckerReport {
 export type CertificateBranch =
   | "SKIPPED_NO_HISTORY"
   | "PACK_AUTHORING_BUG"
+  /** B06b — the real timetable breaches the encoding, and every breach lands
+   *  only on rows the pack DECLARED as known conflicts
+   *  (`PackHistoricalAssignment.knownConflict`). The pack is right, the source
+   *  data contradicts itself, and no encoding can reconcile them. Reported,
+   *  never red. */
+  | "HISTORY_SELF_CONFLICT"
   | "PRODUCT_DEFECT"
   | "UNPLACED"
   | "FEASIBLE";

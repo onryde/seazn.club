@@ -625,16 +625,46 @@ function worldsHistorical(): HistoricalInput[] {
  *  (board 2, R3-2 against R4-2) is left VERBATIM: three feeds agree, and a
  *  certificate that reports this history as clean is broken. */
 function womensHistorical(): HistoricalInput[] {
+  // The rows that really do overlap a same-board neighbour, DERIVED by
+  // sweeping every board rather than hand-listed: if the source is ever
+  // corrected, or a second overlap appears, this moves with it instead of
+  // asserting yesterday's answer.
+  const conflicted = new Set<string>();
+  const byBoard = new Map<number, WomensMatch[]>();
+  for (const m of WOMENS.matches) {
+    if (m.p2 === null || m.board === undefined || m.startTime === undefined) continue;
+    byBoard.set(m.board, [...(byBoard.get(m.board) ?? []), m]);
+  }
+  for (const [board, ms] of byBoard) {
+    ms.sort((a, b) => ((a.startTime as string) < (b.startTime as string) ? -1 : 1));
+    for (let i = 1; i < ms.length; i++) {
+      if ((ms[i].startTime as string) >= (ms[i - 1].endTime as string)) continue;
+      conflicted.add(extKey(WOMENS_BRACKET, ms[i - 1]));
+      conflicted.add(extKey(WOMENS_BRACKET, ms[i]));
+      void board;
+    }
+  }
   return WOMENS.matches
     .filter((m) => m.p2 !== null && m.startTime !== undefined)
-    .map((m) => ({
-      divisionRef: DIV_B,
-      fixtureExtKey: extKey(WOMENS_BRACKET, m),
-      venue: WOMENS.meta.venue,
-      court: `Board ${m.board as number}`,
-      startsAt: m.startTime as string,
-      ...(m.endTime === undefined ? {} : { endsAt: m.endTime }),
-    }));
+    .map((m) => {
+      const key = extKey(WOMENS_BRACKET, m);
+      return {
+        divisionRef: DIV_B,
+        fixtureExtKey: key,
+        venue: WOMENS.meta.venue,
+        court: `Board ${m.board as number}`,
+        startsAt: m.startTime as string,
+        ...(m.endTime === undefined ? {} : { endsAt: m.endTime }),
+        // Declared per row, so the certificate can tell "the source data
+        // contradicts itself" from "the pack encoded something too strict".
+        ...(conflicted.has(key)
+          ? {
+              knownConflict:
+                "the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact",
+            }
+          : {}),
+      };
+    });
 }
 
 function buildVenues(): PackInput["venues"] {

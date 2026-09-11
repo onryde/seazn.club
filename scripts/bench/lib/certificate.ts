@@ -17,6 +17,7 @@
 //
 //   1. no `historicalAssignment` for this division  -> SKIPPED_NO_HISTORY
 //   2. history breaches our own encoding            -> PACK_AUTHORING_BUG
+//      ...but only on rows the pack DECLARED     -> HISTORY_SELF_CONFLICT
 //   3. history clean AND solver `infeasible`        -> PRODUCT_DEFECT
 //   4. `placed < total`                             -> UNPLACED
 //   5. otherwise                                    -> FEASIBLE
@@ -100,6 +101,10 @@ import type { PackHistoricalAssignment } from "./pack-schema.ts";
 const RED_BY_BRANCH: Readonly<Record<CertificateBranch, boolean>> = {
   SKIPPED_NO_HISTORY: false,
   PACK_AUTHORING_BUG: true,
+  // Reported, never red: the pack is correct and the SOURCE contradicts
+  // itself. `_RULES.md` §1's "adaptations never red" holds for source data as
+  // well as for reshaping.
+  HISTORY_SELF_CONFLICT: false,
   PRODUCT_DEFECT: true,
   UNPLACED: true,
   FEASIBLE: false,
@@ -270,6 +275,45 @@ export function certify(input: {
     // summary line: eleven repeats of one kind bury the other ten.
     const kinds = [...new Set(history.findings.map((f) => f.kind))];
     const named = kinds.length > 0 ? kinds.join(", ") : "none named";
+
+    // B06b — a published timetable can genuinely contradict itself. Suite 11's
+    // sources put two matches on one board at overlapping times, agreed by
+    // three independent feeds, and no encoding reconciles that: under the
+    // checker's fixed-width occupancy any width above the gap reports it and
+    // any width below is shorter than every real match, which would make the
+    // whole check vacuous.
+    //
+    // So a breach landing ONLY on rows the pack declared as known conflicts
+    // gets its own branch and does not gate. The test is per-ROW and requires
+    // EVERY fixture named by EVERY finding to be declared — one undeclared
+    // fixture anywhere and this is a pack-authoring bug exactly as before,
+    // which is what stops the exemption spreading over breaches nobody looked
+    // at.
+    const declaredConflicts = new Set(
+      declared.filter((row) => row.knownConflict !== undefined).map((row) => row.fixtureExtKey),
+    );
+    const extKeyById = new Map(
+      board.fixtures.filter((f) => f.extKey !== undefined).map((f) => [f.fixtureId, f.extKey as string]),
+    );
+    const undeclared = history.findings.filter((f) =>
+      f.fixtureIds.some((id) => {
+        const extKey = extKeyById.get(id);
+        return extKey === undefined || !declaredConflicts.has(extKey);
+      }),
+    );
+    if (declaredConflicts.size > 0 && undeclared.length === 0) {
+      const reasons = [
+        ...new Set(
+          declared.filter((row) => row.knownConflict !== undefined).map((row) => row.knownConflict as string),
+        ),
+      ];
+      return verdict(
+        "HISTORY_SELF_CONFLICT",
+        `the real timetable breaches our own encoding (${history.findings.length} findings: ${named}), and every breach lands on a row the pack DECLARED as a known conflict — the source data contradicts itself, so there is nothing to fix in the pack or the solver: ${reasons.join("; ")}`,
+        history.findings,
+      );
+    }
+
     return verdict(
       "PACK_AUTHORING_BUG",
       `the real timetable breaches our own encoding (${history.findings.length} findings: ${named}) — the pack encoded constraints stricter than reality, so fix the pack, not the solver`,
