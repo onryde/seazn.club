@@ -80,7 +80,10 @@ TIER B  phone (SRT) ► Cloudflare Stream live input ┬ passthrough: simulcast 
 > "WHEP free until 2026-10-15" no longer applies — HLS delivery bills now), and
 > the LL-HLS beta toggle, which is OFF by default per input and is therefore
 > load-bearing for the compositor's latency. Surviving WHEP references below are
-> superseded by this banner.
+>
+> **All nine measured findings live in
+> `2026-09-11-cloudflare-stream-measured.md`** — the authority for what the API
+> DOES, as this document is the authority for what we BUILD. Surviving WHEP references below are superseded by this banner.
 
 **Programme DAG** (owner-approved 2026-09-07):
 
