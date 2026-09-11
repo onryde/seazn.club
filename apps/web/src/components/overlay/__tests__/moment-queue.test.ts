@@ -202,7 +202,7 @@ describe("the revision — what stops the queue freezing under reduced motion", 
     expect(s.revision, "so the revision must move, or nothing re-arms").toBeGreaterThan(before);
   });
 
-  it("every transition moves the revision, and a no-op does NOT", () => {
+  it("every transition moves the revision, and an ENQUEUE no-op does NOT", () => {
     let s = enqueue(INITIAL, [m(1)], 0);
     const seen = [s.revision];
     s = tick(s, 250);
@@ -214,13 +214,44 @@ describe("the revision — what stops the queue freezing under reduced motion", 
     expect(new Set(seen).size, "four distinct transitions").toBe(4);
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
 
-    // A tick before the deadline and an enqueue of nothing both change nothing,
-    // and must not churn the effect either.
+    // AN ENQUEUE no-op must not churn the effect. Note the asymmetry with a
+    // TICK no-op, which must (see the describe below): an enqueue that changes
+    // nothing leaves the armed timer PENDING, so there is nothing to re-arm,
+    // while a tick means the timer that produced it is already spent. Both look
+    // like "nothing happened"; only one of them still has a timer.
     const idle = enqueue(INITIAL, [m(9)], 0);
-    expect(tick(idle, 1).revision).toBe(idle.revision);
     expect(enqueue(idle, [], 1).revision).toBe(idle.revision);
     expect(enqueue(idle, [m(9)], 1).revision, "an already-seen moment is a no-op").toBe(
       idle.revision,
     );
+  });
+});
+
+describe("a tick that lands BELOW the deadline (W2 final review, finding 3)", () => {
+  it("changes the revision so the hook re-arms, without moving the phase", () => {
+    // The hook arms ONE timer per state and re-arms only when the state
+    // changes. Returning the same object means `useReducer` bails, nothing
+    // re-renders, no timer is armed — and the timer that produced this tick is
+    // already spent. The slab would freeze for the rest of the broadcast.
+    // Reachable when the wall clock steps backwards between arming and firing.
+    const one = enqueue(INITIAL, [m(1, "goal")], 1_000);
+    expect(one.phase).toBe("in");
+    const early = tick(one, 1_100);
+    expect(early.phase, "no phase moves before the deadline").toBe("in");
+    expect(early.deadline, "and no deadline moves either").toBe(one.deadline);
+    expect(early.revision, "but the state MUST change, or nothing re-arms").toBeGreaterThan(
+      one.revision,
+    );
+    expect(early).not.toBe(one);
+  });
+
+  it("still advances exactly one phase once the deadline is actually reached", () => {
+    // The re-arm must not consume the transition: the same deadline, reached,
+    // still moves in -> hold and nothing more.
+    const one = enqueue(INITIAL, [m(1, "goal")], 1_000);
+    const early = tick(one, 1_100);
+    const due = tick(early, one.deadline!);
+    expect(due.phase).toBe("hold");
+    expect(due.deadline).toBe(one.deadline! + OVERLAY_MOMENT_HOLD_MS);
   });
 });

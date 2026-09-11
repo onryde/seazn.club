@@ -664,15 +664,20 @@ insets:
 canvas                1920 × 1080
 
 BAR (§3)              left 72   right 72   bottom 54
-  main band           126
-  detail band          51
-  bar height          126 + 51                        = 177
-  bar TOP edge        54 + 177                        = 231 from the bottom
+  main band           126             ALWAYS
+  detail band          51             ONLY WHEN IT HAS CONTENT (§3: "an empty
+                                      detail band is not rendered")
+  bar height          126             with no band
+                      126 + 51 = 177  with one
+  bar TOP edge        54 + 126 = 180  with no band
+                      54 + 177 = 231  with one
   room BENEATH it     54                              ← against a 216 slab
 
 SLAB on the bar       left 72         (flush with the bar's own left inset)
-  bottom              231             (its underside meets the bar's top edge)
-  occupies            y 633 … 849     (1080 − 231 − 216 … 1080 − 231)
+  bottom              180 or 231      (its underside meets the bar's top edge,
+                                       WHICHEVER height the bar has)
+  occupies            y 684 … 900     with no band
+                      y 633 … 849     with one
   radius              6 6 0 0         ← TOP corners, not bottom
 
 BUG (§4)              left 60   top 54   width 480
@@ -683,6 +688,20 @@ SLAB on the bug       left 540        (flush with the bug's right edge)
                                        the rows rather than the caption)
   radius              0 12 12 0
 ```
+
+**THE BAR'S HEIGHT IS NOT A CONSTANT — corrected 2026-09-11 after the W2 final
+review.** This paragraph first stated 177 flat, which is the bar's height only
+when §3's detail band has something to show. Football carries no band until its
+first card, cricket none until its first ball, and every sport loses it at
+`no_result`; in each of those states a slab pinned at 231 floats 51 px clear of
+the bar, square bottom corners exposed — the exact opposite of "tucked behind".
+W2's own football capture was shot on that defect before it was found.
+
+The stylesheet therefore DERIVES the offset (`--ovl-bar-main-h`,
+`--ovl-bar-band-h`, `--ovl-bar-bottom` in `globals.css`) and the stage flags
+the slot with `data-band` from `hasDetailBand` (`lib/overlay-model.ts`) — the
+same predicate the bar renders from, so the two cannot drift again. Moving
+either band height moves the slab with it.
 
 There are 54 px of canvas beneath the bar and the slab is 216 tall, so "under"
 was never buildable. The slab therefore sits ABOVE the bar with its underside

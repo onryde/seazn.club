@@ -1341,10 +1341,15 @@ body {
 .ovl-label { font-family: var(--font-geist-sans, system-ui, sans-serif); }
 
 /* Theme A — broadcast bar (_THEMES.md §3) */
-.ovl-bar { position: absolute; left: 72px; right: 72px; bottom: 54px;
+.ovl-bar { position: absolute; left: 72px; right: 72px; bottom: var(--ovl-bar-bottom);
            border-radius: 6px; overflow: hidden;
            box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
-.ovl-bar-main { display: flex; align-items: stretch; height: 126px;
+/* The two band heights are CUSTOM PROPERTIES because §5's slab placement is
+   derived from them (see `.ovl-moment-slot--bar`). Typed as literals in both
+   places they drifted: the slot froze their SUM at 231 while the detail band
+   is conditional, so a bar without one left the slab floating 51 px clear. */
+.ovl-canvas { --ovl-bar-main-h: 126px; --ovl-bar-band-h: 51px; --ovl-bar-bottom: 54px; }
+.ovl-bar-main { display: flex; align-items: stretch; height: var(--ovl-bar-main-h);
                 background: var(--sport-board); }
 /* MAX-WIDTH 480 (product ruling 2026-09-10, `_THEMES.md` §3). The cell has a
    225 px floor and the team cells are `flex: 1 1 auto`, so it GREW with its
@@ -1409,7 +1414,7 @@ body {
              background: var(--sport-board-2); font-size: 30px; font-weight: 600;
              letter-spacing: 0.08em;
              color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
-.ovl-detail-band { display: flex; align-items: center; gap: 33px; height: 51px;
+.ovl-detail-band { display: flex; align-items: center; gap: 33px; height: var(--ovl-bar-band-h);
                    padding: 0 33px; font-size: 24px; font-weight: 500;
                    background: color-mix(in srgb, var(--sport-board) 90%, transparent);
                    color: color-mix(in srgb, var(--sport-ink) 92%, transparent); }
@@ -1699,8 +1704,18 @@ body {
      fold phases. The slab is at `left: 0` within this window. */
   left: 72px;
   right: 0;
-  bottom: 231px;
+  /* The slab's UNDERSIDE meets the bar's TOP edge (_THEMES §5, owner-ruled
+     2026-09-11), so this is the bar's own bottom inset plus its height — and
+     the bar's height depends on whether §3's detail band renders at all. The
+     stage sets `data-band` from `hasDetailBand`, the one authority the bar
+     itself renders from. Derived, never a frozen sum: moving a band height
+     moves the slab with it. */
+  bottom: calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h));
   height: 216px;
+}
+
+.ovl-moment-slot--bar[data-band] {
+  bottom: calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h) + var(--ovl-bar-band-h));
 }
 
 .ovl-slab {

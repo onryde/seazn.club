@@ -14,6 +14,7 @@ import { OverlayMomentSlab } from "./overlay-moment";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import {
+  hasDetailBand,
   overlayModel,
   type OverlayModel,
   type OverlayMsg,
@@ -252,6 +253,12 @@ export function OverlayStage(props: OverlayStageProps) {
         <div
           data-testid="ovl-moment-slot"
           className={`ovl-moment-slot ovl-moment-slot--${placement}`}
+          /* §3's detail band is CONDITIONAL ("an empty detail band is not
+             rendered"), so the bar is 126 or 177 tall and the slab's underside
+             has to follow it. One authority — `hasDetailBand` — feeds the
+             bar's own render and this attribute; the stylesheet derives both
+             offsets from the two band heights rather than freezing a sum. */
+          data-band={hasDetailBand(model) ? "" : undefined}
           style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
         >
           {moment === null ? null : (

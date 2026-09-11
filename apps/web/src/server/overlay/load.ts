@@ -16,7 +16,7 @@ import { venueTzForDivision } from "@/server/venue-tz";
 import { foldFrom, loadFoldInputs, type FoldedFixture } from "@/server/engine-db/fold";
 import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
-import type { RecentDerived, RecentEvent } from "@/lib/overlay-recent-types";
+import type { RecentDerived, RecentEvent, RecentPerson } from "@/lib/overlay-recent-types";
 import type { OverlayCricketLive } from "@/lib/overlay-cricket";
 import {
   buildOverlayRecent,
@@ -148,6 +148,8 @@ async function foldOrNull(fixtureId: string, lastSeq: number): Promise<CachedOve
   }
 }
 
+type PersonResolver = (id: unknown) => RecentPerson | undefined;
+
 /**
  * W2 — the moment window, off the stream the fold ALREADY void-resolved
  * (`FoldedFixture.active`). No second ledger read: the events are in hand, and
@@ -158,12 +160,16 @@ async function foldOrNull(fixtureId: string, lastSeq: number): Promise<CachedOve
  * line-up must cost the overlay its moments, never its scorebug — a club is on
  * air.
  *
- * The person read is SKIPPED ENTIRELY when the window names nobody, which is
- * the ordinary case at fidelity bands 0 and 1 (a goal records its side and
- * nothing else). `personIdsIn` answers that by running the real projectors, so
- * it cannot drift from what is actually published.
+ * The names arrive already resolved, from `overlayPersonOf` — ONE read shared
+ * with the crease band. They used to be fetched here and again there, and
+ * `loadRecentPersonOf` issues TWO queries (the division's display policy, then
+ * the line-ups), so a cricket poll cost four and read the same line-up twice.
  */
-async function recentOrEmpty(row: PublicRow, bundle: CachedOverlay): Promise<RecentEvent[]> {
+function recentOrEmpty(
+  row: PublicRow,
+  bundle: CachedOverlay,
+  personOf: PersonResolver,
+): RecentEvent[] {
   const { folded } = bundle;
   if (!folded) return [];
   const { home_entrant_id: home, away_entrant_id: away } = row;
@@ -173,8 +179,6 @@ async function recentOrEmpty(row: PublicRow, bundle: CachedOverlay): Promise<Rec
   // and credit every event to the home side.
   if (!home || !away) return [];
   try {
-    const ids = personIdsIn(recentWindow(folded.active), [home, away]);
-    const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, ids);
     const derived = new Map(Object.entries(bundle.derived).map(([seq, d]) => [Number(seq), d]));
     return buildOverlayRecent({ active: folded.active, sides: [home, away], personOf, derived });
   } catch (err) {
@@ -197,19 +201,37 @@ async function recentOrEmpty(row: PublicRow, bundle: CachedOverlay): Promise<Rec
  * for cricket, the one sport whose default theme is the bar. Now the only work
  * left outside the cache is one query for at most three names.
  */
-async function cricketLiveOrNull(
-  row: PublicRow,
+function cricketLiveOrNull(
   bundle: CachedOverlay,
-): Promise<OverlayCricketLive | null> {
-  const ids = cricketPersonIdsIn(bundle.cricketLive);
+  personOf: PersonResolver,
+): OverlayCricketLive | null {
   if (bundle.cricketLive === null) return null;
-  if (ids.length === 0) return nameCricketLive(bundle.cricketLive, () => undefined);
+  return nameCricketLive(bundle.cricketLive, personOf);
+}
+
+/** Every person id either surface can put on air, resolved in ONE read.
+ *
+ *  SKIPPED ENTIRELY when neither names anybody, which is the ordinary case at
+ *  fidelity bands 0 and 1 (a goal records its side and nothing else). Both id
+ *  collectors answer that by running the real projectors, so neither can drift
+ *  from what is actually published.
+ *
+ *  BEST EFFORT on its own, like everything else here: an unreadable line-up
+ *  costs the overlay its NAMES, never its moments or its crease band — a club
+ *  is on air, and a wicket with no batter named still beats no wicket. */
+async function overlayPersonOf(row: PublicRow, bundle: CachedOverlay): Promise<PersonResolver> {
+  const none: PersonResolver = () => undefined;
   try {
-    const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, ids);
-    return nameCricketLive(bundle.cricketLive, personOf);
+    const { home_entrant_id: home, away_entrant_id: away } = row;
+    const ids = new Set(cricketPersonIdsIn(bundle.cricketLive));
+    if (bundle.folded && home && away) {
+      for (const id of personIdsIn(recentWindow(bundle.folded.active), [home, away])) ids.add(id);
+    }
+    if (ids.size === 0) return none;
+    return await loadRecentPersonOf(sql, row.id, row.division_id, [...ids]);
   } catch (err) {
-    log.error({ err, fixtureId: row.id }, "overlay: crease names failed, serving the band unnamed");
-    return nameCricketLive(bundle.cricketLive, () => undefined);
+    log.error({ err, fixtureId: row.id }, "overlay: name resolution failed, serving unnamed");
+    return none;
   }
 }
 
@@ -220,7 +242,8 @@ export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiv
     row.last_seq === null
       ? { folded: null, derived: {}, cricketLive: null }
       : await foldOrNull(fixtureId, row.last_seq);
-  const recent = await recentOrEmpty(row, bundle);
-  const cricketLive = await cricketLiveOrNull(row, bundle);
+  const personOf = await overlayPersonOf(row, bundle);
+  const recent = recentOrEmpty(row, bundle, personOf);
+  const cricketLive = cricketLiveOrNull(bundle, personOf);
   return projectOverlayLiveData({ row, folded: bundle.folded, venueTz, recent, cricketLive });
 }

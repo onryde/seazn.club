@@ -26,6 +26,7 @@ import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
   grantOverlay,
+  seedCricketOverlayFixture,
   seedOverlayFixture,
   sendEvent,
   signInAs,
@@ -932,7 +933,9 @@ test.describe("moments (W2)", () => {
   test("a goal scored while the overlay is open raises a slab, holds, and folds away", async ({
     browser,
   }) => {
-    test.setTimeout(CYCLE_MS * 6 + 60_000);
+    // Three extra cycles over the sibling test: the replay watch below samples
+    // for exactly that long. Derived from the same constant, never typed.
+    test.setTimeout(CYCLE_MS * 9 + 60_000);
     // The overlay VIEW is anonymous; the event SENDS are not. `sendEvent` posts
     // to `/api/v1/fixtures/{id}/events`, which 401s without the rig owner's
     // session — the anon context has none, and the project's shared storageState
@@ -946,9 +949,21 @@ test.describe("moments (W2)", () => {
       const slab = anon.locator('[data-testid="overlay-moment"]');
 
       // NOTHING ON MOUNT. The window already carries three suspensions from the
-      // seed, and an overlay opened mid-broadcast must not replay them — this is
-      // the assertion that the mount baseline is real.
-      await expect(slab, "the seeded history must not replay on mount").toHaveCount(0);
+      // seed, and an overlay opened mid-broadcast must not replay them.
+      //
+      // SAMPLED, not asserted once. A bare `toHaveCount(0)` straight after
+      // `goto` resolves before hydration can mount anything, so it passed with
+      // `momentBaseline` (overlay-stage.tsx) deleted — a reachability check
+      // where a behaviour was wanted. Three replayed suspensions would occupy
+      // 3 x CYCLE_MS and then be GONE, so a single late assertion passes too.
+      // Polling every 250 ms across that whole span is what actually kills the
+      // mutant: a 4.5 s slab cannot hide between two samples.
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible();
+      const watchUntil = Date.now() + CYCLE_MS * 3;
+      while (Date.now() < watchUntil) {
+        expect(await slab.count(), "the seeded history must not replay on mount").toBe(0);
+        await anon.waitForTimeout(250);
+      }
 
       await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId });
 
@@ -1045,6 +1060,70 @@ test.describe("moments (W2)", () => {
     } finally {
       await anon.context().close();
       await owner.close();
+    }
+  });
+});
+
+/**
+ * W2 TASK 3 — the cricket bar's SECOND BAND, in a browser and in CI.
+ *
+ * Its own describe and its own rig, for the reason the moments describe states:
+ * this file is serial and a test above decides the shared hockey fixture.
+ *
+ * WHY IT EXISTS. Before this, `cricketLive` had no automated gate anywhere that
+ * runs: there was no cricket case in this file, `scripts/smoke.ts` checks only
+ * `recent[]` against the hockey rig, and the sole end-to-end proof was
+ * `overlay-moments.capture.ts` — which is `test.skip` without `GALLERY_DIR`, and
+ * whose `gallery` project no workflow invokes. A whole wave task rested on a
+ * harness CI never runs. Found by the W2 final review.
+ */
+test.describe("cricket crease band (W2 Task 3)", () => {
+  let cricket: OverlayRig;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    try {
+      cricket = await seedCricketOverlayFixture(ownerPage);
+      await grantOverlay(cricket.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test("the band names both batters and the bowler, through the consent resolver", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${cricket.fixtureId}?style=bar`);
+      const band = anon.locator('[data-testid="ovl-detail"]');
+      await expect(band).toBeVisible({ timeout: 30_000 });
+
+      // The seed's over is a single, a four, a wide, then a bowled — so by the
+      // time this reads, one batter is out and the incoming one is at the
+      // crease. FIGURES, not just a name: "N (M)" is what the band is FOR, and
+      // a test that only saw a name would pass on a band that lost its
+      // arithmetic. `(` is the cheapest witness of the figures' shape that
+      // cannot be satisfied by a bare name.
+      await expect(band).toContainText("(");
+
+      // The bowler's analysis, four numbers joined by hyphens (O-M-R-W). Pinned
+      // as a SHAPE rather than as "0.4-0-12-1", which would freeze this seed's
+      // arithmetic into a test about rendering.
+      await expect(band).toContainText(/\d+(\.\d)?-\d+-\d+-\d+/);
+
+      // A NAME REACHED AIR. Deliberately NOT "the name is masked": this rig's
+      // division sets no youth flag and no display policy, so the consent
+      // resolver's correct answer here IS the full name, and a test asserting
+      // initials would assert a policy this fixture does not have. What the
+      // band owes is that people appear at all — the resolver being the route
+      // is pinned by `recent.test.ts`, which drives it against the real one.
+      await expect(band).toContainText(/Bat \d+ /);
+    } finally {
+      await anon.context().close();
     }
   });
 });

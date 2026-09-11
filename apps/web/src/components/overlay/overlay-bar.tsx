@@ -3,7 +3,7 @@
 // is a class in globals.css's `.ovl-*` block, which carries the sheet's native
 // values; nothing is styled inline here except the LED bar's slide, which is a
 // transform the CSS transitions.
-import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { hasDetailBand, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 
 // Fix round 3, F5 — the bug's own pattern (`overlay-bug.tsx`'s `halfOf`),
 // duplicated rather than imported: the two themes stay independent renderers
@@ -86,7 +86,7 @@ export function OverlayBar({
             authority, resolved through the SAME `msg` the projection uses. */}
         <div className="ovl-brand ovl-display">{msg("overlay.brand")}</div>
       </div>
-      {model.detail.length > 0 || model.chase || model.result ? (
+      {hasDetailBand(model) ? (
         <div data-testid="ovl-detail" className="ovl-detail-band">
           {model.result ? (
             <span data-testid="ovl-result" className="ovl-detail-emphasis">{model.result}</span>

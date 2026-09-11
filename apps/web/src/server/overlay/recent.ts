@@ -391,9 +391,15 @@ function batterFigures(
 export interface DerivedReplay {
   bySeq: Map<number, RecentDerived>;
   /** False when the module refused the ledger part-way: annotations beyond that
-   *  point are ABSENT, not proven not to exist. Reported rather than swallowed
-   *  — an empty catch here would make a fixture that loses every set-won
-   *  annotation indistinguishable from one that had none to lose. */
+   *  point are ABSENT, not proven not to exist.
+   *
+   *  PRODUCTION REPORTS IT THROUGH THE `log.warn` BELOW, not through this
+   *  field: `load.ts` destructures `{ bySeq }` and nothing reads `complete` off
+   *  a live request. It is here for the TESTS, which assert the refusal is
+   *  detected at all — an empty catch would make a fixture that loses every
+   *  set-won annotation indistinguishable from one that had none to lose, and
+   *  a warn line is not something a unit test can hold on to. Stated plainly
+   *  rather than left reading as a production signal it is not. */
   complete: boolean;
 }
 

@@ -2378,3 +2378,59 @@ checks out `github.sha`) or against a PR number via the `pr` input.
 **Also settled 2026-09-11:** the Cloudflare account is already provisioned —
 the capture session's open question is closed, and no account setup is owed by
 R1.
+
+## 2026-09-11 — W2 final review, round two (F2-1…F2-7 in `W2-review.md`)
+
+**W2-F40 — a DERIVED constant is only as good as the thing it was derived FROM,
+and a conditional element is not a constant.** `.ovl-moment-slot--bar`'s
+`bottom: 231px` was `54 + 126 + 51`, and §3 rules that "an empty detail band is
+not rendered" — so the bar is 126 OR 177 and the slab floated 51 px clear of it
+on every fixture that had not yet earned a band (football before its first card,
+cricket before its first ball, anything at `no_result`), square bottom corners
+exposed. **The error was in `_THEMES` §5, written IN THIS WAVE to record the
+owner's placement ruling**, which stated 177 flat. Fixed by deleting the
+duplicated fact: `hasDetailBand` is one authority read by the bar's render and
+by the stage's `data-band`, and the CSS derives both offsets from the two band
+heights. The test asserts the two readers agree IN THE SAME RENDER — either
+alone is satisfied by a constant.
+
+**W2-F41 — a visual gate can be GREEN on a stale bundle.** Confirming F40's fix,
+the capture passed 4/4 and the picture still showed the gap: `seazn-env rebuild`
+reused Turbopack's FS cache, the built chunk still held `bottom:231px` while the
+source held the variables, and the content-hashed filename never moved;
+`up --server` then warned it was "serving whatever was built when it started"
+and did not restart. Needed `rm -rf .next` + `turbo run build --force` + an
+explicit `kill`. **A capture asserts the DOM it photographs; it cannot assert
+that the CSS it photographed is the CSS in the repo.** Third vacuous mode this
+wave, after a harness that errored before shooting and a motion frame read as a
+layout bug.
+
+**W2-F42 — a fix for the EQUAL case leaves the BELOW case open.** R-2 gave the
+queue a `revision` because a repeated deadline armed no timer. A tick landing
+BELOW the deadline still returned `state` itself — same bail-out, same frozen
+slab — reachable when the wall clock steps backwards mid-broadcast. And the
+existing test asserted a tick no-op must NOT churn the revision, i.e. it pinned
+the defect as a requirement. **When a guard is fixed for one boundary, state the
+other two.**
+
+**W2-F43 — a wave task can rest on a harness CI never runs.** Task 3's cricket
+band was proven only by `overlay-moments.capture.ts`, which is `test.skip`
+without `GALLERY_DIR` and whose `gallery` project appears in NO workflow; the
+spec had no cricket case and smoke checks `recent[]` on the hockey rig alone.
+**Before calling a surface covered, name the job that runs the file.**
+
+**W2-F44 — a performance comment is a claim, and this one was wrong twice.**
+"One query for at most three names" described a path that issued two queries and
+was called from two places: four per poll per viewer for cricket, reading the
+same line-up twice. Same class as R-3 and equally invisible — nothing about the
+output was wrong.
+
+**W2-F45 — the bar has NO name cap, and §1's fallback ladder was never built.**
+Found by driving the product, not by any review. §1: a name too long "falls to
+the entrant's short name, then to the three-letter code". `overlay-bar.tsx:54`
+renders `side.name` unconditionally; `side.short` exists and is used only as a
+React key and by the bug. Measured at 1920×1080: the home score paints inside
+the away cell (1046→1156 against a cell starting at 1063) and the away name
+paints over the brand mark (to 1781 in a cell ending at 1708); threshold ≈ 34
+characters at 45 px. **W1's surface and an owner call** — §1 forbids an ellipsis,
+so the fix is the measuring ladder, not a CSS one-liner.

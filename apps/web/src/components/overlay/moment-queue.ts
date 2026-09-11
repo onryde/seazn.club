@@ -124,11 +124,21 @@ export function momentQueueReducer(
     return next.current === null ? promote(next, action.now, action.foldMs) : next;
   }
 
-  // A tick before the deadline is a no-op. The timer is armed to the deadline,
-  // but a React re-render can fire one early and must change nothing.
-  if (state.current === null || state.deadline === null || action.now < state.deadline) {
-    return state;
-  }
+  // A tick before the deadline changes no PHASE — but it must still change the
+  // state, or the slab freezes for the rest of the broadcast.
+  //
+  // The hook arms one timer per state and re-arms only when the state changes
+  // (`use-moment-queue.ts`). Returning `state` itself means `useReducer` bails
+  // out, nothing re-renders, no timer is armed — and the timer that dispatched
+  // this tick is already spent. `revision` is the fix R-2 introduced for the
+  // EQUAL-deadline case; a tick that lands BELOW the deadline needs it too.
+  //
+  // Reachable when the wall clock steps backwards between arming and firing —
+  // an NTP correction on a machine that has been running OBS for hours. The
+  // re-arm cannot loop: the effect schedules `max(0, deadline - now)`, which is
+  // positive exactly while this branch is taken.
+  if (state.current === null || state.deadline === null) return state;
+  if (action.now < state.deadline) return { ...state, revision: state.revision + 1 };
   // EXACTLY ONE phase per tick, however late the tick is. A backgrounded OBS
   // source gets no timers at all; on return the clock has jumped minutes, and
   // collapsing three phases into one frame would flash the slab rather than
