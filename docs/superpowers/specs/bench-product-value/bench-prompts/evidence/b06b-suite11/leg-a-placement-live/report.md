@@ -1,22 +1,22 @@
-# Scheduler bench — run `3b1ce6b37407e893d4c3ad2ab397b8f46d3a3480`
+# Scheduler bench — run `cfa309aecb3e9ccb7cbbc140338deb5065da0b6c`
 
 - Gate: **GREEN**
 - Engine: both
-- Base: http://localhost:3384
-- Started: 2026-09-11T09:42:38.893Z
-- Finished: 2026-09-11T09:43:48.632Z
+- Base: http://localhost:3302
+- Started: 2026-09-11T15:13:04.066Z
+- Finished: 2026-09-11T15:13:59.832Z
 - Oracles: 25 total, 23 with a subject (23 PASS, 0 FAIL), 2 NO SUBJECT
 
 ## Pre-flight
 
 - Result: PASSED
-- Placement: live — placement channel to localhost:50484 reached READY within 3s.
+- Placement: live — placement channel to localhost:50898 reached READY within 3s.
 
 ## Suites
 
 ### suite11 — GREEN
 
-- Timings: seed 5284ms, schedule 1751ms, sim 15027ms, import 25130ms
+- Timings: seed 2834ms, schedule 663ms, sim 18075ms, import 19482ms
 - Data left in place: no (--wipe requested)
 - Solver: requested=both, actual=greedy, status=n/a
 - Blocking conflicts: 0
@@ -62,8 +62,8 @@
 
 | Suite | Division | Requested | Actual | Status | Mode | Blocking | Unplaced (board) | Placed/Total (proposal) | Wall |
 |---|---|---|---|---|---|---|---|---|---|
-| suite11 | d-worlds | both | greedy | solver_unavailable | build | 0 | 0 | 95/95 | 575ms |
-| suite11 | d-womens | both | greedy | not_searched | build | 0 | 0 | 110/110 | 1033ms |
+| suite11 | d-worlds | both | greedy | solver_unavailable | build | 0 | 0 | 95/95 | 233ms |
+| suite11 | d-womens | both | greedy | not_searched | build | 0 | 0 | 110/110 | 339ms |
 
 - `d-worlds`: solver budget expired (tiers 0/6)
 - `d-womens`: solver did not search — too_big
@@ -112,16 +112,16 @@ Every OTHER layer in this report is division-scoped and blind to this by constru
 | suite11 | d-womens | `HISTORY_SELF_CONFLICT` | no | the real timetable breaches our own encoding (1 findings: court_double_booking), and every breach lands on a row the pack DECLARED as a known conflict — the source data contradicts itself, so there is nothing to fix in the pack or the solver: the published timetable really does put this match and its same-board neighbour on one board at overlapping times — three independent DartConnect feeds agree, so shifting either would invent an attributed fact |
 
 History's own violations of this pack's encoding:
-- `d-womens` `court_double_booking` [1d875a9a-f801-4ef1-9073-6bc72113a819, 38c9c540-3f39-4a3d-9798-40bc12c887c6]: court 42ec2f1e-e2d7-436f-9131-00673d5626f5 is occupied by 1d875a9a-f801-4ef1-9073-6bc72113a819 (2024-03-23T12:23) and 38c9c540-3f39-4a3d-9798-40bc12c887c6 (2024-03-23T12:32) at the same time, for 12 minutes each
+- `d-womens` `court_double_booking` [e53750d6-0f97-4b83-8a34-77f0a8beebbc, 5f14e191-3b39-4d4d-a949-aac899cfc502]: court 44fb1886-6541-4ce4-b77a-d4abbc79fc1b is occupied by e53750d6-0f97-4b83-8a34-77f0a8beebbc (2024-03-23T12:23) and 5f14e191-3b39-4d4d-a949-aac899cfc502 (2024-03-23T12:32) at the same time, for 12 minutes each
 
 ## Believability
 
 Report-only — nothing here ever reds a run (design §3.5).
 
 - `suite11/d-worlds`: restSpread=100, courtBalance=100, gapDispersion=9, primeSlotFairness=62
-  - similarity to historical: 8% same day, 4% same instant over 95 compared fixture(s) of 95 declared row(s)
-- `suite11/d-womens`: restSpread=100, courtBalance=100, gapDispersion=100, primeSlotFairness=68
-  - similarity to historical: 100% same day, 0% same instant over 110 compared fixture(s) of 110 declared row(s)
+  - similarity to historical: 14% same day, 2% same instant over 95 compared fixture(s) of 95 declared row(s)
+- `suite11/d-womens`: restSpread=100, courtBalance=100, gapDispersion=100, primeSlotFairness=69
+  - similarity to historical: 100% same day, 1% same instant over 110 compared fixture(s) of 110 declared row(s)
 
 ## Engine delta (greedy − optimized)
 
