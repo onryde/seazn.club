@@ -4,6 +4,7 @@
 // replaced the score with `undefined`).
 import { api } from "@/lib/client";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import type { RecentEvent } from "@/lib/overlay-recent-types";
 
 export interface LiveFixtureData {
   status: string;
@@ -68,6 +69,19 @@ export interface OverlayLiveData extends LiveFixtureData {
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
   };
+  /** W2 — the last `OVERLAY_RECENT_WINDOW` surviving module events, oldest
+   *  first, with the engine's own type strings and a consent-resolved person
+   *  where the payload names one (`server/overlay/recent.ts`). The moment slab
+   *  derives from this and from nothing else; `match_centre` never arrives on
+   *  this payload (it typechecks, because this interface extends
+   *  `LiveFixtureData`, and is always `undefined` at runtime).
+   *
+   *  OPTIONAL here, ALWAYS EMITTED by the endpoint. The asymmetry is deliberate:
+   *  `projectOverlayLiveData` always sets an array (possibly empty), but
+   *  `fixture-stream-panel.tsx` seeds an `OverlayLiveData` from a fixture ROW
+   *  before any poll has happened, and `[]` there would assert "this fixture has
+   *  no recent events" when the truth is "none have been loaded". */
+  recent?: RecentEvent[];
 }
 
 export interface PublicRealtimeToken {

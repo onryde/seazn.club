@@ -16798,6 +16798,40 @@ async function streamOverlaySuite(): Promise<void> {
     missing.length === 0,
   );
 
+  // --- W2 Task 1: the overlay endpoint's `recent` window, over real HTTP.
+  //
+  // The ONLY place this can be proven. `recent` is built in `server/overlay/`
+  // from the fold's own void-resolved stream, projected per event type and
+  // consent-resolved — four seams no unit test drives end to end, and the seeded
+  // ledger above is exactly the shape it must survive: one `core.start` that
+  // must NOT appear, three `hockey.suspension.start` that must, each carrying
+  // its own class and the side it was recorded against.
+  const overlayJson = await v1(anon, `/api/v1/public/fixtures/${entitled.fixtureId}/overlay`);
+  const recent = v1data<{ recent?: { type: string; seq: number; payload: { side?: number; class?: string } }[] }>(
+    overlayJson,
+  ).recent;
+  check(
+    `overlay smoke: the overlay payload always carries a recent[] array (got ${typeof recent})`,
+    Array.isArray(recent),
+  );
+  const suspensions = (recent ?? []).filter((e) => e.type === "hockey.suspension.start");
+  check(
+    `overlay smoke: recent[] carries the engine's OWN event types, kernel events excluded (${
+      (recent ?? []).map((e) => e.type).join(", ") || "empty"
+    })`,
+    suspensions.length === 3 && !(recent ?? []).some((e) => e.type.startsWith("core.")),
+  );
+  check(
+    "overlay smoke: recent[] is oldest-first and its seqs ascend",
+    (recent ?? []).every((e, i, all) => i === 0 || all[i - 1].seq < e.seq),
+  );
+  check(
+    `overlay smoke: each suspension projects its own class and the side it was recorded against (${
+      suspensions.map((e) => `${e.payload.class}/${e.payload.side}`).join(" ")
+    })`,
+    suspensions.map((e) => e.payload.class).join(",") === "green,yellow,red" &&
+      suspensions.every((e) => e.payload.side === 1),
+  );
   const bug = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?style=bug`);
   check(
     "overlay smoke: ?style= picks the theme server-side",

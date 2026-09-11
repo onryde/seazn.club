@@ -16,6 +16,8 @@ import { venueTzForDivision } from "@/server/venue-tz";
 import { foldFixture, type FoldedFixture } from "@/server/engine-db/fold";
 import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import type { RecentEvent } from "@/lib/overlay-recent-types";
+import { buildOverlayRecent, loadRecentPersonOf, personIdsIn, recentWindow } from "./recent";
 import { projectOverlayLiveData } from "./project";
 
 interface PublicRow {
@@ -25,6 +27,11 @@ interface PublicRow {
   summary: OverlayLiveData["summary"];
   outcome: OverlayLiveData["outcome"];
   last_seq: number | null;
+  /** Nullable on the view: a bye/TBD slot, or an entrant deleted after scoring
+   *  (`on delete set null`). Both mean the ledger cannot be attributed to a
+   *  side — see `recentOrEmpty`. */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
 }
 
 /** Folds once per (fixture, last_seq). The fold reads the whole ledger and
@@ -73,9 +80,46 @@ async function foldOrNull(fixtureId: string, lastSeq: number): Promise<FoldedFix
   }
 }
 
+/**
+ * W2 — the moment window, off the stream the fold ALREADY void-resolved
+ * (`FoldedFixture.active`). No second ledger read: the events are in hand, and
+ * a second `select … from score_events` would be a second authority for what
+ * survived.
+ *
+ * BEST EFFORT, exactly like the fold above it. A missing name or an unreadable
+ * line-up must cost the overlay its moments, never its scorebug — a club is on
+ * air.
+ *
+ * The person read is SKIPPED ENTIRELY when the window names nobody, which is
+ * the ordinary case at fidelity bands 0 and 1 (a goal records its side and
+ * nothing else). `personIdsIn` answers that by running the real projectors, so
+ * it cannot drift from what is actually published.
+ */
+async function recentOrEmpty(
+  row: PublicRow,
+  folded: FoldedFixture | null,
+): Promise<RecentEvent[]> {
+  if (!folded) return [];
+  const { home_entrant_id: home, away_entrant_id: away } = row;
+  // Not a degrade: `foldFixture` itself throws WRONG_PHASE for an unassigned
+  // entrant, so reaching here with one is impossible today. Stated rather than
+  // assumed, because `sideOf` would otherwise match `undefined === undefined`
+  // and credit every event to the home side.
+  if (!home || !away) return [];
+  try {
+    const ids = personIdsIn(recentWindow(folded.active), [home, away]);
+    const personOf = await loadRecentPersonOf(sql, row.id, row.division_id, ids);
+    return buildOverlayRecent({ active: folded.active, sides: [home, away], personOf });
+  } catch (err) {
+    log.error({ err, fixtureId: row.id }, "overlay: recent window failed, serving without it");
+    return [];
+  }
+}
+
 export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiveData> {
   const row = (await publicFixture(fixtureId)) as PublicRow;
   const venueTz = await venueTzForDivision(row.division_id);
   const folded = row.last_seq === null ? null : await foldOrNull(fixtureId, row.last_seq);
-  return projectOverlayLiveData({ row, folded, venueTz });
+  const recent = await recentOrEmpty(row, folded);
+  return projectOverlayLiveData({ row, folded, venueTz, recent });
 }
