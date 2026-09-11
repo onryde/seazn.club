@@ -200,8 +200,27 @@ export function failOnNativeDialog(page: Page): void {
 
 // Shared test tag so parallel/rerun state never collides.
 export const TAG = Date.now().toString(36);
-export const proEmail = () => `delivered+e2e-pro-${TAG}@resend.dev`;
-export const communityEmail = () => `delivered+e2e-community-${TAG}@resend.dev`;
+/**
+ * The TAG-FREE prefixes of the two seeded accounts, and the one authority for
+ * them.
+ *
+ * A spec that has to FIND the setup worker's account in a member list cannot
+ * call `proEmail()` / `communityEmail()` — `TAG` is per-process, so a spec
+ * worker computes a different tag than the setup worker that minted the
+ * account (the same reason `invalidateOrgEntitlements` says never to key on
+ * those helpers). It matches on these instead.
+ *
+ * They exist because #771 moved both addresses from `e2e-*@example.com` to
+ * `delivered+e2e-*@resend.dev` and four hand-typed `startsWith("e2e-pro-")` /
+ * `startsWith("e2e-community-")` literals in `members-roles.spec.ts` were left
+ * behind — silently matching nothing, which reads as "the member is not in the
+ * list". Derived from the same constant now, so the next change to the address
+ * shape moves the matchers with it.
+ */
+export const PRO_EMAIL_PREFIX = "delivered+e2e-pro-";
+export const COMMUNITY_EMAIL_PREFIX = "delivered+e2e-community-";
+export const proEmail = () => `${PRO_EMAIL_PREFIX}${TAG}@resend.dev`;
+export const communityEmail = () => `${COMMUNITY_EMAIL_PREFIX}${TAG}@resend.dev`;
 
 // True when the server under test is a production build (e.g. staging): it
 // never dev-exposes login/claim links, so auth helpers mint tokens straight in

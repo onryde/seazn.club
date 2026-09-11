@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { apiJson, activeOrg } from "./helpers";
+import {
+  COMMUNITY_EMAIL_PREFIX,
+  PRO_EMAIL_PREFIX,
+  activeOrg,
+  apiJson,
+} from "./helpers";
 
 // Membership lifecycle without spending magic links: invites are share-link
 // tokens returned by the create API, and the second session is the existing
@@ -42,7 +47,7 @@ test.describe.serial("members and roles", () => {
       page.request,
       `/api/orgs/${proOrgId}/members`,
     );
-    const viewer = members.data!.find((m) => m.email.startsWith("e2e-community-"));
+    const viewer = members.data!.find((m) => m.email.startsWith(COMMUNITY_EMAIL_PREFIX));
     expect(viewer?.role).toBe("viewer");
     communityUserId = viewer!.user_id;
   });
@@ -61,7 +66,7 @@ test.describe.serial("members and roles", () => {
     await expect(page.getByRole("button", { name: "+ Create link" })).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByText(/e2e-community-/).first()).toBeVisible();
+    await expect(page.getByText(COMMUNITY_EMAIL_PREFIX, { exact: false }).first()).toBeVisible();
   });
 
   test("ownership transfers and returns (community org)", async ({ page, browser }) => {
@@ -88,8 +93,8 @@ test.describe.serial("members and roles", () => {
         cPage.request,
         `/api/orgs/${communityOrg.id}/members`,
       );
-      const proMember = members.data!.find((m) => m.email.startsWith("e2e-pro-"))!;
-      const communityOwner = members.data!.find((m) => m.email.startsWith("e2e-community-"))!;
+      const proMember = members.data!.find((m) => m.email.startsWith(PRO_EMAIL_PREFIX))!;
+      const communityOwner = members.data!.find((m) => m.email.startsWith(COMMUNITY_EMAIL_PREFIX))!;
 
       // Community owner → Pro user.
       const away = await apiJson(
