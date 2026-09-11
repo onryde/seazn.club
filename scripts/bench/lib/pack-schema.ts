@@ -457,9 +457,31 @@ export const PackStage = z.strictObject({
   /** Cross-stage progression, carried verbatim for the same reason as
    *  `config` — the authority is the product's `ProgressionSchema`. */
   progression: z.record(z.string(), PackJsonValue).optional(),
-  /** The REAL historical seed order for this stage, as entrant refs. */
+  /** The REAL historical seed order for this stage, as entrant refs.
+   *
+   *  DOCUMENTATION, NOT WIRING — read this before relying on it (B06b). No
+   *  code in `scripts/bench` reads this field: `seed.ts` does not forward it,
+   *  and the product derives its own order from each entrant's `seed` column
+   *  (`usecases/stages.ts:782` builds the seeds map from `entrants[].seed`,
+   *  and `roundrobin.ts:62`'s `seedOrder` sorts by it). What this field DOES
+   *  buy is validation — `PackSchema`'s ref walk refuses a seeding that names
+   *  an unknown entrant or one from another division — plus a written record
+   *  of the real historical order for a reader comparing pack to source.
+   *
+   *  To actually control a seeded order, set `PackEntrant.seed` (forwarded at
+   *  `seed.ts:527`). To control a knockout DRAW, see `bracket` below. */
   seeding: z.array(PackRef).optional(),
-  /** The REAL historical bracket, slot by slot. */
+  /** The REAL historical bracket, slot by slot.
+   *
+   *  DOCUMENTATION, NOT WIRING, exactly as `seeding` above — and the more
+   *  dangerous of the two, because declaring a bracket reads like it seeds
+   *  one. It does not. A knockout stage's draw is set by
+   *  `config.slotOrder` (a list of SEED NUMBERS with `null` for a bye,
+   *  `bracket.ts:135-152`), or by `config.byes` (entrant ids) if the draw may
+   *  be the product's own; the two cannot be combined (`bracket.ts:130`).
+   *  Suite 11 pins both its divisions with `config.slotOrder`, and asserts
+   *  the round-0 fixtures back, precisely because a dropped draw would
+   *  otherwise surface as ninety-five wrong results rather than one error. */
   bracket: z.array(PackBracketSlot).optional(),
 });
 export type PackStage = z.infer<typeof PackStage>;
