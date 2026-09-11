@@ -36,13 +36,20 @@ const CASES: Case[] = [
   // closed-state shell with no sponsor masthead. RS006 owns the rebuilt
   // public stepper and reintroduces whatever image contracts it needs.
   {
-    name: "[competitionSlug]/page.tsx sponsor logo",
-    file: join(SRC_ROOT, "app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx"),
+    // W2 Task 12 LIFTED the perimeter board out of
+    // `[competitionSlug]/page.tsx` into its own component, so the page can
+    // hand it to the landing root as a slot. Same markup, same tier map, new
+    // file — and the helper it reads is `panel(s)` rather than the page's old
+    // one-letter `c(s)`. The page itself keeps its two deliberate `<img>`
+    // (competition branding.banner/logo) and no longer converts anything, so
+    // it has no case of its own here any more.
+    name: "sponsors-board.tsx sponsor logo",
+    file: join(SRC_ROOT, "components/public-site/sponsors-board.tsx"),
     srcExpr: "s.logo",
     // v10 perimeter board: both dimensions come from the tier panel map —
     // still a locked width/height pair (per-tier 48/32/24/20), no CLS drift.
-    width: "c(s).logo",
-    height: "c(s).logo",
+    width: "panel(s).logo",
+    height: "panel(s).logo",
   },
   {
     name: "[orgSlug]/layout.tsx org logo",

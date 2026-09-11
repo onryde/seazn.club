@@ -71,18 +71,43 @@ function hubMatch(
   };
 }
 
-// `showDivision` is passed STRAIGHT THROUGH, never `?? true`. The helper used
-// to substitute its own default, so every test rendered the chip-visible arm
-// while the component itself defaulted to hidden — the fixture picked the arm
-// and the real default went unwitnessed in both directions. Now an omitted
-// `showDivision` here is an omitted `showDivision` there, so the live test
-// below is what proves the default, and the `showDivision: false` test proves
-// the other arm.
-function card(m: HubMatchT, now: number = NOW, opts: { showDivision?: boolean } = {}) {
+// `showDivision` and `crestSize` are passed STRAIGHT THROUGH, never `?? …`.
+// The helper used to substitute its own default for `showDivision`, so every
+// test rendered the chip-visible arm while the component itself defaulted to
+// hidden — the fixture picked the arm and the real default went unwitnessed in
+// both directions. Now an omitted prop here is an omitted prop there, so the
+// live test below is what proves the default and the explicit test proves the
+// other arm. `crestSize` follows the same rule for the same reason.
+function card(
+  m: HubMatchT,
+  now: number = NOW,
+  opts: { showDivision?: boolean; crestSize?: 24 | 32 } = {},
+) {
   return renderToStaticMarkup(
-    <MatchCard match={m} dict={dict} locale="en" now={now} showDivision={opts.showDivision} />,
+    <MatchCard
+      match={m}
+      dict={dict}
+      locale="en"
+      now={now}
+      showDivision={opts.showDivision}
+      crestSize={opts.crestSize}
+    />,
   );
 }
+
+/** One side row's markup — from its testid to whatever follows it, the other
+ *  side row or the card's footer row. A negative assertion read off the whole
+ *  card passes on a card that says the same thing somewhere else (Task 9
+ *  review F4), and "this side is NOT painted" is exactly that shape. */
+const sideHtml = (h: string, i: 0 | 1): string => {
+  const at = h.indexOf(`data-testid="mh-match-side-${i}"`);
+  expect(at, `side ${i} is in the markup`).toBeGreaterThan(-1);
+  const ends = [
+    h.indexOf(`data-testid="mh-match-side-`, at + 1),
+    h.indexOf(`class="mt-2 flex`, at + 1),
+  ].filter((x) => x > -1);
+  return h.slice(at, ends.length > 0 ? Math.min(...ends) : h.length);
+};
 
 describe("MatchCard", () => {
   const live = hubMatch({
@@ -382,5 +407,73 @@ describe("MatchCard", () => {
       }),
     );
     expect(withoutBadge).toContain(">BB<");
+  });
+
+  it("a side's own COLOUR paints its crest, per side — the field crossed the wire and was read by nothing", () => {
+    // `Side.colour` (`match-centre-schema.ts:11`) is populated for every hub
+    // fixture — `competition-hub.ts`'s `hubSides` off `primaryColour`, and
+    // `match-centre-load.ts:207` off the same `colors.home_primary` — and this
+    // card passed only `badgeUrl`. So one badge-less club rendered as a
+    // coloured tile on the Teams tab and a grey one here, on the same page.
+    //
+    // TWO colours in one render, not one: a single painted side is satisfied by
+    // a card that paints a constant, and the two inks differ as well as the two
+    // backgrounds, so a hardcoded white ink cannot pass either.
+    const h = card(
+      hubMatch({
+        header: {
+          sides: [
+            { entrantId: "e1", name: "Rochford Ramblers", short: "RRA", colour: "#123456", badgeUrl: null },
+            { entrantId: "e2", name: "Canvey Canaries", short: "CAN", colour: "#ffdd00", badgeUrl: null },
+          ],
+        },
+      }),
+    );
+    expect(sideHtml(h, 0)).toContain("background:#123456");
+    expect(sideHtml(h, 0)).toContain("color:#ffffff");
+    expect(sideHtml(h, 0)).toContain(">RR<");
+    expect(sideHtml(h, 1)).toContain("background:#ffdd00");
+    expect(sideHtml(h, 1)).toContain("color:#0f172a");
+    expect(sideHtml(h, 1)).toContain(">CC<");
+    // Neither side's paint leaks into the other's row.
+    expect(sideHtml(h, 0)).not.toContain("#ffdd00");
+    expect(sideHtml(h, 1)).not.toContain("#123456");
+  });
+
+  it("no colour → the neutral tile, and a badge still beats a colour (the two negatives the painted arm needs)", () => {
+    const mixed = card(
+      hubMatch({
+        header: {
+          sides: [
+            { entrantId: "e1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null },
+            { entrantId: "e2", name: "Queens Park", short: "QNS", colour: "#123456", badgeUrl: "https://x/q.png" },
+          ],
+        },
+      }),
+    );
+    // Side 0: a colour of null is the same grey tile it has always been.
+    expect(sideHtml(mixed, 0)).not.toContain("style=");
+    expect(sideHtml(mixed, 0)).toContain(">BB<");
+    // Side 1: a club with BOTH shows its badge and paints nothing — otherwise a
+    // club that uploaded a crest would get a coloured box behind a transparent
+    // PNG.
+    expect(sideHtml(mixed, 1)).toContain(`src="https://x/q.png"`);
+    expect(sideHtml(mixed, 1)).not.toContain("background:");
+    expect(sideHtml(mixed, 1)).not.toContain(">QP<");
+  });
+
+  it("the crest is 24 by default and 32 when the caller asks — a size prop that changes nothing is a dead prop", () => {
+    // Task 7's review deleted a `compact` prop that shipped declared-but-dead:
+    // the Overview's live rail passed it and got an identical card back with
+    // nothing red to say so. `crestSize` exists for that same caller, so it
+    // owes the differential that would have caught `compact`.
+    const plain = hubMatch();
+    expect(card(plain)).toContain("h-6 w-6");
+    expect(card(plain)).not.toContain("h-8 w-8");
+    expect(card(plain, NOW, { crestSize: 32 })).toContain("h-8 w-8");
+    expect(card(plain, NOW, { crestSize: 32 })).not.toContain("h-6 w-6");
+    // The explicit 24 is the same render as the omitted one: the default is the
+    // component's, not the helper's.
+    expect(card(plain, NOW, { crestSize: 24 })).toBe(card(plain));
   });
 });

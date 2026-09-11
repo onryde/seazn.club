@@ -48,10 +48,37 @@ export const W2_KEYS = [
   // over `LandingStatus["kind"]` with a `never` default, which makes tsc — not
   // a reviewer — reject a rung with no branch.
   "landing.status.empty", "landing.status.live.one", "landing.status.live.other", "landing.status.next", "landing.status.matchDay", "landing.status.finished", "landing.status.dates", "landing.status.datesFrom",
+  // `landing.today` is Task 11's, and it is here for the reason the header
+  // above states rather than because someone remembered. The Overview's
+  // next-up SCOPE picks the heading as well as the window, so the `match_day`
+  // rung emits this key unconditionally — a PRODUCER, exactly like
+  // `landing.status.matchDay` — and it arrived in round 2 of Task 11, after
+  // this list was last written. Its fr/nl values were asserted by nothing until
+  // now, which is the same gap in the same file that let `matchDay` ship
+  // missing from four locales.
+  "landing.today",
   "landing.liveNow", "landing.nextUp", "landing.tables", "landing.register", "landing.present", "landing.divisions.one", "landing.divisions.other",
   "landing.entrants.one", "landing.entrants.other", "landing.liveCount.one", "landing.liveCount.other", "landing.sponsors", "landing.presentedBy", "landing.partners", "landing.noDivisions",
+  // The competition page's `<meta name="description">` fallback (Task 12).
+  // `lib/public-meta.ts` used to hardcode the English sentence for all four
+  // locales — the competition twin of `division.metaDescription`, which has
+  // existed here since Task 6. The helper now takes the resolved fallback and
+  // the PAGE resolves it, so this is the only place the sentence lives.
+  "landing.metaDescription",
   // matches hub
   "matchesHub.filter.live", "matchesHub.filter.upcoming", "matchesHub.filter.completed", "matchesHub.filtersLabel", "matchesHub.divisionsLabel", "matchesHub.division.all",
+  // The called-off statuses. `MatchCard` renders `header.statusLine` for the
+  // first time on this branch, and the builder emits exactly these six there
+  // (`competition-hub.ts`'s `STATUS_LINE_KEYS`) for abandoned / cancelled /
+  // forfeited / postponed / walkover, with `other` as the catch-all.
+  //
+  // Booked by this file's own rule — "a key is owed by what can EMIT it, never
+  // by what happens to read it" — and NOT because a hole was found: all six are
+  // present and translated in all four locales today. That is precisely the
+  // shape of the `landing.status.matchDay` miss this file documents, which was
+  // also fine right up until it was not. Final review C7.
+  "matchCentre.status.abandoned", "matchCentre.status.cancelled", "matchCentre.status.forfeited",
+  "matchCentre.status.postponed", "matchCentre.status.walkover", "matchCentre.status.other",
   // NO `matchesHub.startsAt`. It was `"{when}"` — byte-identical in all four
   // locales, because a template that is nothing but its own argument cannot
   // differ by locale. A dictionary round trip that returns its input is not a
@@ -123,6 +150,10 @@ describe("W2 public dictionary coverage", () => {
       "matchesHub.round": ["round"],
       // matches-hub chrome (Task 11).
       "matchesHub.timesIn": ["tz"],
+      // The competition page's meta description (Task 12) — the page passes
+      // both, so a locale that drops one ships a sentence with a hole in it
+      // straight into every link preview and search result.
+      "landing.metaDescription": ["competition", "org"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

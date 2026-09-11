@@ -48,15 +48,32 @@ export interface MatchCardProps {
    * passes `false`.
    */
   showDivision?: boolean;
-  // NO `compact`. The brief declared one and its card markup had no branch for
-  // it, so the prop shipped dead: Task 11's Overview tab passes `compact` on
-  // every live-rail card and would have got an identical card back, with
-  // nothing red to say so. A declared-but-dead prop is worse than an absent
-  // one, because the caller believes it works. Task 11 adds it when it has a
-  // dense variant and a test that proves the two differ.
+  /**
+   * The crest's box, 24 unless the caller asks for 32. Stated here and in the
+   * destructure below rather than left to `undefined`.
+   *
+   * 32 is for the Overview's live-now rail, which is the one place a card is a
+   * hero rather than a row — two names, a score and the whole card. Everywhere
+   * else 24 is right: in a list of forty cards the NAME is the identifier, and
+   * a bigger badge costs name width on a 320px phone.
+   *
+   * This is the prop `compact` should have been. The brief declared a `compact`
+   * whose card markup had no branch for it, so it shipped dead: the Overview
+   * passed it on every rail card and got an identical card back with nothing
+   * red to say so. `crestSize` has a branch — it reaches `EntityLogo`'s `size`
+   * — and `match-card.test.tsx` renders both values and asserts they differ.
+   */
+  crestSize?: 24 | 32;
 }
 
-export function MatchCard({ match: m, dict, locale, now, showDivision = true }: MatchCardProps) {
+export function MatchCard({
+  match: m,
+  dict,
+  locale,
+  now,
+  showDivision = true,
+  crestSize = 24,
+}: MatchCardProps) {
   const s0 = m.header.sides[0];
   const s1 = m.header.sides[1];
 
@@ -120,7 +137,19 @@ export function MatchCard({ match: m, dict, locale, now, showDivision = true }: 
         data-winner={isWinner ? "true" : undefined}
         className={`flex items-center gap-2 ${isWinner || m.header.battingIndex === i ? "font-semibold text-ink" : "text-ink"}`}
       >
-        <EntityLogo src={side.badgeUrl} name={side.name} size={24} />
+        {/* `colour` is the entrant's own, and until it was passed here it was
+            an inert seam in its purest form: `Side.colour` is built for every
+            hub fixture (`competition-hub.ts`'s `hubSides`, and
+            `match-centre-load.ts:207` for W1) and NOTHING read it, so the same
+            badge-less club was a coloured tile on the Teams tab and a grey one
+            on every card of the same page. `EntityLogo` owns what a colour is
+            allowed to be; this card only forwards it. */}
+        <EntityLogo
+          src={side.badgeUrl}
+          name={side.name}
+          colour={side.colour}
+          size={crestSize}
+        />
         {/* `min-w-0` is what lets `truncate` engage on a flex item — see
             AGENTS.md, "`truncate` needs `min-w-0` on the whole ancestor
             chain". */}
