@@ -49,7 +49,7 @@ on:
 jobs:
   deploy-stg:
     name: Deploy to placement-stg
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # Its OWN group. A staging deploy must never queue behind, or cancel, a
     # production rollout — and, symmetrically, must not be cancelled
     # mid-flight by the next merge either (a killed `flyctl deploy` can leave
@@ -85,14 +85,14 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_TOKEN }}
 
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
       # Pushed to placement-stg's OWN registry namespace. Each Fly app has its
       # own; tagging into `registry.fly.io/placement` here would put a staging
       # image in production's registry, one `flyctl deploy --image` away from
       # being shipped to real organisers.
       - name: Build and push the image
-        uses: useblacksmith/build-push-action@v2
+        uses: docker/build-push-action@v6
         with:
           context: services/placement
           push: true
