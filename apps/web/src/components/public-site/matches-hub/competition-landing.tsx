@@ -127,10 +127,14 @@ export function activeTab(
  * exclusive instead of claiming a fallback chain.
  */
 export function arrivalTab(deepLinked: string | null, selfWritten: string | null): string | null {
-  // `null` self-written means nothing has been tapped yet, and a null deep link
-  // is no arrival — neither case can be an echo, and `null === null` must not
-  // be read as one.
-  if (deepLinked === null || selfWritten === null) return deepLinked;
+  // ONE line, and the `null` cases need no guard of their own — which is worth
+  // stating because the first version of this function carried one
+  // (`if (deepLinked === null || selfWritten === null) return deepLinked`) and
+  // the sweep proved it EQUIVALENT: deleting it changed no answer on any of the
+  // five input shapes. `null === null` does read as an echo here, and returning
+  // `null` for it is the same answer the guard gave. A redundant line that
+  // claims to prevent something is the overclaim class this wave keeps paying
+  // for, so it is gone rather than kept for reassurance.
   return deepLinked === selfWritten ? null : deepLinked;
 }
 

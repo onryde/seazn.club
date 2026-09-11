@@ -63,8 +63,24 @@ const rt = vi.hoisted(() => {
 });
 vi.mock("@/lib/supabase-browser", () => ({ supabaseBrowser: () => ({ channel: rt.channel }) }));
 
+/** The ONE browser fact this environment cannot produce: what `useTabParam`
+ *  reads out of a live `window.location`. Both harnesses answer
+ *  `useSyncExternalStore` with the SERVER snapshot by contract, so `deepLinked`
+ *  is null in every render test and the component's use of it is invisible —
+ *  which is exactly where the final review found C1 hiding.
+ *
+ *  So the browser SOURCE is stubbed and nothing else: `arrivalTab`,
+ *  `activeTab`, `readTabParam` and `writeTabParam` all stay real (the round-trip
+ *  test below uses the real pair). Stubbing the source is what lets the WIRING
+ *  be tested; stubbing the logic would prove the stub. */
+const tabParam = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock("../use-tab-param", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../use-tab-param")>()),
+  useTabParam: () => tabParam.value,
+}));
+
 import { fetchCompetitionHub } from "../competition-hub-data";
-import { HUB_POLL_MS } from "../use-live-competition";
+import { HUB_IDLE_POLL_MS, HUB_POLL_MS } from "../use-live-competition";
 import { readTabParam, writeTabParam } from "../use-tab-param";
 import { OverviewTab } from "../matches-hub/overview-tab";
 import { MatchesTab } from "../matches-hub/matches-tab";
@@ -510,6 +526,7 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
     vi.unstubAllEnvs();
     vi.resetAllMocks();
     rt.reset();
+    tabParam.value = null;
   });
 
   /** The transport the root advertised, off the live tree. */
@@ -672,6 +689,67 @@ describe("CompetitionLanding — a poll re-renders the ACTIVE tab in place", () 
       .filter((el) => Array.isArray(propsOf(el)["tabs"]))
       .flatMap((el) => (propsOf(el)["tabs"] as { id: string }[]).map((x) => x.id));
     expect(railIds).toContain("table");
+    expect(activeId()).toBe("mh-tab-panel-overview");
+  });
+
+  it("WIRING: the component neutralises its own URL write, not just the helper in isolation", async () => {
+    // The sweep found `arrivalTab` pinned and its USE unpinned: deleting
+    // `setSelfWritten(tab)`, and feeding the live parameter straight into
+    // `activeTab`, both survived — because `deepLinked` is null in every other
+    // test here, so the whole branch is inert. With the browser source stubbed
+    // the wiring becomes visible.
+    //
+    // The sequence is the spectator's: arrive on ?tab=stats, tap Matches, the
+    // board empties, the board comes back.
+    tabParam.value = "stats";
+    const board1 = board("premier", "runs", [leader("p1", "Arjun Mehta", null)]);
+    // Matches AND Stats, so the arrival (`stats`) and the tap (`matches`) name
+    // two different real tabs.
+    const full = hubDoc({ realtime: false, matches: ONE_LIVE.matches, leaders: [board1] });
+    // Every fixture withdrawn: `deriveHubTabs` drops the Matches tab, which is
+    // the tab that was tapped. Stats survives, so the rail still has three.
+    const noMatches = hubDoc({ realtime: false, leaders: [board1] });
+    expect(full.tabs).toContain("matches");
+    expect(noMatches.tabs).not.toContain("matches"); // the premise, asserted
+    vi.mocked(fetchCompetitionHub).mockResolvedValueOnce(noMatches);
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(full);
+
+    const island = mount(full);
+    const activeId = () =>
+      propsOf(island.tree().find((el) => String(propsOf(el)["role"]) === "tabpanel")!)[
+        "data-testid"
+      ];
+    // The arrival is honoured — the positive pair, and proof the stub is live.
+    expect(activeId()).toBe("mh-tab-panel-stats");
+
+    // A tap on Matches. The real `onChange` calls the real `writeTabParam`
+    // against the stubbed window; the browser would then report the new value,
+    // which is what moving `tabParam.value` models.
+    const rail = island.tree().find((el) => Array.isArray(propsOf(el)["tabs"]));
+    (propsOf(rail!)["onChange"] as (id: string) => void)("matches");
+    tabParam.value = "matches";
+    expect(activeId()).toBe("mh-tab-panel-matches");
+
+    // The Matches data goes (every fixture withdrawn), so the tab leaves the
+    // rail and the render-phase clear nulls `manualTab`.
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+    expect(activeId()).toBe("mh-tab-panel-overview");
+
+    // …and comes back. `noMatches` has NO live match, so the hub has re-armed
+    // its poll at the IDLE cadence — advancing by `HUB_POLL_MS` here fires
+    // nothing at all, and the assertion below passed vacuously against a
+    // document that never changed. Found by probing what the test actually saw
+    // rather than by reading it, which is why the rail is asserted first: if
+    // the Matches tab is not back, this test is not testing anything.
+    await vi.advanceTimersByTimeAsync(HUB_IDLE_POLL_MS);
+    const railIds = island
+      .tree()
+      .filter((el) => Array.isArray(propsOf(el)["tabs"]))
+      .flatMap((el) => (propsOf(el)["tabs"] as { id: string }[]).map((x) => x.id));
+    expect(railIds).toContain("matches"); // the premise: the data really returned
+
+    // Before the fix the echoed `?tab=matches` matched the arrival rung and
+    // pulled the spectator into Matches mid-read.
     expect(activeId()).toBe("mh-tab-panel-overview");
   });
 

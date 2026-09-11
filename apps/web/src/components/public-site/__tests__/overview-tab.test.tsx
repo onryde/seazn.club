@@ -1032,6 +1032,18 @@ describe("OverviewTab — next up and the table previews", () => {
     const single = render(one);
     expect(single.match(/data-testid="mh-table-preview-[a-z-]+-division"/g)).toHaveLength(1);
     expect(single).toContain(`data-testid="mh-table-preview-premier-league-division"`);
+    // PRESENT is not SHOWN, and the sweep is why this line exists: reinstating
+    // the gate as `hidden={doc.divisions.length <= 1}` leaves the testid in the
+    // markup and restores the defect, so a containment check alone passes on
+    // it. `hidden` is the one attribute that makes the element render and not
+    // render at the same time.
+    for (const h2 of [h, single]) {
+      const tag = h2.slice(
+        h2.lastIndexOf("<", h2.indexOf(`data-testid="mh-table-preview-premier-league-division"`)),
+        h2.indexOf(">", h2.indexOf(`data-testid="mh-table-preview-premier-league-division"`)) + 1,
+      );
+      expect(tag).not.toContain("hidden");
+    }
   });
 
   it("the preview division name is an <h3> — the section's own heading is the h2 above it", () => {
