@@ -1060,19 +1060,33 @@ export const PackExpectedOutcome = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("draw") }),
   z.strictObject({ kind: z.literal("tie") }),
   z.strictObject({ kind: z.literal("no_result") }),
-  /** NO `method`, deliberately. The engine's own `award` variant is
-   *  `{kind, winner, score?}` (`packages/engine/src/core/types.ts:128-131`) —
-   *  it has no `method` field at all, so a folded award outcome can never
-   *  carry one. A pack writing `{kind: "award", method: "walkover"}` would
-   *  parse cleanly and then be UNSATISFIABLE: the comparison reads
-   *  `undefined` from the fold and reds forever. Same class as the `mtbTo`
-   *  trap in header note 7, failing closed rather than open, which makes it an
-   *  authoring dead end rather than a hole — and the fix is to make it
-   *  unwritable. `win` keeps `method` because `MatchOutcome`'s win variant
-   *  declares one (`types.ts:122`). */
+  /** `method` IS writable here, since 2026-09-11 — and the note that used to
+   *  stand in this place said the opposite, for a good reason that stopped
+   *  being true.
+   *
+   *  It said: the engine's `award` variant is `{kind, winner, score?}` with no
+   *  `method` at all, so a pack writing `{kind: "award", method: "walkover"}`
+   *  would parse and then be UNSATISFIABLE — the comparison reads `undefined`
+   *  from the fold and reds forever — and the fix is to make it unwritable.
+   *  That was correct against the engine of the day. It was also the reason
+   *  suite 11 encoded its walkover as an administrative 1-0, which credited a
+   *  set nobody threw to a real named player's stats.
+   *
+   *  `MatchOutcome`'s award variant now declares `method` (`types.ts`), fed
+   *  verbatim from `core.forfeit`'s required `reason` by every sport module
+   *  except boardgame (`packages/engine/src/core/forfeit-reason.test.ts`
+   *  sweeps them). So the field is satisfiable, and a pack that folds a
+   *  forfeit can assert WHY the award happened rather than only that it did.
+   *
+   *  A POST-FREEZE SCHEMA CHANGE, declared rather than slipped in: `_RULES.md`
+   *  §4 freezes `PackSchema` at B06b's merge and this lands after it. It is
+   *  additive and optional — every pack written against the frozen shape still
+   *  parses byte-identically — and it exists to let a pack stop asserting
+   *  something false. */
   z.strictObject({
     kind: z.literal("award"),
     winner: PackRef,
+    method: z.string().min(1).optional(),
   }),
 ]);
 export type PackExpectedOutcome = z.infer<typeof PackExpectedOutcome>;

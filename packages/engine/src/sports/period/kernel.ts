@@ -11,7 +11,13 @@
 // scorer decides (coincidentals, delayed penalties → core.note for context).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, resolveVoids, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import {
+  forfeitOf,
+  isStrictFold,
+  resolveVoids,
+  type CoreEv,
+  type EventEnvelope,
+} from "../../core/events.ts";
 import { GameTime, addDuration, compareGameTime, gameTimeOf } from "../../core/time.ts";
 import { periodClockPosition, type MatchPosition } from "../../core/position.ts";
 import type { Rng } from "../../core/rng.ts";
@@ -1391,7 +1397,7 @@ function applyShot(
   return { ...state, shots: [...(state.shots ?? []), record] };
 }
 
-function applyForfeit(state: PeriodState, by: string): PeriodState {
+function applyForfeit(state: PeriodState, by: string, reason: string): PeriodState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -1404,7 +1410,7 @@ function applyForfeit(state: PeriodState, by: string): PeriodState {
     ...sweepEndOfMatch(state),
     phase: "done",
     goals,
-    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], score: goals, method: reason },
   };
 }
 
@@ -2364,7 +2370,7 @@ export function makePeriodModule(
       case shotType:
         return applyShot(state, parsePayload(PeriodShot, ev.payload, ev.type), shotTracking);
       case "core.forfeit":
-        return applyForfeit(state, (ev.payload as { by: string }).by);
+        return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
       case "core.abandon":
         return applyAbandon(state);
       case "core.finalize":

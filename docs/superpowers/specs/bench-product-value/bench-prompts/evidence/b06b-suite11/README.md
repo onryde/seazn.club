@@ -30,6 +30,49 @@ its timetable is DERIVED from a session-level schedule, so a breach there is
 our own arithmetic, which is what the red branch is for and what it caught
 earlier in this wave.
 
+## RE-RUN 2026-09-11 — the walkover is a forfeit now, not a fabricated 1-0
+
+The reports in both leg directories are from a re-run at
+`fix/forfeit-carries-its-reason`, NOT from the original B06b run. The pack
+changed shape, so the earlier reports described a pack that no longer exists
+and were replaced rather than kept beside these.
+
+What changed. Div A match 35 — Ian White w/o Sandro Eric Sosing — used to be
+encoded as a single administrative 1-0 set, because this wave recorded (wrongly)
+that the product had no route to forfeit an existing fixture. It does:
+`core.forfeit` is postable on any fixture through the ordinary scoring door
+(`usecases/scoring.ts` applies no event-type allowlist — the sport module's
+reducer is the only validator), `append-event.ts:127` derives the `forfeited`
+status from it, and it folds to an award carrying NO score.
+
+Proven at the database rather than from the gate, after leg A:
+
+| division | ext_key | status | outcome kind | method | score_events |
+|---|---|---|---|---|---|
+| `pdc-world-championship-2025` | `se-r0-i19` | **forfeited** | **award** | **walkover** | **2** |
+| `pdc-women-s-series-2024-event-1` | `se-r0-i19` | decided | win | regulation | 7 |
+
+Two events on the walkover, `core.start` and `core.forfeit`, neither of them a
+score. Pack events fell 1,426 -> 1,425, and that one event is a set nobody threw
+leaving a real named player's statistics — leaderboard and career expectations
+derive from the streams, so the fiction was flowing into player stats as real.
+The second row is Div B's same-keyed fixture: `se-r{round}-i{index}` is unique
+per DIVISION, not globally, which is worth knowing before writing that query.
+
+Both legs at this commit: **GATE GREEN, 0 errors, provenance 100% (205/205),
+25 oracles all passed with identical verdicts across the legs** (23 with a
+subject, 2 NO SUBJECT).
+
+### A trap in the two-leg protocol itself, found here
+
+`reportDir` is keyed by the COMMIT SHA, so running leg B at the same commit
+OVERWRITES leg A's `report.json` in place. Nothing warns. The overwrite is
+invisible unless you notice the preflight status disagreeing with the leg you
+believe you ran — which is exactly how leg A nearly got published here as
+`placement: absent`. Copy each leg's report into its evidence directory in the
+SAME command that runs it, and check `preflight.placement.status` in the saved
+file rather than trusting the directory name.
+
 ## The open finding: the solver does not survive a real fixture count
 
 Read this before quoting these reports. The optimized path never ran in

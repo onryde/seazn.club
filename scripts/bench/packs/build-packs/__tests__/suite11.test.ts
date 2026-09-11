@@ -118,15 +118,38 @@ describe("suite11 — Div A encoding (sets)", () => {
     }
   });
 
-  it("the walkover is one administrative set, recorded as an adaptation", () => {
+  // REWRITTEN 2026-09-11. This test used to assert the walkover was "one
+  // administrative set" folding to `{kind: "win", method: "regulation"}`,
+  // because the pack believed the product had no route to forfeit an existing
+  // fixture. It has one — `core.forfeit` through the ordinary scoring door —
+  // and the old encoding credited a set nobody threw to Ian White's statistics.
+  it("the walkover is a forfeit carrying NO score, and states why", () => {
     const wo = streamsOf("d-worlds").find((s) => s.fixtureExtKey === "se-r0-i19");
     if (wo === undefined) throw new Error("no walkover stream");
-    expect(scoresOf(wo)).toHaveLength(1);
-    expect(scorePayload(scoresOf(wo)[0]).by).toBe(`@${entrantRef("a", "Ian White")}`);
+
+    // The point of the change: nothing was scored, so nothing is recorded.
+    expect(scoresOf(wo)).toHaveLength(0);
+
+    const forfeits = wo.events.filter((e) => e.type === "core.forfeit");
+    expect(forfeits).toHaveLength(1);
+    const payload = forfeits[0]!.payload as { by: string; reason: string };
+    // Awarded AGAINST the side that did not play — asserting the loser's ref
+    // rather than the winner's is what makes this test fail if the sides are
+    // ever swapped, which asserting "a forfeit exists" would not.
+    expect(payload.by).toBe(`@${entrantRef("a", "Sandro Eric Sosing")}`);
+    // A PAYLOAD ref, so it carries the sigil; an unsigilled one is read as a
+    // literal and only stage 0 would catch it.
+    expect(payload.by.startsWith("@")).toBe(true);
+    expect(payload.reason).toBe("walkover");
+
     const expected = (committed.expected.matches ?? []).find((m) => m.fixtureExtKey === "se-r0-i19");
-    // "regulation", not "walkover": stage 0 refuses the latter because the
-    // product cannot express it. The adaptation carries the reason.
-    expect(expected?.outcome).toMatchObject({ kind: "win", method: "regulation" });
+    // "walkover", not "regulation" — the module carries the forfeit's reason
+    // onto the award's method, so the pack asserts what the fold really says.
+    expect(expected?.outcome).toMatchObject({
+      kind: "award",
+      winner: entrantRef("a", "Ian White"),
+      method: "walkover",
+    });
     expect((committed.meta.adaptations ?? []).some((a) => /Ian White/.test(a.what))).toBe(true);
   });
 });

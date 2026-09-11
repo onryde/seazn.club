@@ -7,7 +7,13 @@
 // outcomes, and all result math reads only the folded set ledger.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, resolveVoids, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import {
+  forfeitOf,
+  isStrictFold,
+  resolveVoids,
+  type CoreEv,
+  type EventEnvelope,
+} from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   scoreSegment,
@@ -795,7 +801,7 @@ function applyExpedite(state: SetBasedState): SetBasedState {
 
 // Forfeit — spec 04 §3 / volleyball.md §7: award the match to the opponent;
 // completed sets already stand in the ledger.
-function applyForfeit(state: SetBasedState, by: string): SetBasedState {
+function applyForfeit(state: SetBasedState, by: string, reason: string): SetBasedState {
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
   }
@@ -803,7 +809,7 @@ function applyForfeit(state: SetBasedState, by: string): SetBasedState {
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide] },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
   };
 }
 
@@ -2355,7 +2361,7 @@ export function makeSetBasedModule(preset: SetBasedPreset): SetBasedModule {
           parsePayload(SetBasedExpediteStart, ev.payload, ev.type);
           return applyExpedite(state);
         case "core.forfeit":
-          return applyForfeit(state, (ev.payload as { by: string }).by);
+          return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
         case "core.abandon":
           return applyAbandon(state);
         case "core.finalize":

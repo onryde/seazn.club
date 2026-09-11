@@ -260,7 +260,7 @@ describe("set-based match lifecycle", () => {
         { by: "A", reason: "injury, no subs" },
       ]),
     );
-    expect(state.outcome).toEqual({ kind: "award", winner: "H" });
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", method: "injury, no subs" });
     const [home, away] = volleyball.standingsDelta(state.outcome!, cfg, { kind: "league" }, state);
     expect([home.points, away.points]).toEqual([3, 0]);
     expect(home.points + away.points).toBe(3); // still inside declaredPointsSets

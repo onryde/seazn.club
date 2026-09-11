@@ -184,7 +184,9 @@ describe("carrom golden: walkover", () => {
   );
 
   it("awards the match to the opponent", () => {
-    expect(state.outcome).toEqual({ kind: "award", winner: "H" });
+    // `method` is the forfeit's own `reason`, carried verbatim — the field
+    // that lets a reader tell this walkover from a disqualification.
+    expect(state.outcome).toEqual({ kind: "award", winner: "H", method: "no-show" });
   });
 
   it("pays win/loss points; the ledger keeps only what was played", () => {

@@ -128,6 +128,13 @@ export const MatchOutcome = z.discriminatedUnion("kind", [
     kind: z.literal("award"),
     winner: EntrantId,
     score: z.unknown().optional(),
+    // WHY the award was made, carried verbatim from `core.forfeit`'s required
+    // `reason` (`events.ts:52`). Without it a walkover, a disqualification and
+    // a retirement fold to byte-identical outcomes, which is what the B06b
+    // darts bench hit: the only way left to state a walkover was a result card
+    // crediting a score nobody played. Free-form for the same reason `win`'s
+    // `method` is — the caller's vocabulary, not the engine's.
+    method: z.string().min(1).optional(),
   }),
 ]);
 export type MatchOutcome = z.infer<typeof MatchOutcome>;

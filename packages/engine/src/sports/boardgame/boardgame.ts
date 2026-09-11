@@ -10,7 +10,7 @@
 // tiebreakers.ts).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
-import { isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
+import { forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
   EntrantId,
@@ -615,7 +615,17 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         return applyPairing(state, parsePayload(BoardgamePairing, ev.payload, ev.type), isStrictFold(ctx));
       case "core.forfeit": {
         if (state.phase !== "live") wrongPhase(`forfeit not allowed in phase "${state.phase}"`);
-        const by = (ev.payload as { by: string }).by;
+        // The REASON is deliberately not carried onto the outcome here, and
+        // boardgame is the only module that does not carry it. Its
+        // `outcome.method` is already a MEANINGFUL typed value — the
+        // `BoardgameMethod` enum, "forfeit" — where the other ten leave the
+        // field empty, so filling it from `core.forfeit`'s free-text reason
+        // would overwrite a classification with prose and cost more than it
+        // buys. Boardgame states a walkover through its own `boardgame.result`
+        // method enum instead (padSpec offers it; see the "single forfeit
+        // rides boardgame.result's own method enum" test). Recording the
+        // finer-grained reason for boardgame too is a separate, smaller gap.
+        const { by } = forfeitOf(ev.payload);
         return decideResult(state, state.entrants[opponent(sideOf(state, by))], "forfeit");
       }
       case "core.abandon":

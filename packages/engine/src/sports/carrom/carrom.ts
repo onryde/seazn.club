@@ -13,6 +13,7 @@ import {
   resolveVoids,
   type CoreEv,
   type EventEnvelope,
+  forfeitOf,
 } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import { currentUnit, unitNumber, unitSegment, type MatchPosition } from "../../core/position.ts";
@@ -447,7 +448,7 @@ function applyAdjust(
 
 // Walkover — carrom.md §7: the match is awarded to the opponent; completed
 // games stand in the ledger.
-function applyForfeit(state: CarromState, by: string): CarromState {
+function applyForfeit(state: CarromState, by: string, reason: string): CarromState {
   const winnerSide = opponent(sideOf(state, by));
   if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
     wrongPhase("match already over");
@@ -455,7 +456,7 @@ function applyForfeit(state: CarromState, by: string): CarromState {
   return {
     ...state,
     phase: "done",
-    outcome: { kind: "award", winner: state.entrants[winnerSide] },
+    outcome: { kind: "award", winner: state.entrants[winnerSide], method: reason },
   };
 }
 
@@ -854,7 +855,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
         // Reserved fine fidelity — carrom.md §6, key `scoring.strike_by_strike`.
         return invalid("carrom.strike is reserved and not yet implemented");
       case "core.forfeit":
-        return applyForfeit(state, (ev.payload as { by: string }).by);
+        return applyForfeit(state, forfeitOf(ev.payload).by, forfeitOf(ev.payload).reason);
       case "core.abandon":
         return applyAbandon(state);
       case "core.finalize":

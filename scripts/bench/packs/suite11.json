@@ -4323,16 +4323,11 @@
           "type": "core.start"
         },
         {
-          "type": "generic.score",
+          "type": "core.forfeit",
           "payload": {
-            "by": "@e-a-ian-white",
-            "points": 1,
-            "person": "@p-ian-white"
+            "by": "@e-a-sandro-eric-sosing",
+            "reason": "walkover"
           }
-        },
-        {
-          "type": "generic.result",
-          "payload": {}
         }
       ]
     },
@@ -18145,19 +18140,18 @@
         "divisionRef": "d-worlds",
         "fixtureExtKey": "se-r0-i19",
         "outcome": {
-          "kind": "win",
+          "kind": "award",
           "winner": "e-a-ian-white",
-          "loser": "e-a-sandro-eric-sosing",
-          "method": "regulation"
+          "method": "walkover"
         },
         "perSide": [
           {
             "entrant": "e-a-ian-white",
-            "line": "1"
+            "line": "W/O"
           },
           {
             "entrant": "e-a-sandro-eric-sosing",
-            "line": "0"
+            "line": "L"
           }
         ]
       },
@@ -21835,8 +21829,8 @@
         "where": "divisions[].stages[].config.slotOrder"
       },
       {
-        "what": "Div A match 35, Ian White w/o Sandro Eric Sosing, is encoded as a single 1-0 administrative set and its expected outcome method is \"regulation\", not \"walkover\". No darts were thrown.",
-        "why": "Two product facts, not one. There is no route to forfeit an existing fixture — `forfeited` is a fixture status but its only writer is the bracket generator, stamping byes it created itself (stages.ts:1351) — and the generic module in score mode refuses a result card with no scores and no tally (generic.ts:119-120), so a stream cannot express it either. Encoded the only way available, the walkover then becomes INDISTINGUISHABLE from a played 1-0: stage 0 refused `method: \"walkover\"` against a fold that produced `\"regulation\"`. The 1-0 is an encoding of record, not a score that happened. Both halves recorded as a product finding.",
+        "what": "Div A match 35, Ian White w/o Sandro Eric Sosing, is encoded as `core.forfeit` with reason \"walkover\" and carries NO score events. No darts were thrown, and none are recorded.",
+        "why": "`core.forfeit` is postable on any fixture through the ordinary scoring door (usecases/scoring.ts applies no event-type allowlist — the sport module's reducer is the only validator), append-event.ts:127 derives the `forfeited` status from it, and it folds to `{kind: \"award\"}` carrying no score. So the adaptation is small: the source records only that the match was a walkover, and the pack states that and nothing more. AN EARLIER VERSION OF THIS ENTRY CLAIMED THE OPPOSITE — no route to forfeit, so encode an administrative 1-0 with method \"regulation\". Both halves were false, and the 1-0 was harmful: leaderboard and career expectations derive from the streams, so a set nobody threw entered a real player's statistics. The real defect was narrower and is fixed — every module discarded core.forfeit's required `reason` (core/forfeit-reason.test.ts now sweeps all eleven).",
         "where": "streams[] and expected.matches[] for se-r0-i19 of Div A"
       },
       {
