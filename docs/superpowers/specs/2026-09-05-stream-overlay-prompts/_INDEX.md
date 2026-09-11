@@ -2163,3 +2163,69 @@ tiers — the ledger already carries free text as `core.note` — but it needs a
 product decision, not a code change: `recentWindow` excludes every `core.*` type
 on purpose, and a note is written by an official for the record rather than for
 an audience.
+
+## 2026-09-11 — W2 Task 3: the crease band, and two environment findings
+
+The cricket bar's second band ships and has been SEEN in a browser against a
+real ledger. 9329 passed / 0 failed, mutation sweep 10/10, tsc clean, lint 0
+errors, i18n parity green.
+
+**W2-F23 — variant B, and the brief's own fallback would have forked over
+arithmetic.** Step 0's flowchart offered three sources. A is out (W2-F2:
+`match_centre` never reaches the overlay payload). C — the briefed
+`liveFromFoldState` — computes overs as `Math.floor(balls / ballsPerOver)` from
+the raw fine-innings state, which is a SECOND IMPLEMENTATION of over arithmetic:
+`deriveCricketScorecard` already returns `overs: "0.3"` and `maidens` on its
+`BowlingLine`, and it is the engine's own public spectator seam. C was not
+written. **No cricket arithmetic exists anywhere in this wave.**
+
+Also corrected: the brief typed `thisOver: string[]`. `BallGlyph` is a
+DISCRIMINATED UNION (`{kind:"runs",runs}` / `{kind:"wide",runs}` /
+`{kind:"wicket",dismissal}` …). The wire carries the union and the client
+renders it, so the notation lives in one place.
+
+**W2-F24 — `deriveCricketScorecard` REQUIRES a parsed config, and the usual
+fallback is unavailable.** Handed the raw `resolveFixtureCfg` output — exactly
+what `loadFoldInputs` carries, because `foldMatch` takes cfg unparsed — it
+throws `Cannot read properties of undefined (reading 'enabled')`.
+`loadMatchCentre` hit the same wall and answers it with `safeParse` plus a
+FALLBACK TO RAW; that fallback cannot be copied here, because raw is precisely
+what throws. A config the schema rejects therefore yields no band rather than a
+500 mid-broadcast.
+
+**W2-F25 — a defect found sideways, by a test aimed at something else.** The
+striker's `*` was bound to array position. With the striker unnamed and dropped
+from the line, the NON-striker became element zero and would have been marked as
+facing — the graphic naming the wrong batter. `onStrike` is now carried
+explicitly. **A marker that says WHO cannot be a function of who happens to be
+renderable.**
+
+**W2-F26 — `seazn-env up --server` REUSES an existing standalone build, and only
+warns.** The visual check was run against a bundle built before Task 3 existed.
+The route answered 200, the page rendered, `recent` and the innings block were
+both correct, and `cricketLive` was simply ABSENT — which is indistinguishable
+from a dead seam. The script had printed
+`REUSING the standalone build from 09:58 — it is NOT rebuilt from the current
+tree` and named the fix (`seazn-env rebuild --label <l>`); it was not read.
+
+**What saved it was checking the PAYLOAD, not the picture.** A screenshot of a
+band that renders empty and a screenshot of a band that was never wired are the
+same image. When verifying a new field visually, assert the field on the wire in
+the same run.
+
+**W2-F27 — element boxes on the overlay are NOT comparable, and an overlap scan
+of it is vacuous.** The stage is authored at a fixed 1920×1080 and scaled with
+`transform: scale(min(vw/1920, vh/1080))` from the top-left
+(`overlay-stage.tsx:4-5,116`), so `getBoundingClientRect` returns positions in
+the scaled space: `ovl-side-home`, `ovl-side-away` and `ovl-detail` all reported
+the identical box `x=60 w=480`, and a naive pairwise overlap scan therefore
+reported every pair as overlapping. **Any geometric assertion about this route
+has to work in canvas coordinates, not client rects.**
+
+**OBSERVED AND NOT ESTABLISHED, recorded as an open thread rather than a
+finding.** With very long entrant names (38 characters, from a seed tag) the
+bar's name row and the big score appeared to overlap in the screenshot, and the
+brand mark appeared to sit under the away name. That is W1's layout, not W2's
+band, and the measurement above cannot confirm or deny it. It is worth its own
+look with a realistic long club name, in canvas coordinates. `ovl-detail`
+itself reported `clipped: false` at both name lengths.
