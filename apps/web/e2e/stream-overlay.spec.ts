@@ -19,6 +19,10 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import { apiJson, invalidateOrgEntitlements } from "./helpers";
 import {
+  OVERLAY_MOMENT_FOLD_MS,
+  OVERLAY_MOMENT_HOLD_MS,
+} from "../src/components/overlay/moment-timing";
+import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
   grantOverlay,
@@ -883,3 +887,164 @@ async function decideFixture(page: Page, fixtureId: string): Promise<void> {
   }
   throw new Error("decideFixture: ten advances and the fixture is still not decided");
 }
+
+/**
+ * W2 — THE MOMENT SLAB, in a browser.
+ *
+ * The only place this half of the wave can be proven. `apps/web` vitest is
+ * `environment: "node"`: the reducer is unit-tested one deadline at a time, but
+ * nothing in this repo can see the slab mount, carry its tone, fold, or leave —
+ * and "the queue is green" says nothing about whether the stage ever hands it a
+ * moment. That gap is the inert seam this file exists to close.
+ *
+ * SERIAL, like the rest of the file, and it appends events to the SAME hockey
+ * rig. A red count here is a floor, never a total (AGENTS.md class 21).
+ */
+test.describe("moments (W2)", () => {
+  /**
+   * ITS OWN RIG, not the file's.
+   *
+   * This file is serial and shares one hockey fixture, and a test above DECIDES
+   * it — so by the time these run, appending anything answers
+   * `422 ALREADY_DECIDED`. Reordering would fix it today and break the next
+   * time somebody adds a test; an independent rig cannot be broken by
+   * neighbours at all. AGENTS.md class 21 is about exactly this coupling.
+   */
+  let moments: OverlayRig;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    try {
+      moments = await seedOverlayFixture(ownerPage);
+      await grantOverlay(moments.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  /** The budget is DERIVED from the slab's own constants, never typed. Moving
+   *  the hold moves this with it — a flat timeout beside a derived cost is the
+   *  latent red of AGENTS.md class 20. */
+  const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
+
+  test("a goal scored while the overlay is open raises a slab, holds, and folds away", async ({
+    browser,
+  }) => {
+    test.setTimeout(CYCLE_MS * 6 + 60_000);
+    // The overlay VIEW is anonymous; the event SENDS are not. `sendEvent` posts
+    // to `/api/v1/fixtures/{id}/events`, which 401s without the rig owner's
+    // session — the anon context has none, and the project's shared storageState
+    // belongs to a different org. Two contexts, deliberately.
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    await signInAs(ownerPage, moments.ownerEmail);
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${moments.fixtureId}?style=bar`);
+      const slab = anon.locator('[data-testid="overlay-moment"]');
+
+      // NOTHING ON MOUNT. The window already carries three suspensions from the
+      // seed, and an overlay opened mid-broadcast must not replay them — this is
+      // the assertion that the mount baseline is real.
+      await expect(slab, "the seeded history must not replay on mount").toHaveCount(0);
+
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId });
+
+      // It arrives, carrying the engine's own kind and the sheet's tone.
+      await expect(slab).toHaveAttribute("data-kind", "goal", { timeout: 30_000 });
+      await expect(slab).toHaveAttribute("data-tone", "led");
+      await expect(slab).toBeVisible();
+
+      // …reaches `hold`, which is the phase that is actually ON SCREEN…
+      await expect(slab).toHaveAttribute("data-phase", "hold", { timeout: CYCLE_MS });
+      // …and then leaves entirely, rather than sitting on the broadcast.
+      await expect(slab, "the slab must not stay on air").toHaveCount(0, {
+        timeout: CYCLE_MS * 2,
+      });
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+
+  test("a dismissal takes the dismissal tone, and its ink is the one the PALETTE derives", async ({
+    browser,
+  }) => {
+    test.setTimeout(CYCLE_MS * 6 + 60_000);
+    // The overlay VIEW is anonymous; the event SENDS are not. `sendEvent` posts
+    // to `/api/v1/fixtures/{id}/events`, which 401s without the rig owner's
+    // session — the anon context has none, and the project's shared storageState
+    // belongs to a different org. Two contexts, deliberately.
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    await signInAs(ownerPage, moments.ownerEmail);
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${moments.fixtureId}?style=bar`);
+      const slab = anon.locator('[data-testid="overlay-moment"]');
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.suspension.start", {
+        by: moments.awayEntrantId,
+        class: "red",
+      });
+      await expect(slab).toHaveAttribute("data-tone", "dismissal", { timeout: 30_000 });
+
+      // _THEMES.md §5, owner pick 5C — hockey's dismissal ink is the BOARD, not
+      // the near-white, because `--sport-dismissal` is a light colour in this
+      // palette. Derived from the palette here rather than typed, so a palette
+      // revision moves the expectation with it.
+      const expected = await anon.evaluate(() => {
+        const host = document.querySelector<HTMLElement>('[data-testid="ovl-root"]');
+        if (!host) throw new Error("no ovl-root");
+        const probe = document.createElement("span");
+        probe.style.color = "var(--sport-board)";
+        host.appendChild(probe);
+        const value = getComputedStyle(probe).color;
+        probe.remove();
+        return value;
+      });
+      await expect(slab).toHaveCSS("color", expected);
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+
+  test("two moments QUEUE: the second waits for the first to leave, and neither is lost", async ({
+    browser,
+  }) => {
+    test.setTimeout(CYCLE_MS * 8 + 60_000);
+    // The overlay VIEW is anonymous; the event SENDS are not. `sendEvent` posts
+    // to `/api/v1/fixtures/{id}/events`, which 401s without the rig owner's
+    // session — the anon context has none, and the project's shared storageState
+    // belongs to a different org. Two contexts, deliberately.
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    await signInAs(ownerPage, moments.ownerEmail);
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${moments.fixtureId}?style=bar`);
+      const slab = anon.locator('[data-testid="overlay-moment"]');
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId });
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.suspension.start", {
+        by: moments.awayEntrantId,
+        class: "yellow",
+      });
+
+      // Exactly ONE slab at a time, ever — the second is queued, not stacked.
+      await expect(slab).toHaveCount(1, { timeout: 30_000 });
+      const first = await slab.getAttribute("data-kind");
+      expect(first, "the goal is older, so it goes first").toBe("goal");
+
+      // The card follows on its own turn rather than being dropped.
+      await expect(slab).toHaveAttribute("data-kind", "card.yellow", {
+        timeout: CYCLE_MS * 3,
+      });
+      await expect(slab).toHaveAttribute("data-tone", "caution");
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+});

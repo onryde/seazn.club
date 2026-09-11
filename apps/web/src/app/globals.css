@@ -1661,15 +1661,42 @@ body {
    handed down from `moment-timing.ts` by the stage, so the CSS and the state
    machine cannot disagree about how long a fold takes.
    ─────────────────────────────────────────────────────────────────────────── */
+/* The slot is a CLIPPING WINDOW placed at the slab's emergence point, NOT the
+   whole canvas. That is what "clipped behind the bug" (§6) requires: with the
+   window's near edge flush against the scorebug, a slab translated by its own
+   width sits entirely outside it and is hidden. An `inset: 0` slot — the first
+   shape this took — cannot hide anything, because `translateX(-100%)` of a
+   200 px word still leaves it on a 1920 px canvas, painted over the bug. */
 .ovl-moment-slot {
   position: absolute;
-  inset: 0;
   overflow: hidden;
   pointer-events: none;
+}
+/* §4 — the bug is inset left 60, width 480, so its right edge is 540; the rows
+   start below its 48 px header. The slab is the height of the bug's body and
+   emerges rightward from behind it. */
+.ovl-moment-slot--bug {
+  left: 540px;
+  right: 0;
+  top: 102px;
+  height: 216px;
+}
+/* §3 — the bar is inset left/right 72, bottom 54, and stands 177 tall (126 main
+   + 51 detail), so its top edge is 231 from the canvas bottom. The slab sits
+   directly above it and emerges from the left. SEE `_OPEN-QUESTIONS.md` Q23:
+   the sheet says "centred under the bar's detail band", and there is no room
+   under it — 54 px of canvas against a 216 px slab. This is the interim
+   reading, not a ruling. */
+.ovl-moment-slot--bar {
+  left: 0;
+  right: 0;
+  bottom: 231px;
+  height: 216px;
 }
 
 .ovl-slab {
   position: absolute;
+  top: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1684,14 +1711,13 @@ body {
 
 /* §5 — under the bar's detail band, and off the bug's right edge. The bar sits
    at the bottom of the canvas, so its slab rises from beneath it. */
+/* Both sit at their slot's near edge; the slot does the placing. */
 .ovl-slab--bar {
-  left: 60px;
-  bottom: 0;
-  border-radius: 0 0 6px 6px;
+  left: 72px;
+  border-radius: 6px 6px 0 0;
 }
 .ovl-slab--bug {
   left: 0;
-  top: 180px;
   border-radius: 0 12px 12px 0;
 }
 
