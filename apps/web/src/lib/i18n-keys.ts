@@ -5386,6 +5386,7 @@ export type DictionaryKey =
   | "share.share"
   | "share.whatsapp"
   | "share.whatsappAria"
+  | "share.whatsappShort"
   | "shared.notFound.body"
   | "shared.notFound.cta"
   | "shared.notFound.heading"

@@ -151,6 +151,28 @@ const RANK_PX = 48;
  *  exists to prevent. */
 const NAME_MIN_PX = 96;
 
+/**
+ * The columns a PREVIEW shows. Narrower than the compact set, and deliberately.
+ *
+ * Measured on the built page at 320: the compact set (P W L Pts) left the name
+ * column **98px** — enough for "Summit…" and "Riversid…", which is a standings
+ * table that cannot tell you who is top. The table did not overflow and no test
+ * could see it; it was found by looking at a screenshot.
+ *
+ * A preview already shows only its first N ROWS, so it is a teaser rather than
+ * a table, and the same argument decides its columns: played and points are the
+ * two numbers that make a position mean something, and won/lost are exactly the
+ * detail "Full division" exists to go and get. Dropping the two returns 64px to
+ * the name — 98 → 162 at 320, which holds a real club name.
+ *
+ * Keys, not `compact`, because this is a SUBSET of compact and the wire carries
+ * no finer flag. `standings-table-view.test.tsx` pins it against `COMPACT_KEYS`
+ * (`server/public-site/standings-view.ts`) so it cannot drift into naming a
+ * column the server never marks compact — a set that matched nothing would fall
+ * through to the compact set below and look exactly like this working.
+ */
+const PREVIEW_KEYS: ReadonlySet<string> = new Set(["played", "points"]);
+
 export function StandingsTableView({
   view,
   dict,
@@ -168,9 +190,17 @@ export function StandingsTableView({
   const sizes = view.columns.map((c, i) =>
     columnSize(Math.max(c.abbr.length, ...view.rows.map((r) => (r.cells[i] ?? "").length))),
   );
-  // A compact column is always shown. A long-tail one folds below `md` until
-  // the disclosure is opened; from `md` up nothing folds, ever.
-  const shown = (c: TableColumnT) => c.compact || expanded;
+  // A PREVIEW narrows to `PREVIEW_KEYS`; a full table shows every compact
+  // column, and a long-tail one folds below `md` until the disclosure is
+  // opened. From `md` up a full table folds nothing, ever.
+  //
+  // The fallback is load-bearing rather than defensive: a sport whose table
+  // names neither `played` nor `points` would otherwise preview as a list of
+  // names with no numbers at all, which is worse than the crowding this fixes.
+  // Such a table falls through to the compact set instead.
+  const previewNarrows = preview !== undefined && view.columns.some((c) => PREVIEW_KEYS.has(c.key));
+  const shown = (c: TableColumnT) =>
+    previewNarrows ? PREVIEW_KEYS.has(c.key) : c.compact || expanded;
   // `max-md:hidden` for a full table, `hidden` for a PREVIEW — and the
   // difference was found by driving the built page, not by a test.
   //
@@ -204,6 +234,39 @@ export function StandingsTableView({
   // gone and the floor still demanded 380px in a 318px rail, so the table
   // overflowed by exactly the space its invisible columns had booked.
   const minWide = floor((c, i) => (preview === undefined || shown(c) ? sizes[i]!.px : 0));
+
+  // ── THE END GUTTER ────────────────────────────────────────────────────────
+  // Every numeric column is `px-0.5` (2px a side), which is right BETWEEN
+  // columns and wrong at the end of the row: measured at 320, the points value
+  // sat 2px from the card's own border, so the number a standings table exists
+  // for read as if it had been clipped. The `#` column has carried `pl-2` for
+  // the same reason since it was written; this is its missing other half.
+  //
+  // WHICH column is last is a per-breakpoint question, so it cannot be one
+  // class. Below `md` a full table folds its long tail, and a preview folds at
+  // every width — so the last VISIBLE column there is the last compact one. At
+  // `md` and up a full table folds nothing and the last column is the array's.
+  //
+  // Those are not the same column, and assuming `points` covers both would be
+  // wrong: `standingsColumns` (`lib/public-site.ts:249-253`) pushes points and
+  // THEN every derived cascade column, so a division with a cascade ends on a
+  // derived column at `md` and on points below it.
+  //
+  // Exactly one `pr-*` is emitted per cell rather than layering `pr-2` over
+  // `px-0.5` — two classes setting one property leave the winner to stylesheet
+  // order, which is a class present rather than a class in effect.
+  const lastPhone = view.columns.reduce((last, c, i) => (shown(c) ? i : last), -1);
+  const lastWide = preview === undefined ? view.columns.length - 1 : lastPhone;
+  // The box does not change — Tailwind is border-box and the floors sum
+  // `sizes[i].px` — so this spends 6px of the end column's CONTENT, which the
+  // widest thing it holds (a 3-digit points total, a signed 6-character rate in
+  // its own wider class) has room for.
+  const endPad = (i: number) => {
+    if (i === lastPhone && i === lastWide) return "pr-2";
+    if (i === lastPhone) return "pr-2 md:pr-0.5";
+    if (i === lastWide) return "pr-0.5 md:pr-2";
+    return "pr-0.5";
+  };
 
   const rankChip = (rank: number | null) => (
     <span
@@ -293,7 +356,7 @@ export function StandingsTableView({
                       scope="col"
                       data-col={c.key}
                       title={c.title}
-                      className={`${sizes[i]!.cls} px-0.5 py-2 text-right font-semibold${foldCls(c)}`}
+                      className={`${sizes[i]!.cls} pl-0.5 ${endPad(i)} py-2 text-right font-semibold${foldCls(c)}`}
                     >
                       <span className="sr-only">{c.title}</span>
                       <span aria-hidden>{c.abbr}</span>
@@ -347,7 +410,7 @@ export function StandingsTableView({
                       <td
                         key={c.key}
                         data-col={c.key}
-                        className={`px-0.5 py-2 text-right ${
+                        className={`pl-0.5 ${endPad(i)} py-2 text-right ${
                           c.key === "points"
                             ? "font-display text-base font-bold text-accent-strong"
                             : "text-zinc-600"

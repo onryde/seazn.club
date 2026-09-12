@@ -45,11 +45,16 @@ const CASES: Case[] = [
     // it has no case of its own here any more.
     name: "sponsors-board.tsx sponsor logo",
     file: join(SRC_ROOT, "components/public-site/sponsors-board.tsx"),
-    srcExpr: "s.logo",
-    // v10 perimeter board: both dimensions come from the tier panel map —
-    // still a locked width/height pair (per-tier 48/32/24/20), no CLS drift.
-    width: "panel(s).logo",
-    height: "panel(s).logo",
+    srcExpr: "sponsor.logo",
+    // The sponsor placement redesign (2026-09-12) gave the board and the hero
+    // ONE logo site, `logoChip(sponsor, px, cls)`, so the dimension arrives as
+    // a parameter rather than a per-call tier lookup. That is a STRONGER lock
+    // than the pair it replaced, not a weaker one: width and height are the
+    // same identifier, so they cannot drift apart at all — the CLS failure this
+    // contract exists for. What the callers pass (40 in the hero, 32/24/20 per
+    // board tier) is pinned by `sponsors-board.test.tsx`, which can see values.
+    width: "px",
+    height: "px",
   },
   {
     name: "[orgSlug]/layout.tsx org logo",

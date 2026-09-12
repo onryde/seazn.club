@@ -41,9 +41,9 @@ export interface InfoTabProps {
   /** The share bar. A client island with a clipboard and a toast, so it cannot
    *  be built here without making this whole tab a client component. */
   shareSlot?: ReactNode;
-  /** The org's sponsor board. An async server component
-   *  (`resolveSponsors` + a `sponsors.tiers` entitlement read), so likewise. */
-  sponsorsSlot?: ReactNode;
+  // NO `sponsorsSlot`. The board is rendered by `page.tsx` below the whole tab
+  // panel, so it is on every tab rather than on this one and the Overview
+  // (owner ruling 2026-09-12; `sponsors-board.tsx`'s header has the reasoning).
 }
 
 const DATE_OPTS: Intl.DateTimeFormatOptions = {
@@ -183,7 +183,6 @@ export function InfoTab({
   locale,
   descriptionSlot,
   shareSlot,
-  sponsorsSlot,
 }: InfoTabProps) {
   const info = doc.info;
   const dates = competitionDateLine(info);
@@ -284,12 +283,6 @@ export function InfoTab({
           {t(dict, "landing.present")}
         </Link>
       </div>
-
-      {sponsorsSlot ? (
-        <section data-testid="mh-info-sponsors" className="min-w-0">
-          {sponsorsSlot}
-        </section>
-      ) : null}
     </div>
   );
 }

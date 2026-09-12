@@ -86,7 +86,6 @@ interface RenderOver {
   dict?: Dict;
   locale?: Locale;
   now?: number;
-  sponsorsSlot?: ReactNode;
   descriptionSlot?: ReactNode;
 }
 
@@ -97,7 +96,6 @@ const render = (doc: CompetitionHubDocT, over: RenderOver = {}) =>
       dict={over.dict ?? dict}
       locale={over.locale ?? "en"}
       now={over.now ?? NOW}
-      sponsorsSlot={over.sponsorsSlot}
       descriptionSlot={over.descriptionSlot}
     />,
   );
@@ -357,7 +355,6 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
   // what a rung does NOT show is the rung's own decision.
   const SLOTS: RenderOver = {
     descriptionSlot: <p>ABOUT THIS CUP</p>,
-    sponsorsSlot: <p>SPONSOR BOARD</p>,
   };
   const preview = tableView("t8-s1-overall", "premier");
   const open = info({ startsOn: "2026-09-01", endsOn: "2026-09-20", registrationOpen: true });
@@ -370,14 +367,13 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
   });
 
   it("no live rung: next-up leads and there is NO rail at all — not an empty one", () => {
     const doc = hubDoc({ matches: docUpcoming4.matches, tables: [preview], info: open });
     const h = render(doc, SLOTS);
-    expect(sections(h)).toEqual(["next", "tables", "register", "description", "sponsors"]);
+    expect(sections(h)).toEqual(["next", "tables", "register", "description"]);
     // Absent, not empty — a `<ul>` with no children is a hole in the page.
     expect(h).not.toContain(`data-testid="mh-live-now"`);
   });
@@ -390,7 +386,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     });
     const h = render(doc, SLOTS);
     expect(tagOf(h, "mh-status")).toContain(`data-kind="match_day"`);
-    expect(sections(h)).toEqual(["next", "tables", "register", "description", "sponsors"]);
+    expect(sections(h)).toEqual(["next", "tables", "register", "description"]);
   });
 
   it("finished: the TABLE leads, and next-up is not in the order at all", () => {
@@ -407,7 +403,6 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
   });
 
@@ -421,19 +416,19 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     const doc = hubDoc({ divisions: [division("premier")], tables: [preview], info: open });
     const h = render(doc, SLOTS);
     expect(tagOf(h, "mh-status")).toContain(`data-kind="dates"`);
-    expect(sections(h)).toEqual(["register", "description", "sponsors"]);
+    expect(sections(h)).toEqual(["register", "description"]);
     expect(h).not.toContain(`data-testid="mh-tables"`);
   });
 
   it("empty: the same order as dates — a competition with nothing published still has a way in", () => {
     const h = render(hubDoc({ divisions: [], info: open }), SLOTS);
     expect(tagOf(h, "mh-status")).toContain(`data-kind="empty"`);
-    expect(sections(h)).toEqual(["register", "description", "sponsors"]);
+    expect(sections(h)).toEqual(["register", "description"]);
   });
 
   it("the order VALUES are 1..n with no gaps and no repeats — two sections at one order is no order", () => {
     const doc = hubDoc({ matches: LIVE_AND_NEXT, tables: [preview], info: open });
-    expect(ladder(render(doc, SLOTS)).map(([, n]) => n)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(ladder(render(doc, SLOTS)).map(([, n]) => n)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("a live rung with nothing to come drops next-up and RENUMBERS — the order is over what shows", () => {
@@ -447,8 +442,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       ["tables", 2],
       ["register", 3],
       ["description", 4],
-      ["sponsors", 5],
-    ]);
+          ]);
   });
 
   it("a rung the renderer does not handle THROWS rather than rendering a wrong page", () => {
@@ -480,14 +474,12 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
     expect(orderOf({ kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "Europe/London" })).toEqual([
       "next",
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
     // `match_day` SHARES `next`'s order and differs only in what it says. The
     // two are asserted separately, so a later change to one cannot silently
@@ -497,20 +489,17 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
     expect(orderOf({ kind: "finished" })).toEqual([
       "tables",
       "register",
       "description",
-      "sponsors",
     ]);
     expect(orderOf({ kind: "dates", startsOn: null, endsOn: null })).toEqual([
       "register",
       "description",
-      "sponsors",
     ]);
-    expect(orderOf({ kind: "empty" })).toEqual(["register", "description", "sponsors"]);
+    expect(orderOf({ kind: "empty" })).toEqual(["register", "description"]);
     // And the scope pairs with the order EXACTLY: non-null when the rung
     // renders the rail, null when it does not. Without this the three rungs
     // that never show next-up could carry any scope at all — a dead value no
@@ -1109,18 +1098,30 @@ describe("OverviewTab — the register CTA and the slots", () => {
     expect(sections(h)).not.toContain("register");
   });
 
-  it("the slots render where they are given, and their sections vanish when they are not", () => {
-    const withSlots = render(closed, {
-      descriptionSlot: <p>ABOUT THIS CUP</p>,
-      sponsorsSlot: <p>SPONSOR BOARD</p>,
-    });
-    expect(sectionHtml(withSlots, "description")).toContain("ABOUT THIS CUP");
-    expect(sectionHtml(withSlots, "sponsors")).toContain("SPONSOR BOARD");
+  it("the slot renders where it is given, and its section vanishes when it is not", () => {
+    const withSlot = render(closed, { descriptionSlot: <p>ABOUT THIS CUP</p> });
+    expect(sectionHtml(withSlot, "description")).toContain("ABOUT THIS CUP");
 
     const without = render(closed);
     expect(without).not.toContain("ABOUT THIS CUP");
     expect(sections(without)).not.toContain("description");
-    expect(sections(without)).not.toContain("sponsors");
+  });
+
+  it("there is NO sponsors section — the board is the PAGE's, below every tab", () => {
+    // Owner ruling 2026-09-12 (Option B). The board used to be a slot here and
+    // in `InfoTab`, which meant a competition's sponsors vanished the moment a
+    // spectator tapped Matches, Table, Stats or Teams. `page.tsx` renders it
+    // below the whole tab panel now.
+    //
+    // Asserted on the LADDER as well as the markup: a section id left in
+    // `OverviewSection` with nothing ever filling it renders nothing and looks
+    // exactly like this test passing.
+    for (const rung of ALL_RUNGS) {
+      expect(overviewPlan(rung, dict, "en").order, rung.kind).not.toContain("sponsors");
+    }
+    expect(render(closed, { descriptionSlot: <p>ABOUT THIS CUP</p> })).not.toContain(
+      `data-testid="mh-sec-sponsors"`,
+    );
   });
 
   it("CALLER CONTRACT: a slot that renders NOTHING still costs a section — pass undefined instead", () => {
@@ -1130,29 +1131,27 @@ describe("OverviewTab — the register CTA and the slots", () => {
     // here, and no parent can ask a child what it will render without
     // rendering it.
     //
-    // So the hole is real and the fix is the CALLER's (Task 12). The page
-    // being replaced already gets it right
-    // (`…/[competitionSlug]/page.tsx:272` renders its board only when
-    // `sponsors.length > 0`). This test exists so the rule is written down in
-    // an executable place and so a later "silent fix" here has to face it:
-    // `InfoTab` has the identical shape, so it is ONE contract for both files.
+    // So the hole is real and the fix is the CALLER's. `page.tsx` gets it
+    // right: it passes the prose only when there is prose to pass. This test
+    // exists so the rule is written down in an executable place and so a later
+    // "silent fix" here has to face it.
     const Empty = () => null;
-    const h = render(closed, { sponsorsSlot: <Empty /> });
-    expect(sections(h)).toContain("sponsors");
+    const h = render(closed, { descriptionSlot: <Empty /> });
+    expect(sections(h)).toContain("description");
     // Empty in the literal sense: the section's element has no content at all.
-    const at = h.indexOf(`data-testid="mh-sec-sponsors"`);
+    const at = h.indexOf(`data-testid="mh-sec-description"`);
     expect(h.slice(h.indexOf(">", at) + 1)).toMatch(/^<\/section>/);
     // Positive pair, and the shape the contract asks for: `undefined` costs
     // nothing at all.
-    expect(sections(render(closed, { sponsorsSlot: undefined }))).not.toContain("sponsors");
+    expect(sections(render(closed, { descriptionSlot: undefined }))).not.toContain("description");
   });
 
-  it("a slot is rendered ONCE — a slot in two sections would duplicate a sponsor board", () => {
+  it("a slot is rendered ONCE — a slot in two sections would duplicate the prose", () => {
     const h = render(
       hubDoc({ matches: docLive2.matches, info: info({ registrationOpen: true }) }),
-      { sponsorsSlot: <p>SPONSOR BOARD</p> },
+      { descriptionSlot: <p>ABOUT THIS CUP</p> },
     );
-    expect(h.match(/SPONSOR BOARD/g)?.length).toBe(1);
+    expect(h.match(/ABOUT THIS CUP/g)?.length).toBe(1);
   });
 });
 
@@ -1222,8 +1221,8 @@ describe("OverviewTab — one DOM, branched", () => {
     expect(classesOf(split, "mh-overview")).toContain("group/ov");
   });
 
-  it("status, the live rail, next up and the description are the MAIN column; tables, register and sponsors the side rail", () => {
-    const h = render(full, { descriptionSlot: <p>ABOUT</p>, sponsorsSlot: <p>SPONSORS</p> });
+  it("status, the live rail, next up and the description are the MAIN column; tables and register the side rail", () => {
+    const h = render(full, { descriptionSlot: <p>ABOUT</p> });
     const sideAt = h.indexOf(`data-testid="mh-overview-side"`);
     expect(sideAt).toBeGreaterThan(-1);
     const inMain = (id: string) => {
@@ -1237,11 +1236,10 @@ describe("OverviewTab — one DOM, branched", () => {
     expect(inMain("mh-sec-description"), "mh-sec-description").toBe(true);
     expect(inMain("mh-sec-tables"), "mh-sec-tables").toBe(false);
     expect(inMain("mh-sec-register"), "mh-sec-register").toBe(false);
-    expect(inMain("mh-sec-sponsors"), "mh-sec-sponsors").toBe(false);
   });
 
   it("the status line is FIRST in the column whatever the ladder says", () => {
-    // `order-first` rather than `order-none`: the sections are `order-1..6`, so
+    // `order-first` rather than `order-none`: the sections are `order-1..5`, so
     // a status at 0 would work by arithmetic and break the moment a rung wanted
     // a zeroth section. This is the one element whose position is not a ladder
     // decision.
@@ -1269,14 +1267,12 @@ describe("OverviewTab — one DOM, branched", () => {
     // on the WHOLE ancestor chain. Below `lg` the chain runs root → section
     // (the wrappers are not boxes); from `lg` it runs root → column → section.
     // So all three levels carry it.
-    const h = render(full, { descriptionSlot: <p>ABOUT</p>, sponsorsSlot: <p>SPONSORS</p> });
+    const h = render(full, { descriptionSlot: <p>ABOUT</p> });
     expect(classesOf(h, "mh-overview")).toContain("min-w-0");
     const ids = [...h.matchAll(/data-testid="mh-sec-([a-z]+)"/g)].map(([, id]) => id!);
     // EVERY section, not the first — a `min-w-0` that only reached the head of
     // the ladder is invisible to a one-section document.
-    expect(ids.sort()).toEqual(
-      ["description", "live", "next", "register", "sponsors", "tables"].sort(),
-    );
+    expect(ids.sort()).toEqual(["description", "live", "next", "register", "tables"].sort());
     for (const id of ids) {
       expect(classesOf(h, `mh-sec-${id}`), `section ${id}`).toContain("min-w-0");
     }
