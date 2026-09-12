@@ -285,7 +285,7 @@ describe("CourtCard — the live pill's note and the meta line", () => {
   // them; the over lives on the innings card.
   const withBoth: MatchCentreHeaderT = {
     ...liveHeader,
-    pillNote: { key: "matchCentre.oversPill", params: { overs: "12.3" } },
+    pillNote: { key: "matchCentre.oversShort", params: { overs: "12.3" } },
     metaLine: "8-over match · Round 1 · Garon Park",
   };
 
@@ -293,10 +293,10 @@ describe("CourtCard — the live pill's note and the meta line", () => {
     const html = renderToStaticMarkup(<CourtCard header={withBoth} dict={dict} />);
     expect(html).toContain('data-testid="mc-pill-note"');
     // The RENDERED copy, not the key: `pillNote` is a Msg because the unit is
-    // translated, so a raw "matchCentre.oversPill" on the page is exactly the
+    // translated, so a raw "matchCentre.oversShort" on the page is exactly the
     // failure this asserts against.
     expect(html).toContain("12.3 ov");
-    expect(html).not.toContain("matchCentre.oversPill");
+    expect(html).not.toContain("matchCentre.oversShort");
     // INSIDE the pill, not merely somewhere on the card — the board puts it
     // after the status word, and a note floating elsewhere would satisfy a
     // bare `toContain`.

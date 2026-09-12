@@ -636,7 +636,7 @@ describe("buildMatchCentre — cricket", () => {
       // innings' own total, so it cannot disagree with the score beside it.
       const live = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg }));
       if (live.header.status === "in_play") {
-        expect(live.header.pillNote?.key).toBe("matchCentre.oversPill");
+        expect(live.header.pillNote?.key).toBe("matchCentre.oversShort");
         const lastInnings = live.cricket?.innings.at(-1);
         expect(String(live.header.pillNote?.params?.overs)).toBe(lastInnings?.total.overs);
       }

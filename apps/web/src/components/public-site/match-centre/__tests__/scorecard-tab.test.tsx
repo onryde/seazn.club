@@ -447,7 +447,12 @@ describe("ScorecardTab", () => {
     expect(html).toContain(en["matchCentre.extras"]);
     expect(html).toContain('data-testid="mc-total-1"');
     expect(html).toContain(en["matchCentre.total"]);
-    expect(html).toContain("7.80");
+    // The WHOLE figure, with both units, not a loose "7.80" that a bare run
+    // rate anywhere on the page would satisfy. It used to read
+    // "156/6 (20.0) · 7.80", where the trailing number had nothing saying what
+    // it was — and a run rate is the one figure on a scorecard that most needs
+    // labelling: 7.80 beside 20.0 means nothing on its own.
+    expect(html).toContain("156/6 (20.0 ov, RR 7.80)");
 
     // Positive pairs for the two "hidden when absent" lines. NOTE the "1":
     // `COARSE_ONLY` is a ONE-innings document whose only innings carries
