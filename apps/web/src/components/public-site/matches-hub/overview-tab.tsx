@@ -290,7 +290,25 @@ export function overviewPlan(
       return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER, nextUp: null };
     case "live":
       return {
-        copy: plural(dict, "landing.status.live", status.n, locale),
+        // NO status line on this rung, and it is the only rung without one.
+        //
+        // Every other rung's copy says something nothing else on the panel
+        // does — "Next: Sat 5 Sept 14:00", "Match day", "Finished". This one
+        // said "Live now: 1 match" directly above a section headed "Live now"
+        // holding exactly that match, on a page whose hero already carries a
+        // "1 live" chip. Three statements of one fact inside ~200px at 320.
+        //
+        // The owner ruling this panel is built on — "the top of the panel is
+        // always the most live thing that exists" — is satisfied BETTER by the
+        // rail than by a sentence about it: `LIVE_ORDER` puts `live` first, so
+        // the live matches themselves are the top of the panel.
+        //
+        // `plural(…, "landing.status.live", …)` is now unused by this file.
+        // The key stays in all four dictionaries: `landingStatus` still returns
+        // the `live` rung with its count, and a future surface that needs the
+        // sentence without the rail beneath it should not have to re-translate
+        // it in four languages.
+        copy: null,
         order: LIVE_ORDER,
         nextUp: "ahead",
       };
