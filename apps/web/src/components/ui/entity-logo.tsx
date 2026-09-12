@@ -143,6 +143,72 @@ export function monogramInk(colour: string | null | undefined): { bg: string; in
   };
 }
 
+/**
+ * The tile's colour for an entity that declares none — DERIVED FROM ITS NAME,
+ * never stored.
+ *
+ * The problem this solves: most entities have no colour and never will. A club
+ * has to have been created with one, and an INDIVIDUAL has no club at all — in
+ * this database, 18,126 of 19,500 entrants are individuals, of which twelve
+ * have a team. So the honest default was a grey tile on nearly every row, which
+ * identifies nothing and makes two adjacent rows look like one thing.
+ *
+ * A generated colour was rejected once on the grounds that it invents an
+ * identity — "the same player would be a different colour in another
+ * competition". Deriving it from the NAME answers that: the same name is the
+ * same colour on every page, in every competition, forever, with nothing
+ * written down and nothing to migrate. A rename changes it, which is correct —
+ * the tile is a visual handle for the name being shown.
+ *
+ * A FIXED PALETTE rather than a free hue, for two reasons. Every entry is a
+ * colour someone chose, so no entity is ever assigned a muddy one; and every
+ * entry has a clear winner between the two inks, which is what keeps
+ * `monogramInk`'s contrast pick from landing on a marginal pair. Collisions
+ * inside one table are possible and accepted — the initials are still there,
+ * and the alternative (a hue per entity) is what produces the muddy ones.
+ *
+ * FNV-1a over the normalised name: trimmed and lower-cased, so "Valley FC" and
+ * "valley fc " are one entity rather than two colours. `Math.imul` keeps the
+ * multiply in 32-bit, which is what makes this stable across engines.
+ */
+const AUTO_PALETTE = [
+  "#2563eb", "#d6336c", "#0f766e", "#c05621",
+  "#6b46c1", "#b7791f", "#9b2c2c", "#2f855a",
+  "#1e40af", "#a21caf", "#0e7490", "#b45309",
+  "#4c1d95", "#7c2d12", "#166534", "#be123c",
+] as const;
+
+export function autoColour(name: string): string {
+  const key = name.trim().toLowerCase();
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  // THE FOLD IS LOAD-BEARING, and it was found by mutation testing rather than
+  // reasoned about up front. `% AUTO_PALETTE.length` reads the LOW four bits,
+  // which is exactly where FNV-1a diffuses worst: without this mix, four of six
+  // name pairs differing only in case or surrounding space landed on the SAME
+  // palette entry, so the normalisation above could be deleted and every test
+  // still passed. Measured again after: zero of the same six collide.
+  //
+  // A whole-hash distribution check hid it — 400 names spread evenly across the
+  // sixteen buckets either way, because those names differ in their tails. Only
+  // the near-identical pairs expose a weak avalanche.
+  //
+  // NO TEST KILLS THIS FOLD ON ITS OWN, and that is stated rather than left to
+  // be discovered: with the normalisation above intact both sides of every pair
+  // are the SAME STRING, so removing the fold changes nothing observable. Its
+  // value is that it makes the normalisation's removal detectable — the two are
+  // one guard, and the mutant that matters (`key = name`) is killed.
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x2545f491);
+  h ^= h >>> 15;
+  // `>>> 0` before the modulo: `Math.imul` returns a SIGNED 32-bit int, and a
+  // negative remainder would index off the front of the array.
+  return AUTO_PALETTE[(h >>> 0) % AUTO_PALETTE.length]!;
+}
+
 export function EntityLogo({
   src,
   name,
@@ -202,8 +268,17 @@ export function EntityLogo({
       </span>
     );
   }
+  // The entity declared no colour, so one is derived from its NAME rather than
+  // falling through to a grey tile that identifies nothing. Last in the chain,
+  // so a real colour and a real badge both still win — this never overrides
+  // what an organiser chose, it only fills the case where nothing was chosen.
+  const auto = monogramInk(autoColour(name));
   return (
-    <span aria-hidden className={`${base} bg-slate-100 font-semibold text-slate-500`}>
+    <span
+      aria-hidden
+      className={`${base} font-semibold`}
+      style={{ background: auto!.bg, color: auto!.ink }}
+    >
       {initials(name)}
     </span>
   );

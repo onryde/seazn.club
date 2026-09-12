@@ -44,6 +44,7 @@
 //     literal truthiness silently drops it. Tested both ways below.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { autoColour } from "@/components/ui/entity-logo";
 import type { ReactNode } from "react";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -511,11 +512,15 @@ describe("TeamsTab", () => {
     expect(e2).toMatch(/background:#123456[\s\S]*?>RC</); // the brief's own assertion
     expect(e2).not.toContain("<img");
 
-    // The arm the brief does not name, and the one most cards land on.
+    // The arm the brief does not name, and the one most cards land on. It is no
+    // longer grey: an entity with no colour of its own gets one derived from
+    // its NAME, so the same team is the same colour on every page with nothing
+    // stored. A badge and a declared colour both still win — the two
+    // assertions above are what say so.
     const e3 = rowHtml(h, "mh-team-e3");
     expect(e3).toContain(">AA<");
     expect(e3).not.toContain("<img");
-    expect(e3).not.toContain("style="); // no colour → no inline paint at all
+    expect(e3).toContain("background:");
 
     // Review F5 — every crest is `aria-hidden`, on all three arms. The entrant's
     // NAME is beside it, so a crest that announced itself would read the same
@@ -577,11 +582,14 @@ describe("TeamsTab", () => {
     expect(rowHtml(h, "mh-team-e9")).not.toContain("background:123456");
     expect(rowHtml(h, "mh-team-e9")).toContain(">HH<");
 
-    // And the refusal arm through the same path, so "the card paints what it
-    // was given" has its negative: a value CSS cannot parse leaves no `style`
-    // on the card at all rather than an empty one.
+    // And the refusal arm through the same path. The claim that matters is
+    // unchanged and is the whole point of the gate: a value CSS cannot parse
+    // NEVER reaches `style`. What it falls through to has changed — the chain
+    // now ends in a colour derived from the name rather than in a grey tile —
+    // so the assertion is that the bad value is absent, not that paint is.
     const bad = render(hubDoc({ teams: [team("e8", "Puce Piranhas", null, "puce")] }));
-    expect(rowHtml(bad, "mh-team-e8")).not.toContain("style=");
+    expect(rowHtml(bad, "mh-team-e8")).not.toContain("puce");
+    expect(rowHtml(bad, "mh-team-e8")).toContain(`background:${autoColour("Puce Piranhas")}`);
     expect(rowHtml(bad, "mh-team-e8")).toContain(">PP<");
   });
 
