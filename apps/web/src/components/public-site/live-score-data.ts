@@ -5,7 +5,7 @@
 import { api } from "@/lib/client";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
-import type { OverlayCricketLive } from "@/lib/overlay-cricket";
+import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss } from "@/lib/overlay-cricket";
 
 export interface LiveFixtureData {
   status: string;
@@ -89,6 +89,12 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  before its first ball. `cricket` above carries the SCORE; this carries the
    *  people. */
   cricketLive?: OverlayCricketLive | null;
+  /** Match openers — toss winner side + bat/bowl election. */
+  cricketToss?: OverlayCricketToss | null;
+  /** End-of-over card — most recently completed over in the active innings. */
+  lastClosedOver?: OverlayClosedOver | null;
+  /** True once any scoring (ball / over) has been recorded. */
+  scoringStarted?: boolean;
 }
 
 export interface PublicRealtimeToken {

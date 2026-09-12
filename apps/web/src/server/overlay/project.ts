@@ -6,7 +6,7 @@
 import type { FoldedFixture } from "@/server/engine-db/fold";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
-import type { OverlayCricketLive } from "@/lib/overlay-cricket";
+import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss } from "@/lib/overlay-cricket";
 
 interface RowSnapshot {
   status: string;
@@ -172,6 +172,9 @@ export function projectOverlayLiveData(input: {
   /** W2 Task 3. Passed IN for the same reason `recent` is: naming the people at
    *  the crease needs the line-up, which this projection cannot read. */
   cricketLive?: OverlayCricketLive | null;
+  cricketToss?: OverlayCricketToss | null;
+  lastClosedOver?: OverlayClosedOver | null;
+  scoringStarted?: boolean;
 }): OverlayLiveData {
   const { row, folded, venueTz } = input;
   const out: OverlayLiveData = {
@@ -182,6 +185,9 @@ export function projectOverlayLiveData(input: {
     venueTz,
     recent: [...(input.recent ?? [])],
     ...(input.cricketLive ? { cricketLive: input.cricketLive } : {}),
+    ...(input.cricketToss ? { cricketToss: input.cricketToss } : {}),
+    ...(input.lastClosedOver ? { lastClosedOver: input.lastClosedOver } : {}),
+    ...(input.scoringStarted !== undefined ? { scoringStarted: input.scoringStarted } : {}),
   };
   if (!folded) return out;
   const clock = clockOf(folded.state, folded.active);

@@ -109,6 +109,89 @@ export function liveFromScorecard(
   return { batters, ...(bowler === undefined ? {} : { bowler }), thisOver: live.thisOver };
 }
 
+export type OverlayCricketToss = {
+  wonBySide: 0 | 1;
+  elected: "bat" | "bowl";
+};
+
+export type OverlayClosedOver = {
+  /** 1-based over number. */
+  over: number;
+  runs: number;
+  wickets: number;
+  /** Team total after the over, e.g. `142/6`. */
+  score: string;
+  glyphs: BallGlyph[];
+  bowler?: OverlayCricketBowler;
+  batters: OverlayCricketBatter[];
+};
+
+/**
+ * Scorecard toss → overlay side index. `sides` is `[homeEntrantId, awayEntrantId]`.
+ * Null when no toss, or when `wonBy` is not one of the two sides.
+ */
+export function tossFromScorecard(
+  scorecard: CricketScorecard,
+  sides: readonly [string, string],
+): OverlayCricketToss | null {
+  const toss = scorecard.toss;
+  if (!toss) return null;
+  const wonBySide = toss.wonBy === sides[0] ? 0 : toss.wonBy === sides[1] ? 1 : undefined;
+  if (wonBySide === undefined) return null;
+  return { wonBySide, elected: toss.elected };
+}
+
+/** True once any over log or live delivery exists — the first scoring fact. */
+export function scoringStartedFromScorecard(scorecard: CricketScorecard): boolean {
+  if (scorecard.live && scorecard.live.thisOver.length > 0) return true;
+  return scorecard.innings.some((inn) => inn.overs.length > 0 || inn.total.legalBalls > 0);
+}
+
+/**
+ * The most recently *completed* over in the latest innings.
+ *
+ * Mid-over (`thisOver.length > 0`), that is `overs.at(-2)` — the current over
+ * is already in `overs` as the tip. Between overs (`thisOver` empty) the tip
+ * itself is complete.
+ */
+export function lastClosedOverFromScorecard(
+  scorecard: CricketScorecard,
+  nameOf: (personId: string) => string | undefined,
+): OverlayClosedOver | null {
+  const innings = scorecard.innings.at(-1);
+  if (!innings || innings.overs.length === 0) return null;
+  const midOver = (scorecard.live?.thisOver.length ?? 0) > 0;
+  const over = midOver ? innings.overs.at(-2) : innings.overs.at(-1);
+  if (!over) return null;
+
+  const bowlLine =
+    over.bowler === null ? undefined : innings.bowling.find((b) => b.person === over.bowler);
+  const bowlerName = over.bowler === null ? undefined : nameOf(over.bowler);
+  const bowler: OverlayCricketBowler | undefined =
+    bowlLine === undefined || bowlerName === undefined
+      ? undefined
+      : {
+          name: bowlerName,
+          overs: bowlLine.overs,
+          maidens: bowlLine.maidens,
+          runs: bowlLine.runs,
+          wickets: bowlLine.wickets,
+        };
+
+  // Crease figures at projection time (best available for the full card).
+  const liveBlock = liveFromScorecard(scorecard, nameOf);
+
+  return {
+    over: over.number,
+    runs: over.runs,
+    wickets: over.wickets,
+    score: `${over.scoreAfter.runs}/${over.scoreAfter.wickets}`,
+    glyphs: over.balls,
+    ...(bowler === undefined ? {} : { bowler }),
+    batters: liveBlock?.batters ?? [],
+  };
+}
+
 /** One delivery, as a scorer would write it. Notation, never copy. */
 function glyph(g: BallGlyph): string {
   switch (g.kind) {

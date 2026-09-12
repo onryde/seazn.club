@@ -10,7 +10,14 @@
 import { describe, expect, it } from "vitest";
 import { cricket, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
-import { cricketDetail, liveFromScorecard, type OverlayCricketLive } from "../overlay-cricket";
+import {
+  cricketDetail,
+  lastClosedOverFromScorecard,
+  liveFromScorecard,
+  scoringStartedFromScorecard,
+  tossFromScorecard,
+  type OverlayCricketLive,
+} from "../overlay-cricket";
 
 const msg = (key: string) =>
   (({ "overlay.cricket.strikerMark": "*", "overlay.cricket.thisOver": "this over" }) as Record<string, string>)[
@@ -151,5 +158,53 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   it("a scorecard with no live block at all (not started, between innings) yields null", () => {
     const notStarted = scorecardOf([OVER[0]!, OVER[1]!]);
     expect(liveFromScorecard(notStarted, nameOf)).toBeNull();
+  });
+});
+
+describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromScorecard", () => {
+  const sides: [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
+
+  /** Six legal dots — over 1 complete, no ball of over 2 yet. */
+  const OVER_COMPLETE = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    ...[1, 2, 3, 4, 5, 6].map((ballInOver) =>
+      makeEnvelope(2 + ballInOver, {
+        type: "cricket.ball",
+        payload: { ...base, over: 0, ballInOver, runs: { bat: 0 } },
+      } as never),
+    ),
+  ];
+
+  it("toss maps wonBy entrant to a side index and keeps elected", () => {
+    const sc = scorecardOf([OVER_COMPLETE[0]!]);
+    expect(tossFromScorecard(sc, sides)).toEqual({ wonBySide: 0, elected: "bat" });
+  });
+
+  it("no toss yet yields null", () => {
+    expect(tossFromScorecard(scorecardOf([]), sides)).toBeNull();
+  });
+
+  it("scoringStarted is false until a ball (or over) has been recorded", () => {
+    expect(scoringStartedFromScorecard(scorecardOf([OVER_COMPLETE[0]!, OVER_COMPLETE[1]!]))).toBe(
+      false,
+    );
+    expect(scoringStartedFromScorecard(scorecardOf(OVER_COMPLETE.slice(0, 3)))).toBe(true);
+  });
+
+  it("after a completed over with empty thisOver, lastClosedOver is that over", () => {
+    const sc = scorecardOf(OVER_COMPLETE);
+    const closed = lastClosedOverFromScorecard(sc, nameOf);
+    expect(closed).not.toBeNull();
+    expect(closed!.over).toBe(1);
+    expect(closed!.runs).toBe(0);
+    expect(closed!.score).toBe("0/0");
+    expect(closed!.glyphs.length).toBe(6);
+    expect(closed!.bowler?.name).toBe("Bumrah");
+  });
+
+  it("before any over completes, lastClosedOver is null", () => {
+    const sc = scorecardOf(OVER);
+    expect(lastClosedOverFromScorecard(sc, nameOf)).toBeNull();
   });
 });
