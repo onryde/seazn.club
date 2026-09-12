@@ -598,6 +598,7 @@ export async function loadCompetitionHub(
             cascade: d.tiebreakers ?? module_?.defaultTiebreakers ?? [],
             entrantNames: names,
             entrantLogos: badges,
+            entrantColours: colours,
             championId,
             updatedAt: snap.updated_at,
             msg,

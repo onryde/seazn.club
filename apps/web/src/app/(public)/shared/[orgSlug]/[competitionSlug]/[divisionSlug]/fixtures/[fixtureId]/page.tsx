@@ -220,14 +220,25 @@ export default async function FixturePage({ params }: Props) {
     <DictProvider dict={ui} locale={locale}>
       <div style={publicThemeStyle(competition.branding)}>
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
-        <nav className="mb-4 text-xs text-ink-muted">
+        {/* `‹ Competition · Division` — the design board's breadcrumb. The
+            leading chevron says "up from here" before either link is read,
+            which a bare "A / B" does not; the competition page's own nav
+            already opens with `←` for the same reason. The separator is `·`
+            rather than `/`, matching every other meta line on this surface
+            (the court card's, the sponsor ticker's).
+
+            `aria-hidden` on the chevron: it is punctuation, and a screen
+            reader announcing "single left-pointing angle quotation mark"
+            before the competition's name is noise. */}
+        <nav className="mb-4 flex flex-wrap items-center gap-x-1.5 text-xs text-ink-muted">
+          <span aria-hidden>‹</span>
           <Link
             href={`/shared/${org.slug}/${competition.slug}`}
             className="hover:text-accent-strong hover:underline"
           >
             {competition.name}
-          </Link>{" "}
-          /{" "}
+          </Link>
+          <span aria-hidden>·</span>
           <Link href={basePath} className="hover:text-accent-strong hover:underline">
             {division.name}
           </Link>

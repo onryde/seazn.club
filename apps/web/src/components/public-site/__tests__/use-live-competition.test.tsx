@@ -183,6 +183,7 @@ function docWith(
             entrantId: "e1",
             name: "Blue Blazers",
             badgeUrl: null,
+            colour: null,
             cells: [opts.pts ?? "3"],
             tieBreakText: null,
             champion: false,

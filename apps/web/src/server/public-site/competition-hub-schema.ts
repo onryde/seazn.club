@@ -117,6 +117,11 @@ export const TableRow = z.object({
   entrantId: z.string(),
   name: z.string(),
   badgeUrl: z.string().nullable(),
+  /** The entrant's own colour, for `EntityLogo`'s painted tile. Absent until
+   *  now, which is why the same club read as a coloured tile on the Teams tab
+   *  and a grey one in the standings table one tab away — `entity-logo.tsx`
+   *  records that as knowingly deferred. */
+  colour: z.string().nullable(),
   /** One formatted string per `TableColumn`, in the same order. Strings, not
    *  numbers: the builder has already applied the locale's number format. */
   cells: z.array(z.string()),
@@ -140,6 +145,13 @@ export const LeaderRow = z.object({
   personHref: z.string().nullable(),
   entrantName: z.string().nullable(),
   badgeUrl: z.string().nullable(),
+  // NO `colour` here yet, deliberately, and the asymmetry with `TableRow`
+  // above is the point: the standings table's colours were one map away (the
+  // hub already builds `colours` for the fixture sides), while a leader row's
+  // entrant colour is not read at all — `public-leaders.ts` selects
+  // `team_display->>'logo_path'` and nothing beside it. Closing this half is a
+  // query change in that reader, not a field here, and a required field
+  // nothing populates is worse than an absent one.
   /** The formatted value ("412", "8.44"), not the number. */
   value: z.string(),
 });
