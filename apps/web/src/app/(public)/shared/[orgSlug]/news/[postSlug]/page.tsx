@@ -19,7 +19,7 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareBar } from "@/components/share-bar";
 import { DownloadCardButton } from "@/components/news/download-card-button";
 import { PostScorebug } from "@/components/news/post-scorebug";
-import { kindEyebrow, scoreboardFor } from "@/lib/news-presentation";
+import { kindEyebrow, scoreboardFor, TONE_ON_LIGHT } from "@/lib/news-presentation";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
 
@@ -77,13 +77,6 @@ export default async function PostPage({ params }: Props) {
     : "";
   const isPublishedResult = post.status === "published" && scoreline !== null;
 
-  const TONE_TEXT = {
-    lime: "text-[#a3e635]",
-    white: "text-court-ink",
-    red: "text-[#ef4444]",
-    muted: "text-ink-muted",
-  } as const;
-
   return (
     <article className="mx-auto max-w-2xl">
       <Link
@@ -117,7 +110,7 @@ export default async function PostPage({ params }: Props) {
       <header className="mt-5">
         {!scoreline ? (
           <span
-            className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${TONE_TEXT[eb.tone]}`}
+            className={`text-[11px] font-semibold uppercase tracking-[0.22em] ${TONE_ON_LIGHT[eb.tone]}`}
           >
             {eyebrow}
           </span>
