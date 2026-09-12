@@ -179,7 +179,20 @@ export default async function CompetitionHomePage({ params }: Props) {
 
   const shareLabels: ShareBarLabels = {
     share: t(dict, "share.share"),
-    whatsapp: t(dict, "share.whatsapp"),
+    // The SHORT label, visible on the button; the long sentence is the
+    // accessible name below. `share.whatsapp` ("Share on WhatsApp") in the
+    // visible slot put three full-sentence buttons in a phone hero and wrapped
+    // them onto two rows, which pushed the counters below the fold at 320.
+    //
+    // The verb is not lost: it is in `whatsappAria`, which is what a screen
+    // reader announces, and the button sits in a row headed by "Share". A
+    // brand name beside two verbs reads as the WhatsApp option, which is how
+    // every other share row on a phone works.
+    //
+    // `share.whatsapp` itself is deliberately NOT shortened — it must stay
+    // identical to ui.json's copy (`hub-dictionary.test.ts`), where it is the
+    // accessible name of the console's share button.
+    whatsapp: t(dict, "share.whatsappShort"),
     whatsappAria: t(dict, "share.whatsappAria"),
     copy: t(dict, "share.copy"),
     copied: t(dict, "share.copied"),
@@ -286,11 +299,22 @@ export default async function CompetitionHomePage({ params }: Props) {
                 {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
                     The `▸` stays OUT of the dictionary string: a decorative
                     glyph inside translated copy is what gets mangled per
-                    locale (Task 6 ruling 24). */}
+                    locale (Task 6 ruling 24).
+
+                    `max-md:hidden` — and this is a PRODUCT call, not a layout
+                    one. Present casts the competition to a big screen at a
+                    ground; it is not something anyone does from the phone they
+                    are holding, and on a phone it was the fourth control in a
+                    hero row that already wrapped onto two lines.
+
+                    It is HIDDEN, not removed: the Info tab renders the same
+                    link (`mh-info-present`) at every width, so the kiosk is
+                    still reachable on a phone, one tab away — which is what
+                    makes this a fold rather than a feature a phone loses. */}
                 <Link
                   data-testid="mh-hero-present"
                   href={hub.info.presentHref}
-                  className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink"
+                  className="inline-flex min-h-11 items-center rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink max-md:hidden"
                 >
                   {t(dict, "landing.present")} ▸
                 </Link>

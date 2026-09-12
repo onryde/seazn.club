@@ -1013,6 +1013,18 @@ describe("InfoTab", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
+  it("the kiosk link is never folded — this tab is where a phone reaches Present", () => {
+    // The other half of `page.test.tsx`'s "folds Present out of the hero on a
+    // phone". The hero's copy is `max-md:hidden` because casting to a big
+    // screen is not something anyone does from the phone in their hand; that is
+    // only acceptable while THIS link is reachable at every width, so the fold
+    // and the absence of a fold are one pair split across two files.
+    const h = render();
+    const at = h.indexOf(`data-testid="mh-info-present"`);
+    expect(at).toBeGreaterThan(-1);
+    expect(h.slice(h.lastIndexOf("<", at), h.indexOf(">", at))).not.toContain("hidden");
+  });
+
   it("there is NO sponsor row on this tab — the board is the PAGE's, below every tab", () => {
     // Owner ruling 2026-09-12 (Option B). The board used to be a slot here and
     // on the Overview, which meant a competition's sponsors vanished the moment

@@ -5169,8 +5169,12 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
   const proShared = await html(newSession(), `/shared/${proOrgSlug}/${proComp.slug}`);
   check(
     "plg pro page keeps the fan ShareBar",
+    // The ARIA name, not the visible label. The button shows the brand alone
+    // ("WhatsApp") since the sponsor-placement change — a full sentence on the
+    // button wrapped the phone hero onto two rows — and a bare "WhatsApp"
+    // substring is too weak to isolate this row from anything else on the page.
     proShared.status === 200 &&
-      proShared.body.includes("Share on WhatsApp") &&
+      proShared.body.includes("Share this competition on WhatsApp") &&
       proShared.body.includes("Copy link"),
   );
   check(
@@ -5237,7 +5241,8 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
   );
   check(
     "plg free page also renders the fan ShareBar",
-    freeShared.body.includes("Share on WhatsApp") && freeShared.body.includes("Copy link"),
+    freeShared.body.includes("Share this competition on WhatsApp") &&
+      freeShared.body.includes("Copy link"),
   );
 
   // --- /me: the player→organiser "run your own" CTA is gated to users with

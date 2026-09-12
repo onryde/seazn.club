@@ -351,6 +351,36 @@ describe("the competition page mounts the landing", () => {
     expect(h).toContain(`data-testid="mh-hero-present"`);
   });
 
+  it("folds Present out of the hero on a phone, and the Info tab still carries it", async () => {
+    // Present casts the competition to a big screen at a ground — not something
+    // anyone does from the phone in their hand — and it was the fourth control
+    // in a hero row that already wrapped onto two lines at 320.
+    //
+    // AGENTS.md #22 is why this is written the way it is: a folded control
+    // still RENDERS into the markup, so `toContain` passes in both states and
+    // no unit test in this repo can witness a fold. The class is asserted on
+    // the element itself, anchored with a leading space so it cannot match
+    // inside another utility.
+    const h = await render();
+    const at = h.indexOf(`data-testid="mh-hero-present"`);
+    expect(at).toBeGreaterThan(-1);
+    const tag = h.slice(h.lastIndexOf("<", at), h.indexOf(">", at));
+    expect(tag).toMatch(/class="[^"]*\smax-md:hidden"/);
+
+    // The half that makes this a fold rather than a feature a phone loses is
+    // that the Info tab carries the same link, unfolded, at every width — and
+    // it CANNOT be asserted here: `panelFor` mounts one panel, this harness
+    // renders the default (Overview), so `mh-info-present` is legitimately
+    // absent from this markup. Its witness lives where InfoTab is actually
+    // rendered, in `components/public-site/__tests__/stats-teams-info-tabs.test.tsx`
+    // ("the kiosk link is never folded"), which is the other half of this pair.
+    //
+    // What IS assertable here is that the href the Info tab will use comes off
+    // the same document — so the fold cannot strand the kiosk behind a link
+    // this page invented and the tab does not have.
+    expect(tag).toContain(`href="${doc().info.presentHref}"`);
+  });
+
   it("passes the competition's prose down as a slot, and omits it when there is nothing to show", async () => {
     stub.getPublicCompetition.mockResolvedValue(shell({ description: "Since 1894." }));
 
@@ -700,7 +730,10 @@ describe("every word on this page comes from the org's dictionary", () => {
     "landing.tab.overview",
     "landing.tab.matches",
     "landing.tab.info",
-    "share.whatsapp",
+    // The SHORT label is what this page renders on the button;
+    // `share.whatsapp` (the long sentence) is deliberately NOT one of this
+    // page's keys any more — see `page.tsx`'s share-label block.
+    "share.whatsappShort",
     "share.whatsappAria",
     "share.copy",
   ];
@@ -766,7 +799,7 @@ describe("every word on this page comes from the org's dictionary", () => {
       for (const bar of bars) {
         expect(propsOf(bar).labels).toEqual({
           share: dict["share.share"],
-          whatsapp: dict["share.whatsapp"],
+          whatsapp: dict["share.whatsappShort"],
           whatsappAria: dict["share.whatsappAria"],
           copy: dict["share.copy"],
           copied: dict["share.copied"],
