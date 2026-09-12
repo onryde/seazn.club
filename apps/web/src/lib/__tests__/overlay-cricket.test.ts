@@ -206,6 +206,7 @@ describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromSc
     const closed = lastClosedOverFromScorecard(sc, nameOf);
     expect(closed).not.toBeNull();
     expect(closed!.over).toBe(1);
+    expect(closed!.inningsIndex).toBe(0);
     expect(closed!.runs).toBe(0);
     expect(closed!.score).toBe("0/0");
     expect(closed!.glyphs.length).toBe(6);

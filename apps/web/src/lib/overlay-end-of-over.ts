@@ -8,21 +8,54 @@ export function isFullEndOfOver(closed: OverlayClosedOver): boolean {
   return closed.glyphs.length > 0;
 }
 
+/** Mount baseline when the page has never seen a closed over. */
+export const CLOSED_OVER_BASELINE_NONE = { inningsIndex: -1, over: 0 } as const;
+
+export type ClosedOverBaseline = {
+  readonly inningsIndex: number;
+  readonly over: number;
+};
+
+export function closedOverBaselineOf(
+  closed: OverlayClosedOver | null | undefined,
+): ClosedOverBaseline {
+  if (!closed) return CLOSED_OVER_BASELINE_NONE;
+  return { inningsIndex: closed.inningsIndex, over: closed.over };
+}
+
+/** True when `closed` is strictly after the mount baseline (innings, then over). */
+export function isClosedOverAfter(
+  closed: OverlayClosedOver,
+  since: ClosedOverBaseline,
+): boolean {
+  if (closed.inningsIndex > since.inningsIndex) return true;
+  if (closed.inningsIndex < since.inningsIndex) return false;
+  return closed.over > since.over;
+}
+
 /**
- * One queue item when `closed.over` is newer than the mount baseline.
- * `seq` uses the over number so identity is `overN:endOfOver`.
+ * Queue identity for one closed over. Encodes innings so over 12 in innings 1
+ * and over 1 in innings 2 cannot share a `seen` slot (`seq:kind`).
+ */
+export function endOfOverSeq(closed: OverlayClosedOver): number {
+  return (closed.inningsIndex + 1) * 1_000 + closed.over;
+}
+
+/**
+ * One queue item when `closed` is newer than the mount baseline.
+ * `seq` encodes innings+over so identity is unique across the break.
  */
 export function endOfOverMoment(args: {
   closed: OverlayClosedOver | null | undefined;
-  sinceOver: number;
+  since: ClosedOverBaseline;
   msg: OverlayMsg;
 }): OverlayMoment | null {
   const closed = args.closed;
   if (!closed) return null;
-  if (closed.over <= args.sinceOver) return null;
+  if (!isClosedOverAfter(closed, args.since)) return null;
   const full = isFullEndOfOver(closed);
   return {
-    seq: closed.over,
+    seq: endOfOverSeq(closed),
     kind: "endOfOver",
     graphic: "endOfOver",
     tone: "led",
@@ -32,7 +65,6 @@ export function endOfOverMoment(args: {
       score: closed.score,
     }),
     endOfOver: closed,
-    // Attach variant hint in kind suffix? Prefer reading glyphs in the UI.
     ...(full ? {} : {}),
   };
 }

@@ -115,7 +115,10 @@ export type OverlayCricketToss = {
 };
 
 export type OverlayClosedOver = {
-  /** 1-based over number. */
+  /** 0-based index into `scorecard.innings` — pairs with `over` for identity
+   *  across the innings break (bare over numbers restart at 1). */
+  inningsIndex: number;
+  /** 1-based over number within that innings. */
   over: number;
   runs: number;
   wickets: number;
@@ -158,8 +161,9 @@ export function lastClosedOverFromScorecard(
   scorecard: CricketScorecard,
   nameOf: (personId: string) => string | undefined,
 ): OverlayClosedOver | null {
+  const inningsIndex = scorecard.innings.length - 1;
   const innings = scorecard.innings.at(-1);
-  if (!innings || innings.overs.length === 0) return null;
+  if (!innings || innings.overs.length === 0 || inningsIndex < 0) return null;
   const midOver = (scorecard.live?.thisOver.length ?? 0) > 0;
   const over = midOver ? innings.overs.at(-2) : innings.overs.at(-1);
   if (!over) return null;
@@ -182,6 +186,7 @@ export function lastClosedOverFromScorecard(
   const liveBlock = liveFromScorecard(scorecard, nameOf);
 
   return {
+    inningsIndex,
     over: over.number,
     runs: over.runs,
     wickets: over.wickets,

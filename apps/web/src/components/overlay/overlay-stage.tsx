@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
 import { maxSeq, momentsFor } from "@/lib/overlay-moments";
-import { endOfOverMoment } from "@/lib/overlay-end-of-over";
+import { endOfOverMoment, closedOverBaselineOf } from "@/lib/overlay-end-of-over";
 import { tossMoment } from "@/lib/overlay-openers";
 import { useMomentQueue } from "./use-moment-queue";
 import { OverlayMomentSlab } from "./overlay-moment";
@@ -139,7 +139,7 @@ export function OverlayStage(props: OverlayStageProps) {
    * shown.
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
-  const [closedOverBaseline] = useState(() => props.initial.lastClosedOver?.over ?? 0);
+  const [closedOverBaseline] = useState(() => closedOverBaselineOf(props.initial.lastClosedOver));
   const placement = slabPlacementFor(props.style, props.sportKey);
   const reducedMotion = usePrefersReducedMotion();
 
@@ -173,7 +173,7 @@ export function OverlayStage(props: OverlayStageProps) {
         );
         const eoo = endOfOverMoment({
           closed: data.lastClosedOver,
-          sinceOver: closedOverBaseline,
+          since: closedOverBaseline,
           msg,
         });
         const toss = showMatchCard

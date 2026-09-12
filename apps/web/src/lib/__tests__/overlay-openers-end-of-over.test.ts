@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { tossMoment } from "../overlay-openers";
-import { endOfOverMoment, isFullEndOfOver } from "../overlay-end-of-over";
+import {
+  closedOverBaselineOf,
+  CLOSED_OVER_BASELINE_NONE,
+  endOfOverMoment,
+  endOfOverSeq,
+  isClosedOverAfter,
+  isFullEndOfOver,
+} from "../overlay-end-of-over";
 import type { OverlayClosedOver } from "../overlay-cricket";
 
 const msg = (key: string, vars?: Record<string, string | number>) => {
@@ -46,6 +53,7 @@ describe("tossMoment", () => {
 
 describe("endOfOverMoment", () => {
   const closed: OverlayClosedOver = {
+    inningsIndex: 0,
     over: 12,
     runs: 8,
     wickets: 1,
@@ -63,14 +71,14 @@ describe("endOfOverMoment", () => {
   };
 
   it("is null when over is not newer than the baseline", () => {
-    expect(endOfOverMoment({ closed, sinceOver: 12, msg })).toBeNull();
-    expect(endOfOverMoment({ closed, sinceOver: 13, msg })).toBeNull();
+    expect(endOfOverMoment({ closed, since: { inningsIndex: 0, over: 12 }, msg })).toBeNull();
+    expect(endOfOverMoment({ closed, since: { inningsIndex: 0, over: 13 }, msg })).toBeNull();
   });
 
   it("fires once for a newer closed over with full payload", () => {
-    const m = endOfOverMoment({ closed, sinceOver: 11, msg })!;
+    const m = endOfOverMoment({ closed, since: { inningsIndex: 0, over: 11 }, msg })!;
     expect(m.graphic).toBe("endOfOver");
-    expect(m.seq).toBe(12);
+    expect(m.seq).toBe(endOfOverSeq(closed));
     expect(m.headline).toBe("End of over 12");
     expect(m.line).toBe("8 runs · 142/6");
     expect(m.endOfOver).toEqual(closed);
@@ -80,6 +88,29 @@ describe("endOfOverMoment", () => {
   it("compact when glyphs are empty", () => {
     const coarse: OverlayClosedOver = { ...closed, glyphs: [] };
     expect(isFullEndOfOver(coarse)).toBe(false);
-    expect(endOfOverMoment({ closed: coarse, sinceOver: 0, msg })!.endOfOver!.glyphs).toEqual([]);
+    expect(
+      endOfOverMoment({ closed: coarse, since: CLOSED_OVER_BASELINE_NONE, msg })!.endOfOver!.glyphs,
+    ).toEqual([]);
+  });
+
+  it("fires innings-2 over 1 after an OBS mid-innings-1 baseline (bare over would silence it)", () => {
+    const chaseFirst: OverlayClosedOver = {
+      ...closed,
+      inningsIndex: 1,
+      over: 1,
+      score: "4/0",
+      runs: 4,
+      wickets: 0,
+    };
+    // Mounted while innings 1 was on over 15 — old `over <= sinceOver` would drop this.
+    const since = { inningsIndex: 0, over: 15 };
+    expect(isClosedOverAfter(chaseFirst, since)).toBe(true);
+    expect(endOfOverMoment({ closed: chaseFirst, since, msg })!.seq).toBe(endOfOverSeq(chaseFirst));
+    expect(endOfOverSeq(chaseFirst)).not.toBe(endOfOverSeq({ ...closed, over: 1 }));
+  });
+
+  it("closedOverBaselineOf reads innings+over from the mount tip", () => {
+    expect(closedOverBaselineOf(null)).toEqual(CLOSED_OVER_BASELINE_NONE);
+    expect(closedOverBaselineOf(closed)).toEqual({ inningsIndex: 0, over: 12 });
   });
 });

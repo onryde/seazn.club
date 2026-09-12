@@ -259,15 +259,16 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // public HTTP publish vs private subscribe mismatch, fixed 2026-09-12) would
   // otherwise freeze the overlay on first paint.
   //
-  // Refresh ONCE immediately when the effect arms — otherwise the first update
-  // waits a full POLL_MS after mount, which on a live demo is most of an over.
+  // Immediate refresh only when undelayed: under `?delay=` a mount-time fetch
+  // would land in the buffer next to the seed and the drain would present the
+  // NEWER undelayed tip first (I1 regression). Interval still arms either way.
   useEffect(() => {
     if (!live) return;
-    void refresh();
+    if (delayMs <= 0) void refresh();
     const ms = subscribed ? 60_000 : POLL_MS;
     const id = setInterval(refresh, ms);
     return () => clearInterval(id);
-  }, [live, subscribed, refresh]);
+  }, [live, subscribed, refresh, delayMs]);
 
   return {
     data,
