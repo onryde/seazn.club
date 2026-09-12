@@ -30,6 +30,8 @@ export function validHubDoc(): unknown {
     rateLine: "CRR 8.44 · RRR 9.71",
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
   };
   return {

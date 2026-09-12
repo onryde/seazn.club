@@ -34,6 +34,36 @@ export const MatchCentreHeader = z.object({
   // match has no current phase and nobody is a man up.
   phase: z.string().nullable(),
   strength: z.string().nullable(),
+  /**
+   * Where the match currently IS, for a sport whose answer is not a term token
+   * — cricket's over ("5.1 ov"). It sits after the status word in the live
+   * pill, which is where `phase` already sits for the period sports, and the
+   * design board's `LIVE · 12.3 OV` is this field.
+   *
+   * SEPARATE FROM `phase` on purpose. `phase` is the engine's raw period token
+   * resolved through `term.<phase>`; setting it to "5.1 ov" would work only by
+   * falling through its missing-key fallback, which would make a lookup failure
+   * the mechanism rather than the safety net. An over is also not copy — it is
+   * numerals and a unit, the same "numbers, no copy" `rateLine` above is.
+   *
+   * Null for every sport that has no such answer, and for every status but
+   * in_play: a finished match is not anywhere.
+   *
+   * A `Msg`, not a string, because the unit is COPY — the board's "12.3 OV"
+   * is a number plus a translated word, and "ov" is not "ov" in every locale.
+   * Same key+params shape as `statusLine`, resolved client-side by `t()` on
+   * the same tick a live push changes it.
+   */
+  pillNote: Msg.nullable(),
+  /**
+   * The one-line match identity — "8-over match · Round 1 · Garon Park".
+   * Already-resolved strings joined with a separator, never copy this module
+   * composes: the format label arrives pre-resolved from the caller
+   * (`MatchCentreInput.formatLabel`), the round from `stage.roundLabel`, and
+   * the venue is a proper noun. `null` when none of the three exists, never a
+   * string of bare separators.
+   */
+  metaLine: z.string().nullable(),
   updatedAt: z.string(),             // ISO
 });
 

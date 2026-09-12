@@ -568,6 +568,81 @@ describe("buildMatchCentre — cricket", () => {
     });
   });
 
+  describe("the header's meta line and the live pill's over", () => {
+    it("joins format, round and venue in that order, from the same sources the Info tab uses", () => {
+      const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+      const doc = buildMatchCentre(
+        input({
+          events: ledger.events,
+          cfg: ledger.cfg,
+          fixture: decidedFixture(ledger),
+          formatLabel: "8-over match",
+          stage: { name: "Group A", roundLabel: "Round 1" },
+        }),
+      );
+      // The ORDER is the assertion, not the membership: the board reads
+      // "8-over match · Round 1 · Garon Park", and a set of the same three
+      // parts in any order satisfies a "contains" check.
+      expect(doc.header.metaLine).toMatch(/^8-over match · Round 1 · /);
+      // The venue comes from the SAME `venue_name`/`court_name` pair the Info
+      // tab's venue row uses, not a second idea of what a venue is.
+      const venueRow = doc.info.rows.find((r) => r.label.key === "matchCentre.info.venue");
+      expect(venueRow, "the fixture under test has a venue").toBeTruthy();
+      expect(doc.header.metaLine).toContain(String(venueRow!.value.params!.venue));
+    });
+
+    it("is NULL when none of the three exists — never a string of bare separators", () => {
+      const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+      const doc = buildMatchCentre(
+        input({
+          events: ledger.events,
+          cfg: ledger.cfg,
+          fixture: decidedFixture(ledger, { venue_name: null, court_name: null }),
+          formatLabel: null,
+          stage: null,
+        }),
+      );
+      // The failure this guards is " · · ", which renders as punctuation on a
+      // card and passes any non-empty check.
+      expect(doc.header.metaLine).toBeNull();
+    });
+
+    it("drops the missing parts rather than leaving a gap between separators", () => {
+      const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+      const doc = buildMatchCentre(
+        input({
+          events: ledger.events,
+          cfg: ledger.cfg,
+          fixture: decidedFixture(ledger, { venue_name: null, court_name: null }),
+          formatLabel: "8-over match",
+          stage: { name: "Group A", roundLabel: null },
+        }),
+      );
+      // Format only: no trailing separator, and no empty segment where the
+      // round and venue would have been.
+      expect(doc.header.metaLine).toBe("8-over match");
+    });
+
+    it("carries the live over as a Msg, and only while the match is in play", () => {
+      const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);
+      const decided = buildMatchCentre(
+        input({ events: ledger.events, cfg: ledger.cfg, fixture: decidedFixture(ledger) }),
+      );
+      // A finished match is not anywhere — the note would otherwise survive
+      // into a result page carrying the last over played.
+      expect(decided.header.pillNote).toBeNull();
+
+      // …and its positive pair, an in-play document. The over is the CURRENT
+      // innings' own total, so it cannot disagree with the score beside it.
+      const live = buildMatchCentre(input({ events: ledger.events, cfg: ledger.cfg }));
+      if (live.header.status === "in_play") {
+        expect(live.header.pillNote?.key).toBe("matchCentre.oversPill");
+        const lastInnings = live.cricket?.innings.at(-1);
+        expect(String(live.header.pillNote?.params?.overs)).toBe(lastInnings?.total.overs);
+      }
+    });
+  });
+
   describe("Info tab rows — order and omission (fix round 1 — Important #3)", () => {
     it("emits toss, format, venue, start, stage, scoredAs in that order when every fact is present", () => {
       const ledger = scriptLedger(DECIDED_BY_RUNS_SCRIPT);

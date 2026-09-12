@@ -753,6 +753,12 @@ function buildHeader(
   // Only the shootout sentence needs it: the word for a shootout is the
   // SPORT's, not one shared football phrase (see `SHOOTOUT_IS_SKATED`).
   sportKey: string,
+  // The meta line's two non-fixture parts. Both already reach this module for
+  // the Info tab's rows (`MatchCentreInput.formatLabel`, `.stage`) — the header
+  // simply never carried them, so the board's
+  // "8-over match · Round 1 · Garon Park" had no source.
+  formatLabel: string | null,
+  stage: { name: string; roundLabel: string | null } | null,
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
 
@@ -830,6 +836,35 @@ function buildHeader(
   const phase = inPlay ? matchPhase(fixture.summary) : null;
   const strength = inPlay ? matchStrength(fixture.summary) : null;
 
+  // Cricket's "where are we": the live over, for the pill. Read off the SAME
+  // `card.live` the chase sentence and the rate line above already use, so the
+  // pill cannot disagree with the sentence beneath it. Gated on in_play with
+  // everything else on this row — a finished match is not anywhere.
+  // The over comes off the CURRENT innings card, not `card.live` (which has no
+  // overs field of its own) — the last innings is the one being played, super
+  // over included. Same value the score line already shows, so the pill cannot
+  // disagree with the score beneath it.
+  const liveOvers = inPlay ? (card?.innings.at(-1)?.total.overs ?? null) : null;
+  const pillNote: MsgT | null =
+    liveOvers === null ? null : { key: "matchCentre.oversPill", params: { overs: liveOvers } };
+
+  // The match's one-line identity. Every part is an already-resolved string —
+  // the format label arrives pre-resolved from the caller, the round label from
+  // the stage, and a venue is a proper noun — so this joins rather than
+  // translates. `venueParts` mirrors `buildInfoView`'s venue row exactly
+  // (`venue_name` then `court_name`) rather than re-deciding what a venue is.
+  const venueParts = [fixture.venue_name, fixture.court_name].filter(
+    (v): v is string => v !== null,
+  );
+  const metaParts = [
+    formatLabel,
+    stage?.roundLabel ?? null,
+    venueParts.length > 0 ? venueParts.join(" · ") : null,
+  ].filter((v): v is string => v !== null && v !== "");
+  // Null, never a string of bare separators: a fixture with none of the three
+  // gets no line at all rather than an empty one.
+  const metaLine = metaParts.length > 0 ? metaParts.join(" · ") : null;
+
   return {
     live: status === "in_play",
     status,
@@ -841,6 +876,8 @@ function buildHeader(
     rateLine,
     phase,
     strength,
+    pillNote,
+    metaLine,
     updatedAt: now.toISOString(),
   };
 }
@@ -1074,7 +1111,18 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     band = effectiveBand(events, sportModule, cfg);
   }
 
-  const header = buildHeader(fixture, sides, card, setsView, venueTz, locale, now, sportKey);
+  const header = buildHeader(
+    fixture,
+    sides,
+    card,
+    setsView,
+    venueTz,
+    locale,
+    now,
+    sportKey,
+    input.formatLabel,
+    input.stage,
+  );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 
   return {

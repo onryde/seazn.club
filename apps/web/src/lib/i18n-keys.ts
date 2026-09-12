@@ -2642,6 +2642,7 @@ export type DictionaryKey =
   | "matchCentre.lastWicket"
   | "matchCentre.lastWicket.detail"
   | "matchCentre.loadEarlier"
+  | "matchCentre.oversPill"
   | "matchCentre.partnership"
   | "matchCentre.partnerships"
   | "matchCentre.partnershipsFor"
