@@ -2579,3 +2579,128 @@ The other six frames (cricket six, hockey bug goal/red, football penalty,
 hockey open-play goal, reduced motion) were shot in the same run and asserted
 in the same step; the harness's own vacuity floor moved 5 → 8, and all nine
 files are byte-distinct.
+
+## 2026-09-12 — R0 bench CLOSED (memo only, no PR)
+
+Deliverable: **`R0-memo.md`** beside this file — that memo is the authority for every
+number below; this section carries only the rulings and the pointers. Phase detail lives
+in the scratch `PHASE1-FINDINGS.md`, which is THROWAWAY and not in the repo.
+
+**Gate cleared 2026-09-12.** Owner named Fly org `seazn-club`, confirmed the Cloudflare
+account already existed (`CF_ACCOUNT_ID` / `CF_API_TOKEN` were already in `.env.local`,
+which `_STATE.md` did not know), and set a $50 cap. **Actual spend $1.97.** Three bench
+apps created and destroyed; 13 live inputs and every R0 video deleted; storage returned to
+exactly the P5 session's own video. Repo untouched throughout.
+
+### Owner rulings, 2026-09-12
+
+- **B2 (chroma-key) becomes the default R2 wires; the B3 soak cells are struck.** Owner:
+  *"go with your proposal"*. This REVERSES the design of record, which makes B3 the shape
+  and B2 "the documented fallback only on R0's say-so" (design §7.2, line 967).
+- **Ingest goes dual-publish** — WHIP for the live leg, RTMPS for the recorded leg —
+  conditional on C3, which held. `delayMs` follows from it.
+- **Retention:** Cloudflare's 30-day floor stands on the field; the product's 3-day promise
+  is enforced by our own cron DELETE, which must delete **videos, not inputs**
+  (`deleteInput` leaks recordings). The cron half belongs in `onryde/seazn.club.workflow`.
+
+### What R0 settled
+
+- **B3 fails the frame-timing bar and B2 does not.** B3: 156 duplicated frames, 84 gaps,
+  longest clean run 3 — and 144/79/3 with the network removed entirely, so it is the
+  x11grab/Chromium paint beat, not the pull leg. B2: **0 duplicates, 0 gaps at every guest
+  size and every checkpoint through t=180**, *including on a machine failing the fps bar*.
+  **Smoothness under B2 is decoupled from CPU headroom, not merely correlated with it.**
+- **Guest: `performance-4x / 8 GB`, £0.539 / 3 h.** perf-2x has no margin (97.5–98.6 % CPU,
+  fps dips). perf-4x holds every bar a viewer can see and misses only the < 80 % CPU bar,
+  by 1–5 points. perf-8x (£1.078) buys that bar and multi-cam n=4. **Two open owner
+  decisions live here** — whether the CPU bar is honoured as written, and 1080p, which
+  needs perf-8x minimum.
+- **Multi-cam is a guest-size decision, not an architecture decision.** At perf-4x the
+  largest N holding the bars is **N = 1**; N = 4 holds only at perf-8x, comfortably (48 %
+  CPU). So program-plus-preview is required *only* if multi-cam ships on the recommended
+  guest. The curve is not linear and must not be extrapolated.
+- **The hold window replaces a class [D] line.** `timeoutSeconds` governs it, and the hold
+  is timeout + ~3 s. But at **180 no `EXT-X-ENDLIST` is ever emitted** — playback simply
+  expires to a 204 — for a clean cut and an abrupt death alike (183.5 s vs 182.8 s). At 10
+  and 60 an ENDLIST does arrive. **Nothing in R2 may treat ENDLIST as the end-of-stream
+  signal at the value this programme would configure.**
+- **The key colour is `#ff00ff` magenta, `colorkey=0xff00ff:0.30:0.10`, no despill.**
+  Erosion ≤ 4.9 ΔRGB against every palette in `_THEMES.md` §2, versus 334 for the green
+  first tried. `chromakey` costs 4.4× for ~3 ΔRGB; `despill` is actively harmful (it
+  desaturates volleyball's legitimate `#4aa8ff` by 134 ΔRGB).
+
+### False premises found (the brief and the design of record both)
+
+1. **`deleteRecordingAfterDays: 1`** (R0-bench.md scope 2) **and the design's own `7`** are
+   both rejected — HTTP 400, code 10060, valid range 30–1096.
+2. **The design §7.2 ffmpeg line, verbatim, produces a stream Cloudflare will not serve.**
+   Four deviations were needed; all are named in the memo's appendix, none silent.
+3. **§7.2's graceful stop cannot work as written.** `q` requires stdin and the line passes
+   `-nostdin`, so every "graceful" stop was a SIGKILL at the 10 s fallback (+10.015 s vs
+   +0.114 s with SIGINT). **R2 must send SIGINT or drop `-nostdin`**, or §6.4's
+   "child death → retry" fires on an intended clean shutdown.
+4. **The pull path is not LL-HLS.** §7.4 and §9.2 name LL-HLS; the beta is **off** on this
+   account (zero `EXT-X-PART` / `PRELOAD-HINT` / `SERVER-CONTROL` markers, no field on the
+   live-input object) and the measured 12,615 ms is **plain HLS on 2 s segments**.
+   Enabling the beta is a dashboard change and an open owner decision.
+5. **Puppeteer's automation infobar renders ON AIR** and shifts the page 41 px; §7.2 also
+   lacks `-draw_mouse 0`, so a cursor is in every captured frame.
+6. **SRT ingest connects but never starts a broadcast**; RTMPS works. **tini is not PID 1
+   on Fly** (`TINI_SUBREAPER=1` required).
+
+### Findings that change a design rather than a number
+
+- **F1 — `recording.mode: off` takes a LIVE input off the air.** Five inputs flipped
+  `automatic → off` while connected: all five manifests returned `NotFound` within seconds
+  while every input stayed `connected` and every encoder kept running at 29.5–30 fps with
+  `drop_frames: 0`; the un-flipped control kept serving. Flipping back restored playback in
+  15 s with no publisher reconnect. **§6.5's guard must never touch a live input's
+  recording mode** — conserving storage mid-match takes the broadcast down while every
+  encoder-side check stays green. **Recording is not optional for a stream that must be
+  watched; capacity consumption is a consequence of being watchable.** (This overturns
+  phase 1's own retraction of the same finding: both of phase 1's controls were confounded
+  by publishers Cloudflare had never accepted, so there was no broadcast to gate.)
+- **F2 — an in-progress recording contributes NOTHING to `storage-usage`.** Measured with
+  two soaks recording for 2 h 09 m each: the account read **33.31 min**, all of it another
+  session's finalised video; R0's 258 in-flight minutes counted as zero, each carrying
+  `duration: -1`. The minutes then landed as **+359.86 in under three minutes**. And
+  `DELETE` on a `live-inprogress` recording is refused (`409`, code `10046`). So the guard
+  **cannot see the commitment and could not free it if it could**: §6.5 must **reserve at
+  admission** and reconcile at finalisation. Poll-then-admit is *unsound*, not imprecise.
+- **F3 — `GET /stream/live_inputs` omits `recording` entirely.** Only the per-input GET
+  carries it; a list-based audit reads absent-as-`None` and reports the opposite of the
+  truth.
+- **F4 — liveness must be read WITHIN one variant.** An HTTP 200 on the master is not
+  liveness; a reconnect issues a new variant whose numbering is unrelated, so a naive diff
+  reads "advancing"; and a null baseline must read `unknown`, never true. A peer session
+  measured 67 of ~76 polls reported advancing on a frozen head this way. R0's own hold
+  probe then served **61 consecutive 200s on a frozen playlist over 181.5 s** before the
+  204 — a three-minute false green.
+- **F6 — under B2 a failing machine reports `drop_frames: 0` and `dup_frames: 0`.** B2's
+  failure mode is `speed` < 1.0 — falling behind wall clock — which the encoder's frame
+  counters cannot see. **`speed` must be read alongside them.**
+- **WHIP ingest yields neither a recording nor HLS** (zero videos and HTTP 204 on the
+  manifest, with recording explicitly `automatic`). This is the load-bearing reason
+  dual-publish is *necessary* rather than convenient: the WHIP leg cannot be the recorded
+  leg.
+
+**One shape recurred five times this wave and is worth naming once:** absent evidence
+counted as positive evidence — a frozen picture encoded at a contented 30 fps; a stalled
+playlist reported as advancing off a null baseline; a deleted recording indistinguishable
+from one never created; a storage figure of 33 with two three-hour recordings open; and a
+health check that would call a device alive while its publisher was already dead. Each
+passes "did something go wrong" and fails "did the thing I need actually happen".
+
+### What R0 does NOT prove
+
+- No weak-link contribution leg. C5's publisher was a datacentre Machine on a clean link;
+  what the compositor does when contribution collapses is an R2 question.
+- No N-way *contribution pulls* — M1's sources are local files, so those rows measure
+  decode + composite + key and exclude N pulls.
+- The driver row is three numbers, not a verdict: **CPU does not separate CSS, motion.dev
+  and GSAP** (the ordering reversed between runs), overlay smoothness separates them only
+  weakly with **CSS worst in both runs**, and motion.dev was driven through its vanilla
+  API, so the row is a lower bound on the React path's cost.
+- **A destination collision this wave caused is recorded rather than hidden** (memo F9):
+  two cells overlapped on one stream key for ~5 minutes. Encoder-side numbers are
+  unaffected; neither cell's output was pulled, and no D5 row comes from either.

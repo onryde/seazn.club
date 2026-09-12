@@ -12,9 +12,16 @@ production and test code under `apps/web`, and `db/` is no longer untouched —
 exists yet", or names #752 as an OPEN pull request describes the tree before
 2026-09-10 and is marked where it survives as a prior record.
 
-Last updated: **2026-09-10**, by the R2-prep wave (branch `feat/stream-r2-prep`):
-**W1 CLOSED; W2 is next and owes a task-zero RE-PIN; R0, R1 and R2 are prompts
-with no plans and none started; R3 is deferred to the capture repo.**
+Last updated: **2026-09-12**, by the R0 bench wave (branch `docs/streaming-r0-memo`):
+**R0 is CLOSED — its memo is `R0-memo.md` beside this file, and the Cloudflare
+gate that blocked three items is cleared.** W1 CLOSED; W2 is next and owes a
+task-zero RE-PIN; R1 and R2 are prompts with no plans; R3 is deferred to the
+capture repo. **R2's plan gate ("after the R0 memo") is now OPEN.**
+
+**Read `R0-memo.md` before planning R2.** It reverses the design of record's
+compositor choice (B2, not B3), names the guest size and its price, and records
+six false premises in the design itself — including that §7.2's graceful stop
+cannot work as written and that the pull path is not LL-HLS.
 
 ## 2026-09-10 — where things stand (R2-prep; SUPERSEDES the 2026-09-08 block below)
 
@@ -33,7 +40,8 @@ with no plans and none started; R3 is deferred to the capture repo.**
   `../../plans/2026-09-05-stream-overlay-w2-moments.md`, with
   `match_centre.timeline` to be evaluated as the moments source. The spectator-W1
   gate that blocked it is open (PR #743 merged 2026-09-08); the RE-PIN is not.
-- **R0, R1 and R2 are PROMPTS with NO PLANS, and none has started.** No
+- **R0 is CLOSED (2026-09-12, `R0-memo.md`). R1 and R2 are PROMPTS with NO
+  PLANS and have not started.** No
   compositor code exists in the tree — no `x11grab`, no `module-null-sink`, no
   `runner-fly.ts`. Plans are still written one wave ahead: R1's gate ("after PR1
   merges") is now OPEN, since PR1 is #761; R2's plan waits on the R0 memo.
@@ -43,7 +51,10 @@ with no plans and none started; R3 is deferred to the capture repo.**
   work in THIS repo: **P5** (a device spike on real handsets) is startable NOW
   and blocks the R3 estimate; **P1** (iOS drops the camera when backgrounded)
   changes what R2's soak should prove.
-- **ONE owner action gates THREE items.** R0, R1 and the U1 spike
+- **[CLEARED 2026-09-12 — the account and token already existed in `.env.local`;
+  R0 ran against them and U1's hold-window question is answered in `R0-memo.md`
+  §4a. Kept as the prior record.]** **ONE owner action gates THREE items.** R0,
+  R1 and the U1 spike
   (`_OPEN-QUESTIONS.md` Q17) all wait on the same thing: **provisioning a
   Cloudflare account and a Stream-scoped API token.** The code tree references no
   Cloudflare env var at all — `CF_ACCOUNT_ID` and `CF_API_TOKEN` appear only in
@@ -371,10 +382,12 @@ wave, and neither belongs to this programme.
 
 **The live order, 2026-09-10:**
 
-1. **The owner action that gates three items** — provision a Cloudflare account
-   and a Stream-scoped API token. R0, R1 and the U1 spike
-   (`_OPEN-QUESTIONS.md` Q17) all wait on it, and nothing in the relay tier can
-   be measured until it exists.
+1. ~~**The owner action that gates three items** — provision a Cloudflare account
+   and a Stream-scoped API token.~~ **DONE 2026-09-12.** The credentials were
+   already in `.env.local`; this file did not know. R0 has run, and U1's
+   hold-window question (`_OPEN-QUESTIONS.md` Q17) is answered in `R0-memo.md`
+   §4a — `timeoutSeconds` governs the hold, the hold is timeout + ~3 s, and at
+   180 **no `EXT-X-ENDLIST` is ever emitted**.
 2. **W2**, from `../../plans/2026-09-05-stream-overlay-w2-moments.md`, whose
    task zero owes the RE-PIN table in the PR. This is the only wave that can
    move without the Cloudflare account.
@@ -385,7 +398,16 @@ wave, and neither belongs to this programme.
    recorded.
 4. **P5, the device spike**, is startable now and blocks the R3 estimate. It
    needs handsets, not this repo, and touches nothing R2 depends on.
-5. Then R0's bench (once 1 is done), R1, R2. Plans stay one wave ahead.
+5. ~~Then R0's bench~~ **R0 is CLOSED.** Next is **R2's plan**, whose gate is now
+   open — write it from `R0-memo.md`, not from design §7.2/§9.3, both of which
+   R0 corrects. Then R1, then R2. Plans stay one wave ahead.
+
+**Two owner decisions are open and both cost money** (`R0-memo.md` §2, §3):
+whether the `< 80 %` CPU bar is honoured as written — `performance-4x` at
+£0.539/3 h misses it by 1–5 points, `performance-8x` at £1.078 clears it and
+also buys multi-cam n=4 — and whether to enable Cloudflare's **Low-Latency HLS
+beta**, which is off today and is the difference between a ~12.6 s and a claimed
+~5 s scorebug for anyone watching a phone-published match.
 
 **The 2026-09-08 order, kept for the record:**
 
