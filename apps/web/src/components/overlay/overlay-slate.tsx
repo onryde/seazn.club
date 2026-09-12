@@ -67,7 +67,7 @@ export function slateStateOf(model: OverlayModel): SlateState {
  *  built by concatenation, so `overlay-dict-coverage.test.ts`'s source scan
  *  finds them. */
 const HEADLINE_KEY: Record<Exclude<SlateState, "live">, string> = {
-  warming: "overlay.slate.warmingHeadline",
+  warming: "overlay.slate.warmingHeadlineVs",
   ended: "overlay.slate.endedHeadline",
 };
 
@@ -117,17 +117,15 @@ export function OverlaySlate({ model, tick, msg, sportKey }: OverlayThemeProps) 
               time. A `.toUpperCase()` would also be wrong for a locale whose
               casing rules differ from the browser's default. */}
           <span data-testid="ovl-slate-headline" className="ovl-slate-headline ovl-display">
-            {msg(HEADLINE_KEY[state])}
+            {state === "warming"
+              ? msg(HEADLINE_KEY.warming, { home, away })
+              : msg(HEADLINE_KEY.ended)}
           </span>
           {state === "warming" ? (
             <>
-              {/* §4a's warming line: "Home v Away · 14:30 <venueTz short>".
-                  `{start}` is `model.header.context`, which in this state IS
-                  the venue-zone start label the server formatted
-                  (`overlayStartLabel` → `headerContext`'s scheduled branch) —
-                  the same one authority, not a second format. */}
+              {/* A1 (2026-09-12): names are the headline; line is toss-pending + start. */}
               <span data-testid="ovl-slate-line" className="ovl-slate-line">
-                {msg("overlay.slate.warmingLine", { home, away, start: model.header.context })}
+                {msg("overlay.slate.warmingLineTossPending", { start: model.header.context })}
               </span>
               <span data-testid="ovl-slate-indicator-warming" className="ovl-slate-warming-dots">
                 <span />

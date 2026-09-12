@@ -193,7 +193,7 @@ export function lastClosedOverFromScorecard(
 }
 
 /** One delivery, as a scorer would write it. Notation, never copy. */
-function glyph(g: BallGlyph): string {
+export function ballGlyphText(g: BallGlyph): string {
   switch (g.kind) {
     case "runs":
       // A dot ball is a DOT. "0" on a broadcast graphic reads as a score.
@@ -212,6 +212,11 @@ function glyph(g: BallGlyph): string {
     case "wicket":
       return "W";
   }
+}
+
+/** @deprecated Use `ballGlyphText` — kept so existing call sites stay stable. */
+function glyph(g: BallGlyph): string {
+  return ballGlyphText(g);
 }
 
 /**

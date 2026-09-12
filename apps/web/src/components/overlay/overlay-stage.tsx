@@ -9,8 +9,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
 import { maxSeq, momentsFor } from "@/lib/overlay-moments";
+import { endOfOverMoment } from "@/lib/overlay-end-of-over";
+import { tossMoment } from "@/lib/overlay-openers";
 import { useMomentQueue } from "./use-moment-queue";
 import { OverlayMomentSlab } from "./overlay-moment";
+import { OverlayEndOfOverCard } from "./overlay-end-of-over";
+import { OverlayTossCard } from "./overlay-toss-card";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import {
@@ -132,6 +136,7 @@ export function OverlayStage(props: OverlayStageProps) {
    * shown.
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
+  const [closedOverBaseline] = useState(() => props.initial.lastClosedOver?.over ?? 0);
   const placement = slabPlacementFor(props.style, props.sportKey);
   const reducedMotion = usePrefersReducedMotion();
 
@@ -145,19 +150,38 @@ export function OverlayStage(props: OverlayStageProps) {
     decidedTemplates: props.decidedTemplates,
   });
 
-  // The slab's queue. `momentsFor` is pure and cheap; the queue owns every
-  // decision about WHEN, and this hands it the short codes the set-won line
-  // names a winner with — the same `model.sides[].short` the scorebug paints,
-  // never a second derivation.
-  const { current: moment, phase } = useMomentQueue(
-    awaitingDelay
-      ? EMPTY_MOMENTS
-      : momentsFor(props.sportKey, data.recent ?? [], momentBaseline, msg, [
-          model.sides[0].short,
-          model.sides[1].short,
-        ]),
-    { reducedMotion },
-  );
+  // Moments first, then end-of-over (so OUT precedes the over card), then toss
+  // (only eligible pre-scoring — never fights mid-over slabs).
+  const sideShorts: [string, string] = [model.sides[0].short, model.sides[1].short];
+  const sideNames: [string, string] = [model.sides[0].name, model.sides[1].name];
+  const incoming = awaitingDelay
+    ? EMPTY_MOMENTS
+    : (() => {
+        const moments = momentsFor(
+          props.sportKey,
+          data.recent ?? [],
+          momentBaseline,
+          msg,
+          sideShorts,
+        );
+        const eoo = endOfOverMoment({
+          closed: data.lastClosedOver,
+          sinceOver: closedOverBaseline,
+          msg,
+        });
+        const toss =
+          props.style === "slate"
+            ? null
+            : tossMoment({
+                toss: data.cricketToss,
+                sideNames,
+                scoringStarted: data.scoringStarted === true,
+                msg,
+              });
+        return [...moments, ...(eoo ? [eoo] : []), ...(toss ? [toss] : [])];
+      })();
+
+  const { current: moment, phase } = useMomentQueue(incoming, { reducedMotion });
 
   // Score tick: the ONE `big` that changed, and only that one (R13). The
   // previous pair lives in a ref that is read AND written only inside this
@@ -250,6 +274,10 @@ export function OverlayStage(props: OverlayStageProps) {
             transform. The fold duration crosses into CSS as a custom property
             from `moment-timing.ts`, so the paint and the state machine cannot
             disagree about how long a fold takes. */}
+        {/* Toss is a CENTER card (A2), not the anchored moment slot. */}
+        {moment !== null && moment.graphic === "toss" ? (
+          <OverlayTossCard moment={moment} phase={phase} />
+        ) : null}
         <div
           data-testid="ovl-moment-slot"
           className={`ovl-moment-slot ovl-moment-slot--${placement}`}
@@ -261,7 +289,10 @@ export function OverlayStage(props: OverlayStageProps) {
           data-band={hasDetailBand(model) ? "" : undefined}
           style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
         >
-          {moment === null ? null : (
+          {moment === null || moment.graphic === "toss" ? null : moment.graphic === "endOfOver" &&
+            moment.endOfOver ? (
+            <OverlayEndOfOverCard moment={moment} phase={phase} msg={msg} />
+          ) : (
             <OverlayMomentSlab moment={moment} phase={phase} placement={placement} />
           )}
         </div>

@@ -201,16 +201,17 @@ const ENDED: OverlayModel = {
 };
 
 describe("OverlaySlate — headline/line per state, resolved through the theme's own `msg`", () => {
-  it("warming: headline is §4a's own key, line is §4a's own template — both from the dictionary, not the model", () => {
+  it("warming: headline is Home vs Away; line is toss-pending + start (A1, 2026-09-12)", () => {
     const en = dictOf("en");
     const tree = render(WARMING).tree();
-    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(en["overlay.slate.warmingHeadline"]);
-    // The whole interpolated sentence, derived by running the SAME template
-    // through the SAME `t()` — never a hand-typed "A v B · 14:30".
-    expect(textOf(byTestId(tree, "ovl-slate-line")!)).toBe(
-      t(en, "overlay.slate.warmingLine", {
+    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(
+      t(en, "overlay.slate.warmingHeadlineVs", {
         home: "Milton Keynes Rovers",
         away: "Northbridge Athletic",
+      }),
+    );
+    expect(textOf(byTestId(tree, "ovl-slate-line")!)).toBe(
+      t(en, "overlay.slate.warmingLineTossPending", {
         start: "Sat 14:30 BST",
       }),
     );
@@ -220,12 +221,15 @@ describe("OverlaySlate — headline/line per state, resolved through the theme's
     expect(Array.isArray(children) ? children.length : 0, "three dots").toBe(3);
   });
 
-  it("warming: every {var} in the template is supplied — no literal placeholder survives to screen", () => {
-    const line = textOf(byTestId(render(WARMING).tree(), "ovl-slate-line")!);
+  it("warming: every {var} in the templates is supplied — no literal placeholder survives to screen", () => {
+    const tree = render(WARMING).tree();
+    const headline = textOf(byTestId(tree, "ovl-slate-headline")!);
+    const line = textOf(byTestId(tree, "ovl-slate-line")!);
+    expect(headline, "an unsupplied var renders as `{name}`").not.toMatch(/\{[a-z]+\}/i);
     expect(line, "an unsupplied var renders as `{name}`").not.toMatch(/\{[a-z]+\}/i);
-    for (const part of ["Milton Keynes Rovers", "Northbridge Athletic", "Sat 14:30 BST"]) {
-      expect(line, part).toContain(part);
-    }
+    expect(headline).toContain("Milton Keynes Rovers");
+    expect(headline).toContain("Northbridge Athletic");
+    expect(line).toContain("Sat 14:30 BST");
   });
 
   it("ended: headline is §4a's endedHeadline key; line is model.result — zero deviation from §4a's own producer there", () => {
@@ -260,9 +264,15 @@ describe("OverlaySlate — headline/line per state, resolved through the theme's
 // JSON files, which passed identically in the orphaned and the wired state.)
 // ---------------------------------------------------------------------------
 describe("public.overlay.slate.* actually reaches the screen, in every locale", () => {
-  it.each(LOCALES)("%s: the warming headline IS that locale's own dictionary value", (locale) => {
+  it.each(LOCALES)("%s: the warming headline IS that locale's interpolated vs template", (locale) => {
+    const dict = dictOf(locale);
     const tree = render(WARMING, [false, false], { locale }).tree();
-    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(dictOf(locale)["overlay.slate.warmingHeadline"]);
+    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(
+      t(dict, "overlay.slate.warmingHeadlineVs", {
+        home: "Milton Keynes Rovers",
+        away: "Northbridge Athletic",
+      }),
+    );
   });
 
   it.each(LOCALES)("%s: the ended headline IS that locale's own dictionary value", (locale) => {
@@ -275,7 +285,7 @@ describe("public.overlay.slate.* actually reaches the screen, in every locale", 
       textOf(byTestId(render(model, [false, false], { locale }).tree(), "ovl-slate-headline")!);
     // Guard the guard: if the two dictionaries ever carried the same word this
     // check would be vacuous, so assert the SOURCE differs first.
-    expect(dictOf("en")["overlay.slate.warmingHeadline"]).not.toBe(dictOf("fr")["overlay.slate.warmingHeadline"]);
+    expect(dictOf("en")["overlay.slate.warmingHeadlineVs"]).not.toBe(dictOf("fr")["overlay.slate.warmingHeadlineVs"]);
     expect(dictOf("en")["overlay.slate.endedHeadline"]).not.toBe(dictOf("fr")["overlay.slate.endedHeadline"]);
     expect(headline("en", WARMING)).not.toBe(headline("fr", WARMING));
     expect(headline("en", ENDED)).not.toBe(headline("fr", ENDED));
@@ -439,14 +449,14 @@ describe("OverlaySlate — the state-swap cross-fade", () => {
 // ---------------------------------------------------------------------------
 describe("public.overlay.slate.* — present in all four locales", () => {
   const KEYS = [
-    "overlay.slate.warmingHeadline",
-    "overlay.slate.warmingLine",
+    "overlay.slate.warmingHeadlineVs",
+    "overlay.slate.warmingLineTossPending",
     "overlay.slate.signalLostHeadline",
     "overlay.slate.signalLostLine",
     "overlay.slate.endedHeadline",
   ] as const;
 
-  it.each(LOCALES)("%s/public.json carries all five slate keys as non-empty strings", (locale) => {
+  it.each(LOCALES)("%s/public.json carries all slate keys as non-empty strings", (locale) => {
     const dict = JSON.parse(readFileSync(join(DICT, locale, "public.json"), "utf8")) as Record<string, unknown>;
     for (const key of KEYS) {
       expect(typeof dict[key], `${locale} missing ${key}`).toBe("string");
@@ -454,9 +464,9 @@ describe("public.overlay.slate.* — present in all four locales", () => {
     }
   });
 
-  it("en's three headlines are upper case, as §4a requires ('as written in the dictionary')", () => {
+  it("en's status headlines are upper case, as §4a requires ('as written in the dictionary')", () => {
     const en = JSON.parse(readFileSync(join(DICT, "en", "public.json"), "utf8")) as Record<string, string>;
-    for (const key of ["overlay.slate.warmingHeadline", "overlay.slate.signalLostHeadline", "overlay.slate.endedHeadline"]) {
+    for (const key of ["overlay.slate.signalLostHeadline", "overlay.slate.endedHeadline"]) {
       expect(en[key], key).toBe(en[key]!.toUpperCase());
     }
   });

@@ -1845,3 +1845,193 @@ body {
     animation: none;
   }
 }
+
+/* —— End-of-over card (anchored, same slot as moment slabs) —— */
+.ovl-end-of-over {
+  display: flex;
+  background: color-mix(in srgb, var(--sport-board) 92%, transparent);
+  color: var(--sport-ink);
+  border-left: 3px solid var(--sport-led);
+  padding: 14px 22px;
+  gap: 18px;
+  max-width: 720px;
+  font-variant-numeric: tabular-nums;
+}
+.ovl-end-of-over--full {
+  min-height: 120px;
+}
+.ovl-end-of-over--compact {
+  flex-direction: column;
+  gap: 6px;
+  min-width: 280px;
+}
+.ovl-end-of-over-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1.2;
+}
+.ovl-end-of-over-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 1px solid color-mix(in srgb, var(--sport-ink) 20%, transparent);
+  padding-left: 16px;
+  min-width: 0;
+  flex: 1;
+}
+.ovl-end-of-over-title {
+  color: var(--sport-led);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ovl-end-of-over-batter,
+.ovl-end-of-over-bowler,
+.ovl-end-of-over-line {
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ovl-end-of-over-bowler {
+  color: color-mix(in srgb, var(--sport-ink) 75%, transparent);
+  font-size: 14px;
+}
+.ovl-end-of-over-side-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
+}
+.ovl-end-of-over-glyphs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ovl-end-of-over-glyph {
+  background: color-mix(in srgb, var(--sport-led) 18%, transparent);
+  color: var(--sport-led);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.ovl-end-of-over-runs {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--sport-ink);
+}
+/* Reuse slab fold phases (transform/opacity only). */
+.ovl-end-of-over--in {
+  animation: ovl-slab-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-end-of-over--hold {
+  opacity: 1;
+  transform: none;
+}
+.ovl-end-of-over--out {
+  animation: ovl-slab-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+/* Staggered reveal on hold — title → batters → bowler → glyphs (broadcast beat). */
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-title,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > * {
+  animation: ovl-eoo-step 280ms ease-out both;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter:nth-child(2) {
+  animation-delay: 120ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter:nth-child(3) {
+  animation-delay: 180ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler {
+  animation-delay: 240ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(1) {
+  animation-delay: 300ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(2) {
+  animation-delay: 360ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(3) {
+  animation-delay: 420ms;
+}
+@keyframes ovl-eoo-step {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* —— Toss center card (A2) —— */
+.ovl-toss-card {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--sport-board) 94%, transparent);
+  border: 2px solid var(--sport-led);
+  padding: 28px 48px;
+  max-width: 1100px;
+  text-align: center;
+  z-index: 5;
+}
+.ovl-toss-card-headline {
+  color: var(--sport-ink);
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+}
+.ovl-toss-card--in {
+  animation: ovl-toss-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-toss-card--hold {
+  opacity: 1;
+}
+.ovl-toss-card--out {
+  animation: ovl-toss-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+@keyframes ovl-toss-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+@keyframes ovl-toss-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -54%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ovl-end-of-over--in,
+  .ovl-end-of-over--out,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-title,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *,
+  .ovl-toss-card--in,
+  .ovl-toss-card--out {
+    animation: none;
+  }
+}

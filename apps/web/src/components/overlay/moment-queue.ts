@@ -144,10 +144,11 @@ export function momentQueueReducer(
   // collapsing three phases into one frame would flash the slab rather than
   // fold it.
   if (state.phase === "in") {
+    const holdMs = state.current.holdMs ?? action.holdMs;
     return {
       ...state,
       phase: "hold",
-      deadline: action.now + action.holdMs,
+      deadline: action.now + holdMs,
       revision: state.revision + 1,
     };
   }

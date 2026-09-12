@@ -20,6 +20,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
 import { OVERLAY_THEMES, defaultThemeFor } from "../theme-registry";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { t } from "@/lib/i18n-runtime";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -72,29 +73,34 @@ const lineOf = (html: string): string => {
 // ---------------------------------------------------------------------------
 describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
   it.each(LOCALES)(
-    "%s: the slate's warming headline served by the stage IS that locale's dictionary value",
+    "%s: the slate's warming headline served by the stage IS that locale's vs template",
     (locale) => {
       const html = renderToStaticMarkup(<OverlayStage {...props({ dict: dictOf(locale) })} />);
-      expect(headlineOf(html)).toBe(dictOf(locale)["overlay.slate.warmingHeadline"]);
+      expect(headlineOf(html)).toBe(
+        t(dictOf(locale), "overlay.slate.warmingHeadlineVs", {
+          home: "Milton Keynes Rovers",
+          away: "Northbridge Athletic",
+        }),
+      );
     },
   );
 
   it("the same fixture in en and in fr serves DIFFERENT words — a hardcoded English literal fails this", () => {
     const en = renderToStaticMarkup(<OverlayStage {...props({ dict: dictOf("en") })} />);
     const fr = renderToStaticMarkup(<OverlayStage {...props({ dict: dictOf("fr") })} />);
-    expect(dictOf("en")["overlay.slate.warmingHeadline"], "premise").not.toBe(
-      dictOf("fr")["overlay.slate.warmingHeadline"],
+    expect(dictOf("en")["overlay.slate.warmingHeadlineVs"], "premise").not.toBe(
+      dictOf("fr")["overlay.slate.warmingHeadlineVs"],
     );
     expect(headlineOf(en)).not.toBe(headlineOf(fr));
   });
 
-  it("the warming LINE is §4a's interpolated template — both names and the start label, and no `{var}` left over", () => {
+  it("the warming LINE is toss-pending + start — names live on the headline (A1)", () => {
     const html = renderToStaticMarkup(<OverlayStage {...props({})} />);
     const line = lineOf(html);
-    for (const part of ["Milton Keynes Rovers", "Northbridge Athletic", "Sat 14:30 BST"]) {
-      expect(line, part).toContain(part);
-    }
+    expect(line).toContain("Sat 14:30 BST");
     expect(line, "an unsupplied var renders as `{name}`").not.toMatch(/\{[a-z]+\}/i);
+    expect(headlineOf(html)).toContain("Milton Keynes Rovers");
+    expect(headlineOf(html)).toContain("Northbridge Athletic");
   });
 
   it("no raw `overlay.slate.*` key reaches the served HTML — `t()` returns the key on a miss", () => {
@@ -111,13 +117,19 @@ describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
     // versa). Both must come out of `props.dict`.
     const en = dictOf("en");
     const partial: Record<string, string> = {
-      "overlay.slate.warmingHeadline": "ZZTOP",
-      "overlay.slate.warmingLine": "{home}|{away}|{start}",
+      "overlay.slate.warmingHeadlineVs": "ZZTOP {home} {away}",
+      "overlay.slate.warmingLineTossPending": "TOSS|{start}",
+      "overlay.brand": "seazn",
     };
     const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial })} />);
-    expect(headlineOf(html), "the theme reads props.dict").toBe("ZZTOP");
-    expect(lineOf(html)).toBe("Milton Keynes Rovers|Northbridge Athletic|Sat 14:30 BST");
-    expect(headlineOf(html), "not some other en dictionary").not.toBe(en["overlay.slate.warmingHeadline"]);
+    expect(headlineOf(html), "the theme reads props.dict").toBe("ZZTOP Milton Keynes Rovers Northbridge Athletic");
+    expect(lineOf(html)).toBe("TOSS|Sat 14:30 BST");
+    expect(headlineOf(html), "not some other en dictionary").not.toBe(
+      t(en, "overlay.slate.warmingHeadlineVs", {
+        home: "Milton Keynes Rovers",
+        away: "Northbridge Athletic",
+      }),
+    );
   });
 });
 

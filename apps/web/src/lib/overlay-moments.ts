@@ -41,6 +41,15 @@ import type { RecentEvent } from "@/lib/overlay-recent-types";
  */
 export interface OverlayMoment extends W1OverlayMoment {
   seq: number;
+  /**
+   * How this graphic renders. Default / absent = W2 moment slab.
+   * `endOfOver` and `toss` are structured cards (2026-09-12 design).
+   */
+  graphic?: "slab" | "endOfOver" | "toss";
+  /** Per-item hold override (toss uses 8s). Absent → queue default 4s. */
+  holdMs?: number;
+  /** Payload for `graphic: "endOfOver"`. */
+  endOfOver?: import("@/lib/overlay-cricket").OverlayClosedOver;
 }
 
 export type MomentRule = (
