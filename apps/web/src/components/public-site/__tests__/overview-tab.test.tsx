@@ -249,16 +249,28 @@ describe("OverviewTab — the status line", () => {
     expect(h).not.toContain(`data-testid="mh-tables"`);
   });
 
-  it("LIVE: the count is the number of live matches, pluralised through the dictionary", () => {
+  it("LIVE: NO status line — the rail says it, and the hero's chip already counted it", () => {
+    // "Live now: 2 matches" used to render directly above a section headed
+    // "Live now" holding exactly those two matches, on a page whose hero
+    // carries a "2 live" chip. Three statements of one fact inside ~200px at
+    // 320. The rail leads the rung, so the top of the panel still says what is
+    // happening.
     const h = render(docLive2);
-    expect(h).toContain("Live now: 2 matches");
-    expect(tagOf(h, "mh-status")).toContain(`data-kind="live"`);
-  });
+    expect(h).not.toContain(`data-testid="mh-status"`);
+    expect(h).not.toContain("Live now: 2 matches");
+    // The positive pair, and the half that keeps this from passing on a panel
+    // that simply rendered nothing: the rail is there, first, with its own
+    // heading.
+    expect(h).toContain(`data-testid="mh-live-now"`);
+    expect(sections(h)[0]).toBe("live");
+    expect(h).toContain(en["landing.liveNow"]);
 
-  it("LIVE, one match: the SINGULAR key — a count that always reads .other is the plural defect", () => {
+    // One live match, same rule — the singular had its own test because a
+    // count that always reads `.other` is the plural defect, and that coverage
+    // now belongs to the hero chip (`page.test.tsx`), which is where the count
+    // still renders.
     const one = hubDoc({ matches: [m("l1", "live", "2026-09-05T10:00:00.000Z", "premier")] });
-    // Terminated, so "1 match" cannot be satisfied by "1 matches".
-    expect(render(one)).toMatch(/Live now: 1 match</);
+    expect(render(one)).not.toContain(`data-testid="mh-status"`);
   });
 
   it("NEXT: the earliest upcoming kick-off, in ITS OWN venue zone and not the viewer's", () => {
@@ -336,9 +348,18 @@ describe("OverviewTab — the status line", () => {
   });
 
   it("translates: the status line is dictionary copy, never English baked in", () => {
-    const h = render(docLive2, { dict: es as Dict, locale: "es" });
-    expect(h).toContain(es["landing.status.live.other"].replace("{count}", "2"));
-    expect(h).not.toContain("Live now: 2 matches");
+    // Proven on the `finished` rung rather than `live`, which no longer has a
+    // status line at all. `finished` is the right replacement because its
+    // sentence is bare copy — `next`'s embeds a formatted date, so a passing
+    // assertion there would be partly about `fmtDate` rather than about the
+    // dictionary.
+    const finished = hubDoc({
+      matches: [m("c1", "completed", "2026-09-01T10:00:00.000Z", "premier")],
+      info: info({ registrationOpen: true }),
+    });
+    const h = render(finished, { dict: es as Dict, locale: "es" });
+    expect(h).toContain(es["landing.status.finished"]);
+    expect(h).not.toContain("Finished");
   });
 });
 
@@ -535,6 +556,22 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // for a seven-member union without complaint.
     for (const rung of ALL_RUNGS) {
       const plan = overviewPlan(rung, dict, "en");
+      if (rung.kind === "live") {
+        // THE ONE EXEMPTION, pinned rather than excused. The live rung's
+        // sentence said "Live now: 1 match" directly above a section headed
+        // "Live now" holding exactly that match, on a page whose hero already
+        // carries a "1 live" chip. The rail IS the top of the panel here
+        // (`LIVE_ORDER` puts `live` first), so the rule this guard protects —
+        // the top of the panel says what is happening — is still satisfied.
+        //
+        // Asserted as `toBeNull`, not skipped: a `live` rung that started
+        // producing copy again would red here, which is the whole point of
+        // enumerating the union.
+        expect(plan.copy, rung.kind).toBeNull();
+        expect(plan.order[0], "the rail leads the live rung").toBe("live");
+        expect(plan.order.length, rung.kind).toBeGreaterThan(0);
+        continue;
+      }
       expect(plan.copy, rung.kind).not.toBeNull();
       // The copy is a SENTENCE, not the key that was looked up — `t()` returns
       // the key itself on a miss, so this is what separates "rendered" from
@@ -774,7 +811,10 @@ describe("OverviewTab — next up and the table previews", () => {
       ],
     });
     const h = render(doc);
-    expect(tagOf(h, "mh-status")).toContain(`data-kind="live"`);
+    // The rung is proven by the LADDER it produced, not by the status line's
+    // `data-kind` — the live rung no longer has a status line, and the rail
+    // leading the order is the same fact stated where it still exists.
+    expect(sections(h)[0], "the live rung leads with its rail").toBe("live");
     expect(cardIds(h, "live-now")).toEqual(["now-live"]);
     expect(cardIds(h, "next-up")).toEqual([]);
     // Absent, not an empty shell headed with a promise.
@@ -1223,6 +1263,9 @@ describe("OverviewTab — one DOM, branched", () => {
 
   it("status, the live rail, next up and the description are the MAIN column; tables and register the side rail", () => {
     const h = render(full, { descriptionSlot: <p>ABOUT</p> });
+    // `full` is a LIVE document, which no longer carries a status line — the
+    // rail is the top of that panel. The status line's own column placement is
+    // asserted on a rung that still has one, two tests below.
     const sideAt = h.indexOf(`data-testid="mh-overview-side"`);
     expect(sideAt).toBeGreaterThan(-1);
     const inMain = (id: string) => {
@@ -1230,7 +1273,6 @@ describe("OverviewTab — one DOM, branched", () => {
       expect(at, id).toBeGreaterThan(-1);
       return at < sideAt;
     };
-    expect(inMain("mh-status"), "mh-status").toBe(true);
     expect(inMain("mh-sec-live"), "mh-sec-live").toBe(true);
     expect(inMain("mh-sec-next"), "mh-sec-next").toBe(true);
     expect(inMain("mh-sec-description"), "mh-sec-description").toBe(true);
@@ -1243,7 +1285,15 @@ describe("OverviewTab — one DOM, branched", () => {
     // a status at 0 would work by arithmetic and break the moment a rung wanted
     // a zeroth section. This is the one element whose position is not a ladder
     // decision.
-    expect(classesOf(render(full), "mh-status")).toContain("order-first");
+    // On a rung that HAS a status line — `full` is live, and live has none.
+    const dated = hubDoc({ divisions: [division("premier")], info: info({ registrationOpen: true }) });
+    expect(classesOf(render(dated), "mh-status")).toContain("order-first");
+    // …and it really is in the main column, which the live-document test above
+    // cannot say any more.
+    const h = render(dated);
+    expect(h.indexOf('data-testid="mh-status"')).toBeLessThan(
+      h.indexOf('data-testid="mh-overview-side"'),
+    );
   });
 
   it("the grids widen from md, and the table previews go back to one-up in the lg side rail", () => {
