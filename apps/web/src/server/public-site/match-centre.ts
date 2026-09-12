@@ -243,7 +243,20 @@ function toLineupPair(lineups: Record<string, PublicPerson[]>, sides: readonly [
     entrantId: side.entrantId,
     slots: (lineups[side.entrantId] ?? []).map((person, i) => ({
       personId: person.personId,
-      slot: "starting" as const,
+      // THE REAL SLOT, not "starting" for everyone. Stamping every member a
+      // starter put the substitutes on the field before kick-off, so the
+      // timeline replay hit "<name> is already on the field" at the first
+      // `football.sub` and dropped every derived line after it — see
+      // `PublicPerson`.
+      //
+      // SIBLING, stated because this pair feeds more than the timeline:
+      // `deriveCricketScorecard` reads the same lineups and its batting order
+      // is `slots.filter(s => s.slot === "starting")` (cricket.ts). So a
+      // cricket fixture that names substitutes now excludes them from the
+      // batting order — which is what a bench place MEANS, and what the pad
+      // already does; it only ever looked otherwise here because this function
+      // discarded the distinction.
+      slot: person.slot,
       orderNo: i + 1,
     })),
   });
@@ -845,8 +858,33 @@ function buildHeader(
   // over included. Same value the score line already shows, so the pill cannot
   // disagree with the score beneath it.
   const liveOvers = inPlay ? (card?.innings.at(-1)?.total.overs ?? null) : null;
+
+  // Every other sport's "where are we" is the division of play still OPEN, and
+  // `setsView` already knows which one that is — `closedMask` is the same field
+  // the Sets/Periods tab highlights the live column with, so the pill and that
+  // tab cannot disagree. Deriving it from the VIEW rather than from the sport
+  // means football, tennis, badminton and volleyball are all one rule instead
+  // of four branches, and the labels already exist: `columnLabels` carries the
+  // engine's phase token ("H2" → `term.H2` → "2nd half") and, where a sport has
+  // no phase token, the unit and the ordinal do it ("Set 3").
+  //
+  // Measured before this: a LIVE football match centre's pill said "LIVE" and
+  // nothing else, on the one sport where the question has a clock answer.
+  const openColumn = setsView === null ? -1 : setsView.closedMask.findIndex((closed) => !closed);
+  const phaseNote: MsgT | null = (() => {
+    if (!inPlay || setsView === null || openColumn < 0) return null;
+    const label = setsView.columnLabels?.[openColumn];
+    if (label !== undefined && label !== "") return { key: `term.${label}` };
+    if (setsView.unit !== undefined) {
+      return { key: `matchCentre.col.${setsView.unit}`, params: { n: openColumn + 1 } };
+    }
+    return null;
+  })();
+
   const pillNote: MsgT | null =
-    liveOvers === null ? null : { key: "matchCentre.oversShort", params: { overs: liveOvers } };
+    liveOvers !== null
+      ? { key: "matchCentre.oversShort", params: { overs: liveOvers } }
+      : phaseNote;
 
   // The match's one-line identity. Every part is an already-resolved string —
   // the format label arrives pre-resolved from the caller, the round label from

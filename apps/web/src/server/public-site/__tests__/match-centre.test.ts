@@ -74,7 +74,12 @@ const AWAY_SIDE: SideT = { entrantId: "away", name: "Southend Queens", short: "S
 const SIDES: [SideT, SideT] = [HOME_SIDE, AWAY_SIDE];
 
 function lineupsFrom(homeIds: readonly string[], awayIds: readonly string[]): Record<string, PublicPerson[]> {
-  const person = (id: string): PublicPerson => ({ personId: id, name: `Player ${id.toUpperCase()}`, masked: false });
+  const person = (id: string): PublicPerson => ({
+    personId: id,
+    name: `Player ${id.toUpperCase()}`,
+    masked: false,
+    slot: "starting",
+  });
   return { home: homeIds.map(person), away: awayIds.map(person) };
 }
 
@@ -85,7 +90,7 @@ function lineupsWithOneMasked(id: string): Record<string, PublicPerson[]> {
   const base = lineupsFrom(HOME, AWAY);
   return {
     ...base,
-    home: base.home.map((p) => (p.personId === id ? { personId: id, name: MASKED_NAME_OF_H1, masked: true } : p)),
+    home: base.home.map((p) => (p.personId === id ? { personId: id, name: MASKED_NAME_OF_H1, masked: true, slot: "starting" as const } : p)),
   };
 }
 
@@ -551,6 +556,57 @@ describe("buildMatchCentre — cricket", () => {
         }),
       );
       expect(doc.derivedComplete).toBe(true);
+    });
+
+    it("a SUBSTITUTE is on the bench, so the replay survives the substitution that brings him on", () => {
+      // The defect this pins: `toLineupPair` stamped every lineup member
+      // "starting", so the substitute was already on the field when the replay
+      // began and `football.sub` threw "<name> is already on the field". The
+      // derived pass stopped there and every set/period line after it vanished
+      // — with the whole RECORDED timeline still rendering, so the page looked
+      // complete. Found by driving a seeded 2–1 and noticing the
+      // "End of 1st half" rung was simply absent.
+      const starters = ["a1", "a2", "a3"];
+      const bench = "a-sub";
+      const lineups: Record<string, PublicPerson[]> = {
+        home: ["h1", "h2", "h3"].map((id) => ({
+          personId: id,
+          name: `Player ${id}`,
+          masked: false,
+          slot: "starting" as const,
+        })),
+        away: [
+          ...starters.map((id) => ({
+            personId: id,
+            name: `Player ${id}`,
+            masked: false,
+            slot: "starting" as const,
+          })),
+          { personId: bench, name: "Player sub", masked: false, slot: "bench" as const },
+        ],
+      };
+
+      const doc = buildMatchCentre(
+        input({
+          sportKey: "football",
+          cfg: FootballCfg.parse({}),
+          lineups,
+          fixture: F({ status: "in_play" }),
+          events: [
+            makeEnvelope(0, { type: "core.start", payload: {} }),
+            makeEnvelope(1, {
+              type: "football.sub",
+              payload: { by: "away", off: starters[0], on: bench, minute: 29 },
+            }),
+          ],
+        }),
+      );
+
+      expect(doc.derivedComplete).toBe(true);
+
+      // …and the substitution really did reach the timeline, or this would
+      // pass on a build that silently dropped the event instead of folding it.
+      expect(doc.timeline?.some((l) => l.text.key === "timeline.football.sub")).toBe(true);
     });
 
     it("moduleVersion: null falls back to resolveLatestModule", () => {

@@ -67,9 +67,11 @@ import {
   type SquadState,
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { matchPhase, periodBreakdown, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
+import { matchPhase, periodBreakdown, servingSide, setBreakdown, type PeriodScoreRow, type SetScore } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import {
+  TIMELINE_GAME_BROKEN_KEY,
+  TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
   TIMELINE_NEUTRAL_KEY,
   TIMELINE_PERIOD_END_KEY,
@@ -105,6 +107,8 @@ export interface SetsArgs {
 // this module. A component imports `@/lib/timeline-keys`; the server imports
 // either.
 export {
+  TIMELINE_GAME_BROKEN_KEY,
+  TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
   TIMELINE_NEUTRAL_KEY,
   TIMELINE_OVERRIDE_KEYS,
@@ -500,6 +504,76 @@ const periodsOf = (summary: ScoreSummary): PeriodScoreRow[] => periodBreakdown(s
 /** Derived lines for one fold step: a set that has just closed, and a period
  *  that has just been left behind. Both read the module's OWN summary — the
  *  timeline never re-derives a score for itself. */
+/** `summary.detail.games` — games in the set IN PROGRESS. Tennis only; every
+ *  other set-based sport scores points straight into the set and has no such
+ *  level. `null` when the shape is absent, which is how a non-tennis summary
+ *  and a tennis summary before the first point both answer. */
+function gamesOf(summary: ScoreSummary): { home: number; away: number } | null {
+  const detail: unknown = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const games: unknown = (detail as { games?: unknown }).games;
+  if (typeof games !== "object" || games === null) return null;
+  const home: unknown = (games as { home?: unknown }).home;
+  const away: unknown = (games as { away?: unknown }).away;
+  if (typeof home !== "number" || typeof away !== "number") return null;
+  return { home, away };
+}
+
+/**
+ * The GAME rung — tennis only, and the reason is that tennis is the only rally
+ * sport with a level between the point and the set.
+ *
+ * Emitted when the games score GROWS without a set closing. A set closing also
+ * moves `games` (back to 0–0), and that moment already has its own, better line
+ * — `Set 2 to Marchetti — 6–3` — so a game rung there would say the same thing
+ * twice and in less detail.
+ *
+ * HELD OR BROKEN IS READ FROM `before`, not `after`: by the time the summary is
+ * taken after the deciding point, `serving` has already flipped to whoever
+ * serves the NEXT game, so asking `after` who was serving names the wrong
+ * player every single time.
+ */
+function gameLine(
+  before: ScoreSummary,
+  after: ScoreSummary,
+  event: EventEnvelope,
+  sportKey: string,
+  sides: readonly [SideT, SideT],
+  setIndex: number,
+): TimelineLineT | null {
+  if (sportKey !== "tennis") return null;
+
+  const gamesBefore = gamesOf(before);
+  const gamesAfter = gamesOf(after);
+  if (gamesBefore === null || gamesAfter === null) return null;
+
+  const homeWon = gamesAfter.home === gamesBefore.home + 1 && gamesAfter.away === gamesBefore.away;
+  const awayWon = gamesAfter.away === gamesBefore.away + 1 && gamesAfter.home === gamesBefore.home;
+  if (!homeWon && !awayWon) return null;
+
+  const winner: 0 | 1 = homeWon ? 0 : 1;
+  const server = servingSide(before);
+  // No server on the record is not a hold — an unknown server cannot be said to
+  // have held, and calling it a break would be a guess in the other direction.
+  // The neutral of the two is "held", so this stays silent instead and the
+  // point/score lines still carry the game.
+  if (server === null) return null;
+  const held = (server === "home" ? 0 : 1) === winner;
+
+  return {
+    seq: event.seq,
+    at: event.recordedAt,
+    // Raw notation, like `markerOf`'s "67'" — the set this game belongs to.
+    marker: `S${setIndex + 1}`,
+    sideIndex: winner,
+    text: {
+      key: held ? TIMELINE_GAME_HELD_KEY : TIMELINE_GAME_BROKEN_KEY,
+      params: { side: sides[winner].name, home: gamesAfter.home, away: gamesAfter.away },
+    },
+    emphasis: "normal",
+  };
+}
+
 function derivedLines(
   before: ScoreSummary | null,
   after: ScoreSummary,
@@ -511,6 +585,13 @@ function derivedLines(
 
   const setsBefore = before === null ? [] : setsOf(before, sportKey);
   const setsAfter = setsOf(after, sportKey);
+
+  const closedNow = setsAfter.some((set, i) => set.closed && setsBefore[i]?.closed !== true);
+  if (before !== null && !closedNow) {
+    // The set in progress is the last one the engine has opened.
+    const line = gameLine(before, after, event, sportKey, sides, Math.max(setsAfter.length - 1, 0));
+    if (line !== null) out.push(line);
+  }
   for (let i = 0; i < setsAfter.length; i++) {
     const set = setsAfter[i]!;
     if (!set.closed || setsBefore[i]?.closed === true) continue;
@@ -590,7 +671,28 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
   if (active.length === 0) return { lines: [], derivedComplete: true };
 
   // Pass 1 — recorded.
-  const recorded = active.map((event) => recordedLine(event, sides, personOf));
+  //
+  // `null` rather than a shorter array: the derived pass below indexes its
+  // output by POSITION IN `active`, so dropping entries here would slide every
+  // derived line onto the wrong event. The nulls are skipped at assembly.
+  //
+  // A tennis POINT is not rendered. It is the only recorded type suppressed
+  // anywhere, and it earns it: 132 point rows and 6.5 phone screens on a short
+  // seeded match, each row reading "Point — <name>", with the game and set
+  // structure a spectator actually navigates by nowhere on the page. The game
+  // rungs `gameLine` derives carry the same ledger at the level the design
+  // board draws, and the set lines were already there.
+  //
+  // NOT EXTENDED TO THE OTHER RALLY SPORTS, deliberately. Badminton, table
+  // tennis and volleyball score rallies straight into the set with no level in
+  // between, so suppressing their rallies would leave the tab with set lines
+  // and nothing else. They have the same volume problem and no natural rung to
+  // aggregate to — a design question, recorded rather than guessed at.
+  const recorded = active.map((event) =>
+    sportKey === "tennis" && event.type === "tennis.point"
+      ? null
+      : recordedLine(event, sides, personOf),
+  );
   const derivedAfter = new Map<number, TimelineLineT[]>();
 
   // Pass 2 — derived.
@@ -644,7 +746,8 @@ export function buildTimeline(args: TimelineArgs): TimelineResult {
   // afterwards floated every derived line to the top of the whole timeline.
   const lines: Ordered[] = [];
   for (let i = 0; i < recorded.length; i++) {
-    lines.push({ line: recorded[i]!, ordinal: lines.length });
+    const line = recorded[i];
+    if (line != null) lines.push({ line, ordinal: lines.length });
     for (const extra of derivedAfter.get(i) ?? []) {
       lines.push({ line: extra, ordinal: lines.length });
     }

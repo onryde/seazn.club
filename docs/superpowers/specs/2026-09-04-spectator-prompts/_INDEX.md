@@ -428,3 +428,92 @@ the programme's second deliberate console/pad touch (the first was ruling 12's T
 - A subagent tool call over ~10 minutes is killed as "stalled" regardless of progress; serial
   walkthrough files must run under ~8 minutes each (Task 15 split into two files).
 - The Task 14 review accepted `force-dynamic`; main's recorded ISR contract overruled it (14d).
+
+## T13 — football and tennis measured against the design board (2026-09-12)
+
+Measured on rendered pages, against ledgers seeded through the real write paths by
+`npm run seed:showcase -- --sport football|tennis`. Demo data cannot support this audit and
+saying so is the first finding: demo FOOTBALL is `football.goal` with a `by` and a `minute`
+(no scorer, assist, card, substitution or half-time mark, and the minutes arrive out of
+order — 78, 67, 80, 14 on the richest fixture in a fresh database), and demo TENNIS is
+`tennis.set_summary`, i.e. per-set totals with no point ever played. Auditing either
+reports missing DATA as missing DESIGN.
+
+### Already matched the board, verified rather than assumed
+
+- The tab rails, including the sport-specific label: football `Summary · Timeline · Periods ·
+  Info`, tennis `Summary · Timeline · Sets · Info`.
+- Club colour reaches the football court card (HH `rgb(47,133,90)`, WW `rgb(162,28,175)` —
+  each club's declared `colors.home_primary`).
+- The DERIVED name-hash tile renders in production. Tennis entrants are individuals, so they
+  have no club and no colour; their crests paint anyway and differ from each other.
+- The tennis score grid beats the board's: per-set columns, the live set highlighted, the
+  serving dot on the server, games-in-progress in parentheses.
+
+### Fixed in this wave
+
+- **The live pill said only "LIVE" on every sport but cricket.** `pillNote` was cricket's
+  overs and nothing else. Now derived from `setsView.closedMask` — the division of play still
+  OPEN — so football reads `LIVE · 2ND HALF` and tennis `LIVE · SET 3` from one rule rather
+  than four branches, using `term.<phase>` and `matchCentre.col.<unit>`, both of which already
+  existed in all four locales.
+- **The Periods/Sets table painted both sides the SAME tint.** Measured: both chips
+  `oklab(0.54132 0.0964073 -0.226955 / 0.15)`, byte-identical, while the court card six pixels
+  above painted each club's own colour. **Fourth finding of the `Side.colour` seam** (match
+  cards → standings → court card → this). Now the same `monogramInk(colour) ?? autoColour(name)`
+  chain, and measured identical to the card in both the club-colour and the derived case.
+- **The Periods table had no Total column.** Added for period tables only — goals accumulate,
+  sets do not — and bounded at four periods by the header's own `w-10` width budget, which
+  starves the name column at 320 beyond that.
+- **The tennis Timeline was a raw per-point dump.** Measured: 132 point rows, ZERO game rungs,
+  5,526px — 6.5 phone screens — on a deliberately short match; a real three-setter is ~200
+  points. Points are no longer rendered and the GAME is the rung, with the set score and
+  hold/break, which is what the board draws. Held-or-broken reads `serving` from the summary
+  BEFORE the deciding point: by the time the summary is taken after it, serving has already
+  flipped to the next game's server.
+- **THE SILENT ONE: every derived timeline line after a substitution was being lost.**
+  `toLineupPair` stamped every lineup member `slot: "starting"`, so substitutes were on the
+  field before kick-off and the replay threw `"<name> is already on the field"` at the first
+  `football.sub`. The derived pass stopped there, the whole RECORDED timeline still rendered,
+  and the page looked complete — the `End of 1st half — 1–1` rung was simply absent. Found by
+  driving a seeded 2–1 and noticing it missing, then reading `server.log`'s degrade warning.
+  `readPublicLineups` now carries `slot` and `toLineupPair` uses it.
+  **Sibling, stated:** the same pair feeds `deriveCricketScorecard`, whose batting order is
+  `slots.filter(s => s.slot === "starting")` — so a cricket fixture naming substitutes now
+  excludes them from the batting order, which is what a bench place means.
+
+### Open, with reasons
+
+- **Aces and double faults are NOT derivable from engine state.** The board says point kinds
+  come from the ledger's per-point meta, and that is true of the LEDGER — but nothing
+  aggregates `meta.kind` into state (keys: cfg, sets, games, phase, points, outcome, serving,
+  setsWon, entrants, pointsWon, replayFlagged, tbFirstServer, tbPointsPlayed). An ENGINE ask,
+  not a spectator-surface one.
+- **"Points won" is available and unrendered** — `state.pointsWon` was `{home: 66, away: 66}`
+  on the seeded fixture. Cheap, not done.
+- **The current game score is built and never rendered** — `summary.detail.game`. On a live
+  tennis match it is the most volatile number on the page.
+- **The other rally sports have the same volume problem and no rung to aggregate to.**
+  Badminton, table tennis and volleyball score rallies straight into the set with no level
+  between, so tennis's fix does not transfer — suppressing their rallies would leave the tab
+  with set lines and nothing else. A design question, deliberately not guessed at.
+- **Football timeline rows name the team twice**, once in the sentence and once in the side
+  chip; the board names it once.
+- **Half time now renders twice** — the derived `End of 1st half — 1–1` above the recorded
+  `Half-time`. Suppressing the recorded line is NOT safe: `football.period` also carries FT
+  and the extra-time phases, where no derived line fires, so suppression would lose the final
+  whistle.
+- **`yellow card` is lower-case** where `Goal` and `Substitution` are capitalised.
+- **The Periods tab has no Scorers/Cards footer**; the board ends the tab with one.
+- **The Sets tab duplicates Summary's "Score by set"** with less — no live-set highlight, no
+  serving dot.
+- **The format label is the raw variant key** (`11-a-side`, `grand-slam`), same class as
+  cricket's raw `t20`. Pre-existing and owned by the loader.
+
+### Not a finding — recorded so it is not re-chased
+
+The football timeline first showed `Half-time` between the 61' goal and the 54' card. That is
+the LEDGER's order faithfully rendered: the seeder posted half time AFTER the booking. Fixed
+in `seed-showcase.ts`. It leaves a real question: **the timeline orders by SEQUENCE, not by
+`minute`**, and demo football data carries minutes out of order — so a scorer entering events
+late gets a timeline that disagrees with its own minute labels.

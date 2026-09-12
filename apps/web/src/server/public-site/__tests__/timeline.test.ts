@@ -87,6 +87,8 @@ import {
   type TimelineLineT,
 } from "../match-centre-schema";
 import {
+  TIMELINE_GAME_BROKEN_KEY,
+  TIMELINE_GAME_HELD_KEY,
   TIMELINE_KEY_FOR,
   TIMELINE_NEUTRAL_KEY,
   TIMELINE_OVERRIDE_KEYS,
@@ -262,6 +264,18 @@ const tennisSetLedger: EventEnvelope[] = [
   env(2, "tennis.set_summary", { home: 4, away: 6 }),
 ];
 
+/** Two games played POINT BY POINT, which `tennisSetLedger` cannot exercise —
+ *  it jumps straight to per-set totals and no point ever happens.
+ *
+ *  Home serves first, so game 1 to home is a HOLD; serving then passes to away,
+ *  so game 2 to home is a BREAK. One of each, from the engine's own serving
+ *  rotation rather than a flag set by the test. */
+const tennisPointLedger: EventEnvelope[] = [
+  env(0, "core.start", {}),
+  ...[1, 2, 3, 4].map((i) => env(i, "tennis.point", { by: "H" })),
+  ...[5, 6, 7, 8].map((i) => env(i, "tennis.point", { by: "H" })),
+];
+
 // ------------------------------------------------------------ buildTimeline
 
 describe("buildTimeline", () => {
@@ -420,7 +434,14 @@ describe("buildTimeline", () => {
           personOf,
         });
         const { lines } = result;
-        expect(lines.length, key).toBeGreaterThanOrEqual(stream.events.length);
+        // Every event owes at least one line — EXCEPT a tennis point, which is
+        // deliberately not rendered (see `buildTimeline`): its game rungs are
+        // derived instead, so a 40-point stream is 8 lines rather than 40+.
+        // Subtracted rather than skipped, so the floor still holds tennis to
+        // everything else it records.
+        const suppressed =
+          key === "tennis" ? stream.events.filter((e) => e.type === "tennis.point").length : 0;
+        expect(lines.length, key).toBeGreaterThanOrEqual(stream.events.length - suppressed);
         for (const line of lines) {
           expect(TimelineLine.safeParse(line).success).toBe(true);
           validated++;
@@ -491,6 +512,45 @@ describe("buildTimeline", () => {
     // …and something really is plain, or "emphasis" would mean nothing.
     const neutral = linesOf(args({ events: [env(0, "some.future.type", {})] }));
     expect(neutral[0]!.emphasis).toBe("normal");
+  });
+
+  it("tennis: a GAME is a rung and a POINT is not — 8 points become 2 lines, not 8", () => {
+    const lines = linesOf(args({ sportKey: "tennis", events: tennisPointLedger }));
+
+    // The suppression, stated as a count rather than as an absence: eight
+    // points are on the ledger and not one of them is a line.
+    expect(countKey(lines, "timeline.tennis.point")).toBe(0);
+
+    // …and something replaced them, or this test would pass on a build that
+    // simply dropped the points and rendered nothing.
+    const rungs = lines.filter(
+      (l) => l.text.key === TIMELINE_GAME_HELD_KEY || l.text.key === TIMELINE_GAME_BROKEN_KEY,
+    );
+    expect(rungs.length).toBe(2);
+
+    // NEWEST FIRST, so the break (game 2) is above the hold (game 1). Home
+    // serves first: game 1 to home is a hold, game 2 to home is a break — and
+    // asserting BOTH is the point, since a build that always said "holds" would
+    // pass a test that only ever checked the first game.
+    expect(rungs[0]!.text.key).toBe(TIMELINE_GAME_BROKEN_KEY);
+    expect(rungs[0]!.text.params).toMatchObject({ home: 2, away: 0 });
+    expect(rungs[1]!.text.key).toBe(TIMELINE_GAME_HELD_KEY);
+    expect(rungs[1]!.text.params).toMatchObject({ home: 1, away: 0 });
+
+    // The marker names the set the game belongs to.
+    expect(rungs[0]!.marker).toBe("S1");
+    // Both rungs are the winner's, and the winner here is home.
+    expect(rungs.map((l) => l.sideIndex)).toEqual([0, 0]);
+  });
+
+  it("tennis game rungs are NOT emitted for the game that closes a set — the set line already says it", () => {
+    // `tennis.set_summary` closes a set outright. If a set-closing moment also
+    // emitted a game rung, this ledger would carry two rungs saying the same
+    // thing in less detail.
+    const lines = linesOf(args({ sportKey: "tennis", events: tennisSetLedger }));
+    expect(countKey(lines, TIMELINE_GAME_HELD_KEY)).toBe(0);
+    expect(countKey(lines, TIMELINE_GAME_BROKEN_KEY)).toBe(0);
+    expect(countKey(lines, TIMELINE_SET_WON_KEY)).toBe(2);
   });
 
   it("a phase is named ONCE — in the sentence, not also in the marker", () => {
