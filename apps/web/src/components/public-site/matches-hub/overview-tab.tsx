@@ -41,7 +41,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
-import { plural, t } from "@/lib/i18n-runtime";
+import { t } from "@/lib/i18n-runtime";
 import { UTC, fmtDate, fmtTime } from "@/lib/format";
 import {
   dayKeyInZone,
@@ -57,9 +57,9 @@ import { MatchCard } from "./match-card";
 export interface OverviewTabProps {
   doc: CompetitionHubDocT;
   dict: PublicDict;
-  /** The viewer's locale — `plural()`'s `Intl.PluralRules` and `MatchCard`'s
-   *  `Intl.RelativeTimeFormat`. NOT threaded into any date: `fmtDate`/`fmtTime`
-   *  pin `en-GB` repo-wide (`lib/format.ts:10`) and take no locale parameter. */
+  /** The viewer's locale — `MatchCard`'s `Intl.RelativeTimeFormat`. NOT threaded
+   *  into any date: `fmtDate`/`fmtTime` pin `en-GB` repo-wide
+   *  (`lib/format.ts:10`) and take no locale parameter. */
   locale: Locale;
   /** `Date.now()` at render, passed down rather than read here so a card's
    *  "Starts in 2 hours" is stable across a server render and its hydration. */
@@ -280,11 +280,7 @@ function datesCopy(dict: PublicDict, startsOn: string | null, endsOn: string | n
  * reached anyway (a document parsed by an older build, a cast), and it names
  * the rung so the report is one line long.
  */
-export function overviewPlan(
-  status: LandingStatus,
-  dict: PublicDict,
-  locale: Locale,
-): OverviewPlan {
+export function overviewPlan(status: LandingStatus, dict: PublicDict): OverviewPlan {
   switch (status.kind) {
     case "empty":
       return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER, nextUp: null };
@@ -487,7 +483,7 @@ export function OverviewTab({
     endsOn: doc.info.endsOn,
     now: new Date(now),
   });
-  const plan = overviewPlan(status, dict, locale);
+  const plan = overviewPlan(status, dict);
 
   // Ordered by `sortHubMatches`, never by document order: inside a bucket it
   // reads soonest-first, which is what both of these rails mean.

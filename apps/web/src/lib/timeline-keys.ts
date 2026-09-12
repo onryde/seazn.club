@@ -33,6 +33,23 @@ export const TIMELINE_NEUTRAL_KEY = "timeline.generic.event";
 export const TIMELINE_SET_WON_KEY = "timeline.set.won";
 /** Derived, not recorded: emitted when `summary.detail.periods` grows. */
 export const TIMELINE_PERIOD_END_KEY = "timeline.period.end";
+/**
+ * Derived, not recorded: emitted when a tennis GAME finishes.
+ *
+ * Tennis is the one rally sport with a level between the point and the set, and
+ * the timeline needs it. Measured on a seeded three-setter before these
+ * existed: 132 `tennis.point` rows, 5,526px — 6.5 phone screens of "Point —
+ * <name>" with nothing to navigate by, and a real match is nearer 200. So the
+ * points stop being rendered and the GAME becomes the rung, which is what the
+ * design board draws.
+ *
+ * Held or broken is the whole information in a tennis scoreline, so it is in
+ * the key rather than a parameter — the server is the side serving BEFORE the
+ * game ended, because `serving` has already flipped by the time the summary is
+ * read after it.
+ */
+export const TIMELINE_GAME_HELD_KEY = "timeline.tennis.game.held";
+export const TIMELINE_GAME_BROKEN_KEY = "timeline.tennis.game.broken";
 
 const FOOTBALL = "timeline.football.";
 const TENNIS = "timeline.tennis.";
