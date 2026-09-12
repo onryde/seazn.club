@@ -552,9 +552,23 @@ function Innings({
             className="flex justify-between gap-2 border-t border-zinc-200/80 px-1 pt-1 text-[13px] font-semibold"
           >
             <span>{t(dict, "matchCentre.total")}</span>
+            {/* "83/6 (8.0 ov, RR 10.38)" — the board's shape. Both units are
+                COPY ("ov", "RR"), so each comes from the dictionary rather
+                than being punctuation this file invents; the parentheses and
+                the comma around them are punctuation, which is why they live
+                here and not in a translated sentence.
+
+                It used to read "83/6 (8.0) · 10.38", where the bare trailing
+                number had nothing saying what it was. A run rate is the one
+                figure on a scorecard a reader most needs labelled — 10.38 is
+                meaningless beside 8.0 without it. */}
             <span className="font-mono tabular-nums">
-              {innings.total.runs}/{innings.total.wickets} ({innings.total.overs})
-              {innings.total.runRate === null ? "" : ` · ${innings.total.runRate}`}
+              {innings.total.runs}/{innings.total.wickets} (
+              {t(dict, "matchCentre.oversShort", { overs: innings.total.overs })}
+              {innings.total.runRate === null
+                ? ""
+                : `, ${t(dict, "matchCentre.runRateShort", { rate: innings.total.runRate })}`}
+              )
             </span>
           </p>
           {innings.didNotBat.length === 0 ? null : (

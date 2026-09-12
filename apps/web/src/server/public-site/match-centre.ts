@@ -846,7 +846,7 @@ function buildHeader(
   // disagree with the score beneath it.
   const liveOvers = inPlay ? (card?.innings.at(-1)?.total.overs ?? null) : null;
   const pillNote: MsgT | null =
-    liveOvers === null ? null : { key: "matchCentre.oversPill", params: { overs: liveOvers } };
+    liveOvers === null ? null : { key: "matchCentre.oversShort", params: { overs: liveOvers } };
 
   // The match's one-line identity. Every part is an already-resolved string —
   // the format label arrives pre-resolved from the caller, the round label from
