@@ -223,6 +223,7 @@ export function tableRow(
     entrantId,
     name: titleCase(entrantId),
     badgeUrl: null,
+    colour: null,
     // One string per column of `COMPACT_COLUMNS`, in the same order — the
     // view's `cells[i]` IS `columns[i]` and `StandingsTableView` renders them
     // by position, never by key.

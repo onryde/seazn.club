@@ -79,6 +79,7 @@ const view: TableViewT = {
       entrantId: "a",
       name: "Bartholomew Ravindranath-Oyelaran-Whitaker XI",
       badgeUrl: null,
+      colour: null,
       cells: ["2", "2", "0", "4", "6"],
       tieBreakText: null,
       champion: true,
@@ -88,6 +89,7 @@ const view: TableViewT = {
       entrantId: "b",
       name: "Beta",
       badgeUrl: "https://x/b.png",
+      colour: null,
       cells: ["2", "0", "2", "-4", "0"],
       tieBreakText: "Level with Alpha — separated on GD",
       champion: false,
@@ -382,6 +384,28 @@ describe("StandingsTableView — phone composition", () => {
     // hid columns and kept booking their width.
     const floorOf = (h: string) => Number(h.match(/--sv-min:\s*(\d+)px/)![1]);
     expect(floorOf(full) - floorOf(previewed)).toBe(64); // W and L at 32px each
+  });
+
+  it("paints the entrant tile in its own colour, and leaves a colourless row neutral", () => {
+    // The gap `entity-logo.tsx` records as "STILL GREY, KNOWINGLY": the same
+    // club was a coloured tile on the Teams tab and a grey one here, one tab
+    // apart on the same page, because `TableRow` carried no colour.
+    const coloured: TableViewT = {
+      ...view,
+      rows: [
+        { ...view.rows[0]!, colour: "#2563eb" },
+        { ...view.rows[1]!, colour: null },
+      ],
+    };
+    const h = renderToStaticMarkup(
+      <StandingsTableView view={coloured} dict={dict} testid={TESTID} />,
+    );
+    // The STYLE, which is the only thing that paints — a class-token scan
+    // passes on a table that carries the value and never uses it.
+    expect(h).toContain("background:#2563eb");
+    // Exactly one, so the colour provably comes from the ROW rather than a
+    // constant applied to every tile.
+    expect(h.match(/background:#2563eb/g)?.length).toBe(1);
   });
 
   it("the LAST visible column gets an end gutter at each width, and it is a different column at each", () => {

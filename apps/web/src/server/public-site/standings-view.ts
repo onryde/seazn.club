@@ -127,6 +127,10 @@ export interface TableViewInput {
   /** entrant_id → badge URL. A missing key and an explicit null are the same
    *  thing to the renderer: initials, via `EntityLogo`. */
   entrantLogos: Record<string, string | null>;
+  /** entrant_id → the entrant's own colour. Same contract as `entrantLogos`
+   *  above: a missing key and an explicit null are one thing to the renderer,
+   *  which falls through `EntityLogo`'s chain to a neutral tile. */
+  entrantColours: Record<string, string | null>;
   championId: string | null;
   updatedAt: string;
   /** `t(dict, …)` bound by the caller, in the ORG's locale. The builder resolves
@@ -162,6 +166,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       entrantId: r.entrantId,
       name: name(r.entrantId),
       badgeUrl: input.entrantLogos[r.entrantId] ?? null,
+      colour: input.entrantColours[r.entrantId] ?? null,
       // Byte-for-byte `standings-table.tsx`'s cell expression, in the same
       // column order — the view's `cells[i]` IS `columns[i]`, and the renderer
       // relies on that pairing rather than looking anything up by key.
