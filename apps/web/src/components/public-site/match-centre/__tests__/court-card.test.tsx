@@ -41,6 +41,8 @@ const liveHeader: MatchCentreHeaderT = {
   rateLine: "CRR 7.00 · RRR 9.71",
   phase: null,
   strength: null,
+  pillNote: null,
+  metaLine: null,
   updatedAt: new Date().toISOString(),
 };
 
@@ -274,6 +276,61 @@ function nameSpanClasses(row: string, name: string): string {
  *  exactly as broken as it was. Anchored on real class-list separators so a
  *  variant-prefixed utility cannot satisfy these assertions. */
 const utility = (name: string) => new RegExp(`(?:^|\\s)${name}(?:\\s|$)`);
+
+describe("CourtCard — the live pill's note and the meta line", () => {
+  // The design board's court card opens `LIVE · 12.3 OV` with
+  // `8-over match · Round 1 · Garon Park` beside it. Neither had a source on
+  // `MatchCentreHeader` — the format label, the round and the venue all reach
+  // the builder for the Info tab's rows, and the header simply never carried
+  // them; the over lives on the innings card.
+  const withBoth: MatchCentreHeaderT = {
+    ...liveHeader,
+    pillNote: { key: "matchCentre.oversPill", params: { overs: "12.3" } },
+    metaLine: "8-over match · Round 1 · Garon Park",
+  };
+
+  it("renders the over INSIDE the live pill, resolved through the dictionary", () => {
+    const html = renderToStaticMarkup(<CourtCard header={withBoth} dict={dict} />);
+    expect(html).toContain('data-testid="mc-pill-note"');
+    // The RENDERED copy, not the key: `pillNote` is a Msg because the unit is
+    // translated, so a raw "matchCentre.oversPill" on the page is exactly the
+    // failure this asserts against.
+    expect(html).toContain("12.3 ov");
+    expect(html).not.toContain("matchCentre.oversPill");
+    // INSIDE the pill, not merely somewhere on the card — the board puts it
+    // after the status word, and a note floating elsewhere would satisfy a
+    // bare `toContain`.
+    const pill = html.slice(html.indexOf('data-testid="mc-live-pill"'));
+    expect(pill.slice(0, pill.indexOf("</p>"))).toContain("12.3 ov");
+  });
+
+  it("renders the meta line, and omits it entirely when there is none", () => {
+    const html = renderToStaticMarkup(<CourtCard header={withBoth} dict={dict} />);
+    expect(html).toContain('data-testid="mc-meta-line"');
+    expect(html).toContain("8-over match · Round 1 · Garon Park");
+
+    // The positive pair. `liveHeader` carries neither field, so this is the
+    // same card with the same status proving the two lines are driven by the
+    // DATA rather than by the status.
+    const bare = renderToStaticMarkup(<CourtCard header={liveHeader} dict={dict} />);
+    expect(bare).not.toContain('data-testid="mc-meta-line"');
+    expect(bare).not.toContain('data-testid="mc-pill-note"');
+    expect(bare).toContain('data-testid="mc-live-pill"');
+  });
+
+  it("drops both the moment the match is not in play", () => {
+    // A finished match is not anywhere: there is no current over, and the pill
+    // is a result chip rather than a live pill. Without this the note would
+    // survive into a decided page carrying the last over played.
+    const done: MatchCentreHeaderT = { ...withBoth, live: false, status: "decided" };
+    const html = renderToStaticMarkup(<CourtCard header={done} dict={dict} />);
+    expect(html).not.toContain('data-testid="mc-pill-note"');
+    // The meta line is NOT gated on in_play — a finished match was still an
+    // 8-over match at Garon Park, and that is the half a spectator arriving at
+    // a result page wants.
+    expect(html).toContain('data-testid="mc-meta-line"');
+  });
+});
 
 describe("CourtCard — the crest tile and the side's own colour", () => {
   // `Side.colour` and `Side.badgeUrl` have been on the wire since W1

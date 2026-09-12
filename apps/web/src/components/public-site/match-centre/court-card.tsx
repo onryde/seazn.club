@@ -151,6 +151,20 @@ export function CourtCard({ header, dict }: CourtCardProps) {
                 {phaseLabel}
               </span>
             )}
+            {/* Cricket's answer to "where are we" — the live over. It sits in
+                the same slot `phase` occupies for the period sports, because
+                it is the same fact: the board's `LIVE · 12.3 OV` and its
+                `LIVE · 2ND HALF 67'` are one composition, filled by whichever
+                of the two a sport has. No sport has both today; the order is
+                defined anyway so a future one does not depend on luck. */}
+            {!inPlay || header.pillNote === null ? null : (
+              <span
+                data-testid="mc-pill-note"
+                className="font-semibold tracking-normal text-emerald-200/90"
+              >
+                {t(dict, header.pillNote.key, header.pillNote.params)}
+              </span>
+            )}
             {!inPlay || header.strength === null ? null : (
               <span
                 data-testid="mc-strength"
@@ -159,6 +173,17 @@ export function CourtCard({ header, dict }: CourtCardProps) {
                 {header.strength}
               </span>
             )}
+          </p>
+        ) : null}
+        {/* The match's identity — "8-over match · Round 1 · Garon Park".
+            Beside the status pill on the board, and it wraps BELOW it here
+            rather than competing for a phone's width: the pill is the thing
+            that must always be readable, the meta line is context. Every part
+            arrives already resolved (see `metaLine` on the schema), so this
+            renders a string rather than composing copy. */}
+        {header.metaLine ? (
+          <p data-testid="mc-meta-line" className="-mt-1 mb-3 text-xs text-court-muted">
+            {header.metaLine}
           </p>
         ) : null}
         <div className="space-y-2">

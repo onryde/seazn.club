@@ -32,6 +32,7 @@
   "matchCentre.tab.sets": "Sets",
   "matchCentre.tab.info": "Información",
   "matchCentre.status.live": "En vivo",
+  "matchCentre.oversPill": "{overs} ov",
   "matchCentre.status.decided": "Finalizado",
   "matchCentre.status.scheduled": "Programado",
   "matchCentre.status.notStarted": "No iniciado",

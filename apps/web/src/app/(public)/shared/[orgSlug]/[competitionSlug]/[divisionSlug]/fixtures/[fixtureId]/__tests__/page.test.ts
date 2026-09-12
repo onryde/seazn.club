@@ -105,6 +105,8 @@ function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
       rateLine: null,
       phase: null,
       strength: null,
+      pillNote: null,
+      metaLine: null,
       updatedAt: new Date().toISOString(),
     },
     tabs: ["summary", "scorecard", "info"],
