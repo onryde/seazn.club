@@ -34,6 +34,31 @@
 // they already exist, and the ledger is written to a fixture whose ledger is
 // EMPTY — which is settled by attempting the write, not by reading an audit
 // endpoint and guessing its envelope shape.
+import { readFileSync } from "node:fs";
+
+/** `seed:demo --phase=setup` mints its accounts with a RANDOM suffix
+ *  (`delivered+smoke-pro-<1000..9999>@resend.dev`) and records the one it chose
+ *  in this file. So the operator account cannot be hardcoded here: a literal
+ *  copied out of one seeded database is wrong in every other one. Read what the
+ *  demo seed actually wrote, and say so plainly when there is nothing to read.
+ *
+ *  The domain matters too. Every address this repo MINTS goes to Resend, which
+ *  refuses `@example.com` with a 422 — `scripts/__tests__/test-email-domain.test.ts`
+ *  is the guard, and it is a repo-root suite the `apps/web` gate does not run. */
+const DEMO_STATE = new URL("./.seed-demo-state.json", import.meta.url).pathname;
+
+const demoAccount = (account: "pro" | "community"): string | null => {
+  try {
+    const state = JSON.parse(readFileSync(DEMO_STATE, "utf8")) as Record<
+      string,
+      { email?: string } | undefined
+    >;
+    return state[account]?.email ?? null;
+  } catch {
+    return null;
+  }
+};
+
 const args = process.argv.slice(2);
 const arg = (name: string, fallback: string): string => {
   const i = args.indexOf(`--${name}`);
@@ -41,7 +66,14 @@ const arg = (name: string, fallback: string): string => {
 };
 
 const BASE = arg("base", process.env.SEED_BASE ?? "http://localhost:3000");
-const EMAIL = arg("email", process.env.SEED_EMAIL ?? "smoke-pro-1985@example.com");
+const EMAIL = arg("email", process.env.SEED_EMAIL ?? demoAccount("pro") ?? "");
+if (!EMAIL) {
+  console.error(
+    `No operator account. Pass --email, set SEED_EMAIL, or run \`npm run seed:demo\`\n` +
+      `first — it records the account it created in ${DEMO_STATE}.`,
+  );
+  process.exit(1);
+}
 const PASSWORD = process.env.SEED_PASSWORD ?? "smokepass123";
 const COMPETITION = arg("name", "Southend Premier League 2026");
 

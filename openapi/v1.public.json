@@ -37391,6 +37391,51 @@
                                       }
                                     ]
                                   },
+                                  "pillNote": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string"
+                                          },
+                                          "params": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string"
+                                            },
+                                            "additionalProperties": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "key"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "metaLine": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "updatedAt": {
                                     "type": "string"
                                   }
@@ -37406,6 +37451,8 @@
                                   "rateLine",
                                   "phase",
                                   "strength",
+                                  "pillNote",
+                                  "metaLine",
                                   "updatedAt"
                                 ],
                                 "additionalProperties": false
@@ -37540,6 +37587,16 @@
                                         }
                                       ]
                                     },
+                                    "colour": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "cells": {
                                       "type": "array",
                                       "items": {
@@ -37565,6 +37622,7 @@
                                     "entrantId",
                                     "name",
                                     "badgeUrl",
+                                    "colour",
                                     "cells",
                                     "tieBreakText",
                                     "champion"
@@ -37944,6 +38002,11 @@
                           "rateLine": "example",
                           "phase": "example",
                           "strength": "example",
+                          "pillNote": {
+                            "key": "example",
+                            "params": {}
+                          },
+                          "metaLine": "example",
                           "updatedAt": "example"
                         },
                         "winnerIndex": 0,
@@ -37971,6 +38034,7 @@
                             "entrantId": "example",
                             "name": "example",
                             "badgeUrl": "example",
+                            "colour": "example",
                             "cells": [
                               "example"
                             ],
@@ -39133,6 +39197,51 @@
                                     }
                                   ]
                                 },
+                                "pillNote": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string"
+                                        },
+                                        "params": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string"
+                                          },
+                                          "additionalProperties": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "number"
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "key"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "metaLine": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "updatedAt": {
                                   "type": "string"
                                 }
@@ -39148,6 +39257,8 @@
                                 "rateLine",
                                 "phase",
                                 "strength",
+                                "pillNote",
+                                "metaLine",
                                 "updatedAt"
                               ],
                               "additionalProperties": false
@@ -40632,6 +40743,11 @@
                         "rateLine": "example",
                         "phase": "example",
                         "strength": "example",
+                        "pillNote": {
+                          "key": "example",
+                          "params": {}
+                        },
+                        "metaLine": "example",
                         "updatedAt": "example"
                       },
                       "tabs": [
