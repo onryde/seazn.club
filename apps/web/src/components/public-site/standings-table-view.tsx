@@ -398,7 +398,17 @@ export function StandingsTableView({
                         say whose 6 it is. */}
                     <th scope="row" className="py-2 pr-2 text-left font-medium text-ink">
                       <span className="flex min-w-0 items-center gap-2">
-                        <EntityLogo src={r.badgeUrl} name={r.name} size={20} />
+                        {/* `colour` closes the gap `entity-logo.tsx` records as
+                            "STILL GREY, KNOWINGLY": the same club rendered as a
+                            coloured tile on the Teams tab and a grey one here,
+                            one tab apart on the same page, because `TableRow`
+                            carried no colour. It does now, off the map the hub
+                            already builds for the fixture sides.
+
+                            It also earns its keep in the 162px preview column:
+                            a colour block is read before a two-letter
+                            monogram. */}
+                        <EntityLogo src={r.badgeUrl} name={r.name} colour={r.colour} size={20} />
                         {/* `truncate` needs `min-w-0` on the whole ancestor
                             chain, not just this span. */}
                         <span className="block min-w-0 truncate" title={r.name}>

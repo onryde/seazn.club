@@ -243,7 +243,20 @@ function toLineupPair(lineups: Record<string, PublicPerson[]>, sides: readonly [
     entrantId: side.entrantId,
     slots: (lineups[side.entrantId] ?? []).map((person, i) => ({
       personId: person.personId,
-      slot: "starting" as const,
+      // THE REAL SLOT, not "starting" for everyone. Stamping every member a
+      // starter put the substitutes on the field before kick-off, so the
+      // timeline replay hit "<name> is already on the field" at the first
+      // `football.sub` and dropped every derived line after it — see
+      // `PublicPerson`.
+      //
+      // SIBLING, stated because this pair feeds more than the timeline:
+      // `deriveCricketScorecard` reads the same lineups and its batting order
+      // is `slots.filter(s => s.slot === "starting")` (cricket.ts). So a
+      // cricket fixture that names substitutes now excludes them from the
+      // batting order — which is what a bench place MEANS, and what the pad
+      // already does; it only ever looked otherwise here because this function
+      // discarded the distinction.
+      slot: person.slot,
       orderNo: i + 1,
     })),
   });
@@ -753,6 +766,12 @@ function buildHeader(
   // Only the shootout sentence needs it: the word for a shootout is the
   // SPORT's, not one shared football phrase (see `SHOOTOUT_IS_SKATED`).
   sportKey: string,
+  // The meta line's two non-fixture parts. Both already reach this module for
+  // the Info tab's rows (`MatchCentreInput.formatLabel`, `.stage`) — the header
+  // simply never carried them, so the board's
+  // "8-over match · Round 1 · Garon Park" had no source.
+  formatLabel: string | null,
+  stage: { name: string; roundLabel: string | null } | null,
 ): MatchCentreHeaderT {
   const status = statusOf(fixture.status);
 
@@ -830,6 +849,60 @@ function buildHeader(
   const phase = inPlay ? matchPhase(fixture.summary) : null;
   const strength = inPlay ? matchStrength(fixture.summary) : null;
 
+  // Cricket's "where are we": the live over, for the pill. Read off the SAME
+  // `card.live` the chase sentence and the rate line above already use, so the
+  // pill cannot disagree with the sentence beneath it. Gated on in_play with
+  // everything else on this row — a finished match is not anywhere.
+  // The over comes off the CURRENT innings card, not `card.live` (which has no
+  // overs field of its own) — the last innings is the one being played, super
+  // over included. Same value the score line already shows, so the pill cannot
+  // disagree with the score beneath it.
+  const liveOvers = inPlay ? (card?.innings.at(-1)?.total.overs ?? null) : null;
+
+  // Every other sport's "where are we" is the division of play still OPEN, and
+  // `setsView` already knows which one that is — `closedMask` is the same field
+  // the Sets/Periods tab highlights the live column with, so the pill and that
+  // tab cannot disagree. Deriving it from the VIEW rather than from the sport
+  // means football, tennis, badminton and volleyball are all one rule instead
+  // of four branches, and the labels already exist: `columnLabels` carries the
+  // engine's phase token ("H2" → `term.H2` → "2nd half") and, where a sport has
+  // no phase token, the unit and the ordinal do it ("Set 3").
+  //
+  // Measured before this: a LIVE football match centre's pill said "LIVE" and
+  // nothing else, on the one sport where the question has a clock answer.
+  const openColumn = setsView === null ? -1 : setsView.closedMask.findIndex((closed) => !closed);
+  const phaseNote: MsgT | null = (() => {
+    if (!inPlay || setsView === null || openColumn < 0) return null;
+    const label = setsView.columnLabels?.[openColumn];
+    if (label !== undefined && label !== "") return { key: `term.${label}` };
+    if (setsView.unit !== undefined) {
+      return { key: `matchCentre.col.${setsView.unit}`, params: { n: openColumn + 1 } };
+    }
+    return null;
+  })();
+
+  const pillNote: MsgT | null =
+    liveOvers !== null
+      ? { key: "matchCentre.oversShort", params: { overs: liveOvers } }
+      : phaseNote;
+
+  // The match's one-line identity. Every part is an already-resolved string —
+  // the format label arrives pre-resolved from the caller, the round label from
+  // the stage, and a venue is a proper noun — so this joins rather than
+  // translates. `venueParts` mirrors `buildInfoView`'s venue row exactly
+  // (`venue_name` then `court_name`) rather than re-deciding what a venue is.
+  const venueParts = [fixture.venue_name, fixture.court_name].filter(
+    (v): v is string => v !== null,
+  );
+  const metaParts = [
+    formatLabel,
+    stage?.roundLabel ?? null,
+    venueParts.length > 0 ? venueParts.join(" · ") : null,
+  ].filter((v): v is string => v !== null && v !== "");
+  // Null, never a string of bare separators: a fixture with none of the three
+  // gets no line at all rather than an empty one.
+  const metaLine = metaParts.length > 0 ? metaParts.join(" · ") : null;
+
   return {
     live: status === "in_play",
     status,
@@ -841,6 +914,8 @@ function buildHeader(
     rateLine,
     phase,
     strength,
+    pillNote,
+    metaLine,
     updatedAt: now.toISOString(),
   };
 }
@@ -1074,7 +1149,18 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     band = effectiveBand(events, sportModule, cfg);
   }
 
-  const header = buildHeader(fixture, sides, card, setsView, venueTz, locale, now, sportKey);
+  const header = buildHeader(
+    fixture,
+    sides,
+    card,
+    setsView,
+    venueTz,
+    locale,
+    now,
+    sportKey,
+    input.formatLabel,
+    input.stage,
+  );
   const info = buildInfoView(fixture, card, sides, formatLabel, stage, hrefs, venueTz, locale, band);
 
   return {

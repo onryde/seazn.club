@@ -90,6 +90,7 @@
 //     run-out template takes ONE `{fielder}`, so a thrower/breaker pair is
 //     composed into that one param by the builder, the way a scorebook does.
 import type { ReactNode } from "react";
+import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type {
@@ -487,6 +488,16 @@ function Innings({
           >
             <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.75" />
           </svg>
+          {/* The batting side's crest, in its own colour — the same tile the
+              court card now draws, from the same `Side.colour`/`badgeUrl` the
+              document already carries. Side by side, two innings panels are
+              told apart by their crest before their name is read. */}
+          <EntityLogo
+            src={innings.side.badgeUrl}
+            name={innings.side.name}
+            colour={innings.side.colour}
+            size={24}
+          />
           <span className="min-w-0">
             <span className="block truncate font-semibold">{innings.side.name}</span>
             <span className="block text-[11px] text-ink-muted">
@@ -503,7 +514,18 @@ function Innings({
         </span>
       </summary>
 
-      <div className="grid gap-3 px-3 pb-3 md:grid-cols-2">
+      {/* BATTING ABOVE BOWLING, at every width — the design board's layout,
+          and it corrects a false symmetry rather than just moving boxes. In
+          innings 1 the batting table is Queens and the bowling table is
+          Crusaders: side by side they read as two halves of ONE side's card,
+          which is not what they are. Under a summary that names the batting
+          side, stacked, each table is read as what it is.
+
+          The horizontal room that frees goes to the SECOND INNINGS instead
+          (the grid on the root below) — measured at 1280 the old arrangement
+          was two 477px tables inside one 992px panel, with the second innings
+          pushed below the fold. */}
+      <div className="grid gap-3 px-3 pb-3">
         <div className="grid gap-2">
           <BattingTable
             rows={innings.batting}
@@ -530,9 +552,23 @@ function Innings({
             className="flex justify-between gap-2 border-t border-zinc-200/80 px-1 pt-1 text-[13px] font-semibold"
           >
             <span>{t(dict, "matchCentre.total")}</span>
+            {/* "83/6 (8.0 ov, RR 10.38)" — the board's shape. Both units are
+                COPY ("ov", "RR"), so each comes from the dictionary rather
+                than being punctuation this file invents; the parentheses and
+                the comma around them are punctuation, which is why they live
+                here and not in a translated sentence.
+
+                It used to read "83/6 (8.0) · 10.38", where the bare trailing
+                number had nothing saying what it was. A run rate is the one
+                figure on a scorecard a reader most needs labelled — 10.38 is
+                meaningless beside 8.0 without it. */}
             <span className="font-mono tabular-nums">
-              {innings.total.runs}/{innings.total.wickets} ({innings.total.overs})
-              {innings.total.runRate === null ? "" : ` · ${innings.total.runRate}`}
+              {innings.total.runs}/{innings.total.wickets} (
+              {t(dict, "matchCentre.oversShort", { overs: innings.total.overs })}
+              {innings.total.runRate === null
+                ? ""
+                : `, ${t(dict, "matchCentre.runRateShort", { rate: innings.total.runRate })}`}
+              )
             </span>
           </p>
           {innings.didNotBat.length === 0 ? null : (
@@ -572,7 +608,11 @@ export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
     // The tabpanel role, id and label live on `MatchCentre`'s wrapper around
     // whichever panel is active — declaring them here too would nest two
     // tabpanels and duplicate an id. See `tab-panel.tsx`.
-    <div data-testid="mc-scorecard" className="grid gap-2">
+    // TWO INNINGS SIDE BY SIDE from `lg`, stacked below it. `lg` rather than
+    // `md`: at 768 a half-width panel is ~360px, and a batting table has six
+    // numeric columns plus a name — the width the innings gain has to come
+    // from somewhere, and below `lg` there is none to give.
+    <div data-testid="mc-scorecard" className="grid items-start gap-2 lg:grid-cols-2">
       {innings.map((entry, index) => (
         <Innings
           // KEY AND TESTID SCOPE, from ONE expression — see note 5. `index + 1`
@@ -591,8 +631,22 @@ export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
             doc.header.sides.find((s) => s.entrantId !== entry.side.entrantId) ??
             doc.header.sides[1]
           }
-          // See note 2: the last innings, live or finished.
-          open={index === innings.length - 1}
+          // EVERY innings open. Note 2 used to open only the last one, which
+          // is the right rule for a stacked column and the wrong one beside
+          // it: from `lg` the two innings sit side by side, and a collapsed
+          // panel next to an expanded one is not a composition.
+          //
+          // `<details open>` is an attribute, not a class — it cannot be
+          // varied by media query, so "last only below `lg`, both above" is
+          // not expressible without either duplicating the tree or lying to
+          // the accessibility tree about the disclosure's state. Opening all
+          // of them is the honest resolution: the Scorecard TAB is where a
+          // spectator goes for the scorecard, so collapsing half of it is odd
+          // at any width, and the disclosure remains for anyone who wants it.
+          //
+          // The cost, stated rather than hidden: a finished two-innings match
+          // is a longer scroll on a phone than it was.
+          open
           dict={dict}
         />
       ))}

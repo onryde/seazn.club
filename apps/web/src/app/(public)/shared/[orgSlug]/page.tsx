@@ -9,7 +9,7 @@ import { publicPosts } from "@/server/usecases/org-posts";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { competitionChip, chipLabelKey } from "@/lib/public-site";
-import { kindEyebrow } from "@/lib/news-presentation";
+import { kindEyebrow, TONE_ON_LIGHT } from "@/lib/news-presentation";
 import { renderProse } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
@@ -97,13 +97,6 @@ export default async function OrgLandingPage({ params }: Props) {
   const { posts } = await publicPosts(orgSlug, 0);
   const latestNews = posts.slice(0, 3);
 
-  const TONE_TEXT = {
-    lime: "text-[#65a30d]",
-    white: "text-ink",
-    red: "text-[#dc2626]",
-    muted: "text-ink-muted",
-  } as const;
-
   return (
     <div>
       <section className="mb-8 overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
@@ -161,7 +154,7 @@ export default async function OrgLandingPage({ params }: Props) {
                     className="group flex items-center gap-3 px-4 py-3 transition hover:bg-accent-soft"
                   >
                     <span
-                      className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] ${TONE_TEXT[tone]}`}
+                      className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] ${TONE_ON_LIGHT[tone]}`}
                     >
                       {t(dict, kindEyebrow(p.kind).labelKey)}
                     </span>

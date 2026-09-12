@@ -27,7 +27,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { contrastRatio } from "@/lib/contrast";
-import { EntityLogo, initials, monogramInk } from "../entity-logo";
+import { autoColour, EntityLogo, initials, monogramInk } from "../entity-logo";
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
 
@@ -44,11 +44,11 @@ const SIZE_TOKENS = {
   40: "h-10 w-10 text-sm",
 } as const;
 
-describe("EntityLogo — the pre-existing arms are byte-identical (the additive property)", () => {
+describe("EntityLogo — the badge and org arms are byte-identical; the last arm is deliberately not", () => {
   // 20, 24 and 40 only: 32 did not exist before this change, so it has nothing
   // to be identical to and is asserted in its own block below.
   for (const size of [20, 24, 40] as const) {
-    it(`size ${size}: badge → <img>; orgName → the violet letter mark; neither → the neutral tile`, () => {
+    it(`size ${size}: badge → <img>; orgName → the violet letter mark; neither → a colour from the NAME`, () => {
       const tokens = SIZE_TOKENS[size];
 
       // React hoists a `<link rel="preload" as="image">` ahead of every `<img>`
@@ -67,8 +67,14 @@ describe("EntityLogo — the pre-existing arms are byte-identical (the additive 
         `<span aria-hidden="true" class="${base(tokens)} bg-gradient-to-br from-purple-500 to-fuchsia-500 font-bold text-white">R</span>`,
       );
 
+      // The last arm is NO LONGER the grey tile — an entity that declares no
+      // colour gets one derived from its name. Pinned through `autoColour`
+      // rather than against a hex typed in here, so the palette is the source
+      // of truth and a change to it moves this with it.
+      const auto = monogramInk(autoColour("Blue Blazers"))!;
       expect(html(<EntityLogo src={null} name="Blue Blazers" size={size} />)).toBe(
-        `<span aria-hidden="true" class="${base(tokens)} bg-slate-100 font-semibold text-slate-500">BB</span>`,
+        `<span aria-hidden="true" class="${base(tokens)} font-semibold"` +
+          ` style="background:${auto.bg};color:${auto.ink}">BB</span>`,
       );
     });
   }
@@ -77,13 +83,15 @@ describe("EntityLogo — the pre-existing arms are byte-identical (the additive 
     // The one live caller that passes `className`. Its spacing is the thing
     // that differs from the empty case, so both are pinned: with a className
     // there is ONE space, without it there are two.
+    const auto = monogramInk(autoColour("Blue Blazers"))!;
     expect(
       html(<EntityLogo src={null} name="Blue Blazers" size={20} className="mr-2" />),
     ).toBe(
-      `<span aria-hidden="true" class="${base(SIZE_TOKENS[20], "mr-2")} bg-slate-100 font-semibold text-slate-500">BB</span>`,
+      `<span aria-hidden="true" class="${base(SIZE_TOKENS[20], "mr-2")} font-semibold"` +
+        ` style="background:${auto.bg};color:${auto.ink}">BB</span>`,
     );
     expect(html(<EntityLogo src={null} name="Blue Blazers" size={20} />)).toContain(
-      `${SIZE_TOKENS[20]}  bg-slate-100`,
+      `${SIZE_TOKENS[20]}  font-semibold`,
     );
   });
 
@@ -96,7 +104,10 @@ describe("EntityLogo — the pre-existing arms are byte-identical (the additive 
     expect(omitted).not.toContain(SIZE_TOKENS[24]);
     expect(omitted).toBe(html(<EntityLogo src={null} name="Blue Blazers" size={20} />));
     expect(omitted).toBe(html(<EntityLogo src={null} name="Blue Blazers" colour={null} />));
-    expect(omitted).not.toContain("style=");
+    // It DOES carry a style now — the derived colour is painted the same way a
+    // declared one is. What matters is that omitting `colour` and passing null
+    // are still one render, which the line above pins.
+    expect(omitted).toContain("style=");
   });
 });
 
@@ -358,5 +369,59 @@ describe("initials", () => {
   it("single word takes two letters, multi-word takes first + last", () => {
     expect(initials("Riverside")).toBe("RI");
     expect(initials("Rochford Ramblers")).toBe("RR");
+  });
+});
+
+describe("autoColour — a colour from the name, so nothing has to be stored", () => {
+  it("is stable for the same name, and insensitive to case and surrounding space", () => {
+    // The whole promise: the same entity is the same colour on every page, in
+    // every competition, forever. If this is not stable the feature is worse
+    // than grey — a tile that changes between two pages is noise.
+    // SEVERAL pairs, not one. With a sixteen-entry palette a single pair
+    // agrees by luck one time in sixteen — and that is not hypothetical: the
+    // one-pair version of this test passed with the normalisation DELETED,
+    // because `% 16` reads the low bits where FNV-1a diffuses worst and those
+    // two names happened to collide anyway. Six pairs is what makes the
+    // assertion witness the thing it names.
+    for (const [a, b] of [
+      ["Valley FC", "  valley fc  "],
+      ["Summit FC", "summit fc"],
+      ["Riverside FC", "RIVERSIDE FC"],
+      ["Lakeside FC", " lakeside fc"],
+      ["Meadow CC", "meadow cc"],
+      ["Harbour FC", " HARBOUR FC "],
+    ] as const) {
+      expect(autoColour(a), `${a} vs ${b}`).toBe(autoColour(b));
+    }
+    expect(autoColour("Valley FC")).toBe(autoColour("Valley FC"));
+  });
+
+  it("separates names that differ", () => {
+    // Not a guarantee that ANY two names differ — a fixed palette collides by
+    // construction and that is accepted. This pins that the hash is actually
+    // reading the name rather than returning a constant, which a "stable"
+    // assertion alone would pass on.
+    const names = ["Valley FC", "Summit FC", "Riverside FC", "Lakeside FC", "Meadow CC"];
+    expect(new Set(names.map(autoColour)).size).toBeGreaterThan(1);
+  });
+
+  it("only ever returns a colour `monogramInk` accepts", () => {
+    // Every palette entry has to survive the CSS-hex gate AND produce an ink,
+    // or the last arm in the chain renders a tile with no background — the
+    // invisible-initials failure the gate exists to prevent. Checked across
+    // enough names to touch every entry rather than on one sample.
+    for (let i = 0; i < 200; i++) {
+      const paint = monogramInk(autoColour(`Entity number ${i}`));
+      expect(paint, `name ${i}`).not.toBeNull();
+      expect(paint!.bg).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+
+  it("never overrides a colour the entity actually declared", () => {
+    // The derived colour is LAST in the chain. An organiser who chose navy
+    // gets navy, not a hash of their club's name.
+    const declared = html(<EntityLogo src={null} name="Valley FC" colour="#123456" />);
+    expect(declared).toContain("background:#123456");
+    expect(declared).not.toContain(autoColour("Valley FC"));
   });
 });

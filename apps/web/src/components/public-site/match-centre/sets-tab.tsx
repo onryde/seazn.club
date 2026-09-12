@@ -60,6 +60,7 @@ import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
+import { autoColour, monogramInk } from "@/components/ui/entity-logo";
 import { setsLabelKey } from "./sets-vocabulary";
 import { TabPanel } from "./tab-panel";
 
@@ -78,6 +79,40 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
   // see `sets-vocabulary.ts`. Keying it off `kind` (as this line did) printed
   // "Sets" over "Game 1" / "Game 2" columns for badminton and table tennis.
   const caption = t(dict, setsLabelKey(sets.unit, sets.kind));
+
+  /** A TOTAL column, for period tables only.
+   *
+   *  Goals ACCUMULATE across periods — 1 + 1 is the 2 on the court card — so a
+   *  row of per-period numbers without the sum asks the reader to add up. Sets
+   *  do not work that way (6–4, 3–6 does not total to anything a spectator
+   *  wants), which is why the board draws `Team | 1H | 2H | Total` for football
+   *  and `Player | Set 1 | Set 2 | Set 3` for tennis.
+   *
+   *  Bounded at four periods, and the bound is the WIDTH BUDGET in the header
+   *  comment below: each column is `w-10` and the name column takes what is
+   *  left, so at 320 a fifth and sixth column starve the name to ~48px. Two
+   *  halves, three periods and four quarters all fit with the total; a quarter
+   *  sport that has gone to overtime keeps its columns and loses the sum, which
+   *  is the right way round — the score is still the largest thing on the court
+   *  card directly above. */
+  const showTotal = sets.kind === "periods" && sets.columns.length >= 2 && sets.columns.length <= 4;
+
+  /** Only cells the engine actually wrote. A missing cell is not a zero — the
+   *  table prints an en dash for exactly that reason — so a row with nothing in
+   *  it totals to nothing rather than to 0. */
+  const totalFor = (rowIndex: number): string | null => {
+    const cells = sets.rows[rowIndex] ?? [];
+    let sum = 0;
+    let seen = false;
+    for (const cell of cells) {
+      if (cell === null) continue;
+      const n = Number(cell);
+      if (!Number.isFinite(n)) return null;
+      sum += n;
+      seen = true;
+    }
+    return seen ? String(sum) : null;
+  };
 
   // `lookup`, not `t`, throughout — `t` RETURNS THE KEY on a miss, so it would
   // answer "yes, `term.short.OT9`" for every phase and print the key.
@@ -163,6 +198,15 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                   </th>
                 );
               })}
+              {showTotal && (
+                <th
+                  scope="col"
+                  data-testid="mc-sets-col-total"
+                  className="w-10 px-0.5 text-right font-mono text-[9px] font-medium uppercase tabular-nums text-ink"
+                >
+                  {t(dict, "matchCentre.col.total")}
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -197,8 +241,29 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                         fallback happened to render `1` and `2` at the same
                         width. A layout guarantee that depends on which machine
                         rendered it is not a guarantee. */}
+                    {/* THE SAME COLOUR CHAIN THE COURT CARD USES, because this
+                        chip names the same side a few pixels below it. Measured
+                        before this: both rows painted `bg-accent/15`, one
+                        identical tint for every side, while the card above
+                        painted each club's own colour — two renderings of the
+                        same two entities disagreeing on one screen, and the
+                        lower one carrying no identity at all. Fourth finding of
+                        the same `Side.colour` seam.
+
+                        `monogramInk` picks the ink by measured contrast, so a
+                        club that chose a pale colour still reads. A side with
+                        no colour falls to `autoColour(name)` — which is what
+                        gives an INDIVIDUAL a tile, and tennis entrants are
+                        individuals and never have a club. */}
                     <span
                       data-testid={`mc-sets-badge-${rowIndex}`}
+                      style={(() => {
+                        const paint =
+                          monogramInk(side.colour) ?? monogramInk(autoColour(side.name));
+                        return paint === null
+                          ? undefined
+                          : { backgroundColor: paint.bg, color: paint.ink };
+                      })()}
                       className="inline-flex h-6 min-w-[24px] shrink-0 items-center justify-center rounded-md bg-accent/15 px-0.5 font-mono text-[10px] font-bold uppercase tabular-nums"
                     >
                       {side.short || side.name.slice(0, 3)}
@@ -220,6 +285,14 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
                     {sets.rows[rowIndex]?.[i] ?? "–"}
                   </td>
                 ))}
+                {showTotal && (
+                  <td
+                    data-testid={`mc-sets-total-${rowIndex}`}
+                    className="px-0.5 text-right font-mono font-semibold tabular-nums text-ink"
+                  >
+                    {totalFor(rowIndex) ?? "–"}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

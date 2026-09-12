@@ -61,6 +61,8 @@ function baseHeader(bucket: MatchBucket, overrides: Partial<MatchCentreHeaderT> 
     rateLine: null,
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
     ...overrides,
   };
@@ -221,6 +223,7 @@ export function tableRow(
     entrantId,
     name: titleCase(entrantId),
     badgeUrl: null,
+    colour: null,
     // One string per column of `COMPACT_COLUMNS`, in the same order — the
     // view's `cells[i]` IS `columns[i]` and `StandingsTableView` renders them
     // by position, never by key.

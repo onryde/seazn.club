@@ -41,7 +41,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
-import { plural, t } from "@/lib/i18n-runtime";
+import { t } from "@/lib/i18n-runtime";
 import { UTC, fmtDate, fmtTime } from "@/lib/format";
 import {
   dayKeyInZone,
@@ -57,9 +57,9 @@ import { MatchCard } from "./match-card";
 export interface OverviewTabProps {
   doc: CompetitionHubDocT;
   dict: PublicDict;
-  /** The viewer's locale — `plural()`'s `Intl.PluralRules` and `MatchCard`'s
-   *  `Intl.RelativeTimeFormat`. NOT threaded into any date: `fmtDate`/`fmtTime`
-   *  pin `en-GB` repo-wide (`lib/format.ts:10`) and take no locale parameter. */
+  /** The viewer's locale — `MatchCard`'s `Intl.RelativeTimeFormat`. NOT threaded
+   *  into any date: `fmtDate`/`fmtTime` pin `en-GB` repo-wide
+   *  (`lib/format.ts:10`) and take no locale parameter. */
   locale: Locale;
   /** `Date.now()` at render, passed down rather than read here so a card's
    *  "Starts in 2 hours" is stable across a server render and its hydration. */
@@ -280,17 +280,31 @@ function datesCopy(dict: PublicDict, startsOn: string | null, endsOn: string | n
  * reached anyway (a document parsed by an older build, a cast), and it names
  * the rung so the report is one line long.
  */
-export function overviewPlan(
-  status: LandingStatus,
-  dict: PublicDict,
-  locale: Locale,
-): OverviewPlan {
+export function overviewPlan(status: LandingStatus, dict: PublicDict): OverviewPlan {
   switch (status.kind) {
     case "empty":
       return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER, nextUp: null };
     case "live":
       return {
-        copy: plural(dict, "landing.status.live", status.n, locale),
+        // NO status line on this rung, and it is the only rung without one.
+        //
+        // Every other rung's copy says something nothing else on the panel
+        // does — "Next: Sat 5 Sept 14:00", "Match day", "Finished". This one
+        // said "Live now: 1 match" directly above a section headed "Live now"
+        // holding exactly that match, on a page whose hero already carries a
+        // "1 live" chip. Three statements of one fact inside ~200px at 320.
+        //
+        // The owner ruling this panel is built on — "the top of the panel is
+        // always the most live thing that exists" — is satisfied BETTER by the
+        // rail than by a sentence about it: `LIVE_ORDER` puts `live` first, so
+        // the live matches themselves are the top of the panel.
+        //
+        // `plural(…, "landing.status.live", …)` is now unused by this file.
+        // The key stays in all four dictionaries: `landingStatus` still returns
+        // the `live` rung with its count, and a future surface that needs the
+        // sentence without the rail beneath it should not have to re-translate
+        // it in four languages.
+        copy: null,
         order: LIVE_ORDER,
         nextUp: "ahead",
       };
@@ -469,7 +483,7 @@ export function OverviewTab({
     endsOn: doc.info.endsOn,
     now: new Date(now),
   });
-  const plan = overviewPlan(status, dict, locale);
+  const plan = overviewPlan(status, dict);
 
   // Ordered by `sortHubMatches`, never by document order: inside a bucket it
   // reads soonest-first, which is what both of these rails mean.

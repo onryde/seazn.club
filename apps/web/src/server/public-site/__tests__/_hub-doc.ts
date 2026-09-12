@@ -30,6 +30,8 @@ export function validHubDoc(): unknown {
     rateLine: "CRR 8.44 · RRR 9.71",
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
   };
   return {
@@ -128,6 +130,7 @@ export function validHubDoc(): unknown {
             entrantId: "e1",
             name: "Blue Blazers",
             badgeUrl: "https://x/b.png",
+            colour: "#1d4ed8",
             cells: ["7", "+1.204"],
             tieBreakText: "ahead on net run rate",
             champion: true,
@@ -137,6 +140,7 @@ export function validHubDoc(): unknown {
             entrantId: "e2",
             name: "Queens",
             badgeUrl: null,
+            colour: null,
             cells: ["7", "-0.310"],
             tieBreakText: null,
             champion: false,

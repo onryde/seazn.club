@@ -77,6 +77,7 @@ const base: Omit<TableViewInput, "rows"> = {
   cascade: ["points", "gd"],
   entrantNames: { a: "Alpha", b: "Beta" },
   entrantLogos: { a: "https://x/a.png", b: null },
+  entrantColours: {},
   championId: null,
   updatedAt: "2026-09-05T10:00:00Z",
   msg,

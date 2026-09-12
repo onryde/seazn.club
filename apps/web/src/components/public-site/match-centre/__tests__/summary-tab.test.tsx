@@ -44,6 +44,8 @@ function baseHeader(status: MatchCentreDocT["header"]["status"] = "in_play") {
     // cricket fixture has neither. The court card's own tests cover the pair.
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: new Date().toISOString(),
   };
 }

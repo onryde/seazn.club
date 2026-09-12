@@ -35,6 +35,8 @@ function buildDoc(overrides: Partial<MatchCentreDocT> = {}): MatchCentreDocT {
       rateLine: null,
       phase: null,
       strength: null,
+      pillNote: null,
+      metaLine: null,
       updatedAt: new Date().toISOString(),
     },
     tabs: ["summary", "scorecard", "commentary", "timeline", "sets", "info"],
@@ -111,8 +113,12 @@ describe("MatchCentre", () => {
   it("renders the court card with the document's own header", () => {
     const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc)} />);
     expect(html).toContain('data-testid="mc-court-card"');
-    expect(html).toContain("HOM"); // CourtCard prefers the side's short label
-    expect(html).toContain("AWY");
+    // The FULL name, not the `short` label. A scorebug reading "HOM vs AWY"
+    // makes a spectator decode their own club; the design board's court card
+    // carries "Southend Blue Blazers". `short` stays on the wire for the places
+    // the box really is too small — it is just not what this card leads with.
+    expect(html).toContain("Home");
+    expect(html).toContain("Away");
   });
 
   it("each tab's panel is wrapped in EXACTLY ONE role=tabpanel with the id/aria-labelledby pairing its tab button controls", () => {

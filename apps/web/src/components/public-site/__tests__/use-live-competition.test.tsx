@@ -113,6 +113,8 @@ function baseHeader(overrides: Partial<MatchCentreHeaderT> = {}): MatchCentreHea
     rateLine: null,
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
     ...overrides,
   };
@@ -181,6 +183,7 @@ function docWith(
             entrantId: "e1",
             name: "Blue Blazers",
             badgeUrl: null,
+            colour: null,
             cells: [opts.pts ?? "3"],
             tieBreakText: null,
             champion: false,

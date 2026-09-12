@@ -103,6 +103,8 @@ export function makeDoc(o: DocOver = {}): MatchCentreDocT {
       rateLine: null,
       phase: null,
       strength: null,
+      pillNote: null,
+      metaLine: null,
       updatedAt: "2026-09-04T12:00:00.000Z",
     },
     tabs: ["summary", "info"],

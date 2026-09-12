@@ -15,6 +15,7 @@
 // when present and `t(dict, "matchesHub.round", { round })` when it is null
 // — tested as a positive pair below.
 import { describe, expect, it } from "vitest";
+import { autoColour } from "@/components/ui/entity-logo";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -40,6 +41,8 @@ function baseHeader(overrides: Partial<MatchCentreHeaderT> = {}): MatchCentreHea
     rateLine: null,
     phase: null,
     strength: null,
+    pillNote: null,
+    metaLine: null,
     updatedAt: "2026-09-05T12:00:00.000Z",
     ...overrides,
   };
@@ -451,8 +454,11 @@ describe("MatchCard", () => {
         },
       }),
     );
-    // Side 0: a colour of null is the same grey tile it has always been.
-    expect(sideHtml(mixed, 0)).not.toContain("style=");
+    // Side 0: no colour of its own, so one is DERIVED from the name — a grey
+    // tile identifies nothing, and most sides have no colour. It is painted the
+    // same way a declared one is, so the assertion is that it is the name's
+    // colour rather than that there is no paint.
+    expect(sideHtml(mixed, 0)).toContain(`background:${autoColour("Blue Blazers")}`);
     expect(sideHtml(mixed, 0)).toContain(">BB<");
     // Side 1: a club with BOTH shows its badge and paints nothing — otherwise a
     // club that uploaded a crest would get a coloured box behind a transparent

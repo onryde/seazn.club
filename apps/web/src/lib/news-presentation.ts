@@ -12,6 +12,41 @@ import type { PostKind } from "@/server/usecases/org-posts";
 // (public dict), so this returns a dictionary KEY + a tone token, never a string.
 export type EyebrowTone = "lime" | "white" | "red" | "muted";
 
+/**
+ * The eyebrow's colour, by the GROUND it is painted on.
+ *
+ * The tone vocabulary was designed for the night-mode slab — a hero image's
+ * overlay, a scorebug — where "white" means white. Three surfaces then copied
+ * ONE map between them and two of them used the dark values on a light card:
+ * `white` resolves to `#f7f5fb` and `bg-surface` is `#ffffff`, which measures
+ * about **1.07:1**. A `round_recap` or `weekly_digest` post with no hero image
+ * rendered its eyebrow invisible — on the public news feed and on the post page
+ * itself, observed live, not inferred.
+ *
+ * `lime` is the same story one step less severe: `#a3e635` on white is ~1.7:1.
+ * It only ever looked right because a RESULT post with a numeric scoreline gets
+ * the dark scorebug — the documented fallback for a result whose title is NOT a
+ * clean scoreline (a forfeit) put lime on white.
+ *
+ * Two maps, named for the ground, so a caller has to say which it is painting
+ * on. The light values are not invented here: they are the ones
+ * `(public)/shared/[orgSlug]/page.tsx` already worked out for its latest-news
+ * strip, which is the one surface of the three that was correct.
+ */
+export const TONE_ON_DARK: Record<EyebrowTone, string> = {
+  lime: "text-[#a3e635]",
+  white: "text-court-ink",
+  red: "text-[#ef4444]",
+  muted: "text-ink-muted",
+};
+
+export const TONE_ON_LIGHT: Record<EyebrowTone, string> = {
+  lime: "text-[#65a30d]",
+  white: "text-ink",
+  red: "text-[#dc2626]",
+  muted: "text-ink-muted",
+};
+
 export interface KindEyebrow {
   /** public-dict key resolved by the page via t(dict, key). */
   labelKey: string;

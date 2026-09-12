@@ -324,6 +324,17 @@ export function hubHeader(
     // final whistle, so a finished match would keep announcing a power play.
     phase: live ? matchPhase(fixture.summary) : null,
     strength: live ? matchStrength(fixture.summary) : null,
+    // Both null for the same reason `rateLine` is: the hub does not read the
+    // ledger. The live over comes off the cricket fold (`card.innings`), and
+    // the meta line needs the division's format label and the stage's round —
+    // neither of which this builder is given. Null is the schema's own "no
+    // such line", not a placeholder for something reachable from here.
+    //
+    // Nothing on the hub renders either today: the match CARD shows a score
+    // and a time, not a scorebug. A future hub scorebug would need the fields
+    // plumbed, and would find them null rather than wrong.
+    pillNote: null,
+    metaLine: null,
     updatedAt: generatedAt,
   };
 }
@@ -587,6 +598,7 @@ export async function loadCompetitionHub(
             cascade: d.tiebreakers ?? module_?.defaultTiebreakers ?? [],
             entrantNames: names,
             entrantLogos: badges,
+            entrantColours: colours,
             championId,
             updatedAt: snap.updated_at,
             msg,
