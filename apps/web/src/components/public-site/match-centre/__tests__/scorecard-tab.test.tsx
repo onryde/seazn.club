@@ -359,7 +359,15 @@ describe("ScorecardTab", () => {
     expect(html).not.toContain('data-testid="mc-innings-');
   });
 
-  it("one section per innings, and the LAST one is open — decided and live alike", () => {
+  it("one section per innings, and EVERY one is open — decided and live alike", () => {
+    // This used to open only the LAST innings, which is the right rule for a
+    // stacked column and the wrong one beside it: from `lg` the innings sit
+    // side by side, and a collapsed panel next to an expanded one is not a
+    // composition. `<details open>` is an attribute and cannot be varied by a
+    // media query, so "last only below `lg`, both above" would need either a
+    // duplicated tree or a lie to the accessibility tree about the
+    // disclosure's state. Opening all of them is the honest resolution — the
+    // Scorecard TAB is where a spectator goes for the scorecard.
     for (const [label, d] of [
       ["decided", DECIDED],
       ["live", LIVE],
@@ -368,13 +376,35 @@ describe("ScorecardTab", () => {
       expect(html, label).toContain('data-testid="mc-innings-1"');
       expect(html, label).toContain('data-testid="mc-innings-2"');
       expect(isOpen(html, "mc-innings-2"), label).toBe(true);
-      expect(isOpen(html, "mc-innings-1"), label).toBe(false);
+      expect(isOpen(html, "mc-innings-1"), label).toBe(true);
     }
-    // Three innings: still the last, never merely "not the first".
+    // Three innings (a super over): all three, not merely "more than one".
     const three = render(SUPER_OVER);
+    expect(isOpen(three, "mc-innings-1")).toBe(true);
+    expect(isOpen(three, "mc-innings-2")).toBe(true);
     expect(isOpen(three, "mc-innings-3")).toBe(true);
-    expect(isOpen(three, "mc-innings-1")).toBe(false);
-    expect(isOpen(three, "mc-innings-2")).toBe(false);
+    // The disclosure is NOT removed — these are still <details> a reader can
+    // collapse. Without this the change reads as "the panels stopped being
+    // collapsible", which is a different and worse thing.
+    expect(three).toContain("group-open:rotate-90");
+  });
+
+  it("lays the innings side by side from lg, and batting ABOVE bowling at every width", () => {
+    // Measured at 1280 before this change: both innings panels at x=144 w=992
+    // (stacked), and inside each the batting and bowling tables at x=157 and
+    // x=646 (side by side). The board inverts both axes, and the reason is not
+    // symmetry for its own sake — in innings 1 the batting table is one side
+    // and the bowling table is the OTHER, so side by side they read as two
+    // halves of one team's card, which is false.
+    const html = render(DECIDED);
+    const root = /data-testid="mc-scorecard" class="([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(root).toMatch(/(?:^|\s)lg:grid-cols-2(?:\s|$)/);
+    // …and NOT at md, where a half-width panel is ~360px and a batting table
+    // has six numeric columns plus a name.
+    expect(root).not.toMatch(/(?:^|\s)md:grid-cols-2(?:\s|$)/);
+    // The inner grid gives its horizontal room up: one column, every width.
+    const inner = /class="grid gap-3 px-3 pb-3([^"]*)"/.exec(html)?.[1] ?? "";
+    expect(inner).not.toContain("grid-cols-2");
   });
 
   it("the summary row carries the side, the innings number, the total — and 'super over' only when it is one", () => {
