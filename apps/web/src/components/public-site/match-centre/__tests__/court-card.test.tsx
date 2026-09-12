@@ -251,11 +251,22 @@ function nameRow(html: string, name: string): string {
   return html.slice(open, close + "</div>".length);
 }
 
-/** The class list of the row's FIRST span — the entrant-name span. */
-function nameSpanClasses(row: string): string {
-  const m = /<span class="([^"]*)"/.exec(row);
-  expect(m, "the row opens no span").not.toBeNull();
-  return m![1];
+/**
+ * The class list of the span that actually HOLDS the name.
+ *
+ * It used to take the row's first span, which stopped being the name span the
+ * moment the crest tile arrived and the name was wrapped in a flex — and the
+ * failure read as "truncate is missing" on a card that truncates correctly.
+ * Anchoring on the name's own text finds the right span whatever wraps it.
+ */
+function nameSpanClasses(row: string, name: string): string {
+  const at = row.indexOf(`>${name}<`);
+  expect(at, `"${name}" is not in this row`).toBeGreaterThan(-1);
+  const open = row.lastIndexOf("<span ", at);
+  expect(open, "the name is in no span").toBeGreaterThan(-1);
+  const m = /<span class="([^"]*)"/.exec(row.slice(open));
+  expect(m, "the name's span carries no class list").not.toBeNull();
+  return m![1]!;
 }
 
 /** `\bmin-w-0\b` also matches inside `max-md:min-w-0` (`-` to `m` is a word
@@ -264,12 +275,57 @@ function nameSpanClasses(row: string): string {
  *  variant-prefixed utility cannot satisfy these assertions. */
 const utility = (name: string) => new RegExp(`(?:^|\\s)${name}(?:\\s|$)`);
 
+describe("CourtCard — the crest tile and the side's own colour", () => {
+  // `Side.colour` and `Side.badgeUrl` have been on the wire since W1
+  // (`match-centre-schema.ts:11`, populated from `colors.home_primary` at
+  // `match-centre-load.ts:207`) and this card read NEITHER — an inert seam, and
+  // the SECOND time this same seam has been found (`entity-logo.tsx`'s header
+  // records it being fixed for match cards and not here). The design board's
+  // court card is crest tiles in team colours, so this is what makes the board
+  // reachable at all.
+  const coloured: MatchCentreHeaderT = {
+    ...liveHeader,
+    sides: [
+      { entrantId: "home", name: "Southend Blue Blazers", short: "SBB", colour: "#2563eb", badgeUrl: null },
+      { entrantId: "away", name: "Southend Queens", short: "SQ", colour: null, badgeUrl: null },
+    ],
+  };
+
+  it("paints the tile in the side's colour, and leaves a colourless side neutral", () => {
+    const html = renderToStaticMarkup(<CourtCard header={coloured} dict={dict} />);
+    // The colour reaches the STYLE, which is the only thing that paints. A
+    // class-token scan would pass on a card that carried the value and never
+    // used it — which is exactly the state this test exists to end.
+    expect(html).toContain("background:#2563eb");
+    // The negative pair, and it is the half that proves the colour came from
+    // the side rather than from a constant: the away side has none, so exactly
+    // ONE tile is painted.
+    expect(html.match(/background:#2563eb/g)?.length).toBe(1);
+  });
+
+  it("renders a tile for BOTH sides — a colourless side still gets its monogram", () => {
+    const html = renderToStaticMarkup(<CourtCard header={coloured} dict={dict} />);
+    // Two initials-tiles, one per side. Without this a card could paint the
+    // home tile and silently drop the away one and the test above would pass.
+    expect(html).toContain(">SB<");
+    expect(html).toContain(">SQ<");
+  });
+
+  it("leads with the FULL name, not the short code", () => {
+    const html = renderToStaticMarkup(<CourtCard header={coloured} dict={dict} />);
+    expect(html).toContain("Southend Blue Blazers");
+    // `short` is still on the wire — this asserts what the card LEADS with, so
+    // it must not claim the short code was deleted.
+    expect(html).not.toMatch(/>SBB</);
+  });
+});
+
 describe("CourtCard — a long entrant name ellipses instead of pushing the score off its row", () => {
   // `short` is EMPTY on both sides on purpose (the schema types it `z.string()`,
-  // never nullable, so "" is how a side without a short code arrives):
-  // `{side.short || side.name}` means a short code ("RVS") is what renders when
-  // one exists, and short codes never reached the overflow threshold — which is
-  // why this sat latent until the gate photographed a realistic full name.
+  // never nullable, so "" is how a side without a short code arrives).
+  // `{side.name || side.short}` means the full name is what renders whenever
+  // there is one, which is why a realistic name is what reaches the overflow
+  // threshold — this sat latent while the card led with three-letter codes.
   const longHeader: MatchCentreHeaderT = {
     ...liveHeader,
     sides: [
@@ -286,7 +342,7 @@ describe("CourtCard — a long entrant name ellipses instead of pushing the scor
     // refuses to shrink it below its content — so `truncate` never engages and
     // the name pushes its sibling out of the row instead of ellipsing.
     expect(row.startsWith('<div class="flex items-baseline justify-between gap-3 tabular-nums')).toBe(true);
-    const classes = nameSpanClasses(row);
+    const classes = nameSpanClasses(row, "Riverside Wanderers Athletic Club");
     expect(classes, "the flex item cannot shrink below its content without min-w-0").toMatch(utility("min-w-0"));
     expect(classes, "min-w-0 only matters because this span truncates").toMatch(utility("truncate"));
     // The sibling that wins the row when the name will not shrink — the score,
@@ -301,7 +357,7 @@ describe("CourtCard — a long entrant name ellipses instead of pushing the scor
     // rows are not the same string; one sample is not a parity sweep.
     const away = nameRow(html, "Oakdale Community Sports Association");
     expect(away.startsWith('<div class="flex items-baseline justify-between gap-3 tabular-nums')).toBe(true);
-    const classes = nameSpanClasses(away);
+    const classes = nameSpanClasses(away, "Oakdale Community Sports Association");
     expect(classes).toMatch(utility("min-w-0"));
     expect(classes).toMatch(utility("truncate"));
     expect(away).toContain('data-testid="mc-score-1"');

@@ -43,6 +43,7 @@
 //   render values can legitimately differ by the seconds the network round
 //   trip took; that is expected drift, not the corruption
 //   `suppressHydrationWarning` normally papers over on OTHER attributes.
+import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { lookup, t } from "@/lib/i18n-runtime";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
@@ -181,8 +182,33 @@ export function CourtCard({ header, dict }: CourtCardProps) {
                     `truncate-chain` check, which reds on this span without
                     it. `(public)/shared/[orgSlug]/layout.tsx:83` already
                     pairs the two the same way. */}
-                <span className="min-w-0 truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
-                  {side.short || side.name}
+                {/* THE CREST TILE, in the side's own colour.
+                    `Side.colour` and `Side.badgeUrl` have been on the wire
+                    since W1 (`match-centre-schema.ts:11`, populated at
+                    `match-centre-load.ts:207` from `colors.home_primary`) and
+                    this card read NEITHER — the inert-seam class, and the
+                    second time this exact seam has been found: `EntityLogo`'s
+                    own header records `Side.colour` being built for every hub
+                    fixture and read by nothing, fixed then for match cards and
+                    not here. The design board's court card is crest tiles in
+                    team colours; this is what makes that possible. */}
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <EntityLogo
+                    src={side.badgeUrl}
+                    name={side.name}
+                    colour={side.colour}
+                    size={32}
+                  />
+                  {/* The FULL name, not the three-letter `short`. A scorebug
+                      that reads "SOU vs CAN" makes a spectator decode their own
+                      club; the board shows "Southend Blue Blazers". `short`
+                      still earns its place where the box really is too small —
+                      it is not removed from the wire, just not the default
+                      here. `min-w-0` + `truncate` is what keeps a long name
+                      from pushing the score off the row. */}
+                  <span className="min-w-0 truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
+                    {side.name || side.short}
+                  </span>
                 </span>
                 <span className="shrink-0 text-right">
                   <span
@@ -199,15 +225,26 @@ export function CourtCard({ header, dict }: CourtCardProps) {
             );
           })}
         </div>
-        {header.statusLine ? (
-          <p data-testid="mc-status-line" className="mt-3 text-sm text-court-muted">
-            {t(dict, header.statusLine.key, header.statusLine.params)}
-          </p>
-        ) : null}
-        {header.rateLine ? (
-          <p data-testid="mc-rate-line" className="mt-1 text-xs text-court-muted">
-            {header.rateLine}
-          </p>
+        {/* ONE ROW, ruled off above it — the board's composition. The chase
+            sentence is the loud half (it is the thing a spectator came to
+            read: "Queens need 34 from 21"), the rates are the quiet half on
+            the right. They used to be two stacked muted paragraphs of
+            near-equal weight, which made the sentence look like a caption.
+            They wrap onto separate lines at a narrow width rather than
+            competing for one. */}
+        {header.statusLine || header.rateLine ? (
+          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-white/10 pt-3">
+            {header.statusLine ? (
+              <p data-testid="mc-status-line" className="min-w-0 text-sm font-semibold text-court-ink">
+                {t(dict, header.statusLine.key, header.statusLine.params)}
+              </p>
+            ) : null}
+            {header.rateLine ? (
+              <p data-testid="mc-rate-line" className="min-w-0 text-xs text-court-muted">
+                {header.rateLine}
+              </p>
+            ) : null}
+          </div>
         ) : null}
         {inPlay ? (
           <p
