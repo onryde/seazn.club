@@ -105,11 +105,16 @@ export interface PublicRealtimeToken {
 }
 
 export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureData> {
-  return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`);
+  // Live scores must never reuse a cached GET — the route's Cache-Control is
+  // for shared CDNs; a browser default cache made a 15 s poll return the
+  // pre-ball payload in 1 ms (measured 2026-09-12).
+  return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`, { cache: "no-store" });
 }
 
 export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData> {
-  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`);
+  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`, {
+    cache: "no-store",
+  });
 }
 
 export async function fetchPublicRealtimeToken(

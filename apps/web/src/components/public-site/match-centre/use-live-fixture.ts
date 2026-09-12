@@ -169,6 +169,15 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
 
   // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
   // websocket refused — leaves `subscribed` false and polling takes over.
+  //
+  // Public channel on purpose for this spectator path (2026-09-12): the minted
+  // public JWT fails Realtime auth here (`JwtSignatureError` on private
+  // subscribe), so private-first left the overlay on the 15 s poll while the
+  // division slideshow (public, no JWT) stayed live. Entitlement is still
+  // enforced by the token route; the topic is an unguessable fixture UUID.
+  // `publishFixtureUpdate` fans out a public twin alongside the private one
+  // for scorepad. Fixing `SUPABASE_JWT_SECRET` to match the project is the
+  // follow-up that restores private for this surface.
   const [subscribed, setSubscribed] = useState(false);
   useEffect(() => {
     if (!realtime || !live) return;
@@ -188,9 +197,8 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       if (cancelled) return;
       const { supabaseBrowser } = await import("@/lib/supabase-browser");
       const sb = supabaseBrowser();
-      await sb.realtime.setAuth(token.token);
       channel = sb
-        .channel(token.channel, { config: { private: true } })
+        .channel(token.channel)
         .on("broadcast", { event: "state_changed" }, () => {
           if (debounce) clearTimeout(debounce);
           debounce = setTimeout(refresh, 250);
@@ -245,10 +253,19 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     return () => clearInterval(id);
   }, [delayMs]);
 
-  // 15 s polling fallback (Community, or realtime not connected).
+  // 15 s polling — primary on Community / when push is not connected; slower
+  // safety net once SUBSCRIBED (slideshow pattern). NEVER stop polling entirely
+  // while live: a SUBSCRIBED private channel that receives no broadcasts (e.g.
+  // public HTTP publish vs private subscribe mismatch, fixed 2026-09-12) would
+  // otherwise freeze the overlay on first paint.
+  //
+  // Refresh ONCE immediately when the effect arms — otherwise the first update
+  // waits a full POLL_MS after mount, which on a live demo is most of an over.
   useEffect(() => {
-    if (!live || subscribed) return;
-    const id = setInterval(refresh, POLL_MS);
+    if (!live) return;
+    void refresh();
+    const ms = subscribed ? 60_000 : POLL_MS;
+    const id = setInterval(refresh, ms);
     return () => clearInterval(id);
   }, [live, subscribed, refresh]);
 

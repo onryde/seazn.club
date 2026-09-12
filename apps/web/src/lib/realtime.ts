@@ -5,6 +5,13 @@ import { SignJWT } from "jose";
  * Broadcast a state_changed event on `fixture:{id}` after a v2 scoring write
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
  * forget, never throws.
+ *
+ * Two messages on purpose (measured 2026-09-12):
+ * - `private: true` for scorepad / private subscribers.
+ * - a public twin for the spectator overlay when the minted public JWT fails
+ *   Realtime auth (`JwtSignatureError`) and the client falls back to a public
+ *   channel (slideshow pattern). Private-only publish left the overlay on the
+ *   15 s poll; public-only never reaches private scorepad subscribers.
  */
 export async function publishFixtureUpdate(
   fixtureId: string,
@@ -14,6 +21,8 @@ export async function publishFixtureUpdate(
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return;
   try {
+    const payload = { v: Date.now(), reason, at: new Date().toISOString() };
+    const topic = `fixture:${fixtureId}`;
     const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
       method: "POST",
       headers: {
@@ -23,11 +32,8 @@ export async function publishFixtureUpdate(
       },
       body: JSON.stringify({
         messages: [
-          {
-            topic: `fixture:${fixtureId}`,
-            event: "state_changed",
-            payload: { v: Date.now(), reason, at: new Date().toISOString() },
-          },
+          { topic, event: "state_changed", payload, private: true },
+          { topic, event: "state_changed", payload },
         ],
       }),
     });

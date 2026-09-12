@@ -1,8 +1,13 @@
 import { v1, reply } from "@/server/api-v1/http";
-import { publicRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
+import { publicRateLimit } from "@/server/usecases/public";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 
 type Ctx = { params: Promise<{ id: string }> };
+
+/** Live overlay JSON — never CDN/browser-cached. `PUBLIC_CACHE_CONTROL`
+ *  (s-maxage=30) is correct for static public pages; on this route it made
+ *  OBS/browser polls reuse the pre-ball body while the match moved on. */
+const LIVE_CACHE_CONTROL = "private, no-store";
 
 /** The stream overlay's one poll target (design §3.2): the public live
  *  summary plus the two folded-state facts a scorebug needs. Visibility is
@@ -13,6 +18,6 @@ export async function GET(req: Request, { params }: Ctx) {
     await publicRateLimit(req);
     const { id } = await params;
     const data = await loadOverlayLiveData(id);
-    return reply(200, data, { "Cache-Control": PUBLIC_CACHE_CONTROL });
+    return reply(200, data, { "Cache-Control": LIVE_CACHE_CONTROL });
   });
 }
