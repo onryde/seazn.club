@@ -37,7 +37,8 @@ Non-goals for this wave:
 | D7 | Themes for end-of-over | **Bar + Bug only.** Slate is out of scope for this panel (slate is not mid-over live) |
 | D8 | Match openers | Sharpened **C**: slate for pre-start; brief **center card on Bar/Bug** after toss until first scoring |
 | D9 | Motion | `transform` / `opacity` only; no mount/reconnect replay; `prefers-reduced-motion` = instant show/hide, same hold, same queue |
-| D10 | Scorer undo while a graphic is on air | **Retract:** `momentQueue` `sync` folds the current slab/EOO out and drops queued ids that left the live window; clears those ids from `seen` so an end-of-over can re-fire after undo+recomplete. Scorebug already corrects via fold. |
+| D10 | Scorer undo while a graphic is on air | **Retract:** `momentQueue` `sync` folds the current slab/EOO out and drops queued ids that left the live window; **purges every id absent from live from `seen`** (including after a natural ride-out) so an end-of-over can re-fire after undo+recomplete. Scorebug already corrects via fold. |
+| D11 | Ended-card top batter / bowler | On the **overlay poll** (`OverlayLiveData.highlights`), derived from the same cricket scorecard fold as crease / EOO — never SSR-only match-centre. Ranking matches match-centre (runs→SR, wickets→economy). Masked / unnamed people are omitted. |
 
 ---
 

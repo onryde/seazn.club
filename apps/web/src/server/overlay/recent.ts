@@ -35,6 +35,7 @@ import {
 import type { AnySportModule } from "@seazn/engine/sport";
 import { activeInnings, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import {
+  highlightsFromScorecard,
   lastClosedOverFromScorecard,
   liveFromScorecard,
   scoringStartedFromScorecard,
@@ -42,6 +43,7 @@ import {
   type OverlayClosedOver,
   type OverlayCricketLive,
   type OverlayCricketToss,
+  type OverlayHighlights,
 } from "@/lib/overlay-cricket";
 import { servingSide, setBreakdown } from "@/lib/public-site";
 import { log } from "@/server/logger";
@@ -532,6 +534,8 @@ export type OverlayCricketBundleIds = {
   toss: OverlayCricketToss | null;
   lastClosedOver: OverlayClosedOver | null;
   scoringStarted: boolean;
+  /** Ended-card top batter / bowler; `name` holds person id until named. */
+  highlights: OverlayHighlights | null;
 };
 
 /**
@@ -573,6 +577,7 @@ export function overlayCricketBundleIds(
     toss: null,
     lastClosedOver: null,
     scoringStarted: false,
+    highlights: null,
   };
   if (inputs.sportKey !== "cricket") return empty;
   const parsed = inputs.module.configSchema.safeParse(inputs.cfg);
@@ -595,6 +600,7 @@ export function overlayCricketBundleIds(
       toss: tossFromScorecard(scorecard, sides),
       lastClosedOver: lastClosedOverFromScorecard(scorecard, idAsName),
       scoringStarted: scoringStartedFromScorecard(scorecard),
+      highlights: highlightsFromScorecard(scorecard, idAsName),
     };
   } catch (err) {
     log.warn({ err }, "overlay: cricket scorecard failed, serving no crease band");
@@ -658,6 +664,28 @@ function nameClosedOver(
   };
 }
 
+function nameHighlights(
+  highlights: OverlayHighlights | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayHighlights | null {
+  if (highlights === null) return null;
+  const chip = (c: { name: string; line: string; detail?: string } | undefined) => {
+    if (!c) return undefined;
+    const person = personOf(c.name);
+    // Masked / unnamed: never put an id or youth-hidden name on the ended card.
+    if (!person || person.masked || !person.name) return undefined;
+    return {
+      name: person.name,
+      line: c.line,
+      ...(c.detail ? { detail: c.detail } : {}),
+    };
+  };
+  const batter = chip(highlights.batter);
+  const bowler = chip(highlights.bowler);
+  if (!batter && !bowler) return null;
+  return { ...(batter ? { batter } : {}), ...(bowler ? { bowler } : {}) };
+}
+
 export function nameCricketBundle(
   bundle: OverlayCricketBundleIds,
   personOf: (id: unknown) => RecentPerson | undefined,
@@ -667,6 +695,7 @@ export function nameCricketBundle(
     toss: bundle.toss,
     lastClosedOver: nameClosedOver(bundle.lastClosedOver, personOf),
     scoringStarted: bundle.scoringStarted,
+    highlights: nameHighlights(bundle.highlights, personOf),
   };
 }
 
@@ -690,5 +719,7 @@ export function cricketBundlePersonIdsIn(bundle: OverlayCricketBundleIds): strin
       ids.add(id);
     }
   }
+  if (bundle.highlights?.batter?.name) ids.add(bundle.highlights.batter.name);
+  if (bundle.highlights?.bowler?.name) ids.add(bundle.highlights.bowler.name);
   return [...ids];
 }

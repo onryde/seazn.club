@@ -49,8 +49,6 @@ export interface OverlayStageProps {
   startLabel: string | null;
   /** Competition / stage for the slate card meta pill. */
   slateMeta?: { competition?: string; stage?: string } | null;
-  /** Ended slate highlights (from match centre on first paint). */
-  highlights?: OverlayModel["highlights"] | null;
   /** The `public` namespace, en-merged server-side. A plain object, so the
    *  island carries only the active locale. */
   dict: Record<string, string>;
@@ -154,7 +152,6 @@ export function OverlayStage(props: OverlayStageProps) {
     msg,
     decidedTemplates: props.decidedTemplates,
     slateMeta: props.slateMeta,
-    highlights: props.highlights,
   });
 
   const cardState = slateStateOf(model);

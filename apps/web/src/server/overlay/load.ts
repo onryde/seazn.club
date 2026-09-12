@@ -76,6 +76,7 @@ const EMPTY_CRICKET: OverlayCricketBundleIds = {
   toss: null,
   lastClosedOver: null,
   scoringStarted: false,
+  highlights: null,
 };
 
 /** Folds once per (fixture, last_seq), and derives in the SAME pass. The fold
@@ -97,8 +98,8 @@ const EMPTY_CRICKET: OverlayCricketBundleIds = {
  *  stubs `next/cache` passthrough, exactly as this repo's other
  *  `unstable_cache` tests do.
  *
- *  The key is `overlay-fold-v3`: the VALUE's shape changed (cricket bundle),
- *  and a live entry written under v2 would deserialise wrong. */
+ *  The key is `overlay-fold-v4`: the VALUE's shape changed (highlights on the
+ *  cricket bundle), and a live entry written under v3 would deserialise wrong. */
 function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOverlay> {
   return unstable_cache(
     async () =>
@@ -119,7 +120,7 @@ function cachedFold(fixtureId: string, lastSeq: number): () => Promise<CachedOve
           cricket: overlayCricketBundleIds(inputs, folded.active),
         };
       }) as Promise<CachedOverlay>,
-    ["overlay-fold-v3", fixtureId, String(lastSeq)],
+    ["overlay-fold-v4", fixtureId, String(lastSeq)],
     { revalidate: 300 },
   );
 }
@@ -250,5 +251,6 @@ export async function loadOverlayLiveData(fixtureId: string): Promise<OverlayLiv
     cricketToss: cricket.toss,
     lastClosedOver: cricket.lastClosedOver,
     scoringStarted: cricket.scoringStarted,
+    highlights: cricket.highlights,
   });
 }

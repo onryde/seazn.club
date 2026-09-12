@@ -130,4 +130,17 @@ export default defineConfig([
       "no-undef": "off",
     },
   },
+
+  {
+    // Plain `.mjs`/`.js` under scripts/ are also outside tsconfig.scripts.json
+    // (only `scripts/**/*.ts` is included). `recommendedTypeChecked` still
+    // matches them via `eslint scripts`, and typed rules then crash without
+    // parserOptions.project — same failure mode as the test-file block above.
+    files: ["scripts/**/*.{mjs,cjs,js}"],
+    extends: [tseslint.configs.disableTypeChecked],
+    rules: {
+      "no-console": "off",
+      "no-undef": "off",
+    },
+  },
 ]);

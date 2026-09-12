@@ -179,7 +179,7 @@ export interface OverlayModel {
   };
   /** Slate match-card meta (competition · stage). Absent segments are omitted. */
   slateMeta?: OverlaySlateMeta;
-  /** Ended slate only — top batter / bowler when the scorecard can name them. */
+  /** Ended slate only — top batter / bowler from the overlay poll (`data.highlights`). */
   highlights?: {
     batter?: OverlayHighlight;
     bowler?: OverlayHighlight;
@@ -251,8 +251,6 @@ export interface OverlayModelInput {
   decidedTemplates: DecidedOutcomeTemplates;
   /** Slate card pill — competition / stage names from the public page. */
   slateMeta?: OverlaySlateMeta | null;
-  /** Slate ended card — performers from match centre when available. */
-  highlights?: OverlayModel["highlights"] | null;
 }
 
 const EM_DASH = "—";
@@ -720,8 +718,8 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
           },
         }
       : {}),
-    ...(input.highlights && (input.highlights.batter || input.highlights.bowler)
-      ? { highlights: input.highlights }
+    ...(data.highlights && (data.highlights.batter || data.highlights.bowler)
+      ? { highlights: data.highlights }
       : {}),
   };
 }

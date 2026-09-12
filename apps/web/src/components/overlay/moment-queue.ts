@@ -108,22 +108,19 @@ export function momentQueueReducer(
   if (action.type === "sync") {
     // Undo / void: the transport's live window no longer carries this id.
     // Drop it from the queue, fold the current slab off if it was struck, and
-    // forget it in `seen` so an end-of-over can re-fire after undo+recomplete
-    // (same over number, new completion).
+    // forget EVERY id absent from live in `seen` — including moments that
+    // already rode out while idle. Otherwise an end-of-over that finished its
+    // natural hold stays in `seen` after undo, and undo+recomplete cannot
+    // re-air (same over number, new completion). Pair beats (`.bis`) leave
+    // together because both ids drop from live at once.
     const live = new Set(action.live.map(idOf));
-    const retracted: string[] = [];
-    const queue = state.queue.filter((m) => {
-      const id = idOf(m);
-      if (live.has(id)) return true;
-      retracted.push(id);
-      return false;
-    });
+    const queue = state.queue.filter((m) => live.has(idOf(m)));
     const currentGone = state.current !== null && !live.has(idOf(state.current));
-    if (currentGone && state.current) retracted.push(idOf(state.current));
+    const seen = state.seen.filter((id) => live.has(id));
+    const queueShrunk = queue.length !== state.queue.length;
+    const seenShrunk = seen.length !== state.seen.length;
+    if (!currentGone && !queueShrunk && !seenShrunk) return state;
 
-    if (retracted.length === 0) return state;
-
-    const seen = state.seen.filter((id) => !retracted.includes(id));
     const revision = state.revision + 1;
 
     if (currentGone && state.current !== null) {

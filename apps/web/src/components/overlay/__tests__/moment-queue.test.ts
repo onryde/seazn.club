@@ -304,6 +304,39 @@ describe("sync — retract moments that left the live window (undo)", () => {
     expect(s.current, "re-completion must air").toMatchObject({ seq: 12, kind: "endOfOver" });
   });
 
+  it("purges seen after a natural finish when the id later leaves the live window", () => {
+    // The common undo path: EOO rides out, THEN the scorer undoes the closing
+    // ball. Current/queue are already empty — only `seen` still held the id.
+    const eoo = (over: number): OverlayMoment => ({
+      seq: over,
+      kind: "endOfOver",
+      graphic: "endOfOver",
+      headline: `End of over ${over}`,
+      tone: "led",
+    });
+    let s = enqueue(INITIAL, [eoo(12)], 0);
+    for (const now of [F, F + H, F + H + F]) s = tick(s, now);
+    expect(s).toMatchObject(IDLE);
+    expect(s.seen).toContain("12:endOfOver");
+    s = sync(s, [], 5_000); // undo after the card already left air
+    expect(s.seen, "idle undo must still forget the id").not.toContain("12:endOfOver");
+    s = enqueue(s, [eoo(12)], 6_000);
+    expect(s.current, "re-completion after idle undo must air").toMatchObject({
+      seq: 12,
+      kind: "endOfOver",
+    });
+  });
+
+  it("undo while a .bis beat is current also forgets the base kind in seen", () => {
+    let s = enqueue(INITIAL, [m(3, "six"), m(3, "six.bis")], 0);
+    for (const now of [F, F + H, F + H + F]) s = tick(s, now); // promote .bis
+    s = tick(s, F + H + F + F); // hold on .bis
+    expect(s).toMatchObject({ current: m(3, "six.bis"), phase: "hold" });
+    s = sync(s, [], 10_000);
+    expect(s.seen).not.toContain("3:six");
+    expect(s.seen).not.toContain("3:six.bis");
+  });
+
   it("does NOT clear seen for a moment that finished its natural run", () => {
     let s = enqueue(INITIAL, [m(7, "six")], 0);
     for (const now of [F, F + H, F + H + F]) s = tick(s, now);

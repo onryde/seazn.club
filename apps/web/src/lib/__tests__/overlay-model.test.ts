@@ -411,6 +411,27 @@ describe("overlayModel — decided", () => {
     expect(model.sides[0].led, "the winner keeps the LED").toBe(true);
     expect(model.sides[1].led).toBe(false);
   });
+
+  it("carries ended-card highlights from the overlay poll payload, not a page prop", () => {
+    const data: OverlayLiveData = {
+      status: "decided",
+      summary: {
+        headline: "180/8 — 120/10",
+        perSide: [
+          { entrantId: "H", line: "180/8 (20)" },
+          { entrantId: "A", line: "120/10 (18.2)" },
+        ],
+      },
+      outcome: { kind: "win", winner: "H", method: "regulation" },
+      lastSeq: null,
+      venueTz: "UTC",
+      highlights: {
+        batter: { name: "Kohli", line: "78 (42)", detail: "SR 185.7" },
+        bowler: { name: "Bumrah", line: "3/24", detail: "Econ 6.0" },
+      },
+    };
+    expect(project("cricket", data).highlights).toEqual(data.highlights);
+  });
 });
 
 describe("overlayModel — the decided/void three-case split (fix round 3, F1)", () => {

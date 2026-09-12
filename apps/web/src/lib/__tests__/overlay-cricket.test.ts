@@ -12,6 +12,7 @@ import { cricket, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import {
   cricketDetail,
+  highlightsFromScorecard,
   lastClosedOverFromScorecard,
   liveFromScorecard,
   scoringStartedFromScorecard,
@@ -214,5 +215,75 @@ describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromSc
   it("before any over completes, lastClosedOver is null", () => {
     const sc = scorecardOf(OVER);
     expect(lastClosedOverFromScorecard(sc, nameOf)).toBeNull();
+  });
+});
+
+describe("highlightsFromScorecard — ended-card top batter / bowler", () => {
+  it("empty scorecard yields null", () => {
+    expect(highlightsFromScorecard(scorecardOf([]), nameOf)).toBeNull();
+  });
+
+  it("picks highest runs (then SR) and most wickets (then best economy) across the card", () => {
+    const sc = scorecardOf(OVER);
+    const h = highlightsFromScorecard(sc, nameOf);
+    expect(h).not.toBeNull();
+    expect(h!.batter).toMatchObject({ name: "Kohli", line: expect.stringMatching(/^\d+ \(\d+\)$/) });
+    expect(h!.bowler).toMatchObject({ name: "Bumrah", line: expect.stringMatching(/^\d+\/\d+$/) });
+  });
+
+  it("bowler tie on wickets prefers lower economy — not parseFloat on the display line", () => {
+    // Same wickets, different economy: `"2/40"` vs `"2/20"` — parseFloat both
+    // yield 2; structured pick must prefer the tighter spell.
+    const sc = {
+      innings: [
+        {
+          batting: [
+            {
+              order: 1,
+              person: "H-p1",
+              runs: 10,
+              balls: 10,
+              fours: 0,
+              sixes: 0,
+              strikeRate: 100,
+              dismissal: { kind: "not_out" },
+            },
+          ],
+          bowling: [
+            {
+              person: "A-p11",
+              legalBalls: 30,
+              overs: "5.0",
+              maidens: 0,
+              runs: 40,
+              wickets: 2,
+              economy: 8.0,
+              wides: 0,
+              noBalls: 0,
+            },
+            {
+              person: "A-p10",
+              legalBalls: 30,
+              overs: "5.0",
+              maidens: 0,
+              runs: 20,
+              wickets: 2,
+              economy: 4.0,
+              wides: 0,
+              noBalls: 0,
+            },
+          ],
+        },
+      ],
+    } as unknown as Parameters<typeof highlightsFromScorecard>[0];
+    const names: Record<string, string> = { "H-p1": "Sharma", "A-p11": "Bumrah", "A-p10": "Shami" };
+    const h = highlightsFromScorecard(sc, (id) => names[id]);
+    expect(h?.bowler).toMatchObject({ name: "Shami", line: "2/20", detail: "Econ 4.0" });
+  });
+
+  it("drops a performer the name resolver cannot name", () => {
+    const sc = scorecardOf(OVER);
+    const h = highlightsFromScorecard(sc, () => undefined);
+    expect(h).toBeNull();
   });
 });

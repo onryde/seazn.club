@@ -404,4 +404,21 @@ describe("projectOverlayLiveData", () => {
       expect(out.cricket, key).toBeUndefined();
     }
   });
+
+  it("highlights from the cricket fold ride on the wire for the ended card", () => {
+    const highlights = {
+      batter: { name: "Kohli", line: "78 (42)", detail: "SR 185.7" },
+      bowler: { name: "Bumrah", line: "3/24", detail: "Econ 6.0" },
+    };
+    const out = projectOverlayLiveData({
+      row: ROW(1),
+      folded: null,
+      venueTz: "UTC",
+      highlights,
+    });
+    expect(out.highlights).toEqual(highlights);
+    expect(
+      projectOverlayLiveData({ row: ROW(1), folded: null, venueTz: "UTC", highlights: null }).highlights,
+    ).toBeUndefined();
+  });
 });

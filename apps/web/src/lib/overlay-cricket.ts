@@ -192,6 +192,71 @@ export function lastClosedOverFromScorecard(
   };
 }
 
+/** One ended-card performer chip — same shape as `OverlayHighlight` on the model. */
+export type OverlayHighlights = {
+  batter?: { name: string; line: string; detail?: string };
+  bowler?: { name: string; line: string; detail?: string };
+};
+
+function fmt1(n: number): string {
+  return (Math.round(n * 10) / 10).toFixed(1);
+}
+
+function pickBest<T>(rows: readonly T[], better: (a: T, b: T) => number): T | null {
+  if (rows.length === 0) return null;
+  return rows.reduce((best, row) => (better(row, best) < 0 ? row : best));
+}
+
+/**
+ * Match top batter / bowler for the ended card — same ranking as match-centre
+ * (`runs` then strike rate; `wickets` then economy), across every innings.
+ *
+ * Structured fields only — never `parseFloat` on the display line (a bowler
+ * line `"3/24"` would otherwise ignore conceded runs on a wickets tie).
+ *
+ * `nameOf` is consent-resolved; an unnameable person is omitted rather than
+ * shown as an id on a broadcast graphic.
+ */
+export function highlightsFromScorecard(
+  scorecard: CricketScorecard,
+  nameOf: (personId: string) => string | undefined,
+): OverlayHighlights | null {
+  const batting = scorecard.innings.flatMap((inn) => inn.batting);
+  const bowling = scorecard.innings.flatMap((inn) => inn.bowling);
+
+  const bestBatter = pickBest(batting, (a, b) => {
+    if (a.runs !== b.runs) return b.runs - a.runs;
+    return (b.strikeRate ?? -1) - (a.strikeRate ?? -1);
+  });
+  const bestBowler = pickBest(bowling, (a, b) => {
+    if (a.wickets !== b.wickets) return b.wickets - a.wickets;
+    return (a.economy ?? Number.POSITIVE_INFINITY) - (b.economy ?? Number.POSITIVE_INFINITY);
+  });
+
+  const batterName = bestBatter ? nameOf(bestBatter.person) : undefined;
+  const bowlerName = bestBowler ? nameOf(bestBowler.person) : undefined;
+
+  const batter =
+    bestBatter && batterName
+      ? {
+          name: batterName,
+          line: `${bestBatter.runs} (${bestBatter.balls})`,
+          ...(bestBatter.strikeRate === null ? {} : { detail: `SR ${fmt1(bestBatter.strikeRate)}` }),
+        }
+      : undefined;
+  const bowler =
+    bestBowler && bowlerName
+      ? {
+          name: bowlerName,
+          line: `${bestBowler.wickets}/${bestBowler.runs}`,
+          ...(bestBowler.economy === null ? {} : { detail: `Econ ${fmt1(bestBowler.economy)}` }),
+        }
+      : undefined;
+
+  if (!batter && !bowler) return null;
+  return { ...(batter ? { batter } : {}), ...(bowler ? { bowler } : {}) };
+}
+
 /** One delivery, as a scorer would write it. Notation, never copy. */
 export function ballGlyphText(g: BallGlyph): string {
   switch (g.kind) {

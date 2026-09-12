@@ -120,45 +120,6 @@ export default async function OverlayPage({
     },
   ];
 
-  const performers = matchCentre.cricket?.topPerformers ?? [];
-  const batters = performers.filter((p) => p.role === "batter");
-  const bowlers = performers.filter((p) => p.role === "bowler");
-  const pickBest = <T extends { line: string }>(rows: T[], preferHigher: boolean): T | undefined => {
-    if (rows.length === 0) return undefined;
-    return rows.reduce((best, row) => {
-      const a = Number.parseFloat(row.line);
-      const b = Number.parseFloat(best.line);
-      if (Number.isNaN(a)) return best;
-      if (Number.isNaN(b)) return row;
-      return preferHigher ? (a >= b ? row : best) : a <= b ? row : best;
-    });
-  };
-  const bestBatter = pickBest(batters, true);
-  const bestBowler = pickBest(bowlers, true);
-  const highlights =
-    bestBatter || bestBowler
-      ? {
-          ...(bestBatter
-            ? {
-                batter: {
-                  name: bestBatter.person.name,
-                  line: bestBatter.line,
-                  ...(bestBatter.detail ? { detail: bestBatter.detail } : {}),
-                },
-              }
-            : {}),
-          ...(bestBowler
-            ? {
-                bowler: {
-                  name: bestBowler.person.name,
-                  line: bestBowler.line,
-                  ...(bestBowler.detail ? { detail: bestBowler.detail } : {}),
-                },
-              }
-            : {}),
-        }
-      : null;
-
   // Formatted HERE, where the locale is, through the ONE formatter
   // (`overlayStartLabel`, Task 2) and the VENUE zone Task 0 puts on the payload
   // — never UTC, and never `Intl` inlined at this call site.
@@ -190,7 +151,6 @@ export default async function OverlayPage({
         // stages.name — not division.name (that is the league/flight label).
         ...(stageName ? { stage: stageName } : {}),
       }}
-      highlights={highlights}
       dict={dict}
       decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
       delayMs={delayMs}

@@ -6,7 +6,7 @@
 import type { FoldedFixture } from "@/server/engine-db/fold";
 import type { LiveFixtureData, OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
-import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss } from "@/lib/overlay-cricket";
+import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 
 interface RowSnapshot {
   status: string;
@@ -175,6 +175,8 @@ export function projectOverlayLiveData(input: {
   cricketToss?: OverlayCricketToss | null;
   lastClosedOver?: OverlayClosedOver | null;
   scoringStarted?: boolean;
+  /** Ended-card top batter / bowler — from the same scorecard fold as the crease. */
+  highlights?: OverlayHighlights | null;
 }): OverlayLiveData {
   const { row, folded, venueTz } = input;
   const out: OverlayLiveData = {
@@ -188,6 +190,9 @@ export function projectOverlayLiveData(input: {
     ...(input.cricketToss ? { cricketToss: input.cricketToss } : {}),
     ...(input.lastClosedOver ? { lastClosedOver: input.lastClosedOver } : {}),
     ...(input.scoringStarted !== undefined ? { scoringStarted: input.scoringStarted } : {}),
+    ...(input.highlights && (input.highlights.batter || input.highlights.bowler)
+      ? { highlights: input.highlights }
+      : {}),
   };
   if (!folded) return out;
   const clock = clockOf(folded.state, folded.active);
