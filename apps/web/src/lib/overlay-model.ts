@@ -9,6 +9,7 @@ import {
   battingEntrantId,
   chaseBalls,
   chaseNeed,
+  chaseTargetRuns,
   chaseTargetSource,
   disciplineLabel,
   disciplineList,
@@ -42,6 +43,8 @@ export interface OverlaySideInput {
    *  `team_display` blob with no `short_name` — so this is always absent and
    *  `shortCode` falls to three letters. */
   short?: string | null;
+  /** Club kit colour (`team_display.colors.home_primary`) for the slate card tiles. */
+  colour?: string | null;
 }
 
 export interface OverlaySide {
@@ -56,7 +59,22 @@ export interface OverlaySide {
   /** The side in play: batting, or serving, or the winner once decided. */
   led: boolean;
   serving: boolean;
+  /** Tile fill on the slate match card; absent → CSS fallbacks. */
+  colour?: string;
 }
+
+/** One top-performer chip on the ended slate card. */
+export type OverlayHighlight = {
+  name: string;
+  line: string;
+  detail?: string;
+};
+
+/** Competition / stage segments for the slate card meta pill. */
+export type OverlaySlateMeta = {
+  competition?: string;
+  stage?: string;
+};
 
 export interface OverlayCell {
   key: string;
@@ -101,6 +119,9 @@ export interface OverlayDetailLine {
    *  declared uncoloured here, so a 5-minute major rendered no chip while a
    *  2-minute minor did. See `DISCIPLINE_CLASS_TONE` below. */
   tone?: SportTone;
+  /** Cricket this-over ball chips (already notated). When set, bar/bug render
+   *  circular LED pills after `text` instead of flattening glyphs into the string. */
+  glyphs?: readonly string[];
 }
 
 export interface OverlayModel {
@@ -118,9 +139,10 @@ export interface OverlayModel {
    *  exclusive with `decided`. */
   voided: boolean;
   header: {
-    /** The word beside the dot: "Live" while playing, the decided/void
-     *  status label once ended, or the scheduled start label / "Not
-     *  started" fallback. Always present. */
+    /** The word beside the dot: "Live" while playing, a void status label
+     *  once abandoned/cancelled/forfeited, the scheduled start label / "Not
+     *  started" fallback — or "" for a plain decided/finalized fixture (the
+     *  short result lives in `period`; "Final" was retired 2026-09-12). */
     context: string;
     /** Fix round 3, F4 — the context LINE below it (`_THEMES.md` §3's
      *  "context line Geist 21/500 ink 70%"): the period/set label while
@@ -146,6 +168,22 @@ export interface OverlayModel {
   detail: OverlayDetailLine[];
   chase?: string;
   result?: string;
+  /**
+   * Cricket live only: bar/bug show the batting side as a single hero and
+   * (in a chase) a compact strip for the closed innings + absolute target.
+   * Absent when scheduled, decided/void, or non-cricket — those keep both sides.
+   */
+  focus?: {
+    hero: 0 | 1;
+    strip?: string;
+  };
+  /** Slate match-card meta (competition · stage). Absent segments are omitted. */
+  slateMeta?: OverlaySlateMeta;
+  /** Ended slate only — top batter / bowler when the scorecard can name them. */
+  highlights?: {
+    batter?: OverlayHighlight;
+    bowler?: OverlayHighlight;
+  };
 }
 
 /**
@@ -211,6 +249,10 @@ export interface OverlayModelInput {
   /** The decided sentence's templates — `fixture.decidedBy.*`, the `ui`
    *  namespace — resolved server-side exactly as `LiveScoreBody` receives them. */
   decidedTemplates: DecidedOutcomeTemplates;
+  /** Slate card pill — competition / stage names from the public page. */
+  slateMeta?: OverlaySlateMeta | null;
+  /** Slate ended card — performers from match centre when available. */
+  highlights?: OverlayModel["highlights"] | null;
 }
 
 const EM_DASH = "—";
@@ -304,20 +346,17 @@ function hasVerdict(outcome: OverlayLiveData["outcome"]): boolean {
 
 /**
  * Fix round 3, F1/F2/F7 — the word that replaces the live dot once a fixture
- * has ended, whichever of `_THEMES.md` §3's three end cases applies: "Final"
- * for a plain decided/finalized fixture (still `overlay.header.ended` — see
- * F7's own note: the key is used nowhere else, so its VALUE moves from
- * "Ended" to "Final" in the dictionaries rather than minting a second key),
- * else the void status's own new `overlay.status.*` word. Never `resultMsg`
- * and never `fixtureStatusLabel` — both explicitly ruled out by §3's i18n
- * note; these are new keys, deriving their SET from `VOID_STATUSES` above,
- * not a second hand-typed list.
+ * has ended. Void statuses keep their own `overlay.status.*` word
+ * (Abandoned / Cancelled / Forfeited). A plain decided/finalized fixture
+ * returns "" — the short result already sits in `header.period` ("CAN won"),
+ * and a status word of "Final" reads as a knockout stage name on air
+ * (owner, 2026-09-12). Never `resultMsg` and never `fixtureStatusLabel`.
  */
 function statusLabel(msg: OverlayMsg, status: string): string {
   if (status === "cancelled") return msg("overlay.status.cancelled");
   if (status === "abandoned") return msg("overlay.status.abandoned");
   if (status === "forfeited") return msg("overlay.status.forfeited");
-  return msg("overlay.header.ended");
+  return "";
 }
 
 function headerContext(input: OverlayModelInput, ended: boolean): string {
@@ -481,7 +520,7 @@ function detailOf(input: OverlayModelInput, codes: [string, string], live: boole
   // no discipline list, so before W2 its `detail` was always empty and the
   // second band never rendered at all. No `tone`: these are not card chips.
   if (live) {
-    for (const text of cricketDetail(input.data.cricketLive, input.msg)) lines.push({ text });
+    for (const line of cricketDetail(input.data.cricketLive, input.msg)) lines.push(line);
   }
   const serving = servingSide(input.data.summary);
   if (live && serving) {
@@ -575,6 +614,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   const overlaySides = ([0, 1] as const).map((row): OverlaySide => {
     const input_ = sides[row];
     const line = usable ? splitLine(usable[row]!.line) : { big: EM_DASH };
+    const colour = input_.colour?.trim();
     return {
       short: codes[row],
       name: input_.name,
@@ -583,6 +623,7 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
       ...(line.sub === undefined ? {} : { sub: line.sub }),
       led: led !== null && led === input_.id,
       serving: serving !== null && (row === 0 ? "home" : "away") === serving,
+      ...(colour ? { colour } : {}),
     };
   }) as [OverlaySide, OverlaySide];
 
@@ -630,9 +671,18 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   // line alone. A decided outcome the sentence producer has nothing to say
   // about (a draw — `renderDecidedOutcome` describes wins, ties and awards
   // only) falls to no line at all rather than back to the period: "H2" under
-  // the word "Final" would read as a match still in its second half.
+  // an empty status cell would still read as a match in its second half.
   const period = decided ? (shortResult ?? undefined) : sportPeriodLine(input);
   const cellsResult = cellsOf(input);
+  const focus = cricketLiveFocus({
+    sportKey: input.sportKey,
+    live,
+    summary: data.summary,
+    sideIds: [sides[0].id, sides[1].id],
+    overlaySides,
+    codes,
+    msg,
+  });
 
   return {
     live,
@@ -659,6 +709,61 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
           ),
         }),
     ...(result === null ? {} : { result }),
+    ...(focus === undefined ? {} : { focus }),
+    ...(input.slateMeta
+      ? {
+          slateMeta: {
+            ...(input.slateMeta.competition
+              ? { competition: input.slateMeta.competition }
+              : {}),
+            ...(input.slateMeta.stage ? { stage: input.slateMeta.stage } : {}),
+          },
+        }
+      : {}),
+    ...(input.highlights && (input.highlights.batter || input.highlights.bowler)
+      ? { highlights: input.highlights }
+      : {}),
+  };
+}
+
+/**
+ * Live cricket: one hero (the side batting) instead of two finished-innings
+ * columns. In a chase, the strip carries the closed side's score and the
+ * absolute target — overs stay off the strip (compact).
+ */
+function cricketLiveFocus(args: {
+  sportKey: string;
+  live: boolean;
+  summary: OverlayLiveData["summary"];
+  sideIds: [string, string];
+  overlaySides: [OverlaySide, OverlaySide];
+  codes: [string, string];
+  msg: OverlayMsg;
+}): OverlayModel["focus"] | undefined {
+  if (!args.live || args.sportKey !== "cricket") return undefined;
+  const battingId = battingEntrantId(args.summary);
+  if (battingId === null) return undefined;
+  const hero = (args.sideIds[0] === battingId ? 0 : args.sideIds[1] === battingId ? 1 : null) as
+    | 0
+    | 1
+    | null;
+  if (hero === null) return undefined;
+
+  const target = chaseTargetRuns(args.summary);
+  if (target === null) return { hero };
+
+  const other = (1 - hero) as 0 | 1;
+  const closedBig = args.overlaySides[other].big;
+  if (!closedBig || closedBig === EM_DASH) return { hero };
+
+  const targetLabel = withRevisionMarker(
+    args.msg("overlay.cricket.target", { target }),
+    chaseTargetSource(args.summary),
+    args.msg,
+  );
+  return {
+    hero,
+    strip: `${args.codes[other]} ${closedBig} · ${targetLabel}`,
   };
 }
 

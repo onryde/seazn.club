@@ -182,9 +182,30 @@ describe("cricket", () => {
   it("SIX, FOUR and OUT fire; the single is SILENT; order is ledger order", () => {
     expect(of("cricket", recent).map((m) => [m.seq, m.kind, m.tone])).toEqual([
       [3, "six", "led"],
+      [3, "six.bis", "led"],
       [5, "four", "led"],
+      [5, "four.bis", "led"],
       [6, "wicket", "dismissal"],
+      [6, "wicket.bis", "dismissal"],
     ]);
+  });
+
+  it("FOUR / SIX / OUT each raise TWO identical slabs (bis) — 2s hold then again 2s", () => {
+    for (const [seq, kind, headline] of [
+      [3, "six", "overlay.moment.six"],
+      [5, "four", "overlay.moment.four"],
+      [6, "wicket", "overlay.moment.out"],
+    ] as const) {
+      const pair = of("cricket", recent).filter((m) => m.seq === seq);
+      expect(pair, kind).toHaveLength(2);
+      expect(pair[0]).toMatchObject({ kind, headline, seq });
+      expect(pair[1]).toMatchObject({
+        kind: `${kind}.bis`,
+        headline: pair[0]!.headline,
+        tone: pair[0]!.tone,
+      });
+      expect(pair[1]!.line).toBe(pair[0]!.line);
+    }
   });
 
   it("the OUT line carries the dismissed batter's name, the engine's figures and the kind", () => {
@@ -202,7 +223,10 @@ describe("cricket", () => {
 
   it("`sinceSeq` is EXCLUSIVE — the tip is not replayed, the one before it is", () => {
     expect(of("cricket", recent, 6)).toEqual([]);
-    expect(of("cricket", recent, 5).map((m) => m.seq)).toEqual([6]);
+    expect(of("cricket", recent, 5).map((m) => [m.seq, m.kind])).toEqual([
+      [6, "wicket"],
+      [6, "wicket.bis"],
+    ]);
   });
 
   it("a wicket with NO figures (a coarse innings) still fires, with the kind alone", () => {
@@ -212,9 +236,11 @@ describe("cricket", () => {
       at: "",
       payload: { wicketKind: "lbw", person: { name: "H. One", masked: true } },
     };
-    const m = of("cricket", [ev])[0]!;
-    expect(m.tone).toBe("dismissal");
-    expect(m.line).toBe("overlay.moment.wicket.lbw");
+    const pair = of("cricket", [ev]);
+    expect(pair).toHaveLength(2);
+    expect(pair[0]!.tone).toBe("dismissal");
+    expect(pair[0]!.line).toBe("overlay.moment.wicket.lbw");
+    expect(pair[1]!.kind).toBe("wicket.bis");
   });
 
   it("a super-over delivery runs the SAME rule as an ordinary one", () => {
@@ -224,7 +250,17 @@ describe("cricket", () => {
       at: "",
       payload: { boundary: 6, runs: 6 },
     };
-    expect(of("cricket", [ev])[0]).toMatchObject({ kind: "six", tone: "led" });
+    expect(of("cricket", [ev]).map((m) => m.kind)).toEqual(["six", "six.bis"]);
+  });
+
+  it("a super-over FOUR also double-beats", () => {
+    const ev: RecentEvent = {
+      seq: 41,
+      type: "cricket.superover.ball",
+      at: "",
+      payload: { boundary: 4, runs: 4 },
+    };
+    expect(of("cricket", [ev]).map((m) => m.kind)).toEqual(["four", "four.bis"]);
   });
 });
 

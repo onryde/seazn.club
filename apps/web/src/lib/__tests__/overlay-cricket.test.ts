@@ -87,14 +87,15 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     expect(sc.live!.striker).toBe("H-p3");
     expect(sc.live!.nonStriker).toBe("H-p1");
     const line = sc.innings.at(-1)!.batting.find((b) => b.person === "H-p1")!;
-    expect(cricketDetail(live, msg)[0]).toBe(`Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`);
+    expect(cricketDetail(live, msg)[0]?.text).toBe(`Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`);
   });
 
-  it("the bowler's line is O-M-R-W from the engine, then this over's glyphs", () => {
+  it("the bowler's line is O-M-R-W from the engine; this over's glyphs are structured chips", () => {
     const bowl = sc.innings.at(-1)!.bowling.find((b) => b.person === "A-p11")!;
-    expect(cricketDetail(live, msg)[1]).toBe(
-      `Bumrah ${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets} · this over 1 4 wd W`,
-    );
+    expect(cricketDetail(live, msg)[1]).toEqual({
+      text: `Bumrah ${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets}`,
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("a maiden count the ledger cannot state is DROPPED, not printed as null", () => {
@@ -102,11 +103,14 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
       ...live,
       bowler: { ...live.bowler!, maidens: null, overs: "2.3", runs: 14, wickets: 1 },
     };
-    expect(cricketDetail(coarse, msg)[1]).toBe("Bumrah 2.3-14-1 · this over 1 4 wd W");
+    expect(cricketDetail(coarse, msg)[1]).toEqual({
+      text: "Bumrah 2.3-14-1",
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("an empty over drops the this-over segment entirely rather than trailing a label", () => {
-    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toBe("Bumrah 0.3-0-6-1");
+    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toEqual({ text: "Bumrah 0.3-0-6-1" });
   });
 
   it("every glyph the engine can emit renders as notation, and a dot ball is a dot", () => {
@@ -122,9 +126,10 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
       { kind: "penalty", runs: 5 },
       { kind: "wicket", dismissal: "caught" },
     ] as never;
-    expect(cricketDetail({ ...live, thisOver: glyphs }, msg)[1]).toBe(
-      "Bumrah 0.3-0-6-1 · this over · 3 wd wd+2 nb nb+2 2b 1lb 5p W",
-    );
+    expect(cricketDetail({ ...live, thisOver: glyphs }, msg)[1]).toEqual({
+      text: "Bumrah 0.3-0-6-1",
+      glyphs: ["·", "3", "wd", "wd+2", "nb", "nb+2", "2b", "1lb", "5p", "W"],
+    });
   });
 
   it("nothing at the crease yields NO band at all — never an empty line", () => {
@@ -135,7 +140,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   it("a batter the line-up never named is dropped from the LINE but stays a fact on the wire", () => {
     const anon = liveFromScorecard(sc, (id) => (id === "H-p1" ? undefined : NAMES[id]));
     expect(anon!.batters.map((b) => b.name)).toEqual(["Iyer", undefined]);
-    expect(cricketDetail(anon, msg)[0]).toBe("Iyer* 0 (0)");
+    expect(cricketDetail(anon, msg)[0]?.text).toBe("Iyer* 0 (0)");
   });
 
   it("the marker follows the STRIKER, not the first name that survives", () => {
@@ -145,14 +150,17 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     const anon = liveFromScorecard(sc, (id) => (id === "H-p3" ? undefined : NAMES[id]));
     expect(anon!.batters[0]!.onStrike).toBe(true);
     expect(anon!.batters[0]!.name).toBeUndefined();
-    expect(cricketDetail(anon, msg)[0]).toBe("Sharma 1 (1)");
-    expect(cricketDetail(anon, msg)[0]).not.toContain("*");
+    expect(cricketDetail(anon, msg)[0]?.text).toBe("Sharma 1 (1)");
+    expect(cricketDetail(anon, msg)[0]?.text).not.toContain("*");
   });
 
   it("a bowler with no name loses the BOWLER line but keeps the over — the glyphs are the over, not the person", () => {
     const anon = liveFromScorecard(sc, (id) => (id === "A-p11" ? undefined : NAMES[id]));
     expect(anon!.bowler).toBeUndefined();
-    expect(cricketDetail(anon, msg)[1]).toBe("this over 1 4 wd W");
+    expect(cricketDetail(anon, msg)[1]).toEqual({
+      text: "",
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("a scorecard with no live block at all (not started, between innings) yields null", () => {

@@ -258,7 +258,7 @@ describe("§3's decided/void context line reaches the rendered second line (I2)"
     it("decided: the SHORT form of the result sentence, not the phase", () => {
       const line = contextLineOf(OverlayBar, modelFor("decided", { kind: "win", winner: "H", method: "regulation" }));
       expect(line, "the winner reduced to the cell's short name").toBe("WIN MIL REG");
-      expect(line, "the phase must not survive under the word 'Final'").not.toBe("H2");
+      expect(line, "the phase must not survive under a decided status cell").not.toBe("H2");
     });
 
     it("void carrying a verdict: the same short form as decided", () => {

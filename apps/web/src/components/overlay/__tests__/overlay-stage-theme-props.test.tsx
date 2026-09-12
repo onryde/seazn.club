@@ -4,10 +4,11 @@
 // proves the fixture).
 //
 // The producer is `OverlayStage`, which owns the dictionary and the sport key
-// and is the ONLY place a theme becomes a component. The consumer is
-// `OverlaySlate`, the one shipped theme that needs both. Nothing here calls a
-// theme with hand-written props: the stage builds `msg` from a REAL on-disk
-// dictionary and the assertions read the HTML a viewer would be served.
+// and is the ONLY place a theme becomes a component. The match-card layer
+// (`OverlayMatchCard`) is the consumer of `msg` while warming/ended. Nothing
+// here calls a theme with hand-written props: the stage builds `msg` from a
+// REAL on-disk dictionary and the assertions read the HTML a viewer would be
+// served.
 //
 // `environment: "node"`, no jsdom — `renderToStaticMarkup` is this directory's
 // existing precedent for a real, non-mocked render of a hook-using client
@@ -18,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
-import { OVERLAY_THEMES, defaultThemeFor } from "../theme-registry";
+import { defaultThemeFor } from "../theme-registry";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { t } from "@/lib/i18n-runtime";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
@@ -44,7 +45,7 @@ function props(over: Partial<OverlayStageProps>): OverlayStageProps {
     initial: SCHEDULED,
     realtime: false,
     sportKey: "football",
-    style: "slate",
+    style: "bug",
     sides: [
       { id: "home", name: "Milton Keynes Rovers" },
       { id: "away", name: "Northbridge Athletic" },
@@ -134,9 +135,9 @@ describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// `sportKey` — the composited scorebug is the SPORT'S default, not a constant.
+// Scorebug under the match card — sport default is bar|bug, never slate.
 // ---------------------------------------------------------------------------
-describe("OverlayStage threads its sport key to the theme (`sportKey`)", () => {
+describe("OverlayStage mounts scorebug + match card when scheduled", () => {
   const SPORTS = [
     "cricket",
     "football",
@@ -151,86 +152,97 @@ describe("OverlayStage threads its sport key to the theme (`sportKey`)", () => {
     "generic",
   ] as const;
 
-  /** The root class the registry's chosen default renders — read off a
-   *  standalone render of THAT component, never a table typed here, so a
-   *  moved default moves this expectation with it. */
-  const rootClassOfDefault = (sportKey: string): string => {
-    const html = renderToStaticMarkup(
-      <OverlayStage {...props({ sportKey, style: defaultThemeFor(sportKey) })} />,
-    );
-    const match = html.match(/<div class="(ovl-[a-z]+)"/);
-    if (!match) throw new Error(`no theme root in:\n${html}`);
+  const scorebugRootOf = (html: string): string => {
+    const match = html.match(/<div class="(ovl-(?:bar|bug))"/);
+    if (!match) throw new Error(`no scorebug root in:\n${html}`);
     return match[1]!;
   };
 
-  it.each(SPORTS)("slate on %s composites exactly the theme defaultThemeFor names", (sportKey) => {
-    const expected = rootClassOfDefault(sportKey);
-    const html = renderToStaticMarkup(<OverlayStage {...props({ sportKey })} />);
-    expect(html, `${sportKey} should composite ${defaultThemeFor(sportKey)} ("${expected}")`).toContain(
-      `class="${expected}"`,
+  it.each(SPORTS)("%s with style=default shows that sport's scorebug under the match card", (sportKey) => {
+    const expected = `ovl-${defaultThemeFor(sportKey)}`;
+    const html = renderToStaticMarkup(
+      <OverlayStage {...props({ sportKey, style: defaultThemeFor(sportKey) })} />,
     );
+    expect(scorebugRootOf(html), `${sportKey} scorebug`).toBe(expected);
+    expect(html, "warming card layer").toContain('data-testid="ovl-slate-card"');
   });
 
-  it("cricket composites the BAR and football the BUG — the differential a hardcoded OverlayBug fails", () => {
+  it("cricket bar + football bug — and both carry the match card when scheduled", () => {
     expect(defaultThemeFor("cricket"), "premise").not.toBe(defaultThemeFor("football"));
-    const cricket = renderToStaticMarkup(<OverlayStage {...props({ sportKey: "cricket" })} />);
-    const football = renderToStaticMarkup(<OverlayStage {...props({ sportKey: "football" })} />);
+    const cricket = renderToStaticMarkup(
+      <OverlayStage {...props({ sportKey: "cricket", style: "bar" })} />,
+    );
+    const football = renderToStaticMarkup(
+      <OverlayStage {...props({ sportKey: "football", style: "bug" })} />,
+    );
     expect(cricket).toContain('class="ovl-bar"');
     expect(cricket).not.toContain('class="ovl-bug"');
     expect(football).toContain('class="ovl-bug"');
     expect(football).not.toContain('class="ovl-bar"');
+    expect(cricket).toContain('data-testid="ovl-slate-card"');
+    expect(football).toContain('data-testid="ovl-slate-card"');
   });
 
-  it("no sport defaults to slate — the composite would otherwise recurse forever", () => {
-    for (const sportKey of SPORTS) {
-      expect(defaultThemeFor(sportKey), sportKey).not.toBe("slate");
-      expect(OVERLAY_THEMES[defaultThemeFor(sportKey)].component, sportKey).not.toBe(
-        OVERLAY_THEMES.slate.component,
-      );
-    }
+  it("retired ?style=slate is not a ThemeId — page resolveTheme maps it before the stage", () => {
+    // Stage props are ThemeId only; the page's resolveTheme maps "slate" → default.
+    expect(defaultThemeFor("cricket")).toBe("bar");
+    expect(defaultThemeFor("football")).toBe("bug");
   });
 });
 
 // ---------------------------------------------------------------------------
-// The widening is INVISIBLE to the two themes that do not use it (§3's bar and
-// §4's bug render byte-identically to before).
+// Live: no match card, so bar/bug ignore overlay.slate.* dictionary keys.
 // ---------------------------------------------------------------------------
-describe("bar and bug are unmoved by the widened contract", () => {
+describe("bar and bug ignore slate copy while LIVE (no match card)", () => {
+  const LIVE: OverlayLiveData = {
+    status: "in_play",
+    summary: null,
+    outcome: null,
+    lastSeq: 1,
+    venueTz: "Europe/London",
+  };
+
   it.each(["bar", "bug"] as const)(
     "%s renders BYTE-IDENTICALLY whether or not the dictionary carries the slate copy",
     (style) => {
-      // Two dictionaries that differ ONLY in the keys the new `msg` channel
-      // exists for. Bar and bug read neither, so their bytes must not move —
-      // and the SLATE differential above proves the same pair of dicts really
-      // does change what a theme that DOES read them renders.
       const withSlate = dictOf("en");
       const withoutSlate = Object.fromEntries(
         Object.entries(withSlate).filter(([k]) => !k.startsWith("overlay.slate.")),
       );
-      const a = renderToStaticMarkup(<OverlayStage {...props({ style, dict: withSlate })} />);
-      const b = renderToStaticMarkup(<OverlayStage {...props({ style, dict: withoutSlate })} />);
+      const a = renderToStaticMarkup(
+        <OverlayStage {...props({ style, dict: withSlate, initial: LIVE })} />,
+      );
+      const b = renderToStaticMarkup(
+        <OverlayStage {...props({ style, dict: withoutSlate, initial: LIVE })} />,
+      );
       expect(a).toBe(b);
       expect(a).toContain(`class="ovl-${style}"`);
+      expect(a).not.toContain('data-testid="ovl-slate-card"');
     },
   );
 
-  it("the slate, on the SAME pair of dictionaries, does move — so the check above is not vacuous", () => {
+  it("the match card, on the SAME pair of dictionaries while scheduled, does move", () => {
     const withSlate = dictOf("en");
     const withoutSlate = Object.fromEntries(
       Object.entries(withSlate).filter(([k]) => !k.startsWith("overlay.slate.")),
     );
-    const a = renderToStaticMarkup(<OverlayStage {...props({ style: "slate", dict: withSlate })} />);
-    const b = renderToStaticMarkup(<OverlayStage {...props({ style: "slate", dict: withoutSlate })} />);
+    const a = renderToStaticMarkup(<OverlayStage {...props({ style: "bar", dict: withSlate })} />);
+    const b = renderToStaticMarkup(
+      <OverlayStage {...props({ style: "bar", dict: withoutSlate })} />,
+    );
     expect(a).not.toBe(b);
+    expect(a).toContain("UPCOMING");
+    expect(b).toContain("overlay.slate.pillUpcoming");
   });
 
-  it.each(["bar", "bug"] as const)("%s renders BYTE-IDENTICALLY for two different sportKeys", (style) => {
-    // Both are `sports: "all"` and neither branches on the sport in JS (the
-    // palette arrives as CSS custom properties on the ancestor `.ovl-canvas`,
-    // which the stage sets — outside the theme's own subtree).
+  it.each(["bar", "bug"] as const)("%s scorebug subtree is BYTE-IDENTICAL for two sportKeys when live", (style) => {
     const subtree = (html: string) => html.slice(html.indexOf(`<div class="ovl-${style}"`));
-    const cricket = renderToStaticMarkup(<OverlayStage {...props({ style, sportKey: "cricket" })} />);
-    const football = renderToStaticMarkup(<OverlayStage {...props({ style, sportKey: "football" })} />);
+    const cricket = renderToStaticMarkup(
+      <OverlayStage {...props({ style, sportKey: "cricket", initial: LIVE })} />,
+    );
+    const football = renderToStaticMarkup(
+      <OverlayStage {...props({ style, sportKey: "football", initial: LIVE })} />,
+    );
     expect(subtree(cricket)).toBe(subtree(football));
   });
 });

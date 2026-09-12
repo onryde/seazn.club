@@ -55,7 +55,7 @@ export interface OverlayMoment extends W1OverlayMoment {
 export type MomentRule = (
   ev: RecentEvent,
   ctx: { msg: OverlayMsg; sportKey: string; sides: readonly [string, string] },
-) => OverlayMoment | null;
+) => OverlayMoment | readonly OverlayMoment[] | null;
 
 const name = (ev: RecentEvent): string | undefined => ev.payload.person?.name;
 
@@ -83,7 +83,16 @@ const WICKET_KEYS: Readonly<Record<string, string>> = {
  *
  * The wicket is checked FIRST: a ball can be both a boundary and a dismissal
  * (a catch on the rope), and the dismissal is the moment.
+ *
+ * FOUR / SIX / OUT each play TWICE on air (2s + 2s with the shared hold). The
+ * second beat uses kind `${kind}.bis` so the queue's seq:kind dedupe still lets
+ * both through (same pattern as tennis setWon + match point on one seq).
  */
+const doubleBeat = (moment: OverlayMoment): readonly [OverlayMoment, OverlayMoment] => [
+  moment,
+  { ...moment, kind: `${moment.kind}.bis` },
+];
+
 const ball: MomentRule = (ev, { msg }) => {
   const p = ev.payload;
   if (p.wicketKind !== undefined) {
@@ -108,22 +117,22 @@ const ball: MomentRule = (ev, { msg }) => {
         : who !== undefined && figures !== undefined
           ? `${who} ${figures.runs} (${figures.balls})`
           : (kind ?? who);
-    return {
+    return doubleBeat({
       kind: "wicket",
       headline: msg("overlay.moment.out"),
       ...(line === undefined ? {} : { line }),
       tone: "dismissal",
       seq: ev.seq,
-    };
+    });
   }
   if (p.boundary === 6 || p.boundary === 4) {
-    return {
+    return doubleBeat({
       kind: p.boundary === 6 ? "six" : "four",
       headline: msg(p.boundary === 6 ? "overlay.moment.six" : "overlay.moment.four"),
       ...(name(ev) === undefined ? {} : { line: name(ev)! }),
       tone: "led",
       seq: ev.seq,
-    };
+    });
   }
   return null;
 };
@@ -400,7 +409,14 @@ export function momentsFor(
     ];
     for (const rule of candidates) {
       const moment = rule?.(ev, ctx);
-      if (moment !== null && moment !== undefined) out.push(moment);
+      if (moment === null || moment === undefined) continue;
+      // `Array.isArray` does not exclude `readonly T[]` from `T | readonly T[]`
+      // in the else branch — narrow via explicit branch assignment.
+      if (Array.isArray(moment)) {
+        out.push(...moment);
+      } else {
+        out.push(moment as OverlayMoment);
+      }
     }
   }
   return out;

@@ -309,8 +309,10 @@ describe("the opaque-preview caption is dictionary-driven, not theme-named", () 
     .map((t) => t.id)
     .filter((id) => typeof en[captionKeyFor(id)] === "string");
 
-  it("premise: at least one shipped theme declares a preview caption", () => {
-    expect(withCaption.length).toBeGreaterThan(0);
+  it("bar and bug declare no opaque caption — only a future opaque theme would", () => {
+    // 2026-09-12: slate retired as a theme; match card is a transparent layer.
+    // The caption mechanism remains: `stream.preview.<id>` when a theme needs it.
+    expect(withCaption).toEqual([]);
   });
 
   it("every declared caption exists in all four locales", () => {

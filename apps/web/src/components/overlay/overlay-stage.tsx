@@ -31,6 +31,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // imports neither `overlay-bar` nor `overlay-bug` — registering a third theme
 // must not touch this file, and an import here would be exactly that edit.
 import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "./theme-registry";
+import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -46,6 +47,10 @@ export interface OverlayStageProps {
   style: ThemeId;
   sides: [OverlaySideInput, OverlaySideInput];
   startLabel: string | null;
+  /** Competition / stage for the slate card meta pill. */
+  slateMeta?: { competition?: string; stage?: string } | null;
+  /** Ended slate highlights (from match centre on first paint). */
+  highlights?: OverlayModel["highlights"] | null;
   /** The `public` namespace, en-merged server-side. A plain object, so the
    *  island carries only the active locale. */
   dict: Record<string, string>;
@@ -148,10 +153,15 @@ export function OverlayStage(props: OverlayStageProps) {
     clockLabel,
     msg,
     decidedTemplates: props.decidedTemplates,
+    slateMeta: props.slateMeta,
+    highlights: props.highlights,
   });
 
+  const cardState = slateStateOf(model);
+  const showMatchCard = cardState === "warming" || cardState === "ended";
+
   // Moments first, then end-of-over (so OUT precedes the over card), then toss
-  // (only eligible pre-scoring — never fights mid-over slabs).
+  // (only when the match card is NOT up — card owns warming openers).
   const sideShorts: [string, string] = [model.sides[0].short, model.sides[1].short];
   const sideNames: [string, string] = [model.sides[0].name, model.sides[1].name];
   const incoming = awaitingDelay
@@ -169,15 +179,14 @@ export function OverlayStage(props: OverlayStageProps) {
           sinceOver: closedOverBaseline,
           msg,
         });
-        const toss =
-          props.style === "slate"
-            ? null
-            : tossMoment({
-                toss: data.cricketToss,
-                sideNames,
-                scoringStarted: data.scoringStarted === true,
-                msg,
-              });
+        const toss = showMatchCard
+          ? null
+          : tossMoment({
+              toss: data.cricketToss,
+              sideNames,
+              scoringStarted: data.scoringStarted === true,
+              msg,
+            });
         return [...moments, ...(eoo ? [eoo] : []), ...(toss ? [toss] : [])];
       })();
 
@@ -263,10 +272,9 @@ export function OverlayStage(props: OverlayStageProps) {
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
       >
-        {/* `OverlayThemeProps` (theme-registry.ts) — the model, the score
-            tick, the ONE `msg` above, and the sport. The last two are what
-            let a theme carry its own copy and composite the sport's own
-            scorebug; §3's bar and §4's bug ignore both. */}
+        {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
+            warming or ended — not a third ?style= (2026-09-12). */}
+        {showMatchCard ? <OverlayMatchCard model={model} msg={msg} /> : null}
         <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
         {/* W2's slab attaches here (R4). The slot CLIPS: the slab slides out
             from under the scorebug rather than appearing beside it, so the

@@ -226,8 +226,19 @@ function glyph(g: BallGlyph): string {
  *
  * The second line survives an unnamed bowler: the glyphs are the OVER, not the
  * person, and dropping them with the name would lose the more useful half.
+ *
+ * Glyphs ride as structured chips (`glyphs`) so bar/bug can circle them —
+ * never flattened into `text` (a string cannot carry pill geometry).
  */
-export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: OverlayMsg): string[] {
+export type CricketDetailLine = {
+  text: string;
+  glyphs?: readonly string[];
+};
+
+export function cricketDetail(
+  live: OverlayCricketLive | null | undefined,
+  msg: OverlayMsg,
+): CricketDetailLine[] {
   // TWO guards, and they ask DIFFERENT questions: "there is no crease block at
   // all" (between innings, not cricket) versus "there is one, and nobody on it
   // can be named". The third — `batters.length === 0` — was the redundant one,
@@ -241,10 +252,8 @@ export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: 
     .map((b) => `${b.name}${b.onStrike ? mark : ""} ${b.runs} (${b.balls})`)
     .join(" · ");
 
-  const over =
-    live.thisOver.length === 0
-      ? undefined
-      : `${msg("overlay.cricket.thisOver")} ${live.thisOver.map(glyph).join(" ")}`;
+  const glyphLabels =
+    live.thisOver.length === 0 ? undefined : live.thisOver.map(ballGlyphText);
   const bowler =
     live.bowler === undefined
       ? undefined
@@ -255,6 +264,16 @@ export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: 
           String(live.bowler.wickets),
         ].join("-")}`;
 
-  const second = [bowler, over].filter((part) => part !== undefined).join(" · ");
-  return second === "" ? [batters] : [batters, second];
+  // No "this over" label on the live band — the circular glyphs carry that
+  // meaning. The end-of-over card keeps `overlay.cricket.thisOver` as its
+  // column heading.
+  const second: CricketDetailLine | undefined =
+    bowler === undefined && glyphLabels === undefined
+      ? undefined
+      : {
+          text: bowler ?? "",
+          ...(glyphLabels === undefined ? {} : { glyphs: glyphLabels }),
+        };
+
+  return second === undefined ? [{ text: batters }] : [{ text: batters }, second];
 }

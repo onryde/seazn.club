@@ -1,18 +1,17 @@
-// Theme C — the slate (`_THEMES.md` §4a, task 5e). `apps/web` vitest is
-// `environment: "node"` — no DOM, so this cannot see the rendered ground, the
-// radial highlight or the actual cross-fade paint; it proves the ELEMENT TREE
-// and the STATE MACHINE `OverlaySlate` produces, the same way
-// decided-void-and-cells.test.tsx proves the bar/bug. `OverlaySlate` (unlike
-// bar/bug) uses hooks, so it is driven through `renderIsland`
-// (_hook-harness.tsx), not called as a plain function.
+// Match / end card layer (2026-09-12) — not a ?style= theme.
+// Spec: docs/superpowers/specs/2026-09-12-overlay-match-card-layer-design.md
+//
+// `apps/web` vitest is `environment: "node"` — no DOM. This proves the
+// ELEMENT TREE and the STATE MACHINE `OverlayMatchCard` produces.
+// Driven through `renderIsland` (_hook-harness.tsx).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { OverlaySlate, slateStateOf } from "../overlay-slate";
-import { OVERLAY_THEMES, defaultThemeFor, type OverlayThemeProps } from "../theme-registry";
+import { OverlayMatchCard, OverlaySlate, slateStateOf } from "../overlay-slate";
+import type { OverlayThemeProps } from "../theme-registry";
 import { t } from "@/lib/i18n-runtime";
 import { nameLadder, type OverlayModel, type OverlayMsg } from "@/lib/overlay-model";
 
@@ -20,30 +19,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DICT = join(HERE, "../../../dictionaries");
 const LOCALES = ["en", "fr", "es", "nl"] as const;
 
-/** The eleven sport keys the overlay serves — the same list `theme-registry`'s
- *  own slate suite sweeps. Expectations are DERIVED from `defaultThemeFor`
- *  below, never from a per-sport table typed here. */
-const SPORTS = [
-  "cricket",
-  "football",
-  "hockey",
-  "icehockey",
-  "tennis",
-  "badminton",
-  "tabletennis",
-  "volleyball",
-  "boardgame",
-  "carrom",
-  "generic",
-] as const;
-
 const dictOf = (locale: string): Record<string, string> =>
   JSON.parse(readFileSync(join(DICT, locale, "public.json"), "utf8"));
 
 /** The REAL `msg` an overlay theme receives — `t()` over the real, on-disk
  *  dictionary for that locale, which is exactly what `overlay-stage.tsx`
- *  builds (`(key, vars) => t(props.dict, key, vars)`). A hardcoded English
- *  string in the component therefore cannot satisfy `fr`. */
+ *  builds (`(key, vars) => t(props.dict, key, vars)`). */
 const msgOf =
   (locale: string): OverlayMsg =>
   (key, vars) =>
@@ -67,26 +48,6 @@ function classesOf(el: ReactElement): string {
   return (propsOf(el).className as string | undefined) ?? "";
 }
 
-/** The registry's own hookless themes, DERIVED from the registry rather than
- *  named here: whichever component `defaultThemeFor` picks is the one `expand`
- *  must descend into, so this keeps working if a sport's default moves.
- *  `OverlaySlate` itself is excluded — it has hooks, and nothing defaults to
- *  it (pinned in theme-registry.test.ts). */
-const COMPOSITABLE = new Set(
-  Object.values(OVERLAY_THEMES)
-    .map((theme) => theme.component)
-    .filter((component) => component !== OverlaySlate),
-);
-
-/**
- * `OverlaySlate` embeds the composited scorebug as JSX (§4a: "the selected
- * theme … renders ON TOP"), not as a called function — `walk`'s default
- * behaviour reads only `.props.children`, so it treats that element as opaque
- * and never descends into what the scorebug itself renders. This expands it —
- * hookless, so calling it directly is a real, non-mocked render, the same
- * shape decided-void-and-cells.test.tsx uses at the top level; here it happens
- * one level deeper because OverlaySlate embeds it rather than calling it.
- */
 function expand(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
   if (Array.isArray(node)) {
     for (const child of node) expand(child, out);
@@ -94,18 +55,14 @@ function expand(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
   }
   if (!isValidElement(node)) return out;
   out.push(node);
-  if (typeof node.type === "function" && COMPOSITABLE.has(node.type as never)) {
-    return expand((node.type as (p: OverlayThemeProps) => ReactNode)(node.props as OverlayThemeProps), out);
-  }
   return expand((node.props as { children?: ReactNode }).children, out);
 }
 
 function render(
   model: OverlayModel,
-  tick: [boolean, boolean] = [false, false],
-  { locale = "en", sportKey = "football" }: { locale?: string; sportKey?: string } = {},
+  { locale = "en" }: { locale?: string } = {},
 ) {
-  return renderIsland(OverlaySlate, { model, tick, msg: msgOf(locale), sportKey }, expand);
+  return renderIsland(OverlayMatchCard, { model, msg: msgOf(locale) }, expand);
 }
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((el) => propsOf(el)["data-testid"] === id);
@@ -114,9 +71,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// ---------------------------------------------------------------------------
-// The state union `?style=slate` can actually reach — mutated per member.
-// ---------------------------------------------------------------------------
 describe("slateStateOf — the three states OverlayModel alone can drive (gap 3: 'signal lost' is not one of them)", () => {
   it("decided ⇒ ended", () => {
     expect(slateStateOf({ ...BASE_MODEL, live: false, decided: true, voided: false })).toBe("ended");
@@ -135,54 +89,57 @@ describe("slateStateOf — the three states OverlayModel alone can drive (gap 3:
   });
 
   it("ended is checked BEFORE live — a mutant swapping the branch order changes this", () => {
-    // Real data never sets both, but this pins which `if` runs first.
     expect(slateStateOf({ ...BASE_MODEL, live: true, decided: true, voided: false })).toBe("ended");
   });
 });
 
-// ---------------------------------------------------------------------------
-// The always-present scaffold: ground root, brand, and the composited
-// scorebug — present in EVERY state, never conditional on it.
-// ---------------------------------------------------------------------------
-describe("OverlaySlate — ground, brand and the scorebug-on-top mount in every state", () => {
+describe("OverlayMatchCard — card-only layer (no nested scorebug)", () => {
   it.each<[string, OverlayModel]>([
     ["warming", { ...BASE_MODEL, live: false, decided: false, voided: false }],
     ["ended (decided)", { ...BASE_MODEL, live: false, decided: true, result: "Milton Keynes Rovers won by 44 runs" }],
     ["ended (voided, no verdict)", { ...BASE_MODEL, live: false, decided: false, voided: true }],
-    ["live", { ...BASE_MODEL, live: true, decided: false, voided: false }],
-  ])("%s: .ovl-slate, .ovl-slate-brand ('seazn'), and the composited scorebug all mount", (_label, model) => {
+  ])("%s: .ovl-slate, brand, and card mount — never ovl-bar / ovl-bug", (_label, model) => {
     const tree = render(model).tree();
     expect(tree.some((el) => classesOf(el) === "ovl-slate"), "root").toBe(true);
     const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
     expect(brand, "brand").toBeDefined();
     expect(textOf(brand!)).toBe("seazn");
-    const bug = tree.find((el) => classesOf(el).split(" ").includes("ovl-bug"));
-    expect(bug, "the composited scorebug (football ⇒ bug, per defaultThemeFor)").toBeDefined();
+    expect(byTestId(tree, "ovl-slate-card"), "card").toBeDefined();
+    expect(
+      tree.some((el) => classesOf(el).split(" ").includes("ovl-bar")),
+      "no nested bar",
+    ).toBe(false);
+    expect(
+      tree.some((el) => classesOf(el).split(" ").includes("ovl-bug")),
+      "no nested bug",
+    ).toBe(false);
+  });
+
+  it("live ⇒ null (stage owns when to mount; card does not paint an empty root)", () => {
+    const tree = render({ ...BASE_MODEL, live: true, decided: false, voided: false }).tree();
+    expect(tree.length).toBe(0);
+    expect(byTestId(tree, "ovl-slate-card")).toBeUndefined();
+  });
+
+  it("OverlaySlate alias still points at OverlayMatchCard", () => {
+    expect(OverlaySlate).toBe(OverlayMatchCard);
   });
 
   it("fix round 5, I5 — the brand is RESOLVED, not a hardcoded literal", () => {
-    // The case above cannot separate the two states: `overlay.brand` is
-    // "seazn" in all four dictionaries, so a hardcoded `seazn` satisfies it
-    // forever. A resolver that returns the KEY is what tells them apart —
-    // the same shape that would have caught the five orphaned
-    // `overlay.slate.*` keys at 5e.
     const keyMsg: OverlayMsg = (key) => key;
     const tree = renderIsland(
-      OverlaySlate,
-      { model: BASE_MODEL, tick: [false, false] as [boolean, boolean], msg: keyMsg, sportKey: "football" },
+      OverlayMatchCard,
+      { model: { ...BASE_MODEL, live: false }, msg: keyMsg },
       expand,
     ).tree();
     const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
-    expect(textOf(brand!), "slate resolves the wordmark through the dictionary channel").toBe(
+    expect(textOf(brand!), "card resolves the wordmark through the dictionary channel").toBe(
       "overlay.brand",
     );
     expect(textOf(brand!)).not.toBe("seazn");
   });
 });
 
-// ---------------------------------------------------------------------------
-// Headline / line per state — mutated per member of the union.
-// ---------------------------------------------------------------------------
 const WARMING: OverlayModel = {
   ...BASE_MODEL,
   live: false,
@@ -196,11 +153,11 @@ const ENDED: OverlayModel = {
   live: false,
   decided: true,
   voided: false,
-  header: { context: "Final" },
+  header: { context: "", period: "MIL won" },
   result: "Milton Keynes Rovers won by 44 runs",
 };
 
-describe("OverlaySlate — headline/line per state, resolved through the theme's own `msg`", () => {
+describe("OverlayMatchCard — headline/line per state, resolved through `msg`", () => {
   it("warming: headline is Home vs Away; line is toss-pending + start (A1, 2026-09-12)", () => {
     const en = dictOf("en");
     const tree = render(WARMING).tree();
@@ -232,15 +189,18 @@ describe("OverlaySlate — headline/line per state, resolved through the theme's
     expect(line).toContain("Sat 14:30 BST");
   });
 
-  it("ended: headline is §4a's endedHeadline key; line is model.result — zero deviation from §4a's own producer there", () => {
-    const en = dictOf("en");
+  it("ended: headline is model.result (result card); matchup tiles carry scores", () => {
     const tree = render(ENDED).tree();
-    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(en["overlay.slate.endedHeadline"]);
-    expect(textOf(byTestId(tree, "ovl-slate-line")!)).toBe("Milton Keynes Rovers won by 44 runs");
+    expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe("Milton Keynes Rovers won by 44 runs");
+    expect(byTestId(tree, "ovl-slate-line"), "ended card has no toss line").toBeUndefined();
     expect(byTestId(tree, "ovl-slate-indicator-warming"), "no warming dots once ended").toBeUndefined();
+    expect(textOf(byTestId(tree, "ovl-slate-vs")!)).toBe("vs");
+    expect(textOf(byTestId(tree, "ovl-slate-tile-0")!)).toContain("MIL");
+    expect(textOf(byTestId(tree, "ovl-slate-tile-0")!)).toContain("2");
+    expect(textOf(byTestId(tree, "ovl-slate-tile-1")!)).toContain("NOR");
   });
 
-  it("ended (voided, no verdict): headline still renders; NO line is fabricated for a null resultMsg", () => {
+  it("ended (voided, no verdict): headline falls back to endedHeadline; NO fabricated result line", () => {
     const en = dictOf("en");
     const model: OverlayModel = { ...BASE_MODEL, live: false, decided: false, voided: true, header: { context: "Cancelled" } };
     const tree = render(model).tree();
@@ -248,7 +208,15 @@ describe("OverlaySlate — headline/line per state, resolved through the theme's
     expect(byTestId(tree, "ovl-slate-line"), "no invented line").toBeUndefined();
   });
 
-  it("the positive/negative pair — live renders NO .ovl-slate-content at all (§4a defines no fourth headline)", () => {
+  it("warming: matchup tiles show codes without scores", () => {
+    const tree = render(WARMING).tree();
+    expect(textOf(byTestId(tree, "ovl-slate-pill")!)).toContain(dictOf("en")["overlay.slate.pillUpcoming"]);
+    expect(textOf(byTestId(tree, "ovl-slate-tile-0")!)).toBe("MIL");
+    expect(textOf(byTestId(tree, "ovl-slate-name-0")!)).toBe("Milton Keynes Rovers");
+    expect(textOf(byTestId(tree, "ovl-slate-vs")!)).toBe("vs");
+  });
+
+  it("live renders nothing — no content / headline / line", () => {
     const tree = render({ ...BASE_MODEL, live: true, decided: false, voided: false }).tree();
     expect(byTestId(tree, "ovl-slate-content")).toBeUndefined();
     expect(byTestId(tree, "ovl-slate-headline")).toBeUndefined();
@@ -256,17 +224,10 @@ describe("OverlaySlate — headline/line per state, resolved through the theme's
   });
 });
 
-// ---------------------------------------------------------------------------
-// The keys are WIRED, not merely present. A non-English locale is what makes
-// this fail against a hardcoded English literal: the four dictionaries carry
-// four different sentences, and only a real `msg(key)` lookup produces all
-// four. (The old version of this file asserted the keys EXISTED in the four
-// JSON files, which passed identically in the orphaned and the wired state.)
-// ---------------------------------------------------------------------------
 describe("public.overlay.slate.* actually reaches the screen, in every locale", () => {
   it.each(LOCALES)("%s: the warming headline IS that locale's interpolated vs template", (locale) => {
     const dict = dictOf(locale);
-    const tree = render(WARMING, [false, false], { locale }).tree();
+    const tree = render(WARMING, { locale }).tree();
     expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(
       t(dict, "overlay.slate.warmingHeadlineVs", {
         home: "Milton Keynes Rovers",
@@ -275,26 +236,38 @@ describe("public.overlay.slate.* actually reaches the screen, in every locale", 
     );
   });
 
-  it.each(LOCALES)("%s: the ended headline IS that locale's own dictionary value", (locale) => {
-    const tree = render(ENDED, [false, false], { locale }).tree();
+  it.each(LOCALES)("%s: the voided ended headline IS that locale's own dictionary value", (locale) => {
+    const voided: OverlayModel = {
+      ...BASE_MODEL,
+      live: false,
+      decided: false,
+      voided: true,
+      header: { context: "Cancelled" },
+    };
+    const tree = render(voided, { locale }).tree();
     expect(textOf(byTestId(tree, "ovl-slate-headline")!)).toBe(dictOf(locale)["overlay.slate.endedHeadline"]);
   });
 
   it("en and fr render DIFFERENT words — the differential a hardcoded English string cannot satisfy", () => {
     const headline = (locale: string, model: OverlayModel) =>
-      textOf(byTestId(render(model, [false, false], { locale }).tree(), "ovl-slate-headline")!);
-    // Guard the guard: if the two dictionaries ever carried the same word this
-    // check would be vacuous, so assert the SOURCE differs first.
+      textOf(byTestId(render(model, { locale }).tree(), "ovl-slate-headline")!);
+    const voided: OverlayModel = {
+      ...BASE_MODEL,
+      live: false,
+      decided: false,
+      voided: true,
+      header: { context: "Cancelled" },
+    };
     expect(dictOf("en")["overlay.slate.warmingHeadlineVs"]).not.toBe(dictOf("fr")["overlay.slate.warmingHeadlineVs"]);
     expect(dictOf("en")["overlay.slate.endedHeadline"]).not.toBe(dictOf("fr")["overlay.slate.endedHeadline"]);
     expect(headline("en", WARMING)).not.toBe(headline("fr", WARMING));
-    expect(headline("en", ENDED)).not.toBe(headline("fr", ENDED));
+    expect(headline("en", voided)).not.toBe(headline("fr", voided));
   });
 
   it("nothing renders a raw dictionary KEY — a `t()` miss returns the key itself and would slip past a bare toBeDefined", () => {
     for (const model of [WARMING, ENDED]) {
       for (const locale of LOCALES) {
-        const tree = render(model, [false, false], { locale }).tree();
+        const tree = render(model, { locale }).tree();
         const content = byTestId(tree, "ovl-slate-content");
         expect(textOf(content!), `${locale}`).not.toMatch(/overlay\.slate\./);
       }
@@ -302,82 +275,12 @@ describe("public.overlay.slate.* actually reaches the screen, in every locale", 
   });
 });
 
-// ---------------------------------------------------------------------------
-// The composited scorebug is the SPORT'S default, not a constant (§4a: "the
-// SELECTED theme (§3 bar or §4 bug) renders ON TOP"). Expectations derive from
-// `defaultThemeFor` + the registry — a table typed here would freeze today's
-// answer.
-// ---------------------------------------------------------------------------
-describe("OverlaySlate — the composited scorebug resolves per sport", () => {
-  /** The root className the registry's own default for this sport produces when
-   *  rendered standalone. Both bar and bug are hookless, so this is a real,
-   *  non-mocked render of the actual component the registry names. */
-  const standaloneRootClass = (sportKey: string, model: OverlayModel): string => {
-    const Component = OVERLAY_THEMES[defaultThemeFor(sportKey)].component as (p: OverlayThemeProps) => ReactNode;
-    const node = Component({ model, tick: [false, false], msg: msgOf("en"), sportKey });
-    return isValidElement(node) ? classesOf(node) : "";
-  };
-
-  it.each(SPORTS)("%s composites exactly the component defaultThemeFor names for it", (sportKey) => {
-    const model: OverlayModel = { ...BASE_MODEL, live: true };
-    const expected = standaloneRootClass(sportKey, model);
-    expect(expected, `${sportKey} standalone root class`).not.toBe("");
-    const tree = render(model, [false, false], { sportKey }).tree();
-    expect(
-      tree.some((el) => classesOf(el) === expected),
-      `${sportKey} should composite ${defaultThemeFor(sportKey)} (root class "${expected}")`,
-    ).toBe(true);
+describe("OverlayMatchCard — the state-swap cross-fade", () => {
+  const themeProps = (model: OverlayModel): Pick<OverlayThemeProps, "model" | "msg"> => ({
+    model,
+    msg: msgOf("en"),
   });
 
-  it("cricket gets the BAR and football the BUG — the differential a hardcoded OverlayBug fails", () => {
-    const model: OverlayModel = { ...BASE_MODEL, live: true };
-    const rootsFor = (sportKey: string) =>
-      render(model, [false, false], { sportKey })
-        .tree()
-        .map((el) => classesOf(el).split(" ")[0]);
-    // Derived, not typed: whatever the registry says cricket/football open on.
-    expect(defaultThemeFor("cricket"), "premise").not.toBe(defaultThemeFor("football"));
-    expect(rootsFor("cricket")).toContain("ovl-bar");
-    expect(rootsFor("cricket")).not.toContain("ovl-bug");
-    expect(rootsFor("football")).toContain("ovl-bug");
-    expect(rootsFor("football")).not.toContain("ovl-bar");
-  });
-
-  it("the composited scorebug receives the SAME msg and sportKey the slate got — pass-through, not a fresh channel", () => {
-    // The composited theme must be indistinguishable from the same theme
-    // served directly under `?style=bar`/`?style=bug`; §3's bar and §4's bug
-    // happen not to READ msg today, so this binds on the element's props
-    // rather than on rendered text (which would be vacuous for them).
-    const msg = msgOf("en");
-    const island = renderIsland(
-      OverlaySlate,
-      { model: { ...BASE_MODEL, live: true }, tick: [true, false] as [boolean, boolean], msg, sportKey: "cricket" },
-      expand,
-    );
-    const scorebug = island.tree().find((el) => COMPOSITABLE.has(el.type as never));
-    expect(scorebug, "the composited scorebug element").toBeDefined();
-    expect(propsOf(scorebug!).msg, "same msg instance").toBe(msg);
-    expect(propsOf(scorebug!).sportKey).toBe("cricket");
-    expect(propsOf(scorebug!).tick).toEqual([true, false]);
-  });
-
-  it("the composited scorebug receives THIS model and tick, not a stale/default one", () => {
-    const a = render({ ...BASE_MODEL, live: true }).tree();
-    const b = render({
-      ...BASE_MODEL,
-      live: true,
-      sides: [{ ...BASE_MODEL.sides[0], big: "9" }, BASE_MODEL.sides[1]],
-    }).tree();
-    expect(textOf(byTestId(a, "ovl-big-home")!)).toBe("2");
-    expect(textOf(byTestId(b, "ovl-big-home")!)).toBe("9");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// The 250ms cross-fade (§6): none on mount, exactly one 250ms window per
-// real state change, never on a same-state re-render.
-// ---------------------------------------------------------------------------
-describe("OverlaySlate — the state-swap cross-fade", () => {
   it("never fades on mount", () => {
     vi.useFakeTimers();
     const tree = render({ ...BASE_MODEL, live: false, decided: false, voided: false }).tree();
@@ -387,12 +290,9 @@ describe("OverlaySlate — the state-swap cross-fade", () => {
   it("fades for exactly 250ms on a genuine state change, then clears", () => {
     vi.useFakeTimers();
     const island = render({ ...BASE_MODEL, live: false, decided: false, voided: false });
-    island.rerender({
-      model: { ...BASE_MODEL, live: false, decided: true, voided: false, result: "X won" },
-      tick: [false, false],
-      msg: msgOf("en"),
-      sportKey: "football",
-    });
+    island.rerender(
+      themeProps({ ...BASE_MODEL, live: false, decided: true, voided: false, result: "X won" }),
+    );
     expect(classesOf(byTestId(island.tree(), "ovl-slate-content")!), "fading right after the swap").toContain(
       "ovl-slate-fading",
     );
@@ -410,43 +310,22 @@ describe("OverlaySlate — the state-swap cross-fade", () => {
     vi.useFakeTimers();
     const model: OverlayModel = { ...BASE_MODEL, live: false, decided: false, voided: false, header: { context: "Sat 14:30" } };
     const island = render(model);
-    island.rerender({
-      model: { ...model, header: { context: "Sun 10:00" } },
-      tick: [false, false],
-      msg: msgOf("en"),
-      sportKey: "football",
-    });
+    island.rerender(themeProps({ ...model, header: { context: "Sun 10:00" } }));
     const tree = island.tree();
     expect(classesOf(byTestId(tree, "ovl-slate-content")!), "same state: no fade").not.toContain("ovl-slate-fading");
-    // The warming LINE carries the changed start label (§4a moved the time off
-    // the headline and into the line); the headline itself is now the constant
-    // dictionary word, so the "content still updates" claim binds here.
     expect(textOf(byTestId(tree, "ovl-slate-line")!), "content still updates").toContain("Sun 10:00");
   });
 
   it("unmounting mid-fade clears its timer (no leaked setTimeout)", () => {
     vi.useFakeTimers();
     const island = render({ ...BASE_MODEL, live: false, decided: false, voided: false });
-    island.rerender({
-      model: { ...BASE_MODEL, live: false, decided: true, voided: false },
-      tick: [false, false],
-      msg: msgOf("en"),
-      sportKey: "football",
-    });
+    island.rerender(themeProps({ ...BASE_MODEL, live: false, decided: true, voided: false }));
     expect(vi.getTimerCount(), "one timer armed mid-fade").toBe(1);
     island.unmount();
     expect(vi.getTimerCount(), "cleanup ran").toBe(0);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Completeness, beneath the reachability checks above. Four of the five keys
-// are now referenced by `overlay-slate.tsx` and so are covered by
-// `overlay-dict-coverage.test.ts`'s source scan as well; the two
-// `signalLost*` keys are NOT referenced anywhere (gap 3 — the `<video>` seam
-// is B3's, not this wave's) and that scan is one-directional, so their
-// presence is only asserted here.
-// ---------------------------------------------------------------------------
 describe("public.overlay.slate.* — present in all four locales", () => {
   const KEYS = [
     "overlay.slate.warmingHeadlineVs",
@@ -469,10 +348,5 @@ describe("public.overlay.slate.* — present in all four locales", () => {
     for (const key of ["overlay.slate.signalLostHeadline", "overlay.slate.endedHeadline"]) {
       expect(en[key], key).toBe(en[key]!.toUpperCase());
     }
-  });
-
-  it.each(LOCALES)("%s/ui.json carries stream.tab.slate — this one IS wired (theme-registry.ts's labelKey)", (locale) => {
-    const dict = JSON.parse(readFileSync(join(DICT, locale, "ui.json"), "utf8")) as Record<string, unknown>;
-    expect(typeof dict["stream.tab.slate"], `${locale} missing stream.tab.slate`).toBe("string");
   });
 });

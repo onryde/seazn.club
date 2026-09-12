@@ -29,7 +29,7 @@ Non-goals for this wave:
 | # | Decision | Choice |
 |---|---|---|
 | D1 | End-of-over content | Full cricket card when fine facts exist; **compact** team-level card when coarse |
-| D2 | End-of-over timing | Auto on over boundary; hold ~4s; **queue behind** W2 moment slabs |
+| D2 | End-of-over timing | Auto on over boundary; hold ~2s; **queue behind** W2 moment slabs |
 | D3 | Coarse fidelity | **Degraded/compact** variant — never empty placeholders, never skip entirely when an over completed |
 | D4 | End-of-over placement | **Anchored** to the scorebug (beside bug / under bar) — approach B anchored panel |
 | D5 | End-of-over full layout | **Split card**: left batters + bowler; right this-over glyphs + over runs |
@@ -37,6 +37,7 @@ Non-goals for this wave:
 | D7 | Themes for end-of-over | **Bar + Bug only.** Slate is out of scope for this panel (slate is not mid-over live) |
 | D8 | Match openers | Sharpened **C**: slate for pre-start; brief **center card on Bar/Bug** after toss until first scoring |
 | D9 | Motion | `transform` / `opacity` only; no mount/reconnect replay; `prefers-reduced-motion` = instant show/hide, same hold, same queue |
+| D10 | Scorer undo while a graphic is on air | **Retract:** `momentQueue` `sync` folds the current slab/EOO out and drops queued ids that left the live window; clears those ids from `seen` so an end-of-over can re-fire after undo+recomplete. Scorebug already corrects via fold. |
 
 ---
 
@@ -122,7 +123,7 @@ If only some fine fields exist, **collapse missing rows** — do not show empty 
 
 If a SIX/OUT (or other moment) is showing or queued for the same tip, the end-of-over card **waits**. Typical last-ball wicket: OUT slab first, then end-of-over.
 
-Hold **4 seconds** (same as moment slabs) so the shared queue stays predictable.
+Hold **2 seconds** (same as moment slabs) so the shared queue stays predictable.
 
 ### 4.5 Data (price first)
 
@@ -139,7 +140,7 @@ Establish whether bowler figures come from match-centre cricket live / scorecard
 
 ### 4.6 Motion
 
-In 250 ms → hold 4 s → out 250 ms. `transform`/`opacity` only. Reduced motion: instant show/hide, same hold, same queue.
+In 250 ms → hold 2 s → out 250 ms. `transform`/`opacity` only. Reduced motion: instant show/hide, same hold, same queue.
 
 ---
 

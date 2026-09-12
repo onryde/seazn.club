@@ -539,6 +539,29 @@ export function chaseNeed(summary: unknown): number | null {
 }
 
 /**
+ * Absolute chase target while a second (or later) innings is open, or null.
+ * Same gates as `chaseNeed`: revised `detail.target` wins, else first innings
+ * runs + 1. Used by the cricket bar/bug compact strip ("Target 49"), not by
+ * the "Need X off Y" line (which keeps needing the remainder).
+ */
+export function chaseTargetRuns(summary: unknown): number | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const detail = (summary as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const raw = (detail as { innings?: unknown }).innings;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  const first = raw[raw.length - 2];
+  const current = raw[raw.length - 1];
+  if (typeof first !== "object" || first === null) return null;
+  if (typeof current !== "object" || current === null) return null;
+  if ((current as Record<string, unknown>).closed === true) return null;
+  const revised = (detail as { target?: unknown }).target;
+  if (typeof revised === "number") return revised;
+  const set = (first as Record<string, unknown>).runs;
+  return typeof set === "number" ? set + 1 : null;
+}
+
+/**
  * HOW a chase target was set, or null.
  *
  * `_THEMES.md` §3's cricket row (owner ruling 2026-09-10, "add the DLS hint in

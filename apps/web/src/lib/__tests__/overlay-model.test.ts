@@ -330,11 +330,11 @@ describe("overlayModel — led and serving truth table", () => {
     // composition around it, where an English expectation would pass with the
     // wrong key wired to the right word.
     const MARK = "overlay.cricket.strikerMark";
-    const THIS_OVER = "overlay.cricket.thisOver";
     expect(model.detail.map((d) => d.text)).toEqual([
       `Sharma${MARK} 34 (21) · Kohli 12 (9)`,
-      `Bumrah 2.3-0-14-1 · ${THIS_OVER} 1 4 W`,
+      `Bumrah 2.3-0-14-1`,
     ]);
+    expect(model.detail[1]?.glyphs).toEqual(["1", "4", "W"]);
     // Not card chips — the band's tone is reserved for discipline lines.
     expect(model.detail.every((d) => d.tone === undefined)).toBe(true);
   });
@@ -402,7 +402,8 @@ describe("overlayModel — decided", () => {
     expect(model.decided).toBe(true);
     expect(model.voided, "a plain decided fixture is never voided").toBe(false);
     expect(model.live).toBe(false);
-    expect(model.header.context, "the status word — 'Final', not 'Ended' (F7)").toBe("overlay.header.ended");
+    expect(model.header.context, "no 'Final' status word — short result is in period").toBe("");
+    expect(model.header.period, "short result replaces the status word").toBeDefined();
     expect(model.result, "the ONE decided-sentence authority, renderDecidedOutcome").toBe(
       "WIN Milton Keynes Rovers REG",
     );
@@ -480,12 +481,12 @@ describe("overlayModel — the decided/void three-case split (fix round 3, F1)",
     expect(model.sides[1].led).toBe(false);
   });
 
-  it("status 'decided' with a null outcome: ended but no verdict — 'Final', not the winner treatment", () => {
+  it("status 'decided' with a null outcome: ended but no verdict — empty status, not a winner treatment", () => {
     const data = payload("tennis", [["core.start", {}]], "decided", null);
     const model = project("tennis", data);
     expect(model.decided, "no outcome to name a winner from").toBe(false);
     expect(model.voided).toBe(true);
-    expect(model.header.context, "still 'Final' — the status itself is 'decided'").toBe("overlay.header.ended");
+    expect(model.header.context, "no 'Final' — plain decided has no status word").toBe("");
     expect(model.sides[0].led).toBe(false);
     expect(model.sides[1].led).toBe(false);
   });
@@ -544,6 +545,77 @@ describe("overlayModel — the decided/void three-case split (fix round 3, F1)",
     const model = project("icehockey", data);
     expect(model.voided).toBe(true);
     expect(model.detail, "no detail band on a void-no-verdict frame, even with a real discipline entry").toEqual([]);
+  });
+});
+
+describe("overlayModel — cricket innings focus (live bar/bug)", () => {
+  it("1st innings: focus.hero is the batting side, strip absent", () => {
+    const data: OverlayLiveData = {
+      status: "in_play",
+      summary: {
+        headline: "40/1 (5)",
+        perSide: [{ entrantId: "H", line: "40/1 (5)" }, { entrantId: "A", line: "" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 40, wickets: 1, legalBalls: 30, ballsLimit: 120, declared: false, closed: false },
+          ],
+        },
+      },
+      outcome: null,
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    const model = project("cricket", data);
+    expect(model.focus).toEqual({ hero: 0 });
+  });
+
+  it("chase: focus.hero is the batting side; strip is closed score · Target N", () => {
+    const data: OverlayLiveData = {
+      status: "in_play",
+      summary: {
+        headline: "180/8 (20) — 91/3 (12)",
+        perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "91/3 (12)" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, ballsLimit: 120, declared: false, closed: true },
+            { entrantId: "A", runs: 91, wickets: 3, legalBalls: 72, ballsLimit: 120, declared: false, closed: false },
+          ],
+        },
+      },
+      outcome: null,
+      lastSeq: null,
+      venueTz: "UTC",
+      cricket: {
+        innings: [
+          { runs: 180, wickets: 8, legalBalls: 120, ballsLimit: 120 },
+          { runs: 91, wickets: 3, legalBalls: 72, ballsLimit: 120 },
+        ],
+      },
+    };
+    const model = project("cricket", data);
+    expect(model.focus?.hero).toBe(1);
+    expect(model.focus?.strip).toBe("MIL 180/8 · overlay.cricket.target(target=181)");
+  });
+
+  it("decided and non-cricket: no focus — both sides stay in the main band", () => {
+    const decided: OverlayLiveData = {
+      status: "decided",
+      summary: {
+        headline: "180/8 — 181/4",
+        perSide: [{ entrantId: "H", line: "180/8 (20)" }, { entrantId: "A", line: "181/4 (19.2)" }],
+        detail: {
+          innings: [
+            { entrantId: "H", runs: 180, wickets: 8, legalBalls: 120, closed: true },
+            { entrantId: "A", runs: 181, wickets: 4, legalBalls: 116, closed: true },
+          ],
+        },
+      },
+      outcome: { kind: "win", winner: "A" },
+      lastSeq: null,
+      venueTz: "UTC",
+    };
+    expect(project("cricket", decided).focus).toBeUndefined();
+    expect(project("football", payload("football", [["core.start", {}]], "in_play")).focus).toBeUndefined();
   });
 });
 

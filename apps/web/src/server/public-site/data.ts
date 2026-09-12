@@ -766,6 +766,11 @@ export async function getPublicFixture(
    *  label: the label is formatted by the server component that already holds
    *  the locale (`overlayStartLabel`, Task 2), so `?lang=` can re-render it. */
   venueTz: string;
+  /** Slate match-card meta (2026-09-12) — `stages.name` for the fixture's
+   *  own stage. Already read for match-centre; surfaced so the overlay does
+   *  not substitute `division.name` (a different noun on air). Null when the
+   *  stage row is missing. */
+  stageName: string | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -845,6 +850,7 @@ export async function getPublicFixture(
         // organiser can run an event in Malaga, and the overlay is watched by
         // an audience in neither.
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
+        stageName: stageRow?.name ?? null,
       };
     },
     ["pub-fixture", fixtureId],

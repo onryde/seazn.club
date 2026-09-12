@@ -36,14 +36,31 @@ vi.mock("@/server/overlay/load", () => ({
   loadOverlayLiveData: (...a: unknown[]) => loadOverlayLiveData(...a),
 }));
 
+const side = (id: string, name: string, short: string) => ({
+  entrantId: id,
+  name,
+  short,
+  colour: null,
+  badgeUrl: null,
+});
+
 const baseFixtureData = () => ({
   org: { id: "o1", default_locale: "en" },
-  competition: { id: "c1" },
-  division: { sport_key: "football" },
+  competition: { id: "c1", name: "Southend Premier League 2026" },
+  division: { sport_key: "football", name: "Open Division" },
   fixture: { id: "f1", home_entrant_id: "home", away_entrant_id: "away", scheduled_at: null },
   entrantNames: { home: "Home XI", away: "Away XI" },
   realtime: false,
   venueTz: "UTC",
+  // stages.name — the slate pill's third segment. Distinct from division.name
+  // on purpose so a regression that reverts to the division label fails here.
+  stageName: "League",
+  matchCentre: {
+    header: {
+      sides: [side("home", "Home XI", "HOM"), side("away", "Away XI", "AWY")],
+    },
+    cricket: null,
+  },
 });
 
 const baseInitial: OverlayLiveData = {
@@ -75,6 +92,10 @@ function delayMsPropOf(el: ReactElement): unknown {
   return (el.props as { delayMs?: unknown }).delayMs;
 }
 
+function slateMetaPropOf(el: ReactElement): { competition?: string; stage?: string } | null | undefined {
+  return (el.props as { slateMeta?: { competition?: string; stage?: string } | null }).slateMeta;
+}
+
 describe("OverlayPage — ?delay= resolves server-side and reaches <OverlayStage>'s delayMs prop (Task 5d)", () => {
   it("absent ?delay= resolves to 0 — the pre-Task-5d behaviour, unchanged", async () => {
     const el = await renderPage(undefined);
@@ -94,5 +115,31 @@ describe("OverlayPage — ?delay= resolves server-side and reaches <OverlayStage
   it("an absurd ?delay=99999999 falls back to 0, not the raw out-of-range value", async () => {
     const el = await renderPage("99999999");
     expect(delayMsPropOf(el)).toBe(0);
+  });
+});
+
+describe("OverlayPage — slateMeta uses stages.name, not division.name", () => {
+  it("threads competition.name + stageName onto slateMeta.stage", async () => {
+    const el = await renderPage(undefined);
+    expect(slateMetaPropOf(el)).toEqual({
+      competition: "Southend Premier League 2026",
+      stage: "League",
+    });
+  });
+
+  it("omits stage when stageName is null — never falls back to division.name", async () => {
+    publicFixtureSlugs.mockResolvedValue({ orgSlug: "test-org", compSlug: "test-comp", divSlug: "open" });
+    getPublicFixture.mockResolvedValue({ ...baseFixtureData(), stageName: null });
+    hasFeature.mockResolvedValue(true);
+    loadOverlayLiveData.mockResolvedValue(baseInitial);
+    const { default: OverlayPage } = await import("../page");
+    const el = (await OverlayPage({
+      params: Promise.resolve({ fixtureId: "f1" }),
+      searchParams: Promise.resolve({}),
+    })) as unknown as ReactElement;
+    expect(slateMetaPropOf(el)).toEqual({
+      competition: "Southend Premier League 2026",
+    });
+    expect(slateMetaPropOf(el)?.stage).toBeUndefined();
   });
 });

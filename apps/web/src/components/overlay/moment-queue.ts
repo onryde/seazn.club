@@ -50,7 +50,10 @@ export interface MomentQueueState {
 
 export type QueueAction =
   | { type: "enqueue"; moments: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number }
-  | { type: "tick"; now: number; foldMs: number; holdMs: number };
+  | { type: "tick"; now: number; foldMs: number; holdMs: number }
+  /** Drop / fold away anything no longer in the live window (scorer undo). */
+  | { type: "sync"; live: readonly OverlayMoment[]; now: number; foldMs: number; holdMs: number };
+
 
 export const INITIAL: MomentQueueState = {
   current: null,
@@ -68,7 +71,9 @@ export const INITIAL: MomentQueueState = {
  * point carries both the set won and the match point it opens, on the same
  * sequence number. Keyed on `seq` alone, one of them would be silently dropped.
  */
-const idOf = (moment: OverlayMoment): string => `${moment.seq}:${moment.kind}`;
+export const momentIdOf = (moment: OverlayMoment): string => `${moment.seq}:${moment.kind}`;
+
+const idOf = momentIdOf;
 
 /**
  * The timer's only input: when the current phase ends. `null` = nothing armed.
@@ -100,6 +105,45 @@ export function momentQueueReducer(
   state: MomentQueueState,
   action: QueueAction,
 ): MomentQueueState {
+  if (action.type === "sync") {
+    // Undo / void: the transport's live window no longer carries this id.
+    // Drop it from the queue, fold the current slab off if it was struck, and
+    // forget it in `seen` so an end-of-over can re-fire after undo+recomplete
+    // (same over number, new completion).
+    const live = new Set(action.live.map(idOf));
+    const retracted: string[] = [];
+    const queue = state.queue.filter((m) => {
+      const id = idOf(m);
+      if (live.has(id)) return true;
+      retracted.push(id);
+      return false;
+    });
+    const currentGone = state.current !== null && !live.has(idOf(state.current));
+    if (currentGone && state.current) retracted.push(idOf(state.current));
+
+    if (retracted.length === 0) return state;
+
+    const seen = state.seen.filter((id) => !retracted.includes(id));
+    const revision = state.revision + 1;
+
+    if (currentGone && state.current !== null) {
+      // Already folding out — keep the out phase; just drop queue + seen.
+      if (state.phase === "out") {
+        return { ...state, queue, seen, revision };
+      }
+      return {
+        ...state,
+        queue,
+        seen,
+        phase: "out",
+        deadline: action.now + action.foldMs,
+        revision,
+      };
+    }
+
+    return { ...state, queue, seen, revision };
+  }
+
   if (action.type === "enqueue") {
     // Deduped against history AND against the batch itself. Checking only
     // `seen` left a gap: two identical moments arriving in ONE array would both
@@ -123,6 +167,8 @@ export function momentQueueReducer(
     // screen would cut a wicket off mid-sentence.
     return next.current === null ? promote(next, action.now, action.foldMs) : next;
   }
+
+  if (action.type !== "tick") return state;
 
   // A tick before the deadline changes no PHASE — but it must still change the
   // state, or the slab freezes for the rest of the broadcast.

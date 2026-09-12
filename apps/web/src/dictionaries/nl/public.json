@@ -403,7 +403,6 @@
   "share.copy": "Link kopiëren",
   "share.copied": "Link gekopieerd",
   "overlay.header.live": "Live",
-  "overlay.header.ended": "Definitief",
   "overlay.header.notStarted": "Niet begonnen",
   "overlay.header.set": "Set {n}",
   "overlay.header.game": "Game {n}",
@@ -476,5 +475,11 @@
   "overlay.moment.gameWon": "GAME {n}",
   "overlay.moment.setWonLine": "{short} {home}–{away}",
   "overlay.cricket.strikerMark": "*",
-  "overlay.cricket.thisOver": "deze over"
+  "overlay.cricket.target": "Doel {target}",
+  "overlay.cricket.thisOver": "deze over",
+  "overlay.slate.pillUpcoming": "AANKOMEND",
+  "overlay.slate.pillResult": "UITSLAG",
+  "overlay.slate.vs": "vs",
+  "overlay.slate.topBatter": "TOP BATSMAN",
+  "overlay.slate.topBowler": "TOP BOWLER"
 }

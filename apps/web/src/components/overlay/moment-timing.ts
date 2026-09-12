@@ -5,12 +5,12 @@
 // is a latent red — AGENTS.md class 20, paid for once already when `HOLD_MS`
 // moved and a Playwright budget did not move with it.
 //
-// `_THEMES.md` §6: "→ 0 250 ms ease-out, hold 4000 ms, → -100% 250 ms ease-in".
+// `_THEMES.md` §6: "→ 0 250 ms ease-out, hold 2000 ms, → -100% 250 ms ease-in".
 // The CSS transition duration is derived from `OVERLAY_MOMENT_FOLD_MS` through
 // a custom property, so the paint and the state machine cannot disagree.
 
 /** How long a slab stays fully on screen, between its fold in and its fold out. */
-export const OVERLAY_MOMENT_HOLD_MS = 4_000;
+export const OVERLAY_MOMENT_HOLD_MS = 2_000;
 
 /** Toss opener card — denser copy than a SIX slab (design 2026-09-12). */
 export const OVERLAY_TOSS_HOLD_MS = 8_000;

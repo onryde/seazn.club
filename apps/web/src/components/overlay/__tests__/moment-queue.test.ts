@@ -19,6 +19,8 @@ const m = (seq: number, kind = "goal"): OverlayMoment => ({
   tone: "led",
 });
 const T = { foldMs: OVERLAY_MOMENT_FOLD_MS, holdMs: OVERLAY_MOMENT_HOLD_MS };
+const F = OVERLAY_MOMENT_FOLD_MS;
+const H = OVERLAY_MOMENT_HOLD_MS;
 const enqueue = (state: typeof INITIAL, moments: OverlayMoment[], now: number) =>
   reduce(state, { type: "enqueue", moments, now, ...T });
 const tick = (state: typeof INITIAL, now: number) => reduce(state, { type: "tick", now, ...T });
@@ -28,10 +30,10 @@ const tick = (state: typeof INITIAL, now: number) => reduce(state, { type: "tick
 const IDLE = { current: null, queue: [], deadline: null };
 
 describe("the timing constants", () => {
-  it("hold is four seconds and the fold a quarter — pinned on the DEFAULTS", () => {
+  it("hold is two seconds and the fold a quarter — pinned on the DEFAULTS", () => {
     // The e2e's budget is derived from these, so moving one moves the budget
     // with it rather than leaving a flat timeout beside a derived cost.
-    expect(OVERLAY_MOMENT_HOLD_MS).toBe(4_000);
+    expect(OVERLAY_MOMENT_HOLD_MS).toBe(2_000);
     expect(OVERLAY_MOMENT_FOLD_MS).toBe(250);
   });
 });
@@ -39,14 +41,14 @@ describe("the timing constants", () => {
 describe("momentQueueReducer", () => {
   it("idle → in → hold → out → idle, each on its own deadline", () => {
     let s = enqueue(INITIAL, [m(1)], 0);
-    expect(s).toMatchObject({ current: m(1), phase: "in", deadline: 250 });
-    s = tick(s, 250);
-    expect(s).toMatchObject({ phase: "hold", deadline: 4_250 });
-    s = tick(s, 4_000);
+    expect(s).toMatchObject({ current: m(1), phase: "in", deadline: F });
+    s = tick(s, F);
+    expect(s).toMatchObject({ phase: "hold", deadline: F + H });
+    s = tick(s, F + H - 250);
     expect(s.phase, "a tick BEFORE the deadline changes nothing").toBe("hold");
-    s = tick(s, 4_250);
-    expect(s).toMatchObject({ phase: "out", deadline: 4_500 });
-    s = tick(s, 4_500);
+    s = tick(s, F + H);
+    expect(s).toMatchObject({ phase: "out", deadline: F + H + F });
+    s = tick(s, F + H + F);
     expect(s).toMatchObject(IDLE);
   });
 
@@ -54,7 +56,7 @@ describe("momentQueueReducer", () => {
     let s = enqueue(INITIAL, [m(1, "goal"), m(2, "card.yellow")], 0);
     expect(s.current, "the head shows at once").toMatchObject({ seq: 1 });
     expect(s.queue.map((q) => q.seq), "the rest wait").toEqual([2]);
-    for (const now of [250, 4_250, 4_500]) s = tick(s, now);
+    for (const now of [F, F + H, F + H + F]) s = tick(s, now);
     expect(s).toMatchObject({ current: m(2, "card.yellow"), phase: "in" });
     expect(s.queue).toEqual([]);
   });
@@ -70,9 +72,9 @@ describe("momentQueueReducer", () => {
 
   it("a moment arriving mid-slab QUEUES rather than interrupting the one on air", () => {
     let s = enqueue(INITIAL, [m(1)], 0);
-    s = tick(s, 250);
+    s = tick(s, F);
     s = enqueue(s, [m(2, "six")], 1_000);
-    expect(s).toMatchObject({ current: m(1), phase: "hold", deadline: 4_250 });
+    expect(s).toMatchObject({ current: m(1), phase: "hold", deadline: F + H });
     expect(s.queue.map((q) => q.seq)).toEqual([2]);
   });
 
@@ -105,7 +107,7 @@ describe("momentQueueReducer", () => {
 
   it("a moment already SHOWN is not re-shown after it leaves the queue", () => {
     let s = enqueue(INITIAL, [m(7, "six")], 0);
-    for (const now of [250, 4_250, 4_500]) s = tick(s, now);
+    for (const now of [F, F + H, F + H + F]) s = tick(s, now);
     expect(s).toMatchObject(IDLE);
     s = enqueue(s, [m(7, "six")], 5_000);
     expect(s.current, "the window still carries it; it has had its turn").toBeNull();
@@ -123,17 +125,17 @@ describe("momentQueueReducer", () => {
     let s = reduce(INITIAL, { type: "enqueue", moments: [m(1)], now: 0, ...R });
     expect(s).toMatchObject({ phase: "in", deadline: 0 });
     s = reduce(s, { type: "tick", now: 0, ...R });
-    expect(s).toMatchObject({ phase: "hold", deadline: 4_000 });
-    s = reduce(s, { type: "tick", now: 4_000, ...R });
+    expect(s).toMatchObject({ phase: "hold", deadline: H });
+    s = reduce(s, { type: "tick", now: H, ...R });
     expect(s.phase).toBe("out");
-    s = reduce(s, { type: "tick", now: 4_000, ...R });
+    s = reduce(s, { type: "tick", now: H, ...R });
     expect(s).toMatchObject(IDLE);
   });
 
   it("nextDeadline is the timer's ONLY input — null when idle, the deadline otherwise", () => {
     expect(nextDeadline(INITIAL)).toBeNull();
     const s = enqueue(INITIAL, [m(1)], 1_000);
-    expect(nextDeadline(s)).toBe(1_250);
+    expect(nextDeadline(s)).toBe(1_000 + F);
   });
 
   it("a LATE tick that overshoots several deadlines advances one phase, not all of them", () => {
@@ -141,12 +143,12 @@ describe("momentQueueReducer", () => {
     // minutes; the slab must not skip its phases in one frame and flash.
     let s = enqueue(INITIAL, [m(1)], 0);
     s = tick(s, 600_000);
-    expect(s).toMatchObject({ phase: "hold", deadline: 604_000 });
+    expect(s).toMatchObject({ phase: "hold", deadline: 600_000 + H });
     // And the NEXT phase still waits its own hold out — the overshoot is not
     // carried forward as credit.
     s = tick(s, 601_000);
     expect(s.phase, "still holding: 601s is inside the new deadline").toBe("hold");
-    s = tick(s, 604_000);
+    s = tick(s, 600_000 + H);
     expect(s).toMatchObject({ phase: "out" });
   });
 });
@@ -159,20 +161,8 @@ describe("slabPlacementFor — which scorebug the slab attaches to", () => {
     expect(slabPlacementFor("bug", "football")).toBe("bug");
   });
 
-  it("SLATE paints no scorebug — it composites one, and the slab follows THAT", () => {
-    // §4a: slate renders `defaultThemeFor(sportKey)` on top of itself. Reading
-    // `?style=` alone gave the slab bar geometry under slate while the BUG was
-    // on screen — wrong for ten of the eleven sports, and right for cricket
-    // only by accident, which is why both halves are asserted here.
-    expect(slabPlacementFor("slate", "cricket"), "cricket composites the bar").toBe("bar");
-    for (const sport of ["football", "hockey", "tennis", "badminton", "volleyball"]) {
-      expect(slabPlacementFor("slate", sport), `${sport} composites the bug`).toBe("bug");
-    }
-  });
-
   it("every sport the registry serves resolves to a placement the CSS defines", () => {
-    // A third placement would render an unstyled slab rather than fail.
-    for (const style of ["bar", "bug", "slate"] as const) {
+    for (const style of ["bar", "bug"] as const) {
       for (const sport of builtinModules.map((m) => m.key)) {
         expect(["bar", "bug"]).toContain(slabPlacementFor(style, sport));
       }
@@ -192,12 +182,12 @@ describe("the revision — what stops the queue freezing under reduced motion", 
     // freezes and nothing airs again.
     let s = reduce(INITIAL, { type: "enqueue", moments: [m(1), m(2)], now: 0, ...R });
     s = reduce(s, { type: "tick", now: 0, ...R }); // in → hold
-    s = reduce(s, { type: "tick", now: 4_000, ...R }); // hold → out, deadline 4000
-    expect(s).toMatchObject({ phase: "out", deadline: 4_000 });
+    s = reduce(s, { type: "tick", now: H, ...R }); // hold → out, deadline H
+    expect(s).toMatchObject({ phase: "out", deadline: H });
 
     const before = s.revision;
-    s = reduce(s, { type: "tick", now: 4_000, ...R }); // out → promote, deadline 4000 AGAIN
-    expect(s.deadline, "the deadline genuinely repeats — this is the trap").toBe(4_000);
+    s = reduce(s, { type: "tick", now: H, ...R }); // out → promote, deadline H AGAIN
+    expect(s.deadline, "the deadline genuinely repeats — this is the trap").toBe(H);
     expect(s.current?.seq, "and the queue HAS advanced").toBe(2);
     expect(s.revision, "so the revision must move, or nothing re-arms").toBeGreaterThan(before);
   });
@@ -205,11 +195,11 @@ describe("the revision — what stops the queue freezing under reduced motion", 
   it("every transition moves the revision, and an ENQUEUE no-op does NOT", () => {
     let s = enqueue(INITIAL, [m(1)], 0);
     const seen = [s.revision];
-    s = tick(s, 250);
+    s = tick(s, F);
     seen.push(s.revision);
-    s = tick(s, 4_250);
+    s = tick(s, F + H);
     seen.push(s.revision);
-    s = tick(s, 4_500);
+    s = tick(s, F + H + F);
     seen.push(s.revision);
     expect(new Set(seen).size, "four distinct transitions").toBe(4);
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
@@ -253,5 +243,78 @@ describe("a tick that lands BELOW the deadline (W2 final review, finding 3)", ()
     const due = tick(early, one.deadline!);
     expect(due.phase).toBe("hold");
     expect(due.deadline).toBe(one.deadline! + OVERLAY_MOMENT_HOLD_MS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Undo / void: a moment that disappears from the live window must leave air
+// (2026-09-12). Score corrects immediately; a slab already holding must not
+// keep announcing a six the scorer just struck out.
+// ---------------------------------------------------------------------------
+describe("sync — retract moments that left the live window (undo)", () => {
+  const sync = (state: typeof INITIAL, live: OverlayMoment[], now: number) =>
+    reduce(state, { type: "sync", live, now, ...T });
+
+  it("forces the current slab to out when its id is gone from the live set", () => {
+    let s = enqueue(INITIAL, [m(10, "six")], 0);
+    s = tick(s, F); // hold
+    expect(s).toMatchObject({ current: m(10, "six"), phase: "hold" });
+
+    s = sync(s, [], 1_000); // undo — recent no longer carries the six
+    expect(s.current, "still painted through the fold-out").toMatchObject({ seq: 10, kind: "six" });
+    expect(s.phase, "forced out, not left holding a lie").toBe("out");
+    expect(s.deadline).toBe(1_000 + OVERLAY_MOMENT_FOLD_MS);
+  });
+
+  it("drops a queued moment that was voided before it reached air", () => {
+    let s = enqueue(INITIAL, [m(1, "goal"), m(2, "six")], 0);
+    expect(s.queue.map((q) => q.seq)).toEqual([2]);
+    // Goal still live; six undone while waiting.
+    s = sync(s, [m(1, "goal")], 100);
+    expect(s.current?.seq).toBe(1);
+    expect(s.queue, "voided six never airs").toEqual([]);
+  });
+
+  it("a live current is left alone — sync is not an interrupt for still-true moments", () => {
+    let s = enqueue(INITIAL, [m(1, "six")], 0);
+    s = tick(s, F);
+    const before = s.revision;
+    s = sync(s, [m(1, "six")], 1_000);
+    expect(s).toMatchObject({ current: m(1, "six"), phase: "hold", deadline: F + H });
+    expect(s.revision, "no-op does not churn the timer").toBe(before);
+  });
+
+  it("removes the retracted id from seen so an end-of-over can re-fire after undo+recomplete", () => {
+    // EOO identity is `overN:endOfOver`. Undo the closing ball, re-bowl it —
+    // same over number must be allowed to raise the card again.
+    const eoo = (over: number): OverlayMoment => ({
+      seq: over,
+      kind: "endOfOver",
+      graphic: "endOfOver",
+      headline: `End of over ${over}`,
+      tone: "led",
+    });
+    let s = enqueue(INITIAL, [eoo(12)], 0);
+    s = tick(s, F);
+    s = sync(s, [], 1_000); // undo closing ball
+    expect(s.seen, "retracted id must leave seen").not.toContain("12:endOfOver");
+    s = tick(s, 1_000 + OVERLAY_MOMENT_FOLD_MS); // fold away
+    expect(s.current).toBeNull();
+    s = enqueue(s, [eoo(12)], 5_000); // over completes again
+    expect(s.current, "re-completion must air").toMatchObject({ seq: 12, kind: "endOfOver" });
+  });
+
+  it("does NOT clear seen for a moment that finished its natural run", () => {
+    let s = enqueue(INITIAL, [m(7, "six")], 0);
+    for (const now of [F, F + H, F + H + F]) s = tick(s, now);
+    expect(s).toMatchObject(IDLE);
+    // Still in the transport window — sync keeps it "live" but idle.
+    s = sync(s, [m(7, "six")], 5_000);
+    s = enqueue(s, [m(7, "six")], 5_100);
+    expect(s.current, "natural finish stays once-only").toBeNull();
+  });
+
+  it("empty live set while idle is a no-op", () => {
+    expect(sync(INITIAL, [], 0)).toEqual(INITIAL);
   });
 });
