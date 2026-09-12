@@ -517,3 +517,77 @@ the LEDGER's order faithfully rendered: the seeder posted half time AFTER the bo
 in `seed-showcase.ts`. It leaves a real question: **the timeline orders by SEQUENCE, not by
 `minute`**, and demo football data carries minutes out of order — so a scorer entering events
 late gets a timeline that disagrees with its own minute labels.
+
+## The match poster — the share button gets a picture (2026-09-12)
+
+Owner: *"whenever I go to each match, the share button should load show the og as a option a
+from artifact and also live or end for the same"*, then *"poster doesn't have any extension"*
+and *"can we have a lime floodlight to match our theme"*.
+
+The board's §poster draws **Option A** at 1080 × 1350 in two variants, upcoming and result,
+and its §match-centre header draws **two** actions, `Poster` then `Share`. Both now exist.
+
+### What was built
+
+- `server/og/match-poster.tsx` — Option A as one layout in two shapes: the fixture's OG card
+  (1200 × 630, what unfurls in a chat) and the downloadable poster (1080 × 1350). The pure
+  `matchPosterModel` decides variant, paint and slots; the renderer paints.
+- **Three fills, not two.** The board draws upcoming and result; reading them side by side they
+  are ONE skeleton with two slots swapped, so the third — **live**, the state a spectator
+  actually shares — is the same skeleton again: chip `● LIVE · 3.1 OV`, the chase line as the
+  hero, the batting side lit and the other held back, the rate line in the foot.
+- `…/fixtures/[fixtureId]/poster.png` (new route) and the fixture's `opengraph-image` (rewritten
+  onto the same model). Both read `getPublicFixture`, so the poster cannot disagree with the
+  page it came from — and inherits that loader's masking rather than re-deciding it (the old OG
+  card ran its own `select youth from divisions` and applied its own rule; one authority now).
+- `components/public-site/poster-button.tsx`, mounted beside `ShareButton`.
+
+### Found by RENDERING, which no unit test could have seen
+
+Every one of these was green in the suite and wrong in the picture.
+
+- **Two colourless sides can derive the SAME tile colour.** `autoColour`'s palette has sixteen
+  entries; Northfield CC and Riverside FC both land on `#b7791f`, so a poster whose entire idea
+  is "two crests in two colours" painted one colour twice, about one pair in sixteen. Now the
+  pair is resolved TOGETHER — the same way `disambiguatedShorts` resolves the two short codes —
+  and only DERIVED paint is stepped, never a colour an organiser chose. **The court card and
+  every other tile on the site have the same latent collision and are NOT fixed here.**
+- **Tile figures rendered outside the tile.** Satori neither shrinks type to fit nor clips:
+  a cricket tile's `48/3 (5.1)` painted straight through the rounded rect. Sized down, and the
+  box clips as a backstop.
+- **The performer boxes overlapped each other.** The board's name-left/figure-right row does not
+  survive real data — `Arjun Mehta` + `20 (14)` + `SR 142.9` ran through the border and over the
+  neighbour's name. Stacked instead. The board's own figures (`34 (21)`) are shorter than the
+  ones the builder actually produces.
+- **The landscape card printed its foot ON TOP of the wordmark.** 630px could not hold the
+  first cut; the `og` scale block is now a stated budget (~594 of 630 at the two-line worst
+  case) and the landscape drops the performer boxes rather than overflow.
+- **A live tennis poster shouted "MAIN DRAW"** in 92px, because the hero fell back to the
+  division name when there was no sentence. A headline slot with nothing to say is now empty.
+- **`t20` and `grand-slam`** — the raw `variant_key` — on the share images and on the match
+  page's own header. `sport_variants.name` has had "T20" and "Grand Slam" in it all along;
+  `data.ts` now reads it, scoped to system rows and the org's own (a bare match on
+  `(sport_key, key)` returns a STRANGER's rename — that guard is mutation-killed).
+
+### Two owner corrections, both real
+
+- **A route path ending in `.png` does not name the download.** The browser prefers
+  `Content-Disposition`, and the saved file arrived with no extension. Both ends now say it,
+  through one authority (`lib/poster-file-name.ts`), and the file is named for the two sides:
+  `seazn-southend-queens-v-canvey-crusaders.png`.
+- **The lime floodlight.** `globals.css`'s own rule, verbatim: *"Lime discipline: hairline, LIVE
+  signals, eyebrow ticks, focus-on-night — never lime text on light."* A share card is a night
+  surface, so both permitted uses apply and no third was invented: the hairline that closes the
+  app's gantry now runs along the top of the card, and LIVE is signalled in lime. Lime is a
+  STATUS colour, never an identity one — it does not come from `theme`, so "this match is on"
+  means the same thing on every club's poster while their own colour paints the crests.
+
+### Open
+
+- **A live poster with no rate line has an empty foot** (tennis). The alternatives were the raw
+  variant key or an invented line; neither is better than space.
+- **`battingIndex` is cricket's**, so no side is held back on a live tennis or football poster
+  even though both have a server / a side in possession.
+- The board's result variant stacks score over overs; the builder packs them into one
+  `scoreLines` string (`48/3 (5.1)`), so the tile prints one line. The data's shape, not the
+  layout's.

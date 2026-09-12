@@ -22,6 +22,9 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
+import { PosterButton } from "@/components/public-site/poster-button";
+import { posterFileName } from "@/lib/poster-file-name";
+import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { fixtureSubheading } from "./fixture-subheading";
 import { shareTextFor } from "./share-text";
@@ -259,6 +262,23 @@ export default async function FixturePage({ params }: Props) {
               `text` is `shareTextFor` (`./share-text.ts`), localised via
               `fixture.share.decided`/`fixture.share.live`/
               `fixture.share.fullTime`. */}
+          {/* Spectator boards §match-centre: the header row carries TWO
+              actions, `Poster` then `Share`. The poster is a picture of this
+              match (1080x1350, cut server-side at `poster.png`); the share is
+              the link. They sit together because they answer the same
+              question — "send this to the group" — with the two things people
+              actually send. */}
+          <div className="flex flex-wrap items-center gap-2">
+          <PosterButton
+            href={`${basePath}/fixtures/${fixture.id}/poster.png`}
+            fileName={posterFileName(home, away)}
+            // `statusOf`, not `data.matchCentre.header.status`: the same
+            // function the header itself derives that field with, applied to
+            // the status this component already holds. Reaching back through
+            // the whole match-centre document for a value one call away made
+            // the page depend on a field it never otherwise reads.
+            variant={statusOf(fixture.status)}
+          />
           <ShareButton
             title={`${home} ${msgFn("schedule.vs")} ${away}`}
             text={shareTextFor(
@@ -272,6 +292,7 @@ export default async function FixturePage({ params }: Props) {
             )}
             url={`${basePath}/fixtures/${fixture.id}`}
           />
+          </div>
         </div>
         {/* R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play
             fixture with no scheduled time (the court card right below

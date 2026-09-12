@@ -18,6 +18,7 @@ import publicEs from "@/dictionaries/es/public.json";
 import publicFr from "@/dictionaries/fr/public.json";
 import publicNl from "@/dictionaries/nl/public.json";
 import uiEn from "@/dictionaries/en/ui.json";
+import { posterFileName } from "@/lib/poster-file-name";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
@@ -508,6 +509,50 @@ describe("FixturePage — the public stream link (stream overlay W1, §3.9)", ()
       expect(ended).toContain(`>${dict["overlay.replay"]}</a>`);
       expect(live).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
       expect(ended).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+});
+
+
+describe("FixturePage — the Poster button (Spectator Surface Boards §match-centre)", () => {
+  // The board draws TWO actions in this row, `Poster` then `Share`. A MOUNT
+  // test, because the button itself cannot see whether anything mounts it —
+  // the inert-seam class this repo keeps paying for.
+  const posterHtml = (fixtureOver: Record<string, unknown> = {}, locale = "en") =>
+    streamHtml({ status: "decided", ...fixtureOver }, locale);
+
+  it("renders beside Share, pointing at this fixture's own poster.png", async () => {
+    const html = await posterHtml();
+    expect(html).toContain('data-testid="match-poster-download"');
+    // The VALUE, not the attribute: React serialises an omitted prop as
+    // `"$undefined"`, so a bare `href` probe passes in both states.
+    expect(html).toContain('href="/shared/test-org/test-comp/open/fixtures/f1/poster.png"');
+    // Beside, not instead of — the share action is still there.
+    expect(html).toContain(uiEn["share.whatsapp"] as string);
+  });
+
+  it("names the saved file, so a download arrives with an extension", async () => {
+    // The route path already ends in `poster.png` and that is NOT enough: the
+    // browser names the file from the download attribute / the disposition.
+    const html = await posterHtml();
+    expect(html).toContain(`download="${posterFileName("Home XI", "Away XI")}"`);
+  });
+
+  it("is offered for a fixture nobody has played yet, not only a finished one", async () => {
+    // A poster of an upcoming match is the one a club posts to fill a ground.
+    expect(await posterHtml({ status: "scheduled" })).toContain(
+      'data-testid="match-poster-download"',
+    );
+  });
+
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`locale=${locale} labels the button from ITS OWN dictionary, not English`, async () => {
+      // A key-existence check passes whether the label is wired or hardcoded
+      // English; only a locale differential can tell the two apart.
+      const dict = UI_DICTS[locale]!;
+      const html = await posterHtml({}, locale);
+      expect(html).toContain(dict["matchPoster.downloadAria"] as string);
+      expect(html).not.toContain(uiEn["matchPoster.downloadAria"] as string);
     });
   }
 });

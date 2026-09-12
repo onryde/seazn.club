@@ -1908,6 +1908,8 @@
   "schedule.fstatus.forfeited": "verbeurd",
   "schedule.fstatus.cancelled": "geannuleerd",
   "schedule.tbd": "NNB",
+  "matchPoster.download": "Poster",
+  "matchPoster.downloadAria": "Download de wedstrijdposter",
   "schedule.vs": "vs",
   "schedule.chip.scheduled": "Ingepland",
   "schedule.chip.unscheduled": "Niet ingepland",

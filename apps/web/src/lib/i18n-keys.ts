@@ -2714,6 +2714,8 @@ export type DictionaryKey =
   | "matchPhase.QT"
   | "matchPhase.end"
   | "matchPhase.start"
+  | "matchPoster.download"
+  | "matchPoster.downloadAria"
   | "matchesHub.card.label"
   | "matchesHub.division.all"
   | "matchesHub.divisionsLabel"

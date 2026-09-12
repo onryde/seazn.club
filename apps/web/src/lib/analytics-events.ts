@@ -54,6 +54,11 @@ export const EVENTS = {
   POST_PUBLISHED: "post_published",
   POST_SHARED: "post_shared",
   POST_CARD_DOWNLOADED: "post_card_downloaded",
+  /** Spectator surface: a match poster (the 1080×1350 Option A PNG) was
+   *  downloaded from a public match page. The SAME share loop POST_SHARED
+   *  measures for news, on the surface a spectator actually lands on — carries
+   *  { variant } so an upcoming/live/result split is visible without a join. */
+  MATCH_POSTER_DOWNLOADED: "match_poster_downloaded",
   /** v4 AI Schedule Architect (design/v4/00 §5): one metered architect run —
    *  fired on success AND on a 422 AI_PLAN_FAILED so refused spend is visible. */
   AI_PLAN_RUN: "ai_plan_run",

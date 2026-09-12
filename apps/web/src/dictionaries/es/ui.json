@@ -1908,6 +1908,8 @@
   "schedule.fstatus.forfeited": "no presentado",
   "schedule.fstatus.cancelled": "cancelado",
   "schedule.tbd": "Por confirmar",
+  "matchPoster.download": "Póster",
+  "matchPoster.downloadAria": "Descargar el póster del partido",
   "schedule.vs": "vs",
   "schedule.chip.scheduled": "Programado",
   "schedule.chip.unscheduled": "Sin programar",

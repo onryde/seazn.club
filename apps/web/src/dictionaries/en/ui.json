@@ -1908,6 +1908,8 @@
   "schedule.fstatus.forfeited": "forfeited",
   "schedule.fstatus.cancelled": "cancelled",
   "schedule.tbd": "TBD",
+  "matchPoster.download": "Poster",
+  "matchPoster.downloadAria": "Download the match poster",
   "schedule.vs": "vs",
   "schedule.chip.scheduled": "Scheduled",
   "schedule.chip.unscheduled": "Unscheduled",

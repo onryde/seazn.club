@@ -817,6 +817,23 @@ export async function getPublicFixture(
       const tzRow = await venueTzRow(division.id);
       const [stageRow] = await sql<{ name: string }[]>`
         select name from stages where id = ${fixture.stage_id}`;
+      // The FORMAT's name, not its key. `formatLabel` fed the header's
+      // `metaLine` straight from `division.variant_key`, so the match centre
+      // — and, once the share images started carrying that line, a poster a
+      // spectator posts to Instagram — read "t20" and "grand-slam" where the
+      // catalog has "T20" and "Grand Slam" sitting in `sport_variants.name`.
+      //
+      // Scoped to system rows and this org's own: variants are org-scoped, and
+      // a bare match on (sport_key, key) would happily return ANOTHER org's
+      // renamed variant. The org's own row wins where both exist, which is what
+      // renaming a variant is for; the key remains the fallback, so a division
+      // pointing at a variant the catalog no longer has still says something.
+      const [variantRow] = await sql<{ name: string }[]>`
+        select name from sport_variants
+        where sport_key = ${division.sport_key} and key = ${division.variant_key}
+          and (org_id is null or org_id = ${shell.org.id})
+        order by org_id nulls last
+        limit 1`;
       const locale = toLocale(shell.org.default_locale);
       const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
       const matchCentre = await loadMatchCentre(sql, fixture, {
@@ -824,7 +841,7 @@ export async function getPublicFixture(
         division: {
           sportKey: division.sport_key,
           moduleVersion: division.module_version,
-          formatLabel: division.variant_key,
+          formatLabel: variantRow?.name ?? division.variant_key,
           tz: tzRow?.division_tz ?? null,
           youth: division.youth ?? false,
           playerNameDisplay: division.player_name_display ?? null,
