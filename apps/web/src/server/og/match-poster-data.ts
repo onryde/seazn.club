@@ -16,8 +16,34 @@ import { sql } from "@/lib/db";
 import { getPublicFixture } from "@/server/public-site/data";
 import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
+import { servingSide } from "@/lib/public-site";
 import { matchPosterModel, type MatchPosterModel } from "./match-poster";
-import type { MsgT } from "@/server/public-site/match-centre-schema";
+import type { MatchCentreDocT, MsgT } from "@/server/public-site/match-centre-schema";
+
+/**
+ * "6–4 3–6 · 2–1" — the set-by-set score, for the poster's foot.
+ *
+ * SETS ONLY. `SetsView` also serves period sports, and an unlabelled
+ * "1–0 · 1–1" for a football match could be halves or anything else; a set
+ * score is notation every spectator already reads. Columns nobody has played
+ * are dropped rather than printed as "–", so a best-of-five that is one set in
+ * says "6–4" and not "6–4 · – · – · – · –".
+ *
+ * The en dash is this repo's house style for a score pair (`shootoutScoreFromDetail`,
+ * `resultMsg`), so one match cannot read two ways on two surfaces.
+ */
+function setLineOf(sets: MatchCentreDocT["sets"]): string | null {
+  if (sets === null || sets.kind !== "sets") return null;
+  const [home, away] = sets.rows;
+  const pairs = sets.columns
+    .map((_, i) => {
+      const h = home[i];
+      const a = away[i];
+      return h == null && a == null ? null : `${h ?? "–"}–${a ?? "–"}`;
+    })
+    .filter((pair): pair is string => pair !== null);
+  return pairs.length === 0 ? null : pairs.join(" · ");
+}
 
 export async function loadMatchPosterModel(
   orgSlug: string,
@@ -28,6 +54,16 @@ export async function loadMatchPosterModel(
   const data = await getPublicFixture(orgSlug, competitionSlug, divisionSlug, fixtureId);
   if (!data) return null;
   const { org, competition, division, fixture, matchCentre } = data;
+  const header = matchCentre.header;
+
+  // Which side is DOING something. Cricket's answer is on the header; a racket
+  // sport's is `serving` in the kernel summary, read through the SAME shared
+  // reader `timeline.ts` uses for hold-or-break rather than a second parse of
+  // `summary.detail` here. A period sport has neither and stays null — nothing
+  // tracks possession, and guessing "whoever is ahead" would be editorial.
+  const serving = servingSide(fixture.summary);
+  const activeIndex: 0 | 1 | null =
+    header.battingIndex ?? (serving === "home" ? 0 : serving === "away" ? 1 : null);
 
   // The board's hero line on an upcoming poster is the STAGE ("League match",
   // "Quarter-final"), which `getPublicFixture` reads but does not return.
@@ -50,11 +86,13 @@ export async function loadMatchPosterModel(
     competitionName: competition.name,
     divisionName: division.name,
     stageName: stageRow?.name ?? null,
-    header: matchCentre.header,
+    header,
+    activeIndex,
+    setLine: setLineOf(matchCentre.sets),
     topPerformers: matchCentre.cricket?.topPerformers ?? null,
     copy: {
-      statusLine: say(matchCentre.header.statusLine),
-      pillNote: say(matchCentre.header.pillNote),
+      statusLine: say(header.statusLine),
+      pillNote: say(header.pillNote),
       live: t(pub, "matchCentre.status.live"),
       result: t(pub, "news.kind.result"),
       vs: t(ui, "schedule.vs"),

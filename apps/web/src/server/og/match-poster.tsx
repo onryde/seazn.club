@@ -95,6 +95,26 @@ export interface MatchPosterInput {
    *  on an upcoming poster. Null when the fixture belongs to no named stage. */
   stageName: string | null;
   header: MatchCentreDocT["header"];
+  /**
+   * Which side is DOING something right now — batting, or serving. Resolved by
+   * the caller, because the answer comes from a different place per sport and
+   * only one of them is on the header: cricket's is `battingIndex`, a racket
+   * sport's is `serving` in the kernel summary, and a period sport has no such
+   * idea at all (nothing tracks possession), which is `null`.
+   *
+   * Was `header.battingIndex` read directly, which meant a live TENNIS poster
+   * held back neither player — the one field it asked was cricket's.
+   */
+  activeIndex: 0 | 1 | null;
+  /**
+   * "6–4 3–6 · 2–1" — the set-by-set score, already composed by the caller from
+   * the Sets tab's own view, or null.
+   *
+   * SETS ONLY, never periods. A set score is self-describing notation that
+   * needs no header; "1–0 · 1–1" for a football match is not — unlabelled, it
+   * could be halves, could be anything, and the poster has no room to label it.
+   */
+  setLine: string | null;
   /** Cricket's own top performers, already selected by the match-centre
    *  builder. Null for every sport that has none — the foot then stays the
    *  live rate line or the kick-off line, never an empty pair of boxes. */
@@ -168,7 +188,7 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   // score says did not win — and ONLY when the two scores actually differ, so a
   // tie dims neither. Upcoming: neither, nobody has done anything yet.
   const dimIndex = ((): 0 | 1 | null => {
-    if (variant === "live") return header.battingIndex === 0 ? 1 : header.battingIndex === 1 ? 0 : null;
+    if (variant === "live") return input.activeIndex === 0 ? 1 : input.activeIndex === 1 ? 0 : null;
     if (variant !== "result") return null;
     const [h, a] = header.scoreLines;
     if (h === null || a === null || h === a) return null;
@@ -204,7 +224,9 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
       ? [copy.result, input.divisionName, input.stageName]
       : variant === "live"
         ? [copy.live, copy.pillNote]
-        : [input.divisionName, input.stageName]
+        : // The stage is the upcoming HERO, so the chip must not say it again:
+          // this printed "TOURNAMENT · GROUP STAGE" above a 92px "GROUP STAGE".
+          [input.divisionName]
   )
     .filter((part): part is string => typeof part === "string" && part !== "")
     .join(" · ");
@@ -217,8 +239,7 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   // back to the division name, which printed "MAIN DRAW" in 92px across a live
   // tennis poster as though it were the news; a headline slot with nothing to
   // say is better empty, and the chip and the tiles already carry the match.
-  const hero =
-    variant === "upcoming" ? (input.stageName ?? input.divisionName) : copy.statusLine;
+  const hero = variant === "upcoming" ? input.stageName : copy.statusLine;
 
   // The foot. Result: the two performers, which is what the board draws.
   // Live: the rate line, the one fact that only exists while a match is on.
@@ -242,12 +263,16 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
   // is ~100px tall against a budget with ~40 to spare). So the landscape falls
   // back to this line and the portrait prefers the boxes — one model, and the
   // renderer picks per shape rather than the model guessing which it is for.
+  //
+  // Ordered most-specific-first within each state. `setLine` is why a live
+  // tennis poster is no longer blank along the foot: it has no run rate, and
+  // the set-by-set score is the fact a spectator actually wants there.
   const footNote =
     variant === "live"
-      ? header.rateLine
+      ? (header.rateLine ?? input.setLine ?? header.metaLine)
       : variant === "upcoming"
         ? (copy.statusLine ?? header.metaLine)
-        : header.metaLine;
+        : (input.setLine ?? header.metaLine);
 
   return {
     theme: ogTheme(...input.branding),

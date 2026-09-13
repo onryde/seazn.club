@@ -82,6 +82,8 @@ const input = (over: Partial<MatchPosterInput> = {}): MatchPosterInput => ({
   divisionName: "Men's T8",
   stageName: "Round 1",
   header: header(),
+  activeIndex: null,
+  setLine: null,
   topPerformers: null,
   copy,
   ...over,
@@ -119,11 +121,11 @@ describe("matchPosterModel — the three states the board's one layout carries",
         header: header({
           status: "in_play",
           live: true,
-          battingIndex: 1,
           rateLine: "CRR 8.44 · RRR 9.71",
           statusLine: { key: "x" },
           pillNote: { key: "y" },
         }),
+        activeIndex: 1,
         topPerformers: performers,
         copy: { ...copy, statusLine: "Queens need 34 from 21", pillNote: "12.3 ov" },
       }),
@@ -149,8 +151,11 @@ describe("matchPosterModel — the three states the board's one layout carries",
       }),
     );
     expect(m.variant).toBe("upcoming");
-    expect(m.chip).toBe("Men's T8 · Round 1");
+    // The stage is the hero, so the chip carries the division ALONE — this
+    // printed "TOURNAMENT · GROUP STAGE" above a 92px "GROUP STAGE".
+    expect(m.chip).toBe("Men's T8");
     expect(m.hero).toBe("Round 1");
+    expect(m.chip).not.toContain(m.hero!);
     expect(m.sides.map((s) => s.score)).toEqual([null, null]);
     expect(m.sides.map((s) => s.sub)).toEqual([null, null]);
     expect(m.footNote).toBe("Starts Sat 5 Sep, 14:00");
@@ -280,10 +285,12 @@ describe("matchPosterModel — the headline slot says nothing rather than someth
 });
 
 describe("matchPosterModel — nothing renders a stray separator", () => {
-  it("a fixture with no stage still has a chip and a hero", () => {
+  it("a fixture with no stage keeps its chip and simply has no hero", () => {
+    // Never the division name in both slots: one of them would be repeating
+    // the other, which is the defect above in its other direction.
     const m = matchPosterModel(input({ stageName: null, header: header({ status: "scheduled" }) }));
     expect(m.chip).toBe("Men's T8");
-    expect(m.hero).toBe("Men's T8");
+    expect(m.hero).toBeNull();
   });
 
   it("a live sport with no pill note reads just LIVE", () => {
@@ -297,10 +304,53 @@ describe("matchPosterModel — nothing renders a stray separator", () => {
     expect(m.footNote).toBe("8-over match · Round 1 · Garon Park");
   });
 
-  it("a live fixture with no rate line leaves the foot empty rather than printing the wrong fact", () => {
-    // Tennis has no run rate. Reaching for `metaLine` here would print the
-    // division's raw variant key ("grand-slam") across the foot of a poster.
+  it("a live fixture with no rate line falls to the SET score, which is the fact a spectator wants", () => {
+    // Tennis has no run rate, and this foot used to render empty.
+    const m = matchPosterModel(
+      input({ header: header({ status: "in_play", live: true }), setLine: "6–4 3–6 · 2–1" }),
+    );
+    expect(m.footNote).toBe("6–4 3–6 · 2–1");
+  });
+
+  it("and to the match's own line when there is no set score either", () => {
     const m = matchPosterModel(input({ header: header({ status: "in_play", live: true }) }));
-    expect(m.footNote).toBeNull();
+    expect(m.footNote).toBe("8-over match · Round 1 · Garon Park");
+  });
+
+  it("a rate line still wins over the set score — a live cricket foot is the rate", () => {
+    const m = matchPosterModel(
+      input({
+        header: header({ status: "in_play", live: true, rateLine: "CRR 8.44" }),
+        setLine: "6–4",
+      }),
+    );
+    expect(m.footNote).toBe("CRR 8.44");
+  });
+});
+
+
+describe("matchPosterModel — which side is DOING something", () => {
+  it("a live tennis match holds back the returner, not nobody", () => {
+    // The bug this closes: the model asked `header.battingIndex`, which is
+    // cricket's field, so a live tennis poster lit both players equally.
+    const live = header({ status: "in_play", live: true, battingIndex: null });
+    const serving0 = matchPosterModel(input({ header: live, activeIndex: 0 }));
+    expect([serving0.sides[0].dim, serving0.sides[1].dim]).toEqual([false, true]);
+    const serving1 = matchPosterModel(input({ header: live, activeIndex: 1 }));
+    expect([serving1.sides[0].dim, serving1.sides[1].dim]).toEqual([true, false]);
+  });
+
+  it("a sport with no active side at all holds back neither", () => {
+    // Football tracks no possession. Dimming "whoever is behind" mid-match
+    // would be the poster editorialising about a result nobody has yet.
+    const m = matchPosterModel(
+      input({ header: header({ status: "in_play", live: true }), activeIndex: null }),
+    );
+    expect([m.sides[0].dim, m.sides[1].dim]).toEqual([false, false]);
+  });
+
+  it("the active side is irrelevant once the match is decided — the SCORE decides", () => {
+    const m = matchPosterModel(input({ header: header({ scoreLines: ["1", "3"] }), activeIndex: 0 }));
+    expect([m.sides[0].dim, m.sides[1].dim]).toEqual([true, false]);
   });
 });
