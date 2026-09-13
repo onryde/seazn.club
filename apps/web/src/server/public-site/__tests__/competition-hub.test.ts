@@ -1354,7 +1354,11 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
 //   `drawable: true` always .................... "drawable: FALSE when round 0 holds three fixtures" (+2)
 //   champion without the decided check ........ "NO champion while the final is still being played"
 //   third-place round placed after the final .. "rounds run in bracket order … BEFORE the final" (+1)
-//   voided-reset skip removed ................. "a reset the adapter VOIDED is skipped"
+//   (fix round 1 moved the champion RULE into champion.ts `bracketChampion`;
+//   its own sweep is in champion.test.ts. Here, the view ignoring the helper
+//   is killed by 8 tests, led by "championFixtureId: the final, once it is
+//   DECIDED with a winner", and routing divisionChampion around it by the
+//   three "…is divisionChampion's champion" parity cases.)
 //   no-is_final fallback removed .............. "with no is_final flag anywhere…"
 //   laneRank returns 0 ........................ "rounds order by LANE first"
 //   bracket stages not seq-sorted ............. "one view per bracket stage WITH fixtures…"
@@ -1497,7 +1501,7 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
     expect(view.championFixtureId).toBe("ko-f");
   });
 
-  it("a FINALIZED final crowns as well — the one status ladder, not the raw string 'decided'", async () => {
+  it("a FINALIZED final crowns as well — the settled set, not the raw string 'decided'", async () => {
     const view = await cupView(eight({ status: "finalized", outcome: win("e2", "e1") }));
     expect(view.championFixtureId).toBe("ko-f");
   });
