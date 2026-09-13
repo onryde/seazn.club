@@ -36,6 +36,8 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
+import { getPublicDivision } from "../data";
+import { divisionChampion } from "../champion";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -338,6 +340,55 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
     expect(view.rounds.map((r) => r.fixtureIds)).toEqual([roundIds(first), bronzeIds, roundIds(last)]);
     const carried = new Map(doc.matches.map((m) => [m.fixtureId, m.roundLabel]));
     for (const round of view.rounds) expect(round.label).toBe(carried.get(round.fixtureIds[0]!));
+  });
+
+  it("a knockout FINAL stored decided with a winner crowns from real rows — the view names that final, and divisionChampion the same entrant", async () => {
+    // What the builder suite's doubles cannot witness: `bracketChampion` reading
+    // a STORED row's status, outcome and is_final back through
+    // `public_fixtures_v` (which does not redact `outcome`). Written the way this
+    // repo's DB tests record a result (`placement-snapshots.test.ts`), with the
+    // bronze match left unplayed so the final alone must decide, and put back in
+    // `finally` so the read-back case above keeps its unplayed bracket.
+    const [final] = await sql<
+      { id: string; status: string; outcome: unknown; home_entrant_id: string | null; away_entrant_id: string | null }[]
+    >`
+      select id, status, outcome, home_entrant_id, away_entrant_id from fixtures
+      where stage_id = ${scene.koStageId} and is_final`;
+    expect(final).toBeDefined();
+    expect(final!.status).toBe("scheduled");
+    expect(final!.outcome).toBeNull();
+    const [north, south] = await sql<{ id: string }[]>`
+      select e.id from entrants e
+      join divisions d on d.id = e.division_id
+      join competitions c on c.id = d.competition_id
+      where c.org_id = ${scene.orgId} and c.slug = ${scene.koCompSlug} and d.slug = 'cup'
+      order by e.seed`;
+
+    try {
+      await sql`
+        update fixtures
+        set status = 'decided', home_entrant_id = ${north!.id}, away_entrant_id = ${south!.id},
+            outcome = ${sql.json({ kind: "win", winner: south!.id, loser: north!.id })}
+        where id = ${final!.id}`;
+
+      const doc = (await loadCompetitionHub(scene.orgSlug, scene.koCompSlug))!;
+      expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+      expect(doc.knockouts[0]!.championFixtureId).toBe(final!.id);
+      const match = doc.matches.find((m) => m.fixtureId === final!.id)!;
+      expect(match.header.sides[match.winnerIndex!]!.entrantId).toBe(south!.id);
+
+      // A bracket-only division publishes no table, so the Table crown is not
+      // reachable from this document. The division page's crown is: the same
+      // `divisionChampion` call the page makes, over the same real division read.
+      const detail = (await getPublicDivision(scene.orgSlug, scene.koCompSlug, "cup"))!;
+      expect(divisionChampion(detail.stages, detail.fixtures, detail.standings)).toBe(south!.id);
+    } finally {
+      await sql`
+        update fixtures
+        set status = 'scheduled', home_entrant_id = ${final!.home_entrant_id},
+            away_entrant_id = ${final!.away_entrant_id}, outcome = null
+        where id = ${final!.id}`;
+    }
   });
 
   it("a PRIVATE competition → null (the page 404s it)", async () => {

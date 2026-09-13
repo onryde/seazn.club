@@ -372,6 +372,25 @@ describe("bracketChampion — the engine's rule, and the one authority for a bra
     });
   });
 
+  it("a row flagged BOTH is_final and third_place is a bronze match, not a final — it never crowns", () => {
+    // The generator never marks a bronze match `is_final` (`bracket.ts`
+    // `generateSingleElim`), so this guards hand-entered rows. Listed FIRST and
+    // sharing the final's round, so a filter that let it through finds it
+    // before the real final.
+    const misflagged = ko("bronze", {
+      round_no: 3,
+      is_final: true,
+      third_place: true,
+      outcome: { winner: "third" },
+    });
+    expect(
+      bracketChampion([misflagged, ko("final", { round_no: 3, is_final: true, status: "scheduled" })]),
+    ).toBeNull();
+    expect(
+      bracketChampion([misflagged, ko("final", { round_no: 3, is_final: true, outcome: { winner: "champ" } })]),
+    ).toEqual({ fixtureId: "final", winner: "champ" });
+  });
+
   it("a later final that is NOT conditional is always owed — an earlier decided final cannot crown past it", () => {
     expect(
       bracketChampion([

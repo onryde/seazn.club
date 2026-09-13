@@ -181,7 +181,10 @@ export const KnockoutView = z.object({
    *  fixtures the engine's `twoSidedBracket` — the repo's one authority on a
    *  regular single-elimination shape — lays out. */
   drawable: z.boolean(),
-  /** The stage's final, once it is decided WITH a winner; null before then. */
+  /** The fixture that crowns the stage, from `bracketChampion` (`./champion.ts`)
+   *  — the same rule `divisionChampion` crowns with: the latest-round final
+   *  that is settled (decided, finalized or forfeited) with a winner, withheld
+   *  while an owed grand-final reset is unplayed. Null until then. */
   championFixtureId: z.string().nullable(),
 });
 

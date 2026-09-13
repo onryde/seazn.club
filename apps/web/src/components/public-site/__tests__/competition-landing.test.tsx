@@ -347,6 +347,26 @@ describe("CompetitionLanding — only the tabs THIS bundle has a panel for", () 
     expect(h).not.toContain(`data-testid="mh-tab-panel-knockout"`);
   });
 
+  it("an id NO bundle knows yet (`leaderboard`) is not offered, and a deep link to it falls back — only an allowlist can drop it", () => {
+    // The case that separates an ALLOWLIST from a name exclusion: `knockout` is
+    // dropped by both, an id invented after this bundle shipped only by the
+    // allowlist. It reaches the page for real — `competition-hub-data.ts`
+    // hands the polled JSON on with a cast, never a parse.
+    const newer = {
+      ...withKnockout,
+      tabs: [...withKnockout.tabs, "leaderboard"],
+    } as unknown as CompetitionHubDocT;
+    const h = render(newer);
+    expect(railTabs(h)).toEqual(["overview", "matches", "table", "stats", "teams", "info"]);
+    expect(h).not.toContain(`data-testid="mh-tab-leaderboard"`);
+    tabParam.value = "leaderboard";
+    try {
+      expect(panelRoots(render(newer))).toEqual(["overview"]);
+    } finally {
+      tabParam.value = null;
+    }
+  });
+
   it("?tab=knockout falls back to the first tab instead of throwing out of panelFor", () => {
     tabParam.value = "knockout";
     try {

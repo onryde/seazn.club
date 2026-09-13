@@ -124,13 +124,15 @@ export default async function DivisionHomePage({ params }: Props) {
       (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
   );
 
-  // Champion (v1 parity): once the decisive stage is done, crown the winner
-  // above the table. Bracket → winner of the last-round fixture; league/group
-  // → rank 1 of the final overall standings.
+  // Champion (v1 parity): crown the winner above the table. A bracket is
+  // crowned by `bracketChampion` (`server/public-site/champion.ts`) — its final,
+  // settled with a winner, on the engine's rule: a forfeit counts, and an
+  // unplayed bronze match does not hold the crown back. A league/group crowns
+  // rank 1 of the final overall standings once its decisive stage is done.
   //
-  // The rule itself lives in `server/public-site/champion.ts` — the competition
-  // hub crowns the same entrant on every table it publishes, and two copies of
-  // this ladder would be two crowns that agree only until one of them moves.
+  // Both rules live in that file — the competition hub crowns the same entrant
+  // on every table and in its knockout view, and two copies would be two
+  // crowns that agree only until one of them moves.
   const championId: string | null = divisionChampion(stages, fixtures, standings);
 
   // Rendered at the very top of the division page (above the tabs) so the
