@@ -13,6 +13,7 @@ import type { Lineup, LineupPair } from "../../core/types.ts";
 import { buildStream, defaultLineupPair, lineupFromCatalog, makeEnvelope } from "../../testkit/index.ts";
 import {
   FootballCard,
+  FootballClock,
   FootballEv,
   FootballGoal,
   FootballPenalty,
@@ -903,6 +904,7 @@ const BRANCH_NAMES = new Map<unknown, string>([
   [FootballSinBinStart, "FootballSinBinStart"],
   [FootballSinBinEnd, "FootballSinBinEnd"],
   [FootballShot, "FootballShot"],
+  [FootballClock, "FootballClock"],
 ]);
 const BRANCHES: [string, z.ZodType][] = FootballEv.options.map((schema) => [
   BRANCH_NAMES.get(schema) ?? "UNNAMED",
@@ -938,6 +940,7 @@ describe("FootballEv union disambiguation (§8)", () => {
     // ambiguous" below for the two `outcome` tokens ("saved"/"missed") that
     // are NOT disambiguated this way.
     ["stamped shot", { by: "H", taker: "H-p1", outcome: "blocked", at: stamp }, "FootballShot"],
+    ["stamped clock pause", { at: stamp, running: false }, "FootballClock"],
   ])("%s reaches its own branch, and every branch ahead of it REJECTS", (_, payload, expected) => {
     expect(firstBranch(payload)).toBe(expected);
     // The winner alone is only half the claim, and the weaker half: a

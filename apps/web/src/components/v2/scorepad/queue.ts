@@ -123,20 +123,19 @@ export function queueStatus(params: {
 // ---------------------------------------------------------------------------
 
 /** The soft-commit hold window's SHIPPED value — a CHASSIS constant, not
- *  per-sport config (R1 ruling), which is why R6's owner ruling below moves it
- *  for EVERY sport rather than for the two that raised it.
+ *  per-sport config (R1 ruling), which is why owner rulings move it for EVERY
+ *  sport rather than for the two that raised it.
  *
- *  6000 -> 12000 (owner-ruled 2026-08-31, R6 W-4). The window is how long the
- *  attribution dock stays up asking who an event belongs to. Six seconds is
- *  not enough to read eleven names on a phone, and the cost of missing it is
- *  asymmetric: a lingering chip row is tidied by the next tap, while lost
- *  attribution is permanent — nothing later can recover who was carded. The
- *  dock blocks nothing while it is open, so the window is close to free.
+ *  6000 -> 12000 (owner-ruled 2026-08-31, R6 W-4) — roster scan on a phone.
+ *  12000 -> 5000 (owner-ruled 2026-09-13) — the stream overlay was a full
+ *  soft-commit behind every six / goal / card; five seconds still covers a
+ *  one-name pick, and taps with a null dock skip the hold entirely (period
+ *  advance, etc.). The dock blocks nothing while it is open.
  *
  *  This is the DEFAULT, and the floor test in soft-commit.test.ts pins THIS
  *  symbol rather than `HOLD_MS` — see `resolveHoldMs` immediately below for
  *  why that distinction is the whole point. */
-export const HOLD_MS_DEFAULT = 12000;
+export const HOLD_MS_DEFAULT = 5000;
 
 /** The env override's name, exported so a test names the same string the
  *  build-time substitution below does rather than a copy of it. */
@@ -171,7 +170,7 @@ export function resolveHoldMs(raw: string | undefined): number {
  *  the env var above, which exists so e2e can run the same production bundle
  *  at a shorter window. The walkthrough specs tap a whole match — sixteen taps
  *  for badminton — and each tap waits out a full window before the ledger can
- *  be polled, so the shipped 12s puts those specs past their 180s budget.
+ *  be polled, so the shipped 5s puts those specs past their 180s budget.
  *
  *  Written as a full `process.env.NEXT_PUBLIC_...` member expression on
  *  purpose: Next substitutes that TEXT at build time, so a dynamic read

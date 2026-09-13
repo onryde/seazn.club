@@ -1194,6 +1194,17 @@ export function resolveDockSpec(
 }
 
 /**
+ * Soft-commit only when the skin has something to enrich. Period advance,
+ * clock-adjacent taps with a null dock, and any other "nothing left to ask"
+ * event send immediately — waiting out HOLD_MS would only delay the overlay
+ * (owner ruling 2026-09-13). A real dock (goal / card / six attribution)
+ * still holds for the full window.
+ */
+export function usesSoftCommit(dock: DockSpec | null): boolean {
+  return dock !== null;
+}
+
+/**
  * R7-42/F (owner ruling on P-5, `_INDEX.md`) — "a doubles rally opens the
  * dock; if nobody answers within HOLD_MS the hold drains and the rally
  * submits with `wonBy` only... label the stat as partial wherever it
@@ -1791,8 +1802,9 @@ export function PadHostV3(props: PadHostV3Props) {
   // sends — tile taps, guided-sheet completions, action-form confirms,
   // swap completions, context selections — passes through
   // `createSkinDispatch`'s "a skin cannot invent an event" guard, then
-  // this function's own soft-commit (submitHeld, never plain submit —
-  // spec §2.3).
+  // either soft-commit (when the skin has a dock to enrich) or an immediate
+  // `pipeline.submit` (period advance and any other null-dock tap — owner
+  // ruling 2026-09-13: do not make the overlay wait out HOLD_MS for nothing).
   //
   // R8/#675 — the RETURNED result is new, and exists for the amendment
   // (`runAmend` above): `submitHeld` answers `null` on its double-submit
@@ -1819,9 +1831,14 @@ export function PadHostV3(props: PadHostV3Props) {
   const dispatch = useMemo(
     () =>
       createSkinDispatch(padView, async (type, payload) => {
+        const dock = props.skin.dock(type, view, payload as Record<string, unknown> | undefined);
+        if (!usesSoftCommit(dock)) {
+          await pipeline.submit(type, payload);
+          return;
+        }
         await heldSubmit(type, payload);
       }),
-    [padView, heldSubmit],
+    [padView, heldSubmit, props.skin, view, pipeline],
   );
 
   /**
@@ -1891,10 +1908,31 @@ export function PadHostV3(props: PadHostV3Props) {
     return () => clearInterval(id);
   }, [clock]);
 
+  const publishClock = useCallback(
+    async (next: NonNullable<typeof clock>, now: number) => {
+      const type = `${props.module.key}.clock`;
+      if (props.module.eventSchemas?.[type] === undefined) return;
+      try {
+        await pipeline.submit(type, {
+          at: { period: next.period, elapsed: elapsedOf(next, now) },
+          running: next.runningSince !== null,
+        });
+      } catch (err: unknown) {
+        console.error("scorepad v3: clock publish failed", type, err);
+        setDispatchRefusal(msg("scorepad.rejection.fallback"));
+      }
+    },
+    [pipeline, props.module, msg],
+  );
+
   const toggleClockNow = useCallback(() => {
-    setClock((prev) => (prev === null ? prev : toggleClock(prev, Date.now())));
-    setNowMs(Date.now());
-  }, []);
+    if (!clock) return;
+    const now = Date.now();
+    const next = toggleClock(clock, now);
+    setClock(next);
+    setNowMs(now);
+    void publishClock(next, now);
+  }, [clock, publishClock]);
 
   // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
   // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
@@ -1911,18 +1949,22 @@ export function PadHostV3(props: PadHostV3Props) {
   // moves `state.asOf` forward; `clockSpec` cannot, because it is rebuilt on
   // every render from the SAME `view` the rest of this render pass uses.
   // `clockSpec` in the dependency list keeps this callback's closure as
-  // fresh as that value, unlike `toggleClockNow` above, which needs no cfg
-  // read at all.
+  // fresh as that value. 2026-09-13: also publishes `*.clock` so the overlay
+  // re-anchors immediately (no soft-commit).
   const adjustClockNow = useCallback(
     (deltaSeconds: number) => {
+      if (!clock) return;
+      const now = Date.now();
       const floor =
         clockSpec !== null && clockSpec.seed !== undefined
           ? { period: clockSpec.period, elapsed: clockSpec.seed }
           : undefined;
-      setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds, Date.now(), floor)));
-      setNowMs(Date.now());
+      const next = adjustClock(clock, deltaSeconds, now, floor);
+      setClock(next);
+      setNowMs(now);
+      void publishClock(next, now);
     },
-    [clockSpec],
+    [clock, clockSpec, publishClock],
   );
 
   const handleTileAction = useCallback(

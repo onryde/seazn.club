@@ -113,7 +113,7 @@ function nominalSecondsOf(state: unknown, phase: string): number | undefined {
  *  bound it does not have. */
 function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
   if (typeof state !== "object" || state === null) return undefined;
-  const s = state as { phase?: unknown; asOf?: unknown };
+  const s = state as { phase?: unknown; asOf?: unknown; clockRunning?: unknown };
   if (typeof s.phase !== "string") return undefined;
   if (typeof s.asOf !== "object" || s.asOf === null) return undefined;
   const asOf = s.asOf as { period?: unknown; elapsed?: unknown };
@@ -121,10 +121,13 @@ function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveDa
   const wall = anchorWallMs(active, asOf);
   if (wall === undefined) return undefined;
   const nominalSeconds = nominalSecondsOf(state, s.phase);
+  // Absent `clockRunning` ⇒ running (pre-2026-09-13 streams). Explicit false holds.
+  const running = s.clockRunning !== false;
   return {
     phase: s.phase,
     anchorSeconds: asOf.elapsed,
     anchorAtWallMs: wall,
+    running,
     ...(nominalSeconds === undefined ? {} : { nominalSeconds }),
   };
 }

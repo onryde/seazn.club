@@ -133,6 +133,23 @@ describe("useOverlayClock", () => {
     vi.spyOn(Date, "now").mockReturnValue(999_000);
     expect(harness(ANCHOR, "in_play").read()).toBe("12:41");
   });
+
+  it("holds at the stamped elapsed when running is false — and arms no timer", () => {
+    const t = stubTick();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const paused = { ...ANCHOR, running: false as const };
+    const h = harness(paused, "in_play");
+    expect(h.read()).toBe("12:41");
+    expect(t.armed()).toBe(0);
+    now.mockReturnValue(1_060_000);
+    // No interval — wall time alone must not advance a paused clock.
+    expect(h.read()).toBe("12:41");
+    h.island.rerender({ clock: { ...paused, running: true }, status: "in_play", offset: 0 });
+    expect(t.armed()).toBe(1);
+    now.mockReturnValue(1_061_000);
+    t.tick();
+    expect(h.read()).toBe("13:42");
+  });
 });
 
 // F16 (product ruling 2026-09-10, `_THEMES.md` §3). Driven live on a real

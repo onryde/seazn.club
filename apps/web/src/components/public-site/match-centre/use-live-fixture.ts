@@ -170,14 +170,10 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
   // websocket refused — leaves `subscribed` false and polling takes over.
   //
-  // Public channel on purpose for this spectator path (2026-09-12): the minted
-  // public JWT fails Realtime auth here (`JwtSignatureError` on private
-  // subscribe), so private-first left the overlay on the 15 s poll while the
-  // division slideshow (public, no JWT) stayed live. Entitlement is still
-  // enforced by the token route; the topic is an unguessable fixture UUID.
-  // `publishFixtureUpdate` fans out a public twin alongside the private one
-  // for scorepad. Fixing `SUPABASE_JWT_SECRET` to match the project is the
-  // follow-up that restores private for this surface.
+  // Private channel + setAuth (scorepad shape). Mint is ES256 via
+  // SUPABASE_JWT_PRIVATE_KEY; Realtime Authorization SELECT on
+  // realtime.messages binds topic to JWT fixture_id claim (proved 2026-09-13).
+  // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
   const [subscribed, setSubscribed] = useState(false);
   useEffect(() => {
     if (!realtime || !live) return;
@@ -197,8 +193,10 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       if (cancelled) return;
       const { supabaseBrowser } = await import("@/lib/supabase-browser");
       const sb = supabaseBrowser();
+      await sb.realtime.setAuth(token.token);
+      if (cancelled) return;
       channel = sb
-        .channel(token.channel)
+        .channel(token.channel, { config: { private: true } })
         .on("broadcast", { event: "state_changed" }, () => {
           if (debounce) clearTimeout(debounce);
           debounce = setTimeout(refresh, 250);

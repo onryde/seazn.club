@@ -22,6 +22,7 @@ import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
+import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
@@ -115,13 +116,11 @@ let statusBeforeGrant = 0;
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(180_000);
-  // `seedOverlayFixture` leaves this context signed in as the rig's OWNER, and
-  // the entitlement drop below needs exactly that session: it borrows staff on
-  // the org's owner row, so a bare `browser.newContext()` — which inherits the
-  // shared Pro storageState — flips the rig owner to staff and then calls the
-  // admin route as somebody else. That is a 401, and it is how this hook first
-  // failed.
-  const owner = await browser.newContext();
+  // Empty storage on purpose. A bare `browser.newContext()` inherits the
+  // project's Pro `storageState`; after `signInAs` the page can show the rig
+  // owner while `page.request` still rides the Pro cookie jar — persons POST
+  // then 401s (seen 2026-09-13). Same empty shape as `anonPage` below.
+  const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const ownerPage = await owner.newPage();
   try {
     rig = await seedOverlayFixture(ownerPage);
@@ -786,6 +785,77 @@ test.describe("§8's live preview", () => {
 });
 
 // ===========================================================================
+// Private Realtime → overlay scorebug (JWT mint + Realtime Authorization)
+// Must stay BEFORE the stream-link describe: that one decides the fixture.
+// ===========================================================================
+
+test.describe("private realtime push to the overlay", () => {
+  test("subscribes private and paints a goal well under POLL_MS", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const anon = await anonPage(browser);
+    try {
+      await signInAs(ownerPage, rig.ownerEmail);
+      await anon.setViewportSize({ width: 1920, height: 1080 });
+
+      const tokenResPromise = anon.waitForResponse(
+        (r) =>
+          r.url().includes(`/api/v1/public/fixtures/${rig.fixtureId}/realtime-token`) &&
+          r.request().method() === "GET",
+        { timeout: 30_000 },
+      );
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
+      await expect(anon.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
+
+      const tokenRes = await tokenResPromise;
+      expect(tokenRes.status(), "Pro org must mint a spectator realtime token").toBe(200);
+      const tokenBody = (await tokenRes.json()) as { data?: { token?: string }; token?: string };
+      const jwt = tokenBody.data?.token ?? tokenBody.token;
+      expect(jwt, "token body").toBeTruthy();
+      const headerJson = Buffer.from(String(jwt).split(".")[0]!, "base64url").toString("utf8");
+      const header = JSON.parse(headerJson) as { alg?: string; kid?: string };
+      expect(header.alg, "mint must be ES256 after JWKS key import").toBe("ES256");
+      expect(header.kid, "mint must carry the imported signing kid").toBeTruthy();
+
+      await expect(
+        anon.locator('[data-testid="ovl-root"]'),
+        "private channel must reach SUBSCRIBED (poll alone never flips this)",
+      ).toHaveAttribute("data-transport", "realtime", { timeout: 20_000 });
+
+      const home = anon.locator('[data-testid="ovl-big-home"]');
+      const before = ((await home.textContent()) ?? "").trim();
+      expect(before.length, "home score must be painted before the push").toBeGreaterThan(0);
+
+      const t0 = Date.now();
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", {
+        by: rig.homeEntrantId,
+      });
+
+      await expect
+        .poll(
+          async () => ((await home.textContent()) ?? "").trim(),
+          {
+            message: `home score must move off "${before}" via realtime, not the ${POLL_MS}ms poll`,
+            timeout: 8_000,
+            intervals: [200, 400, 800],
+          },
+        )
+        .not.toBe(before);
+
+      const elapsed = Date.now() - t0;
+      expect(
+        elapsed,
+        `push took ${elapsed}ms — at or above POLL_MS (${POLL_MS}) this is poll, not realtime`,
+      ).toBeLessThan(POLL_MS);
+    } finally {
+      await owner.close();
+      await anon.context().close();
+    }
+  });
+});
+
+// ===========================================================================
 // The public match page's link to the club's broadcast (Task 7)
 // ===========================================================================
 
@@ -1057,6 +1127,101 @@ test.describe("moments (W2)", () => {
         timeout: CYCLE_MS * 3,
       });
       await expect(slab).toHaveAttribute("data-tone", "caution");
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+});
+
+/**
+ * 2026-09-13 — pad Pause / Correct publish `*.clock`; the OBS clock must hold
+ * when `running: false`. Own rig: the shared hockey fixture is decided earlier.
+ */
+test.describe("overlay clock holds when paused (*.clock)", () => {
+  let clockRig: OverlayRig;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    try {
+      clockRig = await seedOverlayFixture(ownerPage);
+      await grantOverlay(clockRig.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test("a paused stamp freezes .ovl-bug-clock; resume lets it advance again", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    await signInAs(ownerPage, clockRig.ownerEmail);
+    const anon = await anonPage(browser);
+    const clockCell = anon.locator(".ovl-bug-clock");
+
+    const parseFace = (text: string): number => {
+      const m = /^(\d+):(\d{2})$/.exec(text.trim());
+      if (!m) throw new Error(`not M:SS: "${text}"`);
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+
+    try {
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: true,
+      });
+
+      await anon.goto(`/overlay/fixtures/${clockRig.fixtureId}?style=bug`);
+      await expect
+        .poll(async () => ((await clockCell.count()) > 0 ? (await clockCell.innerText()).trim() : ""), {
+          timeout: 60_000,
+          intervals: [2_000],
+          message: "bug clock must appear once asOf is stamped",
+        })
+        .toMatch(/^\d+:\d{2}$/);
+
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: false,
+      });
+
+      let held = "";
+      await expect
+        .poll(
+          async () => {
+            await anon.reload();
+            held = (await clockCell.innerText()).trim();
+            return held;
+          },
+          { timeout: 60_000, intervals: [2_000], message: "paused stamp must paint 1:30" },
+        )
+        .toBe("1:30");
+
+      await anon.waitForTimeout(2_500);
+      await anon.reload();
+      await expect(clockCell, "paused clock must not advance on wall time alone").toHaveText("1:30", {
+        timeout: 30_000,
+      });
+      expect(parseFace(held)).toBe(90);
+
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: true,
+      });
+
+      await expect
+        .poll(
+          async () => {
+            await anon.reload();
+            const face = (await clockCell.innerText()).trim();
+            if (!/^\d+:\d{2}$/.test(face)) return 0;
+            return parseFace(face);
+          },
+          { timeout: 60_000, intervals: [1_000], message: "resume must let the bug clock tick past 1:30" },
+        )
+        .toBeGreaterThan(90);
     } finally {
       await anon.context().close();
       await owner.close();

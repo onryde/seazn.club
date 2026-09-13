@@ -104,7 +104,7 @@ export function OverlayStage(props: OverlayStageProps) {
   // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
   // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
   // subtracts it either way.
-  const { data, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
+  const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
     delayMs: props.delayMs,
   });
@@ -250,6 +250,7 @@ export function OverlayStage(props: OverlayStageProps) {
           data-testid="ovl-root"
           data-style={props.style}
           data-sport-theme={sportThemeAttr(props.sportKey)}
+          data-transport={transport}
           data-awaiting-delay="1"
           data-led="none"
           className="ovl-canvas ovl-label ovl-static"
@@ -265,6 +266,7 @@ export function OverlayStage(props: OverlayStageProps) {
         data-testid="ovl-root"
         data-style={props.style}
         data-sport-theme={sportThemeAttr(props.sportKey)}
+        data-transport={transport}
         data-led={model.sides[0].led ? "home" : model.sides[1].led ? "away" : "none"}
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}

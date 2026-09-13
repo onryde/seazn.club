@@ -49,6 +49,7 @@ import {
   sidePool,
   squadStateOf,
   suppressEmptyMoreTile,
+  usesSoftCommit,
 } from "../pad-host";
 import type { ActivityEvent } from "../activity";
 
@@ -1045,6 +1046,16 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
     const viaMutant = dropsPayload(skin, held, padHostView());
     expect(real).not.toEqual(viaMutant);
     expect(real).toEqual({ title: "has-payload", chips: [] });
+  });
+});
+
+describe("usesSoftCommit", () => {
+  it("holds when the skin has a dock to enrich", () => {
+    expect(usesSoftCommit({ title: "Who scored?", chips: [] })).toBe(true);
+  });
+
+  it("sends immediately when there is nothing to enrich — period advance, bare taps", () => {
+    expect(usesSoftCommit(null)).toBe(false);
   });
 });
 

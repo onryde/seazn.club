@@ -46,7 +46,7 @@ export interface OverlayMoment extends W1OverlayMoment {
    * `endOfOver` and `toss` are structured cards (2026-09-12 design).
    */
   graphic?: "slab" | "endOfOver" | "toss";
-  /** Per-item hold override (toss uses 8s). Absent → queue default 4s. */
+  /** Per-item hold override (toss uses 8s). Absent → queue default (`OVERLAY_MOMENT_HOLD_MS`). */
   holdMs?: number;
   /** Payload for `graphic: "endOfOver"`. */
   endOfOver?: import("@/lib/overlay-cricket").OverlayClosedOver;
@@ -84,9 +84,10 @@ const WICKET_KEYS: Readonly<Record<string, string>> = {
  * The wicket is checked FIRST: a ball can be both a boundary and a dismissal
  * (a catch on the rope), and the dismissal is the moment.
  *
- * FOUR / SIX / OUT each play TWICE on air (2s + 2s with the shared hold). The
- * second beat uses kind `${kind}.bis` so the queue's seq:kind dedupe still lets
- * both through (same pattern as tennis setWon + match point on one seq).
+ * FOUR / SIX / OUT / GOAL / cards each play TWICE on air (2s + 2s with the
+ * shared hold ≈ 5s wall time including folds). The second beat uses kind
+ * `${kind}.bis` so the queue's seq:kind dedupe still lets both through (same
+ * pattern as tennis setWon + match point on one seq).
  */
 const doubleBeat = (moment: OverlayMoment): readonly [OverlayMoment, OverlayMoment] => [
   moment,
@@ -196,13 +197,13 @@ const goal: MomentRule = (ev, { msg }) => {
       : who === undefined
         ? label
         : msg("overlay.moment.goalKindLine", { name: who, kind: label });
-  return {
+  return doubleBeat({
     kind: "goal",
     tone: "led",
     seq: ev.seq,
     headline: msg(ev.payload.ownGoal ? "overlay.moment.ownGoal" : "overlay.moment.goal"),
     ...(line === undefined ? {} : { line }),
-  };
+  });
 };
 
 /** ONE table, key and tone together. Two parallel records let a colour exist
@@ -233,13 +234,13 @@ const card =
     // missing slab than one whose tone is a guess — tone is the colour of the
     // thing on air.
     if (card === undefined) return null;
-    return {
+    return doubleBeat({
       kind: `card.${value}`,
       headline: msg(card.key),
       ...(name(ev) === undefined ? {} : { line: name(ev)! }),
       tone: card.tone,
       seq: ev.seq,
-    };
+    });
   };
 
 /** Ice hockey has one headline and seven classes, so the class rides on the
@@ -261,13 +262,13 @@ const penalty: MomentRule = (ev, { msg }) => {
   const tone = PENALTY_TONE[cls];
   if (tone === undefined) return null;
   const label = disciplineLabel(cls, (key) => msg(key));
-  return {
+  return doubleBeat({
     kind: `penalty.${cls}`,
     headline: msg("overlay.moment.penaltyHeadline"),
     line: [label, name(ev)].filter((part) => part !== undefined).join(" · "),
     tone,
     seq: ev.seq,
-  };
+  });
 };
 
 /** The one tennis point worth a slab on its own. `meta.kind` is the SHOT type,

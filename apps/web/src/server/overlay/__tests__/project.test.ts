@@ -167,12 +167,26 @@ describe("projectOverlayLiveData", () => {
       phase: "H1",
       anchorSeconds: 761,
       anchorAtWallMs: Date.parse("2026-09-07T14:00:00.000Z"),
+      running: true,
       // F16 — the half's nominal length, from the cfg the fixture was folded
       // under. Derived from the module's OWN parsed config, never the literal
       // 45: the ceiling has to move when the competition's does.
       nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
     });
     expect(out.cricket).toBeUndefined();
+  });
+
+  it("football: clockRunning false projects running false so the stage holds", () => {
+    const f = folded("football", [
+      ["core.start", {}],
+      ["football.clock", { at: { period: "H1", elapsed: 761 }, running: false }],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+    expect(out.clock).toMatchObject({
+      phase: "H1",
+      anchorSeconds: 761,
+      running: false,
+    });
   });
 
   it("football: between periods the clock is ABSENT (the stage holds the last value), never a stale stamp", () => {
@@ -208,6 +222,7 @@ describe("projectOverlayLiveData", () => {
       phase: "H1",
       anchorSeconds: 761,
       anchorAtWallMs: Date.parse(goalWall),
+      running: true,
       nominalSeconds: (cfgFor("football") as { halfMinutes: number }).halfMinutes * 60,
     });
     // The assertion that actually witnesses the regression: the wrong answer

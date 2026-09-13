@@ -47,7 +47,10 @@ export function useOverlayClock(
    */
   const compute = (): string | null => {
     if (!clock) return null;
-    if (clock.nominalSeconds === undefined) return formatClockCapped(clock.anchorSeconds);
+    // Paused (or unknown length): hold at the last stamped elapsed.
+    if (clock.running === false || clock.nominalSeconds === undefined) {
+      return formatClockCapped(clock.anchorSeconds, clock.nominalSeconds);
+    }
     const pictureNow = Date.now() - presentationNowOffsetMs;
     const elapsed = Math.max(0, (pictureNow - clock.anchorAtWallMs) / 1000);
     return formatClockCapped(clock.anchorSeconds + elapsed, clock.nominalSeconds);
@@ -73,15 +76,21 @@ export function useOverlayClock(
       setLabel(next);
     };
     tick(); // re-anchor immediately on every push
-    // No declared period length ⇒ the value cannot advance (see `compute`), so
-    // no timer is armed at all rather than one that recomputes a constant once
-    // a second for the life of an OBS browser source. A later push that brings
-    // a length re-runs this effect and arms it.
-    if (clock.nominalSeconds === undefined) return;
+    // No declared period length, or paused ⇒ the value cannot advance, so no
+    // timer is armed. A later push that brings a length / resume re-runs this.
+    if (clock.nominalSeconds === undefined || clock.running === false) return;
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `compute` closes over exactly these
-  }, [clock?.phase, clock?.anchorSeconds, clock?.anchorAtWallMs, clock?.nominalSeconds, status, presentationNowOffsetMs]);
+  }, [
+    clock?.phase,
+    clock?.anchorSeconds,
+    clock?.anchorAtWallMs,
+    clock?.nominalSeconds,
+    clock?.running,
+    status,
+    presentationNowOffsetMs,
+  ]);
 
   return label;
 }

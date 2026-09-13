@@ -2,16 +2,14 @@
 //
 // WHAT WAS MISSING. `core/time.ts:6-9` states the engine's side of this
 // outright: "The engine owns no clock... `at` is a frozen fact recorded by the
-// pad." There is no start/stop/adjust-clock event anywhere in the period
-// kernel, and there never will be — a countdown is a pad rendering a duration
-// against a known start, not the engine racing real time. The READ side has
-// been correct since R3: `skins/football.tsx`'s `readClock` reads `state.asOf`
-// and drops the strip item when it is absent or names a phase the match has
-// left. The WRITE side had never existed. `state.asOf` is set ONLY by a
-// stamped event's `at`, and no v3 tile sent `at` — except the swap, which
-// copies an `asOf` that must already exist — so a stream recorded entirely
-// through this pad had NO clock, ever, and football's own comment recorded
-// that as an open engine-side question. It was neither: it is this file.
+// pad." The engine still does not *race* wall time — a countdown is a pad
+// rendering a duration against a known start. What changed (2026-09-13): the
+// pad also publishes `*.clock` `{ at?, running }` so the overlay can hold or
+// tick from the same stamps. The engine stores `clockRunning` + `asOf`; it
+// still does not advance elapsed on its own. The READ side has been correct
+// since R3: `skins/football.tsx`'s `readClock` reads `state.asOf` and drops
+// the strip item when it is absent or names a phase the match has left. The
+// WRITE side (local start/pause/correct) lives here; publish is pad-host.
 //
 // It is not only the clock that was inert. `period/suspensions.ts:137-153`
 // derives `ActiveSuspension.expiresAt` ONCE, at start, from `startedAt` plus

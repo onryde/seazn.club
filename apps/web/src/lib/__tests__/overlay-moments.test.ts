@@ -131,7 +131,7 @@ describe("the allowlist is held against the modules' own declarations", () => {
     const goal: RecentEvent = { seq: 1, type: "football.goal", at: "", payload: { side: 0 } };
     expect(of("some.future.sport", [goal])).toEqual([]);
     // Its positive pair, so the case cannot pass by the payload being unusable.
-    expect(of("football", [goal])).toHaveLength(1);
+    expect(of("football", [goal])).toHaveLength(2);
   });
 
   it("every key a rule can emit is authored in the English dictionary", () => {
@@ -160,7 +160,7 @@ describe("the allowlist is held against the modules' own declarations", () => {
           at: "",
           payload: { side: 0, class: cls },
         };
-        expect(of(key, [ev]), `${key} class ${cls} raises nothing`).toHaveLength(1);
+        expect(of(key, [ev]), `${key} class ${cls} raises nothing`).toHaveLength(2);
       }
     }
   });
@@ -273,20 +273,44 @@ describe("football, hockey and ice hockey", () => {
       ["football.goal", { by: "H", scorer: "H-p2", penalty: true }],
     ]);
     const got = of("football", recent);
-    expect(got.map((m) => m.headline)).toEqual([
+    // Each goal double-beats (same as FOUR / SIX) — assert the first beat of
+    // each seq so the headline/line pins stay readable.
+    const firsts = [2, 3, 4].map((seq) => got.find((m) => m.seq === seq && !m.kind.endsWith(".bis"))!);
+    expect(firsts.map((m) => m.headline)).toEqual([
       "overlay.moment.goal",
       "overlay.moment.ownGoal",
       "overlay.moment.goal",
     ]);
-    expect(got[0]!.line).toBe("H. One");
+    expect(firsts[0]!.line).toBe("H. One");
     // The owner ruling of 2026-09-11, pinned as a VALUE rather than as "the
     // line mentions a penalty": the bare `overlay.moment.penalty` this once
     // emitted also mentions one, and would pass a weaker assertion while
     // dropping the scorer — which was the defect.
-    expect(got[2]!.line).toBe(
+    expect(firsts[2]!.line).toBe(
       'overlay.moment.goalKindLine{"name":"H. Two","kind":"overlay.moment.goalKind.penalty"}',
     );
     expect(got.every((m) => m.tone === "led")).toBe(true);
+  });
+
+  it("GOAL / card / penalty each raise TWO identical slabs (bis) — same double-beat as FOUR / SIX", () => {
+    const football = of(
+      "football",
+      recentOf("football", [
+        ["core.start", {}],
+        ["football.goal", { by: "H", scorer: "H-p1" }],
+        ["football.card", { by: "H", person: "H-p1", color: "yellow" }],
+      ]),
+    );
+    expect(football.map((m) => m.kind)).toEqual(["goal", "goal.bis", "card.yellow", "card.yellow.bis"]);
+    const hockey = of(
+      "hockey",
+      recentOf("hockey", [
+        ["core.start", {}],
+        ["hockey.goal", { by: "H", person: "H-p1" }],
+        ["hockey.suspension.start", { by: "H", person: "H-p2", class: "red" }],
+      ]),
+    );
+    expect(hockey.map((m) => m.kind)).toEqual(["goal", "goal.bis", "card.red", "card.red.bis"]);
   });
 
   it("a penalty with no nameable scorer falls back to the bare word", () => {
@@ -298,12 +322,13 @@ describe("football, hockey and ice hockey", () => {
       ["football.goal", { by: "H", penalty: true }],
     ]);
     const got = of("football", recent);
-    expect(got).toHaveLength(1);
+    expect(got).toHaveLength(2);
     expect(got[0]).toMatchObject({
       kind: "goal",
       headline: "overlay.moment.goal",
       line: "overlay.moment.goalKind.penalty",
     });
+    expect(got[1]!.kind).toBe("goal.bis");
   });
 
   it("a HOCKEY penalty stroke names its taker AND says stroke — football's parity", () => {
@@ -317,7 +342,7 @@ describe("football, hockey and ice hockey", () => {
       ["hockey.goal", { by: "H", person: "H-p2", kind: "stroke" }],
       ["hockey.goal", { by: "H", person: "H-p1", kind: "pc" }],
     ]);
-    const got = of("hockey", recent);
+    const got = of("hockey", recent).filter((m) => !m.kind.endsWith(".bis"));
     // Open play FIRST, so "the line carries the kind" cannot pass by every
     // line carrying one.
     expect(got[0]!.line).toBe("H. One");
@@ -339,7 +364,11 @@ describe("football, hockey and ice hockey", () => {
       ["icehockey.goal", { by: "H", person: "H-p2", kind: "pp" }],
       ["icehockey.goal", { by: "A", person: "A-p1", kind: "sh" }],
     ]);
-    expect(of("icehockey", recent).map((m) => m.line)).toEqual([
+    expect(
+      of("icehockey", recent)
+        .filter((m) => !m.kind.endsWith(".bis"))
+        .map((m) => m.line),
+    ).toEqual([
       'overlay.moment.goalKindLine{"name":"H. One","kind":"overlay.moment.goalKind.penaltyShot"}',
       'overlay.moment.goalKindLine{"name":"H. Two","kind":"overlay.moment.goalKind.powerPlay"}',
       'overlay.moment.goalKindLine{"name":"A. One","kind":"overlay.moment.goalKind.shortHanded"}',
@@ -355,7 +384,7 @@ describe("football, hockey and ice hockey", () => {
       ["core.start", {}],
       ["hockey.goal", { by: "H", person: "H-p1", kind: "og" }],
     ]);
-    const got = of("hockey", recent);
+    const got = of("hockey", recent).filter((m) => !m.kind.endsWith(".bis"));
     expect(got[0]!.headline).toBe("overlay.moment.ownGoal");
     expect(got[0]!.line).toBe("H. One");
   });
@@ -367,7 +396,9 @@ describe("football, hockey and ice hockey", () => {
       ["core.start", {}],
       ["hockey.goal", { by: "H", kind: "stroke" }],
     ]);
-    expect(of("hockey", recent)[0]!.line).toBe("overlay.moment.goalKind.stroke");
+    expect(of("hockey", recent).filter((m) => !m.kind.endsWith(".bis"))[0]!.line).toBe(
+      "overlay.moment.goalKind.stroke",
+    );
   });
 
   it("every goal kind the PERIOD SPORTS declare has a line key — a new kind is a missing key", () => {
@@ -392,9 +423,10 @@ describe("football, hockey and ice hockey", () => {
           ["core.start", {}],
           [`${key}.goal`, { by: "H", person: "H-p1", kind }],
         ]);
-        expect(of(key, recent)[0]!.line, `${key} goal kind ${kind} reaches air as a bare name`).toBe(
-          `overlay.moment.goalKindLine{"name":"H. One","kind":"${dictKey}"}`,
-        );
+        expect(
+          of(key, recent).filter((m) => !m.kind.endsWith(".bis"))[0]!.line,
+          `${key} goal kind ${kind} reaches air as a bare name`,
+        ).toBe(`overlay.moment.goalKindLine{"name":"H. One","kind":"${dictKey}"}`);
       }
     }
   });
@@ -410,7 +442,11 @@ describe("football, hockey and ice hockey", () => {
       ["football.card", { by: "A", person: "A-p1", color: "second_yellow" }],
       ["football.card", { by: "A", person: "A-p3", color: "red" }],
     ]);
-    expect(of("football", recent).map((m) => [m.headline, m.tone])).toEqual([
+    expect(
+      of("football", recent)
+        .filter((m) => !m.kind.endsWith(".bis"))
+        .map((m) => [m.headline, m.tone]),
+    ).toEqual([
       ["overlay.moment.card.yellow", "caution"],
       ["overlay.moment.card.yellow", "caution"],
       ["overlay.moment.card.secondYellow", "dismissal"],
@@ -425,7 +461,11 @@ describe("football, hockey and ice hockey", () => {
       ["hockey.suspension.start", { by: "H", person: "H-p2", class: "yellow" }],
       ["hockey.suspension.start", { by: "A", person: "A-p1", class: "red" }],
     ]);
-    expect(of("hockey", recent).map((m) => [m.headline, m.tone])).toEqual([
+    expect(
+      of("hockey", recent)
+        .filter((m) => !m.kind.endsWith(".bis"))
+        .map((m) => [m.headline, m.tone]),
+    ).toEqual([
       ["overlay.moment.card.green", "caution"],
       ["overlay.moment.card.yellow", "caution"],
       ["overlay.moment.card.red", "dismissal"],
@@ -438,7 +478,7 @@ describe("football, hockey and ice hockey", () => {
       ["icehockey.suspension.start", { by: "H", person: "H-p1", class: "minor" }],
       ["icehockey.suspension.start", { by: "A", person: "A-p1", class: "match" }],
     ]);
-    const got = of("icehockey", recent);
+    const got = of("icehockey", recent).filter((m) => !m.kind.endsWith(".bis"));
     expect(got.map((m) => [m.headline, m.tone])).toEqual([
       ["overlay.moment.penaltyHeadline", "caution"],
       ["overlay.moment.penaltyHeadline", "dismissal"],

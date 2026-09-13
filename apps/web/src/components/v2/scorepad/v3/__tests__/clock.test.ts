@@ -1110,12 +1110,20 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     // this session's own prior dispatch) moves the fold's high-water mark.
     expect(src).toContain("clockSpec !== null && clockSpec.seed !== undefined");
     expect(src).toContain("{ period: clockSpec.period, elapsed: clockSpec.seed }");
-    expect(src).toContain("adjustClock(prev, deltaSeconds, Date.now(), floor)");
-    // The callback's own closure stays as fresh as `clockSpec` — a stable
-    // `[]` dependency array (the shape `toggleClockNow` uses, which needs no
-    // cfg read at all) would close over the render this callback was BUILT
-    // in and apply that render's floor forever after.
-    expect(src).toContain("[clockSpec]");
+    expect(src).toContain("adjustClock(clock, deltaSeconds, now, floor)");
+    // Closure stays fresh with clock + clockSpec + publishClock (2026-09-13:
+    // Correct also publishes `*.clock` so the overlay re-anchors immediately).
+    expect(src).toContain("[clock, clockSpec, publishClock]");
+  });
+
+  it("publishes *.clock on toggle and correct — overlay pause must not wait on soft-commit", () => {
+    // 2026-09-13. Pad Pause used to be host-local only; the OBS clock kept
+    // ticking. Both sites must call publishClock → pipeline.submit (immediate,
+    // no HOLD_MS). Deleting either call reds here before the e2e can miss it.
+    expect(src).toContain("const type = `${props.module.key}.clock`");
+    expect(src).toContain("await pipeline.submit(type,");
+    expect(src).toContain("void publishClock(next, now)");
+    expect(src.split("void publishClock(next, now)").length - 1).toBe(2);
   });
 
   it("hands PadClockBar the pad's OWN fixtureId, not a placeholder", () => {

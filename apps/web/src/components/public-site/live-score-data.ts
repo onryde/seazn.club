@@ -66,7 +66,14 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  `nominalSecondsOf`). The stage shows `45+` past it instead of counting on;
    *  ABSENT when the state declares no readable length, and the stage then
    *  HOLDS at the anchor rather than ticking without a bound. */
-  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number; nominalSeconds?: number };
+  clock?: {
+    phase: string;
+    anchorSeconds: number;
+    anchorAtWallMs: number;
+    nominalSeconds?: number;
+    /** Absent/true = tick; false = hold at anchorSeconds (pad Pause). */
+    running?: boolean;
+  };
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
   };
