@@ -1280,25 +1280,14 @@ describe("buildTiles — minor extras defaults (R2b task 4)", () => {
 // surfacing as a generic rejection the owner hit live (cricket.ts:1224,
 // "freeHit flagged but no free hit is pending"). Replaced by a READ-ONLY
 // indicator (buildScorebug, below) — the scorer no longer declares what the
-// fold already knows. `buildDock` itself stays non-null for every ball event
-// type (never `null` merely because `chips` ends up empty):
-// `e2e/scorepad-v3-cricket.spec.ts`'s undo tests tap a PLAIN run and assert
-// `[data-role="v3-dock"]` becomes visible, using dock presence as a generic
-// "this tap is still in the hold window" proxy — unrelated to free hit
-// specifically. Returning `null` for an empty-chips spec would silently
-// break that already-passing coverage; keeping the spec (title + dismiss +
-// countdown, zero chips) preserves it.
+// fold already knows. Plain / wide / penalty balls return null (nothing to
+// enrich); soft-commit holds only for noball bat-runs and bye/legbye extras.
 describe("buildDock", () => {
-  it("offers no chips for a plain ball event — freeHit is gone — but the spec itself stays non-null", () => {
-    const dock = buildDock("cricket.ball", t)!;
-    expect(dock).not.toBeNull();
-    expect(dock.title).toBe("pad.cricket.dock.title");
-    expect(dock.chips).toEqual([]);
+  it("is null for a plain ball — nothing to enrich, so no soft-commit hold", () => {
+    expect(buildDock("cricket.ball", t)).toBeNull();
   });
-  it("also stays non-null (with no chips) for a super-over ball", () => {
-    const dock = buildDock("cricket.superover.ball", t)!;
-    expect(dock).not.toBeNull();
-    expect(dock.chips).toEqual([]);
+  it("is also null for a plain super-over ball", () => {
+    expect(buildDock("cricket.superover.ball", t)).toBeNull();
   });
   it("is null for every non-ball event type — never a stray dock on an admin action", () => {
     expect(buildDock("cricket.toss", t)).toBeNull();
@@ -1315,14 +1304,12 @@ describe("buildDock", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildDock — payload-aware chips (R2b task 4)", () => {
-  it("omitting payload entirely (every pre-existing 2-arg call site): no chips, freeHit is gone", () => {
-    const dock = buildDock("cricket.ball", t)!;
-    expect(dock.chips.map((c) => c.id)).toEqual([]);
+  it("omitting payload entirely (every pre-existing 2-arg call site): null dock, freeHit is gone", () => {
+    expect(buildDock("cricket.ball", t)).toBeNull();
   });
 
-  it("a plain run tap's dock has no chips — no extras field at all", () => {
-    const dock = buildDock("cricket.ball", t, { runs: { bat: 4 }, boundary: 4 })!;
-    expect(dock.chips.map((c) => c.id)).toEqual([]);
+  it("a plain run tap has no dock — nothing to enrich", () => {
+    expect(buildDock("cricket.ball", t, { runs: { bat: 4 }, boundary: 4 })).toBeNull();
   });
 
   it("a no-ball's dock offers bat-run chips +1/+2/+3/+4/+6 — freeHit no longer among them", () => {
@@ -1357,16 +1344,12 @@ describe("buildDock — payload-aware chips (R2b task 4)", () => {
     }
   });
 
-  it("a wide's dock offers NO bat-run chips — the engine refuses bat runs off a wide (cricket.ts:1229) — and no freeHit chip either", () => {
-    const payload = { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } };
-    const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual([]);
+  it("a wide has no dock — engine refuses bat runs off a wide; nothing else to ask", () => {
+    expect(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } })).toBeNull();
   });
 
-  it("a penalty's dock has no chips — only the TILE default changed (5); freeHit is gone here too", () => {
-    const payload = { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } };
-    const dock = buildDock("cricket.ball", t, payload)!;
-    expect(dock.chips.map((c) => c.id)).toEqual([]);
+  it("a penalty has no dock — only the TILE default changed (5)", () => {
+    expect(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "penalty", runs: 5 } } })).toBeNull();
   });
 });
 
@@ -2841,7 +2824,12 @@ describe("cricketSkinV3", () => {
     expect(skin.key).toBe("cricket");
     expect(skin.tapModel).toBe("T");
     expect(skin.scorebug(view()).context).toContain("scorepad.skin.cricket.context.over");
-    expect(skin.dock("cricket.ball", view())?.title).toBe("pad.cricket.dock.title");
+    expect(
+      skin.dock("cricket.ball", view(), {
+        runs: { bat: 0, extras: { kind: "noball", runs: 1 } },
+      })?.title,
+    ).toBe("pad.cricket.dock.title");
+    expect(skin.dock("cricket.ball", view())).toBeNull();
     expect(skin.tiles(view()).length).toBeGreaterThan(0);
     expect(skin.phase!(view())).toBe("live");
     expect(skin.context!(view())).not.toBeNull();

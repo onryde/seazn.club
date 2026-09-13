@@ -2121,8 +2121,8 @@ describe("second_yellow needs someone on a caution (R3 review, the unattributabl
   it("the sheet leaves it enabled EXACTLY when the dock can name somebody", () => {
     for (const fixture of [view(), view({ state: yellowFor("h2") })]) {
       const enabled = colourStep(fixture).blocked!({}).second_yellow === undefined;
-      const chips = buildDock("football.card", fixture, t, { by: "home-1", color: "second_yellow" })!.chips;
-      expect(chips.length > 0, `enabled=${enabled} chips=${chips.length}`).toBe(enabled);
+      const dock = buildDock("football.card", fixture, t, { by: "home-1", color: "second_yellow" });
+      expect((dock?.chips.length ?? 0) > 0, `enabled=${enabled} chips=${dock?.chips.length ?? 0}`).toBe(enabled);
     }
   });
 

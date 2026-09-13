@@ -1051,12 +1051,18 @@ describe("resolveDockSpec — mutation proof (the widened payload wiring is load
 });
 
 describe("usesSoftCommit", () => {
-  it("holds when the skin has a dock to enrich", () => {
-    expect(usesSoftCommit({ title: "Who scored?", chips: [] })).toBe(true);
+  it("holds when the dock has chips to enrich", () => {
+    expect(
+      usesSoftCommit({
+        title: "Who scored?",
+        chips: [{ id: "a", label: "A", mutate: (p) => p }],
+      }),
+    ).toBe(true);
   });
 
-  it("sends immediately when there is nothing to enrich — period advance, bare taps", () => {
+  it("sends immediately when there is nothing to enrich — null or empty chips", () => {
     expect(usesSoftCommit(null)).toBe(false);
+    expect(usesSoftCommit({ title: "Who scored?", chips: [] })).toBe(false);
   });
 });
 
@@ -1070,6 +1076,41 @@ describe("clock sports inventory", () => {
       })
       .sort();
     expect(withClock).toEqual(["football", "hockey", "icehockey"]);
+  });
+});
+
+describe("soft-commit inventory — HOLD only when dock has chips", () => {
+  // Sport-level pins: empty-chip / null docks must not hold (overlay delay for
+  // nothing). Enrichment docks must. Clock never reaches this gate.
+  it("cricket: plain / wide immediate; noball / bye hold", async () => {
+    const { buildDock } = await import("../skins/cricket");
+    const t = (key: string): string => key;
+    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 1 } }))).toBe(false);
+    expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }))).toBe(
+      false,
+    );
+    expect(
+      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })),
+    ).toBe(true);
+    expect(
+      usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "bye", runs: 1 } } })),
+    ).toBe(true);
+    expect(usesSoftCommit(buildDock("cricket.toss", t))).toBe(false);
+  });
+
+  it("football: period / shot / empty card immediate; goal holds", async () => {
+    const { buildDock } = await import("../skins/football");
+    const t = (key: string): string => key;
+    const emptyView = {
+      state: { phase: "H1", entrants: { home: "H", away: "A" }, squads: { home: { onPitch: [] }, away: { onPitch: [] } } },
+      cfg: {},
+      band: 0,
+      personNames: {},
+    } as never;
+    expect(usesSoftCommit(buildDock("football.period", emptyView, t, { phase: "HT" }))).toBe(false);
+    expect(usesSoftCommit(buildDock("football.shot", emptyView, t, { by: "H" }))).toBe(false);
+    expect(usesSoftCommit(buildDock("football.card", emptyView, t, {}))).toBe(false);
+    expect(usesSoftCommit(buildDock("football.goal", emptyView, t, { by: "H" }))).toBe(true);
   });
 });
 

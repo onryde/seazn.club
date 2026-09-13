@@ -1517,12 +1517,13 @@ export function buildDock(
   }
 
   if (eventType === "football.card") {
-    if (side === null) return { title: t("pad.football.dock.card.title"), chips: [] };
+    if (side === null) return null;
     // `cardCandidates` is the SAME list the card sheet blocks its colour step
     // against — see its doc for why one implementation rather than two.
     const chips = cardCandidates(state, side, payload?.color).map((id) =>
       personChip(`person:${id}`, "person", id, nameOf(view, id, t)),
     );
+    if (chips.length === 0) return null;
     return { title: t("pad.football.dock.card.title"), chips };
   }
 
@@ -1538,6 +1539,7 @@ export function buildDock(
   if (eventType === "football.shootout.kick") {
     if (side === null || view.band < 2) return null;
     const chips = squadOf(state, side).onPitch.map((id) => personChip(`person:${id}`, "person", id, nameOf(view, id, t)));
+    if (chips.length === 0) return null;
     return { title: t("pad.football.dock.shootoutKick.title"), chips };
   }
 

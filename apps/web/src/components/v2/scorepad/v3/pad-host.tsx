@@ -1194,16 +1194,17 @@ export function resolveDockSpec(
 }
 
 /**
- * Soft-commit only when the skin has something to enrich. Period advance and
- * any other "nothing left to ask" event (null dock) send immediately — waiting
- * out HOLD_MS would only delay the overlay (owner ruling 2026-09-13). A real
- * dock (goal / card / six attribution) still holds for the full window.
+ * Soft-commit only when the skin has chips to enrich. Null dock, empty-chip
+ * dock (plain cricket ball, unresolved card side), period advance, and any
+ * other "nothing left to ask" event send immediately — waiting out HOLD_MS
+ * would only delay the overlay (owner ruling 2026-09-13). A real dock (goal /
+ * card person / six / noball bat-runs) still holds for the full window.
  *
  * `*.clock` (Pause / Start / Correct) never reaches this gate: `publishClock`
  * always `pipeline.submit`s. Soft-commit is for `send()` after dock resolution.
  */
 export function usesSoftCommit(dock: DockSpec | null): boolean {
-  return dock !== null;
+  return dock !== null && dock.chips.length > 0;
 }
 
 /**
@@ -1804,9 +1805,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // sends — tile taps, guided-sheet completions, action-form confirms,
   // swap completions, context selections — passes through
   // `createSkinDispatch`'s "a skin cannot invent an event" guard, then
-  // either soft-commit (when the skin has a dock to enrich) or an immediate
-  // `pipeline.submit` (period advance and any other null-dock tap — owner
-  // ruling 2026-09-13: do not make the overlay wait out HOLD_MS for nothing).
+  // either soft-commit (when the skin's dock has chips to enrich) or an
+  // immediate `pipeline.submit` (null / empty dock — period advance, plain
+  // cricket ball, etc. — owner ruling 2026-09-13: do not make the overlay wait
+  // out HOLD_MS for nothing).
   //
   // R8/#675 — the RETURNED result is new, and exists for the amendment
   // (`runAmend` above): `submitHeld` answers `null` on its double-submit

@@ -1562,12 +1562,13 @@ export function buildDock(
   }
 
   if (eventType === e.suspStart) {
-    if (side === null) return { title: t(`pad.${spec.key}.dock.suspension.title`), chips: [] };
+    if (side === null) return null;
     const escalating = escalatingOf(view);
     const offender = typeof payload?.person === "string" ? payload.person : undefined;
     const chips = onFieldOf(view, side).map((id) =>
       personChip(spec, `person:${id}`, "person", id, personName(view, id, t)),
     );
+    if (chips.length === 0) return null;
     // The FIH escalation hint, reusing the sentence S13 already shipped in four
     // locales (`pad.pp.escalation`) rather than minting a second one. It fires
     // exactly where the v2 period skin fired it — once the offender is named and

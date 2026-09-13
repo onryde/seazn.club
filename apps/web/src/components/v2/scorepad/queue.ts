@@ -129,8 +129,9 @@ export function queueStatus(params: {
  *  6000 -> 12000 (owner-ruled 2026-08-31, R6 W-4) — roster scan on a phone.
  *  12000 -> 5000 (owner-ruled 2026-09-13) — the stream overlay was a full
  *  soft-commit behind every six / goal / card; five seconds still covers a
- *  one-name pick, and taps with a null dock skip the hold entirely (period
- *  advance, etc.). The dock blocks nothing while it is open.
+ *  one-name pick, and taps with nothing to enrich skip the hold entirely
+ *  (null / empty dock: period advance, plain cricket ball, etc.). The dock
+ *  blocks nothing while it is open.
  *
  *  This is the DEFAULT, and the floor test in soft-commit.test.ts pins THIS
  *  symbol rather than `HOLD_MS` — see `resolveHoldMs` immediately below for

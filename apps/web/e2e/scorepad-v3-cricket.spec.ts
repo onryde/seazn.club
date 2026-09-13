@@ -321,10 +321,10 @@ test("cricket v3: undo INSIDE the soft-commit hold window drops silently, no cor
   });
   await openLiveConsole(page, fx);
 
-  await pad(page).getByRole("button", { name: "1", exact: true }).click();
-  // The dock (v3/detail-dock.tsx) renders only while `held` is non-null
-  // (pad-host.tsx) — its presence right after the tap is itself proof the
-  // tap is still sitting in the hold window, before any network round trip.
+  // Plain runs submit immediately (no enrichment chips). Use a no-ball so the
+  // dock opens and the tap stays HELD — that is the only path where Take back
+  // can drop without a core.void.
+  await pad(page).locator('[data-tile-id="extra-noball"]').click();
   const dock = pad(page).locator('[data-role="v3-dock"]');
   await expect(dock).toBeVisible({ timeout: 5_000 });
 
@@ -370,16 +370,16 @@ test("cricket v3: undo AFTER send voids through core.void", async ({ page }) => 
   await openLiveConsole(page, fx);
 
   await pad(page).getByRole("button", { name: "1", exact: true }).click();
-  // Wait OUT the ~6s hold for real, off the ledger — once this resolves, the
-  // dock has already cleared (`onDue`) and `held` is null, so the NEXT undo
-  // tap must take the "void" branch (decideUndo, pad-host.tsx), never "drop".
+  // Plain runs have no enrichment dock — they submit immediately. Once the
+  // ball is on the ledger, Take back must void (decideUndo "void" branch),
+  // never drop a held tap.
   await expect
     .poll(
       async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
       { timeout: 20_000 },
     )
     .toBe(1);
-  await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 20_000 });
+  await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 5_000 });
 
   await pad(page).locator('[data-role="v3-ribbon"]').getByRole("button", { name: "Take back", exact: true }).click();
   await expect
@@ -953,14 +953,10 @@ test(
     expect(noball.payload.runs).toEqual({ bat: 3, extras: { kind: "noball", runs: 1 } });
 
     // A wide is ALSO an extra, but the engine refuses bat runs off one
-    // (cricket.ts:1229) — buildDock's own `extraKind === "noball"` check
-    // (never a bare "is this an extra") is what keeps this dock empty.
+    // (cricket.ts:1229) — buildDock returns null, so the tap submits with no
+    // hold (owner ruling 2026-09-13: nothing to enrich → immediate).
     await pad(page).locator('[data-tile-id="wide"]').click();
-    await expect(dock).toBeVisible({ timeout: 5_000 });
-    // Only "Send now" — zero chips. A real, non-vacuous check: buildDock
-    // returns `chips: []` for a wide, so the chip row has nothing to map.
-    await expect(dock.getByRole("button")).toHaveCount(1);
-    await sendHeldNow(page);
+    await expect(dock).not.toBeVisible({ timeout: 5_000 });
     await expect
       .poll(
         async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
@@ -1002,14 +998,12 @@ test(
     // straight to a legal ball here could not tell this from "any next ball
     // clears it".
     await pad(page).locator('[data-tile-id="wide"]').click();
-    await expect(dock).toBeVisible({ timeout: 5_000 });
-    await sendHeldNow(page);
+    await expect(dock).not.toBeVisible({ timeout: 5_000 });
     await expect.poll(ballCount, { timeout: 20_000 }).toBe(2);
     await expect(freeHit, "a wide must NOT clear a pending free hit").toBeVisible({ timeout: 10_000 });
 
     await pad(page).locator('[data-tile-id="run0"]').click();
-    await expect(dock).toBeVisible({ timeout: 5_000 });
-    await sendHeldNow(page);
+    await expect(dock).not.toBeVisible({ timeout: 5_000 });
     await expect.poll(ballCount, { timeout: 20_000 }).toBe(3);
     await expect(freeHit, "the next LEGAL delivery must consume it").not.toBeVisible({ timeout: 10_000 });
   },
@@ -1051,8 +1045,7 @@ test(
     // file's own `setContextPerson` doc) — pick the OTHER eligible bowler.
     await setContextPerson(page, "Bowler", `V3 AN BowlerB ${TAG}`);
     await pad(page).locator('[data-tile-id="run0"]').click();
-    await expect(pad(page).locator('[data-role="v3-dock"]')).toBeVisible({ timeout: 5_000 });
-    await sendHeldNow(page);
+    await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 5_000 });
     await expect
       .poll(
         async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
@@ -1498,8 +1491,8 @@ test(
     const run1 = pad(page).locator('[data-tile-id="run1"]');
     await expect(run1).toBeEnabled();
     await run1.click();
-    await expect(pad(page).locator('[data-role="v3-dock"]')).toBeVisible({ timeout: 5_000 });
-    await sendHeldNow(page);
+    // Plain run — immediate submit, no enrichment dock.
+    await expect(pad(page).locator('[data-role="v3-dock"]')).not.toBeVisible({ timeout: 5_000 });
     await expect
       .poll(
         async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
@@ -1722,9 +1715,11 @@ test("cricket v3: the soft-commit dock is revealed on screen when it opens", asy
     .locator('[data-role="v3-tiles"]')
     .evaluate((node) => node.scrollIntoView({ block: "start" }));
 
-  const tile = pad(page).getByRole("button", { name: "1", exact: true });
-  // `scrollIntoViewIfNeeded` on the tile itself would undo the setup; the tile
-  // is already at the top of the grid, so a plain click never scrolls.
+  // No-ball opens an enrichment dock (plain runs submit immediately with no
+  // dock). The reveal-into-view effect is what this test measures.
+  const tile = pad(page).locator('[data-tile-id="extra-noball"]');
+  // `scrollIntoViewIfNeeded` on the tile itself would undo the setup; keep the
+  // grid where we scrolled it and tap without recentering.
   await tile.click();
 
   const dock = pad(page).locator('[data-role="v3-dock"]');
