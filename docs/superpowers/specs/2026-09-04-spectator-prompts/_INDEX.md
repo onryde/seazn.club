@@ -718,3 +718,44 @@ illustrative results).
   unbeaten winners'-bracket champion BELOW every entrant who lost. Owed to its own wave: void the
   reset when GF1 is won by the home (winners'-bracket) side, and make `bracketRanks` read GF1 when
   the reset is void. The public Knockout tab already crowns correctly in this case.
+
+### Knockout tab — build status and open fix list (2026-09-13, written before a context compaction)
+
+Built and reviewed clean: Task 1 (document, `d52902106`..`3d43fd0bd`), Task 2 (tab, `5df14f64a`..`61cb2b987`),
+Task 3 (`abad906e6` e2e `apps/web/e2e/hub-knockout.spec.ts` 8/8 twice; `197ddfaf8` smoke suite, 11 pass /
+1 fail — the fail is P1 below). Local env `spectw2` (server :3319, Postgres :54842) serves build `61cb2b987`.
+Capture script (not committed): `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/6262000e-0d12-4731-97e2-7a60369846eb/scratchpad/t3/capture.cjs`
+(+ `capture.sh`, shots in `t3/shots/`) — 22 cells, every state asserted before its picture, all asserted OK.
+
+Per-screen verdicts on the captures looked at so far (controller, by eye):
+- `mid-event-32-390` — pass layout; opens on the live Round of 16 (live rung works), pressed chip visible. D1.
+- `draw-complete-16-1280` — pass; champion banner, Third place chip before Final, opens on Final. D1.
+- `draw-tapped-16-1280` — pass; tree correct, winners bold, third place under the final, long name truncates.
+- `multi-all-1280` — pass with C2 and D1; each division opens on its own first unfinished round.
+- `non-drawable-1280` — pass with C1; double elim has no switch, opens on Winners' final.
+- `walkover-final-320` — FAIL P2 (card prints `matchCentre.status.forfeited`); banner reads "Won the Final by walkover against Arjun Mehta" correctly.
+- Earlier unscored 32-draw at 320/390/768/1024/1280 + draw 768/1024/1280 — pass layout; D1, D2.
+Still to look at: the remaining t3 shots (mid-event 320/768/1024/1280, draw-complete 320/768, draw-link-768,
+draw-tapped-1024, tree-32-1024, multi 320, multi-one 1280, non-drawable 320, walkover 1280, league-only 320/1280).
+
+Open fix list (one fix round, then rebuild, recapture ALL cells, look at every one, publish the contact sheet
+with verdicts for owner sign-off; then a final whole-branch review):
+- **P1 (important, pre-existing, reds the smoke champion check)** — the hub JSON serves the old result for
+  ~30s after a score. Lead, unverified: `server/public-site/revalidate.ts` `fireDivisionRevalidate` calls
+  `revalidateTag(tag, "max")` (stale-while-revalidate profile) where `orgTag` uses `{ expire: 0 }`; the hub's
+  `unstable_cache` and the inner `getPublicDivision` cache both hang off `division:{id}`. Read Next's
+  `revalidateTag` docs in `node_modules/next/dist/docs` before changing; prove with the capture/diag script
+  (`t3/diag-refresh.cjs`) that a score shows on the next hub read.
+- **P2 (pre-existing)** — `lib/hub-dict.ts` `HUB_DICT_PREFIXES` lacks the `matchCentre.status.*` keys the hub
+  `MatchCard` prints, so a forfeited match shows the raw key on Matches and Knockout. Add exactly those keys
+  (not the whole `matchCentre.` prefix — the slice exists to keep the page small) and keep `hub-dict.test.tsx` honest.
+- **D1 (minor)** — Knockout cards repeat "STAGE · ROUND" under the stage caption and pressed chip. `MatchCard`
+  gets `showRound` (default true); the Knockout rounds list passes false.
+- **D2 (important — the approved mock)** — unfilled slots print the engine's "Winner of R1·1" in tree nodes and
+  later-round cards. On drawable views a pending side whose feeder (previous round, index 2i / 2i+1) is
+  undecided with both sides known reads `knockout.pendingPair` "{a} / {b}" (4 locales); otherwise the slot label.
+- **C1 (cosmetic)** — at 1280 the double-elim round rail cuts its last chip mid-word with no way to scroll with
+  a mouse. Rails wrap from `lg` (`hub-chip.tsx` rail), phones keep the swipe rail; check the Matches rails too.
+- **C2 (cosmetic)** — with two divisions, the division chips and the Rounds|Draw switch sit on two rows at `lg`;
+  one row (chips left, switch right).
+Also owed (separate wave, owner told): double-elim unowed reset never voided / `bracketRanks` ranking.
