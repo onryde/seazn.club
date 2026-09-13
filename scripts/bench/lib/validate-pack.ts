@@ -1776,7 +1776,7 @@ export function validatePack(
     divisionRef: string,
     stageRef: string,
     poolKey: string | undefined,
-  ): string => `${fixtureKey(divisionRef, stageRef)} ${poolKey ?? ""}`;
+  ): string => `${fixtureKey(divisionRef, stageRef)}\u0000${poolKey ?? ""}`;
   const tabled = new Set(
     pack.expected.tables.map((table) =>
       scopeOf(table.divisionRef, table.stageRef, table.poolKey),
