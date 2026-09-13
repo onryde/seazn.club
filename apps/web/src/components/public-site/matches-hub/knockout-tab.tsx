@@ -68,6 +68,10 @@ export interface KnockoutTabProps {
  *  `import type`, so a value cannot cross that boundary. */
 const THIRD_PLACE_KEY = "third-place";
 
+/** The status line `hubHeader` gives a forfeited fixture: `forfeited` is an
+ *  `other` status, and `STATUS_LINE_KEYS` keeps its own name for it. */
+const FORFEITED_STATUS_KEY = "matchCentre.status.forfeited";
+
 /** A round-0 cell in the Draw, in px; round k is this times 2^k, so every node
  *  sits centred between the two that feed it. */
 const CELL_PX = 64;
@@ -89,18 +93,32 @@ function winnerOf(match: HubMatchT | undefined) {
 }
 
 /**
- * The round a rail opens on: the FIRST round, in bracket order, still holding
- * a fixture that is not finished — else the LAST round.
+ * The round a rail opens on. Four rungs, the first that answers wins (Task 2
+ * fix round 1, ruling 1):
  *
- * "First unfinished" is what puts a spectator on the round being played now
- * (or the next one due). "Else last" is what opens a finished draw on its
- * Final rather than on round 0 — and it is the last round in the document's
- * order, which is the Final even when a third-place round sits in front of it.
+ *  1. the first round, in rail order, holding a LIVE fixture — what a
+ *     spectator arriving mid-match came for, even when an EARLIER round still
+ *     has a fixture waiting (a losers' round live beside an upcoming winners'
+ *     final) or the title is already won (a bronze match played after the
+ *     final was decided);
+ *  2. the round holding the CHAMPION's fixture — a finished bracket opens on
+ *     the round the title was won in, even when a later round never settles
+ *     (a double-elimination reset nobody owes reads `scheduled` for ever);
+ *  3. the first round holding a fixture that is not finished — the round due
+ *     next;
+ *  4. the LAST round.
  */
 export function defaultRoundKey(view: KnockoutViewT, matches: MatchIndex): string {
-  const open = view.rounds.find((round) =>
-    round.fixtureIds.some((id) => matches.get(id)?.bucket !== "completed"),
-  );
+  const holding = (test: (match: HubMatchT | undefined) => boolean) =>
+    view.rounds.find((round) => round.fixtureIds.some((id) => test(matches.get(id))));
+  const live = holding((match) => match?.bucket === "live");
+  if (live) return live.key;
+  const championId = view.championFixtureId;
+  if (championId !== null) {
+    const crowned = view.rounds.find((round) => round.fixtureIds.includes(championId));
+    if (crowned) return crowned.key;
+  }
+  const open = holding((match) => match?.bucket !== "completed");
   return (open ?? view.rounds[view.rounds.length - 1]!).key;
 }
 
@@ -313,7 +331,15 @@ function championBanner(view: KnockoutViewT, matches: MatchIndex, dict: PublicDi
         </p>
         {roundLabel ? (
           <p className="text-[13px] text-court-muted">
-            {t(dict, "knockout.championLine", { name: loser.name, round: roundLabel })}
+            {t(
+              dict,
+              // A final won by forfeit was never played, so "Beat X" would
+              // report a match that did not happen.
+              final.header.statusLine?.key === FORFEITED_STATUS_KEY
+                ? "knockout.championLineWalkover"
+                : "knockout.championLine",
+              { name: loser.name, round: roundLabel },
+            )}
           </p>
         ) : null}
       </div>
@@ -368,9 +394,12 @@ function drawTree(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): R
   const third = view.rounds.find((round) => round.key === THIRD_PLACE_KEY);
   return (
     <div data-testid={`mh-knockout-draw-${view.id}`} className="hidden lg:block">
-      {/* Its own scroll region: a 64-draw is wider than the page's 992px
-          column. Focusable and named, so a keyboard can scroll it and axe's
-          scrollable-region rule holds (AGENTS.md 23). */}
+      {/* Its own scroll region. Columns are 184px with a 12px gap, so a
+          32-draw's five columns come to 968px and fit the 977px content column
+          of a 1024px window with a classic 15px scrollbar; a 64-draw's six do
+          not, and scroll here rather than on the page. Focusable and named,
+          so a keyboard can scroll it and axe's scrollable-region rule holds
+          (AGENTS.md 23). */}
       <div
         data-testid={`mh-knockout-draw-region-${view.id}`}
         role="region"
@@ -386,7 +415,7 @@ function drawTree(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): R
               <div
                 key={round.key}
                 data-testid={`mh-knockout-col-${view.id}-${round.key}`}
-                className="w-[188px] shrink-0"
+                className="w-[184px] shrink-0"
               >
                 <p className={COLUMN_HEAD}>{round.label}</p>
                 <div>
@@ -570,10 +599,15 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
               const round = view.rounds.find((r) => r.key === roundKey)!;
               const drawn = mode === "draw" && view.drawable;
               return (
+                // A flex GAP, not `space-y-3`: with the Draw open, the tree is
+                // the last child and is not rendered below lg, and `space-y`
+                // still put its margin under the rounds block — 12px of
+                // nothing on every phone. A gap only sits between boxes that
+                // exist.
                 <section
                   key={view.id}
                   data-testid={`mh-knockout-stage-${view.id}`}
-                  className="min-w-0 space-y-3"
+                  className="flex min-w-0 flex-col gap-3"
                 >
                   <h3 className="font-display text-lg font-semibold text-ink">{view.stageName}</h3>
                   {championBanner(view, matches, dict)}

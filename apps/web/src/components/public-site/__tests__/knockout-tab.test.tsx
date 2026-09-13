@@ -274,6 +274,77 @@ describe("KnockoutTab — which round it opens on", () => {
     expect(rule(LATER)).toBe("main-2");
     expect(rule(doneDoc(null))).toBe("main-3");
   });
+
+  // The four rungs (fix round 1, ruling 1): a LIVE round, else the round the
+  // CHAMPION was crowned in, else the first unfinished round, else the last.
+  // Each case is one where the rung's answer differs from the next rung's, so
+  // deleting or reordering any rung is visible.
+  const opensOn = (doc: CompetitionHubDocT) => pressedRounds(render(doc));
+
+  it("rung 1 — LIVE beats an EARLIER unfinished round: a live losers' round opens ahead of an upcoming winners' round in front of it", () => {
+    const doc = hubDoc({
+      matches: [
+        ko("w1", "completed", "Winners' round 1", [S("Ana"), S("Ben")], 0),
+        ko("w2", "upcoming", "Winners' final", [S("Ana"), S("Cara")]),
+        ko("l1", "live", "Losers' round 1", [S("Ben"), S("Dev")]),
+        ko("g1", "upcoming", "Grand final", [tbd("Winner of WB"), tbd("Winner of LB")]),
+      ],
+      knockouts: [
+        knockoutView(
+          "de",
+          "premier",
+          [
+            koRound("WB-1", "Winners' round 1", ["w1"], "WB"),
+            koRound("WB-2", "Winners' final", ["w2"], "WB"),
+            koRound("LB-1", "Losers' round 1", ["l1"], "LB"),
+            koRound("GF-3", "Grand final", ["g1"], "GF"),
+          ],
+          { kind: "double_elim", drawable: false },
+        ),
+      ],
+    });
+    expect(opensOn(doc)).toEqual(["mh-knockout-round-premier-de-LB-1"]);
+  });
+
+  it("rung 1 — LIVE beats the CHAMPION's round: a live bronze match beside a decided final opens on the bronze", () => {
+    const matches = [
+      ...DONE_MATCHES.filter((x) => x.fixtureId !== "t1"),
+      ko("t1", "live", TP, [S("Ana"), S("Hal")]),
+    ];
+    const doc = hubDoc({
+      matches,
+      knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
+    });
+    expect(opensOn(doc)).toEqual([`mh-knockout-round-${VIEW}-third-place`]);
+  });
+
+  it("rung 2 — the CHAMPION's round beats an unfinished one: a finished double-elim whose unowed reset still reads scheduled opens on the first grand final", () => {
+    // The builder now leaves an unowed reset off the rail (ruling 2), so a
+    // fresh document never carries this round. A document cached before that
+    // change does, and the tab must still open on the round the title was won.
+    const doc = hubDoc({
+      matches: [
+        ko("w1", "completed", "Winners' final", [S("Ana"), S("Ben")], 0),
+        ko("l1", "completed", "Losers' final", [S("Ben"), S("Cara")], 0),
+        ko("g1", "completed", "Grand final", [S("Ana"), S("Ben")], 0),
+        ko("g2", "upcoming", "Grand final (reset)", [S("Ben"), S("Ana")]),
+      ],
+      knockouts: [
+        knockoutView(
+          "de",
+          "premier",
+          [
+            koRound("WB-1", "Winners' final", ["w1"], "WB"),
+            koRound("LB-1", "Losers' final", ["l1"], "LB"),
+            koRound("GF-3", "Grand final", ["g1"], "GF"),
+            koRound("GF-4", "Grand final (reset)", ["g2"], "GF"),
+          ],
+          { kind: "double_elim", drawable: false, championFixtureId: "g1" },
+        ),
+      ],
+    });
+    expect(opensOn(doc)).toEqual(["mh-knockout-round-premier-de-GF-3"]);
+  });
 });
 
 describe("KnockoutTab — the round rail", () => {
@@ -342,9 +413,39 @@ describe("KnockoutTab — the champion banner", () => {
     expect(banner).toContain(">Eli<");
     expect(banner).toContain(">Beat Dev in the Final<");
     expect(banner).not.toContain(">Dev<");
+    expect(banner).not.toContain("walkover");
     for (const token of ["bg-court", "text-court-ink"]) {
       expect(classOf(h, `mh-knockout-champion-${VIEW}`), token).toContain(token);
     }
+  });
+
+  it("a final won by FORFEIT says so — 'Won the Final by walkover against Dev', never 'Beat Dev'", () => {
+    // The builder's own forfeited final carries exactly this status line
+    // (`competition-hub.test.ts` witnesses it on the real producer).
+    const forfeited = DONE_MATCHES.map((x) =>
+      x.fixtureId === "f1"
+        ? {
+            ...x,
+            header: {
+              ...x.header,
+              status: "other" as const,
+              statusLine: { key: "matchCentre.status.forfeited" },
+            },
+          }
+        : x,
+    );
+    const h = render(
+      hubDoc({
+        matches: forfeited,
+        knockouts: [knockoutView("cup", "premier", ROUNDS, { championFixtureId: "f1" })],
+      }),
+    );
+    const at = h.indexOf(`data-testid="mh-knockout-champion-${VIEW}"`);
+    expect(at).toBeGreaterThan(-1);
+    const banner = h.slice(at, h.indexOf(`data-testid="mh-knockout-rail-${VIEW}"`));
+    expect(banner).toContain(">Eli<");
+    expect(banner).toContain(">Won the Final by walkover against Dev<");
+    expect(banner).not.toContain("Beat Dev");
   });
 
   it("ABSENT on the same finished draw when the document names no champion (the builder withholds it, the tab does not second-guess)", () => {
@@ -491,13 +592,16 @@ describe("KnockoutTab — the view switch and the Draw", () => {
     const cols = [...h.matchAll(/data-testid="mh-knockout-col-premier-cup-([^"]+)"/g)].map((x) => x[1]);
     expect(cols).toEqual(["main-1", "main-2", "main-3"]);
     for (const key of cols) {
-      expect(classOf(h, `mh-knockout-col-${VIEW}-${key}`), key).toContain("w-[188px]");
+      expect(classOf(h, `mh-knockout-col-${VIEW}-${key}`), key).toContain("w-[184px]");
     }
     const colHtml = (key: string, until: string) =>
       h.slice(h.indexOf(`data-testid="mh-knockout-col-${VIEW}-${key}"`), until ? h.indexOf(until) : undefined);
     const heights = (s: string) => [...s.matchAll(/style="height:(\d+)px"/g)].map((x) => Number(x[1]));
     expect(heights(colHtml("main-1", `data-testid="mh-knockout-col-${VIEW}-main-2"`))).toEqual([64, 64, 64, 64]);
     expect(heights(colHtml("main-2", `data-testid="mh-knockout-col-${VIEW}-main-3"`))).toEqual([128, 128]);
+    // The final's column: one 256px cell (64 · 2² for the third round of an
+    // 8-draw), then the third-place node at round 0's 64px.
+    expect(heights(colHtml("main-3", ""))).toEqual([256, 64]);
     // The third-place node sits in the FINAL's column, after the final's node.
     const finalCol = h.indexOf(`data-testid="mh-knockout-col-${VIEW}-main-3"`);
     expect(h.indexOf(`data-testid="mh-knockout-node-f1"`)).toBeGreaterThan(finalCol);
@@ -536,6 +640,137 @@ describe("KnockoutTab — the view switch and the Draw", () => {
     );
     // …and the switch opens straight after the division rail closes.
     expect(multi).toMatch(/<\/button><\/div><div data-testid="mh-knockout-view"/);
+  });
+
+  it("?view=draw below lg: the stage lays out with a flex GAP, not space-y — the hidden tree leaves no margin under the rounds", () => {
+    // `space-y-3` put `margin-block-end` on the rounds block because the
+    // tree after it is not the last child — but below lg the tree is not
+    // rendered, so that margin was 12px of nothing. A flex gap is only laid
+    // between boxes that exist.
+    url.view = "draw";
+    const h = render(MID);
+    const stage = classOf(h, `mh-knockout-stage-${VIEW}`);
+    for (const token of ["flex", "flex-col", "gap-3"]) expect(stage, token).toContain(token);
+    expect(stage.filter((c) => c.startsWith("space-y-"))).toEqual([]);
+    // The tree is a direct child, straight after the rounds block…
+    expect(h).toContain(
+      `</ul></div><div data-testid="mh-knockout-draw-${VIEW}" class="hidden lg:block">`,
+    );
+    // …and neither carries a margin of its own to reintroduce the band.
+    for (const testid of [`mh-knockout-rounds-${VIEW}`, `mh-knockout-draw-${VIEW}`]) {
+      expect(classOf(h, testid).filter((c) => /^m[tby]?-/.test(c)), testid).toEqual([]);
+    }
+  });
+
+  it("the switch follows the brackets ON SCREEN — narrowed to a division whose only bracket cannot be drawn, there is no switch", () => {
+    const mixed = hubDoc({
+      matches: [...MID_MATCHES, ...PLATE_MATCHES],
+      knockouts: [knockoutView("cup", "premier", ROUNDS), plateView({ drawable: false })],
+    });
+    // Positive pair: All shows the drawable cup, so the switch is there.
+    expect(render(mixed)).toContain(`data-testid="mh-knockout-view"`);
+    const narrowed = render(mixed, { initialDivision: "sunday-league" });
+    expect(narrowed).toContain(`data-testid="mh-knockout-stage-sunday-league-plate"`); // the premise
+    expect(narrowed).not.toContain(`data-testid="mh-knockout-stage-${VIEW}"`);
+    expect(narrowed).not.toContain(`data-testid="mh-knockout-view"`);
+  });
+
+  it("a 32-draw FITS a 1024px window: five 184px columns and four 12px gaps are 968px, inside the 977px column", () => {
+    // 977 = 1024 − 15 (a classic, space-taking scrollbar) − 32 (the public
+    // layout's `px-4`, both sides). The widths are READ off the markup, not
+    // typed here, so moving the column class moves this sum with it.
+    url.view = "draw";
+    const sizes = [16, 8, 4, 2, 1];
+    const labels = ["Round of 32", "Round of 16", QF, SF, F];
+    const rounds = sizes.map((n, k) =>
+      koRound(
+        `main-${k + 1}`,
+        labels[k]!,
+        Array.from({ length: n }, (_, i) => `r${k}-${i + 1}`),
+      ),
+    );
+    const doc = hubDoc({
+      matches: rounds.flatMap((r) =>
+        r.fixtureIds.map((id) => ko(id, "upcoming", r.label, [S(`Home ${id}`), S(`Away ${id}`)])),
+      ),
+      knockouts: [knockoutView("cup", "premier", rounds)],
+    });
+    const h = render(doc);
+    const cols = [...h.matchAll(/data-testid="mh-knockout-col-premier-cup-[^"]+" class="([^"]*)"/g)].map(
+      (x) => x[1]!.split(" "),
+    );
+    expect(cols).toHaveLength(5);
+    const widths = cols.map((tokens) =>
+      Number(tokens.find((c) => /^w-\[\d+px\]$/.test(c))?.match(/\d+/)?.[0]),
+    );
+    const row = h
+      .match(new RegExp(`data-testid="mh-knockout-draw-region-${VIEW}"[^>]*><div class="([^"]*)"`))?.[1]
+      ?.split(" ");
+    const gapToken = row?.find((c) => /^gap-\d+$/.test(c));
+    expect(gapToken, "the column row's gap").toBeDefined();
+    // Tailwind v4 spacing: one unit is 0.25rem, 4px.
+    const gap = Number(gapToken!.slice("gap-".length)) * 4;
+    const total = widths.reduce((sum, w) => sum + w, 0) + gap * (cols.length - 1);
+    expect(widths).toEqual([184, 184, 184, 184, 184]);
+    expect(total).toBe(968);
+    expect(total).toBeLessThanOrEqual(977);
+    // Every column is exactly as tall as round 0's sixteen 64px cells, so each
+    // node sits centred against the two that feed it and the final is 1024px.
+    const colHtml = (k: number) =>
+      h.slice(
+        h.indexOf(`data-testid="mh-knockout-col-${VIEW}-main-${k + 1}"`),
+        k + 1 < sizes.length ? h.indexOf(`data-testid="mh-knockout-col-${VIEW}-main-${k + 2}"`) : undefined,
+      );
+    const heights = (s: string) => [...s.matchAll(/style="height:(\d+)px"/g)].map((x) => Number(x[1]));
+    sizes.forEach((n, k) => {
+      expect(heights(colHtml(k)), `column ${k}`).toEqual(Array.from({ length: n }, () => 64 * 2 ** k));
+    });
+  });
+
+  it("connectors: an even node's stroke runs DOWN to its pair, an odd node's UP; the last column sends none out, and every later column has one coming in", () => {
+    url.view = "draw";
+    const h = render(MID);
+    const col = (key: string, next?: string) =>
+      h.slice(
+        h.indexOf(`data-testid="mh-knockout-col-${VIEW}-${key}"`),
+        next ? h.indexOf(`data-testid="mh-knockout-col-${VIEW}-${next}"`) : undefined,
+      );
+    /** Per cell, the class tokens of each decorative stroke before its node. */
+    const strokes = (html: string) =>
+      [...html.matchAll(/style="height:\d+px">(.*?)<a /g)].map((cell) =>
+        [...cell[1]!.matchAll(/<span aria-hidden="true" class="([^"]*)"><\/span>/g)].map((s) =>
+          s[1]!.split(" "),
+        ),
+      );
+    const out = (spans: string[][]) => spans.filter((s) => s.includes("left-full"));
+    const inn = (spans: string[][]) => spans.filter((s) => s.includes("right-full"));
+    const down = ["top-1/2", "h-1/2", "border-t-2", "border-r-2"];
+    const up = ["bottom-1/2", "h-1/2", "border-b-2", "border-r-2"];
+
+    const quarters = strokes(col("main-1", "main-2"));
+    expect(quarters).toHaveLength(4);
+    quarters.forEach((spans, i) => {
+      expect(out(spans), `QF ${i} sends one stroke out`).toHaveLength(1);
+      expect(out(spans)[0], `QF ${i}`).toEqual(expect.arrayContaining(i % 2 === 0 ? down : up));
+      expect(out(spans)[0], `QF ${i}`).not.toContain(i % 2 === 0 ? "bottom-1/2" : "top-1/2");
+      expect(inn(spans), `QF ${i} has nothing coming in`).toEqual([]);
+    });
+
+    const semis = strokes(col("main-2", "main-3"));
+    expect(semis.map((spans) => [out(spans).length, inn(spans).length])).toEqual([
+      [1, 1],
+      [1, 1],
+    ]);
+    expect(out(semis[0]!)[0]).toEqual(expect.arrayContaining(down));
+    expect(out(semis[1]!)[0]).toEqual(expect.arrayContaining(up));
+
+    // The final, then the third-place node under it: nothing goes out of the
+    // last column, one stroke comes into the final, none into the bronze.
+    const last = strokes(col("main-3"));
+    expect(last.map((spans) => [out(spans).length, inn(spans).length])).toEqual([
+      [0, 1],
+      [0, 0],
+    ]);
   });
 
   it("TWO drawable views share ONE switch — `?view=` is one parameter for the whole tab", () => {
@@ -686,6 +921,17 @@ describe("KnockoutTab — taps and polls", () => {
       "mh-knockout-round-sunday-league-plate-main-2",
     ]);
     expect(cards(island.tree())).toEqual(["f1", "p3"]);
+  });
+
+  it("each bracket keeps its OWN round: tap the cup's semi-finals, then the plate's — the cup is still on its semi-finals", () => {
+    const island = mount(MULTI);
+    tap(island.tree(), `mh-knockout-round-${VIEW}-main-2`);
+    tap(island.tree(), "mh-knockout-round-sunday-league-plate-main-1");
+    expect(pressed(island.tree(), "mh-knockout-round-")).toEqual([
+      `mh-knockout-round-${VIEW}-main-2`,
+      "mh-knockout-round-sunday-league-plate-main-1",
+    ]);
+    expect(cards(island.tree())).toEqual(["s1", "s2", "p1", "p2"]);
   });
 
   it("the Draw switch writes `view=draw` into the URL and shows the tree; Rounds takes the parameter out", () => {
