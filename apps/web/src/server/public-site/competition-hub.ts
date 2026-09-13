@@ -66,7 +66,7 @@ import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, bracketChampion, divisionChampion } from "./champion";
+import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
 import { describeFormat } from "./describe-format";
 import type {
   CompetitionHubDocT,
@@ -418,6 +418,26 @@ function buildKnockoutView(a: {
 
   const champion = bracketChampion(a.fixtures);
 
+  // THE RESET NOBODY OWES leaves the rail (Task 2 fix round 1, ruling 2). Once
+  // a champion is crowned, a round made only of CONDITIONAL fixtures that never
+  // settled is a double-elimination reset the result made unnecessary: the
+  // winners' champion took the first grand final, and nothing in production
+  // voids the reset row, so it reads `scheduled` for ever. Left on the rail it
+  // is a "Grand final (reset)" chip nobody will play — the one unfinished round
+  // of a finished bracket. Its MATCH stays in `doc.matches` (a fixture in no
+  // round is valid), so its own page still resolves.
+  //
+  // "The crowning fixture is not the reset" needs no clause of its own:
+  // `bracketChampion` only crowns a SETTLED final, so a reset that crowned is
+  // settled and the settled test below already keeps its round. A separate
+  // clause could never change an answer, and a guard no test can kill is
+  // decoration (AGENTS.md 3).
+  const shownRounds = champion
+    ? rounds.filter(
+        (g) => !g.fixtures.every((f) => f.conditional === true && !BRACKET_SETTLED.has(f.status)),
+      )
+    : rounds;
+
   return {
     id: `${a.division.slug}-${a.stage.id}`,
     divisionId: a.division.id,
@@ -428,7 +448,7 @@ function buildKnockoutView(a: {
     // `BRACKET_KINDS` chose this stage, and `KnockoutKind` restates that set
     // exactly (pinned by the schema suite).
     kind: a.stage.kind as KnockoutViewT["kind"],
-    rounds: rounds.map((g) => ({
+    rounds: shownRounds.map((g) => ({
       key: g.key,
       // Unreachable fallback: a view only exists for a stage the division
       // read returned, and every fixture of a known stage got a label.

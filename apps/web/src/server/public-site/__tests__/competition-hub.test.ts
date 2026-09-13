@@ -1619,6 +1619,45 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
         (await deView(LOSERS_SIDE_WON, { status: "decided", outcome: win("e1", "e2") })).championFixtureId,
       ).toBe("gf-reset");
     });
+
+    // THE RESET NOBODY OWES (Task 2 fix round 1, ruling 2). The winners'
+    // champion took the first grand final, so the title is settled — and the
+    // reset row reads `scheduled` for ever, because nothing in production voids
+    // it. Left on the rail it is the one "unfinished" round of a finished
+    // bracket, a Grand final (reset) chip nobody will ever play. It leaves the
+    // ROUNDS only; its match stays in the document, where a fixture in no round
+    // is valid.
+    it("an UNOWED reset still `scheduled` leaves the rail — the rounds end at the first grand final, and its match stays in the document", async () => {
+      const doc = await load({
+        stages: [de],
+        fixtures: bracket(WINNERS_SIDE_WON, { status: "scheduled" }),
+        standings: [],
+      });
+      const view = doc.knockouts[0]!;
+      expect(view.championFixtureId).toBe("gf");
+      expect(view.rounds.map((r) => r.key)).toEqual(["WB-1", "WB-2", "LB-1", "LB-2", "GF-3"]);
+      expect(doc.matches.map((m) => m.fixtureId)).toContain("gf-reset");
+    });
+
+    it("an OWED reset stays on the rail — no champion yet, and it is the round still to play", async () => {
+      const view = await deView(LOSERS_SIDE_WON, { status: "scheduled" });
+      expect(view.championFixtureId).toBeNull();
+      expect(view.rounds.map((r) => r.key)).toEqual(["WB-1", "WB-2", "LB-1", "LB-2", "GF-3", "GF-4"]);
+    });
+
+    it("a reset that CROWNED stays on the rail — it is the round the title was won in", async () => {
+      const view = await deView(LOSERS_SIDE_WON, { status: "decided", outcome: win("e1", "e2") });
+      expect(view.championFixtureId).toBe("gf-reset");
+      expect(view.rounds.at(-1)!.key).toBe("GF-4");
+    });
+
+    it("only an UNSETTLED reset leaves: a settled one with no winner stays beside a first-grand-final crown", async () => {
+      // The one shape that separates "not settled" from "not the champion":
+      // settled, so it stays, yet it crowned nobody.
+      const view = await deView(WINNERS_SIDE_WON, { status: "decided", outcome: { kind: "no_result" } });
+      expect(view.championFixtureId).toBe("gf");
+      expect(view.rounds.at(-1)!.key).toBe("GF-4");
+    });
   });
 
   // ONE champion authority. `divisionChampion` crowns the Table tab and the
@@ -1642,6 +1681,22 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
         view: "e2",
         division: "e2",
       });
+    });
+
+    it("the forfeited final's hub match is what the Knockout banner reads a walkover off — completed, with a winner, and the forfeited status line", async () => {
+      // The producer half of the banner's walkover sentence (Task 2 fix round
+      // 1, ruling 7): `knockout-tab.tsx` keys on this exact status line, so it
+      // is witnessed here on the REAL builder rather than only on a fixture.
+      const doc = await load({
+        stages: [cup],
+        fixtures: eight({ status: "forfeited", outcome: forfeit("e2", "e1") }),
+        standings: [],
+      });
+      const final = doc.matches.find((m) => m.fixtureId === doc.knockouts[0]!.championFixtureId)!;
+      expect(final.fixtureId).toBe("ko-f");
+      expect(final.bucket).toBe("completed");
+      expect(final.winnerIndex).toBe(1);
+      expect(final.header.statusLine?.key).toBe("matchCentre.status.forfeited");
     });
 
     it("a grand-final RESET won by forfeit crowns the reset's winner, not the first grand final's", async () => {
