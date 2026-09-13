@@ -276,3 +276,22 @@ Binding on Tasks 2 and 3. A green suite is not a sign-off (AGENTS.md classes 10,
    defect; fix and recapture before moving on.
 5. **Owner sign-off:** publish the contact sheet with the verdicts as an artifact and put it in
    front of the owner. No PR, no merge, and no division-page redirect until the owner signs it off.
+
+## Review rulings — Task 2, round 1 (2026-09-13)
+
+- **Default round order** replaces R5's two-rung rule: the first round with a LIVE fixture; else,
+  when there is a champion, the round holding the champion's fixture; else the first round with a
+  non-completed fixture; else the last round. Found by review: a finished double-elim whose unowed
+  reset is still `scheduled` opened on that empty reset round under the champion banner, and a live
+  losers' round could sit behind an upcoming winners' round.
+- **An unowed reset leaves the rail.** When the champion was crowned off GF1 (no reset owed), a round
+  made only of unsettled `conditional` fixtures is omitted from `rounds`. The fixture stays in
+  `matches`. The engine defect that leaves it `scheduled` is recorded in `_INDEX.md`.
+- **Draw column 184px** (was 188): a 32-draw is 968px, which fits the 977px column a 1024px window
+  leaves beside a classic 15px scrollbar. Headless capture hides scrollbars, so this is set by
+  arithmetic, not by a screenshot.
+- **Walkover banner.** A final won by forfeit reads `knockout.championLineWalkover` ("Won the {round}
+  by walkover against {name}"), not "Beat {name}".
+- **Accepted deviations:** division heading testid `mh-knockout-heading-{slug}` (the plan's id
+  collided with the chip's); ONE Rounds|Draw switch for the tab, shown when a bracket ON SCREEN is
+  drawable, non-drawable brackets keep Rounds in Draw mode; es/fr sentences lead with the round name.
