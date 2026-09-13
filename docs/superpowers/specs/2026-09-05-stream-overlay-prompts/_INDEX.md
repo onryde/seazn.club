@@ -2640,8 +2640,8 @@ exactly the P5 session's own video. Repo untouched throughout.
    +0.114 s with SIGINT). **R2 must send SIGINT or drop `-nostdin`**, or §6.4's
    "child death → retry" fires on an intended clean shutdown.
 4. **The pull path is not LL-HLS.** §7.4 and §9.2 name LL-HLS; the beta is **off** on this
-   account (zero `EXT-X-PART` / `PRELOAD-HINT` / `SERVER-CONTROL` markers, no field on the
-   live-input object) and the measured 12,615 ms is **plain HLS on 2 s segments**.
+   account (zero `EXT-X-PART` / `PRELOAD-HINT` / `SERVER-CONTROL` markers, no field on the live-input object — *wrong: the field is `preferLowLatency`, omitted until set; see
+   the 2026-09-13 LL-HLS entry*) and the measured 12,615 ms is **plain HLS on 2 s segments**.
    Enabling the beta is a dashboard change and an open owner decision.
 5. **Puppeteer's automation infobar renders ON AIR** and shifts the page 41 px; §7.2 also
    lacks `-draw_mouse 0`, so a cursor is in every captured frame.
@@ -2718,7 +2718,8 @@ order recommended after R0 closed:
    misses the `< 80 %` CPU bar by 1–5 points. `performance-8x` is deferred until
    multi-camera or 1080p is ruled on — both would force it.
 4. **Enable Cloudflare's Low-Latency HLS beta, then measure it** before `delayMs` is set.
-   The toggle is a dashboard action only the owner can take.
+   The toggle is a dashboard action only the owner can take. *[Wrong — it is the per-input API
+   field `preferLowLatency`; see the LL-HLS entry below.]*
    **Probed 2026-09-13 09:11Z — still OFF.** A local `ffmpeg` 9.0.1 RTMPS publish into a
    fresh input, its manifest polled with a browser User-Agent: 12 live samples, media
    sequence advancing 1 → 18 within one variant, `#EXT-X-TARGETDURATION:2` throughout, and
@@ -2740,3 +2741,16 @@ exactly the case §8.2's own measurement calls safe. The bench's stand-in relay 
 real slate, was what the verdict was reasoned from. **No motion code change is owed**; the
 audit is in `_THEMES.md` §6 and is a read, not yet a run under a real key. W2 (#775,
 merged 2026-09-11) animates its slab by `translateX` only and was never exposed.
+
+### LL-HLS, corrected and measured — 2026-09-13
+
+LL-HLS is the **per-live-input API field `preferLowLatency`**, not an account-level dashboard
+beta; it was invisible in R0's object dumps because unset fields are omitted. Set to `true` on a
+fresh input and measured against a burned-in wall clock in Chrome 152 / hls.js 1.6.2:
+**13,352 ms p50 with a standard player, 17,374 ms with `lowLatencyMode` on, and zero parts in
+the playlist** — the field is stored and delivery is unchanged. Three consequences for R2, all
+in `R0-memo.md` §3a: the API setting alone does not deliver LL-HLS here (enrolment or a
+dashboard prerequisite is unestablished); a low-latency player without parts costs +4.0 s, so
+`lowLatencyMode` keys off parts actually present; and hls.js's own latency figure under-reads
+glass-to-glass by ~7.5 s, so `delayMs` is seeded from a source clock, never the player. An idle
+input `r0-llhls-probe2`, field set, is left for the owner's dashboard toggle and re-probe.

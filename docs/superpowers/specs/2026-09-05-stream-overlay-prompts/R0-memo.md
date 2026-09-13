@@ -117,7 +117,7 @@ perf-8x is therefore 2× CPU **and** 2× RAM — exactly 2× the price, with no 
 |---|---|---|---|---|
 | **WHEP**, WHIP-ingested input, idle machine | **501 ms** | — | 439–624 | **measured** (phase 1.5, 17 flashes) |
 | **WHEP**, WHIP-ingested input, machine also encoding | **736 ms** | — | 542–1 141 | **measured** (C3, 20 flashes) |
-| **LL-HLS** (Cloudflare's low-latency beta) | ~5 s claimed | — | — | **NOT MEASURED — the beta is OFF on this account** |
+| **LL-HLS** (`preferLowLatency: true`, §3a) | ~5 s claimed | — | — | **field set, NOT DELIVERED** — 0 parts; 13.4 s standard player, 17.4 s low-latency player (§3a) |
 | **Standard HLS** (hls.js against 2 s segments) | **12 615 ms** | 12 689 ms | 12 516–12 708 | **measured** (phase 1.5, 299 samples) |
 
 **The ordering the owner needs: WHEP 0.5 s (WHIP ingest only) → LL-HLS ~5 s claimed and
@@ -132,13 +132,10 @@ and `#EXTINF:2.000` segments and **zero low-latency markers** — no `#EXT-X-PAR
 `#EXT-X-RENDITION-REPORT` (all five counted at 0). Two-second segments plus an ordinary
 player buffer is exactly where 12.6 s comes from.
 
-Cloudflare's Low-Latency HLS is an **account-level beta that must be opted into from the
-dashboard**. There is no field for it anywhere on the live-input object — the full key
-list is `uid rtmps rtmpsPlayback srt srtPlayback webRTC webRTCPlayback playback created
-modified enabled meta status recording deleteRecordingAfterDays`, and nothing matching
-`low.latency|llhls` appears in the object at all. The segment URLs do carry an
-`llhlsHBs=0.9` hold-back parameter, so the machinery is wired server-side and is simply
-not emitting partial segments.
+*Withdrawn 2026-09-13 — see §3a.* This paragraph said LL-HLS was an account-level dashboard
+beta with no field on the live-input object, and read `llhlsHBs=0.9` as machinery wired but
+idle. Both are wrong: the field is `preferLowLatency`, omitted from responses until it is
+set, and `llhlsHBs` appears on every input's variant URIs whether or not it is set.
 
 **The design of record calls the pull path LL-HLS (§7.4, §9.2). On this account it is
 plain HLS.** Recorded as a false premise rather than absorbed.
@@ -146,15 +143,56 @@ plain HLS.** Recorded as a false premise rather than absorbed.
 **The consequence for the owner, stated plainly.** WHEP's 0.5 s requires **WebRTC
 ingest**, and the phone publishes SRT/RTMPS. So **for the contribution path, HLS is the
 viewer's latency**: enabling the LL-HLS beta is the difference between a ~12.6 s scorebug
-and a claimed ~5 s one for anyone watching a phone-published match. That is an
-account-level dashboard change and therefore the owner's call — R0 did not enable it. If
-he does, the same burned-clock-delta method re-measures it in one short cell.
+and a claimed ~5 s one for anyone watching a phone-published match. It is a per-input API field rather than a dashboard action
+(§3a) — and setting it did not, on 2026-09-13, change what Cloudflare delivered.
 
 WHEP is available **only on a WebRTC-ingested input**: on an RTMPS/SRT-ingested input,
 `POST …/webRTC/play` returns `409 "Live broadcast not started yet"` — proved because the
 same deliberately malformed SDP returns **409 under RTMPS and 400 "Unable to parse SDP"
 under WHIP**. The 409 was never about the SDP. Running the WHEP subscriber beside the
 encoder costs ~235 ms of its own latency.
+
+
+### 3a. Correction and measurement, 2026-09-13 — `preferLowLatency`
+
+**Two statements in §3 were wrong.** LL-HLS is not an account-level dashboard beta with no API
+surface: it is a **per-live-input boolean, `preferLowLatency`**, in the create-input API
+reference (*"When enabled, the live stream is delivered using Low-Latency HLS (LL-HLS),
+reducing glass-to-glass latency for viewers at the cost of reduced player compatibility."*).
+It was missing from every object R0 dumped because **an unset field is omitted from the
+response** — `GET` returns the key only once it has been set, the same absent-field shape as
+F3. And `llhlsHBs=0.9` is not evidence of idle LL-HLS machinery; it is on every input.
+
+**Measured with the field set.** A fresh input, `preferLowLatency: true` confirmed by `GET`, fed
+by a local `ffmpeg` 9.0.1 RTMPS publish whose frames carry the wall clock in milliseconds
+(`setpts=RTCTIME` driving a 20-bit `drawbox` bar — dry-run decoded 4/4 at bit margin 127),
+read in headless Chrome 152 through hls.js 1.6.2 pinned to the 720p rendition, publisher and
+reader on one clock:
+
+| Player mode | samples | p50 | p95 | hls.js's own `latency` | parts in playlist | `canBlockReload` |
+|---|---|---|---|---|---|---|
+| `lowLatencyMode: true` | 1 247 | **17 374 ms** | 17 395 ms | 9 722 ms | 0 | false |
+| `lowLatencyMode: false` | 1 243 | **13 352 ms** | 13 368 ms | 6 129 ms | 0 | false |
+
+A separate poll of the same input's variant playlist, 12 live samples, found
+`#EXT-X-TARGETDURATION:2` and **zero** `EXT-X-PART`, `PART-INF`, `PRELOAD-HINT`,
+`SERVER-CONTROL` and `RENDITION-REPORT`.
+
+1. **Setting `preferLowLatency` through the API does not produce LL-HLS on this account today.**
+   The field is accepted and stored; delivery is unchanged. Whether it needs beta enrolment or
+   a dashboard-only prerequisite (the owner's panel reads *"Requires HLS to be enabled"*, and the
+   API has no HLS-enablement field) is **not established**.
+2. **A low-latency player without low-latency delivery is WORSE — +4.0 s** (17.4 s against
+   13.4 s). R2 must not turn on `lowLatencyMode` because the input asked for it; it must key off
+   the playlist actually carrying parts.
+3. **hls.js's self-reported `latency` under-reads glass-to-glass by ~7.2–7.7 s.** The player
+   measures from the playlist's timeline and cannot see encode, ingest and packaging upstream of
+   it. **`delayMs` must be seeded from a burned-in source clock, never from the player's
+   latency figure.**
+
+**Limit:** the publisher was a laptop on a home uplink, not an `lhr` Machine, so absolute
+figures include that uplink. The comparison between the two player modes, taken back to back
+on one stream, does not.
 
 ---
 
