@@ -82,6 +82,7 @@ import {
 } from "../data";
 import { MatchCentreHeader, type SideT } from "../match-centre-schema";
 import { CompetitionHubDoc } from "../competition-hub-schema";
+import { divisionChampion } from "../champion";
 import { describeFormat } from "../describe-format";
 import { STRUCTURAL_KEYS, TIE_BREAK_MSG_KEYS } from "../standings-view";
 import {
@@ -1443,7 +1444,7 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
     expect(view.rounds.map((r) => r.lane)).toEqual([null, null, null, null]);
   });
 
-  it("each round's label is the label its own matches already carry — one resolution, not two", async () => {
+  it("each round's label equals the roundLabel its matches carry, and names the round (quarter, semi, third place, final)", async () => {
     const doc = await leagueThenCup();
     const carried = new Map(doc.matches.map((m) => [m.fixtureId, m.roundLabel]));
     const rounds = doc.knockouts[0]!.rounds;
@@ -1556,51 +1557,99 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
     expect(doc.knockouts.map((v) => v.id)).toEqual(["open-ko", "open-pl", "reserves-sh"]);
   });
 
-  describe("a double-elimination grand final and its conditional reset", () => {
-    const de: PublicStage = { ...STAGE, id: "de", seq: 1, kind: "double_elim", name: "Double" };
-    const d = (
-      id: string,
-      lane: "WB" | "LB" | "GF",
-      round_no: number,
-      seq_in_round: number,
-      over: Partial<PublicFixture> = {},
-    ) => F({ id, stage_id: "de", lane, round_no, seq_in_round, ...over });
-    // The engine marks BOTH grand finals `isFinal` and the second `conditional`
-    // (`bracket.ts`): it is played only if the losers' side wins the first,
-    // and the persistence adapter voids it otherwise (`cancelled`/`abandoned`
-    // on the row — `engine-db/competition.ts`'s `toEngineStatus`).
-    const bracket = (reset: Partial<PublicFixture>) => [
-      d("gf-reset", "GF", 4, 1, { is_final: true, conditional: true, ...reset }),
-      d("gf", "GF", 3, 1, { is_final: true, status: "decided", outcome: win("e1", "e2") }),
-      d("lb-2", "LB", 2, 1),
-      d("lb-1", "LB", 1, 1),
-      d("wb-2", "WB", 2, 1),
-      d("wb-1b", "WB", 1, 2),
-      d("wb-1a", "WB", 1, 1),
-    ];
-    const deView = async (reset: Partial<PublicFixture>) =>
-      (await load({ stages: [de], fixtures: bracket(reset), standings: [] })).knockouts[0]!;
+  // A double-elimination bracket. `bracket.ts` marks BOTH grand finals
+  // `isFinal`, the second `conditional`, and seats the winners' champion at
+  // HOME in the first (`homeFrom: winnerOf(wb.finalId)`): the reset is owed
+  // only when the losers' champion — the AWAY side — wins it. Nothing in
+  // production voids a reset nobody owes (the one writer that does is the
+  // engine's test harness, `testkit/simulation.ts`), so such a reset simply
+  // stays `scheduled`; the rule reads "owed" off the first grand final.
+  const de: PublicStage = { ...STAGE, id: "de", seq: 1, kind: "double_elim", name: "Double" };
+  const d = (
+    id: string,
+    lane: "WB" | "LB" | "GF",
+    round_no: number,
+    seq_in_round: number,
+    over: Partial<PublicFixture> = {},
+  ) => F({ id, stage_id: "de", lane, round_no, seq_in_round, ...over });
+  const bracket = (gf: Partial<PublicFixture>, reset: Partial<PublicFixture>) => [
+    d("gf-reset", "GF", 4, 1, {
+      is_final: true,
+      conditional: true,
+      home_entrant_id: "e2",
+      away_entrant_id: "e1",
+      ...reset,
+    }),
+    d("gf", "GF", 3, 1, { is_final: true, home_entrant_id: "e1", away_entrant_id: "e2", ...gf }),
+    d("lb-2", "LB", 2, 1),
+    d("lb-1", "LB", 1, 1),
+    d("wb-2", "WB", 2, 1),
+    d("wb-1b", "WB", 1, 2),
+    d("wb-1a", "WB", 1, 1),
+  ];
+  /** e1 is the winners' champion (home in the first grand final). */
+  const WINNERS_SIDE_WON: Partial<PublicFixture> = { status: "decided", outcome: win("e1", "e2") };
+  const LOSERS_SIDE_WON: Partial<PublicFixture> = { status: "decided", outcome: win("e2", "e1") };
+  const deView = async (gf: Partial<PublicFixture>, reset: Partial<PublicFixture>) =>
+    (await load({ stages: [de], fixtures: bracket(gf, reset), standings: [] })).knockouts[0]!;
 
+  describe("a double-elimination grand final and its conditional reset", () => {
     it("rounds order by LANE first — winners, then losers, then the grand final", async () => {
-      const view = await deView({});
+      const view = await deView({}, {});
       expect(view.rounds.map((r) => r.key)).toEqual(["WB-1", "WB-2", "LB-1", "LB-2", "GF-3", "GF-4"]);
       expect(view.rounds.map((r) => r.lane)).toEqual(["WB", "WB", "LB", "LB", "GF", "GF"]);
       expect(view.rounds[0]!.fixtureIds).toEqual(["wb-1a", "wb-1b"]);
       expect(view.drawable).toBe(false);
     });
 
-    it("a reset still to be played keeps the crown unclaimed, though the first grand final is decided", async () => {
-      expect((await deView({ status: "scheduled" })).championFixtureId).toBeNull();
+    it("the winners' champion took the first grand final: no reset is owed, so it crowns while the reset row still reads scheduled", async () => {
+      expect((await deView(WINNERS_SIDE_WON, { status: "scheduled" })).championFixtureId).toBe("gf");
     });
 
-    it("a reset the adapter VOIDED is skipped — the first grand final crowns", async () => {
-      expect((await deView({ status: "cancelled" })).championFixtureId).toBe("gf");
+    it("the losers' champion took it: the reset is OWED, and the crown waits for it", async () => {
+      expect((await deView(LOSERS_SIDE_WON, { status: "scheduled" })).championFixtureId).toBeNull();
     });
 
-    it("a decided reset crowns", async () => {
+    it("a decided reset crowns — the latest-round settled final", async () => {
       expect(
-        (await deView({ status: "decided", outcome: win("e2", "e1") })).championFixtureId,
+        (await deView(LOSERS_SIDE_WON, { status: "decided", outcome: win("e1", "e2") })).championFixtureId,
       ).toBe("gf-reset");
+    });
+  });
+
+  // ONE champion authority. `divisionChampion` crowns the Table tab and the
+  // division page; the knockout view names a champion fixture. Both call
+  // `bracketChampion` now, so on every shape they must name the SAME entrant —
+  // asserted as the pair, AND as a literal, so two sides agreeing on the wrong
+  // winner cannot pass. Each shape is one the two rules used to disagree on.
+  describe("the knockout view's champion is divisionChampion's champion", () => {
+    const both = async (stages: PublicStage[], fixtures: PublicFixture[]) => {
+      const doc = await load({ stages, fixtures, standings: [] });
+      const id = doc.knockouts[0]!.championFixtureId;
+      return {
+        view: fixtures.find((f) => f.id === id)?.outcome?.winner ?? null,
+        division: divisionChampion(stages, fixtures, []),
+      };
+    };
+    const forfeit = (winner: string, loser: string) => ({ kind: "win", winner, loser, method: "forfeit" });
+
+    it("a final won by FORFEIT crowns its winner — a forfeit is written with one, and the engine counts it settled", async () => {
+      expect(await both([cup], eight({ status: "forfeited", outcome: forfeit("e2", "e1") }))).toEqual({
+        view: "e2",
+        division: "e2",
+      });
+    });
+
+    it("a grand-final RESET won by forfeit crowns the reset's winner, not the first grand final's", async () => {
+      expect(
+        await both([de], bracket(LOSERS_SIDE_WON, { status: "forfeited", outcome: forfeit("e1", "e2") })),
+      ).toEqual({ view: "e1", division: "e1" });
+    });
+
+    it("a decided final crowns while the bronze match is still to be played", async () => {
+      expect(
+        await both([cup], eight({ status: "decided", outcome: win("e1", "e2") }, { status: "scheduled" })),
+      ).toEqual({ view: "e1", division: "e1" });
     });
   });
 });

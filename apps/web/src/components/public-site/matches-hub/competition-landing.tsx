@@ -40,22 +40,33 @@ import { TeamsTab } from "./teams-tab";
 import { InfoTab } from "./info-tab";
 
 /**
- * Every tab this root can actually render.
+ * Every tab THIS BUNDLE has a panel for — an ALLOWLIST, and the difference from
+ * a list of exclusions is which way a gap fails.
  *
- * `gallery` is excluded at the TYPE level rather than handled and ignored, and
- * that is what makes the panel switch below exhaustive without a dead case: W4
- * lifts the reservation by teaching `deriveHubTabs` to DERIVE the tab, and on
- * the day it does, this alias stops excluding it and `tsc` points at the one
- * switch that needs a new arm.
+ * An exclusion names the ids known to have no panel, so an id the document
+ * learns AFTER this bundle shipped slips straight through it: a spectator
+ * whose page loaded yesterday's bundle polls today's document, the rail offers
+ * the new tab, and `panelFor` throws. The allowlist names what CAN render, so
+ * anything else — `gallery` (W4's reserved slot), `knockout` (derived by the
+ * document one task before its panel lands, plan 2026-09-13), or an id nobody
+ * has invented yet — is simply not offered, and a `?tab=` naming it falls back
+ * like any other unknown id.
  *
- * `knockout` is excluded the same way, and only until the Knockout tab's panel
- * lands (plan 2026-09-13, Task 2): the document derives the tab one commit
- * before this root can render it, and excluding it keeps the switch exhaustive
- * AND keeps the rail from offering a tab whose panel would throw. Task 2
- * deletes `"knockout"` from both exclusions (here and the `tabs` filter) and
- * adds the `panelFor` arm — `tsc` then points at exactly that switch.
+ * `LandingTabId` is DERIVED from this list, which keeps `panelFor`'s `never`
+ * switch exhaustive over exactly it: add an id here without a panel arm and
+ * `tsc` refuses; add an arm without the id and the tab never shows. The
+ * Knockout tab's Task 2 adds both together.
  */
-export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery" | "knockout">;
+export const RENDERABLE_TABS = [
+  "overview",
+  "matches",
+  "table",
+  "stats",
+  "teams",
+  "info",
+] as const satisfies readonly CompetitionHubTabIdT[];
+export type LandingTabId = (typeof RENDERABLE_TABS)[number];
+const RENDERABLE: ReadonlySet<string> = new Set(RENDERABLE_TABS);
 
 /**
  * Which tab is showing: the spectator's tap, else the `?tab=` deep link, else
@@ -245,9 +256,7 @@ export function CompetitionLanding({
 
   // Derived from THIS render's document, so a competition that publishes its
   // first standings table between ticks grows a Table tab without a reload.
-  const tabs = doc.tabs.filter(
-    (id): id is LandingTabId => id !== "gallery" && id !== "knockout",
-  );
+  const tabs = doc.tabs.filter((id): id is LandingTabId => RENDERABLE.has(id));
   const active = activeTab(tabs, manualTab, arrivalTab(deepLinked, selfWritten));
 
   // FORGET a choice that has stopped being renderable, rather than merely

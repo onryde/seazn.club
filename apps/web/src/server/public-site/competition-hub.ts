@@ -66,7 +66,7 @@ import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, divisionChampion } from "./champion";
+import { BRACKET_KINDS, bracketChampion, divisionChampion } from "./champion";
 import { describeFormat } from "./describe-format";
 import type {
   CompetitionHubDocT,
@@ -373,14 +373,10 @@ function laneRank(lane: KnockoutLane): number {
  * authority on a regular single-elimination shape. Every other bracket kind
  * keeps its Rounds view and gets no tree.
  *
- * CHAMPION is the stage's final — the last `is_final` fixture, else (no flag
- * anywhere) the last round's single fixture — once it is decided on the ONE
- * status ladder WITH a winner. A double-elimination bracket marks both grand
- * finals `is_final`, the second `conditional`: that reset is played only if
- * the losers' side wins the first, and the persistence adapter voids it
- * otherwise. A voided reset (`other` on the ladder — no result, no future) is
- * therefore skipped, so the grand final it followed still answers; a reset
- * still to be played keeps the crown unclaimed.
+ * CHAMPION is `bracketChampion` (`./champion.ts`) — the engine's rule, and the
+ * SAME function `divisionChampion` crowns the Table tab and the division page
+ * with. A second rule here disagreed with it (a forfeited final, a reset won
+ * by forfeit, a decided final beside an unplayed bronze), so there is none.
  */
 function buildKnockoutView(a: {
   stage: Pick<PublicStage, "id" | "name" | "kind">;
@@ -420,21 +416,7 @@ function buildKnockoutView(a: {
     });
   }
 
-  const finals = ordered.flatMap((g) => g.fixtures).filter((f) => f.is_final === true);
-  const standing = finals.filter(
-    (f) => !(f.conditional === true && hubLiveness(f.status).status === "other"),
-  );
-  const lastRound = ordered[ordered.length - 1]?.fixtures ?? [];
-  const final =
-    finals.length > 0
-      ? standing[standing.length - 1]
-      : lastRound.length === 1
-        ? lastRound[0]
-        : undefined;
-  const crowned =
-    final !== undefined &&
-    hubLiveness(final.status).status === "decided" &&
-    (final.outcome?.winner ?? null) !== null;
+  const champion = bracketChampion(a.fixtures);
 
   return {
     id: `${a.division.slug}-${a.stage.id}`,
@@ -459,7 +441,7 @@ function buildKnockoutView(a: {
       twoSidedBracket(
         a.fixtures.map((f) => ({ id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round })),
       ).ok,
-    championFixtureId: crowned ? final.id : null,
+    championFixtureId: champion?.fixtureId ?? null,
   };
 }
 

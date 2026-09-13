@@ -307,6 +307,58 @@ describe("CompetitionLanding — the gallery slot", () => {
   });
 });
 
+describe("CompetitionLanding — only the tabs THIS bundle has a panel for", () => {
+  // The allowlist's live case. Unlike `gallery`, this document is schema-VALID:
+  // it carries a knockout view, so `deriveHubTabs` really puts `knockout` in
+  // `doc.tabs` — one task before this bundle has a Knockout panel, and exactly
+  // the shape an OLD bundle meets when it polls a NEWER document.
+  const withKnockout = hubDoc({
+    matches: [
+      m("l1", "live", "2026-09-05T10:00:00.000Z", "premier"),
+      m("k1", "upcoming", "2026-09-06T10:00:00.000Z", "premier"),
+    ],
+    tables: [tableView("t8-s1-overall", "premier")],
+    knockouts: [
+      {
+        id: "premier-ko",
+        divisionId: "d-premier",
+        divisionSlug: "premier",
+        divisionName: "Premier",
+        stageId: "ko",
+        stageName: "Cup",
+        kind: "knockout",
+        rounds: [{ key: "main-1", label: "Final", lane: null, fixtureIds: ["k1"] }],
+        drawable: false,
+        championFixtureId: null,
+      },
+    ],
+    leaders: [board("premier", "runs", [leader("p1", "Arjun Mehta", null)])],
+    teams: [team("e1", "Riverside Rovers", null, null)],
+  });
+
+  it("the document really offers `knockout` — so what keeps it out is the filter, not the fixture", () => {
+    expect(withKnockout.tabs).toContain("knockout");
+  });
+
+  it("a tab with no panel in this bundle is not in the rail and draws no panel", () => {
+    const h = render(withKnockout);
+    expect(railTabs(h)).toEqual(["overview", "matches", "table", "stats", "teams", "info"]);
+    expect(h).not.toContain(`data-testid="mh-tab-knockout"`);
+    expect(h).not.toContain(`data-testid="mh-tab-panel-knockout"`);
+  });
+
+  it("?tab=knockout falls back to the first tab instead of throwing out of panelFor", () => {
+    tabParam.value = "knockout";
+    try {
+      const h = render(withKnockout);
+      expect(h).toContain(`data-testid="mh-tab-panel-overview"`);
+      expect(panelRoots(h)).toEqual(["overview"]);
+    } finally {
+      tabParam.value = null;
+    }
+  });
+});
+
 describe("activeTab — which tab wins, and what happens when its data disappears", () => {
   // Extracted and unit-tested rather than left inline, for the reason Task 8's
   // review found: the deep-link arm is unreachable from every render in this
