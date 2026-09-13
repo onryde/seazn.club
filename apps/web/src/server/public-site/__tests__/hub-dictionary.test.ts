@@ -88,6 +88,12 @@ export const W2_KEYS = [
   // `fmtTime` for the clock. Deleted from all four locales with this line.
   "matchesHub.startsIn", "matchesHub.timeTbd", "matchesHub.unscheduled", "matchesHub.empty", "matchesHub.emptyFilter", "matchesHub.live", "matchesHub.ended",
   "matchesHub.round", "matchesHub.timesIn", "matchesHub.card.label",
+  // The Knockout tab (plan 2026-09-13, Task 2). Its division chips REUSE
+  // `matchesHub.division.all` / `matchesHub.divisionsLabel` above rather than
+  // owning a second copy of the same two strings.
+  "knockout.champion", "knockout.championLine", "knockout.roundsLabel", "knockout.liveRound",
+  "knockout.next.through", "knockout.next.meets", "knockout.next.meetsWinnerOf", "knockout.next.advances",
+  "knockout.view.label", "knockout.view.rounds", "knockout.view.draw", "knockout.drawLabel",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
@@ -154,6 +160,15 @@ describe("W2 public dictionary coverage", () => {
       // both, so a locale that drops one ships a sentence with a hole in it
       // straight into every link preview and search result.
       "landing.metaDescription": ["competition", "org"],
+      // knockout-tab.tsx — the champion banner's line and the four "next"
+      // sentences under a round's cards. `{round}` is the NEXT round's
+      // pre-resolved label; a locale that drops it tells a spectator a winner
+      // goes through to nowhere.
+      "knockout.championLine": ["name", "round"],
+      "knockout.next.through": ["name", "round"],
+      "knockout.next.meets": ["name", "round"],
+      "knockout.next.meetsWinnerOf": ["a", "b", "round"],
+      "knockout.next.advances": ["round"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
