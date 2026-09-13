@@ -27,6 +27,7 @@ import {
 } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { MatchCard } from "./match-card";
+import { HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { writeDivisionParam } from "../use-tab-param";
 
 export interface MatchesTabProps {
@@ -55,23 +56,9 @@ export interface MatchesTabProps {
   initialDivision?: string | null;
 }
 
-// R1: one DOM, branched. The rail scrolls horizontally at every width and
-// bleeds to the phone edge below `md` so a chip is never half-cut by the
-// page gutter — `-mx-4 px-4` against the public page's own `px-4`.
-const RAIL_CLASS = "flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4";
-
-// `min-h-11` is the 44px tap target (AGENTS.md). NOTE the divergence from
-// `PublicTabRail`, which splits the button (hit area) from an inner span (the
-// pill) precisely so `min-h-11` does not stretch the pill background: a chip
-// here carries its COUNT as a direct text child ("Live 2"), so there is no
-// inner span to put the pill on without breaking that. The chip therefore IS
-// the tap target, 44px tall — which is the ordinary shape of a mobile filter
-// chip, and a deliberate difference from the tab rail directly above it
-// rather than a copy of it that went wrong.
-const CHIP_CLASS =
-  "inline-flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-full px-4 text-sm tabular-nums transition";
-const CHIP_ON = "bg-accent font-semibold text-accent-ink shadow-sm";
-const CHIP_OFF = "font-medium text-ink-muted hover:bg-accent-soft hover:text-accent-strong";
+// The rail and chip classes, the 44px tap target and the attribute-order
+// hazard now live in `./hub-chip.tsx` — extracted when the Knockout tab became
+// the second caller (plan 2026-09-13, R5), so there is one copy of the control.
 
 const DAY_OPTS: Intl.DateTimeFormatOptions = {
   weekday: "long",
@@ -147,26 +134,6 @@ export function showZoneCaption(
   if (group.key === UNSCHEDULED_KEY) return false;
   if (!group.items.every((item) => item.tz === group.tz)) return false;
   return viewerZone !== group.tz;
-}
-
-/** Attribute ORDER is load-bearing and not cosmetic: the suite matches
- *  `data-testid="…"[^>]*aria-pressed="…"`, and `[^>]*` cannot cross the `>`
- *  that ends an opening tag — so an attribute that moves ahead of
- *  `data-testid` reds a test about something else entirely. The same hazard
- *  `tab-rail.tsx:137-143` writes up for its own roving `tabIndex`. */
-function chip(testid: string, label: string, pressed: boolean, onPress: () => void) {
-  return (
-    <button
-      key={testid}
-      data-testid={testid}
-      aria-pressed={pressed}
-      type="button"
-      onClick={onPress}
-      className={`${CHIP_CLASS} ${pressed ? CHIP_ON : CHIP_OFF}`}
-    >
-      {label}
-    </button>
-  );
 }
 
 export function MatchesTab({
@@ -325,10 +292,10 @@ export function MatchesTab({
         role="group"
         tabIndex={0}
         aria-label={t(dict, "matchesHub.filtersLabel")}
-        className={RAIL_CLASS}
+        className={HUB_RAIL_CLASS}
       >
         {MATCH_BUCKETS.filter((bucket) => counts[bucket] > 0).map((bucket) =>
-          chip(
+          hubChip(
             `mh-filter-${bucket}`,
             `${t(dict, `matchesHub.filter.${bucket}`)} ${counts[bucket]}`,
             bucket === filter,
@@ -343,13 +310,15 @@ export function MatchesTab({
           role="group"
           tabIndex={0}
           aria-label={t(dict, "matchesHub.divisionsLabel")}
-          className={RAIL_CLASS}
+          className={HUB_RAIL_CLASS}
         >
-          {chip("mh-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
+          {hubChip("mh-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
             chooseDivision(null),
           )}
           {divisionChips.map((d) =>
-            chip(`mh-division-${d.slug}`, d.name, division === d.slug, () => chooseDivision(d.slug)),
+            hubChip(`mh-division-${d.slug}`, d.name, division === d.slug, () =>
+              chooseDivision(d.slug),
+            ),
           )}
         </div>
       ) : null}
