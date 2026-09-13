@@ -2742,15 +2742,14 @@ real slate, was what the verdict was reasoned from. **No motion code change is o
 audit is in `_THEMES.md` §6 and is a read, not yet a run under a real key. W2 (#775,
 merged 2026-09-11) animates its slab by `translateX` only and was never exposed.
 
-### LL-HLS, corrected and measured — 2026-09-13
+### LL-HLS, measured — 2026-09-13
 
-LL-HLS is the **per-live-input API field `preferLowLatency`**, not an account-level dashboard
-beta; it was invisible in R0's object dumps because unset fields are omitted. Set to `true` on a
-fresh input and measured against a burned-in wall clock in Chrome 152 / hls.js 1.6.2:
-**13,352 ms p50 with a standard player, 17,374 ms with `lowLatencyMode` on, and zero parts in
-the playlist** — the field is stored and delivery is unchanged. Three consequences for R2, all
-in `R0-memo.md` §3a: the API setting alone does not deliver LL-HLS here (enrolment or a
-dashboard prerequisite is unestablished); a low-latency player without parts costs +4.0 s, so
-`lowLatencyMode` keys off parts actually present; and hls.js's own latency figure under-reads
-glass-to-glass by ~7.5 s, so `delayMs` is seeded from a source clock, never the player. An idle
-input `r0-llhls-probe2`, field set, is left for the owner's dashboard toggle and re-probe.
+**LL-HLS works through the API: 8,741 ms p50** in Chrome 152 / hls.js 1.6.2 against a burned-in
+wall clock, versus 12.3–13.4 s for standard HLS. It takes three things, all per input:
+`preferLowLatency: true`, the player requesting **`?protocol=llhls`**, and a broadcast with **no
+B-frames**. An earlier entry here (and a pushed commit) concluded the field "changed nothing" — it
+had measured the plain manifest URL, which never serves parts. Four consequences for R2, in
+`R0-memo.md` §3a: request `?protocol=llhls` explicitly; key hls.js `lowLatencyMode` off parts
+present (without parts it costs 4–5 s); seed `delayMs` from a source clock, since hls.js's own
+figure under-reads by 2–7.5 s; and **decide B-frames** — design §7.2's `-bf 2` follows YouTube's
+spec, and LL-HLS forbids them, so one encode cannot serve both. Every probe input is deleted.

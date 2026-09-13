@@ -117,7 +117,7 @@ perf-8x is therefore 2× CPU **and** 2× RAM — exactly 2× the price, with no 
 |---|---|---|---|---|
 | **WHEP**, WHIP-ingested input, idle machine | **501 ms** | — | 439–624 | **measured** (phase 1.5, 17 flashes) |
 | **WHEP**, WHIP-ingested input, machine also encoding | **736 ms** | — | 542–1 141 | **measured** (C3, 20 flashes) |
-| **LL-HLS** (`preferLowLatency: true`, §3a) | ~5 s claimed | — | — | **field set, NOT DELIVERED** — 0 parts; 13.4 s standard player, 17.4 s low-latency player (§3a) |
+| **LL-HLS** — `preferLowLatency: true` + `?protocol=llhls` + no B-frames (§3a) | **8 741 ms** | 8 774 ms | 8 720–8 786 | **measured** (2026-09-13, laptop publisher, 1 049 samples) |
 | **Standard HLS** (hls.js against 2 s segments) | **12 615 ms** | 12 689 ms | 12 516–12 708 | **measured** (phase 1.5, 299 samples) |
 
 **The ordering the owner needs: WHEP 0.5 s (WHIP ingest only) → LL-HLS ~5 s claimed and
@@ -153,46 +153,66 @@ under WHIP**. The 409 was never about the SDP. Running the WHEP subscriber besid
 encoder costs ~235 ms of its own latency.
 
 
-### 3a. Correction and measurement, 2026-09-13 — `preferLowLatency`
+### 3a. LL-HLS, measured — 2026-09-13 (replaces every LL-HLS statement above)
 
-**Two statements in §3 were wrong.** LL-HLS is not an account-level dashboard beta with no API
-surface: it is a **per-live-input boolean, `preferLowLatency`**, in the create-input API
-reference (*"When enabled, the live stream is delivered using Low-Latency HLS (LL-HLS),
-reducing glass-to-glass latency for viewers at the cost of reduced player compatibility."*).
-It was missing from every object R0 dumped because **an unset field is omitted from the
-response** — `GET` returns the key only once it has been set, the same absent-field shape as
-F3. And `llhlsHBs=0.9` is not evidence of idle LL-HLS machinery; it is on every input.
+§3 called LL-HLS an account-level dashboard beta with no API surface and read `llhlsHBs=0.9` as
+idle machinery. Both were wrong — and so was this section's first draft, which concluded the field
+"did not deliver" after measuring the wrong URL. **LL-HLS takes three things, all per input and
+all reachable through the API:**
 
-**Measured with the field set.** A fresh input, `preferLowLatency: true` confirmed by `GET`, fed
-by a local `ffmpeg` 9.0.1 RTMPS publish whose frames carry the wall clock in milliseconds
-(`setpts=RTCTIME` driving a 20-bit `drawbox` bar — dry-run decoded 4/4 at bit margin 127),
-read in headless Chrome 152 through hls.js 1.6.2 pinned to the 720p rendition, publisher and
-reader on one clock:
+1. **`preferLowLatency: true`** on the live input, at create or by update (a `GET` omits the key
+   until it has been set — F3's absent-field shape), with `recording.mode: "automatic"`.
+2. **The player must request `?protocol=llhls`.** Cloudflare's custom-player docs: *"add the query
+   string `?protocol=llhls` to the HLS manifest URL"*. The plain `/manifest/video.m3u8` serves
+   standard HLS even when the field is set.
+3. **The broadcast must carry no B-frames** — *"B Frames are incompatible with LL-HLS and will
+   result in jitter and sporadic buffering delays."*
 
-| Player mode | samples | p50 | p95 | hls.js's own `latency` | parts in playlist | `canBlockReload` |
-|---|---|---|---|---|---|---|
-| `lowLatencyMode: true` | 1 247 | **17 374 ms** | 17 395 ms | 9 722 ms | 0 | false |
-| `lowLatencyMode: false` | 1 243 | **13 352 ms** | 13 368 ms | 6 129 ms | 0 | false |
+Every row below reads a 20-bit wall-clock-millisecond bar burned into the source
+(`setpts=RTCTIME` → `drawbox`; dry-run decoded 4/4 at bit margin 127), in headless Chrome 152
+through hls.js 1.6.2 pinned to 720p, publisher and reader on one clock:
 
-A separate poll of the same input's variant playlist, 12 live samples, found
-`#EXT-X-TARGETDURATION:2` and **zero** `EXT-X-PART`, `PART-INF`, `PRELOAD-HINT`,
-`SERVER-CONTROL` and `RENDITION-REPORT`.
+| Input · manifest · encoder | hls.js mode | samples | p50 | p95 | parts | `canBlockReload` | hls.js's own figure |
+|---|---|---|---|---|---|---|---|
+| field by `PUT` · plain · libx264 default (2 B) | low-latency | 1 247 | 17 374 | 17 395 | 0 | false | 9 722 |
+| field by `PUT` · plain · libx264 default | standard | 1 243 | 13 352 | 13 368 | 0 | false | 6 129 |
+| field at create · plain · libx264 default | low-latency | 1 182 | 17 251 | 17 283 | 0 | false | 10 753 |
+| field at create · plain · libx264 default | standard | 1 136 | 12 302 | 12 336 | 0 | false | 6 282 |
+| **field set · `?protocol=llhls` · `-bf 0`** | **low-latency** | 1 049 | **8 741** | 8 774 | 41 | true | 6 810 |
+| field set · `?protocol=llhls` · `-bf 0` | standard | 1 349 | 11 676 | 11 719 | 41 | true | 9 436 |
 
-1. **Setting `preferLowLatency` through the API does not produce LL-HLS on this account today.**
-   The field is accepted and stored; delivery is unchanged. Whether it needs beta enrolment or
-   a dashboard-only prerequisite (the owner's panel reads *"Requires HLS to be enabled"*, and the
-   API has no HLS-enablement field) is **not established**.
-2. **A low-latency player without low-latency delivery is WORSE — +4.0 s** (17.4 s against
-   13.4 s). R2 must not turn on `lowLatencyMode` because the input asked for it; it must key off
-   the playlist actually carrying parts.
-3. **hls.js's self-reported `latency` under-reads glass-to-glass by ~7.2–7.7 s.** The player
-   measures from the playlist's timeline and cannot see encode, ingest and packaging upstream of
-   it. **`delayMs` must be seeded from a burned-in source clock, never from the player's
-   latency figure.**
+**Manifests, same input, same instant (10 samples each):** the plain URL carried zero parts; the
+`?protocol=llhls` URL carried 43, with `#EXT-X-PART-INF:PART-TARGET=0.5` and
+`#EXT-X-SERVER-CONTROL:PART-HOLD-BACK=1.5,CAN-BLOCK-RELOAD=YES`, 4 rendition reports, and
+`#EXT-X-TARGETDURATION:3`.
 
-**Limit:** the publisher was a laptop on a home uplink, not an `lhr` Machine, so absolute
-figures include that uplink. The comparison between the two player modes, taken back to back
-on one stream, does not.
+**Frames actually delivered, 720p, 4 s each, from a publish verified locally to emit 0 B-frames
+(`-bf 0` → 2 I / 118 P):** the plain rendition arrived with `has_b_frames=2` (52 B · 67 P · 3 I, 2.86
+Mbps); the `?protocol=llhls` rendition with `has_b_frames=0` (118 P · 2 I, 3.69 Mbps). Cloudflare's
+standard pipeline adds B-frames when it re-encodes; its low-latency pipeline delivers none. Whether
+the latter passes the ingest GOP through or re-encodes without B-frames is not established.
+
+Findings:
+
+1. **LL-HLS works on this account through the API, with no dashboard action and no enrolment: 8.7 s
+   p50, against 12.3–13.4 s for standard HLS — about 4 s faster.** Cloudflare's "as low as 5 s" is
+   not reached here, and the publisher explains at least part of it (below).
+2. **R2 must request `?protocol=llhls` explicitly.** Setting the field and pulling the plain URL
+   silently gets standard HLS.
+3. **A low-latency player with no parts is ~4–5 s SLOWER** (17.3 s against 12.3–13.4 s). Key hls.js
+   `lowLatencyMode` off `#EXT-X-PART` actually being present, never off the input's setting.
+4. **hls.js's self-reported latency under-reads glass-to-glass** — by 6–7.5 s on standard HLS and
+   ~1.9 s on LL-HLS. It cannot see encode, ingest or packaging. **`delayMs` is seeded from a
+   burned-in source clock, never from the player's figure.**
+5. **A design conflict, not a typo: B-frames.** Design §7.2 passes `-bf 2`, and §9.2 cites *"2
+   B-frames + CABAC per YouTube's encoder spec"*; LL-HLS requires none. One encode cannot follow
+   both. Whether YouTube's ingest takes a B-frame-free stream without penalty is **not measured**.
+   Choosing between LL-HLS for Seazn's own viewers and YouTube's recommended GOP is an owner
+   decision R2's plan must surface.
+
+**Limit:** every row was published from a laptop on a home uplink, not an `lhr` Machine, so the
+absolute figures include that uplink. The comparisons between rows — same laptop, same stream
+shape, minutes apart — do not.
 
 ---
 
