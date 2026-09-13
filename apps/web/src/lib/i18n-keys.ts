@@ -2435,6 +2435,7 @@ export type DictionaryKey =
   | "kind.winner"
   | "knockout.champion"
   | "knockout.championLine"
+  | "knockout.championLineWalkover"
   | "knockout.drawLabel"
   | "knockout.liveRound"
   | "knockout.next.advances"

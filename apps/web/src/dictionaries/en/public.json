@@ -353,6 +353,7 @@
   "table.champion": "Champion",
   "knockout.champion": "Champion",
   "knockout.championLine": "Beat {name} in the {round}",
+  "knockout.championLineWalkover": "Won the {round} by walkover against {name}",
   "knockout.roundsLabel": "Rounds",
   "knockout.liveRound": "Live",
   "knockout.next.through": "{name} goes through to the {round}",

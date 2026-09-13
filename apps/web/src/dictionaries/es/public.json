@@ -353,6 +353,7 @@
   "table.champion": "Campeón",
   "knockout.champion": "Campeón",
   "knockout.championLine": "{round}: venció a {name}",
+  "knockout.championLineWalkover": "{round}: victoria por walkover ante {name}",
   "knockout.roundsLabel": "Rondas",
   "knockout.liveRound": "En vivo",
   "knockout.next.through": "{round}: se clasifica {name}",

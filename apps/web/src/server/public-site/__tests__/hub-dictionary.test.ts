@@ -91,7 +91,7 @@ export const W2_KEYS = [
   // The Knockout tab (plan 2026-09-13, Task 2). Its division chips REUSE
   // `matchesHub.division.all` / `matchesHub.divisionsLabel` above rather than
   // owning a second copy of the same two strings.
-  "knockout.champion", "knockout.championLine", "knockout.roundsLabel", "knockout.liveRound",
+  "knockout.champion", "knockout.championLine", "knockout.championLineWalkover", "knockout.roundsLabel", "knockout.liveRound",
   "knockout.next.through", "knockout.next.meets", "knockout.next.meetsWinnerOf", "knockout.next.advances",
   "knockout.view.label", "knockout.view.rounds", "knockout.view.draw", "knockout.drawLabel",
   // table
@@ -165,6 +165,8 @@ describe("W2 public dictionary coverage", () => {
       // pre-resolved label; a locale that drops it tells a spectator a winner
       // goes through to nowhere.
       "knockout.championLine": ["name", "round"],
+      // The same banner line for a final won by forfeit (fix round 1).
+      "knockout.championLineWalkover": ["name", "round"],
       "knockout.next.through": ["name", "round"],
       "knockout.next.meets": ["name", "round"],
       "knockout.next.meetsWinnerOf": ["a", "b", "round"],
