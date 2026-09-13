@@ -26,6 +26,11 @@ import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
+// B07a T7 — the play-mode tests drive `runPackSuite` DIRECTLY rather than
+// `runTinySuite`, because the declaration lives on the runner's own options
+// and `runTinySuite` builds those itself (see this file's own T7 block).
+import { runPackSuite } from "../suites/run-suite.ts";
+import type { PlayMode } from "../suites/types.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -2551,29 +2556,51 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
     expect(badmintonImport).toBeDefined();
     expect((badmintonImport?.body as { streams: unknown[] }).streams).toHaveLength(1);
 
-    // …and the knockout stream WAS still played — through the single-event
-    // route, strictly AFTER its own seed proposal. Scoping the import without
-    // this would be indistinguishable from silently dropping the stream.
-    // `badminton.rally` on `/fixtures/{id}/events` can only be the knockout
-    // stream: the league stream folds through the import route above.
+    // …and the knockout stream WAS still played, strictly AFTER its own seed
+    // proposal. Scoping the import without this would be indistinguishable
+    // from silently dropping the stream.
+    //
+    // B07a T7 (ruling R23) moved WHICH ROUTE carries it. This used to assert
+    // `badminton.rally` on `/fixtures/{id}/events`, because the advance step
+    // was hard-wired to the single-event route for every division whatever
+    // that division's mode — the half-connected seam R23 exists to close. A
+    // division's play mode is a property of the DIVISION, so `d-badminton`
+    // (index 1, undeclared, therefore "import") now folds its knockout the
+    // same way it folded its league. The GUARANTEE under test is unchanged and
+    // the routing half is newly pinned below, so this is re-expressed rather
+    // than relaxed.
     const proposalIdxs = calls
       .map((c, i) => ({ c, i }))
       .filter(({ c }) => c.method === "POST" && /\/seed-proposal$/.test(c.path))
       .map(({ i }) => i);
     expect(proposalIdxs).toHaveLength(2);
-    const rallyIdxs = calls
+    const badmintonImportIdxs = calls
       .map((c, i) => ({ c, i }))
       .filter(
         ({ c }) =>
           c.method === "POST" &&
-          /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path) &&
-          (c.body as { type?: string }).type === "badminton.rally",
+          /\/events\/import$/.test(c.path) &&
+          String((c.body as { import_id: string }).import_id).endsWith(":d-badminton"),
       )
       .map(({ i }) => i);
-    expect(rallyIdxs.length).toBeGreaterThan(0);
+    // TWO: its league in the first-stage fold, then its knockout once the
+    // advance has seeded it. One would mean the knockout stream was dropped.
+    expect(badmintonImportIdxs).toHaveLength(2);
     // `proposalIdxs[1]` is `d-badminton`'s own proposal — divisions advance in
     // pack order, which the oracle names above have already pinned.
-    expect(Math.min(...rallyIdxs)).toBeGreaterThan(proposalIdxs[1]!);
+    expect(badmintonImportIdxs[1]!).toBeGreaterThan(proposalIdxs[1]!);
+    // …and NOTHING of this division went out on the single-event route. That
+    // negative is what makes the pair above a ROUTING assertion rather than
+    // only an ordering one — without it, a run that played the knockout on
+    // both routes would pass.
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "POST" &&
+          /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path) &&
+          (c.body as { type?: string }).type === "badminton.rally",
+      ),
+    ).toBe(false);
   });
 
   it("advances STAGE-MAJOR: every division's FIRST boundary before any division's SECOND", async () => {
@@ -2668,5 +2695,211 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
     expect(advanceErrors).toHaveLength(2);
     expect(advanceErrors[0]).toContain("s-badminton-ko");
     expect(advanceErrors[1]).toContain("s-final");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 — the runner DISPATCHES on the declared play mode.
+//
+// Before this task the write path was positional and implicit: `division0`
+// folded through the single-event scoring route and every other division
+// through the batch-import route, each in its own hard-coded block. The
+// declaration has to be able to INVERT that, or it is a field nobody reads —
+// so every test below is a differential against the positional answer rather
+// than a check that some call happened.
+//
+// These drive `runPackSuite` directly. `runTinySuite` builds the runner's
+// options itself (`suiteKey`/`packPath` literals), so it is the one entry
+// point that cannot carry a declaration.
+// ---------------------------------------------------------------------------
+
+/** Every `POST /divisions/{id}/events/import` call. */
+function importCalls(calls: RecordedCall[]): RecordedCall[] {
+  return calls.filter(
+    (c) => c.method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.test(c.path),
+  );
+}
+
+/** The DIVISION each import call belongs to, read OFF THE WIRE rather than
+ *  resolved back out of a division id this test never sees: `buildImportId`
+ *  mints `bench-import:{runId ?? "local"}:{divisionRef}` (`import.ts:292`) and
+ *  `buildImportRequestBody` carries it as `import_id`. */
+function importedDivisionRefs(calls: RecordedCall[]): string[] {
+  return importCalls(calls).map((c) =>
+    String((c.body as { import_id: string }).import_id).replace(/^bench-import:[^:]*:/, ""),
+  );
+}
+
+function eventsInImport(call: RecordedCall): number {
+  return (call.body as { streams: { events: unknown[] }[] }).streams.reduce(
+    (n, st) => n + st.events.length,
+    0,
+  );
+}
+
+/** Single-event POSTs that belong to a PACK stream, scoped away from the
+ *  DLS-gate probe's unconditional `cricket.*` cells exactly as
+ *  `divisionAEventCalls` does — but not scoped to division A, because which
+ *  division lands on this route is the very thing these tests vary. */
+function packEventPostCalls(calls: RecordedCall[]): RecordedCall[] {
+  return eventPostCalls(calls).filter((c) => !(c.body as { type: string }).type.startsWith("cricket."));
+}
+
+/** `_tiny.json`'s own event totals, keyed `divisionRef` and
+ *  `divisionRef/stageRef`. READ OUT OF THE PACK, never typed here: a literal
+ *  freezes yesterday's pack, and this file has already had two count
+ *  assertions go stale that way (see the B05 T5b note above). */
+async function tinyEventTotals(): Promise<{
+  byDivision: Map<string, number>;
+  byStage: Map<string, number>;
+}> {
+  const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+    streams: { divisionRef: string; stageRef?: string; events: unknown[] }[];
+  };
+  const byDivision = new Map<string, number>();
+  const byStage = new Map<string, number>();
+  for (const st of raw.streams) {
+    byDivision.set(st.divisionRef, (byDivision.get(st.divisionRef) ?? 0) + st.events.length);
+    const stageKey = `${st.divisionRef}/${st.stageRef ?? "-"}`;
+    byStage.set(stageKey, (byStage.get(stageKey) ?? 0) + st.events.length);
+  }
+  return { byDivision, byStage };
+}
+
+function playInput(
+  transport: ReturnType<typeof fakeServer>["transport"],
+  sql: ReturnType<typeof fakeServer>["sql"],
+) {
+  return {
+    base: "http://bench.example",
+    engine: "optimized" as const,
+    keep: false,
+    log: silent,
+    cliEntry: "admin" as const,
+    packPath: TINY_PACK_PATH,
+    transport,
+    sql,
+    probeTransport: transport,
+    simTransport: transport,
+    importTransport: transport,
+    startTransport: transport,
+    advanceTransport: transport,
+    oracleTransport: transport,
+    matchBoard: echoExpectedBoard,
+    specialSubjects: echoSpecialSubjects,
+  };
+}
+
+describe("runPackSuite — B07a T7 play-mode dispatch", () => {
+  it("keeps the positional split when the suite declares nothing", async () => {
+    // The REGRESSION that matters most. `_RULES.md` §3 keeps one suite on the
+    // single-POST path and the import path needs a live subject of its own, so
+    // a dispatch that quietly moved `_tiny`'s divisions would delete coverage
+    // while appearing to add some. Asserted as an exact per-division split,
+    // both sides, so a mode that moved ONE division is caught.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+    });
+
+    expect([...importedDivisionRefs(calls)].sort()).toEqual(["d-badminton", "d-tiebreak"]);
+    // …and division A's whole stream — BOTH its stages — still went through
+    // the single-event route. Derived from the pack, never a literal.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-tiny") ?? 0);
+  });
+
+  it("routes each division by its DECLARED mode, inverting the positional default", async () => {
+    // The differential. `d-tiny` is index 0 (positionally "api") and
+    // `d-badminton` index 1 (positionally "import"); this declaration swaps
+    // both. A runner that ignored the declaration would produce EXACTLY the
+    // assertions of the test above, so neither half can pass by accident.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode, "d-badminton": "api" as PlayMode },
+    });
+
+    // `d-badminton` is no longer imported at all; `d-tiny` now is. Compared as
+    // a SET, because `d-tiny` imports TWICE — once for its league and once for
+    // the playoff the advance step folds by the same declared mode (ruling
+    // R23, which has its own test below). What this assertion is about is
+    // WHICH divisions take the import route, not how many calls each takes.
+    expect([...new Set(importedDivisionRefs(calls))].sort()).toEqual(["d-tiebreak", "d-tiny"]);
+    expect(importedDivisionRefs(calls)).not.toContain("d-badminton");
+    // …and the single-event route now carries `d-badminton`'s whole stream
+    // and nothing else — the exact count, so a route carrying BOTH divisions
+    // (a dispatch that added a path without removing one) fails here.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-badminton") ?? 0);
+    expect(
+      packEventPostCalls(calls).some((c) => (c.body as { type: string }).type === "badminton.rally"),
+    ).toBe(true);
+  });
+
+  it("plays a division's LATER stage by the same declared mode (R23)", async () => {
+    // `d-tiny` is the only shipped division with two stages: `s-league` folds
+    // in the first-stage pass and `s-playoff` is played by the advance step
+    // once its seats are confirmed. Before this task that second fold was
+    // hard-wired to the single-event route for EVERY division, whatever its
+    // mode — the seam Task 6 left open and named R23.
+    const { transport, sql, calls } = fakeServer();
+    const { byStage } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode },
+    });
+
+    const tinyImports = importCalls(calls).filter(
+      (c) => String((c.body as { import_id: string }).import_id).endsWith(":d-tiny"),
+    );
+    // TWO imports for the one division: its first stage, then its advanced
+    // stage. One import plus two stray single-event POSTs is exactly the
+    // pre-R23 shape.
+    expect(tinyImports).toHaveLength(2);
+    expect(tinyImports.map(eventsInImport)).toEqual([
+      byStage.get("d-tiny/s-league") ?? 0,
+      byStage.get("d-tiny/s-playoff") ?? 0,
+    ]);
+    // …and the playoff's fold happened AFTER its seats were confirmed. An
+    // import issued before the seed proposal would post into a bracket fixture
+    // that has no real entrants yet.
+    const proposalIdx = calls.findIndex(
+      (c) => c.method === "POST" && /\/seed-proposal$/.test(c.path),
+    );
+    const secondTinyImportIdx = calls.indexOf(tinyImports[1]!);
+    expect(proposalIdx).toBeGreaterThan(-1);
+    expect(secondTinyImportIdx).toBeGreaterThan(proposalIdx);
+  });
+
+  it("refuses a tap division LOUDLY, proving the dispatch is reached and not merely declared", async () => {
+    // The proof device. `tap` has no writer until Task 10, and the failure
+    // this repo ships most often is a seam that is declared, typed and
+    // unit-green while nothing ever drives it. A refusal that names itself in
+    // `report.errors` can only come from the dispatch actually running.
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "tap" as PlayMode },
+    });
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join("\n")).toContain(
+      "tap mode requires the scorer driver (Task 10)",
+    );
+    // The other half, and the half that makes this a REACHED assertion rather
+    // than a thrown-from-somewhere one: nothing was written for that division
+    // by either write path. A silent fall-back to `api` or `import` would be
+    // indistinguishable from the dispatch never having run.
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
   });
 });
