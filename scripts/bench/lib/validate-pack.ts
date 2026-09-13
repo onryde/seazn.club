@@ -110,9 +110,15 @@
 //    one they cannot is where a correct pack gets edited to match a broken
 //    gate. Declaring `stageRef` on every stream silences both.
 //
-//    A POOL still cannot be bound at all: a pack declares none, and no field
-//    was invented for it because no authored source gives one a shape. A
-//    pooled table is skipped with `standings.pool_unbindable`.
+//    A POOL is bound through the fixture EXT KEY, and no pack field was
+//    invented for it. The product keys a pooled round robin's fixtures
+//    `p{key}-rr-r{round}-c{court}` (`usecases/stages.ts:797` prefixing
+//    `roundrobin.ts:140`), so a table scoped to a pool is derived from exactly
+//    the streams whose ext key carries that prefix, and a poolKey no stream
+//    carries is an error (`standings.pool_has_no_streams`) rather than a
+//    shrug. The honest limit that remains: a pack whose ext keys do NOT follow
+//    the product's own convention cannot declare a pooled table, because
+//    nothing else in a pack records which pool a fixture sat in.
 //  * ROUND NUMBER. `StageCtx.roundNo` is a fixture fact and is likewise
 //    undeclared, so `standingsDelta` is called without one. No shipped module
 //    reads it, but a future one could.
@@ -1653,16 +1659,6 @@ export function validatePack(
       );
       return;
     }
-    if (table.poolKey !== undefined) {
-      add(
-        "warning",
-        "standings.pool_unbindable",
-        where,
-        `not checked: the table is scoped to pool "${table.poolKey}" and a pack stream declares no ` +
-          `pool — in the product the FIXTURE row carries it, and a pack declares no fixtures`,
-      );
-      return;
-    }
     if (!TABLE_STAGE_KINDS.has(stage.kind)) {
       add(
         "error",
@@ -1692,12 +1688,38 @@ export function validatePack(
         stageOfStream.get(fixtureKey(st.divisionRef, st.fixtureExtKey))?.ref ===
         stage.ref,
     );
+    // WHICH POOL, for a table scoped to one. A pack declares no fixtures and
+    // therefore no pool column — but the product's own generator keys a pooled
+    // round robin's fixtures `p{key}-rr-r{round}-c{court}`
+    // (`usecases/stages.ts:797` prefixing `roundrobin.ts:140`'s ids), so a
+    // stream's OWN ext key says which pool it played in. ONE rule used twice:
+    // this guard and `deriveStandings`'s partition both ask
+    // `startsWith(prefix)`, so they cannot answer the question differently and
+    // the derivation can never be handed a pool the guard let through.
+    const poolPrefix =
+      table.poolKey === undefined ? undefined : `p${table.poolKey}-`;
+    if (
+      poolPrefix !== undefined &&
+      !streams.some((st) => st.fixtureExtKey.startsWith(poolPrefix))
+    ) {
+      add(
+        "error",
+        "standings.pool_has_no_streams",
+        where,
+        `the table is scoped to pool "${table.poolKey}" and no stream of stage "${stage.ref}" has a ` +
+          `fixtureExtKey starting "${poolPrefix}" — a pooled round robin keys its fixtures ` +
+          `p{pool}-rr-r{round}-c{court}, and that key is the only place a pack records which pool a ` +
+          `fixture sat in. A table over an UNPOOLED stage declares no poolKey at all`,
+      );
+      return;
+    }
     const rows = deriveStandings(
       division,
       stage,
       streams,
       seedByEntrant,
       folded,
+      table.poolKey,
     );
     if (typeof rows === "string") {
       add("error", "standings.underivable", where, rows);
@@ -2028,6 +2050,12 @@ function firstMatchDivergence(
  * the per-fixture delta at `:276-283`, the points rule at `:290-292`, and
  * `toTableStage` at `:329-352`. Returns a message instead of rows when the
  * derivation itself is impossible.
+ *
+ * `poolKey` scopes the answer to ONE pool of a pooled stage, and is the whole
+ * stage's table when absent. The stage's streams are passed WHOLE either way —
+ * as the product passes every fixture of the stage — and the pool partition is
+ * `completeTableStage`'s own (`competition/stage.ts:109`), fed from the ext key
+ * because a pack has no fixture rows to carry a pool id.
  */
 function deriveStandings(
   division: PackDivision,
@@ -2035,14 +2063,18 @@ function deriveStandings(
   streams: readonly PackStream[],
   seedByEntrant: ReadonlyMap<string, number>,
   folded: ReadonlyMap<string, FoldedStream>,
+  poolKey?: string,
 ): readonly StandingsRow[] | string {
   // The string return is a DERIVATION failure, reported as
   // `standings.underivable`. Exactly one of its three cases is reachable for a
   // parsed pack — a stage `points` rule the engine's own schema refuses, which
   // has its own test. The other two are defensive: a stream with no folded
   // outcome cannot get here (the caller's `failedDivisions` gate returns
-  // first), and `completeTableStage` always yields at least one pool. Said out
-  // loud so neither is mistaken for a tested branch.
+  // first), and the pool asked for always exists — `completeTableStage` yields
+  // at least one pool, and a NAMED one is only ever asked for after the caller
+  // has found a stream whose ext key carries that exact prefix, under the same
+  // rule the partition below uses. Said out loud so neither is mistaken for a
+  // tested branch.
   const ctxBase: StageCtx = { kind: stage.kind };
   const pointsRuleRaw = stage.config["points"];
   let pointsRule: PointsRule | null = null;
@@ -2053,6 +2085,14 @@ function deriveStandings(
     pointsRule = rule.data;
   }
 
+  // Which pool each fixture sat in, for a POOLED table. The product reads it
+  // off the fixture row (`engine-db/competition.ts:260`, `poolId: f.pool_id`)
+  // and hands `completeTableStage` every fixture of the stage, which partitions
+  // on it (`poolOf`, competition/stage.ts:109). A pack has no fixture rows, so
+  // the ext key stands in — the same prefix rule the caller's guard used. No
+  // pool asked for means nothing is tagged, which leaves an UNPOOLED stage's
+  // derivation exactly what it was: one pool, keyed "".
+  const poolPrefix = poolKey === undefined ? undefined : `p${poolKey}-`;
   const fixtures: TableFixture[] = [];
   const entrants: string[] = [];
   const seen = new Set<string>();
@@ -2076,6 +2116,10 @@ function deriveStandings(
     );
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
+      ...(poolPrefix !== undefined &&
+      stream.fixtureExtKey.startsWith(poolPrefix)
+        ? { poolId: poolKey }
+        : {}),
       // Every folded stream is a played fixture. `decided` and `walkover` are
       // the two statuses `COUNTS_FOR_STANDINGS` admits (competition/stage.ts:
       // 20) and the fold treats them identically, so the distinction — which
@@ -2159,10 +2203,21 @@ function deriveStandings(
   };
 
   const completed = completeTableStage(tableStage, fixtures);
-  const pool = completed.tables.pools[0];
-  return pool === undefined
-    ? `stage "${stage.ref}" produced no pool table`
-    : pool.rows;
+  // `PoolTable.pool` is the engine's own field name (`competition/stage.ts:232`
+  // pushes `{ pool, rows, results }`), and selecting the asked-for pool by it
+  // is exactly what `recomputeStandings` does (`engine-db/competition.ts:401`)
+  // — with the pack's pool KEY standing where the product has a pool id,
+  // because the ext key is what carries it here.
+  const pool =
+    poolKey === undefined
+      ? completed.tables.pools[0]
+      : completed.tables.pools.find((p) => p.pool === poolKey);
+  if (pool === undefined) {
+    return poolKey === undefined
+      ? `stage "${stage.ref}" produced no pool table`
+      : `stage "${stage.ref}" produced no table for pool "${poolKey}"`;
+  }
+  return pool.rows;
 }
 
 /** The cascade a division inherits when it declares none — the SPORT's own
