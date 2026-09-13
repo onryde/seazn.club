@@ -696,3 +696,25 @@ illustrative results).
   mock is a decision, not a surprise.
 - **Found by the mock and carried into the build:** a rail opened on its last round left the pressed
   chip off-screen; the rail scrolls itself to the pressed chip.
+
+### Found while building the Knockout document (2026-09-13) — engine, NOT fixed in this wave
+
+- **One champion rule now.** `bracketChampion` (`server/public-site/champion.ts`) follows the
+  engine's rule (latest-round final that is decided / finalized / forfeited, with a winner; "reset
+  owed" read off GF1's result, since `bracket.ts` seats the winners'-bracket champion at home). The
+  Knockout view's `championFixtureId` and `divisionChampion` (division page banner, Table crown) both
+  call it. That moved `divisionChampion` on four shapes, each judged right by review and pinned
+  `CHANGED 2026-09-13` in `champion.test.ts`: a decided final crowns while bronze is unplayed; a
+  stage flagged complete with its final unplayed no longer crowns an earlier round's winner; a
+  bronze match listed before the final no longer takes the crown; an `in_play` final with a winner
+  in its outcome no longer crowns. League/group crowns unchanged.
+- **A double-elimination stage whose grand-final reset is NOT owed can never complete** (reviewer
+  confirmed with `path:line`). `engine-db/competition.ts:517-520` stops treating GF1 as a final
+  because it feeds the reset, so the reset is the only final; nothing in production voids a reset
+  nobody owes (the only voiding code is `packages/engine/src/testkit/simulation.ts:731-738`), so it
+  stays `scheduled`; `isBracketStageComplete` (`stage.ts:134-141`) never passes and `completeStage`
+  (`stages.ts:2383-2384`) does nothing. **Worse:** the organiser's only way out is abandoning the
+  reset, after which `bracketRanks` (`stage.ts:314-319,334-337`) finds no grand final and ranks the
+  unbeaten winners'-bracket champion BELOW every entrant who lost. Owed to its own wave: void the
+  reset when GF1 is won by the home (winners'-bracket) side, and make `bracketRanks` read GF1 when
+  the reset is void. The public Knockout tab already crowns correctly in this case.
