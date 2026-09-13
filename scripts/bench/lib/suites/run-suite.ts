@@ -3350,6 +3350,21 @@ export async function runPackSuite(
         // `validate-pack.ts`'s own `resolveStage` uses — so no pack whose
         // other divisions are single-stage sees any change.
         const firstStageRef = plan.divisions.find((d) => d.ref === st.divisionRef)?.stages[0]?.ref;
+        if (firstStageRef === undefined) {
+          // FAIL LOUD, never open. Treating an unresolvable first stage as "no
+          // stage matches" would scope EVERY one of this division's streams out
+          // of the fold and report a clean run that imported nothing — the
+          // silent-drop shape this repo has shipped before. Unreachable today
+          // (`pack-schema.ts` refuses a stream naming an unknown division, and
+          // the registration filter builds a SEPARATE `seedPlan` rather than
+          // narrowing `plan`), which is why it is an error rather than a guard
+          // with a fallback.
+          errors.push(
+            `${suiteKey}: stream "${st.fixtureExtKey}" names division "${st.divisionRef}", which has no stage in ` +
+              "the plan — cannot tell which of its streams belong to its first stage",
+          );
+          continue;
+        }
         if (st.stageRef !== undefined && st.stageRef !== firstStageRef) continue;
         const group = otherStreamsByDivisionRef.get(st.divisionRef) ?? [];
         group.push(st);
@@ -3795,8 +3810,8 @@ export async function runPackSuite(
     // pack shipped before this task except `_tiny`'s own `d-tiny`, so no
     // existing run changes shape.
     if (input.sql !== undefined) {
-      const deepestDivision = Math.max(0, ...plan.divisions.map((d) => d.stages.length));
-      for (let stageIndex = 1; stageIndex < deepestDivision; stageIndex += 1) {
+      const deepestStageCount = Math.max(0, ...plan.divisions.map((d) => d.stages.length));
+      for (let stageIndex = 1; stageIndex < deepestStageCount; stageIndex += 1) {
         for (const division of plan.divisions) {
           const sourceStage = division.stages[stageIndex - 1];
           const targetStage = division.stages[stageIndex];
@@ -3813,12 +3828,15 @@ export async function runPackSuite(
     // reached it from nothing on a real run (AGENTS.md failure class 1, the
     // inert seam — the exact thing this whole wave exists to close;
     // `b05-oracle-comparators.md`'s own vacuity note). Gated on
-    // `input.sql !== undefined` only — unlike T3's advance step below, this
-    // does NOT depend on `stage1?.progression`: `d-badminton` (T2's
-    // batch-import division, folded just above) carries its own
-    // `expected.tables` row and is never advanced through a progression at
-    // all, so a gate on `stage1?.progression` would leave it permanently
-    // unreached.
+    // `input.sql !== undefined` only — it does NOT depend on any division
+    // being advanced. A division can carry an `expected.tables` row and never
+    // declare a progression at all (`d-tiebreak` does exactly that), so gating
+    // this on the advance step would leave such a table permanently unasserted.
+    //
+    // B07a T6: this comment used to say "unlike T3's advance step BELOW … does
+    // not depend on `stage1?.progression`". Both halves are now stale — the
+    // advance step moved ABOVE this block in B06a T9, and `stage1` no longer
+    // exists: advancement walks every division's own stage list.
     const reportMatchOracle = (
       divisionRef: string,
       expectedRows: readonly ExpectedMatchRow[],

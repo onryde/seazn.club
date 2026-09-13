@@ -2368,7 +2368,7 @@ interface MutablePack {
   expected: {
     finalRanks: { divisionRef: string; stageRef: string; order: string[] }[];
     matches: { divisionRef: string; fixtureExtKey: string }[];
-    tables: { divisionRef: string; stageRef: string }[];
+    tables: { divisionRef: string; stageRef: string; rows: { entrant: string; rank: number }[] }[];
   };
 }
 
@@ -2400,6 +2400,20 @@ function playoffProgressionOf(raw: MutablePack): Record<string, unknown> {
     throw new Error("test fixture assumption broken: d-tiny/s-playoff declares no progression");
   }
   return progression as Record<string, unknown>;
+}
+
+/** A stage's own `expected.tables` order, rank 1 first — read out of the pack
+ *  rather than typed here, the same way `playoffProgressionOf` reads the
+ *  progression. A finalRanks order typed into the test would keep asserting
+ *  yesterday's answer the moment the table it mirrors moved. */
+function rankOrderOf(raw: MutablePack, divisionRef: string, stageRef: string): string[] {
+  const table = raw.expected.tables.find(
+    (t) => t.divisionRef === divisionRef && t.stageRef === stageRef,
+  );
+  if (table === undefined || table.rows.length === 0) {
+    throw new Error(`test fixture assumption broken: no expected.tables rows for ${divisionRef}/${stageRef}`);
+  }
+  return [...table.rows].sort((a, b) => a.rank - b.rank).map((r) => r.entrant);
 }
 
 /** `_tiny.json` with `d-badminton` given a progression-fed SECOND stage, so
@@ -2450,7 +2464,9 @@ async function twoAdvancingDivisionsPack(): Promise<string> {
     raw.expected.finalRanks.push({
       divisionRef: "d-badminton",
       stageRef: "s-badminton-ko",
-      order: ["e-cho", "e-dahl"],
+      // The knockout seats its two entrants in the league table's rank order,
+      // so THAT table is the source of truth for this order, not a literal.
+      order: rankOrderOf(raw, "d-badminton", "s-badminton-league"),
     });
   });
 }
@@ -2558,5 +2574,99 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
     // `proposalIdxs[1]` is `d-badminton`'s own proposal — divisions advance in
     // pack order, which the oracle names above have already pinned.
     expect(Math.min(...rallyIdxs)).toBeGreaterThan(proposalIdxs[1]!);
+  });
+
+  it("advances STAGE-MAJOR: every division's FIRST boundary before any division's SECOND", async () => {
+    // The ordering-differential this task turns on (ruling R1), and the test I
+    // wrongly reported as unbuildable. Three things are individually true — the
+    // advance step needs an `expected.tables` row for each SOURCE stage, a table
+    // on a bracket stage is a hard error (`validate-pack.ts:1693`), and a
+    // TABLE-kind middle stage's generated ext keys would collide — and the
+    // conclusion drawn from them was still wrong: a stage-less-and-stream-less
+    // extra stage is only a WARNING (`validate-pack.ts:1875-1902`), so a third
+    // stage carrying nothing but a `progression` loads fine and its advance
+    // pushes an ORDERED error while making zero HTTP calls.
+    //
+    // Two divisions, asymmetric depth, each boundary failing in a way that names
+    // itself:
+    //   d-badminton  league -> ko        (boundary 1) — advances, then errors,
+    //                                     because it declares no finalRanks row
+    //   d-tiny       league -> playoff -> final (boundary 2) — errors before any
+    //                                     call, because a knockout SOURCE has no
+    //                                     expected.tables row
+    // STAGE-major visits every division's boundary 1 first, so s-badminton-ko
+    // errors BEFORE s-final. DIVISION-major would finish d-tiny — both its
+    // boundaries — before starting d-badminton, inverting the pair.
+    const packPath = await writeMutatedTinyPack((raw) => {
+      const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+      const tiny = raw.divisions.find((d) => d.ref === "d-tiny");
+      if (badminton === undefined || tiny === undefined) {
+        throw new Error("test fixture assumption broken: d-badminton / d-tiny not both present");
+      }
+      if (tiny.stages.length !== 2) {
+        throw new Error("test fixture assumption broken: d-tiny is no longer exactly two stages");
+      }
+      const progression = playoffProgressionOf(raw);
+
+      // d-badminton's own first boundary. It owes a stream (a generated bracket
+      // fixture nobody claims throws at `seed.ts:342`) and a stream owes an
+      // expected match — but deliberately NO `expected.finalRanks` row, which is
+      // what makes it report itself after completing.
+      badminton.stages.push({
+        ref: "s-badminton-ko",
+        seq: 2,
+        kind: "knockout",
+        name: "Badminton Playoff",
+        config: {},
+        progression,
+      });
+      const leagueStream = raw.streams.find(
+        (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+      );
+      const leagueMatch = raw.expected.matches.find(
+        (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+      );
+      if (leagueStream === undefined || leagueMatch === undefined) {
+        throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+      }
+      raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+      raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+
+      // d-tiny's SECOND boundary — stream-less on purpose. Its generated
+      // `se-r0-i0` shares a division+ext_key with `s-playoff`'s, which the
+      // playoff stream already claims, so `seedSuite`'s unclaimed-fixture guard
+      // stays satisfied without inventing a second scoreline.
+      tiny.stages.push({ ref: "s-final", seq: 3, kind: "knockout", name: "Final", config: {}, progression });
+    });
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // ORDER is the whole assertion. Both entries are present under either loop
+    // shape — only their sequence differs — so a membership check would pass on
+    // the very thing this test exists to refuse.
+    const advanceErrors = (report.errors ?? []).filter(
+      (e) => e.includes("s-badminton-ko") || e.includes("s-final"),
+    );
+    expect(advanceErrors).toHaveLength(2);
+    expect(advanceErrors[0]).toContain("s-badminton-ko");
+    expect(advanceErrors[1]).toContain("s-final");
   });
 });
