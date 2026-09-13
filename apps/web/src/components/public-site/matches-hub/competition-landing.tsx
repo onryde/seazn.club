@@ -35,6 +35,7 @@ import { useNow } from "../match-centre/use-now";
 import { OverviewTab } from "./overview-tab";
 import { MatchesTab } from "./matches-tab";
 import { TableTab } from "./table-tab";
+import { KnockoutTab } from "./knockout-tab";
 import { StatsTab } from "./stats-tab";
 import { TeamsTab } from "./teams-tab";
 import { InfoTab } from "./info-tab";
@@ -47,20 +48,22 @@ import { InfoTab } from "./info-tab";
  * learns AFTER this bundle shipped slips straight through it: a spectator
  * whose page loaded yesterday's bundle polls today's document, the rail offers
  * the new tab, and `panelFor` throws. The allowlist names what CAN render, so
- * anything else — `gallery` (W4's reserved slot), `knockout` (derived by the
- * document one task before its panel lands, plan 2026-09-13), or an id nobody
- * has invented yet — is simply not offered, and a `?tab=` naming it falls back
- * like any other unknown id.
+ * anything else — `gallery` (W4's reserved slot), or an id nobody has invented
+ * yet — is simply not offered, and a `?tab=` naming it falls back like any
+ * other unknown id.
  *
  * `LandingTabId` is DERIVED from this list, which keeps `panelFor`'s `never`
  * switch exhaustive over exactly it: add an id here without a panel arm and
- * `tsc` refuses; add an arm without the id and the tab never shows. The
- * Knockout tab's Task 2 adds both together.
+ * `tsc` refuses; add an arm without the id and the tab never shows.
+ * `knockout` is the worked example: the document derived that tab one task
+ * before its panel existed, this list kept it off the rail meanwhile, and
+ * plan 2026-09-13's Task 2 added the id and the arm together.
  */
 export const RENDERABLE_TABS = [
   "overview",
   "matches",
   "table",
+  "knockout",
   "stats",
   "teams",
   "info",
@@ -336,9 +339,9 @@ export interface PanelArgs {
   now: number;
   descriptionSlot?: ReactNode;
   shareSlot?: ReactNode;
-  /** `?division=` — the Matches tab's seed. Matches ONLY: the Table and
-   *  Teams tabs group by division rather than filtering, so there is
-   *  nothing for them to seed. */
+  /** `?division=` — the seed for the two tabs that FILTER by division,
+   *  Matches and Knockout. The Table and Teams tabs group by division
+   *  rather than filtering, so there is nothing for them to seed. */
   initialDivision?: string | null;
 }
 
@@ -383,6 +386,16 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
       );
     case "table":
       return <TableTab doc={a.doc} dict={a.dict} />;
+    case "knockout":
+      return (
+        <KnockoutTab
+          doc={a.doc}
+          dict={a.dict}
+          locale={a.locale}
+          now={a.now}
+          initialDivision={a.initialDivision}
+        />
+      );
     case "stats":
       return <StatsTab doc={a.doc} dict={a.dict} />;
     case "teams":

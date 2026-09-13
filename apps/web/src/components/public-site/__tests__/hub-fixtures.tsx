@@ -24,6 +24,8 @@ import {
   type HubDivisionT,
   type HubInfoT,
   type HubMatchT,
+  type KnockoutRoundT,
+  type KnockoutViewT,
   type LeaderBoardT,
   type LeaderRowT,
   type TableColumnT,
@@ -275,6 +277,65 @@ export function tableView(
     // production URL. It still separates one view's href from another's, which
     // is what those assertions are for.
     fullHref: `/${ORG}/${COMP}/${divisionSlug}?tab=standings`,
+    ...over,
+  };
+}
+
+/**
+ * One side of a fixture, for the knockout suites that need two DIFFERENT names
+ * on every card (the default header's "Blue Blazers" v "Queens" would make every
+ * "goes through" sentence indistinguishable from every other).
+ *
+ * `entrantId: null` builds a side with NOBODY in it yet — `hubSides`
+ * (`competition-hub.ts`) emits exactly that as `entrantId: ""` with the slot
+ * sentence as the name, which is how a renderer tells "Winner of QF 3" from a
+ * real entrant.
+ */
+export function koSide(
+  name: string,
+  entrantId: string | null = name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+): MatchCentreHeaderT["sides"][number] {
+  return { entrantId: entrantId ?? "", name, short: "", colour: null, badgeUrl: null };
+}
+
+/** One knockout round: its stable key, its pre-resolved label, and the fixture
+ *  ids it holds in `seq_in_round` order. */
+export function koRound(
+  key: string,
+  label: string,
+  fixtureIds: string[],
+  lane: KnockoutRoundT["lane"] = null,
+): KnockoutRoundT {
+  return { key, label, lane, fixtureIds };
+}
+
+/**
+ * One knockout view. Positional in the three things the Knockout tab is ABOUT
+ * — which stage, which division, and its rounds:
+ *
+ *   knockoutView("cup", "premier", [koRound("main-1", "Final", ["f1"])])
+ *
+ * `id` is `${divisionSlug}-${stageId}`, the builder's own shape (plan R3), and
+ * `drawable` defaults to TRUE because a regular single-elimination draw is the
+ * shape the tab is built for; a test of the non-drawable arm says so.
+ */
+export function knockoutView(
+  stageId: string,
+  divisionSlug: string,
+  rounds: KnockoutRoundT[],
+  over: Partial<Omit<KnockoutViewT, "stageId" | "divisionSlug" | "rounds">> = {},
+): KnockoutViewT {
+  return {
+    id: `${divisionSlug}-${stageId}`,
+    divisionId: `d-${divisionSlug}`,
+    divisionSlug,
+    divisionName: titleCase(divisionSlug),
+    stageId,
+    stageName: "Cup",
+    kind: "knockout",
+    rounds,
+    drawable: true,
+    championFixtureId: null,
     ...over,
   };
 }

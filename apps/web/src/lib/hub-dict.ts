@@ -41,6 +41,7 @@ export const HUB_DICT_PREFIXES = [
   "landing.",
   "matchesHub.",
   "table.",
+  "knockout.",
   "leaders.",
   "teams.",
   "info.",

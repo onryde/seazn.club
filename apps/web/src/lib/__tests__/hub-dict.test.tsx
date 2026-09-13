@@ -13,6 +13,7 @@ import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { HUB_DICT_PREFIXES, SERVER_ONLY_KEYS, hubDict } from "@/lib/hub-dict";
 import { InfoTab } from "@/components/public-site/matches-hub/info-tab";
+import { KnockoutTab } from "@/components/public-site/matches-hub/knockout-tab";
 import { MatchesTab } from "@/components/public-site/matches-hub/matches-tab";
 import { OverviewTab } from "@/components/public-site/matches-hub/overview-tab";
 import { StatsTab } from "@/components/public-site/matches-hub/stats-tab";
@@ -22,6 +23,9 @@ import {
   board,
   division,
   hubDoc,
+  knockoutView,
+  koRound,
+  koSide,
   leader,
   m,
   tableRow,
@@ -75,6 +79,43 @@ const seeded = hubDoc({
   teams: [team("e9", "Lakeside FC", null, null, { seed: 1, divisionSlug: "premier" })],
 });
 
+/** Two brackets that between them reach the Knockout tab's copy: one mid-event
+ *  (a live round badge, the rounds rail, the "next" sentences, the view
+ *  switch) and one won (the champion banner). `useSearchParam` answers null in
+ *  a server render, so the Draw's region label is the one `knockout.` string
+ *  this document cannot reach — the prefix covers it by construction. */
+const koMatch = (
+  id: string,
+  bucket: "live" | "upcoming" | "completed",
+  roundLabel: string,
+  [a, b]: [string, string],
+  winnerIndex: 0 | 1 | null,
+  divisionSlug: string,
+) =>
+  m(id, bucket, "2026-09-05T10:00:00.000Z", divisionSlug, {
+    roundLabel,
+    winnerIndex,
+    header: { sides: [koSide(a), koSide(b)] },
+  });
+const knockouts = hubDoc({
+  matches: [
+    koMatch("k-s1", "completed", "Semi-finals", ["Ana", "Ben"], 0, "premier"),
+    koMatch("k-s2", "live", "Semi-finals", ["Cara", "Dev"], null, "premier"),
+    koMatch("k-f", "upcoming", "Final", ["Ana", "Dev"], null, "premier"),
+    koMatch("p-f", "completed", "Final", ["Eli", "Fay"], 1, "sunday-league"),
+  ],
+  knockouts: [
+    knockoutView("cup", "premier", [
+      koRound("main-1", "Semi-finals", ["k-s1", "k-s2"]),
+      koRound("main-2", "Final", ["k-f"]),
+    ]),
+    knockoutView("plate", "sunday-league", [koRound("main-1", "Final", ["p-f"])], {
+      championFixtureId: "p-f",
+      drawable: false,
+    }),
+  ],
+});
+
 const TABS: [string, (d: Dict) => string][] = [
   [
     "Overview",
@@ -93,6 +134,12 @@ const TABS: [string, (d: Dict) => string][] = [
     (d) =>
       renderToStaticMarkup(<TableTab doc={doc} dict={d} />) +
       renderToStaticMarkup(<TableTab doc={bare} dict={d} />),
+  ],
+  [
+    "Knockout",
+    (d) =>
+      renderToStaticMarkup(<KnockoutTab doc={knockouts} dict={d} locale="en" now={NOW} />) +
+      renderToStaticMarkup(<KnockoutTab doc={bare} dict={d} locale="en" now={NOW} />),
   ],
   [
     "Stats",
