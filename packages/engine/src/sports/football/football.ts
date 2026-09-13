@@ -2998,6 +2998,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         },
       };
     }
+    if (roll < 0.28) {
+      // PadClockBar Pause/Start/Correct — must appear in generated walks or
+      // EXTEND_GOLDEN cannot cover `football.clock` / `clockRunning`.
+      return {
+        type: "football.clock",
+        payload: { running: rng() < 0.5, at: stamp(state.phase) },
+      };
+    }
     if (roll < 0.72) {
       const side = randomSide();
       const ownGoal = rng() < 0.05;
@@ -3095,6 +3103,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         case "football.sinbin.start":
         case "football.sinbin.end":
         case "football.shot": // S8/#417 W6 — never moves state.goals, same arm
+        case "football.clock": // pad clock publish — broadcast only, no score
           break; // no score effect — dropped at coarse fidelity
         default:
           out.push({ type: event.type, payload: event.payload });

@@ -2820,6 +2820,14 @@ export function makePeriodModule(
           },
         };
       }
+      if (roll < 0.33) {
+        // PadClockBar Pause/Start/Correct — required for EXTEND_GOLDEN to
+        // cover `${key}.clock` once the type lands in fidelity.
+        return {
+          type: clockType,
+          payload: { running: rng() < 0.5, at: stamp(state.phase) },
+        };
+      }
       if (roll < 0.62) {
         const side = randomSide();
         const kinds = state.cfg.goalKinds.filter((k) => k !== "fg" && k !== "og");
