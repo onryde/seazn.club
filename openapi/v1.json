@@ -50241,6 +50241,111 @@
                             "additionalProperties": false
                           }
                         },
+                        "knockouts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "divisionName": {
+                                "type": "string"
+                              },
+                              "stageId": {
+                                "type": "string"
+                              },
+                              "stageName": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "knockout",
+                                  "double_elim",
+                                  "stepladder",
+                                  "page_playoff"
+                                ]
+                              },
+                              "rounds": {
+                                "minItems": 1,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "key": {
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "lane": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "WB",
+                                            "LB",
+                                            "GF"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "fixtureIds": {
+                                      "minItems": 1,
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
+                                    "label",
+                                    "lane",
+                                    "fixtureIds"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "drawable": {
+                                "type": "boolean"
+                              },
+                              "championFixtureId": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "divisionId",
+                              "divisionSlug",
+                              "divisionName",
+                              "stageId",
+                              "stageName",
+                              "kind",
+                              "rounds",
+                              "drawable",
+                              "championFixtureId"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "leaders": {
                           "type": "array",
                           "items": {
@@ -50492,6 +50597,7 @@
                               "overview",
                               "matches",
                               "table",
+                              "knockout",
                               "stats",
                               "teams",
                               "gallery",
@@ -50513,6 +50619,7 @@
                         "divisions",
                         "matches",
                         "tables",
+                        "knockouts",
                         "leaders",
                         "teams",
                         "info",
@@ -50634,6 +50741,29 @@
                         ],
                         "updatedAt": "example",
                         "fullHref": "example"
+                      }
+                    ],
+                    "knockouts": [
+                      {
+                        "id": "example",
+                        "divisionId": "example",
+                        "divisionSlug": "example",
+                        "divisionName": "example",
+                        "stageId": "example",
+                        "stageName": "example",
+                        "kind": "knockout",
+                        "rounds": [
+                          {
+                            "key": "example",
+                            "label": "example",
+                            "lane": "WB",
+                            "fixtureIds": [
+                              "example"
+                            ]
+                          }
+                        ],
+                        "drawable": true,
+                        "championFixtureId": "example"
                       }
                     ],
                     "leaders": [

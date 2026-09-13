@@ -47,8 +47,15 @@ import { InfoTab } from "./info-tab";
  * lifts the reservation by teaching `deriveHubTabs` to DERIVE the tab, and on
  * the day it does, this alias stops excluding it and `tsc` points at the one
  * switch that needs a new arm.
+ *
+ * `knockout` is excluded the same way, and only until the Knockout tab's panel
+ * lands (plan 2026-09-13, Task 2): the document derives the tab one commit
+ * before this root can render it, and excluding it keeps the switch exhaustive
+ * AND keeps the rail from offering a tab whose panel would throw. Task 2
+ * deletes `"knockout"` from both exclusions (here and the `tabs` filter) and
+ * adds the `panelFor` arm — `tsc` then points at exactly that switch.
  */
-export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery">;
+export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery" | "knockout">;
 
 /**
  * Which tab is showing: the spectator's tap, else the `?tab=` deep link, else
@@ -238,7 +245,9 @@ export function CompetitionLanding({
 
   // Derived from THIS render's document, so a competition that publishes its
   // first standings table between ticks grows a Table tab without a reload.
-  const tabs = doc.tabs.filter((id): id is LandingTabId => id !== "gallery");
+  const tabs = doc.tabs.filter(
+    (id): id is LandingTabId => id !== "gallery" && id !== "knockout",
+  );
   const active = activeTab(tabs, manualTab, arrivalTab(deepLinked, selfWritten));
 
   // FORGET a choice that has stopped being renderable, rather than merely

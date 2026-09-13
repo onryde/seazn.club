@@ -425,6 +425,7 @@ export function hubDoc(
 ): CompetitionHubDocT {
   const matches = over.matches ?? [];
   const tables = over.tables ?? [];
+  const knockouts = over.knockouts ?? [];
   const leaders = over.leaders ?? [];
   const teams = over.teams ?? [];
   const doc = {
@@ -445,11 +446,13 @@ export function hubDoc(
     divisions: over.divisions ?? divisionsFor(matches, tables, leaders, teams),
     matches,
     tables,
+    knockouts,
     leaders,
     teams,
     tabs: deriveHubTabs({
       matches: matches.length,
       tables: tables.length,
+      knockouts: knockouts.length,
       leaderRows: leaders.reduce((n, board) => n + board.rows.length, 0),
       teams: teams.length,
     }),

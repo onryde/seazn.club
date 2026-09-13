@@ -20,8 +20,10 @@
 //   9 `sportName` loses `.nullable()` .......... the round-trip case (+3 more)
 import { describe, expect, it } from "vitest";
 import { deriveHubTabs } from "@/lib/matches-hub";
+import { BRACKET_KINDS } from "@/server/public-site/champion";
 import {
   CompetitionHubDoc,
+  KnockoutKind,
   type CompetitionHubDocT,
 } from "@/server/public-site/competition-hub-schema";
 
@@ -52,6 +54,7 @@ describe("CompetitionHubDoc — the document really parses", () => {
       deriveHubTabs({
         matches: doc.matches.length,
         tables: doc.tables.length,
+        knockouts: doc.knockouts.length,
         leaderRows: doc.leaders.reduce((n, b) => n + b.rows.length, 0),
         teams: doc.teams.length,
       }),
@@ -93,9 +96,11 @@ describe("CompetitionHubDoc — what it REFUSES, and why", () => {
     expect(issues).toContainEqual({ path: "tabs", code: "custom" });
     const r = CompetitionHubDoc.safeParse(broken);
     expect(r.success).toBe(false);
-    expect(r.error!.issues.find((i) => i.code === "custom")!.message).toContain(
-      "deriveHubTabs()",
-    );
+    // Found by PATH, not by being the first custom issue: emptying `matches`
+    // also strands the knockout rounds' fixture ids, which raise their own.
+    expect(
+      r.error!.issues.find((i) => i.code === "custom" && i.path.join(".") === "tabs")!.message,
+    ).toContain("deriveHubTabs()");
   });
 
   it("SELF-CONSISTENCY: tabs must match in ORDER, not merely in membership", () => {
@@ -104,7 +109,7 @@ describe("CompetitionHubDoc — what it REFUSES, and why", () => {
     const doc = validDoc() as CompetitionHubDocT;
     const broken = {
       ...doc,
-      tabs: ["overview", "table", "matches", "stats", "teams", "info"],
+      tabs: ["overview", "table", "matches", "knockout", "stats", "teams", "info"],
     };
     expect(issuesOf(broken)).toContainEqual({ path: "tabs", code: "custom" });
   });
@@ -118,6 +123,7 @@ describe("CompetitionHubDoc — what it REFUSES, and why", () => {
       ...doc,
       matches: [],
       tables: [],
+      knockouts: [],
       leaders: [],
       teams: [],
       tabs: ["overview", "info"],
@@ -132,11 +138,98 @@ describe("CompetitionHubDoc — what it REFUSES, and why", () => {
     const emptyBoards = {
       ...doc,
       leaders: [{ ...doc.leaders[0]!, rows: [] }],
-      tabs: ["overview", "matches", "table", "stats", "teams", "info"],
+      tabs: ["overview", "matches", "table", "knockout", "stats", "teams", "info"],
     };
     expect(issuesOf(emptyBoards)).toContainEqual({ path: "tabs", code: "custom" });
 
-    const withoutStats = { ...emptyBoards, tabs: ["overview", "matches", "table", "teams", "info"] };
+    const withoutStats = {
+      ...emptyBoards,
+      tabs: ["overview", "matches", "table", "knockout", "teams", "info"],
+    };
     expect(issuesOf(withoutStats)).toEqual([]);
+  });
+});
+
+// Hub Knockout tab (plan 2026-09-13, R2/R3). A knockout view is a list of
+// fixture IDS, not of fixtures: the cards it shows are `matches` rows, so an id
+// that names no match is a round that renders a hole. The refinement refuses
+// that at the seam, at the exact round, for the same reason the tab check does.
+describe("CompetitionHubDoc — knockouts", () => {
+  /** Replace one round's fixture ids, leaving the rest of the document valid. */
+  const withRoundIds = (view: number, round: number, ids: string[]) => {
+    const doc = validDoc() as CompetitionHubDocT;
+    return {
+      ...doc,
+      knockouts: doc.knockouts.map((k, i) =>
+        i !== view
+          ? k
+          : { ...k, rounds: k.rounds.map((r, j) => (j !== round ? r : { ...r, fixtureIds: ids })) },
+      ),
+    };
+  };
+
+  it("the fixture really exercises both views: a champion and a single lane on one, neither on the other", () => {
+    // Guards the round-trip case above against a fixture that quietly stopped
+    // populating a nullable — it would still round-trip, proving nothing.
+    const doc = validDoc() as CompetitionHubDocT;
+    expect(doc.knockouts.map((k) => k.championFixtureId)).toEqual(["f1", null]);
+    expect(doc.knockouts.map((k) => k.rounds.map((r) => r.lane))).toEqual([[null, null], ["WB"]]);
+  });
+
+  it("SELF-CONSISTENCY: knockouts earn a Knockout tab — a tab list that omits it is refused", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const broken = { ...doc, tabs: doc.tabs.filter((t) => t !== "knockout") };
+    expect(issuesOf(broken)).toContainEqual({ path: "tabs", code: "custom" });
+  });
+
+  it("SELF-CONSISTENCY: a Knockout tab with no knockouts behind it is refused — drop the tab and it parses", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const noViews = { ...doc, knockouts: [] };
+    expect(issuesOf(noViews)).toContainEqual({ path: "tabs", code: "custom" });
+    expect(issuesOf({ ...noViews, tabs: doc.tabs.filter((t) => t !== "knockout") })).toEqual([]);
+  });
+
+  it("a round naming a fixture that is not in `matches` is refused AT that round, naming the id", () => {
+    const broken = withRoundIds(0, 1, ["f1", "ghost"]);
+    expect(issuesOf(broken)).toEqual([{ path: "knockouts.0.rounds.1.fixtureIds", code: "custom" }]);
+    expect(CompetitionHubDoc.safeParse(broken).error!.issues[0]!.message).toContain("ghost");
+  });
+
+  it("the SECOND view's round reports at its own index — the path is not a constant", () => {
+    expect(issuesOf(withRoundIds(1, 0, ["nope"]))).toEqual([
+      { path: "knockouts.1.rounds.0.fixtureIds", code: "custom" },
+    ]);
+  });
+
+  it("a championFixtureId that is not in `matches` is refused, at that view", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const broken = {
+      ...doc,
+      knockouts: [{ ...doc.knockouts[0]!, championFixtureId: "ghost" }, doc.knockouts[1]!],
+    };
+    expect(issuesOf(broken)).toEqual([{ path: "knockouts.0.championFixtureId", code: "custom" }]);
+  });
+
+  it("an empty view is not a view: `rounds` and each round's `fixtureIds` are non-empty", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const noRounds = { ...doc, knockouts: [{ ...doc.knockouts[0]!, rounds: [] }, doc.knockouts[1]!] };
+    expect(issuesOf(noRounds)).toContainEqual({ path: "knockouts.0.rounds", code: "too_small" });
+    expect(issuesOf(withRoundIds(0, 0, []))).toContainEqual({
+      path: "knockouts.0.rounds.0.fixtureIds",
+      code: "too_small",
+    });
+  });
+
+  it("kind is the bracket vocabulary — a league is not a knockout", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const broken = { ...doc, knockouts: [{ ...doc.knockouts[0]!, kind: "league" }, doc.knockouts[1]!] };
+    expect(issuesOf(broken)).toContainEqual({ path: "knockouts.0.kind", code: "invalid_value" });
+  });
+
+  it("KnockoutKind declares exactly BRACKET_KINDS, in order — the builder's stage filter and the enum cannot drift", () => {
+    // The builder picks stages by `BRACKET_KINDS` and stamps `kind` from the
+    // stage; a member added to one and not the other would publish a document
+    // this schema refuses (or an enum member nothing can ever produce).
+    expect(KnockoutKind.options).toEqual([...BRACKET_KINDS]);
   });
 });

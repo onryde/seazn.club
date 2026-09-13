@@ -48,6 +48,7 @@ export const CompetitionHubTabId = z.enum([
   "overview",
   "matches",
   "table",
+  "knockout",
   "stats",
   "teams",
   "gallery",
@@ -140,6 +141,50 @@ export const TableView = z.object({
   fullHref: z.string(),
 });
 
+/** The stage kinds a knockout view is published for. Restated from
+ *  `BRACKET_KINDS` (`./champion.ts`), which is a `ReadonlySet<string>` and so
+ *  cannot seed an enum without losing its literal members;
+ *  `competition-hub-schema.test.ts` pins the two equal, in order. */
+export const KnockoutKind = z.enum(["knockout", "double_elim", "stepladder", "page_playoff"]);
+
+export const KnockoutRound = z.object({
+  /** `${lane ?? "main"}-${roundNo}`, or `third-place` for the bronze match's
+   *  own round. Stable across polls, so a round a spectator picked survives
+   *  the next document. */
+  key: z.string(),
+  /** The round's name, pre-resolved in the ORG's locale — the same string
+   *  every match in the round already carries as `HubMatch.roundLabel`,
+   *  reused by the builder rather than resolved a second time. */
+  label: z.string(),
+  lane: z.enum(["WB", "LB", "GF"]).nullable(),
+  /** `HubMatch.fixtureId`s in `seq_in_round` order. IDS, not copies: the cards
+   *  are `matches` rows, and the refinement below refuses an id that names no
+   *  match in this document. */
+  fixtureIds: z.array(z.string()).min(1),
+});
+
+export const KnockoutView = z.object({
+  /** `${divisionSlug}-${stageId}`. */
+  id: z.string(),
+  divisionId: z.string(),
+  divisionSlug: z.string(),
+  divisionName: z.string(),
+  stageId: z.string(),
+  stageName: z.string(),
+  kind: KnockoutKind,
+  /** Bracket order: lane (single or winners, then losers, then grand final),
+   *  then round; the third-place round sits immediately before the final
+   *  round. `.min(1)` because a bracket stage with no fixtures publishes no
+   *  view at all. */
+  rounds: z.array(KnockoutRound).min(1),
+  /** Whether a one-sided Draw tree can be drawn: a `knockout` stage whose
+   *  fixtures the engine's `twoSidedBracket` — the repo's one authority on a
+   *  regular single-elimination shape — lays out. */
+  drawable: z.boolean(),
+  /** The stage's final, once it is decided WITH a winner; null before then. */
+  championFixtureId: z.string().nullable(),
+});
+
 export const LeaderRow = z.object({
   person: Person,
   personHref: z.string().nullable(),
@@ -225,6 +270,8 @@ export const CompetitionHubDoc = z.object({
   divisions: z.array(HubDivision),
   matches: z.array(HubMatch),
   tables: z.array(TableView),
+  /** One per bracket stage with fixtures, division order then stage `seq`. */
+  knockouts: z.array(KnockoutView),
   leaders: z.array(LeaderBoard),
   teams: z.array(TeamCard),
   info: HubInfo,
@@ -251,7 +298,7 @@ export const CompetitionHubDoc = z.object({
   // `deriveHubTabs`'s output makes the reserved `gallery` id UNPARSEABLE. It is
   // a member of `CompetitionHubTabId` so the union is stable, but nothing may
   // emit it while `deriveHubTabs` does not — its widest possible output is
-  // [overview, matches, table, stats, teams, info]. That is correct for W2,
+  // [overview, matches, table, knockout, stats, teams, info]. That is correct for W2,
   // which never produces a gallery. **W4 owns lifting it**, and lifting it
   // means extending `HubTabCounts` and `deriveHubTabs` in `lib/matches-hub.ts`
   // so the tab is DERIVED like every other one — not hand-adding it to a
@@ -261,6 +308,7 @@ export const CompetitionHubDoc = z.object({
   const expected = deriveHubTabs({
     matches: doc.matches.length,
     tables: doc.tables.length,
+    knockouts: doc.knockouts.length,
     leaderRows: doc.leaders.reduce((n, board) => n + board.rows.length, 0),
     teams: doc.teams.length,
   });
@@ -275,6 +323,32 @@ export const CompetitionHubDoc = z.object({
         `expected [${expected.join(", ")}], got [${doc.tabs.join(", ")}]`,
     });
   }
+
+  // A knockout view carries fixture IDS; its cards are `matches` rows. An id
+  // naming no match is a round that renders a hole, and a champion id naming
+  // no match is a banner with nobody in it — both self-contradictions only a
+  // wrong builder can produce, refused here at the exact round (or view) so
+  // the message points at it instead of at "the document".
+  const matchIds = new Set(doc.matches.map((m) => m.fixtureId));
+  doc.knockouts.forEach((view, i) => {
+    view.rounds.forEach((round, j) => {
+      const missing = round.fixtureIds.filter((id) => !matchIds.has(id));
+      if (missing.length > 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["knockouts", i, "rounds", j, "fixtureIds"],
+          message: `knockout round ${round.key} names fixtures that are not in matches: ${missing.join(", ")}`,
+        });
+      }
+    });
+    if (view.championFixtureId !== null && !matchIds.has(view.championFixtureId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["knockouts", i, "championFixtureId"],
+        message: `championFixtureId ${view.championFixtureId} is not in matches`,
+      });
+    }
+  });
 });
 
 export type CompetitionHubDocT = z.infer<typeof CompetitionHubDoc>;
@@ -285,6 +359,9 @@ export type HubMatchT = z.infer<typeof HubMatch>;
 export type TableViewT = z.infer<typeof TableView>;
 export type TableRowT = z.infer<typeof TableRow>;
 export type TableColumnT = z.infer<typeof TableColumn>;
+export type KnockoutKindT = z.infer<typeof KnockoutKind>;
+export type KnockoutRoundT = z.infer<typeof KnockoutRound>;
+export type KnockoutViewT = z.infer<typeof KnockoutView>;
 export type LeaderBoardT = z.infer<typeof LeaderBoard>;
 export type LeaderRowT = z.infer<typeof LeaderRow>;
 export type TeamCardT = z.infer<typeof TeamCard>;

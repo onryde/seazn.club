@@ -193,6 +193,7 @@ function docWith(
         fullHref: "/riverside/autumn-cup/div-a?tab=table",
       },
     ],
+    knockouts: [],
     leaders: [],
     teams: [],
     info: {

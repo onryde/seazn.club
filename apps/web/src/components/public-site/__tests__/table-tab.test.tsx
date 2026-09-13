@@ -125,8 +125,8 @@ describe("TableTab", () => {
     // document's own derived `tabs` as its witness.
     expect(empty.tabs).not.toContain("table");
     expect(doc.tabs).toContain("table"); // the positive pair
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 0 })).not.toContain("table");
-    expect(deriveHubTabs({ matches: 0, tables: 1, leaderRows: 0, teams: 0 })).toContain("table");
+    expect(deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 0 })).not.toContain("table");
+    expect(deriveHubTabs({ matches: 0, tables: 1, knockouts: 0, leaderRows: 0, teams: 0 })).toContain("table");
   });
 
   // -------------------------------------------- (b) one table view per table

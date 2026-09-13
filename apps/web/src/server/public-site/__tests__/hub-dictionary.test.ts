@@ -34,7 +34,7 @@ import { LEADER_SPECS } from "../leaders";
 
 export const W2_KEYS = [
   // landing shell
-  "landing.tabsLabel", "landing.tab.overview", "landing.tab.matches", "landing.tab.table", "landing.tab.stats", "landing.tab.teams", "landing.tab.gallery", "landing.tab.info",
+  "landing.tabsLabel", "landing.tab.overview", "landing.tab.matches", "landing.tab.table", "landing.tab.knockout", "landing.tab.stats", "landing.tab.teams", "landing.tab.gallery", "landing.tab.info",
   // One key per RUNG of `landingStatus`'s ladder (`lib/matches-hub.ts:270`):
   // empty → live → next → match_day → finished → dates. `matchDay` was missing
   // from all four locales until PR 2's pre-flight scan for Task 8 found it, and

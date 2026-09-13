@@ -66,6 +66,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeText } from "@/lib/scoring-vocab";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { resolveLatestModule } from "@/server/engine-db";
+import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import {
   competitionTag,
   divisionTag,
@@ -752,9 +753,9 @@ describe("loadCompetitionHub — the shell", () => {
     });
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
     expect(doc.tabs).toEqual(["overview", "info"]);
-    expect([doc.matches, doc.tables, doc.leaders, doc.teams, doc.divisions].map((x) => x.length)).toEqual(
-      [0, 0, 0, 0, 0],
-    );
+    expect(
+      [doc.matches, doc.tables, doc.knockouts, doc.leaders, doc.teams, doc.divisions].map((x) => x.length),
+    ).toEqual([0, 0, 0, 0, 0, 0]);
     expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
   });
 
@@ -1336,12 +1337,269 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Knockouts — the hub's Knockout tab document (plan 2026-09-13, R3)
+// ---------------------------------------------------------------------------
+//
+// ONE view per bracket stage that has fixtures. Every fixture list below is
+// fed in SCRAMBLED order (last round first, seq reversed, lanes back to
+// front): an ordering rule that merely preserved its input would pass an
+// already-sorted input and assert nothing.
+
+describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
+  const league: PublicStage = { ...STAGE, id: "lg", seq: 1, kind: "league", name: "League" };
+  const cup: PublicStage = { ...STAGE, id: "ko", seq: 2, kind: "knockout", name: "Cup" };
+  const ko = (id: string, round_no: number, seq_in_round: number, over: Partial<PublicFixture> = {}) =>
+    F({ id, stage_id: "ko", round_no, seq_in_round, ...over });
+  const win = (winner: string, loser: string) => ({ kind: "win", winner, loser });
+
+  /** An 8-draw with a bronze match: four quarter-finals, two semis, then the
+   *  final and the third-place match sharing the LAST round — which is where
+   *  the engine puts them (`generateSingleElim` gives the bronze
+   *  `round: se.rounds - 1`). */
+  const eight = (
+    final: Partial<PublicFixture> = {},
+    bronze: Partial<PublicFixture> = {},
+  ): PublicFixture[] => [
+    ko("ko-3p", 3, 2, { third_place: true, ...bronze }),
+    ko("ko-f", 3, 1, { is_final: true, ...final }),
+    ko("ko-s2", 2, 2),
+    ko("ko-s1", 2, 1),
+    ko("ko-q4", 1, 4),
+    ko("ko-q3", 1, 3),
+    ko("ko-q2", 1, 2),
+    ko("ko-q1", 1, 1),
+  ];
+  const leagueFixtures = [
+    F({ id: "lg-1", stage_id: "lg", round_no: 1 }),
+    F({ id: "lg-2", stage_id: "lg", round_no: 2 }),
+  ];
+
+  const load = async (over: Parameters<typeof divisionDetail>[0]) => {
+    getPublicDivisionMock.mockResolvedValue(divisionDetail(over));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    // Every document this block builds must be one the schema accepts —
+    // including the refinement that each round names only real matches.
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    return doc;
+  };
+  const leagueThenCup = (fixtures: PublicFixture[] = eight()) =>
+    load({
+      stages: [league, cup],
+      fixtures: [...leagueFixtures, ...fixtures],
+      standings: [{ ...SNAPSHOT, stage_id: "lg" }],
+    });
+  const cupView = async (fixtures?: PublicFixture[]) => {
+    const doc = await leagueThenCup(fixtures);
+    expect(doc.knockouts).toHaveLength(1);
+    return doc.knockouts[0]!;
+  };
+
+  it("a league-then-knockout division: a table for the league, ONE view for the knockout, and the Knockout tab after Table", async () => {
+    const doc = await leagueThenCup();
+    expect(doc.tables.map((t) => t.caption)).toEqual(["League"]);
+    expect(doc.knockouts).toHaveLength(1);
+    expect(doc.knockouts[0]).toMatchObject({
+      id: "open-ko",
+      divisionId: "div-1",
+      divisionSlug: "open",
+      divisionName: "Open",
+      stageId: "ko",
+      stageName: "Cup",
+      kind: "knockout",
+    });
+    expect(doc.tabs).toEqual(["overview", "matches", "table", "knockout", "teams", "info"]);
+  });
+
+  it("no bracket stage → no knockouts and no Knockout tab (the negative pair)", async () => {
+    const doc = await load({});
+    expect(doc.knockouts).toEqual([]);
+    expect(doc.tabs).not.toContain("knockout");
+  });
+
+  it("rounds run in bracket order, each in seq order — and third place sits immediately BEFORE the final", async () => {
+    const view = await cupView();
+    expect(view.rounds.map((r) => r.key)).toEqual(["main-1", "main-2", "third-place", "main-3"]);
+    expect(view.rounds.map((r) => r.fixtureIds)).toEqual([
+      ["ko-q1", "ko-q2", "ko-q3", "ko-q4"],
+      ["ko-s1", "ko-s2"],
+      ["ko-3p"],
+      ["ko-f"],
+    ]);
+    expect(view.rounds.map((r) => r.lane)).toEqual([null, null, null, null]);
+  });
+
+  it("each round's label is the label its own matches already carry — one resolution, not two", async () => {
+    const doc = await leagueThenCup();
+    const carried = new Map(doc.matches.map((m) => [m.fixtureId, m.roundLabel]));
+    const rounds = doc.knockouts[0]!.rounds;
+    for (const round of rounds) {
+      for (const id of round.fixtureIds) expect(round.label, `${round.key} ${id}`).toBe(carried.get(id));
+    }
+    // The values themselves as well: a label both sides share could agree with
+    // itself and still be the wrong words.
+    expect(rounds.map((r) => r.label)).toEqual([
+      msgFor("en", "bracket.round.quarter"),
+      msgFor("en", "bracket.round.semi"),
+      msgFor("en", "bracket.round.thirdPlace"),
+      msgFor("en", "bracket.round.final"),
+    ]);
+  });
+
+  it("drawable: TRUE for a regular 8-draw — the engine's twoSidedBracket is the authority, and it agrees", async () => {
+    const fixtures = eight();
+    expect(twoSidedBracket(fixtures).ok).toBe(true);
+    expect((await cupView(fixtures)).drawable).toBe(true);
+  });
+
+  it("drawable: FALSE when round 0 holds three fixtures — not a power-of-two field, so no tree", async () => {
+    const lopsided = [
+      ko("r3", 3, 1, { is_final: true }),
+      ko("r2b", 2, 2),
+      ko("r2a", 2, 1),
+      ko("r1c", 1, 3),
+      ko("r1b", 1, 2),
+      ko("r1a", 1, 1),
+    ];
+    expect(twoSidedBracket(lopsided).ok).toBe(false);
+    const view = await cupView(lopsided);
+    expect(view.kind).toBe("knockout");
+    expect(view.drawable).toBe(false);
+    // Still a whole Rounds view — only the tree is withheld.
+    expect(view.rounds.map((r) => r.fixtureIds)).toEqual([["r1a", "r1b", "r1c"], ["r2a", "r2b"], ["r3"]]);
+  });
+
+  it("drawable: FALSE for a stepladder even when its shape would draw — the Draw is single-elimination only", async () => {
+    const fixtures = eight();
+    expect(twoSidedBracket(fixtures).ok).toBe(true);
+    const doc = await load({ stages: [{ ...cup, kind: "stepladder" }], fixtures, standings: [] });
+    expect(doc.knockouts[0]!.kind).toBe("stepladder");
+    expect(doc.knockouts[0]!.drawable).toBe(false);
+  });
+
+  it("championFixtureId: the final, once it is DECIDED with a winner", async () => {
+    const view = await cupView(eight({ status: "decided", outcome: win("e1", "e2") }));
+    expect(view.championFixtureId).toBe("ko-f");
+  });
+
+  it("a FINALIZED final crowns as well — the one status ladder, not the raw string 'decided'", async () => {
+    const view = await cupView(eight({ status: "finalized", outcome: win("e2", "e1") }));
+    expect(view.championFixtureId).toBe("ko-f");
+  });
+
+  it("NO champion while the final is still being played — even with a winner already sitting in `outcome`", async () => {
+    const view = await cupView(eight({ status: "in_play", outcome: win("e1", "e2") }));
+    expect(view.championFixtureId).toBeNull();
+  });
+
+  it("a decided final with NO winner crowns nobody", async () => {
+    const view = await cupView(eight({ status: "decided", outcome: { kind: "no_result" } }));
+    expect(view.championFixtureId).toBeNull();
+  });
+
+  it("a decided BRONZE match is not the final — the crown waits for the final itself", async () => {
+    const view = await cupView(eight({ status: "scheduled" }, { status: "decided", outcome: win("e3", "e2") }));
+    expect(view.championFixtureId).toBeNull();
+  });
+
+  it("with no is_final flag anywhere, the final is the last round's single NON-third-place fixture", async () => {
+    const unflagged = eight(
+      { is_final: false, status: "decided", outcome: win("e1", "e2") },
+      { status: "decided", outcome: win("e3", "e2") },
+    );
+    expect((await cupView(unflagged)).championFixtureId).toBe("ko-f");
+  });
+
+  it("one view per bracket stage WITH fixtures — division order first, then stage seq; an empty bracket stage publishes none", async () => {
+    const reserves: PublicDivision = { ...DIV, id: "div-2", slug: "reserves", name: "Reserves" };
+    const plate: PublicStage = { ...STAGE, id: "pl", seq: 3, kind: "knockout", name: "Plate" };
+    const bowl: PublicStage = { ...STAGE, id: "bw", seq: 4, kind: "knockout", name: "Bowl" };
+    const shield: PublicStage = { ...STAGE, id: "sh", division_id: "div-2", seq: 1, kind: "knockout", name: "Shield" };
+    getPublicCompetitionMock.mockResolvedValue({
+      org: ORG,
+      competition: COMP,
+      divisions: [DIV, reserves],
+      liveNow: [],
+    });
+    getPublicDivisionMock.mockImplementation(async (_o: string, _c: string, slug: string) =>
+      slug === "reserves"
+        ? divisionDetail({
+            division: reserves,
+            stages: [shield],
+            fixtures: [F({ id: "sh-f", stage_id: "sh", is_final: true })],
+            standings: [],
+          })
+        : divisionDetail({
+            // Stage input order runs AGAINST seq, and `bw` has no fixtures.
+            stages: [bowl, plate, cup],
+            fixtures: [F({ id: "pl-f", stage_id: "pl", is_final: true }), ...eight()],
+            standings: [],
+          }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    // Reserves' Shield is seq 1: a document-wide seq sort would put it FIRST.
+    expect(doc.knockouts.map((v) => v.id)).toEqual(["open-ko", "open-pl", "reserves-sh"]);
+  });
+
+  describe("a double-elimination grand final and its conditional reset", () => {
+    const de: PublicStage = { ...STAGE, id: "de", seq: 1, kind: "double_elim", name: "Double" };
+    const d = (
+      id: string,
+      lane: "WB" | "LB" | "GF",
+      round_no: number,
+      seq_in_round: number,
+      over: Partial<PublicFixture> = {},
+    ) => F({ id, stage_id: "de", lane, round_no, seq_in_round, ...over });
+    // The engine marks BOTH grand finals `isFinal` and the second `conditional`
+    // (`bracket.ts`): it is played only if the losers' side wins the first,
+    // and the persistence adapter voids it otherwise (`cancelled`/`abandoned`
+    // on the row — `engine-db/competition.ts`'s `toEngineStatus`).
+    const bracket = (reset: Partial<PublicFixture>) => [
+      d("gf-reset", "GF", 4, 1, { is_final: true, conditional: true, ...reset }),
+      d("gf", "GF", 3, 1, { is_final: true, status: "decided", outcome: win("e1", "e2") }),
+      d("lb-2", "LB", 2, 1),
+      d("lb-1", "LB", 1, 1),
+      d("wb-2", "WB", 2, 1),
+      d("wb-1b", "WB", 1, 2),
+      d("wb-1a", "WB", 1, 1),
+    ];
+    const deView = async (reset: Partial<PublicFixture>) =>
+      (await load({ stages: [de], fixtures: bracket(reset), standings: [] })).knockouts[0]!;
+
+    it("rounds order by LANE first — winners, then losers, then the grand final", async () => {
+      const view = await deView({});
+      expect(view.rounds.map((r) => r.key)).toEqual(["WB-1", "WB-2", "LB-1", "LB-2", "GF-3", "GF-4"]);
+      expect(view.rounds.map((r) => r.lane)).toEqual(["WB", "WB", "LB", "LB", "GF", "GF"]);
+      expect(view.rounds[0]!.fixtureIds).toEqual(["wb-1a", "wb-1b"]);
+      expect(view.drawable).toBe(false);
+    });
+
+    it("a reset still to be played keeps the crown unclaimed, though the first grand final is decided", async () => {
+      expect((await deView({ status: "scheduled" })).championFixtureId).toBeNull();
+    });
+
+    it("a reset the adapter VOIDED is skipped — the first grand final crowns", async () => {
+      expect((await deView({ status: "cancelled" })).championFixtureId).toBe("gf");
+    });
+
+    it("a decided reset crowns", async () => {
+      expect(
+        (await deView({ status: "decided", outcome: win("e2", "e1") })).championFixtureId,
+      ).toBe("gf-reset");
+    });
+  });
+});
+
 describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
   it("keys on the competition id and tags the org, the competition and its division", async () => {
     const doc = await getPublicCompetitionHub("riverside", "autumn-cup");
     expect(doc).not.toBeNull();
     expect(cacheCalls).toHaveLength(1);
-    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v1", "comp-1"]);
+    // v2 since the Knockout tab (plan R4): the page renders this cached
+    // document WITHOUT re-parsing it, so a v1 entry — which has no
+    // `knockouts` — must never be served to a renderer that reads one.
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v2", "comp-1"]);
     // Derived from the SAME tag helpers the writers use, so the two halves of
     // the invalidation story cannot drift: `fireDivisionRevalidate` fires
     // `divisionTag` and `competitionTag`, and both are declared here.

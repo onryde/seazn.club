@@ -2465,6 +2465,7 @@ export type DictionaryKey =
   | "landing.status.next"
   | "landing.tab.gallery"
   | "landing.tab.info"
+  | "landing.tab.knockout"
   | "landing.tab.matches"
   | "landing.tab.overview"
   | "landing.tab.stats"

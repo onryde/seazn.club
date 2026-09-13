@@ -211,6 +211,7 @@ export const HUB_TAB_IDS = [
   "overview",
   "matches",
   "table",
+  "knockout",
   "stats",
   "teams",
   "gallery",
@@ -221,6 +222,9 @@ export type HubTabId = (typeof HUB_TAB_IDS)[number];
 export interface HubTabCounts {
   matches: number;
   tables: number;
+  /** Knockout VIEWS — one per bracket stage that has fixtures. A bracket stage
+   *  nobody has drawn yet has no view, and so earns no tab. */
+  knockouts: number;
   /** Leader ROWS, not boards. A sport whose leaderboards exist but are all
    *  empty has nothing to show, and a Stats tab that opens on nothing is worse
    *  than no Stats tab. */
@@ -238,6 +242,7 @@ export function deriveHubTabs(c: HubTabCounts): HubTabId[] {
   const tabs: HubTabId[] = ["overview"];
   if (c.matches > 0) tabs.push("matches");
   if (c.tables > 0) tabs.push("table");
+  if (c.knockouts > 0) tabs.push("knockout");
   if (c.leaderRows > 0) tabs.push("stats");
   if (c.teams > 0) tabs.push("teams");
   tabs.push("info");
