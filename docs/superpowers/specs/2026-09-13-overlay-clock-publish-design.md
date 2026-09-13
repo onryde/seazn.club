@@ -15,10 +15,10 @@ soft-commit). Overlay gains `clock.running` and holds when `false`.
 
 ## Scope
 
-Sports that mount `PadClockBar` today: **hockey, ice hockey** (period skins
-via `buildClock`). Football has engine `football.clock` + padSpec fidelity
-band 0 so publish is accepted on the wire, but `footballSkinV3` still has no
-`clock:` — strip readout only until the bar is wired.
+Sports that mount `PadClockBar`: **football, hockey, ice hockey**
+(`footballSkinV3.clock` / period-shared `buildClock`). Cricket and racket
+sports do not. Soft-commit still holds attribution docks (~5s); null dock and
+`*.clock` publish immediately.
 
 ## Shape
 

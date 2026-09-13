@@ -1673,6 +1673,19 @@ describe("footballSkinV3", () => {
     expect(Object.keys(skin.sheets!(view())).length).toBeGreaterThan(0);
   });
 
+  it("declares clock() so PadClockBar mounts in play — Pause/Start/Correct publish football.clock", () => {
+    const skin = footballSkinV3(t);
+    expect(typeof skin.clock).toBe("function");
+    expect(skin.clock!(view({ state: state({ phase: "H1" }) }))).toEqual({ period: "H1" });
+    expect(skin.clock!(view({ state: state({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }) }))).toEqual({
+      period: "H1",
+      seed: 761,
+    });
+    expect(skin.clock!(view({ state: state({ phase: "pre" }) }))).toBeNull();
+    expect(skin.clock!(view({ state: state({ phase: "SHOOTOUT" }) }))).toBeNull();
+    expect(skin.clock!(view({ state: state({ phase: "final" }) }))).toBeNull();
+  });
+
   it("declares no context strip — football has no persistent per-person slot the fold can hold", () => {
     expect(footballSkinV3(t).context).toBeUndefined();
     expect(footballSkinV3(t).contextSelect).toBeUndefined();

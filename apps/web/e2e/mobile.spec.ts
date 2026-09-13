@@ -4269,10 +4269,10 @@ function v3Sheet(page: Page): Locator {
 // one engine kernel under two presets, so they are driven by one parametrised
 // test rather than two hand-copied ones — but they get a test EACH (the loop
 // mints two `test()` calls), so a failure names the sport a scorer would be
-// holding. They are also the only two skins in the product that declare
-// `SkinDefV3.clock()`, and the clock's own start/pause toggle is the SMALLEST
-// operable target either pad has — 58.17 x 44 at rest, i.e. exactly on the
-// floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
+// holding. Football also declares `SkinDefV3.clock()` (pad-host inventory) but
+// is not in this width loop. The clock's start/pause toggle is the SMALLEST
+// operable target either period pad has — 58.17 x 44 at rest, i.e. exactly on
+// the floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
 // It is therefore the one control here most likely to go red on a restyle,
 // and the one no other project measures at 320px.
 // WS-M fix round 1, item 3: the pair comes from `v3-width-matrix-coverage.ts`,

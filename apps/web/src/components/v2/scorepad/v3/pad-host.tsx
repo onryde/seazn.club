@@ -1194,11 +1194,13 @@ export function resolveDockSpec(
 }
 
 /**
- * Soft-commit only when the skin has something to enrich. Period advance,
- * clock-adjacent taps with a null dock, and any other "nothing left to ask"
- * event send immediately — waiting out HOLD_MS would only delay the overlay
- * (owner ruling 2026-09-13). A real dock (goal / card / six attribution)
- * still holds for the full window.
+ * Soft-commit only when the skin has something to enrich. Period advance and
+ * any other "nothing left to ask" event (null dock) send immediately — waiting
+ * out HOLD_MS would only delay the overlay (owner ruling 2026-09-13). A real
+ * dock (goal / card / six attribution) still holds for the full window.
+ *
+ * `*.clock` (Pause / Start / Correct) never reaches this gate: `publishClock`
+ * always `pipeline.submit`s. Soft-commit is for `send()` after dock resolution.
  */
 export function usesSoftCommit(dock: DockSpec | null): boolean {
   return dock !== null;
@@ -1626,7 +1628,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // takes a fresh `Date.now()` at tap time, so a stamp is never up to a
   // tick-interval stale.
   //
-  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Seven of the nine v3 skins
+  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Eight of the eleven v3 skins
   // declare no `clock()` at all, and a lazy initialiser still runs on every one
   // of their mounts to produce a value nothing will ever read. Zero is not a
   // placeholder here, it is unreachable: `elapsedOf` ignores `nowMs` entirely

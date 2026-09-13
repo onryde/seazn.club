@@ -1092,11 +1092,12 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     expect(src).toContain("[livePeriod, liveElapsed]");
   });
 
-  it("does NOT read the wall clock on every pad mount — seven of the nine skins have no clock at all", () => {
+  it("does NOT read the wall clock on every pad mount — eight of the eleven skins have no clock at all", () => {
     // R6 review, gap 7. The lazy initialiser ran `Date.now()` for every pad in
     // the product to produce a value only a clocked skin ever reads. The two
     // properties that make 0 unreachable rather than merely unread are pinned
-    // as BEHAVIOUR in the block below this one, not here.
+    // as BEHAVIOUR in the block below this one, not here. Inventory of who
+    // declares `clock()` lives in pad-host.test.ts ("clock sports inventory").
     expect(src).not.toContain("useState(() => Date.now())");
     expect(src).toContain("const [nowMs, setNowMs] = useState(0);");
   });

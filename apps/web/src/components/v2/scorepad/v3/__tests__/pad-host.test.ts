@@ -51,6 +51,7 @@ import {
   suppressEmptyMoreTile,
   usesSoftCommit,
 } from "../pad-host";
+import { V3_SKINS } from "../registry";
 import type { ActivityEvent } from "../activity";
 
 // --- squadStateOf ------------------------------------------------------
@@ -1056,6 +1057,19 @@ describe("usesSoftCommit", () => {
 
   it("sends immediately when there is nothing to enrich — period advance, bare taps", () => {
     expect(usesSoftCommit(null)).toBe(false);
+  });
+});
+
+describe("clock sports inventory", () => {
+  it("exactly football + hockey + icehockey declare SkinDefV3.clock()", () => {
+    const t = (key: string): string => key;
+    const withClock = Object.keys(V3_SKINS)
+      .filter((key) => {
+        const factory = V3_SKINS[key];
+        return factory !== undefined && typeof factory(t).clock === "function";
+      })
+      .sort();
+    expect(withClock).toEqual(["football", "hockey", "icehockey"]);
   });
 });
 
