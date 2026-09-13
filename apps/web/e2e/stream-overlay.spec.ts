@@ -1163,7 +1163,7 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
 
     const parseFace = (text: string): number => {
       const m = /^(\d+):(\d{2})$/.exec(text.trim());
-      if (!m) throw new Error(`not M:SS: "${text}"`);
+      if (!m) throw new Error(`not MM:SS: "${text}"`);
       return Number(m[1]) * 60 + Number(m[2]);
     };
 
@@ -1187,6 +1187,7 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
         running: false,
       });
 
+      // Overlay paints via formatClock → zero-padded MM:SS (`01:30`, not `1:30`).
       let held = "";
       await expect
         .poll(
@@ -1195,13 +1196,13 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
             held = (await clockCell.innerText()).trim();
             return held;
           },
-          { timeout: 60_000, intervals: [2_000], message: "paused stamp must paint 1:30" },
+          { timeout: 60_000, intervals: [2_000], message: "paused stamp must paint 01:30" },
         )
-        .toBe("1:30");
+        .toBe("01:30");
 
       await anon.waitForTimeout(2_500);
       await anon.reload();
-      await expect(clockCell, "paused clock must not advance on wall time alone").toHaveText("1:30", {
+      await expect(clockCell, "paused clock must not advance on wall time alone").toHaveText("01:30", {
         timeout: 30_000,
       });
       expect(parseFace(held)).toBe(90);
@@ -1219,7 +1220,7 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
             if (!/^\d+:\d{2}$/.test(face)) return 0;
             return parseFace(face);
           },
-          { timeout: 60_000, intervals: [1_000], message: "resume must let the bug clock tick past 1:30" },
+          { timeout: 60_000, intervals: [1_000], message: "resume must let the bug clock tick past 01:30" },
         )
         .toBeGreaterThan(90);
     } finally {

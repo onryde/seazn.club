@@ -444,13 +444,15 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   expect(parseClock(after) - parseClock(before), "a single +1:00 tap must move the clock by exactly 60s").toBe(60);
   await shot(page, "hockey", "clock-corrected");
 
-  // The 1-minute card is now expired by the CORRECTED reading — proof the
-  // countdown is measured against the live clock, not the fold's last
-  // stamp (R6 fix pass 2 gap 2's own defect).
+  // Correct publishes `*.clock` with the new stamp (2026-09-13). The kernel
+  // sweeps expired suspensions on that stamped event, so the box is already
+  // gone — not stuck displaying 0:00 until the next goal. Pre-publish, Correct
+  // was host-local only and the pad showed 0:00 against clockAt while the fold
+  // still held the card.
   await expect(
     strip(page, "box"),
-    "the box must read the suspension as expired once the clock has run past its own award",
-  ).toContainText("0:00", { timeout: 20_000 });
+    "a Correct that jumps past the award must sweep the card off the box",
+  ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "hockey", "countdown-expired");
 
   // Resume and score again — a real stamped event, which SWEEPS the expired
@@ -582,10 +584,12 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", false);
   const { before, after } = await correctClockForward(page, page.request, fx.fixtureId, "icehockey.clock", 1);
   expect(parseClock(after) - parseClock(before), "a single +1:00 tap must move the clock by exactly 60s").toBe(60);
+  // Correct publishes `*.clock`; the kernel sweeps on that stamp — box gone,
+  // not a lingering 0:00 face (same as hockey above).
   await expect(
     strip(page, "box"),
-    "the box must read the penalty as expired once the clock has run past its own award",
-  ).toContainText("0:00", { timeout: 20_000 });
+    "a Correct that jumps past the award must sweep the penalty off the box",
+  ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "icehockey", "countdown-expired");
 
   await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", true);
@@ -596,6 +600,12 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
     "an expired-and-swept penalty must leave nothing left to release",
   ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "icehockey", "suspension-swept-levelled");
+
+  // Pause before the whistle ladder — stop-clock sports whistle with the
+  // clock stopped. (OT→SHOOTOUT used to die on DOUBLE_SUBMIT when two
+  // unstamped `{to:"FT"}` advances landed inside the window; `whistleAt` on
+  // the advance tile closes that. Pause stays for realism, not as the fix.)
+  await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", false);
 
   // ---- LEVEL THROUGH THE WHOLE LADDER — the shoot-out is the only thing
   // left that can decide it. No more goals from here. ------------------------

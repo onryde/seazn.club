@@ -507,6 +507,30 @@ export function nextAdvanceOf(view: PadHostView): string | null {
   return typeof next === "string" && next.length > 0 ? next : null;
 }
 
+/**
+ * Stamp for a period whistle. Names the phase being CLOSED, so two "FT"
+ * advances in a row (regulation → OT, then OT → shoot-out) cannot share a
+ * payload and trip the chassis double-submit guard. Prefer the host's live
+ * `clockAt` when it is seated on that same phase; otherwise `{period, 0}` —
+ * a stop-clock whistle with no running pad clock is still "the end of this
+ * period at its origin", not an unstamped event.
+ */
+export function whistleAt(view: PadHostView): GameTimeShape | undefined {
+  const phase = readPhase(view.state);
+  if (!isPlayPhaseToken(phase)) return undefined;
+  const clockAt = view.clockAt;
+  if (
+    clockAt !== undefined &&
+    clockAt.period === phase &&
+    typeof clockAt.elapsed === "number" &&
+    Number.isFinite(clockAt.elapsed) &&
+    clockAt.elapsed >= 0
+  ) {
+    return { period: phase, elapsed: clockAt.elapsed };
+  }
+  return { period: phase, elapsed: 0 };
+}
+
 export function refusedEventTypesFor(spec: PeriodSkinSpec, view: PadHostView): string[] {
   return Object.keys(bandsOf(spec)).filter((type) => !phaseAllows(spec, type, view));
 }
@@ -910,8 +934,18 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
   // THE WHISTLE. One tap, no sheet: `expectedAdvance` leaves nothing to choose,
   // and the tile says which marker it is about to record rather than making the
   // scorer open a picker to find out.
+  //
+  // `at` is ALWAYS on the payload (current play phase + live elapsed, or 0 when
+  // the pad clock has not been told the time). Without it, two consecutive
+  // advances that both target "FT" — P3→OT then OT→SHOOTOUT on a stop-clock
+  // pad whose clock reseated unknown — are byte-identical `{to:"FT"}` and the
+  // pipeline's DOUBLE_SUBMIT_WINDOW_MS guard eats the second tap
+  // (`use-pad-pipeline.ts`). Found 2026-09-13 on the ice-hockey walkthrough.
+  // `stampFor` leaves a skin-supplied `at` untouched, so this is the stamp the
+  // ledger sees.
   const next = nextAdvanceOf(view);
   if (next !== null && offerable(e.advance)) {
+    const at = whistleAt(view);
     tiles.push({
       id: "advance",
       label: periodKey(spec, "action.advance"),
@@ -919,7 +953,12 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
       kind: "standard",
       span: 2,
       phases: ["live"],
-      action: { event: { type: e.advance, payload: { to: next } } },
+      action: {
+        event: {
+          type: e.advance,
+          payload: at === undefined ? { to: next } : { to: next, at },
+        },
+      },
     });
   }
 

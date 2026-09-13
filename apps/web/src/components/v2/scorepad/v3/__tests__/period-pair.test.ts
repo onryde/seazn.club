@@ -371,6 +371,7 @@ describe("what the pad emits is what the fold accepts", () => {
         const view = viewFor(sport, cfg, state);
         const advance = tileEvent(sport.factory(T).tiles(view), "advance");
         expect(advance.payload.to).toBe(nextAdvanceOf(sport.module, state));
+        expect(advance.payload.at).toEqual({ period: String(state.phase), elapsed: 0 });
         expect(phaseVerdict(sport.module, state, advance.type, advance.payload)).toBe("accepted");
       });
 
