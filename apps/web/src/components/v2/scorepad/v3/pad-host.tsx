@@ -37,7 +37,7 @@
 // concretely while building action-form.tsx's own list — see that file's
 // header). The React shell is covered by e2e in a later task; this file's
 // own suite proves every DECISION, not the DOM.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
@@ -1638,6 +1638,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // `toggleClockNow` below — which sets a real `Date.now()` in the same update
   // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
   const [clock, setClock] = useState<PadClock | null>(null);
+  // Updated only in mutators + reseat — never mirrored from render `clock`, so a
+  // Correct tap that races a parent re-render cannot lose a nudge already
+  // written to the ref ahead of the committed state.
+  const clockRef = useRef<PadClock | null>(null);
   const [nowMs, setNowMs] = useState(0);
   // R6 fix pass 2 (gap 7) — whether the clock's correction row is showing. Held
   // HERE rather than inside `PadClockBar` so that component stays pure and both
@@ -1754,6 +1758,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const clockSpec = props.skin.clock?.(view) ?? null;
   const nextClock = reseatClock(clock, clockSpec);
   if (nextClock !== clock) {
+    clockRef.current = nextClock;
     setClock(nextClock);
     // A whistle re-seats the clock, and a correction row left open across it
     // would be offering to nudge a period the scorer has already left. Closing
@@ -1930,13 +1935,15 @@ export function PadHostV3(props: PadHostV3Props) {
   );
 
   const toggleClockNow = useCallback(() => {
-    if (!clock) return;
+    const current = clockRef.current;
+    if (!current) return;
     const now = Date.now();
-    const next = toggleClock(clock, now);
+    const next = toggleClock(current, now);
+    clockRef.current = next;
     setClock(next);
     setNowMs(now);
     void publishClock(next, now);
-  }, [clock, publishClock]);
+  }, [publishClock]);
 
   // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
   // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
@@ -1955,20 +1962,26 @@ export function PadHostV3(props: PadHostV3Props) {
   // `clockSpec` in the dependency list keeps this callback's closure as
   // fresh as that value. 2026-09-13: also publishes `*.clock` so the overlay
   // re-anchors immediately (no soft-commit).
+  //
+  // `clockRef` (not the render-closed `clock`) is the source of truth for
+  // rapid Correct taps — each tap must stack on the previous local nudge
+  // before React re-renders.
   const adjustClockNow = useCallback(
     (deltaSeconds: number) => {
-      if (!clock) return;
+      const current = clockRef.current;
+      if (!current) return;
       const now = Date.now();
       const floor =
         clockSpec !== null && clockSpec.seed !== undefined
           ? { period: clockSpec.period, elapsed: clockSpec.seed }
           : undefined;
-      const next = adjustClock(clock, deltaSeconds, now, floor);
+      const next = adjustClock(current, deltaSeconds, now, floor);
+      clockRef.current = next;
       setClock(next);
       setNowMs(now);
       void publishClock(next, now);
     },
-    [clock, clockSpec, publishClock],
+    [clockSpec, publishClock],
   );
 
   const handleTileAction = useCallback(

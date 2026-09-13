@@ -60,9 +60,16 @@ function expand(node: ReactNode, out: ReactElement[] = []): ReactElement[] {
 
 function render(
   model: OverlayModel,
-  { locale = "en" }: { locale?: string } = {},
+  {
+    locale = "en",
+    cricketToss,
+  }: { locale?: string; cricketToss?: { wonBySide: 0 | 1; elected: "bat" | "bowl" } | null } = {},
 ) {
-  return renderIsland(OverlayMatchCard, { model, msg: msgOf(locale) }, expand);
+  return renderIsland(
+    OverlayMatchCard,
+    { model, msg: msgOf(locale), cricketToss },
+    expand,
+  );
 }
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((el) => propsOf(el)["data-testid"] === id);
@@ -176,6 +183,20 @@ describe("OverlayMatchCard — headline/line per state, resolved through `msg`",
     expect(dots, "warming indicator").toBeDefined();
     const children = propsOf(dots!).children;
     expect(Array.isArray(children) ? children.length : 0, "three dots").toBe(3);
+  });
+
+  it("warming: once toss is known, line is won-and-elected (not Toss pending)", () => {
+    const en = dictOf("en");
+    const tree = render(WARMING, {
+      cricketToss: { wonBySide: 0, elected: "bat" },
+    }).tree();
+    expect(textOf(byTestId(tree, "ovl-slate-line")!)).toBe(
+      t(en, "overlay.toss.wonAndElected", {
+        team: "Milton Keynes Rovers",
+        choice: t(en, "overlay.toss.bat"),
+      }),
+    );
+    expect(textOf(byTestId(tree, "ovl-slate-line")!)).not.toMatch(/pending/i);
   });
 
   it("warming: every {var} in the templates is supplied — no literal placeholder survives to screen", () => {

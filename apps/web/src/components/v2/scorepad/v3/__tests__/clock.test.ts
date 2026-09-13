@@ -1111,10 +1111,13 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     // this session's own prior dispatch) moves the fold's high-water mark.
     expect(src).toContain("clockSpec !== null && clockSpec.seed !== undefined");
     expect(src).toContain("{ period: clockSpec.period, elapsed: clockSpec.seed }");
-    expect(src).toContain("adjustClock(clock, deltaSeconds, now, floor)");
-    // Closure stays fresh with clock + clockSpec + publishClock (2026-09-13:
-    // Correct also publishes `*.clock` so the overlay re-anchors immediately).
-    expect(src).toContain("[clock, clockSpec, publishClock]");
+    // Rapid Correct taps read `clockRef.current`, not the render-closed `clock`.
+    // Ref advances in mutators + reseat only (never mirrored from render state).
+    expect(src).toContain("const current = clockRef.current");
+    expect(src).toContain("adjustClock(current, deltaSeconds, now, floor)");
+    expect(src).toContain("clockRef.current = nextClock");
+    expect(src).toContain("[clockSpec, publishClock]");
+    expect(src).not.toContain("clockRef.current = clock;");
   });
 
   it("publishes *.clock on toggle and correct — overlay pause must not wait on soft-commit", () => {

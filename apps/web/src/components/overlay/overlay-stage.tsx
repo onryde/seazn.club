@@ -273,7 +273,9 @@ export function OverlayStage(props: OverlayStageProps) {
       >
         {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
             warming or ended — not a third ?style= (2026-09-12). */}
-        {showMatchCard ? <OverlayMatchCard model={model} msg={msg} /> : null}
+        {showMatchCard ? (
+          <OverlayMatchCard model={model} msg={msg} cricketToss={data.cricketToss} />
+        ) : null}
         <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
         {/* W2's slab attaches here (R4). The slot CLIPS: the slab slides out
             from under the scorebug rather than appearing beside it, so the

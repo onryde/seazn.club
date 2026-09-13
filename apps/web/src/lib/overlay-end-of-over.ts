@@ -3,9 +3,16 @@ import type { OverlayClosedOver } from "@/lib/overlay-cricket";
 import type { OverlayMoment } from "@/lib/overlay-moments";
 import type { OverlayMsg } from "@/lib/overlay-model";
 
-/** Full split card when the closed over carries a ball row (fine scoring). */
+/**
+ * Full split card when fine facts exist: a ball row PLUS at least one named
+ * batter or bowler. Glyphs alone (consent-masked names) fall back to compact
+ * — design §4.3 "if too little remains… fall back to compact".
+ */
 export function isFullEndOfOver(closed: OverlayClosedOver): boolean {
-  return closed.glyphs.length > 0;
+  if (closed.glyphs.length === 0) return false;
+  const namedBatter = closed.batters.some((b) => Boolean(b.name));
+  const namedBowler = Boolean(closed.bowler?.name);
+  return namedBatter || namedBowler;
 }
 
 /** Mount baseline when the page has never seen a closed over. */
@@ -53,7 +60,6 @@ export function endOfOverMoment(args: {
   const closed = args.closed;
   if (!closed) return null;
   if (!isClosedOverAfter(closed, args.since)) return null;
-  const full = isFullEndOfOver(closed);
   return {
     seq: endOfOverSeq(closed),
     kind: "endOfOver",
@@ -65,6 +71,5 @@ export function endOfOverMoment(args: {
       score: closed.score,
     }),
     endOfOver: closed,
-    ...(full ? {} : {}),
   };
 }

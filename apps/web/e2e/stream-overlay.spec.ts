@@ -28,6 +28,7 @@ import {
   STREAM_URL,
   grantOverlay,
   seedCricketOverlayFixture,
+  seedCricketOverlayFreshOver,
   seedOverlayFixture,
   sendEvent,
   signInAs,
@@ -1290,6 +1291,69 @@ test.describe("cricket crease band (W2 Task 3)", () => {
       await expect(band).toContainText(/Bat \d+ /);
     } finally {
       await anon.context().close();
+    }
+  });
+});
+
+/**
+ * End-of-over card (design 2026-09-12 Feature B) — browser gate.
+ * Unit tests cover builders; this proves the card raises after an over
+ * completes while the overlay is open, and does not replay on mount.
+ */
+test.describe("cricket end-of-over card (EOO)", () => {
+  const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
+
+  test("completing an over while open raises ovl-end-of-over; remount does not replay it", async ({
+    browser,
+  }) => {
+    test.setTimeout(CYCLE_MS * 10 + 180_000);
+    const owner = await browser.newContext();
+    const ownerPage = await owner.newPage();
+    const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
+    await grantOverlay(rig.orgId);
+
+    const anon = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const eoo = anon.locator('[data-testid="ovl-end-of-over"]');
+
+      const watchUntil = Date.now() + CYCLE_MS * 2;
+      while (Date.now() < watchUntil) {
+        expect(await eoo.count(), "pre-over mount must not show end-of-over").toBe(0);
+        await anon.waitForTimeout(250);
+      }
+
+      for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+        await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+          over: 0,
+          ballInOver,
+          striker,
+          nonStriker,
+          bowler,
+          runs: { bat: 0 },
+        });
+      }
+
+      await expect(eoo).toHaveAttribute("data-phase", "hold", { timeout: 30_000 });
+      await expect(eoo, "fine scoring must paint the full split card, not compact").toHaveAttribute(
+        "data-variant",
+        "full",
+      );
+      await expect(eoo, "end-of-over must leave the air").toHaveCount(0, {
+        timeout: CYCLE_MS * 2,
+      });
+
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const remountUntil = Date.now() + CYCLE_MS * 3;
+      while (Date.now() < remountUntil) {
+        expect(await eoo.count(), "OBS remount must not replay a closed over").toBe(0);
+        await anon.waitForTimeout(250);
+      }
+    } finally {
+      await anon.context().close();
+      await owner.close();
     }
   });
 });

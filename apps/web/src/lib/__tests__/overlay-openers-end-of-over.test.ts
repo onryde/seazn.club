@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tossMoment } from "../overlay-openers";
+import { tossMoment, warmingTossLine } from "../overlay-openers";
 import {
   closedOverBaselineOf,
   CLOSED_OVER_BASELINE_NONE,
@@ -51,6 +51,33 @@ describe("tossMoment", () => {
   });
 });
 
+describe("warmingTossLine", () => {
+  it("pending copy when toss is absent", () => {
+    expect(
+      warmingTossLine({
+        toss: null,
+        sideNames: ["Kings", "Royals"],
+        startContext: "Sat 14:30",
+        msg: (key, vars) =>
+          key === "overlay.slate.warmingLineTossPending"
+            ? `Toss pending · ${vars?.start}`
+            : key,
+      }),
+    ).toBe("Toss pending · Sat 14:30");
+  });
+
+  it("won-and-elected once toss is on the wire", () => {
+    expect(
+      warmingTossLine({
+        toss: { wonBySide: 0, elected: "bat" },
+        sideNames: ["Kings", "Royals"],
+        startContext: "Sat 14:30",
+        msg,
+      }),
+    ).toBe("Kings won the toss and elected to bat");
+  });
+});
+
 describe("endOfOverMoment", () => {
   const closed: OverlayClosedOver = {
     inningsIndex: 0,
@@ -91,6 +118,23 @@ describe("endOfOverMoment", () => {
     expect(
       endOfOverMoment({ closed: coarse, since: CLOSED_OVER_BASELINE_NONE, msg })!.endOfOver!.glyphs,
     ).toEqual([]);
+  });
+
+  it("compact when glyphs exist but every name is masked", () => {
+    const masked: OverlayClosedOver = {
+      ...closed,
+      batters: closed.batters.map((b) => ({ ...b, name: undefined })),
+      bowler: closed.bowler ? { ...closed.bowler, name: undefined } : undefined,
+    };
+    expect(isFullEndOfOver(masked)).toBe(false);
+  });
+
+  it("full when glyphs plus a named bowler (batters masked)", () => {
+    const bowlerOnly: OverlayClosedOver = {
+      ...closed,
+      batters: closed.batters.map((b) => ({ ...b, name: undefined })),
+    };
+    expect(isFullEndOfOver(bowlerOnly)).toBe(true);
   });
 
   it("fires innings-2 over 1 after an OBS mid-innings-1 baseline (bare over would silence it)", () => {

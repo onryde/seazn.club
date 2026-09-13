@@ -610,6 +610,19 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   // ---- LEVEL THROUGH THE WHOLE LADDER — the shoot-out is the only thing
   // left that can decide it. No more goals from here. ------------------------
   await tapAdvanceUntil(page, page.request, fx.fixtureId, "SHOOTOUT");
+  // whistleAt: every FT advance on the ladder must name a DISTINCT period so
+  // consecutive {to:"FT"} taps cannot trip DOUBLE_SUBMIT (P3→OT vs OT→SO).
+  {
+    const ft = (await ledger(page.request, fx.fixtureId)).filter(
+      (e) => e.type === "icehockey.period.advance" && e.payload.to === "FT",
+    );
+    expect(ft.length, "tied ice hockey must whistle FT at least twice").toBeGreaterThanOrEqual(2);
+    const periods = ft.map((e) => (e.payload.at as { period?: string } | undefined)?.period);
+    expect(periods.every((p) => typeof p === "string" && p.length > 0), "each FT advance carries whistleAt").toBe(
+      true,
+    );
+    expect(new Set(periods).size, "FT advances must not share at.period").toBe(periods.length);
+  }
   // "Game-winning shots" — pad.icehockey.phase.SHOOTOUT (icehockey.tsx's own
   // header: "The shoot-out is a GWS", reaching the pad as COPY, not a code
   // branch).

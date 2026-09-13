@@ -49,7 +49,7 @@ export function OverlayEndOfOverCard(props: {
     );
   }
 
-  const namedBatters = closed.batters.filter((b) => b.name !== undefined);
+  const namedBatters = closed.batters.filter((b) => Boolean(b.name));
 
   return (
     <div

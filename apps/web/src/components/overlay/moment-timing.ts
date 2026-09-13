@@ -12,8 +12,8 @@
 /** How long a slab stays fully on screen, between its fold in and its fold out. */
 export const OVERLAY_MOMENT_HOLD_MS = 2_000;
 
-/** Toss opener card — denser copy than a SIX slab (design 2026-09-12). */
-export const OVERLAY_TOSS_HOLD_MS = 8_000;
+/** Toss opener — single source is `overlay-openers.ts`; re-export for e2e budgets. */
+export { OVERLAY_TOSS_HOLD_MS } from "@/lib/overlay-openers";
 
 /** Each fold. Applied twice per moment — in, then out. */
 export const OVERLAY_MOMENT_FOLD_MS = 250;

@@ -8,6 +8,8 @@
 //
 // Class / i18n prefix remains `ovl-slate` / `overlay.slate.*` (rename later).
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import type { OverlayCricketToss } from "@/lib/overlay-cricket";
+import { warmingTossLine } from "@/lib/overlay-openers";
 import type { OverlayHighlight, OverlayModel, OverlaySide } from "@/lib/overlay-model";
 import type { OverlayThemeProps } from "./theme-registry";
 
@@ -63,7 +65,13 @@ function HighlightBox(props: {
 }
 
 /** Warming / ended match card. Stage mounts only when not live. */
-export function OverlayMatchCard({ model, msg }: Pick<OverlayThemeProps, "model" | "msg">) {
+export function OverlayMatchCard({
+  model,
+  msg,
+  cricketToss,
+}: Pick<OverlayThemeProps, "model" | "msg"> & {
+  cricketToss?: OverlayCricketToss | null;
+}) {
   const state = slateStateOf(model);
 
   const previousStateRef = useRef<SlateState | undefined>(undefined);
@@ -162,7 +170,12 @@ export function OverlayMatchCard({ model, msg }: Pick<OverlayThemeProps, "model"
           {state === "warming" ? (
             <>
               <span data-testid="ovl-slate-line" className="ovl-slate-line">
-                {msg("overlay.slate.warmingLineTossPending", { start: model.header.context })}
+                {warmingTossLine({
+                  toss: cricketToss,
+                  sideNames: [home.name, away.name],
+                  startContext: model.header.context,
+                  msg,
+                })}
               </span>
               <span data-testid="ovl-slate-indicator-warming" className="ovl-slate-warming-dots">
                 <span />

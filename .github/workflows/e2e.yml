@@ -257,11 +257,12 @@ jobs:
       # login tokens straight in the Postgres service above and skip the specs
       # that assert dev link exposure.
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -269,7 +270,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
@@ -737,11 +738,12 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -749,7 +751,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
@@ -1018,11 +1020,12 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -1030,7 +1033,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
