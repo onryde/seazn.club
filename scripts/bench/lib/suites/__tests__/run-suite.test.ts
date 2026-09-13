@@ -221,6 +221,31 @@ describe("expectedQualifierOrder — pooled derivation vs the flat table", () =>
     expect(out.warning ?? "").toContain("0");
   });
 
+  it("refuses an UNPOOLED source whose placement permutes the list, naming it", () => {
+    // Fix round 1, I2. The placement guard used to sit inside the POOLED
+    // branch only, so an unpooled source declaring `seeded_map` sailed past it
+    // and got a flat rank-order expectation — which the product then permutes,
+    // producing a mismatch red that blames the PRODUCT for the bench's own
+    // wrong assumption. A legitimate pack shape must not be reported as a
+    // defect: refuse, and name the placement.
+    const flat: QualifierTable[] = [
+      {
+        poolKey: undefined,
+        rows: [
+          { entrant: "e-alpha", rank: 1 },
+          { entrant: "e-bravo", rank: 2 },
+        ],
+      },
+    ];
+    const out = expectedQualifierOrder(flat, {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      placement: "seeded_map",
+      map: [{ slot: "1", source: "rank:2" }],
+    });
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").toContain("seeded_map");
+  });
+
   it("returns nothing, and no warning, when the stage has no expected table", () => {
     // The caller owns that error (it already names the missing table); this
     // must not add a second, different complaint about the same fact.

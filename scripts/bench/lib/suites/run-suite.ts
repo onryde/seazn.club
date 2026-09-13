@@ -306,8 +306,10 @@ export interface ExpectedQualifierOrder {
   readonly refs: readonly string[];
   /** True when the source stage declared pools and the progression rule was used. */
   readonly pooled: boolean;
-  /** Set only when a POOLED source stage's progression could not be read —
-   *  names the rule/placement actually found, never a guess. */
+  /** Set when the progression could not be read: a placement that does not
+   *  consume the list verbatim (EITHER source shape), or — for a pooled
+   *  source — a take rule this derivation does not cover. Names what was
+   *  actually found, never a guess. */
   readonly warning?: string;
 }
 
@@ -317,31 +319,44 @@ function takeKindOf(rule: unknown): string {
 }
 
 /**
- * Narrowly parse `PackStage.progression` — carried OPAQUE through the schema
- * (`pack-schema.ts:459`, a `Record<string, PackJsonValue>`), so every field is
- * checked here rather than trusted.
+ * The PLACEMENT check — applied to EVERY source shape, pooled or not.
  *
- * `placement` is checked as strictly as the take rule, and that is not
- * belt-and-braces: `rank_order` is a plain `pots.flat()` that consumes the
- * wave list VERBATIM, while `snake` reverses alternate waves and `seeded_map`
- * permutes by an explicit map (`placeDescriptors`, progression.ts:239-298).
- * Deriving a rank-before-group order for a `snake` placement would produce a
- * confidently wrong seat list, not merely an unverified one.
+ * `rank_order` is a plain `pots.flat()` that consumes the qualifier list
+ * VERBATIM (`placeDescriptors`, progression.ts:239-298). `snake` reverses
+ * alternate waves and `seeded_map` seats named qualifiers at named slots, so
+ * under either one a rank-order expectation is confidently WRONG rather than
+ * merely unverified — and the mismatch would blame the PRODUCT for the
+ * bench's own assumption.
+ *
+ * Fix round 1, I2: this used to live inside `parseTopNPerGroup`, which runs
+ * only for a POOLED source. An UNPOOLED stage declaring `seeded_map` skipped
+ * it entirely and was handed a flat rank-order expectation — a false red on a
+ * legitimate pack.
+ *
+ * Deliberately CONSERVATIVE, and worth knowing before anyone tightens it:
+ * `placeDescriptors` returns `flat` UNCHANGED when a `seeded_map` carries no
+ * map or an empty one (progression.ts:299), so that particular shape would in
+ * fact consume the list as-is and is refused here anyway. The refusal is loud
+ * and harmless; do not read this as a claim that `seeded_map` always permutes.
+ */
+function placementRefusal(progression: Record<string, unknown>): string | undefined {
+  const placement = progression["placement"];
+  if (placement === "rank_order") return undefined;
+  return (
+    `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
+    "consumes the qualifier list verbatim (snake reverses alternate waves; seeded_map seats by name)"
+  );
+}
+
+/**
+ * Narrowly parse the TAKE RULE out of `PackStage.progression` — carried OPAQUE
+ * through the schema (`pack-schema.ts:459`, a `Record<string, PackJsonValue>`),
+ * so every field is checked here rather than trusted. Placement is not this
+ * function's business; see `placementRefusal`.
  */
 function parseTopNPerGroup(
-  progression: Record<string, unknown> | undefined,
+  progression: Record<string, unknown>,
 ): { rule: TopNPerGroup } | { reason: string } {
-  if (progression === undefined) return { reason: "it declares no progression at all" };
-
-  const placement = progression["placement"];
-  if (placement !== "rank_order") {
-    return {
-      reason:
-        `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
-        "consumes the qualifier list verbatim (snake reverses alternate waves)",
-    };
-  }
-
   const sources = progression["sources"];
   if (!Array.isArray(sources) || sources.length !== 1) {
     return {
@@ -380,14 +395,32 @@ export function expectedQualifierOrder(
   stageTables: readonly QualifierTable[],
   progression: Record<string, unknown> | undefined,
 ): ExpectedQualifierOrder {
+  // No table at all: the caller already names that, and a second complaint
+  // about the same fact would only obscure it.
+  if (stageTables.length === 0) return { refs: [], pooled: false };
+
   const pooledTables = stageTables.filter((t) => t.poolKey !== undefined);
-  if (pooledTables.length === 0) {
+  const pooled = pooledTables.length > 0;
+  const flatRefs = (): readonly string[] => {
     const flat = stageTables.find((t) => t.poolKey === undefined);
-    return {
-      refs: [...(flat?.rows ?? [])].sort((a, b) => a.rank - b.rank).map((r) => r.entrant),
-      pooled: false,
-    };
+    return [...(flat?.rows ?? [])].sort((a, b) => a.rank - b.rank).map((r) => r.entrant);
+  };
+
+  if (progression === undefined) {
+    // An UNPOOLED source needs no progression to be read: its seats ARE its
+    // one table, in rank order. A POOLED one has no seat order without the rule.
+    return pooled
+      ? { refs: [], pooled: true, warning: "it declares no progression at all" }
+      : { refs: flatRefs(), pooled: false };
   }
+
+  // I2: placement first, and for BOTH shapes — a placement that permutes
+  // invalidates the flat derivation exactly as it invalidates the pooled one.
+  const placementIssue = placementRefusal(progression);
+  if (placementIssue !== undefined) return { refs: [], pooled, warning: placementIssue };
+
+  if (!pooled) return { refs: flatRefs(), pooled: false };
+
   const parsed = parseTopNPerGroup(progression);
   if ("reason" in parsed) return { refs: [], pooled: true, warning: parsed.reason };
   return { refs: expectedQualifierRefs(pooledTables, parsed.rule), pooled: true };
@@ -3408,15 +3441,26 @@ export async function runPackSuite(
         // below. `expectedQualifierOrder` now picks the rule by what the
         // source actually declared; a pooled stage's seats come from the
         // progression itself, RANK BEFORE GROUP (lib/qualifiers.ts).
+        //
+        // STILL TRUE, and carried forward from the comment this replaced: the
+        // UNPOOLED branch returns EVERY ranked row of the stage-wide table,
+        // whatever the take rule asks for. A future pack with a NARROWER take
+        // — "top 2 of 8" — would need that list sliced to the qualifier count.
+        // That shape reds LOUDLY on length rather than passing silently
+        // (`compareQualifiers` compares length before order), so it is a
+        // documented limitation and not a silent hole — but a pack author who
+        // meets it should recognise it rather than hunt a product defect.
         const stageTables = pack.expected.tables.filter(
           (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref,
         );
         const qualifierOrder = expectedQualifierOrder(stageTables, stage1.progression);
         if (qualifierOrder.warning !== undefined) {
           warnings.push(
-            `${suiteKey}: stage "${stage1.ref}" is fed by the POOLED stage "${stage0.ref}", but ` +
-              `${qualifierOrder.warning} — this bench derives a qualifier order only for a single ` +
-              "topNPerGroup take placed by rank_order, so it asserts none here (D7)",
+            `${suiteKey}: stage "${stage1.ref}" is fed by ` +
+              `${qualifierOrder.pooled ? "the POOLED stage" : "the unpooled stage"} "${stage0.ref}", but ` +
+              `${qualifierOrder.warning} — this bench derives a qualifier order only for a rank_order ` +
+              "placement, and for a pooled source only from a single topNPerGroup take, so it asserts " +
+              "none here (D7)",
           );
         }
         const expectedQualifierEntrantIds: string[] = [];

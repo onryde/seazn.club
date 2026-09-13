@@ -30,7 +30,7 @@
 // a finding either way, whereas one shared implementation is a tautology.
 // This TEST may import the engine precisely to run that comparison.
 import { describe, expect, it } from "vitest";
-import { expandTake, type SlotDescriptor } from "@seazn/engine/competition";
+import { expandSources, placeDescriptors } from "@seazn/engine/competition";
 import { newSession } from "../http.ts";
 import { compareQualifiers, advanceStageSeeding, type AdvanceTransport } from "../advance.ts";
 import { expectedQualifierRefs, type QualifierTable } from "../qualifiers.ts";
@@ -66,22 +66,36 @@ const fourPools: QualifierTable[] = ["A", "B", "C", "D"].map((k) => ({
   ],
 }));
 
-/** The expectation DERIVED FROM THE ENGINE, not typed out: expand the same
- *  take rule the product would expand, place it with `rank_order` (which
- *  `placeDescriptors` implements as a plain `pots.flat()`,
- *  progression.ts:298 — the list is consumed verbatim), then read each
- *  resulting `group_rank` descriptor back through the pack's own tables.
+/** The expectation DERIVED FROM THE ENGINE, not typed out — and derived
+ *  through the engine's REAL pipeline, both halves of it:
  *
- *  Pool order is supplied ascending because that is what the PRODUCT supplies
- *  (this file's header, authority 2); the engine contributes the wave-major
- *  structure, which is the half that would silently invert. */
+ *    `expandSources` -> the wave-major pots (the half that would silently
+ *                       invert), then
+ *    `placeDescriptors(..., "rank_order", undefined, "knockout")` -> the seat
+ *                       order (the PLACEMENT half).
+ *
+ *  Fix round 1, M1: this used to call `expandTake` and then hand-mirror the
+ *  placement as `pots.flat()`. That mirrored a product behaviour into the test
+ *  instead of reading it, so a change to how `rank_order` places would leave
+ *  this asserting yesterday's rule. `placeDescriptors` is exported from the
+ *  same barrel (`competition/index.ts` re-exports all of `progression.ts`), so
+ *  there was never a reason to copy it. `targetKind: "knockout"` is passed
+ *  because a bracket IS the real target; with `rank_order` none of that
+ *  function's snake refusals apply, so it exercises the real signature.
+ *
+ *  Pool ORDER is supplied ascending, and that half is not the engine's to
+ *  give: `expandOne` maps over `shape.poolKeys` exactly as handed to it. The
+ *  ascending order mirrors the PRODUCT's own `order by key` (this file's
+ *  header, authority 2). */
 function engineExpectedRefs(source: readonly QualifierTable[], n: number): string[] {
   const poolKeys = source
     .map((t) => t.poolKey)
     .filter((k): k is string => k !== undefined)
     .sort((a, b) => a.localeCompare(b));
-  const pots: SlotDescriptor[][] = expandTake([{ kind: "topNPerGroup", n }], { poolKeys });
-  return pots.flat().map((d) => {
+  const pots = expandSources([{ stage: "previous", take: [{ kind: "topNPerGroup", n }] }], () => ({
+    poolKeys,
+  }));
+  return placeDescriptors(pots, "rank_order", undefined, "knockout").map(({ descriptor: d }) => {
     if (d.kind !== "group_rank") {
       throw new Error(`topNPerGroup produced a non-group_rank descriptor: ${d.kind}`);
     }
@@ -215,8 +229,18 @@ describe("the derivation drives the real qualifier comparison (D7)", () => {
   }
 
   it("matches when the product proposes the pack's rank-before-group order", () => {
+    // Fix round 1, I1: the two sides come from DIFFERENT implementations —
+    // the expectation from the bench's own derivation, the proposal from the
+    // ENGINE's pipeline. It used to build both from the same `refs`, which
+    // made it agree by construction: it passed for any implementation at all,
+    // including one returning `[]`, and it was the single sibling that
+    // SURVIVED the loop-swap mutant while nine others died.
     const refs = expectedQualifierRefs(fourPools, { kind: "topNPerGroup", n: 2 });
-    const check = compareQualifiers(refs.map(idOf), proposalFor(refs));
+    const engineOrder = engineExpectedRefs(fourPools, 2);
+    // Vacuity guard on BOTH sides: two empty lists would "match" happily.
+    expect(engineOrder.length).toBe(8);
+    expect(refs.length).toBe(engineOrder.length);
+    const check = compareQualifiers(refs.map(idOf), proposalFor(engineOrder));
     expect(check.matched).toBe(true);
   });
 
