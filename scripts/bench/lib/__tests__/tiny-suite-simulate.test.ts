@@ -872,8 +872,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // `expected decided, got scheduled` against a product that was correct.
       // Fold everything, then assert. If these three drift back below the
       // per-match rows, that defect is back.
-      "oracle: s-playoff rank crossing (captured vs standings)",
-      "oracle: s-playoff standings rank vs expected.finalRanks",
+      "oracle: d-tiny/s-playoff rank crossing (captured vs standings)",
+      "oracle: d-tiny/s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
       "oracle: d-tiny per-match results",
       "oracle: d-badminton per-match results",
@@ -2228,10 +2228,10 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
 
     expect(report.gate).toBe("red");
     const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
-    const rankCrossing = runtimeOracles.find((o) => o.name === "oracle: s-playoff rank crossing (captured vs standings)");
+    const rankCrossing = runtimeOracles.find((o) => o.name === "oracle: d-tiny/s-playoff rank crossing (captured vs standings)");
     expect(rankCrossing?.passed).toBe(false);
     const standingsVsExpected = runtimeOracles.find(
-      (o) => o.name === "oracle: s-playoff standings rank vs expected.finalRanks",
+      (o) => o.name === "oracle: d-tiny/s-playoff standings rank vs expected.finalRanks",
     );
     expect(standingsVsExpected?.passed).toBe(false);
     const champion = runtimeOracles.find((o) => o.name === "oracle: d-tiny champion");
@@ -2345,5 +2345,176 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // 9 events total (T1's league fold only) — the playoff's own 2-event
     // stream was never sent.
     expect(divisionAEventCalls(calls)).toHaveLength(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T6 — advancement runs for EVERY division, not only the first.
+//
+// Before this task the advance step was gated on `division0`/`stage0`/`stage1`,
+// so a pack whose SECOND division also had a progression-fed stage imported
+// that stage's fixtures and never seeded them from a proposal. No shipped pack
+// has a second advancing division (`_tiny`'s other three are single-stage, and
+// suite 11 is single-stage in both), so the loop has NO live subject and these
+// fixtures are the only thing that drives it.
+// ---------------------------------------------------------------------------
+
+/** The parts of `_tiny.json` these fixtures reshape. Deliberately loose — the
+ *  file is parsed, mutated and re-serialised, never type-checked against
+ *  `Pack` (stage 0 is what judges it, which is the point). */
+interface MutablePack {
+  divisions: { ref: string; stages: Record<string, unknown>[] }[];
+  streams: { divisionRef: string; fixtureExtKey: string; stageRef?: string }[];
+  expected: {
+    finalRanks: { divisionRef: string; stageRef: string; order: string[] }[];
+    matches: { divisionRef: string; fixtureExtKey: string }[];
+    tables: { divisionRef: string; stageRef: string }[];
+  };
+}
+
+/** `_tiny.json`, mutated and written to its own temp directory. The filename
+ *  must stay `_tiny.json`: `pack-schema.ts`'s own `suite_mismatch` check
+ *  refuses a pack whose declared `suite` disagrees with the file it came from,
+ *  so a different DIRECTORY is what keeps this isolated from the committed
+ *  pack (the same shape the D6 fixture above uses). */
+async function writeMutatedTinyPack(mutate: (raw: MutablePack) => void): Promise<string> {
+  const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as MutablePack;
+  mutate(raw);
+  const dir = await mkdtemp(join(tmpdir(), "b07a-t6-"));
+  const packPath = join(dir, "_tiny.json");
+  await writeFile(packPath, JSON.stringify(raw), "utf8");
+  return packPath;
+}
+
+/** `d-tiny/s-playoff`'s OWN progression, read out of the pack rather than
+ *  re-typed here: a two-slot knockout seeded from the previous stage's
+ *  standings in rank order. Derived from the source of truth so a change to
+ *  the shipped shape moves this fixture with it instead of leaving it
+ *  asserting yesterday's shape (AGENTS.md rule 19). */
+function playoffProgressionOf(raw: MutablePack): Record<string, unknown> {
+  const playoff = raw.divisions
+    .find((d) => d.ref === "d-tiny")
+    ?.stages.find((s) => s["ref"] === "s-playoff");
+  const progression = playoff?.["progression"];
+  if (progression === undefined) {
+    throw new Error("test fixture assumption broken: d-tiny/s-playoff declares no progression");
+  }
+  return progression as Record<string, unknown>;
+}
+
+/** `_tiny.json` with `d-badminton` given a progression-fed SECOND stage, so
+ *  the pack carries TWO divisions that each owe an advancement. Its league
+ *  table already ranks `e-cho` above `e-dahl`, which is also the order this
+ *  file's fake proposes (entrants in creation order), so a correct run
+ *  advances it cleanly. */
+async function twoAdvancingDivisionsPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    badminton.stages.push({
+      ref: "s-badminton-ko",
+      seq: 2,
+      kind: "knockout",
+      name: "Badminton Playoff",
+      config: {},
+      progression: playoffProgressionOf(raw),
+    });
+    // The knockout's own fixture owes a STREAM: the product stamps a generated
+    // bracket game `scheduled` unless it carries an award (a bye —
+    // `usecases/stages.ts:1351`), and `seedSuite` throws on any generated
+    // fixture still at `scheduled` that no stream claims (`seed.ts:342`,
+    // `SETTLED_AT_GENERATION`). A stream in turn owes an `expected.matches`
+    // row — `PackSchema`'s anti-vacuity rule, "a replayed stream with no
+    // oracle asserts nothing" (`pack-schema.ts:2105`).
+    //
+    // Both are COPIED from `d-badminton`'s own league fixture rather than
+    // authored here: the rally sequence is a reconstructed 21-15/21-18 win for
+    // `e-cho`, and re-deriving one by hand would be inventing a badminton
+    // scoreline this test has no way to check.
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+    raw.expected.finalRanks.push({
+      divisionRef: "d-badminton",
+      stageRef: "s-badminton-ko",
+      order: ["e-cho", "e-dahl"],
+    });
+  });
+}
+
+describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
+  it("proposes, confirms and generates for the SECOND division's progression-fed stage too", async () => {
+    const packPath = await twoAdvancingDivisionsPack();
+    const { transport, sql, calls } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // TWO proposals, not one. This is the whole task: the pre-T6 gate read
+    // `division0`'s second stage only, so `d-badminton`'s knockout was
+    // generated at seed time and then never seeded from a proposal at all.
+    const proposals = calls.filter((c) => c.method === "POST" && /\/seed-proposal$/.test(c.path));
+    expect(proposals).toHaveLength(2);
+    // Confirm and generate reached BOTH target stages — a proposal that was
+    // asserted and then abandoned would leave the second stage unseeded while
+    // still counting above.
+    const confirms = calls.filter((c) => c.method === "POST" && /\/seed-proposal\/confirm$/.test(c.path));
+    expect(confirms).toHaveLength(2);
+
+    // The oracle NAMES carry the division ref. Stage refs are unique only
+    // WITHIN a division (`pack-schema.ts`'s `checkRefsUnique` builds its
+    // `seenStage` set inside the per-division loop), so two divisions may
+    // legally declare the same stage ref — and a report whose reader cannot
+    // tell which division failed is the thing this names away.
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-ko seed proposal qualifiers",
+    ]);
+    // …and both actually PASSED. A reachability assertion is satisfied by any
+    // value (AGENTS.md rule 19): an oracle that compared an empty qualifier
+    // list against an empty proposal would still be present and correctly
+    // named here.
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // The captured `complete` response was compared for BOTH, which is what
+    // proves the second division ran the whole propose -> confirm -> generate
+    // -> play -> complete flow rather than stopping at the assertion.
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-badminton-ko finalRanks",
+    ]);
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
   });
 });
