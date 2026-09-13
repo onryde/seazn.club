@@ -89,9 +89,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # `runs-on` for all three jobs reads the E2E_RUNNER repo variable (Settings
-  # -> Secrets and variables -> Actions -> Variables), so the runner can
-  # change without editing this file. Defaults to ubuntu-latest (a stock
+  # `runs-on` for every job reads the RUNS_ON repo variable (Settings ->
+  # Secrets and variables -> Actions -> Variables), so the runner can change
+  # without editing this file. Defaults to ubuntu-latest (a stock
   # GitHub-hosted runner) when unset. Blacksmith runners and their builder
   # actions were removed repo-wide; the builder steps below are stock
   # docker/* actions unconditionally now.
@@ -102,7 +102,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-parallel:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     # No job here had a timeout, so GitHub's 360-minute default applied. Over
     # the 100 runs to 2026-08-19, 15 e2e jobs ran past 30 minutes and burned
     # 46% of this workflow's entire runner time (2,499 of 5,403 minutes); five
@@ -710,7 +710,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-serial:
     name: Playwright e2e — serial (Postgres container)
-    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     # See e2e-parallel's timeout note: no job here had one, so a hung
     # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
     timeout-minutes: 20
@@ -968,7 +968,7 @@ jobs:
   # ---------------------------------------------------------------------
   e2e-mobile:
     name: Playwright e2e — ${{ matrix.group }} (Postgres container)
-    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
     # See e2e-parallel's timeout note: no job here had one, so a hung
     # Playwright run burned GitHub's 360-minute default. p95 is ~7 minutes.
     timeout-minutes: 20
