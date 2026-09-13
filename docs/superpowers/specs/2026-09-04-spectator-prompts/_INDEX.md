@@ -673,3 +673,26 @@ end state is a 308 to `/shared/{org}/{comp}?tab=matches&division={slug}`, mappin
   `REVALIDATE_FAST`, and the page does not re-parse it. (`usecases/public.ts`'s JSON cache
   re-parses hits and self-heals.) Any schema change here also regenerates `openapi/v1*.json` —
   the hub route's response IS `CompetitionHubDoc`.
+
+## The hub Knockout tab — owner decisions (2026-09-13)
+
+Plan of record: `docs/superpowers/plans/2026-09-13-hub-knockout-tab.md`. Mock:
+https://claude.ai/code/artifact/bd05d9de-88b3-49d6-9be9-93cddfdc7ed5 (real seeded 32-draw names,
+illustrative results).
+
+- **"B"** — knockouts get their own hub tab, not a section of Table.
+- **Option A at every width** — a round rail, then that round's matches as cards. The owner's words
+  on the alternative: *"I still want to draw along with A"*, *"show draw only for Desk or Tablet?"*,
+  *"and hide by default?"* Ruled: the one-sided Draw tree exists only at **≥1024px** (`lg`), behind a
+  **Rounds | Draw** switch that **defaults to Rounds**, kept in the URL as `?view=draw`. 1024 is where
+  hub content is 992px and a 32-draw needs 990; at portrait-tablet widths (768/834) it would scroll.
+- **"What happens if we don't have knockout?"** — no Knockout tab; tabs exist by presence. League,
+  groups, Swiss, americano and ladder stay on Table, exactly as the division page draws them today;
+  groups-then-knockout gets both tabs.
+- **Draw only for regular single elimination in this wave** — the engine's `twoSidedBracket` is the
+  authority on that shape. Double elimination, page playoff and stepladder get the Rounds view only.
+- **The build reuses `MatchCard`**, so a card shows what a Matches card shows (`scoreLines`), not the
+  mock's per-game columns: the hub document carries no set rows. Recorded so the difference from the
+  mock is a decision, not a surprise.
+- **Found by the mock and carried into the build:** a rail opened on its last round left the pressed
+  chip off-screen; the rail scrolls itself to the pressed chip.
