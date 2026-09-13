@@ -1018,6 +1018,12 @@ async function main() {
   // silent either. Own fresh community org; keyless-safe.
   await publicQuotaDegradeSuite();
 
+  // --- Hub Knockout tab (plan 2026-09-13, Task 3): a public knockout
+  // competition's hub document offers `knockout`, its rounds name only
+  // fixtures the document lists, and the champion lands when the final is
+  // decided. Own fresh community org; keyless-safe.
+  await hubKnockoutSuite();
+
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
   // passed-vs-sibling PAIR inside one fresh community org — allowed here,
   // refused there — so no assertion can be satisfied by a passless org. Own
@@ -1699,6 +1705,157 @@ async function p72Suite(): Promise<void> {
  *  pass overlays comp-scoped Pro features INSIDE the passed comp only; the dead
  *  Event-Pass members.max row is gone → org-wide keys resolve community for a
  *  passed org. */
+/**
+ * Hub Knockout tab (plan 2026-09-13, Task 3) — the PUBLIC competition hub
+ * document for a seeded knockout competition offers a `knockout` tab, its
+ * knockout view's rounds name only fixtures that same document lists, and the
+ * view's champion appears exactly when the final is decided.
+ *
+ * Driven through the real API end to end: results are `generic.result`
+ * events, and the final's two slots fill from the semi-final winners through
+ * the engine's own `onDecided`, never SQL. The hub is read by an ANONYMOUS
+ * session, as a spectator's page polls it. The mid-event read comes after a
+ * scoring write and the final read after another, so a hub cache that a
+ * scoring write fails to clear reds the champion check rather than hiding.
+ * Own fresh community org (single-elimination knockout is a Community
+ * format); keyless-safe.
+ */
+async function hubKnockoutSuite(): Promise<void> {
+  const owner = newSession();
+  const who = await signIn(owner, `delivered+hubko_${tag}@resend.dev`);
+  const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+  const orgSlug = orgs.find((o) => o.id === who.org_id)?.slug ?? "";
+
+  const comp = await v1(owner, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Hub Knockout ${tag}`,
+    visibility: "public",
+  });
+  const compRow = v1data<{ id: string; slug: string; visibility: string }>(comp);
+  check(
+    "hub knockout: a PUBLIC competition is created (not degraded to private)",
+    comp.status === 201 && compRow.visibility === "public" && orgSlug !== "",
+  );
+
+  const div = await v1(owner, `/api/v1/competitions/${compRow.id}/divisions`, "POST", {
+    name: "Cup",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divId = v1data<{ id: string }>(div).id;
+  const entrants = await v1(
+    owner,
+    `/api/v1/divisions/${divId}/entrants`,
+    "POST",
+    ["KO One", "KO Two", "KO Three", "KO Four"].map((name, i) => ({
+      kind: "individual",
+      display_name: name,
+      seed: i + 1,
+    })),
+  );
+  const stage = await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", {
+    seq: 1,
+    kind: "knockout",
+    name: "Cup",
+  });
+  const stageId = v1data<{ id: string }>(stage).id;
+  const generated = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+  const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+  check(
+    "hub knockout: a generic division, 4 entrants and a generated knockout stage, started",
+    div.status === 201 &&
+      entrants.status < 300 &&
+      stage.status < 300 &&
+      generated.status < 300 &&
+      started.status < 300,
+  );
+
+  type KoFixture = {
+    id: string;
+    round_no: number;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+  };
+  const fixtures = async () =>
+    v1data<KoFixture[]>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+  const score = async (fixtureId: string) => {
+    const state = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${fixtureId}/state`));
+    return v1(owner, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+      expected_seq: state.last_seq,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 1 },
+    });
+  };
+
+  const drawn = await fixtures();
+  const firstRound = Math.min(...drawn.map((f) => f.round_no));
+  const semis = drawn.filter((f) => f.round_no === firstRound);
+  const finalId = drawn.find((f) => f.round_no !== firstRound)?.id ?? "";
+  check(
+    "hub knockout: a 4-draw generates two semi-finals and a final",
+    drawn.length === 3 && semis.length === 2 && finalId !== "",
+  );
+
+  // The first round.
+  const semiWrites: number[] = [];
+  for (const semi of semis) semiWrites.push((await score(semi.id)).status);
+  check(
+    "hub knockout: both semi-final results are accepted",
+    semiWrites.length === 2 && semiWrites.every((s) => s < 300),
+  );
+
+  type HubOut = {
+    tabs: string[];
+    knockouts: {
+      rounds: { key: string; fixtureIds: string[] }[];
+      championFixtureId: string | null;
+    }[];
+    matches: { fixtureId: string }[];
+  };
+  const hubPath = `/api/v1/public/orgs/${orgSlug}/competitions/${compRow.slug}/hub`;
+  const midRes = await v1(newSession(), hubPath);
+  const mid = v1data<HubOut | undefined>(midRes);
+  const midMatchIds = new Set((mid?.matches ?? []).map((m) => m.fixtureId));
+  const midRounds = mid?.knockouts?.[0]?.rounds ?? [];
+  check("hub knockout: the anonymous hub document serves 200", midRes.status === 200);
+  check("hub knockout: `tabs` includes `knockout`", mid?.tabs?.includes("knockout") === true);
+  check(
+    "hub knockout: `knockouts[0].rounds` is non-empty — the semi-finals (2) then the final (1)",
+    midRounds.length === 2 &&
+      midRounds[0].fixtureIds.length === 2 &&
+      midRounds[1].fixtureIds.length === 1,
+  );
+  check(
+    "hub knockout: every `rounds[].fixtureIds` entry exists in `matches`",
+    midRounds.length > 0 &&
+      midRounds.every((r) => r.fixtureIds.length > 0 && r.fixtureIds.every((id) => midMatchIds.has(id))),
+  );
+  check(
+    "hub knockout: no champion while the final is unplayed",
+    mid?.knockouts?.[0]?.championFixtureId === null,
+  );
+
+  // The final's slots fill from the semi-final winners; bounded wait, never a
+  // fixed sleep's worth of hope.
+  let filled = false;
+  for (let tries = 0; tries < 20 && !filled; tries++) {
+    const final = (await fixtures()).find((f) => f.id === finalId);
+    filled = !!final?.home_entrant_id && !!final?.away_entrant_id;
+    if (!filled) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  check("hub knockout: the final's two slots fill from the semi-final winners", filled);
+  const finalWrite = filled ? (await score(finalId)).status : 0;
+  check("hub knockout: the final's result is accepted", finalWrite > 0 && finalWrite < 300);
+
+  const done = v1data<HubOut | undefined>(await v1(newSession(), hubPath));
+  check(
+    "hub knockout: after the final is scored, `championFixtureId` equals the final's id",
+    done?.knockouts?.[0]?.championFixtureId === finalId &&
+      done?.knockouts?.[0]?.rounds?.[1]?.fixtureIds?.[0] === finalId,
+  );
+}
+
 /**
  * T20 — `dashboard.public.max` DEGRADES a create; it never refuses one, and it
  * is never silent about it.
