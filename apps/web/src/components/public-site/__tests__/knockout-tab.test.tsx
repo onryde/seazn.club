@@ -519,6 +519,25 @@ describe("KnockoutTab — the view switch and the Draw", () => {
     expect(classOf(h, "mh-knockout-node-q2")).not.toContain("border-emerald-400");
   });
 
+  it("the switch and the division rail are DIRECT children of the root — no wrapper to keep its spacing where the switch is hidden", () => {
+    // Tailwind v4's `space-y-*` is `margin-block-end` on every child but the
+    // last (`tailwindcss/dist/lib.js`). A hidden element generates no box and
+    // so no margin — but a VISIBLE wrapper whose only child is the hidden
+    // switch keeps its margin, a blank band at the top of the panel on every
+    // phone, for the commonest document there is: one division, one drawable
+    // bracket. Only a browser sees the band; the structure that causes it is
+    // what this pins.
+    expect(render(MID)).toMatch(
+      /^<div data-testid="mh-knockout" class="[^"]*"><div data-testid="mh-knockout-view"/,
+    );
+    const multi = render(MULTI);
+    expect(multi).toMatch(
+      /^<div data-testid="mh-knockout" class="[^"]*"><div data-testid="mh-knockout-divisions"/,
+    );
+    // …and the switch opens straight after the division rail closes.
+    expect(multi).toMatch(/<\/button><\/div><div data-testid="mh-knockout-view"/);
+  });
+
   it("TWO drawable views share ONE switch — `?view=` is one parameter for the whole tab", () => {
     const h = render(
       hubDoc({

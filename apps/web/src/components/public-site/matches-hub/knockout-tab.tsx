@@ -509,52 +509,49 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
   const chooseRound = (viewId: string, key: string) => {
     setChosenRounds((previous) => ({ ...previous, [viewId]: key }));
   };
-  // Whether the Rounds/Draw switch exists — ONE expression, read by the
-  // wrapper that holds the rails AND by the switch itself. Written out twice,
-  // the wrapper's copy stays closed for a single-division, non-drawable
-  // document and hides whatever the switch's own copy says, so a mutant on
-  // the switch could never be seen (AGENTS.md 3).
+  // Whether the Rounds/Draw switch exists: some bracket on screen can be drawn.
   const canDraw = shown.some((view) => view.drawable);
 
   return (
     <div data-testid="mh-knockout" className="min-w-0 space-y-6">
-      {divisions.length > 0 || canDraw ? (
-        <div className="min-w-0 space-y-3">
-          {divisions.length > 0 ? (
-            <div
-              data-testid="mh-knockout-divisions"
-              role="group"
-              tabIndex={0}
-              aria-label={t(dict, "matchesHub.divisionsLabel")}
-              className={HUB_RAIL_CLASS}
-            >
-              {hubChip("mh-knockout-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
-                chooseDivision(null),
-              )}
-              {divisions.map((d) =>
-                hubChip(`mh-knockout-division-${d.slug}`, d.name, division === d.slug, () =>
-                  chooseDivision(d.slug),
-                ),
-              )}
-            </div>
-          ) : null}
-          {canDraw ? (
-            // Hidden below the large breakpoint, where there is no Draw to
-            // switch to: a `?view=draw` link opened on a phone shows Rounds.
-            <div
-              data-testid="mh-knockout-view"
-              role="group"
-              aria-label={t(dict, "knockout.view.label")}
-              className="flex justify-end gap-2 max-lg:hidden"
-            >
-              {hubChip("mh-knockout-view-rounds", t(dict, "knockout.view.rounds"), mode === "rounds", () =>
-                chooseMode("rounds"),
-              )}
-              {hubChip("mh-knockout-view-draw", t(dict, "knockout.view.draw"), mode === "draw", () =>
-                chooseMode("draw"),
-              )}
-            </div>
-          ) : null}
+      {/* The division rail and the switch are DIRECT children of this root,
+          never wrapped together. The root spaces every child but its last;
+          a hidden element takes no space, but a visible wrapper around a
+          switch hidden below the large breakpoint would keep it, as a blank
+          band at the top of the panel on every phone. */}
+      {divisions.length > 0 ? (
+        <div
+          data-testid="mh-knockout-divisions"
+          role="group"
+          tabIndex={0}
+          aria-label={t(dict, "matchesHub.divisionsLabel")}
+          className={HUB_RAIL_CLASS}
+        >
+          {hubChip("mh-knockout-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
+            chooseDivision(null),
+          )}
+          {divisions.map((d) =>
+            hubChip(`mh-knockout-division-${d.slug}`, d.name, division === d.slug, () =>
+              chooseDivision(d.slug),
+            ),
+          )}
+        </div>
+      ) : null}
+      {canDraw ? (
+        // Hidden below the large breakpoint, where there is no Draw to
+        // switch to: a `?view=draw` link opened on a phone shows Rounds.
+        <div
+          data-testid="mh-knockout-view"
+          role="group"
+          aria-label={t(dict, "knockout.view.label")}
+          className="flex justify-end gap-2 max-lg:hidden"
+        >
+          {hubChip("mh-knockout-view-rounds", t(dict, "knockout.view.rounds"), mode === "rounds", () =>
+            chooseMode("rounds"),
+          )}
+          {hubChip("mh-knockout-view-draw", t(dict, "knockout.view.draw"), mode === "draw", () =>
+            chooseMode("draw"),
+          )}
         </div>
       ) : null}
 
