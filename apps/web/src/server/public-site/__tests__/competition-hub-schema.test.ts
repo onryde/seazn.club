@@ -18,6 +18,11 @@
 //   7 `name` made `.nullable()` ................ "a required field cannot be null"
 //   8 `resultLine` loses `.nullable()` ......... the round-trip case (+2 more)
 //   9 `sportName` loses `.nullable()` .......... the round-trip case (+3 more)
+//
+// Knockout tab, Task 1 (2026-09-13) — same protocol, three more, all killed:
+//  10 fixture-id check never raises ........... "a round naming a fixture that is not in `matches`…" (+1)
+//  11 champion-id check never raises .......... "a championFixtureId that is not in `matches`…"
+//  12 refinement counts knockouts as 0 ........ "knockouts earn a Knockout tab" (+5 more)
 import { describe, expect, it } from "vitest";
 import { deriveHubTabs } from "@/lib/matches-hub";
 import { BRACKET_KINDS } from "@/server/public-site/champion";

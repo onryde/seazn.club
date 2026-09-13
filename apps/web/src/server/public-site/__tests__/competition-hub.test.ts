@@ -1345,6 +1345,20 @@ describe("loadCompetitionHub — a FINALIZED fixture is a decided one", () => {
 // fed in SCRAMBLED order (last round first, seq reversed, lanes back to
 // front): an ordering rule that merely preserved its input would pass an
 // already-sorted input and assert nothing.
+//
+// Mutation sweep (2026-09-13) — one mutant at a time, restored from the commit,
+// every run at its full green total; killer named:
+//   drop the `knockout` push (matches-hub.ts) .. matches-hub.test.ts "exactly ONE knockout view…" (+2)
+//   `> 0` → `> 1` on that push ................. matches-hub.test.ts "exactly ONE knockout view…" (+1)
+//   `drawable: true` always .................... "drawable: FALSE when round 0 holds three fixtures" (+2)
+//   champion without the decided check ........ "NO champion while the final is still being played"
+//   third-place round placed after the final .. "rounds run in bracket order … BEFORE the final" (+1)
+//   voided-reset skip removed ................. "a reset the adapter VOIDED is skipped"
+//   no-is_final fallback removed .............. "with no is_final flag anywhere…"
+//   laneRank returns 0 ........................ "rounds order by LANE first"
+//   bracket stages not seq-sorted ............. "one view per bracket stage WITH fixtures…"
+//   empty-stage `return null` removed ......... "one view per bracket stage WITH fixtures…"
+//   tab count passes `knockouts: 0` ........... 17 tests, led by "a league-then-knockout division…"
 
 describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
   const league: PublicStage = { ...STAGE, id: "lg", seq: 1, kind: "league", name: "League" };
