@@ -251,3 +251,28 @@ Acceptance:
 2. Smoke: the hub JSON for a seeded knockout competition carries `knockout` in
    `tabs` and a `knockouts[0].rounds` with fixture ids that exist in `matches`.
 3. Run the whole new spec file (never `-g`), paste the counts.
+
+## Visual verification and owner sign-off (owner, 2026-09-13: "Make sure that follow visual verification and sign off")
+
+Binding on Tasks 2 and 3. A green suite is not a sign-off (AGENTS.md classes 10, 11, 15).
+
+1. **Real renders, rebuilt bundle.** `seazn-env rebuild --label spectw2` after the last code
+   commit; confirm the build is newer than the last edited file before capturing anything.
+2. **The matrix, every cell captured and looked at:**
+   | State | 320 | 390 | 768 | 1024 | 1280 |
+   |---|---|---|---|---|---|
+   | Knockout tab, mid-event (live round opens) | ✓ | ✓ | ✓ | ✓ | ✓ |
+   | Draw complete (opens on Final, champion banner, pressed chip visible) | ✓ | | ✓ | | ✓ |
+   | Draw switch tapped (`?view=draw`) | — | — | switch absent, Rounds shown | ✓ tree | ✓ tree |
+   | Multi-division: All, then one division chip | ✓ | | | | ✓ |
+   | Non-drawable bracket (double elim or odd field) | ✓ | | | | ✓ |
+   | League-only competition: no Knockout tab | ✓ | | | | ✓ |
+   | 32-draw tree at 1024 — fits, no sideways scroll inside or out | | | | ✓ | |
+3. **Every capture proves it is different and current:** images exist, differ from each other,
+   and each is taken after the state it claims (the chip pressed, the URL written) — assert that
+   in the script and print what it saw, then take the picture.
+4. **Per-screen verdicts, written down:** one line per cell — pass, or the defect seen (clipped
+   text, overlap, misalignment, colour, tap area, horizontal page scroll). A cosmetic defect is a
+   defect; fix and recapture before moving on.
+5. **Owner sign-off:** publish the contact sheet with the verdicts as an artifact and put it in
+   front of the owner. No PR, no merge, and no division-page redirect until the owner signs it off.
