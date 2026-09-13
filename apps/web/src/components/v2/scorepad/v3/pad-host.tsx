@@ -1784,13 +1784,18 @@ export function PadHostV3(props: PadHostV3Props) {
   const clockSpec = props.skin.clock?.(view) ?? null;
   const nextClock = reseatClock(clock, clockSpec);
   if (nextClock !== clock) {
-    clockRef.current = nextClock;
     setClock(nextClock);
     // A whistle re-seats the clock, and a correction row left open across it
     // would be offering to nudge a period the scorer has already left. Closing
     // here rather than in an effect keeps it in the same render as the re-seat.
     if (adjusting) setAdjusting(false);
   }
+  // Sync the ref AFTER render — react-hooks/refs forbids writing `.current`
+  // during render (CI lint gate). Mutators still write the ref synchronously
+  // so Correct/toggle see the latest seat before the next paint.
+  useEffect(() => {
+    clockRef.current = clock;
+  }, [clock]);
 
   // W1/Task 4 review, M-1: `entitlements` used to ride along here. `PadViewCtx`
   // no longer declares it (view-model.ts) and `buildPadView` never reads it, so
