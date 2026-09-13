@@ -386,6 +386,27 @@ export function dedicatedEventTypes(
   return out;
 }
 
+/**
+ * PadClockBar is a dedicated surface that never appears in tiles/sheets/swaps/
+ * scorebug, so `dedicatedEventTypes` cannot see it. When the skin declares
+ * `clock()`, every `*.clock` fidelity key is already reachable there and must
+ * stay out of More — the same de-duplication ruling as Goal / Sub / a
+ * tappable half. Callers that rebuild the host's own More exclusion set must
+ * run this after `dedicatedEventTypes`.
+ */
+export function claimPadClockDedicated(
+  dedicated: ReadonlySet<string>,
+  skin: SkinDefV3,
+  fidelity: Readonly<Record<string, FidelityBand>>,
+): Set<string> {
+  if (typeof skin.clock !== "function") return new Set(dedicated);
+  const out = new Set(dedicated);
+  for (const type of Object.keys(fidelity)) {
+    if (type.endsWith(".clock")) out.add(type);
+  }
+  return out;
+}
+
 /** The "More" sheet's own content: every `padSpec(cfg)` action NOT in
  *  `dedicated` and NOT in `refused`, phase/gate/band/entitlement-filtered
  *  exactly like the panel walk `buildPadView` already does for the legacy
@@ -814,8 +835,13 @@ export function reachableControls(
   const refused = new Set(skin.refusedEventTypes?.(at) ?? []);
 
   // `dedicated` is built exactly as the host builds it, and used for exactly
-  // what the host uses it for: deciding what the More sheet holds.
-  const dedicated = dedicatedEventTypes(bandTiles, sheets, swaps, scorebug);
+  // what the host uses it for: deciding what the More sheet holds. PadClockBar
+  // is a fifth surface `dedicatedEventTypes` cannot see — claim it here.
+  const dedicated = claimPadClockDedicated(
+    dedicatedEventTypes(bandTiles, sheets, swaps, scorebug),
+    skin,
+    spec.fidelity,
+  );
   const more = moreActions(spec, { state: at.state, summary: at.summary, phase: at.phase, band }, dedicated, refused);
 
   // A DISABLED tile is drawn but cannot be pressed, so it is not a control —
@@ -1782,8 +1808,17 @@ export function PadHostV3(props: PadHostV3Props) {
   // G4's reasoning for not memoizing it lives with that declaration.
   // R3/football: `swapSlots` is the third argument — without it a swap's own
   // event stays listed in the More sheet as an un-narrowed generic form
-  // beside its Sub tile (see dedicatedEventTypes' own doc).
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots, scorebugSpec), [tiles, sheets, swapSlots, scorebugSpec]);
+  // beside its Sub tile (see dedicatedEventTypes' own doc). PadClockBar is a
+  // fifth surface the tile/sheet/swap/scorebug walk cannot see.
+  const dedicated = useMemo(
+    () =>
+      claimPadClockDedicated(
+        dedicatedEventTypes(tiles, sheets, swapSlots, scorebugSpec),
+        props.skin,
+        spec.fidelity,
+      ),
+    [tiles, sheets, swapSlots, scorebugSpec, props.skin, spec.fidelity],
+  );
   // R3 review round: the skin's own "the fold refuses this right now" set —
   // `moreActions`' second exclusion set, see its doc for why the two are not
   // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and

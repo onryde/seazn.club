@@ -57,11 +57,13 @@ import {
   buildSheets,
   buildSwap,
   buildTiles,
+  footballSkinV3,
   periodMarkersOf,
   refusedEventTypes,
   resolvePhase,
 } from "../skins/football";
 import {
+  claimPadClockDedicated,
   dedicatedEventTypes,
   filterTilesByBand,
   moreActions,
@@ -81,6 +83,7 @@ const padSpecFor = footballModule.padSpec;
 const ALL_EVENT_TYPES = new Set(Object.keys(footballModule.eventSchemas));
 
 const t = (key: string): string => key;
+const footballSkin = footballSkinV3(t);
 const ALL_BANDS: readonly FidelityBand[] = [0, 1, 2, 3];
 
 // ---------------------------------------------------------------------------
@@ -132,6 +135,8 @@ interface Reach {
   viaSheets: Set<string>;
   viaSwap: Set<string>;
   viaMore: Set<string>;
+  /** PadClockBar — Pause / Start / Correct publish `football.clock`. */
+  viaClock: boolean;
   /** The enabled marker options the period sheet currently offers. */
   periodMarkers: string[];
 }
@@ -154,8 +159,13 @@ function reachIn(s: Situation): Reach {
   // fixture: it is a tapModel-T readout that declares no `tappable` half, so
   // it must contribute nothing — and asserting that through the production
   // symbol is what proves this wave left football's More sheet alone, instead
-  // of a comment claiming it did.
-  const dedicated = dedicatedEventTypes(tiles, sheets, slots, buildScorebug(view, t));
+  // of a comment claiming it did. PadClockBar is claimed the same way the
+  // host claims it (`claimPadClockDedicated`).
+  const dedicated = claimPadClockDedicated(
+    dedicatedEventTypes(tiles, sheets, slots, buildScorebug(view, t)),
+    footballSkin,
+    spec.fidelity,
+  );
 
   // A tile the current phase does not declare is not on screen, so nothing it
   // would open is reachable either.
@@ -193,26 +203,38 @@ function reachIn(s: Situation): Reach {
       ? periodSheet.steps[0].options.filter((option) => blocked?.[option.id] === undefined).map((o) => o.id)
       : [];
 
-  return { viaTiles, viaSheets, viaSwap, viaMore, periodMarkers };
+  // PadClockBar mounts only when `clock()` returns a spec (play phases).
+  const viaClock = footballSkin.clock?.(view) != null;
+
+  return { viaTiles, viaSheets, viaSwap, viaMore, viaClock, periodMarkers };
 }
 
 function allReachable(reach: Reach): Set<string> {
-  return new Set([...reach.viaTiles, ...reach.viaSheets, ...reach.viaSwap, ...reach.viaMore]);
+  const out = new Set([...reach.viaTiles, ...reach.viaSheets, ...reach.viaSwap, ...reach.viaMore]);
+  if (reach.viaClock) out.add("football.clock");
+  return out;
 }
 
 describe("football dispatch-guard totality (R3/task B2 headline)", () => {
-  it("the engine declares exactly 9 football.* event types (pins today's known-good shape)", () => {
-    expect(ALL_EVENT_TYPES.size).toBe(9);
+  it("the engine declares exactly 10 football.* event types (pins today's known-good shape)", () => {
+    expect(ALL_EVENT_TYPES.size).toBe(10);
   });
 
-  it("every football.* event type is reachable via tiles, sheets, the swap sheet or More — swept across every shipped cfg", () => {
-    const surfaces = { tiles: new Set<string>(), sheets: new Set<string>(), swap: new Set<string>(), more: new Set<string>() };
+  it("every football.* event type is reachable via tiles, sheets, the swap sheet, PadClockBar or More — swept across every shipped cfg", () => {
+    const surfaces = {
+      tiles: new Set<string>(),
+      sheets: new Set<string>(),
+      swap: new Set<string>(),
+      more: new Set<string>(),
+      clock: false,
+    };
     for (const s of situations()) {
       const reach = reachIn(s);
       for (const type of reach.viaTiles) surfaces.tiles.add(type);
       for (const type of reach.viaSheets) surfaces.sheets.add(type);
       for (const type of reach.viaSwap) surfaces.swap.add(type);
       for (const type of reach.viaMore) surfaces.more.add(type);
+      if (reach.viaClock) surfaces.clock = true;
     }
 
     // Each of the four surfaces pulls real weight — a vacuously empty bucket
@@ -221,8 +243,10 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
     expect([...surfaces.sheets], "guided sheets reached nothing").not.toEqual([]);
     expect([...surfaces.swap], "the swap sheet reached nothing").not.toEqual([]);
     expect([...surfaces.more], "the More sheet reached nothing").not.toEqual([]);
+    expect(surfaces.clock, "PadClockBar never mounted in any situation").toBe(true);
 
     const union = new Set([...surfaces.tiles, ...surfaces.sheets, ...surfaces.swap, ...surfaces.more]);
+    if (surfaces.clock) union.add("football.clock");
     const missing = [...ALL_EVENT_TYPES].filter((type) => !union.has(type)).sort();
     expect(missing, `unreachable football.* event types: ${missing.join(", ")}`).toEqual([]);
 
@@ -298,12 +322,25 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
   // the ENTIRE match rather than a rare type. Outside SHOOTOUT it was already
   // REFUSED (`refusedEventTypes`), never offered via More either — so across
   // every situation this sweep measures, it never appears in `viaMore` at
-  // all any more. R3-4 still stands for the other three: `football.shot` and
-  // both sin-bin forms remain generic-form-only in every situation.
+  // all any more. `football.clock` is PadClockBar-only (2026-09-13). R3-4
+  // still stands for the other three: `football.shot` and both sin-bin forms
+  // remain generic-form-only in every situation.
   it("the three remaining More-sheet types are exactly ruling R3-4's leftovers, and no dedicated type joins them", () => {
     const viaMore = new Set<string>();
     for (const s of situations()) for (const type of reachIn(s).viaMore) viaMore.add(type);
     expect([...viaMore].sort()).toEqual(["football.shot", "football.sinbin.end", "football.sinbin.start"]);
+  });
+
+  it("football.clock is PadClockBar-dedicated and never appears in More", () => {
+    const leaks: string[] = [];
+    let mounted = false;
+    for (const s of situations()) {
+      const reach = reachIn(s);
+      if (reach.viaClock) mounted = true;
+      if (reach.viaMore.has("football.clock")) leaks.push(s.label);
+    }
+    expect(mounted, "PadClockBar never mounted").toBe(true);
+    expect(leaks, `football.clock offered as a generic More form in:\n${leaks.join("\n")}`).toEqual([]);
   });
 
   it("football.shootout.kick is a DEDICATED type during SHOOTOUT, and never appears in More in any situation (R3.5-5)", () => {
@@ -330,6 +367,7 @@ describe("football dispatch-guard totality (R3/task B2 headline)", () => {
     for (const s of situations()) {
       const reach = reachIn(s);
       const dedicatedNow = new Set([...reach.viaTiles, ...reach.viaSheets, ...reach.viaSwap]);
+      if (reach.viaClock) dedicatedNow.add("football.clock");
       for (const type of reach.viaMore) {
         if (dedicatedNow.has(type)) duplicates.push(`${s.label}: ${type}`);
       }

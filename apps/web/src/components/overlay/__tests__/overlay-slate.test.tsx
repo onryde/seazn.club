@@ -65,11 +65,14 @@ function render(
     cricketToss,
   }: { locale?: string; cricketToss?: { wonBySide: 0 | 1; elected: "bat" | "bowl" } | null } = {},
 ) {
-  return renderIsland(
-    OverlayMatchCard,
-    { model, msg: msgOf(locale), cricketToss },
-    expand,
-  );
+  // Omit `cricketToss` when unset — `exactOptionalPropertyTypes` treats an
+  // explicit `undefined` key as a different props shape than an absent key,
+  // and `rerender(themeProps(...))` only passes model+msg.
+  const props =
+    cricketToss === undefined
+      ? { model, msg: msgOf(locale) }
+      : { model, msg: msgOf(locale), cricketToss };
+  return renderIsland(OverlayMatchCard, props, expand);
 }
 
 const byTestId = (tree: ReactElement[], id: string) => tree.find((el) => propsOf(el)["data-testid"] === id);

@@ -123,6 +123,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "cricket.toss": "event.cricket.toss",
 
   "football.card": "event.football.card",
+  "football.clock": "event.football.clock",
   "football.goal": "event.football.goal",
   "football.penalty": "event.football.penalty",
   "football.period": "event.football.period",
@@ -135,6 +136,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "generic.result": "event.generic.result",
   "generic.score": "event.generic.score",
 
+  "hockey.clock": "event.hockey.clock",
   "hockey.goal": "event.hockey.goal",
   "hockey.period.advance": "event.hockey.period.advance",
   "hockey.set_piece": "event.hockey.set_piece",
@@ -143,6 +145,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "hockey.suspension.start": "event.hockey.suspension.start",
   "hockey.suspension.end": "event.hockey.suspension.end",
 
+  "icehockey.clock": "event.icehockey.clock",
   "icehockey.goal": "event.icehockey.goal",
   "icehockey.period.advance": "event.icehockey.period.advance",
   "icehockey.set_piece": "event.icehockey.set_piece",
@@ -902,6 +905,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.ribbon.toss",
 
   "pad.football.action.card",
+  "pad.football.action.clock",
+  "pad.football.action.clock.field.running",
   "pad.football.action.goal",
   "pad.football.action.penalty",
   "pad.football.action.period",
@@ -959,6 +964,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.generic.scorebug.tally.hint",
 
   "pad.hockey.action.advance",
+  "pad.hockey.action.clock",
+  "pad.hockey.action.clock.field.running",
   "pad.hockey.action.goal",
   "pad.hockey.action.goal.field.emptyNet",
   "pad.hockey.action.setPiece",
@@ -978,6 +985,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.panel.shot",
 
   "pad.icehockey.action.advance",
+  "pad.icehockey.action.clock",
+  "pad.icehockey.action.clock.field.running",
   "pad.icehockey.action.goal",
   "pad.icehockey.action.goal.field.emptyNet",
   "pad.icehockey.action.setPiece",

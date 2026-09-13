@@ -18,7 +18,7 @@ describe("whistleAt — consecutive FT advances must not share a payload", () =>
       lineups,
       band: 3,
       phase: "live",
-    } as PadHostView;
+    } as unknown as PadHostView;
   }
 
   it("names the phase being closed, even with no live clockAt", () => {

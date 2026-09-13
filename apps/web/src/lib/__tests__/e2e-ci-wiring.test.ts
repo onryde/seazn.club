@@ -184,6 +184,7 @@ const WALKTHROUGH_SPECS: string[] = [
   "scorepad-v3-honest-recording.spec.ts",
   "scorepad-v3-period-pair.spec.ts",
   "scorepad-v3-r7-console-chrome.spec.ts",
+  "scorepad-v3-soft-commit-visual.spec.ts",
   "scorepad-v3-tabletennis-match.spec.ts",
   "scorepad-v3-tennis-mtb.spec.ts",
   "scorepad-v3-volleyball-match.spec.ts",
