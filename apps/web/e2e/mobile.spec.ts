@@ -172,7 +172,15 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       await expect(activityToggle).toBeVisible();
       expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(1);
       await activityToggle.click();
-      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(rowCount);
+      // Re-count after expand: a tap's ledger row can land between the initial
+      // `rowCount` snapshot and this click (badminton's two half-taps are
+      // back-to-back with no poll), and `max-md:hidden` only toggles on the
+      // rows that exist at render time — stale `rowCount` then reads "expected
+      // 2, got 3 visible" even though the product is correct.
+      const expandedCount = await rows.count();
+      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(
+        expandedCount,
+      );
       await activityToggle.click();
     }
     // Lineup disclosures: rows visible, editors folded.
@@ -3991,6 +3999,21 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   await expect(serverItem, "two tapped rallies must bring the server onto the strip").toBeVisible({
     timeout: 20_000,
   });
+  // Same poll the cricket v3 test pays before `expectPhoneComposition`: the
+  // ledger assertion snapshots row count once, and both taps can outrun the
+  // fold before that snapshot if we only wait on UI chrome (the server strip).
+  await expect
+    .poll(
+      async () => {
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).filter((e) => e.type === "badminton.rally").length;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(2);
   await expectNoHorizontalScroll(page);
   await expectPhoneComposition(page, "S");
 });

@@ -94,6 +94,12 @@ async function captureRow(
       page.locator(row.awaitSelector).first(),
       `${label}: ${row.awaitSelector} never rendered`,
     ).toBeVisible();
+    if (group.seed === "overlay-fixture" && row.route.includes("style=bar")) {
+      await expect(
+        page.locator('.ovl-team-name[data-ladder-settled="true"]'),
+        `${label}: the name ladder has not settled — a full name is still clipped under overflow: hidden`,
+      ).toHaveCount(2, { timeout: 15_000 });
+    }
     await dismissCookieBanner(page);
     if (row.backdrop) await applyBackdrop(page, row.backdrop);
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
