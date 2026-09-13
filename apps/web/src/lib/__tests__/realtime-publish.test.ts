@@ -47,6 +47,7 @@ describe("publishFixtureUpdate", () => {
 describe("mintPublicFixtureToken", () => {
   afterEach(() => {
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     delete process.env.SUPABASE_JWT_KID;
     vi.restoreAllMocks();
@@ -79,9 +80,39 @@ describe("mintPublicFixtureToken", () => {
     expect(payload.role).toBe("authenticated");
   });
 
+  it("mints ES256 from SUPABASE_JWT_PRIVATE_KEY_B64 when the raw key is unset", async () => {
+    vi.resetModules();
+    const { privateKey, publicKey } = await generateKeyPair("ES256", {
+      extractable: true,
+    });
+    const jwk = await exportJWK(privateKey);
+    jwk.kid = "test-kid-b64";
+    jwk.alg = "ES256";
+    const publicJwk = await exportJWK(publicKey);
+    publicJwk.kid = "test-kid-b64";
+    publicJwk.alg = "ES256";
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY;
+    process.env.SUPABASE_JWT_PRIVATE_KEY_B64 = Buffer.from(
+      JSON.stringify(jwk),
+      "utf8",
+    ).toString("base64");
+    delete process.env.SUPABASE_JWT_SECRET;
+
+    const { mintPublicFixtureToken } = await import("../realtime");
+    const token = await mintPublicFixtureToken("fx-b64", 60);
+    const { protectedHeader } = await jwtVerify(
+      token,
+      createLocalJWKSet({ keys: [publicJwk] }),
+      { audience: "authenticated" },
+    );
+    expect(protectedHeader.alg).toBe("ES256");
+    expect(protectedHeader.kid).toBe("test-kid-b64");
+  });
+
   it("falls back to HS256 for a non-UUID shared secret", async () => {
     vi.resetModules();
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
     process.env.SUPABASE_JWT_SECRET = "a-long-shared-secret-not-a-uuid";
 
     const { mintPublicFixtureToken } = await import("../realtime");

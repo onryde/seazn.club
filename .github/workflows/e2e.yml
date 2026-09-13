@@ -237,7 +237,9 @@ jobs:
       # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts).
       # Prefer ES256 (project JWKS shape); HS256 remains as fallback for older
       # helpers. CI-only dummy keypair — not a real Supabase signing key.
-      SUPABASE_JWT_PRIVATE_KEY: '{"kty":"EC","x":"JkXLFTKBFmcNZj3uxo9IG_ChGy4qe0O8uRjgI8iyF1Q","y":"_2CkI9u7EVulWYy58pcUwZpiFBhC5qba8xZTrHfVi0s","crv":"P-256","d":"enLYu03-bP8O-YTy5DjWbt8Cl2ocm2KorNJlBD5bUzY","alg":"ES256","kid":"e2e-ci-es256","use":"sig"}'
+      # Base64 JWK — Actions strips plaintext private JWKs from job env
+      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
+      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       # x-cron-secret bearer for /api/cron/registrations (RS012's walkthrough
       # drives the sweep directly, apps/web/e2e/walkthrough/rs012-solo-signup-
@@ -732,7 +734,9 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
-      SUPABASE_JWT_PRIVATE_KEY: '{"kty":"EC","x":"JkXLFTKBFmcNZj3uxo9IG_ChGy4qe0O8uRjgI8iyF1Q","y":"_2CkI9u7EVulWYy58pcUwZpiFBhC5qba8xZTrHfVi0s","crv":"P-256","d":"enLYu03-bP8O-YTy5DjWbt8Cl2ocm2KorNJlBD5bUzY","alg":"ES256","kid":"e2e-ci-es256","use":"sig"}'
+      # Base64 JWK — Actions strips plaintext private JWKs from job env
+      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
+      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -1015,7 +1019,9 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
-      SUPABASE_JWT_PRIVATE_KEY: '{"kty":"EC","x":"JkXLFTKBFmcNZj3uxo9IG_ChGy4qe0O8uRjgI8iyF1Q","y":"_2CkI9u7EVulWYy58pcUwZpiFBhC5qba8xZTrHfVi0s","crv":"P-256","d":"enLYu03-bP8O-YTy5DjWbt8Cl2ocm2KorNJlBD5bUzY","alg":"ES256","kid":"e2e-ci-es256","use":"sig"}'
+      # Base64 JWK — Actions strips plaintext private JWKs from job env
+      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
+      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"

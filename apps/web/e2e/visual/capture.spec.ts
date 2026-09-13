@@ -94,15 +94,19 @@ async function captureRow(
       page.locator(row.awaitSelector).first(),
       `${label}: ${row.awaitSelector} never rendered`,
     ).toBeVisible();
+    await dismissCookieBanner(page);
+    if (row.backdrop) await applyBackdrop(page, row.backdrop);
+    // Fonts BEFORE the ladder settle: measuring in a fallback face, then
+    // swapping to the display face, re-widens the full name under
+    // overflow:hidden and no-clip reds (stream-overlay/overlay-bar-1920,
+    // run 34784354416 — 588px in a 67px cell after data-ladder-settled).
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     if (group.seed === "overlay-fixture" && row.route.includes("style=bar")) {
       await expect(
         page.locator('.ovl-team-name[data-ladder-settled="true"]'),
         `${label}: the name ladder has not settled — a full name is still clipped under overflow: hidden`,
       ).toHaveCount(2, { timeout: 15_000 });
     }
-    await dismissCookieBanner(page);
-    if (row.backdrop) await applyBackdrop(page, row.backdrop);
-    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     const file = join(OUT, `${group.id}--${row.id}.png`);
     await page.screenshot({ path: file, fullPage: false });
     const bytes = readFileSync(file);

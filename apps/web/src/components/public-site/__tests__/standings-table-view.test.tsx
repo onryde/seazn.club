@@ -36,8 +36,8 @@
 //      (round 1 fix 6).
 //  (aj) the `md:` floor uses the phone sum — the round-1 regression that left
 //      the name column 16px short from `md` up (round 2 NEW-1).
-//  (ak) the `md:min-w-[var(…)]` class dropped, so the wide floor is emitted
-//      but never read (round 2 NEW-1).
+//  (ak) the md-breakpoint min-width var(--sv-min-md) class dropped, so the
+//      wide floor is emitted but never read (round 2 NEW-1).
 //
 // A NOTE ON WHAT THESE CANNOT SHOW. `environment: "node"` — no DOM, no
 // cascade, no layout. The three geometry fixes are asserted as ARITHMETIC and

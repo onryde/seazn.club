@@ -97,6 +97,18 @@ type MintKey = {
   kid?: string;
 };
 
+/** Decode `SUPABASE_JWT_PRIVATE_KEY_B64` when the raw JWK/PEM env is absent. */
+function decodePrivateKeyB64(): string | undefined {
+  const b64 = process.env.SUPABASE_JWT_PRIVATE_KEY_B64?.trim();
+  if (!b64) return undefined;
+  try {
+    const decoded = Buffer.from(b64, "base64").toString("utf8").trim();
+    return decoded || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Resolve signing material for spectator realtime JWTs.
  *
@@ -109,13 +121,20 @@ type MintKey = {
  * imported signing key (Supabase cannot export the private half — import your
  * own). Optional `SUPABASE_JWT_KID` when using PEM.
  *
+ * CI alternative: `SUPABASE_JWT_PRIVATE_KEY_B64` = the same material, base64.
+ * GitHub Actions strips raw JWK private keys from job env (the plaintext
+ * `SUPABASE_JWT_PRIVATE_KEY` line never appears beside its siblings in the
+ * runner dump — measured run 34784354416), so e2e.yml ships the ES256 JWK
+ * only in this encoding.
+ *
  * Fallback: `SUPABASE_JWT_SECRET` = legacy / shared-secret signing key (long
  * random string). Rejected when it looks like a JWKS `kid` (UUID).
  *
  * @see https://supabase.com/docs/guides/auth/signing-keys
  */
 export async function resolveRealtimeMintKey(): Promise<MintKey> {
-  const privateRaw = process.env.SUPABASE_JWT_PRIVATE_KEY?.trim();
+  const privateRaw =
+    process.env.SUPABASE_JWT_PRIVATE_KEY?.trim() || decodePrivateKeyB64();
   if (privateRaw) {
     if (privateRaw.startsWith("{")) {
       const jwk = JSON.parse(privateRaw) as JWK;
