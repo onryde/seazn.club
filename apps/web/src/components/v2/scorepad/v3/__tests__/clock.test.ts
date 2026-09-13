@@ -1112,12 +1112,14 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     expect(src).toContain("clockSpec !== null && clockSpec.seed !== undefined");
     expect(src).toContain("{ period: clockSpec.period, elapsed: clockSpec.seed }");
     // Rapid Correct taps read `clockRef.current`, not the render-closed `clock`.
-    // Ref advances in mutators + reseat only (never mirrored from render state).
+    // Mutators write the ref synchronously; reseat only `setClock`s, and an
+    // effect mirrors `clock` → `clockRef` (react-hooks/refs forbids writing
+    // the ref during render — CI lint gate).
     expect(src).toContain("const current = clockRef.current");
     expect(src).toContain("adjustClock(current, deltaSeconds, now, floor)");
-    expect(src).toContain("clockRef.current = nextClock");
+    expect(src).toContain("useEffect(() => {\n    clockRef.current = clock;\n  }, [clock]);");
+    expect(src).not.toContain("clockRef.current = nextClock");
     expect(src).toContain("[clockSpec, publishClock]");
-    expect(src).not.toContain("clockRef.current = clock;");
   });
 
   it("publishes *.clock on toggle and correct — overlay pause must not wait on soft-commit", () => {
