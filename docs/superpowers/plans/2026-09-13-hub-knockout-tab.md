@@ -117,6 +117,15 @@ KnockoutView = z.object({
 and an old-shaped hit has no `knockouts`.
 
 **R5 — the tab.** `apps/web/src/components/public-site/matches-hub/knockout-tab.tsx`:
+- **Which division (owner, 2026-09-13: "which knockout for division?").** When views
+  from more than one division exist, a division chip rail sits above everything —
+  the SAME chips and the SAME `?division=` parameter the Matches tab uses
+  (`mh-knockout-division-all`, `mh-knockout-division-{slug}`; seeded from
+  `initialDivision`, a tap writes `?division=` back through `writeDivisionParam`,
+  an unknown slug or `""` falls back to All, as `matches-tab.tsx` reconciles). All =
+  every division's views, grouped. One division = no rail. This is what lets the
+  future division-page redirect land a knockout division on
+  `?tab=knockout&division={slug}` and see only its own bracket.
 - Root `data-testid="mh-knockout"`, `min-w-0`. Groups views by division under an
   `<h2 data-testid="mh-knockout-division-{slug}">`, same classes as `table-tab.tsx`'s
   division heading; each view under its stage name (`<h3>`).
@@ -165,8 +174,9 @@ every existing export as a thin wrapper; the existing `use-tab-param.test.tsx`
 stays green unchanged.
 
 **R7 — landing.** `panelFor` gets a `knockout` arm rendering
-`<KnockoutTab doc dict locale now />`; `competition-landing.test.tsx`'s per-arm
-prop table gains the row.
+`<KnockoutTab doc dict locale now initialDivision />` (the same `initialDivision`
+the Matches arm already receives); `competition-landing.test.tsx`'s per-arm prop
+table gains the row.
 
 **R8 — dictionary slice.** Add `"knockout."` to `HUB_DICT_PREFIXES`
 (`lib/hub-dict.ts`) and keep its differential test honest.
