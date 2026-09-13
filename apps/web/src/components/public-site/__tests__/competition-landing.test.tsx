@@ -376,13 +376,17 @@ describe("activeTab — which tab wins, and what happens when its data disappear
       now: Date.parse("2026-09-05T12:00:00.000Z"),
       descriptionSlot: <p>ABOUT THIS CUP</p>,
       shareSlot: <p>SHARE BAR</p>,
+      initialDivision: "sunday-league",
     };
     // Which props each arm owes. The lists differ, which is the reason this is
     // a switch and not a uniform `TAB_PANELS` table — and pinning them here is
     // what makes the difference a contract rather than an accident.
     const expected = [
       ["overview", OverviewTab, ["doc", "dict", "locale", "now", "descriptionSlot"]],
-      ["matches", MatchesTab, ["doc", "dict", "locale", "now"]],
+      // `initialDivision` is the `?division=` deep link. It was declared on
+      // `MatchesTab` and tested there for a whole wave while this arm never
+      // passed it, so a shared division link opened on All.
+      ["matches", MatchesTab, ["doc", "dict", "locale", "now", "initialDivision"]],
       ["table", TableTab, ["doc", "dict"]],
       ["stats", StatsTab, ["doc", "dict"]],
       ["teams", TeamsTab, ["doc", "dict"]],

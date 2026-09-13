@@ -16,7 +16,14 @@
 // belongs to the post-mount e2e leg.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
-import { readTabParam, subscribeToTabParam, useTabParam } from "../use-tab-param";
+import {
+  readDivisionParam,
+  readTabParam,
+  subscribeToTabParam,
+  useDivisionParam,
+  useTabParam,
+  writeDivisionParam,
+} from "../use-tab-param";
 
 type Listener = () => void;
 
@@ -131,5 +138,98 @@ describe("useTabParam", () => {
     // tests above pin, so the hook cannot be wired to a different one.
     stubWindow("?tab=matches");
     expect(seen!.getSnapshot()).toBe("matches");
+  });
+});
+
+/** A `window` with a mutable href and a recording history, for the writer. */
+function stubHistory(href: string) {
+  const replaced: string[] = [];
+  const pushed: string[] = [];
+  vi.stubGlobal("window", {
+    location: { href, search: new URL(href).search },
+    history: {
+      replaceState: (_s: unknown, _t: string, url: string) => replaced.push(url),
+      pushState: (_s: unknown, _t: string, url: string) => pushed.push(url),
+    },
+  });
+  return { replaced, pushed };
+}
+
+describe("readDivisionParam", () => {
+  it("reads the division the URL names, by NAME beside a tab", () => {
+    stubWindow("?tab=matches&division=premier");
+    expect(readDivisionParam()).toBe("premier");
+  });
+
+  it("a bare ?division= is the empty string, which MatchesTab folds to All", () => {
+    stubWindow("?division=");
+    expect(readDivisionParam()).toBe("");
+  });
+
+  it("no ?division= is null — and it is not confused with ?tab=", () => {
+    stubWindow("?tab=premier");
+    expect(readDivisionParam()).toBeNull();
+  });
+});
+
+describe("writeDivisionParam", () => {
+  it("sets the division and KEEPS the tab — a chip tap must not throw the spectator off Matches", () => {
+    const { replaced, pushed } = stubHistory("https://seazn.test/shared/o/c?tab=matches");
+    writeDivisionParam("premier");
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches&division=premier"]);
+    expect(pushed).toEqual([]);
+  });
+
+  it("All REMOVES the parameter rather than writing an empty one", () => {
+    // `?division=` would read back as "" — handled, but a URL a spectator
+    // copies should not carry a parameter that means nothing.
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?tab=matches&division=premier");
+    writeDivisionParam(null);
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches"]);
+  });
+
+  it("replaces an existing division rather than appending a second one", () => {
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?division=open&tab=matches");
+    writeDivisionParam("premier");
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?division=premier&tab=matches"]);
+  });
+});
+
+describe("useDivisionParam", () => {
+  it("hands React a null SERVER snapshot and the division reader as the live one", () => {
+    let seen: {
+      subscribe: (fn: () => void) => () => void;
+      getSnapshot: () => string | null;
+      getServerSnapshot?: () => string | null;
+    } | null = null;
+    const internals = (
+      React as unknown as {
+        __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+      }
+    ).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+    const previous = internals.H;
+    internals.H = {
+      useSyncExternalStore(
+        subscribe: (fn: () => void) => () => void,
+        getSnapshot: () => string | null,
+        getServerSnapshot?: () => string | null,
+      ) {
+        seen = { subscribe, getSnapshot, getServerSnapshot };
+        return getServerSnapshot ? getServerSnapshot() : getSnapshot();
+      },
+    };
+    let value: string | null;
+    try {
+      value = useDivisionParam();
+    } finally {
+      internals.H = previous;
+    }
+    expect(value).toBeNull();
+    expect(seen!.subscribe).toBe(subscribeToTabParam);
+    expect(seen!.getServerSnapshot!()).toBeNull();
+    // The live snapshot reads DIVISION, not tab: a hook wired to the tab
+    // reader would answer "matches" here.
+    stubWindow("?tab=matches&division=premier");
+    expect(seen!.getSnapshot()).toBe("premier");
   });
 });

@@ -1,5 +1,6 @@
 "use client";
-// The public surface's ONE `?tab=` reader.
+// The public surface's ONE `?tab=` reader — and, beside it, the hub's
+// `?division=` reader and writer, which share its store and its reasoning.
 //
 // This is an EXTRACTION, not a new mechanism, and the reason it exists is
 // written up at length in `tabs.tsx`'s own header: the division page and the
@@ -106,4 +107,49 @@ function readTabParamOnServer(): string | null {
 /** The `?tab=` value the browser currently shows, re-read on Back/Forward. */
 export function useTabParam(): string | null {
   return useSyncExternalStore(subscribeToTabParam, readTabParam, readTabParamOnServer);
+}
+
+/**
+ * The raw `?division=` value, or null when the parameter is absent — the
+ * Matches tab's division chip, carried in the URL.
+ *
+ * WHY THIS EXISTS: `MatchesTab` has declared an `initialDivision` prop
+ * documented as "a `?division=` deep link" since W2 Task 8, and nothing ever
+ * read the parameter or passed the prop. A spectator sharing a Premier-only
+ * view shared a link that opened on All. The prop was unit-green the whole
+ * time, because its tests hand it a value directly.
+ *
+ * RAW for `readTabParam`'s reason: `MatchesTab`'s own reconciliation is the
+ * membership test (a slug with no chip, or `""`, falls back to All), and a
+ * reader that validated here would need the live document to do it.
+ */
+export function readDivisionParam(): string | null {
+  return new URLSearchParams(window.location.search).get("division");
+}
+
+/**
+ * Put the chosen division back in the URL, or take it out for All.
+ *
+ * `replaceState` for `writeTabParam`'s reason. The echo `writeTabParam` warns
+ * about is HARMLESS here, and deliberately so: `MatchesTab` reads
+ * `initialDivision` only as a mount-time seed, never as a live value, so its
+ * own write is read back only when the tab MOUNTS again — which is exactly the
+ * spectator switching to Stats and back and finding the division they left.
+ */
+export function writeDivisionParam(slug: string | null): void {
+  const url = new URL(window.location.href);
+  if (slug === null) url.searchParams.delete("division");
+  else url.searchParams.set("division", slug);
+  window.history.replaceState(null, "", url.toString());
+}
+
+function readDivisionParamOnServer(): string | null {
+  return null;
+}
+
+/** The `?division=` value the browser currently shows, re-read on Back/Forward.
+ *  Same `popstate` subscription as `useTabParam`, and the same null server
+ *  snapshot, for the same ISR reason. */
+export function useDivisionParam(): string | null {
+  return useSyncExternalStore(subscribeToTabParam, readDivisionParam, readDivisionParamOnServer);
 }

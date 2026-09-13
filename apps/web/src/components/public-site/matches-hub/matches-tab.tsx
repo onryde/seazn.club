@@ -27,6 +27,7 @@ import {
 } from "@/lib/matches-hub";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { MatchCard } from "./match-card";
+import { writeDivisionParam } from "../use-tab-param";
 
 export interface MatchesTabProps {
   doc: CompetitionHubDocT;
@@ -48,7 +49,9 @@ export interface MatchesTabProps {
    * because the chip carrying the choice is gone by then.
    */
   initialFilter?: MatchBucket | null;
-  /** A `?division=` deep link. `null`/absent means All. */
+  /** A `?division=` deep link, read by `CompetitionLanding` through
+   *  `useDivisionParam` and written back by this tab's own chips.
+   *  `null`/absent means All. A SEED, like `initialFilter`. */
   initialDivision?: string | null;
 }
 
@@ -182,6 +185,14 @@ export function MatchesTab({
   // `null` and show the empty-filter state beside a full rail.
   const [chosen, setChosen] = useState<MatchBucket | null>(initialFilter ?? null);
   const [chosenDivision, setDivision] = useState<string | null>(initialDivision ?? null);
+  // A tap goes back into the URL, so the link a spectator copies opens on the
+  // division they were looking at. The filter chips do NOT do the same:
+  // live/upcoming/results is a fact about this minute, and a link shared
+  // tonight that opened on Live tomorrow would open on an empty bucket.
+  const chooseDivision = (slug: string | null) => {
+    setDivision(slug);
+    writeDivisionParam(slug);
+  };
 
   // The zone caption is DROPPED when the venue's zone is the viewer's own —
   // "times in BST" is noise to someone already in BST.
@@ -335,10 +346,10 @@ export function MatchesTab({
           className={RAIL_CLASS}
         >
           {chip("mh-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
-            setDivision(null),
+            chooseDivision(null),
           )}
           {divisionChips.map((d) =>
-            chip(`mh-division-${d.slug}`, d.name, division === d.slug, () => setDivision(d.slug)),
+            chip(`mh-division-${d.slug}`, d.name, division === d.slug, () => chooseDivision(d.slug)),
           )}
         </div>
       ) : null}

@@ -29,7 +29,7 @@ import type {
   CompetitionHubTabIdT,
 } from "@/server/public-site/competition-hub-schema";
 import { PublicTabRail } from "../tab-rail";
-import { useTabParam, writeTabParam } from "../use-tab-param";
+import { useDivisionParam, useTabParam, writeTabParam } from "../use-tab-param";
 import { useLiveCompetition } from "../use-live-competition";
 import { useNow } from "../match-centre/use-now";
 import { OverviewTab } from "./overview-tab";
@@ -205,6 +205,11 @@ export function CompetitionLanding({
   });
   const now = useNow(NOW_TICK_MS);
   const deepLinked = useTabParam();
+  // The division a shared link names. Read here, at the root that owns the
+  // URL, rather than inside `MatchesTab`, so the tab stays a component its
+  // tests can hand a value to — which is how `initialDivision` was tested
+  // for a whole wave while nothing in production ever passed it.
+  const deepLinkedDivision = useDivisionParam();
 
   // Only an explicit TAP is stored. Which tab is actually active is a plain
   // derivation every render (`activeTab`), never synced through an effect —
@@ -299,6 +304,7 @@ export function CompetitionLanding({
           now,
           descriptionSlot,
           shareSlot,
+          initialDivision: deepLinkedDivision,
         })}
       </div>
     </div>
@@ -312,6 +318,10 @@ export interface PanelArgs {
   now: number;
   descriptionSlot?: ReactNode;
   shareSlot?: ReactNode;
+  /** `?division=` — the Matches tab's seed. Matches ONLY: the Table and
+   *  Teams tabs group by division rather than filtering, so there is
+   *  nothing for them to seed. */
+  initialDivision?: string | null;
 }
 
 /**
@@ -344,7 +354,15 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
         />
       );
     case "matches":
-      return <MatchesTab doc={a.doc} dict={a.dict} locale={a.locale} now={a.now} />;
+      return (
+        <MatchesTab
+          doc={a.doc}
+          dict={a.dict}
+          locale={a.locale}
+          now={a.now}
+          initialDivision={a.initialDivision}
+        />
+      );
     case "table":
       return <TableTab doc={a.doc} dict={a.dict} />;
     case "stats":
