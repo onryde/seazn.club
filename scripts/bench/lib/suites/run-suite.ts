@@ -338,25 +338,33 @@ function takeKindOf(rule: unknown): string {
  * map or an empty one (progression.ts:299), so that particular shape would in
  * fact consume the list as-is and is refused here anyway. The refusal is loud
  * and harmless; do not read this as a claim that `seeded_map` always permutes.
+ *
+ * Fix round 2 — this now also checks the SOURCE COUNT. That is the other half
+ * of the same I2 finding, and round 1 left it behind: the count sat inside
+ * `parseTopNPerGroup`, which runs for a POOLED source only, so an UNPOOLED
+ * stage fed by a two-source progression was handed its flat table with NO
+ * warning at all, while the identical progression on a pooled stage was
+ * refused by name. Both are SHAPE facts — each invalidates the flat
+ * derivation exactly as it invalidates the pooled one — so both belong above
+ * the pooled/unpooled split, and the two shapes now refuse in parity.
+ *
+ * Returns the single validated source on success, so the take-rule parser
+ * never re-reads and never re-checks `sources`: one check, one place. A
+ * duplicated guard would be worse than none — the two cover for each other,
+ * and neither can then be killed by mutation.
  */
-function placementRefusal(progression: Record<string, unknown>): string | undefined {
-  const placement = progression["placement"];
-  if (placement === "rank_order") return undefined;
-  return (
-    `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
-    "consumes the qualifier list verbatim (snake reverses alternate waves; seeded_map seats by name)"
-  );
-}
-
-/**
- * Narrowly parse the TAKE RULE out of `PackStage.progression` — carried OPAQUE
- * through the schema (`pack-schema.ts:459`, a `Record<string, PackJsonValue>`),
- * so every field is checked here rather than trusted. Placement is not this
- * function's business; see `placementRefusal`.
- */
-function parseTopNPerGroup(
+function progressionShape(
   progression: Record<string, unknown>,
-): { rule: TopNPerGroup } | { reason: string } {
+): { reason: string } | { source: Record<string, unknown> } {
+  const placement = progression["placement"];
+  if (placement !== "rank_order") {
+    return {
+      reason:
+        `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
+        "consumes the qualifier list verbatim (snake reverses alternate waves; seeded_map seats by name)",
+    };
+  }
+
   const sources = progression["sources"];
   if (!Array.isArray(sources) || sources.length !== 1) {
     return {
@@ -364,7 +372,21 @@ function parseTopNPerGroup(
     };
   }
 
-  const take = (sources[0] as Record<string, unknown> | null)?.["take"];
+  return { source: (sources[0] ?? {}) as Record<string, unknown> };
+}
+
+/**
+ * Narrowly parse the TAKE RULE out of ONE progression source — the source
+ * having already been validated and handed over by `progressionShape`. The
+ * progression is carried OPAQUE through the schema (`pack-schema.ts:459`, a
+ * `Record<string, PackJsonValue>`), so every field is checked rather than
+ * trusted. Neither placement NOR the source count is this function's
+ * business; both are shape facts and live in `progressionShape`.
+ */
+function parseTopNPerGroup(
+  source: Record<string, unknown>,
+): { rule: TopNPerGroup } | { reason: string } {
+  const take = source["take"];
   if (!Array.isArray(take) || take.length !== 1) {
     const kinds = Array.isArray(take)
       ? take.map((t) => takeKindOf(t)).join(", ")
@@ -414,14 +436,16 @@ export function expectedQualifierOrder(
       : { refs: flatRefs(), pooled: false };
   }
 
-  // I2: placement first, and for BOTH shapes — a placement that permutes
-  // invalidates the flat derivation exactly as it invalidates the pooled one.
-  const placementIssue = placementRefusal(progression);
-  if (placementIssue !== undefined) return { refs: [], pooled, warning: placementIssue };
+  // I2, BOTH halves: the progression's SHAPE — placement and source count —
+  // is checked for either source shape, above the split. Each fact
+  // invalidates the flat derivation exactly as it invalidates the pooled one,
+  // so a refusal here reads the same whether the source declared pools or not.
+  const shape = progressionShape(progression);
+  if ("reason" in shape) return { refs: [], pooled, warning: shape.reason };
 
   if (!pooled) return { refs: flatRefs(), pooled: false };
 
-  const parsed = parseTopNPerGroup(progression);
+  const parsed = parseTopNPerGroup(shape.source);
   if ("reason" in parsed) return { refs: [], pooled: true, warning: parsed.reason };
   return { refs: expectedQualifierRefs(pooledTables, parsed.rule), pooled: true };
 }

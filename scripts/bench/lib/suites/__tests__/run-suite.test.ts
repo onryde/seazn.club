@@ -246,6 +246,45 @@ describe("expectedQualifierOrder — pooled derivation vs the flat table", () =>
     expect(out.warning ?? "").toContain("seeded_map");
   });
 
+  it("refuses a MULTI-SOURCE progression on either source shape, naming the count", () => {
+    // Fix round 2. I2 named TWO blind spots — `placement` and
+    // `sources.length !== 1` — and round 1 hoisted only the first. The source
+    // count stayed inside `parseTopNPerGroup`, which runs for a POOLED source
+    // only, so an UNPOOLED stage with a two-source progression sailed past it
+    // and was handed `["e-alpha","e-bravo"]` with NO warning at all, while the
+    // identical progression on a pooled stage was refused. Same
+    // false-red-blaming-the-product mode; latent until a multi-source pack
+    // exists, and silent rather than loud, which is the worse half.
+    //
+    // Asserted as PARITY, because parity is exactly what broke: the two shapes
+    // must refuse for the same reason, not merely both end up empty.
+    const twoSources = {
+      sources: [
+        { stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] },
+        { stage: { stageId: "s-other" }, take: [{ kind: "rankRange", from: 1, to: 2 }] },
+      ],
+      placement: "rank_order",
+    };
+    const flat: QualifierTable[] = [
+      {
+        poolKey: undefined,
+        rows: [
+          { entrant: "e-alpha", rank: 1 },
+          { entrant: "e-bravo", rank: 2 },
+        ],
+      },
+    ];
+
+    const flatOut = expectedQualifierOrder(flat, twoSources);
+    expect(flatOut.refs).toEqual([]);
+    expect(flatOut.refs).not.toContain("e-alpha"); // never a silent list of entrants
+    expect(flatOut.warning ?? "").toContain("2 progression sources");
+
+    const pooledOut = expectedQualifierOrder(pooled, twoSources);
+    expect(pooledOut.refs).toEqual([]);
+    expect(pooledOut.warning ?? "").toContain("2 progression sources");
+  });
+
   it("returns nothing, and no warning, when the stage has no expected table", () => {
     // The caller owns that error (it already names the missing table); this
     // must not add a second, different complaint about the same fact.
