@@ -12,8 +12,9 @@
 // the two places the key is written: the log line and the returned report.
 import { describe, expect, it } from "vitest";
 import pino from "pino";
-import { formatAdaptation, runPackSuite } from "../run-suite.ts";
+import { expectedQualifierOrder, formatAdaptation, runPackSuite } from "../run-suite.ts";
 import { TINY_PACK_PATH } from "../tiny.ts";
+import type { QualifierTable } from "../../qualifiers.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -91,5 +92,141 @@ describe("runPackSuite is suite-agnostic", () => {
     });
     expect((report.errors ?? []).join(" ")).not.toMatch(/pack: /);
     expect(report.suite).toBe("_probe");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T5 — which derivation the advance step actually uses.
+//
+// `expectedQualifierOrder` IS the branch: pooled source stage => the
+// progression rule decides the seat order (lib/qualifiers.ts); unpooled source
+// stage => the long-standing flat rank sort of the one stage-wide table, which
+// is what `_tiny`'s league -> playoff advance has always used and must keep
+// using. Testing only the pure `expectedQualifierRefs` would leave THIS
+// decision — the part that can silently pick the wrong path — untested
+// (AGENTS.md failure class 1).
+//
+// Every refusal below returns NO seats and NAMES what it saw. That is
+// deliberate: an empty expected list is length-compared against the product's
+// real proposal and reds loudly, whereas guessing a rule would assert a
+// confident wrong order.
+// ---------------------------------------------------------------------------
+describe("expectedQualifierOrder — pooled derivation vs the flat table", () => {
+  const pooled: QualifierTable[] = [
+    {
+      poolKey: "B",
+      rows: [
+        { entrant: "e-b1", rank: 1 },
+        { entrant: "e-b2", rank: 2 },
+      ],
+    },
+    {
+      poolKey: "A",
+      rows: [
+        { entrant: "e-a1", rank: 1 },
+        { entrant: "e-a2", rank: 2 },
+      ],
+    },
+  ];
+
+  const topTwo = {
+    sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }] }],
+    placement: "rank_order",
+    timing: "setup",
+  };
+
+  it("keeps the flat rank sort for an UNPOOLED source stage", () => {
+    // `_tiny`'s own shape: one stage-wide table, a rankRange take. Rows are
+    // declared out of order here so a path that echoed declaration order
+    // rather than sorting by rank would be caught.
+    const flat: QualifierTable[] = [
+      {
+        poolKey: undefined,
+        rows: [
+          { entrant: "e-bravo", rank: 2 },
+          { entrant: "e-alpha", rank: 1 },
+        ],
+      },
+    ];
+    const out = expectedQualifierOrder(flat, {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      placement: "rank_order",
+    });
+    expect(out.refs).toEqual(["e-alpha", "e-bravo"]);
+    expect(out.pooled).toBe(false);
+    expect(out.warning).toBeUndefined();
+  });
+
+  it("derives rank-before-group for a POOLED source stage", () => {
+    const out = expectedQualifierOrder(pooled, topTwo);
+    expect(out.pooled).toBe(true);
+    expect(out.warning).toBeUndefined();
+    // Rank before group, and the pack's B-then-A declaration order does not
+    // move a seat.
+    expect(out.refs).toEqual(["e-a1", "e-b1", "e-a2", "e-b2"]);
+  });
+
+  it("is an ORDERING-differential: the pooled answer is not the pool-major one", () => {
+    const out = expectedQualifierOrder(pooled, topTwo);
+    expect([...out.refs].sort()).toEqual(["e-a1", "e-a2", "e-b1", "e-b2"]);
+    expect(out.refs).not.toEqual(["e-a1", "e-a2", "e-b1", "e-b2"]);
+  });
+
+  it("refuses a pooled stage whose take rule is not topNPerGroup, naming it", () => {
+    const out = expectedQualifierOrder(pooled, {
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+      placement: "rank_order",
+    });
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").toContain("rankRange");
+  });
+
+  it("refuses a placement that does not consume the list verbatim, naming it", () => {
+    // `rank_order` is a plain pots.flat(); `snake` REVERSES alternate waves,
+    // so the derived order would be wrong rather than merely unverified.
+    const out = expectedQualifierOrder(pooled, { ...topTwo, placement: "snake" });
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").toContain("snake");
+  });
+
+  it("refuses a pooled stage that combines several take rules, naming them", () => {
+    const out = expectedQualifierOrder(pooled, {
+      sources: [
+        {
+          stage: "previous",
+          take: [
+            { kind: "topNPerGroup", n: 1 },
+            { kind: "bestNth", nth: 2, count: 2 },
+          ],
+        },
+      ],
+      placement: "rank_order",
+    });
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").toContain("bestNth");
+  });
+
+  it("refuses a pooled stage with no progression at all", () => {
+    const out = expectedQualifierOrder(pooled, undefined);
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").not.toBe("");
+  });
+
+  it("refuses a topNPerGroup whose n is not a positive integer", () => {
+    const out = expectedQualifierOrder(pooled, {
+      sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 0 }] }],
+      placement: "rank_order",
+    });
+    expect(out.refs).toEqual([]);
+    expect(out.warning ?? "").toContain("0");
+  });
+
+  it("returns nothing, and no warning, when the stage has no expected table", () => {
+    // The caller owns that error (it already names the missing table); this
+    // must not add a second, different complaint about the same fact.
+    const out = expectedQualifierOrder([], topTwo);
+    expect(out.refs).toEqual([]);
+    expect(out.pooled).toBe(false);
+    expect(out.warning).toBeUndefined();
   });
 });

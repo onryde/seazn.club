@@ -265,6 +265,11 @@ import {
   newOrganiserBrowserSession,
   type RegistrationBrowserSession,
 } from "../drivers/browser.ts";
+import {
+  expectedQualifierRefs,
+  type QualifierTable,
+  type TopNPerGroup,
+} from "../qualifiers.ts";
 
 /** What a suite definition tells the runner about itself: which key its
  *  report and log lines carry, and which pack to fold when the caller does
@@ -278,6 +283,115 @@ export interface RunPackSuiteOptions {
  *  (jsonb). Exported so a test can construct a matching/mismatching branding
  *  value without hand-typing the key twice. */
 export const KEEP_BRANDING_KEY = "benchPackHash";
+
+// ---------------------------------------------------------------------------
+// B07a T5 — WHICH qualifier derivation the advance step uses (D7).
+//
+// Two source shapes, two rules. An UNPOOLED source stage has one stage-wide
+// `expected.tables` row and its qualifiers are that row in rank order — the
+// long-standing behaviour `_tiny`'s league -> playoff advance relies on. A
+// POOLED source stage has one table PER POOL and no stage-wide row at all, so
+// the flat path has nothing to read; its seat order comes from the
+// progression rule itself (`lib/qualifiers.ts`).
+//
+// Every refusal below yields NO seats and NAMES what it saw. Guessing a rule
+// would assert a confident wrong ORDER — the exact failure this task exists to
+// prevent — whereas an empty list is length-compared against the product's
+// real proposal and reds loudly.
+// ---------------------------------------------------------------------------
+
+/** The advance step's expected qualifier order, plus how it was reached. */
+export interface ExpectedQualifierOrder {
+  /** Entrant REFS in seat order (seed 1 first); `[]` when none could be derived. */
+  readonly refs: readonly string[];
+  /** True when the source stage declared pools and the progression rule was used. */
+  readonly pooled: boolean;
+  /** Set only when a POOLED source stage's progression could not be read —
+   *  names the rule/placement actually found, never a guess. */
+  readonly warning?: string;
+}
+
+function takeKindOf(rule: unknown): string {
+  const kind = (rule as Record<string, unknown> | null)?.["kind"];
+  return typeof kind === "string" ? kind : JSON.stringify(kind);
+}
+
+/**
+ * Narrowly parse `PackStage.progression` — carried OPAQUE through the schema
+ * (`pack-schema.ts:459`, a `Record<string, PackJsonValue>`), so every field is
+ * checked here rather than trusted.
+ *
+ * `placement` is checked as strictly as the take rule, and that is not
+ * belt-and-braces: `rank_order` is a plain `pots.flat()` that consumes the
+ * wave list VERBATIM, while `snake` reverses alternate waves and `seeded_map`
+ * permutes by an explicit map (`placeDescriptors`, progression.ts:239-298).
+ * Deriving a rank-before-group order for a `snake` placement would produce a
+ * confidently wrong seat list, not merely an unverified one.
+ */
+function parseTopNPerGroup(
+  progression: Record<string, unknown> | undefined,
+): { rule: TopNPerGroup } | { reason: string } {
+  if (progression === undefined) return { reason: "it declares no progression at all" };
+
+  const placement = progression["placement"];
+  if (placement !== "rank_order") {
+    return {
+      reason:
+        `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
+        "consumes the qualifier list verbatim (snake reverses alternate waves)",
+    };
+  }
+
+  const sources = progression["sources"];
+  if (!Array.isArray(sources) || sources.length !== 1) {
+    return {
+      reason: `it declares ${Array.isArray(sources) ? sources.length : JSON.stringify(sources)} progression sources, and this derivation covers exactly one`,
+    };
+  }
+
+  const take = (sources[0] as Record<string, unknown> | null)?.["take"];
+  if (!Array.isArray(take) || take.length !== 1) {
+    const kinds = Array.isArray(take)
+      ? take.map((t) => takeKindOf(t)).join(", ")
+      : JSON.stringify(take);
+    return { reason: `its source combines take rules [${kinds}], and this derivation covers exactly one` };
+  }
+
+  const kind = takeKindOf(take[0]);
+  if (kind !== "topNPerGroup") {
+    return { reason: `its take rule is "${kind}", not topNPerGroup` };
+  }
+
+  const n = (take[0] as Record<string, unknown>)["n"];
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+    return { reason: `its topNPerGroup n is ${JSON.stringify(n)}, not a positive integer` };
+  }
+  return { rule: { kind: "topNPerGroup", n } };
+}
+
+/**
+ * The expected qualifier refs for a progression-fed stage, choosing between
+ * the pooled derivation and the flat table by what the SOURCE stage actually
+ * declared. Exported so this decision is directly testable: a branch that
+ * silently picks the wrong path is exactly the inert-seam class
+ * (AGENTS.md failure class 1).
+ */
+export function expectedQualifierOrder(
+  stageTables: readonly QualifierTable[],
+  progression: Record<string, unknown> | undefined,
+): ExpectedQualifierOrder {
+  const pooledTables = stageTables.filter((t) => t.poolKey !== undefined);
+  if (pooledTables.length === 0) {
+    const flat = stageTables.find((t) => t.poolKey === undefined);
+    return {
+      refs: [...(flat?.rows ?? [])].sort((a, b) => a.rank - b.rank).map((r) => r.entrant),
+      pooled: false,
+    };
+  }
+  const parsed = parseTopNPerGroup(progression);
+  if ("reason" in parsed) return { refs: [], pooled: true, warning: parsed.reason };
+  return { refs: expectedQualifierRefs(pooledTables, parsed.rule), pooled: true };
+}
 
 // ---------------------------------------------------------------------------
 // Registration wiring (B03r tasks 9+10, design §3/§9) — the --entry
@@ -3279,32 +3393,56 @@ export async function runPackSuite(
         );
       } else {
         // The expected qualifier order (D7's "expected qualifier list"),
-        // derived from the SOURCE stage's own `expected.tables` row — the
-        // pack's already-authored, already-offline-checked final standings
-        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
-        // minted. Assumes the progression's own take rule pulls every ranked
-        // entrant of that table, in order (true of `_tiny`'s own
-        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
-        // of 8, would need this sliced to the qualifier count, out of this
-        // task's scope).
-        const sourceTable = pack.expected.tables.find(
-          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
+        // derived from the SOURCE stage's own `expected.tables` — the pack's
+        // already-authored, already-offline-checked final standings for
+        // `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
+        // minted.
+        //
+        // B07a T5: this used to read "the one table with no poolKey", in rank
+        // order, and assume the take rule pulled every ranked entrant of it.
+        // That is right for an UNPOOLED source (`_tiny`'s league, whose
+        // `rankRange(1, N)` does take them all) and it is not a derivation at
+        // all for a POOLED group stage, which has one table per pool and no
+        // stage-wide row — so `find(... poolKey === undefined)` returned
+        // undefined and the run died on the "no expected.tables row" error
+        // below. `expectedQualifierOrder` now picks the rule by what the
+        // source actually declared; a pooled stage's seats come from the
+        // progression itself, RANK BEFORE GROUP (lib/qualifiers.ts).
+        const stageTables = pack.expected.tables.filter(
+          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref,
         );
+        const qualifierOrder = expectedQualifierOrder(stageTables, stage1.progression);
+        if (qualifierOrder.warning !== undefined) {
+          warnings.push(
+            `${suiteKey}: stage "${stage1.ref}" is fed by the POOLED stage "${stage0.ref}", but ` +
+              `${qualifierOrder.warning} — this bench derives a qualifier order only for a single ` +
+              "topNPerGroup take placed by rank_order, so it asserts none here (D7)",
+          );
+        }
         const expectedQualifierEntrantIds: string[] = [];
         const unresolvedQualifierRefs: string[] = [];
-        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
-          const id = seeded.entrantIdByRef.get(row.entrant);
-          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
+        for (const ref of qualifierOrder.refs) {
+          const id = seeded.entrantIdByRef.get(ref);
+          if (id === undefined) unresolvedQualifierRefs.push(ref);
           else expectedQualifierEntrantIds.push(id);
         }
-        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
+        if (stageTables.length === 0 || unresolvedQualifierRefs.length > 0) {
           errors.push(
-            sourceTable === undefined
+            stageTables.length === 0
               ? `${suiteKey}: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
                 `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
                 "against before confirming (D7)"
               : `${suiteKey}: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
                 `${unresolvedQualifierRefs.join(", ")}`,
+          );
+        } else if (expectedQualifierEntrantIds.length === 0) {
+          // A pooled source whose progression this bench cannot read reaches
+          // here with an empty list. It stays a LOUD failure — the same shape
+          // the un-derivable case has always had — rather than advancing the
+          // stage with nothing asserted about its seats.
+          errors.push(
+            `${suiteKey}: stage "${stage1.ref}" is fed by "${stage0.ref}", whose expected tables yielded no ` +
+              `qualifier order to assert before confirming — ${qualifierOrder.warning ?? "the source declared no ranked rows"} (D7)`,
           );
         } else {
           log.info(
