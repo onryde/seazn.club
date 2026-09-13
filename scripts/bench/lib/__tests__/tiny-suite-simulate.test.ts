@@ -2516,5 +2516,47 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
       "advance: d-badminton/s-badminton-ko finalRanks",
     ]);
     expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // Ruling R1, the half a permissive fake cannot red on its own: the
+    // batch-import fold carries the second division's FIRST stage only. Its
+    // knockout fixture has no real entrants until the advance above seeds it,
+    // so importing that stream up front would post into a fixture nobody had
+    // seeded — which this fake would happily accept (its `/events/import`
+    // branch is a pass-through) and a live run would refuse.
+    //
+    // The import call identifies ITSELF by the rally events it carries rather
+    // than by a division id this test would have to guess.
+    const imports = calls.filter((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
+    const badmintonImport = imports.find((c) =>
+      (c.body as { streams: { events: { type: string }[] }[] }).streams.some((st) =>
+        st.events.some((e) => e.type === "badminton.rally"),
+      ),
+    );
+    expect(badmintonImport).toBeDefined();
+    expect((badmintonImport?.body as { streams: unknown[] }).streams).toHaveLength(1);
+
+    // …and the knockout stream WAS still played — through the single-event
+    // route, strictly AFTER its own seed proposal. Scoping the import without
+    // this would be indistinguishable from silently dropping the stream.
+    // `badminton.rally` on `/fixtures/{id}/events` can only be the knockout
+    // stream: the league stream folds through the import route above.
+    const proposalIdxs = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => c.method === "POST" && /\/seed-proposal$/.test(c.path))
+      .map(({ i }) => i);
+    expect(proposalIdxs).toHaveLength(2);
+    const rallyIdxs = calls
+      .map((c, i) => ({ c, i }))
+      .filter(
+        ({ c }) =>
+          c.method === "POST" &&
+          /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path) &&
+          (c.body as { type?: string }).type === "badminton.rally",
+      )
+      .map(({ i }) => i);
+    expect(rallyIdxs.length).toBeGreaterThan(0);
+    // `proposalIdxs[1]` is `d-badminton`'s own proposal — divisions advance in
+    // pack order, which the oracle names above have already pinned.
+    expect(Math.min(...rallyIdxs)).toBeGreaterThan(proposalIdxs[1]!);
   });
 });
