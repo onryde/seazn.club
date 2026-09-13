@@ -1658,6 +1658,21 @@ describe("loadCompetitionHub — knockouts, one view per bracket stage", () => {
       expect(view.championFixtureId).toBe("gf");
       expect(view.rounds.at(-1)!.key).toBe("GF-4");
     });
+
+    it("an unowed reset that has STARTED stays on the rail while it is live — the tab's live rung must be able to open on it", async () => {
+      // Task 2 fix round 2. Nobody owed it, but somebody is playing it: a
+      // round dropped while `in_play` is a live match the spectator cannot
+      // reach from the rail, and the tab opens on a live round first.
+      const doc = await load({
+        stages: [de],
+        fixtures: bracket(WINNERS_SIDE_WON, { status: "in_play" }),
+        standings: [],
+      });
+      const view = doc.knockouts[0]!;
+      expect(view.championFixtureId).toBe("gf"); // the premise: still crowned off the first grand final
+      expect(doc.matches.find((m) => m.fixtureId === "gf-reset")?.bucket).toBe("live");
+      expect(view.rounds.map((r) => r.key)).toEqual(["WB-1", "WB-2", "LB-1", "LB-2", "GF-3", "GF-4"]);
+    });
   });
 
   // ONE champion authority. `divisionChampion` crowns the Table tab and the

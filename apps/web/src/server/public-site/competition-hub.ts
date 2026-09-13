@@ -432,9 +432,15 @@ function buildKnockoutView(a: {
   // settled and the settled test below already keeps its round. A separate
   // clause could never change an answer, and a guard no test can kill is
   // decoration (AGENTS.md 3).
+  //
+  // A reset that has STARTED stays (Task 2 fix round 2): unowed or not, a live
+  // match dropped from the rail cannot be reached from it, and the tab opens
+  // on a live round first. Liveness is `hubLiveness`'s, the one derivation.
   const shownRounds = champion
     ? rounds.filter(
-        (g) => !g.fixtures.every((f) => f.conditional === true && !BRACKET_SETTLED.has(f.status)),
+        (g) =>
+          g.fixtures.some((f) => hubLiveness(f.status).live) ||
+          !g.fixtures.every((f) => f.conditional === true && !BRACKET_SETTLED.has(f.status)),
       )
     : rounds;
 

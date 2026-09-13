@@ -306,6 +306,31 @@ describe("KnockoutTab — which round it opens on", () => {
     expect(opensOn(doc)).toEqual(["mh-knockout-round-premier-de-LB-1"]);
   });
 
+  it("rung 1 — with TWO live rounds, the EARLIER one in rail order opens (winners' before losers')", () => {
+    // Task 2 fix round 2: every other rung-1 case has exactly one live round,
+    // so "the last live round" passed them all.
+    const doc = hubDoc({
+      matches: [
+        ko("w1", "live", "Winners' final", [S("Ana"), S("Ben")]),
+        ko("l1", "live", "Losers' final", [S("Cara"), S("Dev")]),
+        ko("g1", "upcoming", "Grand final", [tbd("Winner of WB"), tbd("Winner of LB")]),
+      ],
+      knockouts: [
+        knockoutView(
+          "de",
+          "premier",
+          [
+            koRound("WB-1", "Winners' final", ["w1"], "WB"),
+            koRound("LB-1", "Losers' final", ["l1"], "LB"),
+            koRound("GF-2", "Grand final", ["g1"], "GF"),
+          ],
+          { kind: "double_elim", drawable: false },
+        ),
+      ],
+    });
+    expect(opensOn(doc)).toEqual(["mh-knockout-round-premier-de-WB-1"]);
+  });
+
   it("rung 1 — LIVE beats the CHAMPION's round: a live bronze match beside a decided final opens on the bronze", () => {
     const matches = [
       ...DONE_MATCHES.filter((x) => x.fixtureId !== "t1"),
