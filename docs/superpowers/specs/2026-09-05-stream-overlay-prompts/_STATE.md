@@ -16,7 +16,10 @@ Last updated: **2026-09-12**, by the R0 bench wave (branch `docs/streaming-r0-me
 **R0 is CLOSED — its memo is `R0-memo.md` beside this file, and the Cloudflare
 gate that blocked three items is cleared.** W1 CLOSED; W2 is next and owes a
 task-zero RE-PIN; R1 and R2 are prompts with no plans; R3 is deferred to the
-capture repo. **R2's plan gate ("after the R0 memo") is now OPEN.**
+capture repo. **R2's plan is NOT yet writable** *(corrected 2026-09-13; this line first
+said the gate was open)*: `R2-compositor.md` gates R2 on the R0 memo **and PR-R1 merged**,
+and its plan re-pins on that merged tree — `runner-fly.ts`, the token and session APIs do
+not exist yet. **The next writable plan is R1's**, whose gate (PR1 merged, #761) is open.
 
 **Read `R0-memo.md` before planning R2.** It reverses the design of record's
 compositor choice (B2, not B3), names the guest size and its price, and records
@@ -398,9 +401,10 @@ wave, and neither belongs to this programme.
    recorded.
 4. **P5, the device spike**, is startable now and blocks the R3 estimate. It
    needs handsets, not this repo, and touches nothing R2 depends on.
-5. ~~Then R0's bench~~ **R0 is CLOSED.** Next is **R2's plan**, whose gate is now
-   open — write it from `R0-memo.md`, not from design §7.2/§9.3, both of which
-   R0 corrects. Then R1, then R2. Plans stay one wave ahead.
+5. ~~Then R0's bench~~ **R0 is CLOSED.** Next is **R1's plan** — its gate is open and R1
+   has neither a plan nor code. R2's plan follows PR-R1's merge and re-pins on that tree,
+   and is written from `R0-memo.md`, not from design §7.2/§9.3, both of which R0
+   corrects. Plans stay one wave ahead.
 
 **[RULED 2026-09-13 — owner: "follow the order". Guest is `performance-4x`; the LL-HLS beta is to be enabled and measured. See `_INDEX.md` "Owner rulings, 2026-09-13".]** Prior record: two owner decisions were open and both cost money (`R0-memo.md` §2, §3):
 whether the `< 80 %` CPU bar is honoured as written — `performance-4x` at

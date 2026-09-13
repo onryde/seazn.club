@@ -2725,7 +2725,11 @@ order recommended after R0 closed:
    **zero** `#EXT-X-PART`, `#EXT-X-PART-INF`, `#EXT-X-PRELOAD-HINT`, `#EXT-X-SERVER-CONTROL`
    and `#EXT-X-RENDITION-REPORT` in every sample. Step 4 waits on the toggle; the same probe
    re-runs in under three minutes once it is flipped, and only then is latency measured.
-5. **R2's plan is written from `R0-memo.md`**, not from design §7.2 / §9.3.
+5. **R2's plan is written from `R0-memo.md`**, not from design §7.2 / §9.3. **Premise
+   corrected the same day:** `R2-compositor.md` gates R2's start *and* its plan on PR-R1
+   merging (the plan re-pins on the merged tree), and R1 has neither a plan nor code — so
+   the plan writable next is **R1's**. Recommended to the owner as the replacement for
+   step 5; not yet ruled.
 
 **A claim made to the owner while recommending step 1 is CORRECTED.** The recommendation
 said `ovl-slate-fade` "has to become a transform or a cut" because it fades against the
