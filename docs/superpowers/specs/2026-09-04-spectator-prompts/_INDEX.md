@@ -735,8 +735,28 @@ Per-screen verdicts on the captures looked at so far (controller, by eye):
 - `non-drawable-1280` — pass with C1; double elim has no switch, opens on Winners' final.
 - `walkover-final-320` — FAIL P2 (card prints `matchCentre.status.forfeited`); banner reads "Won the Final by walkover against Arjun Mehta" correctly.
 - Earlier unscored 32-draw at 320/390/768/1024/1280 + draw 768/1024/1280 — pass layout; D1, D2.
-Still to look at: the remaining t3 shots (mid-event 320/768/1024/1280, draw-complete 320/768, draw-link-768,
-draw-tapped-1024, tree-32-1024, multi 320, multi-one 1280, non-drawable 320, walkover 1280, league-only 320/1280).
+Remaining shots, looked at after the compaction:
+- `mid-event-32-320` — pass; round rail swipes, the pressed live Round of 16 is in view, "next" lines wrap cleanly. D1.
+- `mid-event-32-768` — pass; all five round chips on one row, two-column cards. D1.
+- `mid-event-32-1024`, `mid-event-32-1280` — pass with C2 (one division, so no chip rail: the Rounds|Draw
+  switch sits alone on its own row, a ~70px band between the tab bar and the division heading). D1.
+- `tree-32-1024` — pass with D2; the 32-draw tree fits (final column ends ~984px inside 1008), the live Round
+  of 16 node is outlined, a long name truncates; the italic "Winner of R3·1" placeholders are D2.
+- `draw-complete-16-320` — pass; opens on Final with the rail scrolled so Final is in view (the Semi-finals
+  chip peeks at the left edge — a swipe rail, not clipping). D1.
+- `draw-complete-16-768` — pass; no switch below lg. D1.
+- `draw-link-768` — pass; `?view=draw` below lg renders the Rounds page, identical to `draw-complete-16-768` by design.
+- `draw-tapped-16-1024` — pass; 16-draw tree under the champion banner, third place below the final.
+- `multi-all-320` — pass; division chip rail swipes, each division under its own heading, each opens on its own
+  first unfinished round. D1.
+- `multi-one-320` — pass; Girls U14 only. D1.
+- `multi-one-1280` — pass with C2 (division chips and switch on two rows). D1.
+- `non-drawable-320` — pass with D1, which is worse here: the caption "DOUBLE ELIMINATION · WINNERS' FI…"
+  truncates beside TIME TBD.
+- `walkover-final-1280` — FAIL P2 (same raw key as 320; banner correct).
+- `league-only-320`, `league-only-1280` — pass; a league gets no Knockout tab (Overview, Matches, Table, Teams,
+  Info). Observation O1, NOT this wave: that league's Overview shows only "From 31 December 2030" above an empty
+  page — a thin pre-start Overview, to put to the owner separately.
 
 Open fix list (one fix round, then rebuild, recapture ALL cells, look at every one, publish the contact sheet
 with verdicts for owner sign-off; then a final whole-branch review):
@@ -756,6 +776,7 @@ with verdicts for owner sign-off; then a final whole-branch review):
   undecided with both sides known reads `knockout.pendingPair` "{a} / {b}" (4 locales); otherwise the slot label.
 - **C1 (cosmetic)** — at 1280 the double-elim round rail cuts its last chip mid-word with no way to scroll with
   a mouse. Rails wrap from `lg` (`hub-chip.tsx` rail), phones keep the swipe rail; check the Matches rails too.
-- **C2 (cosmetic)** — with two divisions, the division chips and the Rounds|Draw switch sit on two rows at `lg`;
-  one row (chips left, switch right).
+- **C2 (cosmetic)** — at `lg` the Rounds|Draw switch never shares a row: with two divisions it sits under the
+  division chips, with one division it sits alone above the heading. One toolbar row at `lg`: division chips on
+  the left when there is a rail, otherwise the single division's heading; the switch on the right.
 Also owed (separate wave, owner told): double-elim unowed reset never voided / `bracketRanks` ranking.
