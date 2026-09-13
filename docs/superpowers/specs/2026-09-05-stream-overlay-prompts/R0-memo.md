@@ -471,12 +471,14 @@ Applied to the three motions that animate opacity:
 |---|---|---|
 | `ovl-breathe`, live dot 0.55↔1 continuous | inside the scorebug panel, over opaque `--sport-board` | **SAFE — keep as opacity** |
 | warming-state breathing dots | over the slate plate | **SAFE** |
-| `ovl-slate-fade`, 250 ms whole-slate cross-fade | the slate fades **against the key** | **BROKEN — must change** |
-| W2's moment slab (`transform`/`opacity`) | depends on whether the slab has its own plate | safe only if it does |
+| `ovl-slate-fade`, 250 ms state-swap cross-fade | `.ovl-slate-content`, inside `.ovl-slate`, which paints an opaque full-canvas `--sport-board` | **SAFE** — *corrected 2026-09-13: first drafted as "fades against the key — BROKEN", reasoned from the bench's stand-in page rather than the shipped CSS* |
+| W2's moment slab | `translateX` only, on `--sport-led` (W2, #775) | **SAFE** — no opacity at all |
 
 **The rule W2 needs: an overlay element may animate opacity only over an opaque plate of
-its own theme. Nothing may cross-fade against the key.** A whole-slate state swap must
-become a transform (slide/scale) or a hard cut. This is a constraint on `_THEMES.md` §motion,
+its own theme. Nothing may cross-fade against the key.** Every motion the overlay
+ships today already keeps it (`_THEMES.md` §6 audits all five — a read of the stylesheet,
+not yet a run under a real key), so **no motion code change is owed**; the rule binds
+future motion. This is a constraint on `_THEMES.md` §motion,
 not a tuning parameter.
 
 ---

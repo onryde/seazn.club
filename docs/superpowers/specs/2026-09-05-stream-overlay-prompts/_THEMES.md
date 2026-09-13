@@ -826,6 +826,34 @@ Transform and opacity only. No animation on mount, no continuous ticker, no
 `setInterval` for visuals; the tick is a class toggled from a previous-value
 ref and removed on `animationend`.
 
+**Under the B2 compositor the overlay is CHROMA-KEYED — every motion must survive the key.**
+B2 is owner-ruled (2026-09-12, *"go with your proposal"*): the relay page renders the
+overlay over a flat key colour and ffmpeg keys it over the video. The key and filter are
+R0's measured recommendation, accepted in the owner's order of 2026-09-13 (*"follow the
+order"*): **`#ff00ff` magenta, `colorkey=0xff00ff:0.30:0.10`, no `despill`** — erosion
+≤ 4.9 ΔRGB against every palette in §2, where the green first tried eroded by 334
+(`R0-memo.md` §8.1).
+
+**The rule: an element may animate opacity only over an opaque plate of its own theme.
+Nothing may fade against the key.** Keying grades alpha but does not un-mix the key colour
+from what remains, so a half-transparent pixel over the key composites 120–227 ΔRGB off
+(`R0-memo.md` §8.2). Transform-only motion keys cleanly at any frame.
+
+The shipped motions, audited against `globals.css` — a read of the stylesheet, **not yet
+driven under a real key**:
+
+| Motion | What animates | Over what | Verdict |
+|---|---|---|---|
+| Score tick | `transform: scale` | — | safe |
+| Side change | LED `transform: translate` | — | safe |
+| Live dot | `opacity 0.55 ↔ 1` | the bar/bug panel, opaque `--sport-board` | safe |
+| Slab (W2) | `translateX` only, on `--sport-led` | — | safe |
+| Slate state swap (`ovl-slate-fade`, §4a) | `.ovl-slate-content` opacity | `.ovl-slate`, which paints an opaque full-canvas `--sport-board` | safe |
+
+**A new palette colour is checked against the key by its minimum UV distance to the key,
+never by "is it green".** The binding colour today is hockey's advisory `#3ddc84` (0.033 UV
+from a standard green key), not cricket's `#9ae600`, which is yellow-green and sits clear.
+
 **One deliberate exception: the football clock advances between events.**
 A match clock is DATA, not decoration, and the engine gives a snapshot
 (`phase`, `periods`, `asOf`) that only changes when something is scored or a

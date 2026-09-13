@@ -2704,3 +2704,29 @@ passes "did something go wrong" and fails "did the thing I need actually happen"
 - **A destination collision this wave caused is recorded rather than hidden** (memo F9):
   two cells overlapped on one stream key for ~5 minutes. Encoder-side numbers are
   unaffected; neither cell's output was pulled, and no D5 row comes from either.
+
+### Owner rulings, 2026-09-13 — the post-R0 order
+
+Owner, verbatim: *"use ffmepg skills and follow the order"* — accepting the five-step
+order recommended after R0 closed:
+
+1. **The chroma-key rule lands in `_THEMES.md` §6** (key `#ff00ff`,
+   `colorkey=0xff00ff:0.30:0.10`, no despill; opacity only over an opaque plate).
+2. **`R0-memo.md` pushes straight to `main`** — a PR would add a smoke run and still fire
+   e2e at merge.
+3. **`performance-4x / 8 GB` is R2's default guest** (£0.539 / 3 h), accepting that it
+   misses the `< 80 %` CPU bar by 1–5 points. `performance-8x` is deferred until
+   multi-camera or 1080p is ruled on — both would force it.
+4. **Enable Cloudflare's Low-Latency HLS beta, then measure it** before `delayMs` is set.
+   The toggle is a dashboard action only the owner can take.
+5. **R2's plan is written from `R0-memo.md`**, not from design §7.2 / §9.3.
+
+**A claim made to the owner while recommending step 1 is CORRECTED.** The recommendation
+said `ovl-slate-fade` "has to become a transform or a cut" because it fades against the
+key — repeating `R0-memo.md` §8.2 as first drafted. Reading the shipped stylesheet
+falsifies it: the fade class sits on `.ovl-slate-content`, inside `.ovl-slate`, which paints
+an opaque full-canvas `--sport-board`. The fading element is over an opaque plate, which is
+exactly the case §8.2's own measurement calls safe. The bench's stand-in relay page, not the
+real slate, was what the verdict was reasoned from. **No motion code change is owed**; the
+audit is in `_THEMES.md` §6 and is a read, not yet a run under a real key. W2 (#775,
+merged 2026-09-11) animates its slab by `translateX` only and was never exposed.

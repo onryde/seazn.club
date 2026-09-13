@@ -402,7 +402,7 @@ wave, and neither belongs to this programme.
    open — write it from `R0-memo.md`, not from design §7.2/§9.3, both of which
    R0 corrects. Then R1, then R2. Plans stay one wave ahead.
 
-**Two owner decisions are open and both cost money** (`R0-memo.md` §2, §3):
+**[RULED 2026-09-13 — owner: "follow the order". Guest is `performance-4x`; the LL-HLS beta is to be enabled and measured. See `_INDEX.md` "Owner rulings, 2026-09-13".]** Prior record: two owner decisions were open and both cost money (`R0-memo.md` §2, §3):
 whether the `< 80 %` CPU bar is honoured as written — `performance-4x` at
 £0.539/3 h misses it by 1–5 points, `performance-8x` at £1.078 clears it and
 also buys multi-cam n=4 — and whether to enable Cloudflare's **Low-Latency HLS
