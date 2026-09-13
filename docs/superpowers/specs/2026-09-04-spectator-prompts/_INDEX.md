@@ -582,12 +582,94 @@ Every one of these was green in the suite and wrong in the picture.
   STATUS colour, never an identity one — it does not come from `theme`, so "this match is on"
   means the same thing on every club's poster while their own colour paints the crests.
 
-### Open
+### Closed after the first render pass (owner: "Ok fix")
 
-- **A live poster with no rate line has an empty foot** (tennis). The alternatives were the raw
-  variant key or an invented line; neither is better than space.
-- **`battingIndex` is cricket's**, so no side is held back on a live tennis or football poster
-  even though both have a server / a side in possession.
+- **A live poster with no rate line had an empty foot** (tennis). The foot now falls
+  `rateLine ?? setLine ?? metaLine`, where `setLine` is the set-by-set score from the Sets view —
+  SETS only, never periods, because an unlabelled "1–0 · 1–1" could be halves or anything else.
+  Rendered: `6–4 · 4–6 · 2–2`.
+- **No side was held back on a live tennis or football poster**, because the dim rule read
+  `battingIndex`, cricket's field. The loader now resolves `activeIndex` — batting index, else
+  `servingSide()` through the timeline's own reader; period sports stay null (nothing tracks
+  possession). Rendered: the returner's tile dims.
+- **The upcoming poster said its stage twice** — "TOURNAMENT · GROUP STAGE" above a 92px
+  "GROUP STAGE". The chip carries the division alone; no stage means no hero, never the division
+  in both slots.
+
+### Open
 - The board's result variant stacks score over overs; the builder packs them into one
   `scoreLines` string (`48/3 (5.1)`), so the tile prints one line. The data's shape, not the
   layout's.
+
+## The public division page — deprecate, but NOT YET (2026-09-13)
+
+Owner, on `/shared/{org}/{comp}/{division}?tab=standings`: *"there is confusion when go to
+division page"*, then *"are we going to deprecate? or move into the hub?"*, then *"if you think we
+can deprecate then we can"*. The recommendation put back was: deprecate **by redirect into the
+hub, not by deletion** — and not until the hub can show what only this page shows.
+
+### Why a redirect and never a delete
+
+The division URL is a **route prefix**, not only a page: `fixtures/[fixtureId]`, `calendar.ics`,
+`present/` and the poster route all live under it. Strip the last segment off a match URL and you
+land on it. Deleting `page.tsx` makes that a 404 for a URL the product hands out constantly. The
+end state is a 308 to `/shared/{org}/{comp}?tab=matches&division={slug}`, mapping the page's old
+`?tab=` (`schedule`→`matches`, `standings`→`table`, `entrants`→`teams`).
+
+### Three premises withdrawn, each found by reading rather than by the scout's map
+
+- **"`?tab=` does nothing on either page."** FALSE. It is honoured on the CLIENT on purpose
+  (`tabs.tsx`, `use-tab-param.ts`): reading `searchParams` on the server would make an ISR route
+  dynamic. The claim came from comparing server HTML, which is identical by design.
+- **"The hub's Matches tab already has a URL-backed division filter."** FALSE — an **inert
+  seam** (AGENTS.md class 1). `MatchesTab` declared `initialDivision`, documented as "a
+  `?division=` deep link", with a full unit suite handing it values; nothing read the parameter
+  and `CompetitionLanding` never passed the prop. **Now wired both ways**: the landing reads it
+  (`useDivisionParam`, same popstate store and null server snapshot as `useTabParam`), the
+  division chips write it back with `replaceState`. The filter chips deliberately do not write
+  `?filter=` — live/upcoming/results is a fact about this minute. Mutant (drop the prop on the
+  Matches arm) killed by `competition-landing.test.tsx`. **Proven in Chromium** against a
+  4-division competition: no param → All, 24 cards from 4 divisions; `?division=same-b` → that
+  chip pressed, 6 cards from it only; tap another chip → URL rewrites; Info and back → choice
+  kept; reload the rewritten URL → same view; tap All → parameter removed; 390px → 0px overflow.
+- **"The hub already subsumes the division page."** FALSE. Only the division page renders:
+  | Only on the division page | Where it has to go before the redirect |
+  |---|---|
+  | Knockout **bracket** (`<Bracket>`; the hub skips `BRACKET_KINDS` at `competition-hub.ts`) | design call — see below |
+  | **Results grid** (`<ResultsMatrix>`) | with the bracket decision |
+  | **Champion banner** — on the hub a winner shows only as a crown in a TABLE row, so a pure knockout's winner shows nowhere | with the bracket decision |
+  | **Squads** on entrant cards (numbers, links to player cards) | Teams tab |
+  | **Suspensions** strip (hardcoded English: "Suspensions", "to serve") | Info tab, 4 locales |
+  | Division **description** prose | Info tab |
+  | Division-level **Present** kiosk button | not needed — the hub already has competition Present in the hero and on Info; the division kiosk URL keeps working |
+
+  A redirect today would remove public knockout brackets outright.
+
+### Sequencing put to the owner
+
+1. Knockout view in the hub — **the one design call**. A: bracket inside the Table tab under each
+   division's tables. **B (recommended): its own Knockout tab**, derived by presence like every
+   other tab, grouped by division — a pure cup has no table, so "Table" is the wrong name for its
+   bracket.
+2. Squads on Teams cards.
+3. Suspensions and division descriptions on Info.
+4. Then the 308, plus: repoint the direct links (hub table `fullHref` and team `href`, match
+   centre Info "Division", player card ×2, poster PDF QR, embed, console G9 "view public", division
+   timetable PDF QR `liveUrlFor`, division kiosk `backHref`), drop division URLs from the sitemap,
+   delete `tabs.tsx` (the division page is its only production caller) and the division OG image,
+   and move the e2e/smoke checks that open this page (`discipline`, `journey-pro`,
+   `journey-community`, `knockout`, `mobile` P6 slot labels, `rs010` entrants masking,
+   `stream-overlay` cookie banner, smoke's suspensions strip — smoke must read the hub JSON, since
+   the Info panel is not in the first-paint HTML). Most `?tab=entrants|standings` hits in e2e are
+   the ORGANISER console via `divisionPath()`, not this page, and are unaffected.
+
+### Also found, not yet acted on
+
+- The division page's empty Standings line ("Standings appear after the first results.") is
+  **hardcoded English** and is gated on `!stages.some(BRACKET_KINDS)`, so a division with a
+  knockout stage and nothing to draw yet shows a blank panel — the rectangle the owner saw.
+- A hub cache bump is owed when the document grows fields: `unstable_cache(["pub-hub-v1", …])`
+  in `competition-hub.ts` would serve an old-shaped document to the page for up to
+  `REVALIDATE_FAST`, and the page does not re-parse it. (`usecases/public.ts`'s JSON cache
+  re-parses hits and self-heals.) Any schema change here also regenerates `openapi/v1*.json` —
+  the hub route's response IS `CompetitionHubDoc`.
