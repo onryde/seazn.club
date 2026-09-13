@@ -19,11 +19,26 @@ Sports that mount `PadClockBar`: **football, hockey, ice hockey**
 (`footballSkinV3.clock` / period-shared `buildClock`). Cricket and racket
 sports do not.
 
-Soft-commit holds only when `dock.chips.length > 0` (goal / card person /
-noball bat-runs / doubles scorer / etc.). Immediate submit when dock is null
-or empty chips — period advance, plain cricket ball / wide, shot, sub, toss,
-singles rally, unresolved card side, and `*.clock` via `publishClock`.
+## Soft-commit vs immediate (all v3 sports)
 
+Gate: `usesSoftCommit(dock) === dock !== null && dock.chips.length > 0`.
+Empty-chip docks must return `null` (not `{ chips: [] }`). `*.clock` bypasses
+the gate via `publishClock` → always immediate.
+
+| Sport | HOLD (enrichment chips) | Immediate |
+|---|---|---|
+| Cricket | noball bat-runs; bye / legbye extras | plain ball / wide / penalty; toss; retire; review; innings close / declare / summary |
+| Football | goal (flags ± scorer/assist); card with person chips; shootout kick band≥2; penalty offence band≥2 | period; shot; sub; sinbin; empty card; shootout kick band&lt;2; `football.clock` |
+| Hockey / ice hockey | goal (flags ± scorer/assists); suspension.start with on-field; shootout.attempt band≥2; set_piece band≥2 with people | period.advance; shot; suspension.end; empty suspension / set_piece; `*.clock` |
+| Volleyball | rally when on-court &gt; 1 (scorer) | rally singles / ≤1; set.summary; sanction; timeout; sub; libero |
+| Tennis | every `tennis.point` (kind ± scorer) | set_summary; sanction; interruption; game.award |
+| Table tennis | doubles scorer; expedite return chip | singles rally; game.summary; sanction; timeout; expedite.start; sub |
+| Badminton | doubles rally scorer | singles; game.summary; sanction; timeout / sub / expedite |
+| Carrom | board.summary breaker/queenBy; game.adjust person (when roster non-empty) | toss; empty-roster board/adjust |
+| Boardgame | result (method chips) | pairing |
+| Generic | score (amount ± person) | result / settle |
+
+Clock bar sports (PadClockBar): football, hockey, ice hockey only.
 ## Shape
 
 - Event: `{sport}.clock` with `{ at: GameTime, running: boolean }`.

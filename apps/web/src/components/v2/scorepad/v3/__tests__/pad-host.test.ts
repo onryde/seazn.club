@@ -1080,11 +1080,12 @@ describe("clock sports inventory", () => {
 });
 
 describe("soft-commit inventory — HOLD only when dock has chips", () => {
-  // Sport-level pins: empty-chip / null docks must not hold (overlay delay for
-  // nothing). Enrichment docks must. Clock never reaches this gate.
+  // Gate: usesSoftCommit = dock !== null && chips.length > 0.
+  // *.clock never reaches this gate (publishClock → pipeline.submit).
+  const t = (key: string): string => key;
+
   it("cricket: plain / wide immediate; noball / bye hold", async () => {
     const { buildDock } = await import("../skins/cricket");
-    const t = (key: string): string => key;
     expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 1 } }))).toBe(false);
     expect(usesSoftCommit(buildDock("cricket.ball", t, { runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }))).toBe(
       false,
@@ -1100,7 +1101,6 @@ describe("soft-commit inventory — HOLD only when dock has chips", () => {
 
   it("football: period / shot / empty card immediate; goal holds", async () => {
     const { buildDock } = await import("../skins/football");
-    const t = (key: string): string => key;
     const emptyView = {
       state: { phase: "H1", entrants: { home: "H", away: "A" }, squads: { home: { onPitch: [] }, away: { onPitch: [] } } },
       cfg: {},
@@ -1111,6 +1111,108 @@ describe("soft-commit inventory — HOLD only when dock has chips", () => {
     expect(usesSoftCommit(buildDock("football.shot", emptyView, t, { by: "H" }))).toBe(false);
     expect(usesSoftCommit(buildDock("football.card", emptyView, t, {}))).toBe(false);
     expect(usesSoftCommit(buildDock("football.goal", emptyView, t, { by: "H" }))).toBe(true);
+  });
+
+  it("hockey / icehockey: advance / shot / empty suspension / empty set_piece immediate; goal holds", () => {
+    for (const key of ["hockey", "icehockey"] as const) {
+      const skin = V3_SKINS[key]!(t);
+      const emptyView = {
+        state: {
+          phase: "P1",
+          entrants: { home: "H", away: "A" },
+        },
+        cfg: {
+          goalKinds: ["fg"],
+          assists: key === "icehockey",
+          suspensions: { classes: { minor: { minutes: 2 } } },
+          setPieceKinds: ["ps"],
+        },
+        squads: {
+          home: { members: [] },
+          away: { members: [] },
+        },
+        band: 3,
+        personNames: {},
+        summary: { detail: { nextAdvance: "P2" } },
+      } as never;
+      expect(usesSoftCommit(skin.dock(`${key}.period.advance`, emptyView, { to: "P2" })), key).toBe(false);
+      expect(usesSoftCommit(skin.dock(`${key}.shot`, emptyView, { by: "H" })), key).toBe(false);
+      expect(usesSoftCommit(skin.dock(`${key}.suspension.start`, emptyView, {})), key).toBe(false);
+      expect(usesSoftCommit(skin.dock(`${key}.set_piece`, emptyView, { by: "H" })), `${key} empty set_piece`).toBe(
+        false,
+      );
+      expect(usesSoftCommit(skin.dock(`${key}.goal`, emptyView, { by: "H" })), key).toBe(true);
+    }
+  });
+
+  it("racket sports: singles / non-rally immediate; doubles rally / tennis point hold", async () => {
+    const member = (personId: string, onField = true) => ({ personId, onField, role: "player" as const });
+    const singlesView = {
+      state: { entrants: { home: "H", away: "A" }, expedite: false },
+      squads: {
+        home: { members: [member("h1")] },
+        away: { members: [member("a1")] },
+      },
+      band: 2,
+      personNames: { h1: "H1", a1: "A1" },
+    } as never;
+    const doublesView = {
+      state: { entrants: { home: "H", away: "A" }, expedite: false },
+      squads: {
+        home: { members: [member("h1"), member("h2")] },
+        away: { members: [member("a1"), member("a2")] },
+      },
+      band: 2,
+      personNames: { h1: "H1", h2: "H2", a1: "A1", a2: "A2" },
+    } as never;
+
+    const { buildDock: vbDock } = await import("../skins/volleyball");
+    expect(usesSoftCommit(vbDock("volleyball.rally", singlesView, t, { wonBy: "H" }))).toBe(false);
+    expect(usesSoftCommit(vbDock("volleyball.set.summary", singlesView, t, {}))).toBe(false);
+    expect(usesSoftCommit(vbDock("volleyball.rally", doublesView, t, { wonBy: "H" }))).toBe(true);
+
+    const { buildDock: bdDock } = await import("../skins/badminton");
+    expect(usesSoftCommit(bdDock("badminton.rally", singlesView, t, { wonBy: "H", scorer: "h1" }))).toBe(false);
+    expect(usesSoftCommit(bdDock("badminton.rally", doublesView, t, { wonBy: "H" }))).toBe(true);
+
+    const { buildDock: ttDock } = await import("../skins/tabletennis");
+    expect(usesSoftCommit(ttDock("tabletennis.rally", singlesView, t, { wonBy: "H" }))).toBe(false);
+    expect(usesSoftCommit(ttDock("tabletennis.rally", doublesView, t, { wonBy: "H" }))).toBe(true);
+    expect(usesSoftCommit(ttDock("tabletennis.timeout", singlesView, t, {}))).toBe(false);
+
+    const { buildDock: tnDock } = await import("../skins/tennis");
+    expect(usesSoftCommit(tnDock("tennis.point", singlesView, t, { by: "H", server: "H" }))).toBe(true);
+    expect(usesSoftCommit(tnDock("tennis.set_summary", singlesView, t, {}))).toBe(false);
+    expect(usesSoftCommit(tnDock("tennis.game.award", singlesView, t, {}))).toBe(false);
+  });
+
+  it("boardgame / generic / carrom: enrichment holds; pairing / toss / empty roster immediate", async () => {
+    const { buildDock: bgDock } = await import("../skins/boardgame");
+    expect(usesSoftCommit(bgDock("boardgame.result", {} as never, t, { winner: "H" }))).toBe(true);
+    expect(usesSoftCommit(bgDock("boardgame.pairing", {} as never, t, {}))).toBe(false);
+
+    const { buildDock: genDock } = await import("../skins/generic");
+    const scoreView = {
+      state: { entrants: { home: "H", away: "A" } },
+      cfg: { resultMode: "score" },
+      squads: { home: { members: [{ personId: "h1", onField: true }] }, away: { members: [] } },
+      band: 0,
+      personNames: {},
+    } as never;
+    expect(usesSoftCommit(genDock("generic.score", scoreView, t, { by: "H" }))).toBe(true);
+    expect(usesSoftCommit(genDock("generic.result", scoreView, t, {}))).toBe(false);
+
+    const { buildDock: carDock } = await import("../skins/carrom");
+    const emptyCarrom = {
+      state: { entrants: { home: "H", away: "A" } },
+      squads: { home: { members: [] }, away: { members: [] } },
+      summary: { detail: { games: [{ boards: [{ breaker: "H", queenTo: null }] }] } },
+      band: 1,
+      personNames: {},
+    } as never;
+    expect(usesSoftCommit(carDock("carrom.toss", emptyCarrom, t, {}))).toBe(false);
+    expect(usesSoftCommit(carDock("carrom.board.summary", emptyCarrom, t, {}))).toBe(false);
+    expect(usesSoftCommit(carDock("carrom.game.adjust", emptyCarrom, t, { delta: 1 }))).toBe(false);
   });
 });
 

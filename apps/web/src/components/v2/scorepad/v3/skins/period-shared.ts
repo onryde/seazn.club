@@ -1654,6 +1654,7 @@ export function buildDock(
     for (const id of onFieldOf(view, otherSide(side))) {
       chips.push(roleChip(`goalkeeper:${id}`, "goalkeeper", id, personName(view, id, t), `pad.${spec.key}.dock.goalkeeper`));
     }
+    if (chips.length === 0) return null;
     return { title: t(`pad.${spec.key}.dock.setPiece.title`), chips };
   }
 

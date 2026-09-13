@@ -596,6 +596,7 @@ export function buildDock(
       const chips = playersOf(view, side).map((member) =>
         personChip(`breaker:${member.personId}`, "breaker", member.personId, nameOf(view, member.personId, t)),
       );
+      if (chips.length === 0) return null;
       return { title: t("pad.carrom.dock.breaker.title"), chips };
     }
     if (board.queenTo !== null && board.queenTo !== undefined && payload?.queenBy === undefined) {
@@ -604,6 +605,7 @@ export function buildDock(
       const chips = playersOf(view, side).map((member) =>
         personChip(`queenBy:${member.personId}`, "queenBy", member.personId, nameOf(view, member.personId, t)),
       );
+      if (chips.length === 0) return null;
       return { title: t("pad.carrom.dock.queenBy.title"), chips };
     }
     return null;
@@ -624,6 +626,7 @@ export function buildDock(
     const chips = [...playersOf(view, "home"), ...playersOf(view, "away")].map((member) =>
       personChip(`person:${member.personId}`, "person", member.personId, nameOf(view, member.personId, t)),
     );
+    if (chips.length === 0) return null;
     return { title: t("pad.carrom.dock.adjust.title"), chips };
   }
 
