@@ -1291,6 +1291,20 @@ describe("validatePack — the standings derivation mirrors the product's own", 
     expect(finding.message).toContain('kind "knockout"');
   });
 
+  it("says NOT A TABLE STAGE before it says anything about the pool", () => {
+    // Pins the gate ORDER. The pool check sits below the stage-kind gate
+    // because it needs the stage-scoped stream list; with the two swapped
+    // this same pack would report `standings.pool_has_no_streams` instead,
+    // diagnosing the pool of a stage that can never have a table at all.
+    // The case above declares no poolKey, so nothing there would notice.
+    const pack = tiny();
+    pack.divisions[0]!.stages[0]!.kind = "knockout";
+    pack.expected.tables[0]!.poolKey = "A";
+    const finding = onlyError(validatePack(pack, TINY).findings);
+    expect(finding.code).toBe("standings.not_a_table_stage");
+    expect(finding.message).toContain('kind "knockout"');
+  });
+
   it("applies the stage's carry-over openings (stage.config.carry_deltas)", () => {
     const pack = tiny();
     pack.divisions[0]!.stages[0]!.config["carry_deltas"] = [
@@ -1803,6 +1817,30 @@ describe("validatePack — a pooled group stage is checked one table per pool", 
     expect(finding.code).toBe("standings.pool_has_no_streams");
     expect(finding.where).toBe("expected.tables[1] (d1/s1)");
     expect(finding.message).toContain('"pB-"');
+  });
+
+  it("names the pool that PLAYED but was never declared — one of two is not enough", () => {
+    // The anti-vacuity check was keyed division+stage, so ONE declared table
+    // satisfied the whole stage and the other pool went unasserted in silence.
+    // Suite 10 is four pools per division: declaring 1 of 4 would have checked
+    // one pool and said nothing about three, which reads as a clean gate
+    // (AGENTS.md failure class 6 — an absent symptom meaning suppressed).
+    const pack = pooledPack();
+    const expected = expectedOf(pack);
+    expected.tables = expected.tables.filter((t) => t.poolKey !== "B");
+    expect(expected.tables).toHaveLength(1);
+    const result = validatePack(pack, UNIT);
+    // Still only a warning, like every other "nothing asserts this" notice,
+    // and still ok — whether a table is owed is an authoring judgement.
+    expect(errors(result.findings)).toEqual([]);
+    expect(result.ok).toBe(true);
+    // EXACTLY one: pool A is declared and must NOT be reported. A sweep that
+    // warned per pool regardless would pass a `toContain` and fail this.
+    const list = warnings(result.findings);
+    expect(list.map((f) => f.code)).toEqual(["standings.no_expected_table"]);
+    expect(list[0]?.where).toBe("divisions[ref=d1].stages[ref=s1].pools[B]");
+    expect(list[0]?.message).toContain('3 stream(s) fold into pool "B"');
+    expect(list[0]?.message).toContain('poolKey "B"');
   });
 });
 
