@@ -2719,6 +2719,12 @@ order recommended after R0 closed:
    multi-camera or 1080p is ruled on — both would force it.
 4. **Enable Cloudflare's Low-Latency HLS beta, then measure it** before `delayMs` is set.
    The toggle is a dashboard action only the owner can take.
+   **Probed 2026-09-13 09:11Z — still OFF.** A local `ffmpeg` 9.0.1 RTMPS publish into a
+   fresh input, its manifest polled with a browser User-Agent: 12 live samples, media
+   sequence advancing 1 → 18 within one variant, `#EXT-X-TARGETDURATION:2` throughout, and
+   **zero** `#EXT-X-PART`, `#EXT-X-PART-INF`, `#EXT-X-PRELOAD-HINT`, `#EXT-X-SERVER-CONTROL`
+   and `#EXT-X-RENDITION-REPORT` in every sample. Step 4 waits on the toggle; the same probe
+   re-runs in under three minutes once it is flipped, and only then is latency measured.
 5. **R2's plan is written from `R0-memo.md`**, not from design §7.2 / §9.3.
 
 **A claim made to the owner while recommending step 1 is CORRECTED.** The recommendation
