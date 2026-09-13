@@ -918,16 +918,13 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.football.panel.shots",
   "pad.football.panel.sinbin",
   "pad.football.panel.subs",
-  // R3/task C (v3 ribbon). Football is the first sport whose ribbon coverage
-  // is COMPLETE: these nine are every `football.*` type the engine's fidelity
-  // tiers declare, so no football event falls to the generic
-  // `pad.ribbon.fallback` ("{event} recorded"). Registered HERE, not only in
-  // the dictionaries — buildRibbon (v3/ribbon.ts) gates its per-sport lookup
-  // on PAD_LABEL_KEYS membership, so dictionary copy with no entry here stays
-  // on the fallback forever with nothing failing. Suffixes are
-  // `ribbonKeyFor`'s split-on-FIRST-dot output, hence the two-segment
-  // `sinbin.*`/`shootout.*` tails.
+  // R3/task C (v3 ribbon). Football ribbon coverage is COMPLETE: these are
+  // every `football.*` type the engine's fidelity tiers declare, so no
+  // football event falls to the generic `pad.ribbon.fallback`. Registered
+  // HERE, not only in the dictionaries — buildRibbon (v3/ribbon.ts) gates
+  // its per-sport lookup on PAD_LABEL_KEYS membership.
   "pad.football.ribbon.card",
+  "pad.football.ribbon.clock",
   "pad.football.ribbon.goal",
   "pad.football.ribbon.penalty",
   "pad.football.ribbon.period",
@@ -1139,6 +1136,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // "Unreachable" is a claim about config, and config is the thing that varies
   // — the exact reasoning that put badminton's `timeout` on this list in R5.
   "pad.hockey.ribbon.goal",
+  "pad.hockey.ribbon.clock",
   "pad.hockey.ribbon.period.advance",
   "pad.hockey.ribbon.set_piece",
   "pad.hockey.ribbon.shootout.attempt",
@@ -1146,6 +1144,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.ribbon.suspension.end",
   "pad.hockey.ribbon.suspension.start",
   "pad.icehockey.ribbon.goal",
+  "pad.icehockey.ribbon.clock",
   "pad.icehockey.ribbon.period.advance",
   "pad.icehockey.ribbon.set_piece",
   "pad.icehockey.ribbon.shootout.attempt",

@@ -1143,7 +1143,7 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
 
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(180_000);
-    const owner = await browser.newContext();
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const ownerPage = await owner.newPage();
     try {
       clockRig = await seedOverlayFixture(ownerPage);
@@ -1155,7 +1155,7 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
 
   test("a paused stamp freezes .ovl-bug-clock; resume lets it advance again", async ({ browser }) => {
     test.setTimeout(120_000);
-    const owner = await browser.newContext();
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const ownerPage = await owner.newPage();
     await signInAs(ownerPage, clockRig.ownerEmail);
     const anon = await anonPage(browser);

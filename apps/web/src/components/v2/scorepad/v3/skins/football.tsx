@@ -185,6 +185,7 @@ export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
   "football.goal": 0,
   "football.period": 0,
   "football.shootout.kick": 0,
+  "football.clock": 0,
   "football.card": 2,
   "football.sub": 2,
   "football.penalty": 2,
@@ -417,6 +418,7 @@ export function legalPeriodMarkers(phase: string, cfg: unknown): readonly string
  */
 const PLAY_PHASE_ONLY: readonly string[] = [
   "football.goal",
+  "football.clock",
   "football.sub",
   "football.penalty",
   "football.shot",

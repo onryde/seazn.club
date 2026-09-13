@@ -250,7 +250,7 @@ describe("engine mirrors (a module change must red HERE, not drift silently)", (
 
   it("EVENT_BAND mirrors padSpec's own fidelity map exactly — every type, every band", () => {
     expect(EVENT_BAND).toEqual(spec.fidelity);
-    expect(Object.keys(EVENT_BAND)).toHaveLength(9);
+    expect(Object.keys(EVENT_BAND)).toHaveLength(10);
   });
 
   it("periodMarkersOf mirrors football.period's own marker enum for halves, quarters and extra time", () => {
@@ -1970,6 +1970,7 @@ describe("phaseAllows / legalPeriodMarkers — the fold's phase rules, stated on
   it("refusedEventTypes is the complement, derived from EVENT_BAND rather than a second hand-list", () => {
     const shootout = view({ state: state({ phase: "SHOOTOUT" }), cfg: cfg({ shootout: true }) });
     expect(refusedEventTypes(shootout).sort()).toEqual([
+      "football.clock",
       "football.goal",
       "football.penalty",
       "football.period",

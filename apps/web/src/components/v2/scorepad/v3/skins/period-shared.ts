@@ -412,6 +412,7 @@ export interface PeriodEventTypes {
   readonly attempt: string;
   readonly setPiece: string;
   readonly shot: string;
+  readonly clock: string;
 }
 
 export function eventTypesOf(spec: PeriodSkinSpec): PeriodEventTypes {
@@ -424,6 +425,7 @@ export function eventTypesOf(spec: PeriodSkinSpec): PeriodEventTypes {
     attempt: `${k}.shootout.attempt`,
     setPiece: `${k}.set_piece`,
     shot: `${k}.shot`,
+    clock: `${k}.clock`,
   };
 }
 
@@ -439,6 +441,7 @@ export function bandsOf(spec: PeriodSkinSpec): Readonly<Record<string, FidelityB
     [e.goal]: 0,
     [e.advance]: 0,
     [e.attempt]: 0,
+    [e.clock]: 0,
     [e.suspStart]: 1,
     [e.suspEnd]: 1,
     [e.setPiece]: 2,
@@ -487,6 +490,7 @@ export function phaseAllows(
   const hasClasses = Object.keys(cfg.suspensions?.classes ?? {}).length > 0;
 
   if (eventType === e.goal || eventType === e.shot) return play;
+  if (eventType === e.clock) return play;
   if (eventType === e.setPiece) return play && (cfg.setPieceKinds ?? []).length > 0;
   if (eventType === e.suspStart || eventType === e.suspEnd) {
     return hasClasses && (phase === "pre" || play || phase === SHOOTOUT_PHASE);
