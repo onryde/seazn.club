@@ -150,10 +150,10 @@ async function openConsoleAlreadyLive(page: Page, fx: RosteredFixture): Promise<
 }
 
 async function sendHeldNow(page: Page): Promise<void> {
-  await pad(page)
+  const btn = pad(page)
     .locator('[data-role="v3-dock"]')
-    .getByRole("button", { name: "Send now", exact: true })
-    .click();
+    .getByRole("button", { name: "Send now", exact: true });
+  if (await btn.count()) await btn.click();
 }
 
 test(

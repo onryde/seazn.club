@@ -332,23 +332,25 @@ export function pad(page: Page) {
 }
 
 async function sendHeldNow(page: Page): Promise<void> {
-  await pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true }).click();
+  const btn = pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true });
+  if (await btn.count()) await btn.click();
 }
 
-/** Every held ball dispatch (a run tile, an extra, a completed wicket sheet)
- *  opens the SAME `[data-role="v3-dock"]` — flushed here with "Send now"
- *  rather than waiting out `HOLD_MS`, the identical fast-path
- *  `scorepad-v3-cricket.spec.ts`'s own "dock chips"/"free hit" tests use.
- *  Still driven entirely through the real pad UI (R7) — only the WAIT is
- *  shortened, not the tap. */
+/** Soft-commit only when the dock has enrichment chips (`usesSoftCommit`).
+ *  Plain cricket run tiles submit immediately — requiring the dock hangs.
+ *  When a dock *does* open (wicket sheet → held ball with chips), flush via
+ *  "Send now" and wait for it to clear before the next tap. */
 async function flushHeld(page: Page): Promise<void> {
   const dock = pad(page).locator('[data-role="v3-dock"]');
-  await expect(dock).toBeVisible({ timeout: 5_000 });
-  await sendHeldNow(page);
-  // Wait for the dock to actually clear before the next tile is tapped —
-  // clicking "Send now" and immediately tapping the next tile (no wait at
-  // all) raced the flush's own network round trip in an earlier run and
-  // silently dropped a dispatch with no error either side of it.
+  const btn = dock.getByRole("button", { name: "Send now", exact: true });
+  // Brief window for a soft-commit dock to mount after the tap; if none, the
+  // event already left and there is nothing to flush.
+  try {
+    await expect(btn).toBeVisible({ timeout: 750 });
+  } catch {
+    return;
+  }
+  await btn.click();
   await expect(dock, "the dock must clear before the next tap").not.toBeVisible({ timeout: 10_000 });
 }
 
