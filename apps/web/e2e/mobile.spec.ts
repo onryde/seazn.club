@@ -1827,15 +1827,22 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
   await expect(roleSelects.first(), "no role select rendered").toBeAttached({ timeout: 30_000 });
   // BOTH sides, not the first: each side mounts its own disclosure, so opening
   // one leaves the other's selects boxless and the loop below fails on them.
-  // Gated on the toggle being VISIBLE rather than on a width literal — at
-  // `tablet-768`/`tablet-834` the toggle is `md:hidden` and the body is
-  // already open, and clicking a hidden control would throw.
+  // Gated on the toggle being VISIBLE rather than on a width literal.
+  //
+  // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782, fold
+  // the lineup once the match starts, every width) — its toggle is visible at
+  // every width here, not just phone-narrow. At `tablet-768`/`tablet-834`
+  // (real `md`-and-up viewports) the body also starts OPEN pre-match, since
+  // this fixture never sends `core.start`, so the toggle may already read
+  // `aria-expanded="true"` before any click — only click when it does not.
   const lineupDisclosures = page.locator('[data-role="phone-disclosure"]:has([data-testid="lineup-role-select"])');
   expect(await lineupDisclosures.count(), "lineup editor is not inside a PhoneDisclosure").toBeGreaterThan(0);
   for (const wrapper of await lineupDisclosures.all()) {
     const toggle = wrapper.locator('[data-role="phone-disclosure-toggle"]');
     if (!(await toggle.isVisible())) continue;
-    await toggle.click();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
   }
   await expect(roleSelects.first(), "role select still folded after its disclosure was opened").toBeVisible({

@@ -1,5 +1,5 @@
 "use client";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useState, type ReactNode } from "react";
 
 export interface PhoneDisclosureProps {
   /** The card's own title, verbatim — what the row reads as on a phone. */
@@ -57,7 +57,25 @@ export function PhoneDisclosure({
   startOpen = true,
   desktopCollapsible = false,
 }: PhoneDisclosureProps) {
-  const [open, setOpen] = useState(desktopCollapsible ? startOpen : false);
+  // Always starts closed, on the server AND the first client paint — matches
+  // spec 2026-09-02-scorepad-v3-phone-composition §3.10's phone-narrow
+  // default exactly, with no SSR/hydration mismatch. `desktopCollapsible`
+  // widths (>= Tailwind's `md`, 768px) then flip to `startOpen` a layout
+  // effect later, BEFORE the browser paints, so there is no visible flash —
+  // this can't be done in the initial `useState` because the two widths
+  // need DIFFERENT defaults from the SAME `open` state (review fix, PR #782:
+  // a shared `useState(startOpen)` opened the lineup editor pre-match on
+  // phone-narrow widths too, silently dropping the documented "closed until
+  // tapped" phone default and reddening
+  // `mobile.spec.ts`'s "lineup editor role/pair-order selects hold at phone
+  // width" at every width, narrow AND tablet, the moment `mobile.spec.ts`'s
+  // fixture was pre-match).
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (!desktopCollapsible || !startOpen) return;
+    if (typeof window === "undefined") return;
+    if (window.matchMedia("(min-width: 768px)").matches) setOpen(true);
+  }, [desktopCollapsible, startOpen]);
   // Review fix: the activity toggle already carries `aria-controls`; this
   // one did not. `PhoneDisclosure` is mounted several times on one page
   // (once per lineup/availability side in `fixture-console.tsx`), so the
