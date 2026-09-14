@@ -83,26 +83,95 @@ const placeholdersOf = (template: string): string[] =>
 // all four locales). Those are defects, so each survivor needs a written
 // reason here, and `no dead allowance entries` below fails if one stops being
 // hit — the list cannot quietly outlive what it excuses.
-const UNNAMED_PARAM_ALLOWANCE: { key: RegExp; param: string; why: string }[] = [
+//
+// M2 n2 — EACH ALLOWANCE IS NARROWED TO ITS OWN REASON. As first written the
+// predicate matched on (key, param) ONLY, so every entry excused far more than
+// the sentence beside it claimed: a `runs` that stopped being pinned to 0 (a
+// run-out after completed runs is the obvious case), or a `{fielder}` that
+// stopped carrying the composed assist, would have become exactly the k1
+// shape — a fact the builder computed and every locale drops — and the
+// allowance would have gone on excusing it in silence. `reasonHolds` makes
+// each entry re-prove its own claim against the emission in hand, so the
+// allowance can no longer outlive the reason it was granted for.
+type UnnamedParamAllowance = {
+  key: RegExp;
+  param: string;
+  /** What this entry is FOR, in one sentence. */
+  why: string;
+  /** The claim `why` rests on, checked against this emission's own params and
+   *  the locale's own templates. False ⇒ nothing is excused and direction B
+   *  reports the stray, which is the whole point of the narrowing. */
+  reasonHolds: (params: Record<string, string | number>, dict: Dict) => boolean;
+};
+
+/** `dismissalMsg`'s own composition (`match-centre.ts:297-302`): a run-out's
+ *  `{fielder}` is `[fielder, assist].filter(non-empty).join("/")` — "Jones/Smith",
+ *  the way a scorebook prints it. Read off the params rather than re-derived,
+ *  so this is the rendered string a spectator sees. */
+const fielderCarriesAssist = (params: Record<string, string | number>): boolean => {
+  const fielder = params.fielder;
+  const assist = params.assist;
+  if (typeof fielder !== "string" || typeof assist !== "string" || assist === "") return false;
+  return fielder.split("/").includes(assist);
+};
+
+const UNNAMED_PARAM_ALLOWANCE: UnnamedParamAllowance[] = [
   {
     key: /^matchCentre\.dismissal\.runout$/,
     param: "assist",
     why: "`dismissalMsg` COMPOSES the assist into `{fielder}` ('Jones/Smith', the way a scorebook prints it) — the template does render it, under the other name",
+    // …so the excuse holds only while `{fielder}` REALLY carries it. Stop
+    // composing (or drop the assist from the join) and `assist` becomes a name
+    // the builder looked up and no locale prints — a k1 defect, and this stops
+    // hiding it.
+    reasonHolds: (params) => fielderCarriesAssist(params),
   },
   {
     key: /^matchCentre\.result\.(super_over|boundary_count)$/,
     param: "margin",
     why: "`resultMsg` passes one shape to the whole result family; a method-only sentence ('won on the super over') has no room for a margin, and regulation/dls/innings do render `{margin}`",
+    // …so the excuse holds only while the family GENUINELY shares that shape:
+    // some sibling result key must be emitted with a non-empty `margin` that
+    // its own template renders in this locale. The day `resultMsg` starts
+    // tailoring its params per method, "one shape for the whole family" stops
+    // being the explanation and a margin nobody renders is just dropped.
+    reasonHolds: (_params, dict) => resultSiblingRendersMargin(dict),
   },
   {
     key: /^matchCentre\.ballLine\.wicket$/,
     param: "runs",
     why: "`ballLines` pins `runs` to 0 on a wicket ball and the wicket line prints the word, not the number; every other ballLine template renders `{runs}`",
+    // …so the excuse holds only while it IS 0 (`match-centre.ts:378`). A
+    // wicket ball that started carrying the delivery's real runs would be
+    // passing a number every template drops.
+    reasonHolds: (params) => params.runs === 0,
   },
 ];
 
-const isUniformShapeFiller = (key: string, param: string, value: string | number): boolean =>
-  value === "" || UNNAMED_PARAM_ALLOWANCE.some((a) => a.param === param && a.key.test(key));
+/** True when the result family really does share one param shape: some OTHER
+ *  `matchCentre.result.*` Msg is emitted with a non-empty `margin` that this
+ *  locale's template for that key names. Derived from the emissions
+ *  themselves (`EMITTED`, built below — `reasonHolds` runs at test time, long
+ *  after), never from a key typed in here. */
+const resultSiblingRendersMargin = (dict: Dict): boolean =>
+  EMITTED.some(({ msg }) => {
+    if (!msg.key.startsWith("matchCentre.result.")) return false;
+    const margin = msg.params?.margin;
+    if (typeof margin !== "string" || margin === "") return false;
+    const template = lookup(dict, msg.key);
+    return typeof template === "string" && placeholdersOf(template).includes("margin");
+  });
+
+const isUniformShapeFiller = (
+  key: string,
+  param: string,
+  params: Record<string, string | number>,
+  dict: Dict,
+): boolean =>
+  params[param] === "" ||
+  UNNAMED_PARAM_ALLOWANCE.some(
+    (a) => a.param === param && a.key.test(key) && a.reasonHolds(params, dict),
+  );
 
 // --------------------------------------------------------------- fixtures
 
@@ -435,6 +504,43 @@ describe("every Msg the match centre emits renders with no leftover brace, in ev
     expect(dead).toEqual([]);
   });
 
+  // M2 n2 — the two allowances whose reason is a CLAIM ABOUT A VALUE, asserted
+  // head-on as well as through `reasonHolds`. Two witnesses of the same fact on
+  // purpose: `reasonHolds` reds when the claim stops being true AND the param
+  // is still passed, which is the defect; these red when the claim stops being
+  // true at all, and name it in one line instead of as a stray-param report.
+  it("a run-out's {fielder} really does carry the composed assist — the first allowance's whole reason", () => {
+    const runouts = EMITTED.filter(
+      ({ msg }) =>
+        msg.key === "matchCentre.dismissal.runout" &&
+        typeof msg.params?.assist === "string" &&
+        msg.params.assist !== "",
+    );
+    // A floor, not decoration: with no run-out-with-assist in the matrix every
+    // assertion below is vacuously true, and the allowance would be excusing
+    // nothing while looking thoroughly checked.
+    expect(runouts.length, "the matrix emits no run-out carrying an assist").toBeGreaterThan(0);
+    const dropped = runouts
+      .filter(({ msg }) => !fielderCarriesAssist(msg.params!))
+      .map(({ label, path, msg }) => `${label} ${path}: fielder="${msg.params!.fielder}" assist="${msg.params!.assist}"`);
+    expect(
+      dropped,
+      "`dismissalMsg` no longer composes the assist into `{fielder}` — the assist is now a name the builder looked up and no locale prints",
+    ).toEqual([]);
+  });
+
+  it("a wicket ball line really does pin `runs` to 0 — the third allowance's whole reason", () => {
+    const wickets = EMITTED.filter(({ msg }) => msg.key === "matchCentre.ballLine.wicket");
+    expect(wickets.length, "the matrix emits no wicket ball line").toBeGreaterThan(0);
+    const carried = wickets
+      .filter(({ msg }) => msg.params?.runs !== 0)
+      .map(({ label, path, msg }) => `${label} ${path}: runs=${String(msg.params?.runs)}`);
+    expect(
+      carried,
+      "`ballLines` no longer pins a wicket ball's `runs` to 0, so the wicket line passes a number every template drops",
+    ).toEqual([]);
+  });
+
   it("every emitted key exists in English — a missing key renders as the dotted key itself", () => {
     // `t()` returns the KEY on a miss, which contains no brace and would
     // therefore sail through the render check below.
@@ -473,7 +579,7 @@ describe("every Msg the match centre emits renders with no leftover brace, in ev
         const named = new Set(placeholdersOf(template));
         const passed = Object.keys(msg.params ?? {});
         const strays = passed.filter(
-          (p) => !named.has(p) && !isUniformShapeFiller(msg.key, p, msg.params![p]!),
+          (p) => !named.has(p) && !isUniformShapeFiller(msg.key, p, msg.params!, dict),
         );
         if (strays.length > 0) {
           unused.add(`${msg.key} — template "${template}" never names ${strays.join(",")} (${label} ${path})`);
