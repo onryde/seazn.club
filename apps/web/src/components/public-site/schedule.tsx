@@ -22,6 +22,8 @@ import { msg } from "@/lib/messages";
 //   `${fixtureId}:away`, from the public round namer (same shape as
 //   `entrantNames`, a pre-resolved Record<string,string>);
 // - `roundLabels`: every fixture's round name, for the round view;
+// - `stageNames`: every stage's name, which heads a round view group that two
+//   stages would otherwise name identically (N1f f2);
 // - `copy`: every other phrase — the row rail's Live / Ended / TBD, the
 //   filter's label and first option, the view toggle and its group name, the
 //   calendar link, the zone caption, the untimed day heading and the empty
@@ -54,6 +56,12 @@ interface Props {
    *  every stage, so the round view orders its groups by stage first. A stage
    *  missing here sorts after every stage that is present. */
   stageOrder: Record<string, number>;
+  /** N1f f2 — each stage's NAME, keyed by stage id. Two stages in one division
+   *  can produce the same round name (a knockout and its plate both end in a
+   *  "Final"); the round view names the stage in front of those headings, and
+   *  ONLY those. Already in the org's locale, like everything else here; a
+   *  stage missing from the map keeps the bare round name. */
+  stageNames: Record<string, string>;
   /** N1d d5, N1e e5 — every phrase this client component cannot resolve
    *  itself, in the org's locale, built server-side by the caller. */
   copy: ScheduleCopy;
@@ -238,6 +246,7 @@ export function Schedule({
   slotLabels,
   roundLabels,
   stageOrder,
+  stageNames,
   copy,
   locale,
 }: Props) {
@@ -266,6 +275,7 @@ export function Schedule({
   );
   const groups = new Map<string, PublicFixture[]>();
   const roundNames = new Map<string, string>();
+  const groupStage = new Map<string, string>();
   for (const f of mode === "day" ? shown : inPlayOrder) {
     let key: string;
     if (mode === "day") {
@@ -274,6 +284,7 @@ export function Schedule({
       const name = roundLabels[f.id] ?? String(f.round_no);
       key = JSON.stringify([f.stage_id, name]);
       roundNames.set(key, name);
+      groupStage.set(key, f.stage_id);
     }
     const list = groups.get(key) ?? [];
     list.push(f);
@@ -289,8 +300,31 @@ export function Schedule({
         })
       : [...groups.entries()];
 
+  // N1f f2 (review-n1e m1): two stages in one division can produce the SAME
+  // round name — a knockout and its plate both end in a "Final", two group
+  // stages both open with a "Round 1" — and the round view then shows two
+  // headings a spectator cannot tell apart. Count the DISTINCT stages behind
+  // each name, and name the stage in front of the ones that actually repeat:
+  // a heading unique in this division reads exactly as it did.
+  const stagesPerName = new Map<string, Set<string>>();
+  for (const [key, name] of roundNames) {
+    const seen = stagesPerName.get(name) ?? new Set<string>();
+    const stageId = groupStage.get(key);
+    if (stageId != null) seen.add(stageId);
+    stagesPerName.set(name, seen);
+  }
+
   const groupLabel = (key: string): string => {
-    if (mode === "round") return roundNames.get(key) ?? key;
+    if (mode === "round") {
+      const name = roundNames.get(key);
+      if (name == null) return key;
+      if ((stagesPerName.get(name)?.size ?? 0) < 2) return name;
+      const stageId = groupStage.get(key);
+      const stageName = stageId != null ? stageNames[stageId] : undefined;
+      // No name for the stage means nothing to tell them apart WITH, so the
+      // round name goes out alone rather than with a dangling separator.
+      return stageName ? `${stageName} · ${name}` : name;
+    }
     if (key === UNSCHEDULED) return copy.timeTbd;
     return dayLabelLong(key, dateTag);
   };

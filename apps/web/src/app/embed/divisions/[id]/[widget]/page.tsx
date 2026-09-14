@@ -115,6 +115,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
+  // N1f f2: two stages can name a round the same ("Final" in a knockout and in
+  // its plate); the round view heads those groups with the stage as well.
+  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
 
   let body: React.ReactNode;
   if (widget === "schedule") {
@@ -127,6 +130,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         slotLabels={slotLabels}
         roundLabels={roundLabels}
         stageOrder={stageOrder}
+        stageNames={stageNames}
         copy={scheduleCopy}
         locale={orgLocale}
       />

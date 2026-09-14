@@ -207,7 +207,7 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
   // N1e e1 (review-n1d I1) — the schedule tab's round view orders its groups by
   // stage first; the page hands its Schedule each stage's `seq`, as the embed
   // schedule widget does.
-  it("hands its Schedule every stage's seq, keyed by stage id (N1e e1)", async () => {
+  it("hands its Schedule every stage's seq and name, keyed by stage id (N1e e1, N1f f2)", async () => {
     const data = divisionData();
     const stages = [
       { id: "ko", division_id: "d1", seq: 2, kind: "knockout", name: "Knockout", status: "active" },
@@ -220,8 +220,13 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     });
     const schedules = findElements(root, Schedule);
     expect(schedules, "the page builds one Schedule").toHaveLength(1);
-    const { stageOrder } = schedules[0]!.props as { stageOrder: Record<string, number> };
+    const { stageOrder, stageNames } = schedules[0]!.props as {
+      stageOrder: Record<string, number>;
+      stageNames: Record<string, string>;
+    };
     expect(stageOrder).toEqual(Object.fromEntries(stages.map((s) => [s.id, s.seq])));
+    // N1f f2: the names head the round groups two stages would otherwise share.
+    expect(stageNames).toEqual(Object.fromEntries(stages.map((s) => [s.id, s.name])));
   });
 });
 

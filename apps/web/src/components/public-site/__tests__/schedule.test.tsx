@@ -58,8 +58,10 @@ const COPY: ScheduleCopy = {
   empty: "(empty)",
 };
 const LOCALE = "en";
-// N1e e1 made stage order a prop; these cases hold one stage, so it is empty.
+// N1e e1 made stage order a prop, and N1f f2 the stage NAMES; these cases
+// hold one stage, so both are empty.
 const STAGE_ORDER: Record<string, number> = {};
+const STAGE_NAMES: Record<string, string> = {};
 
 describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
   it("renders the caller's pre-resolved slotLabels text for both unfilled sides, not English msg()", () => {
@@ -74,6 +76,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         copy: COPY,
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
         slotLabels: { "final:home": "Ganador del Grupo A", "final:away": "Ganador del Grupo B" },
       }),
     );
@@ -96,6 +99,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         copy: COPY,
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
         slotLabels: { "semi:away": "Runner-up of Group C" },
       }),
     );
@@ -115,6 +119,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         copy: COPY,
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
         slotLabels: {},
       }),
     );
@@ -133,6 +138,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         copy: COPY,
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
         slotLabels: {
           "final:home": "Best 2 of the 3-place teams",
           "final:away": "Winner of Group B",
@@ -166,6 +172,7 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
         copy: COPY,
         locale: LOCALE,
         stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
         slotLabels: {},
       }),
     );
@@ -182,7 +189,7 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
 // Round 2 · Final · Round 3". Groups now follow the stage's `seq` first, then
 // the round, and a round name is grouped per stage.
 describe("public Schedule — the round view reads stage by stage, then round (N1e e1)", () => {
-  type StageSpec = { id: string; seq: number; rounds: { no: number; name: string; matches: number }[] };
+  type StageSpec = { id: string; seq: number; name: string; rounds: { no: number; name: string; matches: number }[] };
 
   /** Untimed fixtures (so the round view is the one rendered), fed in the
    *  interleaved order the bug produced: by round_no across stages. */
@@ -200,11 +207,12 @@ describe("public Schedule — the round view reads stage by stage, then round (N
     }
     fixtures.sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
     const stageOrder = Object.fromEntries(stages.map((st) => [st.id, st.seq]));
-    return { fixtures, roundLabels, stageOrder };
+    const stageNames = Object.fromEntries(stages.map((st) => [st.id, st.name]));
+    return { fixtures, roundLabels, stageOrder, stageNames };
   }
 
-  const render = (stages: StageSpec[]) => {
-    const { fixtures, roundLabels, stageOrder } = build(stages);
+  const render = (stages: StageSpec[], namesOverride?: Record<string, string>) => {
+    const { fixtures, roundLabels, stageOrder, stageNames } = build(stages);
     return renderToStaticMarkup(
       createElement(Schedule, {
         fixtures,
@@ -216,22 +224,42 @@ describe("public Schedule — the round view reads stage by stage, then round (N
         copy: COPY,
         locale: LOCALE,
         stageOrder,
+        stageNames: namesOverride ?? stageNames,
       }),
     );
   };
 
   /** Each group heading's own text, in document order. */
   const headings = (html: string) => [...html.matchAll(/<h3[^>]*>([^<]+)</g)].map((m) => m[1]);
-  /** The expected headings, read off the input: stages by seq, rounds by number. */
-  const expected = (stages: StageSpec[]) =>
-    [...stages].sort((a, b) => a.seq - b.seq).flatMap((st) => [...st.rounds].sort((a, b) => a.no - b.no).map((r) => r.name));
+  /** The expected headings, read off the input: stages by seq, rounds by number,
+   *  with the stage named in front of any round name more than one STAGE
+   *  produces (N1f f2). Derived here rather than typed, so a change to the
+   *  input moves the expectation with it. */
+  const expected = (stages: StageSpec[]) => {
+    const stagesPerName = new Map<string, Set<string>>();
+    for (const st of stages) {
+      for (const r of st.rounds) {
+        const seen = stagesPerName.get(r.name) ?? new Set<string>();
+        seen.add(st.id);
+        stagesPerName.set(r.name, seen);
+      }
+    }
+    return [...stages]
+      .sort((a, b) => a.seq - b.seq)
+      .flatMap((st) =>
+        [...st.rounds]
+          .sort((a, b) => a.no - b.no)
+          .map((r) => ((stagesPerName.get(r.name)?.size ?? 0) > 1 ? `${st.name} \u00b7 ${r.name}` : r.name)),
+      );
+  };
 
   it("a league (seq 1) then a knockout (seq 2), handed in the other order: every league round, then the semi-finals, then the final", () => {
     const stages: StageSpec[] = [
-      { id: "ko", seq: 2, rounds: [{ no: 1, name: "(semi-finals)", matches: 2 }, { no: 2, name: "(final)", matches: 1 }] },
+      { id: "ko", seq: 2, name: "(knockout)", rounds: [{ no: 1, name: "(semi-finals)", matches: 2 }, { no: 2, name: "(final)", matches: 1 }] },
       {
         id: "league",
         seq: 1,
+        name: "(league)",
         rounds: [
           { no: 1, name: "(league round 1)", matches: 2 },
           { no: 2, name: "(league round 2)", matches: 2 },
@@ -243,20 +271,70 @@ describe("public Schedule — the round view reads stage by stage, then round (N
     expect(headings(render(stages))).toEqual(expected(stages));
   });
 
-  it("two stages whose rounds share a name are two groups, each in its own stage's place", () => {
+  it("two stages whose rounds share a name are two groups, each named by its stage (N1f f2)", () => {
     const stages: StageSpec[] = [
-      { id: "group-b", seq: 2, rounds: [{ no: 1, name: "(round 1)", matches: 1 }, { no: 2, name: "(round 2)", matches: 1 }] },
-      { id: "group-a", seq: 1, rounds: [{ no: 1, name: "(round 1)", matches: 1 }, { no: 2, name: "(round 2)", matches: 1 }] },
+      { id: "group-b", seq: 2, name: "(group B)", rounds: [{ no: 1, name: "(round 1)", matches: 1 }, { no: 2, name: "(round 2)", matches: 1 }] },
+      { id: "group-a", seq: 1, name: "(group A)", rounds: [{ no: 1, name: "(round 1)", matches: 1 }, { no: 2, name: "(round 2)", matches: 1 }] },
     ];
     const html = render(stages);
-    expect(headings(html)).toEqual(["(round 1)", "(round 2)", "(round 1)", "(round 2)"]);
-    // Each group holds only its own stage's match: the first "(round 1)" group
-    // links group-a's fixture, and the stage-b fixture appears after it.
+    // Both stages open a "(round 1)" and a "(round 2)", so all four headings
+    // carry their stage: without it a spectator reads the same two words
+    // twice with nothing telling the brackets apart (review-n1e m1).
+    expect(expected(stages)).toEqual([
+      "(group A) \u00b7 (round 1)",
+      "(group A) \u00b7 (round 2)",
+      "(group B) \u00b7 (round 1)",
+      "(group B) \u00b7 (round 2)",
+    ]);
+    expect(headings(html)).toEqual(expected(stages));
+    // Each group still holds only its own stage's match: group-a's fixture is
+    // under the first heading, group-b's after the third.
     const aAt = html.indexOf("/fixtures/group-a-r1-m1");
     const bAt = html.indexOf("/fixtures/group-b-r1-m1");
-    const secondRound1 = html.indexOf(">(round 1)<", html.indexOf(">(round 1)<") + 1);
+    const groupBFirst = html.indexOf(">(group B) \u00b7 (round 1)<");
     expect(aAt).toBeGreaterThan(-1);
-    expect(aAt).toBeLessThan(secondRound1);
-    expect(bAt).toBeGreaterThan(secondRound1);
+    expect(groupBFirst).toBeGreaterThan(-1);
+    expect(aAt).toBeLessThan(groupBFirst);
+    expect(bAt).toBeGreaterThan(groupBFirst);
+  });
+
+  it("names the stage ONLY on the round name the two stages share; a unique heading is untouched (N1f f2)", () => {
+    const stages: StageSpec[] = [
+      {
+        id: "main",
+        seq: 1,
+        name: "(main draw)",
+        rounds: [{ no: 1, name: "(semi-finals)", matches: 2 }, { no: 2, name: "(final)", matches: 1 }],
+      },
+      {
+        id: "plate",
+        seq: 2,
+        name: "(plate)",
+        rounds: [{ no: 1, name: "(plate round 1)", matches: 2 }, { no: 2, name: "(final)", matches: 1 }],
+      },
+    ];
+    // "(final)" is produced by both stages; "(semi-finals)" and "(plate round
+    // 1)" by one each.
+    expect(expected(stages)).toEqual([
+      "(semi-finals)",
+      "(main draw) \u00b7 (final)",
+      "(plate round 1)",
+      "(plate) \u00b7 (final)",
+    ]);
+    expect(headings(render(stages))).toEqual(expected(stages));
+  });
+
+  it("falls back to the bare round name when the caller knows no name for the stage", () => {
+    const stages: StageSpec[] = [
+      { id: "a", seq: 1, name: "(A)", rounds: [{ no: 1, name: "(final)", matches: 1 }] },
+      { id: "b", seq: 2, name: "(B)", rounds: [{ no: 1, name: "(final)", matches: 1 }] },
+    ];
+    // The positive pair: with the names, both headings carry them.
+    expect(headings(render(stages))).toEqual(["(A) \u00b7 (final)", "(B) \u00b7 (final)"]);
+    // With an empty map there is nothing to name them with, so the heading is
+    // the round name alone — never a dangling separator.
+    const bare = headings(render(stages, {}));
+    expect(bare).toEqual(["(final)", "(final)"]);
+    expect(bare.some((h) => h.includes("\u00b7"))).toBe(false);
   });
 });

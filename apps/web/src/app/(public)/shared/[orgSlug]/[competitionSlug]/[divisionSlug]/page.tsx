@@ -135,6 +135,9 @@ export default async function DivisionHomePage({ params }: Props) {
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first, as the embed schedule widget does.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
+  // N1f f2: two stages can name a round the same ("Final" in a knockout and in
+  // its plate); the round view heads those groups with the stage as well.
+  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -398,6 +401,7 @@ export default async function DivisionHomePage({ params }: Props) {
             slotLabels={slotLabels}
             roundLabels={roundLabels}
             stageOrder={stageOrder}
+            stageNames={stageNames}
             copy={scheduleCopy}
             locale={orgLocale}
           />,

@@ -110,6 +110,7 @@ const payload = (locale: string, stages: Stage[], fixtures: PublicFixture[]): Em
 interface ScheduleProps {
   roundLabels: Record<string, string>;
   stageOrder: Record<string, number>;
+  stageNames: Record<string, string>;
   copy: { timeTbd: string; allEntrants: string };
   locale: string;
 }
@@ -259,8 +260,36 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
     };
     const expected = [...stages].sort((a, b) => a.seq - b.seq).flatMap((stage) => namesFor[stage.kind]!);
 
-    expect(props.stageOrder).toEqual({ ko: 2, lg: 1 });
+    expect(props.stageOrder).toEqual(Object.fromEntries(stages.map((st) => [st.id, st.seq])));
+    expect(props.stageNames).toEqual(Object.fromEntries(stages.map((st) => [st.id, st.name])));
     const headings = [...html.matchAll(/<h3[^>]*>([^<]+)</g)].map((m) => m[1]);
     expect(headings).toEqual(expected.map(esc));
+  });
+
+  // N1f f2 (review-n1e m1): a knockout and its plate both end in a "Final", so
+  // the round view showed the same two headings twice with nothing telling the
+  // brackets apart. Driven through the page's real round namer and the real
+  // Schedule, not a fixture on both ends.
+  it("en two knockout stages, both ending in a Final: every shared heading names its stage (N1f f2)", async () => {
+    const stages: Stage[] = [
+      { id: "main", division_id: "d1", seq: 1, kind: "knockout", name: "Main draw", status: "active" },
+      { id: "plate", division_id: "d1", seq: 2, kind: "knockout", name: "Plate", status: "active" },
+    ];
+    const fixtures = [
+      ...knockout(null, null).map((f) => ({ ...f, id: `main-${f.id}`, stage_id: "main" })),
+      ...knockout(null, null).map((f) => ({ ...f, id: `plate-${f.id}`, stage_id: "plate" })),
+    ];
+    const { props, html } = await scheduleOf("en", stages, fixtures);
+    const ui = await getDictionary("en", "ui");
+    const rounds = [t(ui, "bracket.round.semi"), t(ui, "bracket.round.final")];
+    // The premise: the namer gives the two stages the SAME round names.
+    expect(new Set(rounds).size).toBe(2);
+    expect(props.stageNames).toEqual(Object.fromEntries(stages.map((st) => [st.id, st.name])));
+    const headings = [...html.matchAll(/<h3[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(headings).toEqual(
+      [...stages]
+        .sort((a, b) => a.seq - b.seq)
+        .flatMap((st) => rounds.map((r) => esc(`${st.name} \u00b7 ${r}`))),
+    );
   });
 });
