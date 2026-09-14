@@ -486,6 +486,26 @@ describe("public /present kiosk: the 'made for a TV' hint (N1d d6)", () => {
     }
   });
 
+  // N1e e2 (review-n1d m2, m3): the es/fr/nl copy was long enough that on a
+  // 320 phone the two buttons alone overflowed a row. The controller ruled
+  // shorter copy, verbatim; en and every region label stay as they were.
+  it("the es/fr/nl message and buttons are the ruled short copy; en and the region labels are unchanged (N1e e2)", async () => {
+    const [en, es, fr, nl] = await Promise.all([tvHintCopy("en"), tvHintCopy("es"), tvHintCopy("fr"), tvHintCopy("nl")]);
+    const shown = (c: Record<TvHintField, string>) => ({ message: c.message, phoneView: c.phoneView, fullScreen: c.fullScreen });
+
+    expect(shown(es)).toEqual({ message: "Hecho para TV o pantalla grande.", phoneView: "Vista móvil", fullScreen: "Pantalla completa" });
+    expect(shown(fr)).toEqual({ message: "Conçu pour TV ou grand écran.", phoneView: "Vue mobile", fullScreen: "Plein écran" });
+    expect(shown(nl)).toEqual({ message: "Gemaakt voor tv of groot scherm.", phoneView: "Mobiele weergave", fullScreen: "Volledig scherm" });
+    expect(en).toEqual({
+      region: "Big-screen tip",
+      message: "Made for a TV or big screen.",
+      phoneView: "Open phone view",
+      fullScreen: "Full screen",
+      dismiss: "Dismiss tip",
+    });
+    expect([es.region, fr.region, nl.region]).toEqual(["Aviso de pantalla grande", "Conseil grand écran", "Tip voor groot scherm"]);
+  });
+
   it("division kiosk, es org: the hint links the hub filtered to this division, with its copy in es", async () => {
     const es = await tvHintCopy("es");
     getPublicDivision.mockResolvedValue(orgData("es"));

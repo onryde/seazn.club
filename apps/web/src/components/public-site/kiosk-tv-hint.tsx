@@ -101,12 +101,33 @@ export function KioskTvHint({ hubHref, labels }: { hubHref: string; labels: Kios
       data-testid="kiosk-tv-hint"
       className="fixed inset-x-0 top-0 z-50 border-b border-white/15 bg-court/95 text-court-ink shadow-lg backdrop-blur"
     >
-      <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
-        <p className="flex min-w-0 flex-[1_1_12rem] items-center gap-2 text-base font-medium">
-          <span aria-hidden="true">📺</span>
-          <span className="min-w-0 break-words">{labels.message}</span>
-        </p>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+      {/* N1e e2: two rows at every width. Row 1 is the message and the ✕, and
+          never wraps, so the ✕ stays at the banner's top right; row 2 is the two
+          buttons, which wrap only among themselves. The right gutter is split
+          (pr-2 here, pr-2 more on row 2): the ✕'s 44px target reaches to 8px
+          from the edge, its icon about 20px in, and the buttons keep 16px. */}
+      <div className="flex flex-col gap-1.5 py-1.5 pl-4 pr-2">
+        <div data-testid="kiosk-tv-hint-top" className="flex min-w-0 items-start gap-2">
+          <p
+            data-testid="kiosk-tv-hint-message"
+            className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-base font-medium"
+          >
+            <span aria-hidden="true" className="shrink-0">
+              📺
+            </span>
+            <span className="min-w-0 break-words">{labels.message}</span>
+          </p>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label={labels.dismiss}
+            data-testid="kiosk-tv-hint-dismiss"
+            className={`${CONTROL} min-w-11 text-court-muted hover:bg-white/10 hover:text-court-ink`}
+          >
+            <X aria-hidden="true" className="h-5 w-5" strokeWidth={2} />
+          </button>
+        </div>
+        <div data-testid="kiosk-tv-hint-actions" className="flex min-w-0 flex-wrap items-center gap-2 pb-0.5 pr-2">
           <Link
             href={hubHref}
             data-testid="kiosk-tv-hint-phone-view"
@@ -124,15 +145,6 @@ export function KioskTvHint({ hubHref, labels }: { hubHref: string; labels: Kios
               {labels.fullScreen}
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={dismiss}
-            aria-label={labels.dismiss}
-            data-testid="kiosk-tv-hint-dismiss"
-            className={`${CONTROL} min-w-11 text-court-muted hover:bg-white/10 hover:text-court-ink`}
-          >
-            <X aria-hidden="true" className="h-5 w-5" strokeWidth={2} />
-          </button>
         </div>
       </div>
     </div>

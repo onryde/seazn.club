@@ -5137,7 +5137,7 @@
   "slideshow.slideN": "Dia {n}",
   "slideshow.rung": "Trede {n}",
   "slideshow.tvHint.label": "Tip voor groot scherm",
-  "slideshow.tvHint.message": "Gemaakt voor een tv of groot scherm.",
-  "slideshow.tvHint.phoneView": "Telefoonweergave openen",
+  "slideshow.tvHint.message": "Gemaakt voor tv of groot scherm.",
+  "slideshow.tvHint.phoneView": "Mobiele weergave",
   "slideshow.tvHint.fullScreen": "Volledig scherm"
 }

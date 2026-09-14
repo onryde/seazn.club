@@ -5137,7 +5137,7 @@
   "slideshow.slideN": "Diapositiva {n}",
   "slideshow.rung": "Escalón {n}",
   "slideshow.tvHint.label": "Aviso de pantalla grande",
-  "slideshow.tvHint.message": "Pensado para un televisor o una pantalla grande.",
-  "slideshow.tvHint.phoneView": "Abrir vista móvil",
+  "slideshow.tvHint.message": "Hecho para TV o pantalla grande.",
+  "slideshow.tvHint.phoneView": "Vista móvil",
   "slideshow.tvHint.fullScreen": "Pantalla completa"
 }

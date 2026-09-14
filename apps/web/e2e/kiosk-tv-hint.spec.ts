@@ -22,6 +22,7 @@ import { KIOSK_TV_HINT_STORAGE_KEY } from "../src/components/public-site/kiosk-t
 //   Full screen button at 390          <-> absent with the API deleted
 //   hidden after ✕ and a reload        <-> back after the stored key is cleared
 //   division kiosk links ?division=    <-> competition kiosk links the bare hub
+//   ✕ in the message's row, top right  <-> the buttons on the row below it (N1e e2)
 //
 // Labels are never matched by text: the seeded org's locale is whatever the
 // e2e session's org carries. Controls are found by test id, and their
@@ -210,6 +211,41 @@ test.describe("public /present kiosk — the 'made for a TV' hint (N1d d6)", () 
     await expect(banner(page).getByTestId("kiosk-tv-hint-dismiss")).toBeVisible();
     await expect(banner(page).getByTestId("kiosk-tv-hint-full-screen")).toHaveCount(0);
   });
+
+  // N1e e2 (review-n1d m2): the ✕ used to wrap onto a row of its own at the
+  // bottom left. It belongs at the banner's top right, beside the message, with
+  // the two buttons on the row below. The session org's locale decides the
+  // copy; the geometry must hold in any of them.
+  for (const size of [SMALLEST, PHONE]) {
+    test(`${size.width}: the ✕ is at the banner's top right, in the message's row, with the buttons on the row below`, async ({ page }) => {
+      await page.setViewportSize(size);
+      await openMounted(page, divisionKiosk());
+
+      const hint = banner(page);
+      await expect(hint).toBeVisible();
+      const [bannerBox, messageBox, dismissBox, phoneViewBox] = await Promise.all([
+        hint.boundingBox(),
+        hint.getByTestId("kiosk-tv-hint-message").boundingBox(),
+        hint.getByTestId("kiosk-tv-hint-dismiss").boundingBox(),
+        hint.getByTestId("kiosk-tv-hint-phone-view").boundingBox(),
+      ]);
+      expect(bannerBox, "banner has a box").not.toBeNull();
+      expect(messageBox, "message has a box").not.toBeNull();
+      expect(dismissBox, "✕ has a box").not.toBeNull();
+      expect(phoneViewBox, "phone view has a box").not.toBeNull();
+
+      expect(dismissBox!.y, "✕ top is within the message's row").toBeLessThanOrEqual(messageBox!.y + 8);
+      expect(
+        bannerBox!.x + bannerBox!.width - (dismissBox!.x + dismissBox!.width),
+        "✕ right edge to the banner's right edge",
+      ).toBeLessThanOrEqual(16);
+      // The positive pair: the buttons are on a lower row than the ✕, so a
+      // banner that put everything on one row cannot pass.
+      expect(phoneViewBox!.y, "phone view sits below the ✕'s row").toBeGreaterThanOrEqual(dismissBox!.y + dismissBox!.height);
+      await expectTappable(hint.getByTestId("kiosk-tv-hint-dismiss"), "dismiss");
+      await expectNoHorizontalScroll(page);
+    });
+  }
 
   test("320: the banner fits inside the viewport and the page has no horizontal scroll", async ({ page }) => {
     await page.setViewportSize(SMALLEST);

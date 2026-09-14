@@ -38,7 +38,7 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { readDivisionParam } from "../use-tab-param";
 import {
   KIOSK_TV_HINT_QUERY,
@@ -324,6 +324,41 @@ describe("<KioskTvHint>: its controls", () => {
 
     off();
     expect(removed).toEqual(added);
+  });
+});
+
+// N1e e2 (review-n1d m2) — the ✕ was the last item of the wrapping controls
+// group, so on a phone (and in es/fr/nl, whose buttons are wide) it wrapped
+// onto a row of its own at the bottom left. The banner is now two rows: the
+// message and the ✕, then the two buttons, which wrap only among themselves.
+// Where the ✕ lands on screen is e2e/kiosk-tv-hint.spec.ts's to measure; this
+// pins the structure that puts it there.
+describe("<KioskTvHint>: the ✕ shares the first row with the message (N1e e2)", () => {
+  beforeEach(() => {
+    store.browser = true;
+  });
+
+  /** The test ids of the elements rendered inside `el`, in document order. */
+  const idsInside = (el: ReactElement) =>
+    walk(propsOf(el).children as ReactElement)
+      .map((child) => propsOf(child)["data-testid"])
+      .filter((id): id is string => typeof id === "string");
+
+  it("row 1 is the message then the ✕, and does not wrap; row 2 is the two buttons, and never holds the ✕", () => {
+    stubBrowser({ width: 320 });
+    const tree = renderIsland(KioskTvHint, { hubHref: HREF, labels: LABELS }).tree();
+    const [top] = byTestId(tree, "kiosk-tv-hint-top");
+    const [actions] = byTestId(tree, "kiosk-tv-hint-actions");
+    expect(top, "a first row").toBeDefined();
+    expect(actions, "a second row").toBeDefined();
+
+    expect(idsInside(top!)).toEqual(["kiosk-tv-hint-message", "kiosk-tv-hint-dismiss"]);
+    expect(idsInside(actions!)).toEqual(["kiosk-tv-hint-phone-view", "kiosk-tv-hint-full-screen"]);
+    expect(
+      tree.map((el) => propsOf(el)["data-testid"]).filter((id) => id === "kiosk-tv-hint-top" || id === "kiosk-tv-hint-actions"),
+      "row 1 comes first",
+    ).toEqual(["kiosk-tv-hint-top", "kiosk-tv-hint-actions"]);
+    expect(String(propsOf(top!).className), "row 1 never wraps the ✕ below the message").not.toMatch(/\bflex-wrap\b/);
   });
 });
 
