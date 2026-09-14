@@ -301,6 +301,7 @@ export function DeviceScorePad({
           {!started && (
             <button
               type="button"
+              data-testid="score-start-match"
               disabled={busy || padSyncing}
               onClick={() => send("core.start", {})}
               className="btn btn-primary h-12 flex-1 text-base"

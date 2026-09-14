@@ -520,6 +520,7 @@ function renderNumberStep(
         </button>
         <input
           type="number"
+          data-testid="pad-sheet-number"
           inputMode="numeric"
           aria-label={title}
           min={step.min}
@@ -545,7 +546,7 @@ function renderNumberStep(
           +
         </button>
       </div>
-      <button type="button" onClick={onConfirm} style={{ minHeight: 44 }} className={choiceButtonClass}>
+      <button type="button" data-testid="pad-sheet-confirm" onClick={onConfirm} style={{ minHeight: 44 }} className={choiceButtonClass}>
         {t("scorepad.action.confirm")}
       </button>
     </div>

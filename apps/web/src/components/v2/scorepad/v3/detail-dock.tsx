@@ -456,6 +456,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
         </div>
         <button
           type="button"
+          data-testid="pad-send-now"
           onClick={handleDismiss}
           aria-label={t("pad.dock.dismiss")}
           style={{ minHeight: 44, minWidth: 44 }}

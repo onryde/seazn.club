@@ -159,7 +159,7 @@ export function DeviceLinkPanel({
           </div>
         </div>
       ) : (
-        <button type="button" disabled={busy} onClick={mint} className="btn btn-primary mt-3">
+        <button type="button" data-testid="device-link-mint" disabled={busy} onClick={mint} className="btn btn-primary mt-3">
           {busy ? "…" : msg("dlink.create")}
         </button>
       )}

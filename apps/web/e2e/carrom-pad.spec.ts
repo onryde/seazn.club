@@ -65,7 +65,7 @@ test("carrom fixture scores a queen-covered board over a real device link", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/score/${minted.data!.secret}`);
 
-  await page.getByRole("button", { name: "Start match", exact: true }).click();
+  await page.locator('[data-testid="score-start-match"]').click();
   await expect
     .poll(
       async () => {
@@ -111,10 +111,10 @@ test("carrom fixture scores a queen-covered board over a real device link", asyn
   ).toBeVisible({ timeout: 10_000 });
   await sheet.locator('[data-choice-option-id="home"]').click(); // queenTo
 
-  const coinsField = sheet.getByLabel("Opponent's coins left", { exact: true });
+  const coinsField = sheet.locator('[data-testid="pad-sheet-number"]');
   await expect(coinsField, "the coins step must render a numeric field").toBeVisible({ timeout: 10_000 });
   await coinsField.fill("4");
-  await sheet.getByRole("button", { name: "Confirm", exact: true }).click();
+  await sheet.locator('[data-testid="pad-sheet-confirm"]').click();
 
   // The board reached the REAL ledger — coins 4 x pointsPerCoin(1) + queen 3
   // (queenCapAt 22, unreached) = 7 banked to Meena's side — the server's own

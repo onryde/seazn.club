@@ -335,6 +335,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                 // (anywhere in the button) is equivalent to clicking the
                 // score figure inside it — same `onClick`.
                 data-role="v3-scorebug-half"
+                data-side={i === 0 ? "home" : "away"}
                 // `tapSheet` WINS where a skin set it. The half still carries
                 // its `tapEvent` — the sheet's job is to build that same
                 // event with one more fact attached — so the order here is
@@ -359,6 +360,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             <div
               key={i}
               data-role="v3-scorebug-half"
+              data-side={i === 0 ? "home" : "away"}
               className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center max-md:px-2 max-md:py-2"
             >
               {content}

@@ -855,6 +855,7 @@ export function FixtureConsole({
               {!started && (
                 <button
                   type="button"
+                  data-testid="score-start-match"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.start", {})}
                   className="btn btn-primary min-h-11"
@@ -1099,6 +1100,7 @@ export function FixtureConsole({
               <>
                 <button
                   type="button"
+                  data-testid="score-finalize"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.finalize", {})}
                   className="btn btn-ghost min-h-11"
