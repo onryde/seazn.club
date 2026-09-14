@@ -2851,3 +2851,50 @@ table, and a write-path diff table.
 The plan was pinned at `54a125d9f`. `main` has since taken #782 (overlay end-of-over card,
 clock publish) and #784 (cricket player picks); #782 touches overlay code the panel pins
 cite. Task 0 re-pins on the tree the relay worktree is cut from.
+
+## 2026-09-14 — where the relay runs, and in what language
+
+Owner asked: *"like placement service, do you think will deploying as a separate service enough
+we write in Typescript?"* and *"which one is best for compositor? python or typescirpt?"* The
+recommendation below was put to the owner, who answered *"Ok ignore Python then"*.
+
+### Owner ruling, 2026-09-14
+
+**The compositor is TypeScript on Node 26, not Python** (*"Ok ignore Python then"*). The
+supervisor that starts Xvfb, Chromium and ffmpeg, sends SIGINT on stop, and reports its heartbeat
+is written in TypeScript. The same ruling accepts the deployment split it was answered against:
+
+| Part | Where it runs | Why |
+|---|---|---|
+| **Control plane** — session API, credits ledger, the `stream_credits` webhook branch, the Cloudflare and Fly clients, the daily sweep, the Phone tab (R1) | **Inside the existing app, Fly app `seazn-club-prod`**, as R1's plan already places it | Session create and the credit debit share one database transaction under one row lock (C3's reserve and FS10's `balance_after >= 0` rest on it); the Stripe webhook route, auth (`requireResourceAuth`), entitlements (`hasFeature`), the v1 OpenAPI registry and key scopes, and the single Flyway history all live there. Split out, each becomes a network hop, a second auth path, or two services writing one table. The load is a few API calls per session plus a heartbeat; no video bytes pass through the app. |
+| **Data plane** — the compositor image (R2) | **A separate deployable**: top-level `relay-compositor/` with its own Dockerfile and `relay-{ci,stg,prod}.yml`, copying the `services/placement` layout | ffmpeg and Chromium on `performance-4x` must never share the web app's `shared-cpu-1x / 1gb` VM. |
+
+**The compositor is a job, not a placement-style service.** `services/placement` (Python 3.14,
+`uv`) is always-on and the app calls it over Flycast. The compositor takes no inbound traffic:
+the app creates one Fly Machine per session through the Machines API, in a separate Fly app
+(`seazn-relay` in R1's plan), and the Machine pulls from Cloudflare, loads the overlay page,
+pushes RTMPS, POSTs its heartbeat, then exits and auto-destroys.
+
+**Why TypeScript and not Python** — the reasons the recommendation gave:
+
+- Speed is irrelevant: ffmpeg and Chromium do the video work natively.
+- Driving Chromium from Node is first-class; R0's bench harness was already Node + Playwright.
+- The heartbeat payload, the page token, `RunnerSpec` and the report schema can share the app's
+  zod schemas. In Python every one is written twice and drifts.
+- One toolchain (pnpm, vitest, Node 26) and one set of review agents.
+- Python earns its place in `services/placement` through its solver ecosystem; nothing in the
+  compositor draws on it.
+
+### When to revisit the control-plane split (recommendation, not a ruling)
+
+Split the control plane into its own service only on a measured signal: relay calls hurting the
+web app's p95; the relay needing independent scaling or deploy cadence; or a second client
+calling the relay directly. None exists on 2026-09-14. R1's plan already protects the web VM:
+the Fly client carries per-request timeouts and an overall deadline, and the machine lifecycle is
+callback-driven, so no request handler waits out a machine boot.
+
+### Carried to R2's plan
+
+`R2-compositor.md` still describes the pre-R0 compositor (headed Chromium capturing the composite).
+R2's plan is written from `R0-memo.md` — B2, the `#ff00ff` chroma key, `performance-4x`, SIGINT
+stop — with a TypeScript supervisor per the ruling above, once PR-R1 merges.
