@@ -2753,3 +2753,101 @@ had measured the plain manifest URL, which never serves parts. Four consequences
 present (without parts it costs 4–5 s); seed `delayMs` from a source clock, since hls.js's own
 figure under-reads by 2–7.5 s; and **decide B-frames** — design §7.2's `-bf 2` follows YouTube's
 spec, and LL-HLS forbids them, so one encode cannot serve both. Every probe input is deleted.
+
+## 2026-09-14 — R1's plan WRITTEN (docs only, no code, execution not started)
+
+Owner, 2026-09-13: *"yes, write R1's plan"* — the replacement for the post-R0 order's step 5.
+The plan is `../../plans/2026-09-13-streaming-r1.md`, written by a Fable plan-writer (the
+author `R1-relay-core.md` names) from `R1-relay-core.md`, design §5–§7, §9a, §10, and the
+R0 corrections compiled for it (C1–C14: retention, videos-before-inputs, reserve at
+admission, `recording.mode` never updated live, per-input status, never "healthy" off
+`connected`, the Fly guest, the hold window, one passthrough output, no WHEP/WHIP/LL-HLS/
+token-verify, browser UA on manifests, `preferred` asserts nothing). Execution waits on the
+owner's "start".
+
+**Shape as written: 8,747 lines, 22 tasks** — 0, 1, 2, 2A (session aggregate), 2B (expiry,
+credits, retention policies), 2C (the runner lifecycle, `domain/runner.ts`), 3, 4, 5A (the Fly
+Machines client), 5, 6–17, in lanes A–E. The plan's `## Fly machine lifecycle` section is the
+authority for the machine: eight runner states, the Fly-state mapping, the transition table,
+the stop sequence (SIGINT, `RUNNER_STOP_GRACE_SECONDS`, then force destroy), stored failure
+reasons, and five invariants each named to a test. It also carries a "House rules 2026-09-14"
+section: the customer golden path and break list (Task 14, Task 17), an irreversible-actions
+table, and a write-path diff table.
+
+### Owner rulings, 2026-09-14 (verbatim where short)
+
+1. **FS10 — `balance_after >= 0` stays** on `org_stream_credits` (*"all good"*).
+2. **No Supabase Vault.** The AES-256-GCM envelope with `RELAY_KEK` (a Fly secret) is final;
+   design §12.4 is closed.
+3. **The relay sweep runs DAILY** (*"just run every day is fine"*), from the workflow repo
+   (*"workflow stored in seazn.club.workflow repo"*) — nothing workflow-shaped lands here.
+4. **One line in `run-sheet-row.tsx` is allowed**: `streamOpen` initialises from the checkout
+   return URL, so the organiser lands back on the Phone tab.
+5. **Two columns the design's DDL lacked are accepted** (*"Ok"*):
+   `org_stream_targets.watch_url`, `fixture_stream_sessions.runner_retries`.
+6. **`INGEST_TIMEOUT_SECONDS = 180`** (*"3 mins after phone move way"*); the hold window stays
+   183 s for RTMPS and unmeasured (null) for SRT.
+7. **Sentry is enabled; the DSN is owed by the owner.** The `fly.toml` line stays commented
+   until it arrives.
+8. **Checkout is EMBEDDED** (*"checkout should in inbuilt as other"*) — the
+   `buy-credits.tsx` / `credit-pack-checkout` shape, not hosted Checkout.
+9. **Domain-driven and test-driven, with a robust Fly API client** (*"write domain driven and
+   test driven and also make sure that write robust fly.io api client"*).
+10. **The Fly machine lifecycle is defined explicitly** (*"make sure that fly machine lifecycle
+    is well definied"*) — a runner state model, the Fly state mapping, a transition table,
+    the stop sequence (SIGINT → grace → force destroy, from `R0-memo.md`), failure reasons,
+    and invariants each with a test.
+11. **No Fly region picker for organisers** (*"Ok got it"*, accepting the recommendation):
+    `RUNNER_DEFAULT_REGION = "lhr"`; R2 may derive a region from the org's country internally.
+12. **The Fly API token is supplied by the owner later**, before anything uses the Fly API;
+    the live Fly test skips loudly until then.
+13. **House rules added** — `docs/superpowers/RULES.md` "Owner checklist — additions
+    (2026-09-14)", verbatim, binding alongside the 2026-09-07 checklist.
+14. **Customer verification in R1 uses `ffmpeg` as the capture app** (*"3Ok"*) — R1 has none.
+
+### Recommendations recorded in the plan and NOT ruled
+
+- **Expiry that never waits for the daily tick** — the expiry policy runs lazily on every
+  session read, heartbeat and admission; the machine carries its own deadline; the daily
+  sweep keeps retention and an orphan backstop. Written because a daily-only sweep would let
+  an orphan machine bill for up to 24 h.
+- **How customer verification reaches the GRANTED state** — owner asked *"what's best?"*;
+  pending. Recommended: R1 stays dark, staff grants both keys to one fresh org through the
+  real `/admin/orgs/[id]` overrides editor, everything after the grant runs as the customer;
+  the GA purchase path is owed to the GA-flip wave.
+- **The customer-verify destination** — owner *"Ok"* to the options; recommended a second
+  Cloudflare live input as the sink, with one YouTube run optional on an owner-supplied
+  unlisted key.
+- **Scope the lifecycle ruling added, marked in the plan for the owner's call** (PRODUCT-OWNER
+  LENS "silent scope creep"): four more DDL columns (`runner_state`, `runner_name`,
+  `runner_stop_requested_at`, `end_reason`), `RunnerProvider` growing `stop` / `observe` /
+  `list`, and an end-reason chip on the Phone tab.
+- **A write-path gap found by the diff table**: the new `stream_credits` webhook branch has no
+  staff-alert email where its nearest analogue sends one — recorded as a follow-up, not built.
+
+### False premises found writing the plan
+
+- **P1** — `.github/workflows/registrations-sweep.yml` is not in this repo; the cron
+  workflows moved to `onryde/seazn.club.workflow` (#757).
+- **P2** — no producer-side realtime token mint exists.
+- **P13** — the Phone tab's testid is `stream-tab-phone`, not `stream-phone-tab`.
+- **P14** — `fixture-stream-panel.tsx` carries its own `CREDIT_PACKS`, colliding with
+  `lib/credit-packs.ts`; the plan makes `STREAM_CREDIT_PACKS` the one authority.
+- **`POLL_MS`** (the prompt's watch item 4) does not exist; the plan names `STREAM_POLL_MS`.
+- The prompt's port shapes are corrected: `RunnerProvider { create, destroy, list }` and
+  `storageUsage()` in place of `storageHeadroom`.
+- **`streaming.relay` cannot be acquired by any customer during R1** — V402 inserts it false
+  on all five plans (dark rollout), so "no admin shortcuts" cannot reach the granted state
+  without a staff grant (the pending recommendation above).
+- **Fly Machines API, read from `docs.machines.dev/spec/openapi3.json` on 2026-09-14**: create
+  returns 200, names are unique per app, `metadata.{key}` filters the list; the 429 status,
+  `Retry-After`, the request-id header and create idempotency are NOT documented, so the
+  client treats them defensively and the opt-in live test records what Fly sends.
+- The plan-writer's own claim that `R0-memo.md` was absent from the main checkout was false
+  and is withdrawn.
+
+### Base drift
+
+The plan was pinned at `54a125d9f`. `main` has since taken #782 (overlay end-of-over card,
+clock publish) and #784 (cricket player picks); #782 touches overlay code the panel pins
+cite. Task 0 re-pins on the tree the relay worktree is cut from.

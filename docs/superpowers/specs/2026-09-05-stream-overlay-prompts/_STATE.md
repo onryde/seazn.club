@@ -12,7 +12,16 @@ production and test code under `apps/web`, and `db/` is no longer untouched —
 exists yet", or names #752 as an OPEN pull request describes the tree before
 2026-09-10 and is marked where it survives as a prior record.
 
-Last updated: **2026-09-12**, by the R0 bench wave (branch `docs/streaming-r0-memo`):
+Last updated: **2026-09-14**, by the R1 plan session (branch `docs/streaming-r1-plan`):
+**R1's plan is WRITTEN — `../../plans/2026-09-13-streaming-r1.md` — and execution has NOT
+started; it waits on the owner's "start".** Fourteen owner rulings from 2026-09-14 (embedded
+checkout, a daily sweep in the workflow repo, domain-driven with a robust Fly client, an
+explicit machine lifecycle, the house rules in `RULES.md`) are in `_INDEX.md` "2026-09-14 —
+R1's plan WRITTEN", with the recommendations still unruled. Owed by the owner before the
+relevant steps: the Fly API token, the Sentry DSN, and the daily workflow in
+`onryde/seazn.club.workflow`. R2's plan is still not writable until PR-R1 merges.
+
+Prior record — last updated **2026-09-12**, by the R0 bench wave (branch `docs/streaming-r0-memo`):
 **R0 is CLOSED — its memo is `R0-memo.md` beside this file, and the Cloudflare
 gate that blocked three items is cleared.** W1 CLOSED; W2 is next and owes a
 task-zero RE-PIN; R1 and R2 are prompts with no plans; R3 is deferred to the
@@ -401,8 +410,9 @@ wave, and neither belongs to this programme.
    recorded.
 4. **P5, the device spike**, is startable now and blocks the R3 estimate. It
    needs handsets, not this repo, and touches nothing R2 depends on.
-5. ~~Then R0's bench~~ **R0 is CLOSED.** Next is **R1's plan** — its gate is open and R1
-   has neither a plan nor code. R2's plan follows PR-R1's merge and re-pins on that tree,
+5. ~~Then R0's bench~~ **R0 is CLOSED.** ~~Next is **R1's plan** — its gate is open and R1
+   has neither a plan nor code.~~ **R1's plan is WRITTEN (2026-09-14,
+   `../../plans/2026-09-13-streaming-r1.md`); R1 execution waits on the owner's "start".** R2's plan follows PR-R1's merge and re-pins on that tree,
    and is written from `R0-memo.md`, not from design §7.2/§9.3, both of which R0
    corrects. Plans stay one wave ahead.
 

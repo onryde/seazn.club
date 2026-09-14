@@ -167,3 +167,43 @@ satisfies; a reviewer checks the rows, not the prose. Three groups.
   mutant fakes kills
 - One sample isn't a parity sweep — enumerate serve/rotation/alternation
   tables, not one lucky case
+
+## Owner checklist — additions (2026-09-14)
+
+Owner-given, verbatim ("add this house rule as well"). Same standing as the
+2026-09-07 checklist above and binding alongside it: a task's acceptance
+criteria name the rows it satisfies from BOTH lists; a reviewer checks the
+rows, not the prose.
+
+### VERIFY-AS-CUSTOMER
+
+- Use actual UI/API, not code inspection alone — "a read is not a run."
+- Fresh session, no seeded state, no admin shortcuts.
+- Follow the golden path start to finish once, end-to-end.
+- Then break it: empty inputs, wrong perms, network fail, back-button, double-submit.
+- Check on real widths — 320/768/1280, no horizontal scroll.
+- Read every string a customer reads. Wrong copy = defect.
+- Screenshot or record what you actually saw — not what should happen.
+- If gated by entitlement/flag, verify BOTH granted and denied states render correctly.
+
+### PRODUCT-OWNER LENS
+
+- Does this solve the stated problem, or a proxy for it?
+- What's the smallest change that delivers the value? Cut the rest.
+- Who is hurt if this ships wrong — cost of a false positive vs false negative.
+- Is this reversible? If not, needs explicit sign-off before shipping.
+- Does it match existing product conventions, or invent a new pattern needlessly?
+- Any silent scope creep — feature grew beyond the ask?
+- Recommend, don't just report — state the call and the tradeoff, always.
+- Flag anything a decision-maker needs to weigh in on; don't decide it for them silently.
+
+### TEST-CASE DESIGN
+
+- One test per behavior, not per function.
+- Cover: happy path, boundary (0, 1, max), empty/null, malformed input, concurrent/race.
+- Every guard needs a case that DEFEATS it — if you can delete the check and stay green, it's decoration.
+- Assert what the test claims to assert — read the assertion, not the title.
+- Negative assertions need a positive pair (proving absence needs a case proving presence works).
+- Derive expected values from the source of truth (engine/schema), never hardcode a table that can drift.
+- Mutation-test the money/critical path specifically, not just average coverage.
+- New write path — diff it against the nearest existing analogous path for missed guards.
