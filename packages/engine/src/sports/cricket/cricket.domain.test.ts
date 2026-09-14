@@ -309,7 +309,7 @@ describe("cricket W4: the incoming batter can be named", () => {
         striker: "H-7",
         nonStriker: "H-2",
         bowler: "A-11",
-        runs: { bat: 0 },
+        bat: 0,
       })
       .build();
     const { fine } = openFineStrict(events);
@@ -330,13 +330,13 @@ describe("cricket W4: the incoming batter can be named", () => {
         striker: "H-3",
         nonStriker: "H-2",
         bowler: "A-11",
-        runs: { bat: 0 },
+        bat: 0,
       })
       .ball({
         striker: "H-7",
         nonStriker: "H-2",
         bowler: "A-11",
-        runs: { bat: 0 },
+        bat: 0,
       })
       .build();
     expect(() => foldStrict(short, events)).toThrowError(engineError("INVALID_EVENT"));
@@ -354,7 +354,7 @@ describe("cricket W4: the incoming batter can be named", () => {
         striker: "H-3",
         nonStriker: "H-7",
         bowler: "A-11",
-        runs: { bat: 0 },
+        bat: 0,
       })
       .build();
     expect(() => foldStrict(short, events)).toThrowError(engineError("INVALID_EVENT"));

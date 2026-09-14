@@ -359,14 +359,19 @@ export async function tapBallTile(page: Page, tileId: string): Promise<void> {
   await flushHeld(page);
 }
 
-/** "Bowled" needs no further step (not in VARIABLE_OUT_KINDS or
- *  FIELDER_ELIGIBLE_KINDS, `skins/cricket.tsx:132,136`) — the simplest
- *  one-tap wicket the guided sheet offers. */
+/** "Bowled" then "Who walks in?" — kind needs no fielder/out step (not in
+ *  VARIABLE_OUT_KINDS or FIELDER_ELIGIBLE_KINDS), but ICC picks make the
+ *  incoming batter required. Leaving that unanswered holds the sheet open
+ *  with no "Send now", so `flushHeld` returns as a no-op and the ledger
+ *  never gains the ball (spectator-public match A: Expected 86 / Received 85).
+ *  First candidate is the engine's suggested next-in-order. */
 export async function tapWicketBowled(page: Page): Promise<void> {
   await pad(page).locator('[data-tile-id="wicket"]').click();
   const sheet = pad(page).locator('[data-role="v3-sheet"]');
   await expect(sheet).toBeVisible({ timeout: 10_000 });
   await sheet.getByRole("button", { name: "Bowled", exact: true }).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await sheet.locator("[data-candidate-id]").first().click();
   await flushHeld(page);
 }
 
