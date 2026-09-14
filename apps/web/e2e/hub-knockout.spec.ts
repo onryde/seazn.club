@@ -808,17 +808,20 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(page.getByTestId("mh-knockout")).toHaveCount(0);
   });
 
-  // R10: the open page moves with NO reload. Measured on spectw2 at 168a3ca9e:
+  // R10: the open page moves with NO reload. The controller measured the
+  // freeze in a real browser on spectw2 (built at 168a3ca9e):
   //   - a semi-final result was posted with this tab open;
   //   - the push arrived and the hook refetched once;
   //   - the browser answered that refetch from its HTTP cache
   //     (stale-while-revalidate), with a document built BEFORE the write;
-  //   - polling was off while subscribed, so the tab stayed frozen until reload.
+  //   - with the cache disabled over CDP, the tab updated in under a second.
+  // Polling was also off while subscribed, so nothing corrected it.
   // The budget is one poll interval plus slack. That covers a build with
   // realtime (a push lands in well under a second) and one without it (the
   // HUB_POLL_MS poll).
   //
-  // It fails against that build in both modes:
+  // Built to be red against that build in both modes (reasoned from the code,
+  // not yet run):
   //   - realtime up: the cached refetch plus the stopped poll froze the tab.
   //   - polling only: the post is lined up right after a poll tick, so the next
   //     tick (the first that could show the result) is answered from the cache
