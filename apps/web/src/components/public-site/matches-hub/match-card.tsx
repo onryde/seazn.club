@@ -64,6 +64,19 @@ export interface MatchCardProps {
    * — and `match-card.test.tsx` renders both values and asserts they differ.
    */
   crestSize?: 24 | 32;
+  /**
+   * The "STAGE · ROUND" caption in the meta row. Defaults to TRUE, stated here
+   * and in the destructure below, so every caller that does not pass it keeps
+   * the caption it always had — the Matches tab and the Overview mix stages
+   * and rounds in one list, and the caption is how a card says which.
+   *
+   * The Knockout tab passes `false` (fix round, D1): its cards sit under the
+   * stage's own heading and the pressed round chip, so the caption said the
+   * same thing a third time — and on a 320px phone it truncated beside the
+   * status ("DOUBLE ELIMINATION · WINNERS' FI…"). Only the caption goes; the
+   * status slot keeps its place at the end of the row.
+   */
+  showRound?: boolean;
 }
 
 export function MatchCard({
@@ -73,6 +86,7 @@ export function MatchCard({
   now,
   showDivision = true,
   crestSize = 24,
+  showRound = true,
 }: MatchCardProps) {
   const s0 = m.header.sides[0];
   const s1 = m.header.sides[1];
@@ -203,11 +217,13 @@ export function MatchCard({
             {m.divisionName}
           </span>
         ) : null}
-        <span className="min-w-0 truncate">
-          {[m.stageName, m.roundLabel ?? t(dict, "matchesHub.round", { round: m.roundNo })]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
+        {showRound ? (
+          <span className="min-w-0 truncate">
+            {[m.stageName, m.roundLabel ?? t(dict, "matchesHub.round", { round: m.roundNo })]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        ) : null}
         <span className="ml-auto shrink-0">
           {m.bucket === "live" ? (
             <span data-testid="mh-match-live" className="flex items-center gap-1 font-bold text-emerald-600">

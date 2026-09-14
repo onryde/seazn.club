@@ -84,7 +84,7 @@ function hubMatch(
 function card(
   m: HubMatchT,
   now: number = NOW,
-  opts: { showDivision?: boolean; crestSize?: 24 | 32 } = {},
+  opts: { showDivision?: boolean; crestSize?: 24 | 32; showRound?: boolean } = {},
 ) {
   return renderToStaticMarkup(
     <MatchCard
@@ -94,6 +94,7 @@ function card(
       now={now}
       showDivision={opts.showDivision}
       crestSize={opts.crestSize}
+      showRound={opts.showRound}
     />,
   );
 }
@@ -343,6 +344,32 @@ describe("MatchCard", () => {
     const withoutLabel = card(hubMatch({ stageName: "", roundLabel: null, roundNo: 4 }));
     expect(withoutLabel).toMatch(/>Round 4</);
     expect(withoutLabel).not.toContain(" · Round 4");
+  });
+
+  it("showRound={false} drops the STAGE · ROUND caption and leaves the status slot where it was; the DEFAULT keeps the caption (positive pair)", () => {
+    // Knockout fix round, D1: under the Knockout tab's stage heading and its
+    // pressed round chip, "PLAYOFFS · SEMI-FINAL" on every card said the same
+    // thing a third time — and at 320 it truncated beside the status. The
+    // helper passes the prop straight through, so `card(match)` is the
+    // component's own default, not a value this file chose.
+    const match = hubMatch({ stageName: "Playoffs", roundLabel: "Semi-final", roundNo: 3 });
+    const shown = card(match);
+    const hidden = card(match, NOW, { showRound: false });
+    expect(shown).toContain(">Playoffs · Semi-final<");
+    expect(hidden).not.toContain("Playoffs");
+    expect(hidden).not.toContain("Semi-final");
+    // The fallback arm goes too: no stage and no label is still a caption.
+    const bare = hubMatch({ stageName: "", roundLabel: null, roundNo: 4 });
+    expect(card(bare, NOW, { showRound: false })).not.toMatch(/>Round 4</);
+    // The status slot is untouched: the same right-aligned span, the same
+    // word, in both renders — "stays where it is" pinned as the element, not
+    // just the text somewhere on the card.
+    const statusSlot = (h: string) => h.match(/<span class="ml-auto shrink-0">([^<]*)<\/span>/)?.[1];
+    const tbd = (en as Record<string, string>)["matchesHub.timeTbd"];
+    expect(statusSlot(shown)).toBe(tbd);
+    expect(statusSlot(hidden)).toBe(tbd);
+    // And the division chip still leads the row it shares with the status.
+    expect(hidden).toContain(`data-testid="mh-match-division"`);
   });
 
   it("the division chip cannot wrap inside its own pill (class assertion — node vitest cannot measure a line box)", () => {
