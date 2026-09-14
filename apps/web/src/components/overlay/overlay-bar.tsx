@@ -26,11 +26,14 @@ const halfOf = (value: string, row: 0 | 1): string => {
  * same length and nowhere near the same width. A character rule would have to
  * be wrong on one side or the other, so the browser measures.
  *
- * THE PROBES ARE THE MEASUREMENT. Each rung is rendered once, absolutely
- * positioned and hidden, so its natural width is readable whichever rung is on
- * screen — which is what lets the choice be made in ONE pass instead of
- * rendering a rung to find out it did not fit. They are `visibility: hidden`
- * rather than `display: none` (no box, no width) and carry `aria-hidden`.
+ * THE PROBES ARE THE MEASUREMENT. Each rung is rendered once, `position: fixed`
+ * and hidden, so its natural width is readable whichever rung is on screen —
+ * which is what lets the choice be made in ONE pass instead of rendering a
+ * rung to find out it did not fit. They are `visibility: hidden` rather than
+ * `display: none` (no box, no width) and carry `aria-hidden`. Fixed, not
+ * absolute: an absolute probe inside `overflow: hidden` still inflates the
+ * name box's scrollWidth in Chromium, which the visual gate reports as a clip
+ * of the full name (run 34834966169).
  *
  * FIRST PAINT IS THE FULL NAME, before any effect runs: the server render and a
  * browser source with JS still starting both show what W1 showed. `.ovl-team-name`

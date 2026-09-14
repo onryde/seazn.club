@@ -168,8 +168,20 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
         rootEl,
         ...Array.from(rootEl.querySelectorAll<HTMLElement>(cs)),
       ];
-      for (const el of suspects) {
+      const visibleOverhang = (el: HTMLElement) => {
+        const hidden = Array.from(el.querySelectorAll<HTMLElement>("*")).filter(
+          (c) => getComputedStyle(c).visibility === "hidden",
+        );
+        const prev = hidden.map((c) => c.style.display);
+        for (const c of hidden) c.style.display = "none";
         const overhang = el.scrollWidth - el.clientWidth;
+        hidden.forEach((c, i) => {
+          c.style.display = prev[i]!;
+        });
+        return overhang;
+      };
+      for (const el of suspects) {
+        const overhang = visibleOverhang(el);
         if (overhang <= 1) continue;
         if (reachable(el) || truncatedByDesign(el)) continue; // already split out
         // How far past this box's own content edge do the reachable rails

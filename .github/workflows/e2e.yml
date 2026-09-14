@@ -257,6 +257,9 @@ jobs:
       # Stub, not empty: publicStorageUrl("") hides every badge/crest, making
       # logo assertions untestable. No real Supabase call rides on it in e2e.
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      # Dummy, not a real project key — supabaseBrowser() throws without it and
+      # the overlay stays on poll with an unhandled rejection (run 34834966169).
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
       NEXT_TELEMETRY_DISABLED: "1"
       # Production build → no dev-exposed `login_url`, so the auth helpers mint
       # login tokens straight in the Postgres service above and skip the specs
@@ -749,6 +752,9 @@ jobs:
       SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      # Dummy, not a real project key — supabaseBrowser() throws without it and
+      # the overlay stays on poll with an unhandled rejection (run 34834966169).
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
       # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
@@ -1039,6 +1045,9 @@ jobs:
       SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      # Dummy, not a real project key — supabaseBrowser() throws without it and
+      # the overlay stays on poll with an unhandled rejection (run 34834966169).
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
       # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips

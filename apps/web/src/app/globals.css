@@ -1410,12 +1410,17 @@ body {
    1920×1080: the home score painted 1046→1156 against a cell starting at 1063).
    `overflow: hidden` is the mechanical floor UNDER the ladder, not a
    replacement for it: it holds the one frame before `TeamName` has measured,
-   and §1's "never truncate" is about the resting state. `position: relative` is
-   what the probes are absolute against — they must contribute no width, or the
-   box measures every rung at once. */
+   and §1's "never truncate" is about the resting state. Probes are
+   `position: fixed` so they cannot inflate this box's scrollWidth. */
 .ovl-team-name { position: relative; flex: 0 1 auto; min-width: 0; overflow: hidden;
                  font-size: 45px; font-weight: 600; letter-spacing: 0.01em; white-space: nowrap; }
-.ovl-team-name-probe { position: absolute; left: 0; top: 0; visibility: hidden;
+/* `position: fixed`, not `absolute`. Absolute probes inside `overflow: hidden`
+   inflate the name box's scrollWidth in Chromium (580px content in a 67px
+   cell after data-ladder-settled — run 34834966169, overlay-bar-1920), so the
+   visual gate reports a clip of the FULL name even when the rung on air fits.
+   Fixed takes them out of the box's scrollable overflow; getBoundingClientRect
+   still returns the natural width the ladder measures. */
+.ovl-team-name-probe { position: fixed; left: 0; top: 0; visibility: hidden;
                        pointer-events: none; white-space: nowrap; }
 .ovl-team-score { margin-left: auto; font-size: 78px; font-weight: 700; line-height: 1; }
 .ovl-team-meta { width: 66px; font-size: 33px; font-weight: 500;

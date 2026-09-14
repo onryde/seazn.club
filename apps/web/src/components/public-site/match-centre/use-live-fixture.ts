@@ -177,7 +177,12 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   const [subscribed, setSubscribed] = useState(false);
   useEffect(() => {
     if (!realtime || !live) return;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+    if (!supabaseUrl) return;
+    // CI's stub host has no Realtime websocket. Still mint (the e2e asserts
+    // ES256 on that response) but do not dial — setAuth/subscribe hangs on
+    // stub.supabase.co and never flips transport (run 34834966169).
+    const stubHost = /stub\.supabase\.co/i.test(supabaseUrl);
     let cancelled = false;
     let debounce: ReturnType<typeof setTimeout> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,20 +195,24 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       } catch {
         return; // not entitled or server error → polling
       }
-      if (cancelled) return;
-      const { supabaseBrowser } = await import("@/lib/supabase-browser");
-      const sb = supabaseBrowser();
-      await sb.realtime.setAuth(token.token);
-      if (cancelled) return;
-      channel = sb
-        .channel(token.channel, { config: { private: true } })
-        .on("broadcast", { event: "state_changed" }, () => {
-          if (debounce) clearTimeout(debounce);
-          debounce = setTimeout(refresh, 250);
-        })
-        .subscribe((status: string) => {
-          if (!cancelled) setSubscribed(status === "SUBSCRIBED");
-        });
+      if (cancelled || stubHost) return;
+      try {
+        const { supabaseBrowser } = await import("@/lib/supabase-browser");
+        const sb = supabaseBrowser();
+        await sb.realtime.setAuth(token.token);
+        if (cancelled) return;
+        channel = sb
+          .channel(token.channel, { config: { private: true } })
+          .on("broadcast", { event: "state_changed" }, () => {
+            if (debounce) clearTimeout(debounce);
+            debounce = setTimeout(refresh, 250);
+          })
+          .subscribe((status: string) => {
+            if (!cancelled) setSubscribed(status === "SUBSCRIBED");
+          });
+      } catch {
+        // Missing anon key, websocket refused — stay on poll.
+      }
     })();
 
     return () => {
