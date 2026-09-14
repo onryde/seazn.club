@@ -473,6 +473,7 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
           <button
             key={chip.id}
             type="button"
+            data-testid={`pad-dock-chip-${chip.id}`}
             aria-pressed={selected}
             // FIX ROUND 1 finding 3 (design call): a selected chip is
             // ALREADY inert to a repeat tap at the controller level

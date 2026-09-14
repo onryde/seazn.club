@@ -18,6 +18,7 @@ import { call, newSession, type Session } from "./http.ts";
 import { fetchFixtureLedger, type LedgerTransport } from "./ledger.ts";
 import {
   FINALIZE_TESTID,
+  FORFEIT_TESTID,
   ORGANISER_VIEWPORT,
   START_MATCH_TESTID,
   playMatchByTaps,
@@ -322,15 +323,21 @@ export function gateScoringOnStartRow(page: PadPage, waitForStartRow: () => Prom
  *  (`scorepad/use-fixture-stream.ts:21`), and `score-finalize` renders only
  *  once the page knows the match is decided (`fixture-console.tsx:1099`). A
  *  page opened before the scorer played therefore never shows it in time:
- *  reload first, then wait. */
-export function reloadBeforeFinalize(page: TapPage): PadPage {
-  const finalizeSelector = selectorForTapStep({ kind: "testid", testid: FINALIZE_TESTID });
+ *  reload first, then wait.
+ *
+ *  Fix round 1 (R59(c)) — the same page authors the organiser's forfeit, whose
+ *  toggle IS on screen from the first load; but every console send carries
+ *  `expected_seq` from the page's last load (`fixture-console.tsx:456`), and a
+ *  console loaded before the scorer's `core.start` is answered SEQ_CONFLICT and
+ *  writes nothing. So the FIRST control of each organiser action reloads too. */
+export function reloadConsoleBeforeAction(page: TapPage): PadPage {
+  const reloadFirst = new Set([FINALIZE_TESTID, FORFEIT_TESTID].map((testid) => selectorForTapStep({ kind: "testid", testid })));
   return {
     goto: (url) => page.goto(url),
     setViewportSize: (size) => page.setViewportSize(size),
     locator: (selector) => {
       const inner = delegateLocator(page, selector);
-      if (selector !== finalizeSelector) return inner;
+      if (!reloadFirst.has(selector)) return inner;
       return {
         ...inner,
         waitFor: async (options) => {
@@ -478,7 +485,7 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
               sleep,
             }),
           ),
-          organiserPage: reloadBeforeFinalize(orgPage),
+          organiserPage: reloadConsoleBeforeAction(orgPage),
           deviceUrl,
           fixtureId: job.fixtureId,
           stream: job.stream,

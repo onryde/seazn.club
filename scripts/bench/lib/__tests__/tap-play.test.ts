@@ -15,6 +15,27 @@
 //     tap until consent was pre-answered;
 //   - `core.start`'s row can be made to land late (R52 NB3), and a row landed
 //     after a late one stays invisible behind it, as a real ledger has no gaps.
+//
+// Fix round 1 (R59) adds the three routes d-tiny needs, each as the product
+// does it:
+//   - a score-mode half tap is HELD behind a dock (`usesSoftCommit`,
+//     pad-host.tsx:1232 — generic's dock always has amount chips); a new held
+//     tap releases the previous one first (queue.ts `flushHeldBefore`); an
+//     immediate submit queues BEHIND a held one; `pad-send-now` releases.
+//   - the pad stamps a side's SOLE on-field player into the half tap
+//     (generic.tsx:324-327) and offers person chips only for a side with more
+//     than one (:702-705). `roster` absent ≡ no saved lineup — neither.
+//   - THE DOCK RENDERS LATE. A hold's dock is not on screen the instant the tap
+//     that made it returns: this fake re-renders it only when time passes (a
+//     ledger read) or while a `waitFor` has to poll. A `count()`/`click()`
+//     right after a tap therefore still sees the PREVIOUS dock, which is the
+//     real race `releaseHold` exists for.
+//   - the score-entry sheet: tile, then number + confirm per side, home first
+//     (generic.tsx:554-578), then an immediate `generic.result`.
+//   - the console's forfeit: toggle, per-side button, reason prompt (initial
+//     "walkover", trimmed on submit), and the send carries `expected_seq` from
+//     the page's last load — a stale console is refused (SEQ_CONFLICT,
+//     fixture-console.tsx:456-469) and writes nothing. Finalize likewise.
 import { describe, expect, it } from "vitest";
 import * as webConsent from "../../../../apps/web/src/lib/consent.ts";
 import type { LedgerTransport } from "../ledger.ts";
@@ -72,6 +93,8 @@ function withLocalStorage<T>(store: Map<string, string>, fn: () => T): T {
   }
 }
 
+type Side = "home" | "away";
+
 interface FakeWorldOptions {
   /** `core.start`'s row stays invisible until this many ledger reads after the tap. */
   startRowAfterReads?: number;
@@ -81,6 +104,9 @@ interface FakeWorldOptions {
   mintStatus?: number;
   /** Drop every `addInitScript` — the negative control for the banner model. */
   dropInitScripts?: boolean;
+  /** On-field players per side, as the pad's squads carry them from a SAVED
+   *  lineup. Absent ≡ no lineup saved — the bench's own d-tiny case. */
+  roster?: { readonly home?: readonly string[]; readonly away?: readonly string[] };
 }
 
 interface LedgerRowFake {
@@ -90,10 +116,19 @@ interface LedgerRowFake {
   readonly visibleFromRead: number;
 }
 
+interface PadSubmission {
+  readonly type: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+}
+
+const SEND_NOW = '[data-testid="pad-send-now"]';
+const SIDE_ID: Record<Side, string> = { home: HOME, away: AWAY };
+
 function fakeWorld(opts: FakeWorldOptions = {}) {
   const rows: LedgerRowFake[] = [];
   let reads = 0;
   const secrets: string[] = [];
+  const renderers: (() => void)[] = [];
   const record = {
     gotos: [] as string[],
     reloads: 0,
@@ -103,6 +138,8 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     closedContexts: 0,
     closedPages: 0,
     browserClosed: false,
+    /** `console <selector>` / `pad <selector>` / `blank <selector>`, in order. */
+    clicks: [] as string[],
   };
 
   const visibleRows = (): LedgerRowFake[] => {
@@ -113,11 +150,13 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     }
     return out;
   };
+  const tip = (): number => visibleRows().at(-1)?.seq ?? 0;
   const statusNow = (): string => {
     let status = "scheduled";
     for (const r of visibleRows()) {
       if (r.type === "core.start") status = opts.statusAfterStart ?? "in_play";
       else if (r.type === "generic.result") status = "decided";
+      else if (r.type === "core.forfeit") status = "forfeited";
       else if (r.type === "core.finalize") status = "finalized";
     }
     return status;
@@ -125,9 +164,12 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
   const append = (type: string, payload: unknown, delayReads = 0): void => {
     rows.push({ seq: rows.length + 1, type, payload, visibleFromRead: reads + delayReads });
   };
+  const roster = (side: Side): readonly string[] => opts.roster?.[side] ?? [];
 
   const ledger: LedgerTransport = {
     async raw(_base, _s, path) {
+      // Time passes between reads: any dock a tap scheduled has rendered by now.
+      for (const render of renderers) render();
       const events = new RegExp(`^/api/v1/fixtures/${FIXTURE_ID}/events\\?since_seq=(\\d+)$`).exec(path);
       if (events !== null) {
         reads += 1;
@@ -138,11 +180,7 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
         return { status: 200, json: { ok: true, data } as never };
       }
       if (path === `/api/v1/fixtures/${FIXTURE_ID}/state`) {
-        const visible = visibleRows();
-        return {
-          status: 200,
-          json: { ok: true, data: { status: statusNow(), last_seq: visible.at(-1)?.seq ?? 0 } } as never,
-        };
+        return { status: 200, json: { ok: true, data: { status: statusNow(), last_seq: tip() } } as never };
       }
       throw new Error(`fake ledger: unhandled ${path}`);
     },
@@ -159,6 +197,7 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     let url = "about:blank";
     let viewport = { ...ctx.viewport };
     let snapshotStatus = "scheduled";
+    let snapshotSeq = 0;
     let handoverOpen = false;
     let padLive = false;
     let started = false;
@@ -166,7 +205,51 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     const storage = new Map<string, string>();
     const listeners: { pred: (r: TapResponse) => boolean; resolve: (r: TapResponse) => void }[] = [];
 
+    // --- the pad ---
+    let held: (PadSubmission & { readonly id: number }) | undefined;
+    let heldIds = 0;
+    const queued: PadSubmission[] = [];
+    /** What the RENDERED dock shows — lags `held` (see the header). */
+    let dock: { readonly id: number; readonly side: Side; readonly named: boolean } | undefined;
+    let sheet: { step: Side; value: number; home: number } | undefined;
+    // --- the console ---
+    let menuOpen = false;
+    let prompt: { side: Side; reason: string } | undefined;
+
+    const render = (): void => {
+      dock =
+        held === undefined
+          ? undefined
+          : { id: held.id, side: held.payload.by === HOME ? "home" : "away", named: typeof held.payload.person === "string" };
+    };
+    renderers.push(render);
+
+    const land = (s: PadSubmission): void => append(s.type, s.payload);
+    const release = (): void => {
+      if (held !== undefined) land(held);
+      held = undefined;
+      for (const s of queued.splice(0)) land(s);
+    };
+    const submitHeld = (s: PadSubmission): void => {
+      release();
+      heldIds += 1;
+      held = { ...s, id: heldIds };
+    };
+    const submitImmediate = (s: PadSubmission): void => {
+      if (held !== undefined) queued.push(s);
+      else land(s);
+    };
+    const refreshConsole = (): void => {
+      snapshotStatus = statusNow();
+      snapshotSeq = tip();
+      menuOpen = false;
+      prompt = undefined;
+    };
+
     const onConsole = (): boolean => ctx.signedIn && url === `${ORIGIN}${CONSOLE_PATH}`;
+    const surface = (): string => (onConsole() ? "console" : padLive ? "pad" : "blank");
+    const chipOf = (sel: string): string | undefined => /^\[data-testid="pad-dock-chip-(.+)"\]$/.exec(sel)?.[1];
+
     const attached = (sel: string): boolean => {
       switch (sel) {
         case DEVICE_HANDOVER_SELECTOR:
@@ -174,17 +257,37 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
         case '[data-testid="device-link-mint"]':
           return onConsole() && handoverOpen;
         case '[data-testid="score-finalize"]':
-          return onConsole() && snapshotStatus === "decided";
+          return onConsole() && (snapshotStatus === "decided" || snapshotStatus === "forfeited");
+        case '[data-testid="score-forfeit"]':
+          return onConsole() && !["decided", "forfeited", "finalized"].includes(snapshotStatus);
+        case '[data-testid="score-forfeit-home"]':
+        case '[data-testid="score-forfeit-away"]':
+          return onConsole() && menuOpen;
+        case '[data-testid="score-prompt-reason"]':
+        case '[data-testid="score-prompt-submit"]':
+          return onConsole() && prompt !== undefined;
         case '[data-testid="score-start-match"]':
           return padLive && !started;
         case '[data-role="v3-scorebug-half"][data-side="home"]':
         case '[data-role="v3-scorebug-half"][data-side="away"]':
         case '[data-tile-id="settle"]':
           return padLive && started;
-        default:
-          return false;
+        case '[data-tile-id="scoreEntry"]':
+          return padLive && started && sheet === undefined;
+        case '[data-testid="pad-sheet-number"]':
+        case '[data-testid="pad-sheet-confirm"]':
+          return padLive && sheet !== undefined;
+        case SEND_NOW:
+          return padLive && dock !== undefined;
       }
+      const chip = chipOf(sel);
+      if (chip === undefined || !padLive || dock === undefined) return false;
+      if (/^points:(2|3|5)$/.test(chip)) return true;
+      const person = /^person:(.+)$/.exec(chip)?.[1];
+      const players = roster(dock.side);
+      return person !== undefined && !dock.named && players.length > 1 && players.includes(person);
     };
+
     const clickOn = (sel: string): void => {
       switch (sel) {
         case DEVICE_HANDOVER_SELECTOR:
@@ -215,22 +318,67 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           return;
         }
         case '[data-testid="score-finalize"]':
+          if (snapshotSeq !== tip()) return; // SEQ_CONFLICT: a stale console writes nothing
           append("core.finalize", {});
           return;
+        case '[data-testid="score-forfeit"]':
+          menuOpen = !menuOpen;
+          return;
+        case '[data-testid="score-forfeit-home"]':
+        case '[data-testid="score-forfeit-away"]':
+          menuOpen = false;
+          prompt = { side: sel.includes("home") ? "home" : "away", reason: "walkover" };
+          return;
+        case '[data-testid="score-prompt-submit"]': {
+          const { side, reason } = prompt!;
+          prompt = undefined;
+          if (reason.trim() === "" || snapshotSeq !== tip()) return;
+          append("core.forfeit", { by: SIDE_ID[side], reason: reason.trim() });
+          refreshConsole();
+          return;
+        }
         case '[data-testid="score-start-match"]':
           started = true;
           append("core.start", {}, opts.startRowAfterReads ?? 0);
           return;
         case '[data-role="v3-scorebug-half"][data-side="home"]':
-          append("generic.score", { by: HOME, points: 1 });
+        case '[data-role="v3-scorebug-half"][data-side="away"]': {
+          const side: Side = sel.includes('"home"') ? "home" : "away";
+          const players = roster(side);
+          submitHeld({
+            type: "generic.score",
+            payload: { by: SIDE_ID[side], points: 1, ...(players.length === 1 ? { person: players[0] } : {}) },
+          });
           return;
-        case '[data-role="v3-scorebug-half"][data-side="away"]':
-          append("generic.score", { by: AWAY, points: 1 });
-          return;
+        }
         case '[data-tile-id="settle"]':
-          append("generic.result", {});
+          submitImmediate({ type: "generic.result", payload: {} });
+          return;
+        case '[data-tile-id="scoreEntry"]':
+          sheet = { step: "home", value: 0, home: 0 };
+          return;
+        case '[data-testid="pad-sheet-confirm"]':
+          if (sheet!.step === "home") {
+            sheet = { step: "away", value: 0, home: sheet!.value };
+          } else {
+            submitImmediate({ type: "generic.result", payload: { p1Score: sheet!.home, p2Score: sheet!.value } });
+            sheet = undefined;
+          }
+          return;
+        case SEND_NOW:
+          // A dock still on screen for an entry that already went out
+          // dismisses nothing.
+          if (held !== undefined && held.id === dock?.id) release();
           return;
       }
+      const chip = chipOf(sel);
+      // A chip acts on the entry the RENDERED dock is for; a stale dock's chip
+      // is a no-op (`mutateHeld` finds no held entry by that id).
+      if (chip === undefined || held === undefined || held.id !== dock?.id) return;
+      const points = /^points:(\d+)$/.exec(chip)?.[1];
+      const person = /^person:(.+)$/.exec(chip)?.[1];
+      if (points !== undefined) held = { ...held, payload: { ...held.payload, points: Number(points) } };
+      if (person !== undefined) held = { ...held, payload: { ...held.payload, person } };
     };
 
     return {
@@ -247,13 +395,13 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
         });
         bannerShown = withLocalStorage(storage, () => webConsent.needsConsentPrompt());
         if (target === LOGIN_URL) ctx.signedIn = true;
-        if (onConsole()) snapshotStatus = statusNow();
+        if (onConsole()) refreshConsole();
         padLive = secrets.length > 0 && target === `${ORIGIN}/score/${secrets[secrets.length - 1]}`;
         return null;
       },
       async reload() {
         record.reloads += 1;
-        if (onConsole()) snapshotStatus = statusNow();
+        if (onConsole()) refreshConsole();
         return null;
       },
       locator(sel) {
@@ -261,13 +409,22 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
           async click() {
             if (!attached(sel)) throw new Error(`fake page: ${sel} is not attached`);
             if (bannerShown) throw new Error(`fake page: the cookie banner intercepts pointer events on ${sel}`);
+            record.clicks.push(`${surface()} ${sel}`);
             clickOn(sel);
           },
-          async fill() {
-            throw new Error(`fake page: fill is not modelled (${sel})`);
+          async fill(value) {
+            if (!attached(sel)) throw new Error(`fake page: ${sel} is not attached`);
+            if (sel === '[data-testid="pad-sheet-number"]') sheet!.value = Number(value);
+            else if (sel === '[data-testid="score-prompt-reason"]') prompt!.reason = value;
+            else throw new Error(`fake page: fill is not modelled (${sel})`);
           },
-          async waitFor() {
-            if (!attached(sel)) throw new Error(`fake page: timeout waiting for ${sel}`);
+          async waitFor(options) {
+            const wantAttached = options?.state !== "detached" && options?.state !== "hidden";
+            if (attached(sel) === wantAttached) return;
+            render(); // a real waitFor polls, so a pending render lands while it waits
+            if (attached(sel) !== wantAttached) {
+              throw new Error(`fake page: timeout waiting for ${sel}${wantAttached ? "" : " to detach"}`);
+            }
           },
           async count() {
             return attached(sel) ? 1 : 0;
@@ -343,6 +500,8 @@ const FULL_MATCH = [
   { type: "generic.score", payload: { by: "@home", points: 1 } },
   { type: "generic.result", payload: {} },
 ];
+
+const START = { type: "core.start", payload: {} };
 
 describe("the consent pre-answer mirrors apps/web (R45)", () => {
   it("uses apps/web's own keys and policy version, and pre-answers 'rejected'", () => {
@@ -420,8 +579,9 @@ describe("createTapPlayer — hand-over, play, sign-off (B07a T10)", () => {
     expect(result.findings).toEqual([]);
     expect(world.statusNow()).toBe("finalized");
     expect(world.rows.map((r) => r.type)).toEqual(["core.start", "generic.score", "generic.result", "core.finalize"]);
-    // hand-over + mint + one tap per event + finalize.
-    expect(result.taps).toBe(2 + FULL_MATCH.length + 1);
+    // hand-over + mint + one tap per event + the pad-send-now that releases
+    // the held score (the settle queued behind it) + finalize.
+    expect(result.taps).toBe(2 + FULL_MATCH.length + 1 + 1);
     // R44 — the pad was opened at the secret the mint RESPONSE carried.
     expect(world.secrets).toHaveLength(1);
     expect(world.record.gotos).toContain(`${ORIGIN}/score/${world.secrets[0]}`);
@@ -481,5 +641,129 @@ describe("createTapPlayer — hand-over, play, sign-off (B07a T10)", () => {
     expect(result.findings.join("\n")).toContain("PAYMENT_REQUIRED");
     expect(world.record.contexts.filter((c) => c.viewport.width === SCORER_VIEWPORT.width)).toHaveLength(0);
     expect(world.rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10 fix round 1 (R59) — d-tiny's three frozen shapes, played through the
+// REAL driver and the REAL adapter against the fake product above. Every one
+// is judged by the driver's own exact, two-way payload comparison.
+// ---------------------------------------------------------------------------
+describe("R59 — the three d-tiny routes, played through the real driver (fix round 1)", () => {
+  const payloadsOf = (world: ReturnType<typeof fakeWorld>, type: string) => world.rows.filter((r) => r.type === type).map((r) => r.payload);
+
+  it("(a) a typed final score goes in through the score-entry sheet, home's number first, and lands exactly", async () => {
+    const world = fakeWorld();
+    const result = await player(world).playFixture(job([START, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }]));
+
+    expect(result.findings).toEqual([]);
+    expect(payloadsOf(world, "generic.result")).toEqual([{ p1Score: 3, p2Score: 1 }]);
+    expect(world.statusNow()).toBe("finalized");
+  });
+
+  it("(b) a dock-amended score naming its scorer lands exactly — a sole on-field player is stamped by the pad itself", async () => {
+    const world = fakeWorld({ roster: { home: ["p-home"], away: ["p-away"] } });
+    const result = await player(world).playFixture(
+      job([
+        START,
+        { type: "generic.score", payload: { by: "@home", points: 2, person: "p-home" } },
+        { type: "generic.score", payload: { by: "@away", points: 1, person: "p-away" } },
+        { type: "generic.score", payload: { by: "@away", points: 1, person: "p-away" } },
+        { type: "generic.result", payload: {} },
+      ]),
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(payloadsOf(world, "generic.score")).toEqual([
+      { by: HOME, points: 2, person: "p-home" },
+      { by: AWAY, points: 1, person: "p-away" },
+      { by: AWAY, points: 1, person: "p-away" },
+    ]);
+    expect(world.statusNow()).toBe("finalized");
+  });
+
+  it("(b) on a side with more than one player, the named scorer is CHOSEN from the dock", async () => {
+    const world = fakeWorld({ roster: { home: ["p-h1", "p-h2"] } });
+    const result = await player(world).playFixture(
+      job([START, { type: "generic.score", payload: { by: "@home", points: 3, person: "p-h2" } }, { type: "generic.result", payload: {} }]),
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(payloadsOf(world, "generic.score")).toEqual([{ by: HOME, points: 3, person: "p-h2" }]);
+  });
+
+  it("(b) a ONE-point score naming one of several players: the scorer is chosen only once that tap's dock is open", async () => {
+    const world = fakeWorld({ roster: { away: ["p-a1", "p-a2"] } });
+    const result = await player(world).playFixture(
+      job([START, { type: "generic.score", payload: { by: "@away", points: 1, person: "p-a1" } }, { type: "generic.result", payload: {} }]),
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(payloadsOf(world, "generic.score")).toEqual([{ by: AWAY, points: 1, person: "p-a1" }]);
+  });
+
+  it("(b) two amended holds back to back: the second amount lands on the second hold, never on the first's stale dock", async () => {
+    const world = fakeWorld();
+    const result = await player(world).playFixture(
+      job([
+        START,
+        { type: "generic.score", payload: { by: "@home", points: 2 } },
+        { type: "generic.score", payload: { by: "@away", points: 3 } },
+        { type: "generic.result", payload: {} },
+      ]),
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(payloadsOf(world, "generic.score")).toEqual([
+      { by: HOME, points: 2 },
+      { by: AWAY, points: 3 },
+    ]);
+  });
+
+  it("(b) with NO saved lineup the pad can neither stamp nor offer a scorer — the ledger comparison says so, it is not waved through", async () => {
+    const world = fakeWorld();
+    const result = await player(world).playFixture(
+      job([START, { type: "generic.score", payload: { by: "@home", points: 2, person: "p-home" } }, { type: "generic.result", payload: {} }]),
+    );
+
+    expect(result.findings).toEqual([
+      'ledger: event 1 (generic.score) — payload key "person" mismatch: the pack meant "p-home", the server recorded undefined',
+    ]);
+    expect(payloadsOf(world, "generic.score")).toEqual([{ by: HOME, points: 2 }]);
+  });
+
+  it("(c) a forfeit is an ORGANISER action on a freshly loaded console — toggle, side, typed reason, submit — and lands exactly", async () => {
+    const world = fakeWorld();
+    const result = await player(world).playFixture(job([START, { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } }]));
+
+    expect(result.findings).toEqual([]);
+    expect(world.rows.map((r) => [r.type, r.payload])).toEqual([
+      ["core.start", {}],
+      ["core.forfeit", { by: AWAY, reason: "retired hurt" }],
+      ["core.finalize", {}],
+    ]);
+    expect(world.statusNow()).toBe("finalized");
+    const forfeitClicks = world.record.clicks.filter((c) => c.includes("score-forfeit") || c.includes("score-prompt"));
+    expect(forfeitClicks).toEqual([
+      'console [data-testid="score-forfeit"]',
+      'console [data-testid="score-forfeit-away"]',
+      'console [data-testid="score-prompt-submit"]',
+    ]);
+    // Once before the forfeit (the console was loaded before play), once before finalize.
+    expect(world.record.reloads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("(c) a hold still open on the pad is released BEFORE the organiser acts, so the rows land in pack order", async () => {
+    const world = fakeWorld();
+    const result = await player(world).playFixture(
+      job([
+        START,
+        { type: "generic.score", payload: { by: "@home", points: 2 } },
+        { type: "core.forfeit", payload: { by: "@away", reason: "retired hurt" } },
+      ]),
+    );
+
+    expect(result.findings).toEqual([]);
+    expect(world.rows.map((r) => r.type)).toEqual(["core.start", "generic.score", "core.forfeit", "core.finalize"]);
   });
 });

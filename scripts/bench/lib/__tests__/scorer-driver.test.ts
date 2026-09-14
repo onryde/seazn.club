@@ -27,8 +27,15 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  DOCK_CHIP_TESTID_PREFIX,
   FINALIZE_TESTID,
+  FORFEIT_SIDE_TESTID_PREFIX,
+  FORFEIT_TESTID,
+  ORGANISER_ONLY_EVENT_TYPES,
+  organiserStepsFor,
   playMatchByTaps,
+  PROMPT_REASON_TESTID,
+  PROMPT_SUBMIT_TESTID,
   selectorForTapStep,
   SEND_NOW_TESTID,
   START_MATCH_TESTID,
@@ -42,10 +49,13 @@ import { resolvePayloadRefs } from "../simulate.ts";
 import type { LedgerTransport } from "../ledger.ts";
 import type { RawResult, Session } from "../http.ts";
 import {
+  DOCK_AMOUNTS,
   GENERIC_TOLERATED_EXTRA_KEYS,
   genericAdapter,
+  MAX_PLAUSIBLE_SCORE,
   RESULT_TYPE,
   resultModeOf,
+  SCORE_ENTRY_TILE_ID,
   SCORE_TYPE,
   SETTLE_TILE_ID,
 } from "../drivers/adapters/generic.ts";
@@ -54,8 +64,11 @@ import {
 // imports apps/web). Pins every mirrored constant EQUAL to the real module.
 import { HUMAN_FASTEST_REPEAT_MS } from "../../../../apps/web/src/components/v2/scorepad/use-pad-pipeline.ts";
 import {
+  DOCK_AMOUNTS as REAL_DOCK_AMOUNTS,
+  MAX_PLAUSIBLE_SCORE as REAL_MAX_PLAUSIBLE_SCORE,
   RESULT_TYPE as REAL_RESULT_TYPE,
   resultModeOf as realResultModeOf,
+  SCORE_ENTRY_TILE_ID as REAL_SCORE_ENTRY_TILE_ID,
   SCORE_TYPE as REAL_SCORE_TYPE,
   SETTLE_TILE_ID as REAL_SETTLE_TILE_ID,
 } from "../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx";
@@ -532,13 +545,23 @@ describe("playMatchByTaps — the adapter never substitutes a tap (I3, R50(e))",
     expect(pad.scorerLog.some((c) => c.includes("v3-scorebug-half"))).toBe(false);
   });
 
-  it("reds, never silently maps, an event the adapter cannot map (a dock-chip amendment)", async () => {
-    const events = [START, { type: SCORE_TYPE, payload: { by: `@${HOME_REF}`, points: 2 } }];
+  it("reds, never silently maps, an event the adapter cannot map (an amount no dock chip offers)", async () => {
+    const events = [START, { type: SCORE_TYPE, payload: { by: `@${HOME_REF}`, points: 4 } }];
     const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
 
     const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
 
-    expect(joined(result.findings)).toMatch(/^adapter: cannot map event 1 \(generic\.score\) to a tap — .*not a plain one-point half tap/);
+    expect(joined(result.findings)).toMatch(/^adapter: cannot map event 1 \(generic\.score\) to a tap — .*no dock chip offers 4/);
+  });
+
+  it("reds, never silently maps, an organiser action the console route does not cover (core.abandon)", async () => {
+    const events = [START, { type: "core.abandon", payload: { reason: "rain" } }];
+    const pad = buildFakePad({ events, selectors: [START_SEL, "UNUSED"] });
+
+    const result = await playMatchByTaps(makeInput({ pad, stream: stream(events), cfg: SCORE_CFG }));
+
+    expect(joined(result.findings)).toMatch(/^organiser: cannot map event 1 \(core\.abandon\) to a console action — /);
+    expect(pad.organiserLog.filter((l) => l.startsWith("click "))).toEqual([]);
   });
 });
 
@@ -728,16 +751,79 @@ describe("genericAdapter mirrors generic.tsx", () => {
     expect(() => genericAdapter.stepsFor({ type: "core.forfeit", payload: {} }, { cfg: undefined, entrants: ENTRANTS })).toThrow(/no tap mapping/);
   });
 
-  it("throws (never maps) a dock-chip amendment on generic.score", () => {
-    expect(() =>
-      genericAdapter.stepsFor({ type: SCORE_TYPE, payload: { by: HOME_ID, points: 2 } }, { cfg: SCORE_CFG, entrants: ENTRANTS }),
-    ).toThrow(/not a plain one-point half tap/);
+  // --- Task 10 fix round 1 (R59(a)/(b)) — the two d-tiny shapes Task 9 threw on.
+  it("SCORE_ENTRY_TILE_ID/DOCK_AMOUNTS/MAX_PLAUSIBLE_SCORE equal the real module's", () => {
+    expect(SCORE_ENTRY_TILE_ID).toBe(REAL_SCORE_ENTRY_TILE_ID);
+    expect([...DOCK_AMOUNTS]).toEqual([...REAL_DOCK_AMOUNTS]);
+    expect(MAX_PLAUSIBLE_SCORE).toBe(REAL_MAX_PLAUSIBLE_SCORE);
   });
 
-  it("throws (never maps) a typed final score on score-mode generic.result", () => {
+  it("R59(a): a typed final score goes in through the score-entry sheet — HOME's number first, each confirmed", () => {
+    const steps = genericAdapter.stepsFor({ type: RESULT_TYPE, payload: { p1Score: 3, p2Score: 1 } }, { cfg: SCORE_CFG, entrants: ENTRANTS });
+    expect(steps).toEqual([
+      { kind: "tile", tileId: SCORE_ENTRY_TILE_ID },
+      { kind: "number", value: 3 },
+      { kind: "confirm" },
+      { kind: "number", value: 1 },
+      { kind: "confirm" },
+    ]);
+  });
+
+  it.each([
+    [{ p1Score: 3 }],
+    [{ p1Score: 3, p2Score: 1, winnerId: HOME_ID }],
+    [{ p1Score: -1, p2Score: 0 }],
+    [{ p1Score: 501, p2Score: 0 }],
+    [{ p1Score: 1.5, p2Score: 0 }],
+    [{ p1Score: "3", p2Score: 1 }],
+  ])("throws (never maps): %o is not a result the score-entry sheet can author", (payload) => {
+    expect(() => genericAdapter.stepsFor({ type: RESULT_TYPE, payload }, { cfg: SCORE_CFG, entrants: ENTRANTS })).toThrow(
+      /neither a settle \(\{\}\) nor a typed final score/,
+    );
+  });
+
+  it("throws: a typed final score under win_loss — that pad declares no score-entry sheet", () => {
     expect(() =>
-      genericAdapter.stepsFor({ type: RESULT_TYPE, payload: { p1Score: 3, p2Score: 1 } }, { cfg: undefined, entrants: ENTRANTS }),
-    ).toThrow(/typed final score/);
+      genericAdapter.stepsFor({ type: RESULT_TYPE, payload: { p1Score: 3, p2Score: 1 } }, { cfg: WIN_LOSS_CFG, entrants: ENTRANTS }),
+    ).toThrow(/not a plain winnerId half tap/);
+  });
+
+  it("R59(b): a dock-amended score with a named scorer — release any hold, tap the half, the amount chip, then the scorer if the dock offers one", () => {
+    const steps = genericAdapter.stepsFor(
+      { type: SCORE_TYPE, payload: { by: AWAY_ID, points: 2, person: "p-away" } },
+      { cfg: SCORE_CFG, entrants: ENTRANTS },
+    );
+    expect(steps).toEqual([
+      { kind: "releaseHold" },
+      { kind: "half", side: "away" },
+      { kind: "chip", chipId: "points:2" },
+      { kind: "offeredChip", chipId: "person:p-away" },
+    ]);
+  });
+
+  it("R59(b): an amount with no person has no scorer step; one point naming a person has no amount chip", () => {
+    expect(genericAdapter.stepsFor({ type: SCORE_TYPE, payload: { by: HOME_ID, points: 5 } }, { cfg: SCORE_CFG, entrants: ENTRANTS })).toEqual([
+      { kind: "releaseHold" },
+      { kind: "half", side: "home" },
+      { kind: "chip", chipId: "points:5" },
+    ]);
+    expect(
+      genericAdapter.stepsFor({ type: SCORE_TYPE, payload: { by: HOME_ID, points: 1, person: "p-home" } }, { cfg: SCORE_CFG, entrants: ENTRANTS }),
+    ).toEqual([{ kind: "releaseHold" }, { kind: "half", side: "home" }, { kind: "offeredChip", chipId: "person:p-home" }]);
+  });
+
+  it.each([[4], [-1], [0], [1.5]])("throws (never maps): generic.score points %s — no dock chip offers it", (points) => {
+    expect(() => genericAdapter.stepsFor({ type: SCORE_TYPE, payload: { by: HOME_ID, points } }, { cfg: SCORE_CFG, entrants: ENTRANTS })).toThrow(
+      `no dock chip offers ${points}`,
+    );
+  });
+
+  it.each([
+    [{ by: HOME_ID, points: 2, note: "x" }],
+    [{ points: 2 }],
+    [{ by: HOME_ID, points: 2, person: "" }],
+  ])("throws (never maps): %o is not a generic.score the pad can author", (payload) => {
+    expect(() => genericAdapter.stepsFor({ type: SCORE_TYPE, payload }, { cfg: SCORE_CFG, entrants: ENTRANTS })).toThrow(/genericAdapter: generic\.score/);
   });
 
   it("R50(d): the allowlist is ONE constant naming exactly person on generic.score, and the adapter reads it", () => {
@@ -745,5 +831,67 @@ describe("genericAdapter mirrors generic.tsx", () => {
     expect(genericAdapter.tolerableExtraKeys?.(SCORE_TYPE)).toEqual(["person"]);
     expect(genericAdapter.tolerableExtraKeys?.(RESULT_TYPE)).toEqual([]);
     expect(genericAdapter.tolerableExtraKeys?.("core.start")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10 fix round 1 (R59(c)) — organiser actions, authored on the console.
+// The driver-level proof (the steps really run on the ORGANISER page, after a
+// reload, and land exactly) is `tap-play.test.ts`, against its fake product.
+// ---------------------------------------------------------------------------
+describe("organiserStepsFor — what the scorer pad cannot author, on the fixture console (R59(c))", () => {
+  const ctx: TapAdapterContext = { cfg: SCORE_CFG, entrants: ENTRANTS };
+
+  it("maps core.forfeit to the console's toggle, the forfeiting side's own button, the typed reason, and submit", () => {
+    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: AWAY_ID, reason: "retired hurt" } }, ctx)).toEqual([
+      { kind: "testid", testid: FORFEIT_TESTID },
+      { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}away` },
+      { kind: "text", testid: PROMPT_REASON_TESTID, value: "retired hurt" },
+      { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
+    ]);
+    expect(organiserStepsFor({ type: "core.forfeit", payload: { by: HOME_ID, reason: "walkover" } }, ctx)[1]).toEqual({
+      kind: "testid",
+      testid: `${FORFEIT_SIDE_TESTID_PREFIX}home`,
+    });
+  });
+
+  it.each([
+    [{ by: AWAY_ID, reason: " retired hurt" }, /trims/],
+    [{ by: AWAY_ID, reason: "" }, /non-empty/],
+    [{ by: AWAY_ID }, /non-empty/],
+    [{ by: AWAY_ID, reason: "x", note: "y" }, /unknown key/],
+    [{ by: "en-nobody", reason: "x" }, /matches neither/],
+  ] as const)("throws (never maps) core.forfeit %o", (payload, message) => {
+    expect(() => organiserStepsFor({ type: "core.forfeit", payload }, ctx)).toThrow(message);
+  });
+
+  it("throws for core.abandon and anything else — only the forfeit route is mapped", () => {
+    expect(() => organiserStepsFor({ type: "core.abandon", payload: { reason: "rain" } }, ctx)).toThrow(/no console mapping/);
+    expect(() => organiserStepsFor({ type: RESULT_TYPE, payload: {} }, ctx)).toThrow(/no console mapping/);
+  });
+
+  it("ORGANISER_ONLY_EVENT_TYPES restates pad-host.tsx's AUTHORITY_ONLY_EVENT_TYPES exactly", () => {
+    const src = readFileSync(new URL("../../../../apps/web/src/components/v2/scorepad/v3/pad-host.tsx", import.meta.url), "utf8");
+    const literal = /AUTHORITY_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(src);
+    expect(literal, "AUTHORITY_ONLY_EVENT_TYPES literal not found in pad-host.tsx").not.toBeNull();
+    const real = [...literal![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect([...ORGANISER_ONLY_EVENT_TYPES].sort()).toEqual(real.sort());
+  });
+
+  it("every console and dock hook the driver selects is present in the product source (identity is pinned in apps/web)", () => {
+    const web = (path: string) => readFileSync(new URL(`../../../../apps/web/src/components/v2/${path}`, import.meta.url), "utf8");
+    const consoleSrc = web("fixture-console.tsx");
+    expect(consoleSrc).toContain(`data-testid="${FORFEIT_TESTID}"`);
+    expect(consoleSrc).toContain("data-testid={`" + FORFEIT_SIDE_TESTID_PREFIX + "${sideKey}`}");
+    expect(consoleSrc).toContain(`data-testid="${PROMPT_REASON_TESTID}"`);
+    expect(consoleSrc).toContain(`data-testid="${PROMPT_SUBMIT_TESTID}"`);
+    expect(web("scorepad/v3/detail-dock.tsx")).toContain("data-testid={`" + DOCK_CHIP_TESTID_PREFIX + "${chip.id}`}");
+  });
+
+  it("selectorForTapStep: dock chips (tapped or offered) and releaseHold resolve to Task 8-style testids; text to its own", () => {
+    expect(selectorForTapStep({ kind: "chip", chipId: "points:2" })).toBe('[data-testid="pad-dock-chip-points:2"]');
+    expect(selectorForTapStep({ kind: "offeredChip", chipId: "person:p-1" })).toBe('[data-testid="pad-dock-chip-person:p-1"]');
+    expect(selectorForTapStep({ kind: "releaseHold" })).toBe(SEND_NOW_SEL);
+    expect(selectorForTapStep({ kind: "text", testid: PROMPT_REASON_TESTID, value: "x" })).toBe(`[data-testid="${PROMPT_REASON_TESTID}"]`);
   });
 });

@@ -79,6 +79,19 @@
 // allowlist tolerates it for that event type (`TapAdapter.tolerableExtraKeys`;
 // generic's is `GENERIC_TOLERATED_EXTRA_KEYS`, with its file:line evidence).
 // A tolerated extra is recorded as an observation, never dropped silently.
+//
+// ---------------------------------------------------------------------------
+// Task 10 fix round 1 (R59) — the routes d-tiny's frozen streams need
+// ---------------------------------------------------------------------------
+//  - dock chips (`chip`, `offeredChip`) and `releaseHold`: the generic pad
+//    amends a HELD half tap from its dock (see those `TapStep` variants).
+//  - `text`: typing into a field — the console's reason prompt.
+//  - organiser actions: an `ORGANISER_ONLY_EVENT_TYPES` event is mapped by
+//    `organiserStepsFor` (never an adapter) and tapped on `organiserPage`,
+//    after releasing whatever the pad holds; a stream a forfeit ends is judged
+//    "forfeited" at its last event, not "decided" (`terminalStatusOf`).
+// Payload equality, pack-order polling, never-rejects and the required
+// transport are unchanged.
 import { fetchFixtureLedger, fetchFixtureStatus, type LedgerRow, type LedgerTransport } from "../ledger.ts";
 import { resolvePayloadRefs } from "../simulate.ts";
 import type { Session } from "../http.ts";
@@ -96,14 +109,34 @@ export type TapStep =
   | { readonly kind: "testid"; readonly testid: string }
   /** A scorebug half — Task 8's contract gives halves no testid at all
    *  (`data-role="v3-scorebug-half"][data-side="…"]`, `scorebug.tsx:342-343`). */
-  | { readonly kind: "half"; readonly side: "home" | "away" };
+  | { readonly kind: "half"; readonly side: "home" | "away" }
+  /** Task 10 fix round 1 (R59(b)) — a hold-window dock chip, by its
+   *  `DockChip.id`. REQUIRED: a chip that never attaches is a finding. */
+  | { readonly kind: "chip"; readonly chipId: string }
+  /** A dock chip tapped ONLY IF the open dock offers it. The generic pad
+   *  offers a person chip only for a side with more than one on-field player
+   *  and stamps a sole player into the tap itself (generic.tsx:324-327,
+   *  :702-705); the driver cannot see squads, so it waits for the dock to be
+   *  open (`pad-send-now`) and taps the chip if it is there. Skipping is never
+   *  a pass on its own: the row is still compared exactly (R50(d)). */
+  | { readonly kind: "offeredChip"; readonly chipId: string }
+  /** Release whatever the pad holds (tap `pad-send-now` if it is mounted) and
+   *  wait for that dock to unmount. A tap's dock renders AFTER the tap
+   *  returns, so without this a chip step can land on the dock still on screen
+   *  for the PREVIOUS hold — whose `mutateHeld` finds no held entry by that id
+   *  and amends nothing (queue.ts `mutateHeld`, detail-dock.tsx `tapChip`). */
+  | { readonly kind: "releaseHold" }
+  /** Type into a text field, by testid (`fill`, which replaces its value). */
+  | { readonly kind: "text"; readonly testid: string; readonly value: string };
 
 /** `[data-tile-id]` — tile-grid.tsx:293. `[data-choice-option-id]` —
  *  guided-sheet.tsx:418. `[data-testid="pad-sheet-number"]` —
  *  guided-sheet.tsx:523. `[data-testid="pad-sheet-confirm"]` —
  *  guided-sheet.tsx:549. A bare `testid` kind is `[data-testid="…"]` verbatim
  *  (`score-start-match`, `pad-send-now`, `score-finalize`). `half` is
- *  `scorebug.tsx:342-343`'s own two attributes. */
+ *  `scorebug.tsx:342-343`'s own two attributes. A dock chip is
+ *  `pad-dock-chip-<chip.id>` (detail-dock.tsx, fix round 1); `releaseHold`
+ *  targets `pad-send-now`; `text` is its own testid. */
 export function selectorForTapStep(step: TapStep): string {
   switch (step.kind) {
     case "tile":
@@ -118,6 +151,13 @@ export function selectorForTapStep(step: TapStep): string {
       return `[data-testid="${step.testid}"]`;
     case "half":
       return `[data-role="v3-scorebug-half"][data-side="${step.side}"]`;
+    case "chip":
+    case "offeredChip":
+      return `[data-testid="${DOCK_CHIP_TESTID_PREFIX}${step.chipId}"]`;
+    case "releaseHold":
+      return `[data-testid="${SEND_NOW_TESTID}"]`;
+    case "text":
+      return `[data-testid="${step.testid}"]`;
   }
 }
 
@@ -125,6 +165,15 @@ export function selectorForTapStep(step: TapStep): string {
 export const START_MATCH_TESTID = "score-start-match";
 export const SEND_NOW_TESTID = "pad-send-now";
 export const FINALIZE_TESTID = "score-finalize";
+/** Task 10 fix round 1 — every hold-window dock chip (detail-dock.tsx). */
+export const DOCK_CHIP_TESTID_PREFIX = "pad-dock-chip-";
+/** Task 10 fix round 1 — the console's forfeit: the toggle, then
+ *  `score-forfeit-home|away` (fixture-console.tsx `ForfeitButton`), then the
+ *  reason prompt's field and submit (`TextPromptDialog`). */
+export const FORFEIT_TESTID = "score-forfeit";
+export const FORFEIT_SIDE_TESTID_PREFIX = "score-forfeit-";
+export const PROMPT_REASON_TESTID = "score-prompt-reason";
+export const PROMPT_SUBMIT_TESTID = "score-prompt-submit";
 
 /**
  * The pacing floor — R39. Mirrors `HUMAN_FASTEST_REPEAT_MS`
@@ -182,12 +231,36 @@ export const ORGANISER_VIEWPORT = { width: 1280, height: 900 } as const;
 
 async function executeStep(page: PadPage, step: TapStep): Promise<void> {
   const locator = page.locator(selectorForTapStep(step));
-  await locator.waitFor({ timeout: TAP_WAIT_TIMEOUT_MS });
-  if (step.kind === "number") {
-    await locator.fill(String(step.value));
-    return;
+  switch (step.kind) {
+    case "releaseHold": {
+      // `count()` never waits: nothing held is normal, and costs nothing.
+      if ((await locator.count()) === 0) return;
+      try {
+        await locator.click();
+      } catch (err) {
+        // The hold can release ITSELF (its own HOLD_MS tick) between the
+        // presence check and the tap — the dock is gone, which is the goal.
+        if ((await locator.count()) > 0) throw err;
+      }
+      await locator.waitFor({ state: "detached", timeout: TAP_WAIT_TIMEOUT_MS });
+      return;
+    }
+    case "offeredChip":
+      await page.locator(selectorForTapStep({ kind: "releaseHold" })).waitFor({ timeout: TAP_WAIT_TIMEOUT_MS });
+      if ((await locator.count()) > 0) await locator.click();
+      return;
+    case "number":
+      await locator.waitFor({ timeout: TAP_WAIT_TIMEOUT_MS });
+      await locator.fill(String(step.value));
+      return;
+    case "text":
+      await locator.waitFor({ timeout: TAP_WAIT_TIMEOUT_MS });
+      await locator.fill(step.value);
+      return;
+    default:
+      await locator.waitFor({ timeout: TAP_WAIT_TIMEOUT_MS });
+      await locator.click();
   }
-  await locator.click();
 }
 
 async function executeSteps(page: PadPage, steps: readonly TapStep[]): Promise<void> {
@@ -224,6 +297,71 @@ export interface TapAdapter {
 }
 
 // ---------------------------------------------------------------------------
+// Organiser actions (Task 10 fix round 1, R59(c)).
+// ---------------------------------------------------------------------------
+// Some events are the ORGANISER's to author, never a scorer's: the pad filters
+// them off every device by design (`AUTHORITY_ONLY_EVENT_TYPES`,
+// v3/pad-host.tsx:720-723, restated here and pinned equal by a source scan in
+// `__tests__/scorer-driver.test.ts`). They are chassis-level — the fixture
+// console is sport-blind — so their mapping lives in this sport-blind file,
+// not in an adapter, and every step runs on `organiserPage`.
+
+export const ORGANISER_ONLY_EVENT_TYPES: ReadonlySet<string> = new Set(["core.forfeit", "core.abandon"]);
+
+const FORFEIT_PAYLOAD_KEYS: readonly string[] = ["by", "reason"];
+
+/**
+ * The console route for an organiser-only event. Only `core.forfeit` is
+ * mapped: the Forfeit toggle, the forfeiting side's own "<name> forfeits"
+ * button, the reason prompt (it opens pre-filled "walkover", so the pack's
+ * reason is TYPED over it), and submit — which sends exactly
+ * `core.forfeit {by, reason}` with the reason TRIMMED
+ * (fixture-console.tsx `TextPromptDialog` onSubmit, `ForfeitButton` send).
+ * A payload that route cannot produce throws, like an adapter's (R50(e)).
+ */
+export function organiserStepsFor(
+  event: { readonly type: string; readonly payload: unknown },
+  ctx: TapAdapterContext,
+): readonly TapStep[] {
+  if (event.type !== "core.forfeit") {
+    throw new Error(`no console mapping for event type "${event.type}" — only core.forfeit's console route is mapped`);
+  }
+  const p =
+    typeof event.payload === "object" && event.payload !== null && !Array.isArray(event.payload)
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  const unknown = Object.keys(p).filter((key) => !FORFEIT_PAYLOAD_KEYS.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`core.forfeit payload has unknown key(s) ${unknown.join(", ")} — the console sends exactly {by, reason}`);
+  }
+  if (typeof p.reason !== "string" || p.reason.trim().length === 0) {
+    throw new Error("core.forfeit needs a non-empty reason — the console's prompt sends nothing for an empty one");
+  }
+  if (p.reason !== p.reason.trim()) {
+    throw new Error(`core.forfeit reason ${JSON.stringify(p.reason)} is not authorable — the console's prompt trims what it sends`);
+  }
+  const side = p.by === ctx.entrants.home ? "home" : p.by === ctx.entrants.away ? "away" : undefined;
+  if (side === undefined) {
+    throw new Error(
+      `core.forfeit by "${String(p.by)}" matches neither home ("${ctx.entrants.home}") nor away ("${ctx.entrants.away}")`,
+    );
+  }
+  return [
+    { kind: "testid", testid: FORFEIT_TESTID },
+    { kind: "testid", testid: `${FORFEIT_SIDE_TESTID_PREFIX}${side}` },
+    { kind: "text", testid: PROMPT_REASON_TESTID, value: p.reason },
+    { kind: "testid", testid: PROMPT_SUBMIT_TESTID },
+  ];
+}
+
+/** The status a finished stream leaves the fixture in — `fixtureStatusFromFold`
+ *  (append-event.ts:119-129): abandoned first, then forfeited over decided. */
+function terminalStatusOf(events: readonly { readonly type: string }[]): string {
+  if (events.some((event) => event.type === "core.abandon")) return "abandoned";
+  return events.some((event) => event.type === "core.forfeit") ? "forfeited" : "decided";
+}
+
+// ---------------------------------------------------------------------------
 // Input/result.
 // ---------------------------------------------------------------------------
 
@@ -239,7 +377,8 @@ export interface PlayMatchInput {
   readonly scorerPage: PadPage;
   /** Where `score-finalize` is driven — `scoring.ts:233-235` refuses a
    *  `core.finalize` from a device link, so never the same page as
-   *  `scorerPage` for a device-link run. */
+   *  `scorerPage` for a device-link run. Every organiser-only action
+   *  (`ORGANISER_ONLY_EVENT_TYPES`, fix round 1) is driven here too. */
   readonly organiserPage: PadPage;
   readonly deviceUrl: string;
   readonly fixtureId: string;
@@ -342,7 +481,9 @@ function comparePayload(expected: unknown, actual: unknown, tolerable: readonly 
 type StatusRule =
   | { readonly kind: "in_play_after_start" }
   | { readonly kind: "live_before_last"; readonly expected: "in_play" | "scheduled" }
-  | { readonly kind: "decided_at_last" }
+  /** `expected` is `terminalStatusOf(stream)` — "decided", or "forfeited" for
+   *  a stream a forfeit ends (fix round 1). */
+  | { readonly kind: "decided_at_last"; readonly expected: string }
   | { readonly kind: "none" };
 
 interface PendingVerification {
@@ -384,7 +525,7 @@ function applyStatusRule(entry: PendingVerification, status: string, findings: s
       }
       return;
     case "decided_at_last":
-      if (status !== "decided") findings.push(`status: expected "decided" exactly at the last event, got "${status}"`);
+      if (status !== rule.expected) findings.push(`status: expected "${rule.expected}" exactly at the last event, got "${status}"`);
       return;
     case "none":
       return;
@@ -396,9 +537,10 @@ function applyStatusRule(entry: PendingVerification, status: string, findings: s
  *  on a correct product does this), a finding for the last event. */
 function recordUnjudgeable(row: LandedRow, tip: number, v: Verification): void {
   const label = labelOf(row.entry);
-  if (row.entry.statusRule.kind === "decided_at_last") {
+  const rule = row.entry.statusRule;
+  if (rule.kind === "decided_at_last") {
     v.findings.push(
-      `status: could not judge "decided" at the last event — ${label} landed at seq ${row.seq}, but the ledger tip had already moved on to seq ${tip}`,
+      `status: could not judge "${rule.expected}" at the last event — ${label} landed at seq ${row.seq}, but the ledger tip had already moved on to seq ${tip}`,
     );
     return;
   }
@@ -478,10 +620,11 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
   let taps = 0;
   let tappedBefore = false;
 
-  async function tap(page: PadPage, steps: readonly TapStep[]): Promise<void> {
+  async function tap(page: PadPage, steps: readonly TapStep[], releaseHoldFirstOn?: PadPage): Promise<void> {
     // R39 — pace every tap after the first like a deliberate human repeat.
     if (tappedBefore) await sleep(TAP_PACING_MS);
     tappedBefore = true;
+    if (releaseHoldFirstOn !== undefined) await executeStep(releaseHoldFirstOn, { kind: "releaseHold" });
     await executeSteps(page, steps);
     taps += 1;
   }
@@ -513,21 +656,31 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
     const v: Verification = { pending: [], seq: initial.lastSeq, findings, observations };
 
     const events = input.stream.events;
+    const terminalStatus = terminalStatusOf(events);
     let startTapped = false;
     for (let i = 0; i < events.length; i += 1) {
       const event = events[i];
       const resolved = { type: event.type, payload: resolvePayloadRefs(event.payload, input.refIdByKey, "scorer") };
+      const organiserAction = ORGANISER_ONLY_EVENT_TYPES.has(event.type);
 
       let steps: readonly TapStep[];
       try {
-        steps = input.adapter.stepsFor(resolved, ctx);
+        steps = organiserAction ? organiserStepsFor(resolved, ctx) : input.adapter.stepsFor(resolved, ctx);
       } catch (err) {
-        findings.push(`adapter: cannot map event ${i} (${event.type}) to a tap — ${messageOf(err)}`);
+        findings.push(
+          organiserAction
+            ? `organiser: cannot map event ${i} (${event.type}) to a console action — ${messageOf(err)}`
+            : `adapter: cannot map event ${i} (${event.type}) to a tap — ${messageOf(err)}`,
+        );
         return finish();
       }
 
       try {
-        await tap(input.scorerPage, steps);
+        // R59(c) — an organiser-only event is authored on the CONSOLE. Whatever
+        // the pad still holds is released first, or the organiser's row would
+        // land ahead of it and the ledger would no longer be in pack order.
+        if (organiserAction) await tap(input.organiserPage, steps, input.scorerPage);
+        else await tap(input.scorerPage, steps);
       } catch (err) {
         findings.push(`tap: event ${i} (${event.type}) failed — ${messageOf(err)}`);
         return finish();
@@ -538,7 +691,7 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
         event.type === "core.start"
           ? { kind: "in_play_after_start" }
           : i === events.length - 1
-            ? { kind: "decided_at_last" }
+            ? { kind: "decided_at_last", expected: terminalStatus }
             : { kind: "live_before_last", expected: startTapped ? "in_play" : "scheduled" };
       v.pending.push({ index: i, resolved, statusRule, tolerableExtraKeys: input.adapter.tolerableExtraKeys?.(event.type) ?? [] });
 

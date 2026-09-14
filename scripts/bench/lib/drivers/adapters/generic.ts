@@ -40,14 +40,21 @@
 //                                -> the "settle" tile, settling from the
 //                                   tally (generic.tsx:414 `SETTLE_TILE_ID`,
 //                                   :470-483 `buildTiles`).
-//   - Everything else — a dock-chip amendment (`points !== 1` or a `person`
-//     key on `generic.score`), a draw (`isDraw:true`), a typed final score
-//     (`generic.result` with `p1Score`/`p2Score`, the score-entry GUIDED
-//     SHEET), and any non-generic `core.*`/other event — THROWS. None of
-//     these are exercised by this task's own test packs; they are real gaps
-//     a later wave (Task 10/13, which does the live browser run) must close
-//     before running this adapter against a pack that uses them. Recorded
-//     as a deviation in the task report, not silently patched over.
+//   - Task 10 fix round 1 (R59(b)) — `generic.score`, SCORE mode, with
+//     `points` of 2/3/5 and/or a `person`
+//                                -> release any hold, the half tap, then the
+//                                   dock's amount chip, then the person chip
+//                                   IF the dock offers one (generic.tsx:
+//                                   663-712 `buildDock`; the pad stamps a
+//                                   sole on-field player itself, :324-327).
+//   - Task 10 fix round 1 (R59(a)) — `generic.result`, SCORE mode, exactly
+//     `{p1Score, p2Score}`       -> the score-entry sheet: tile, home number
+//                                   + confirm, away number + confirm
+//                                   (generic.tsx:554-578).
+//   - Everything else — a draw (`isDraw:true`), a correction (negative
+//     `points`, the correction sheet), an amount no dock chip offers, and any
+//     non-generic event — THROWS. Organiser-only `core.*` events never reach
+//     an adapter: `scorer.ts`'s `organiserStepsFor` maps them to the console.
 import { START_MATCH_TESTID, type TapAdapter, type TapAdapterContext, type TapStep } from "../scorer.ts";
 
 const SPORT = "generic";
@@ -58,6 +65,25 @@ export const SCORE_TYPE = "generic.score";
 export const RESULT_TYPE = "generic.result";
 /** generic.tsx:414 */
 export const SETTLE_TILE_ID = "settle";
+/** generic.tsx:415 — the tile that opens the typed-result sheet (:488-495). */
+export const SCORE_ENTRY_TILE_ID = "scoreEntry";
+/** generic.tsx:663 — the amounts the hold-window dock offers, as chips
+ *  `points:<n>` (:669-677). A half tap itself is worth 1 (:327). */
+export const DOCK_AMOUNTS: readonly number[] = [2, 3, 5];
+/** generic.tsx:430 — the score-entry sheet's per-side ceiling (:565, :573). */
+export const MAX_PLAUSIBLE_SCORE = 500;
+
+const SCORE_PAYLOAD_KEYS: readonly string[] = ["by", "points", "person"];
+
+function asRecord(payload: unknown): Record<string, unknown> {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
+}
+
+/** A number the score-entry sheet's number step can hold: a whole number in
+ *  its `min: 0` .. `max: MAX_PLAUSIBLE_SCORE` range (generic.tsx:559-574). */
+function isSheetScore(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_PLAUSIBLE_SCORE;
+}
 
 interface GenericCfgShape {
   resultMode?: string;
@@ -100,15 +126,34 @@ function stepsForScore(payload: unknown, cfg: unknown, entrants: TapAdapterConte
         "the pad's half tap commits generic.result {winnerId} there, not this event (generic.tsx:303-304)",
     );
   }
-  const p = (payload ?? {}) as Record<string, unknown>;
-  const keys = Object.keys(p);
-  if (keys.length !== 2 || !("by" in p) || p.points !== 1) {
+  const p = asRecord(payload);
+  const unknown = Object.keys(p).filter((key) => !SCORE_PAYLOAD_KEYS.includes(key));
+  const badPerson = "person" in p && (typeof p.person !== "string" || p.person.length === 0);
+  if (unknown.length > 0 || !("by" in p) || typeof p.points !== "number" || badPerson) {
     throw new Error(
-      `genericAdapter: generic.score payload ${JSON.stringify(payload)} is not a plain one-point half tap — ` +
-        "dock-chip amendments and corrections are not mapped by this task (owed to a later wave)",
+      `genericAdapter: generic.score payload ${JSON.stringify(payload)} is not one the pad authors — ` +
+        "it records {by, points} and optionally a non-empty person, nothing else",
     );
   }
-  return [{ kind: "half", side: sideOf(p.by, entrants) }];
+  const side = sideOf(p.by, entrants);
+  const person = typeof p.person === "string" ? p.person : undefined;
+  if (p.points === 1 && person === undefined) return [{ kind: "half", side }];
+  if (p.points !== 1 && !DOCK_AMOUNTS.includes(p.points)) {
+    throw new Error(
+      `genericAdapter: generic.score payload ${JSON.stringify(payload)} — no dock chip offers ${p.points} ` +
+        `(a half tap is 1 and the dock amends it to ${DOCK_AMOUNTS.join("/")}, generic.tsx:663); ` +
+        "a negative correction is the correction sheet, which is not mapped",
+    );
+  }
+  // Fix round 1 (R59(b)) — the pad's own route: the half tap is HELD behind a
+  // dock (pad-host.tsx `usesSoftCommit`), whose chips amend that same held
+  // submission (`DockChip.mutate`, generic.tsx:675/:685) rather than posting a
+  // second event. Release any earlier hold first, so the chips tapped are this
+  // tap's own dock and not the previous one still on screen.
+  const steps: TapStep[] = [{ kind: "releaseHold" }, { kind: "half", side }];
+  if (p.points !== 1) steps.push({ kind: "chip", chipId: `points:${p.points}` });
+  if (person !== undefined) steps.push({ kind: "offeredChip", chipId: `person:${person}` });
+  return steps;
 }
 
 /** generic.tsx:35, :296-305 (`tapTypeOf`), :310-341 (`buildHalf`), :414-483
@@ -129,9 +174,24 @@ function stepsForResult(payload: unknown, cfg: unknown, entrants: TapAdapterCont
   if (isEmptyPayload(payload)) {
     return [{ kind: "tile", tileId: SETTLE_TILE_ID }];
   }
+  // Fix round 1 (R59(a)) — the typed result: the score-entry sheet asks HOME
+  // first, then AWAY, each a number step with its own confirm, and builds
+  // exactly `{p1Score: home, p2Score: away}` (generic.tsx:554-578). It commits
+  // immediately — `buildDock` declares no dock for a result (:696).
+  const p = asRecord(payload);
+  const keys = Object.keys(p).sort();
+  if (keys.length === 2 && keys[0] === "p1Score" && keys[1] === "p2Score" && isSheetScore(p.p1Score) && isSheetScore(p.p2Score)) {
+    return [
+      { kind: "tile", tileId: SCORE_ENTRY_TILE_ID },
+      { kind: "number", value: p.p1Score },
+      { kind: "confirm" },
+      { kind: "number", value: p.p2Score },
+      { kind: "confirm" },
+    ];
+  }
   throw new Error(
-    `genericAdapter: score-mode generic.result payload ${JSON.stringify(payload)} is a typed final score — ` +
-      "the score-entry guided sheet is not mapped by this task (owed to a later wave)",
+    `genericAdapter: score-mode generic.result payload ${JSON.stringify(payload)} is neither a settle ({}) nor a typed final score ` +
+      `{p1Score, p2Score} of whole numbers 0..${MAX_PLAUSIBLE_SCORE} — the only two results this pad authors in score mode`,
   );
 }
 

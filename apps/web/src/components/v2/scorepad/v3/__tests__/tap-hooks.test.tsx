@@ -290,6 +290,51 @@ describe("the detail dock's Send-now control carries a stable hook", () => {
   });
 });
 
+// --- DetailDock: every chip (Task 10 fix round 1, R59(b)) -------------------
+//
+// The generic skin's hold-window dock AMENDS a held score (`points:2/3/5`)
+// and names its scorer (`person:<id>`) — the only pad route that authors
+// `generic.score {by, points != 1, person}`. The chips had no hook at all, so
+// the tap driver could reach them only by translated label. Each chip's hook
+// is `pad-dock-chip-<chip.id>`: the chip id is the one stable fact, and the
+// label ("2 points", a person's name) is exactly what must never be matched.
+describe("the detail dock's chips each carry pad-dock-chip-<chip.id>", () => {
+  const noopStore: DockStore = { mutateHeld: async () => true, releaseHeld: async () => {} };
+  const spec: DockSpec = {
+    title: "Amount",
+    chips: [
+      { id: "points:2", label: "pad.generic.dock.points", labelText: "2 points", kind: "flag", mutate: (p) => ({ ...p, points: 2 }) },
+      { id: "person:p-9", label: "pad.generic.dock.person", labelText: "Ana Alvarez", mutate: (p) => ({ ...p, person: "p-9" }) },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    <DetailDock
+      spec={spec}
+      heldId="h1"
+      store={noopStore}
+      heldUntil={Date.now() + 6000}
+      t={identity as unknown as Parameters<typeof DetailDock>[0]["t"]}
+      now={() => Date.now()}
+    />,
+  );
+
+  // Identity, not presence: each hook's own <button> must carry ITS OWN chip's
+  // label and not its sibling's — a hook keyed on the wrong chip, or moved
+  // onto Send now (which has no label text at all), fails one of these.
+  it("each chip's hook sits on that chip's own button, never a sibling chip or Send now", () => {
+    const amount = html.match(/<button\b[^>]*data-testid="pad-dock-chip-points:2"[^>]*>([\s\S]*?)<\/button>/);
+    const person = html.match(/<button\b[^>]*data-testid="pad-dock-chip-person:p-9"[^>]*>([\s\S]*?)<\/button>/);
+    expect(amount, 'no <button data-testid="pad-dock-chip-points:2"> found').not.toBeNull();
+    expect(person, 'no <button data-testid="pad-dock-chip-person:p-9"> found').not.toBeNull();
+    expect(amount![1]).toContain("2 points");
+    expect(amount![1]).not.toContain("Ana Alvarez");
+    expect(person![1]).toContain("Ana Alvarez");
+    expect(person![1]).not.toContain("2 points");
+    expect(amount![0]).not.toContain('aria-label="pad.dock.dismiss"');
+    expect(html.match(/data-testid="pad-dock-chip-/g), "one hook per chip, no more").toHaveLength(2);
+  });
+});
+
 // --- FixtureConsole: Start match and Finalize --------------------------------
 const football: SportInfo = {
   key: "football",
