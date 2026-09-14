@@ -10,7 +10,7 @@ import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
 import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
-import { dayLabel, dayLabelLong } from "@/lib/day-label";
+import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { msg } from "@/lib/messages";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
@@ -101,13 +101,21 @@ function dayKey(iso: string, tz: string): string {
 
 /** The Intl tag dates are written in: the org's locale, "en" as en-GB
  *  ("Friday 25 September"), as every public date was before N1e e5. */
-const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : locale);
+export const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : locale);
 
 const UNSCHEDULED = "unscheduled";
 
 const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
-/** The round view's rail date ("vie 25 sept"): the venue-local day, in the tag. */
-const shortDate = (iso: string, tz: string, dateTag: string) => dayLabel(dayKey(iso, tz), dateTag);
+/** The round view's rail date ("25 sept"): the venue-local day, in the tag.
+ *  N1f f3 (review-n1e m2) — this used to be `dayLabel`, which leads with the
+ *  weekday: "THU 24 SEPT" needs 68px, "JEU. 24 SEPT." 72px, and the rail is a
+ *  ~56px track, so EVERY locale's date ended in an ellipsis, English included.
+ *  Day + short month is the shortest unambiguous form (a bare day number is
+ *  not: the round view spans months) and it fits every locale in every month
+ *  — `__tests__/schedule-rail-fits.test.ts` measures all 48. The group heading
+ *  above the row still carries the full day, so nothing is lost. */
+export const shortDate = (iso: string, tz: string, dateTag: string) =>
+  dayDateShort(dayKey(iso, tz), dateTag);
 
 /** Per-side score lines fit the stacked layout only when short ("3", "21").
     Long lines (cricket innings, set strings) fall back to the headline chip. */

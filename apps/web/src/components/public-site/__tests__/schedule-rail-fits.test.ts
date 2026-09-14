@@ -22,6 +22,7 @@ import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
+import { dateTagFor, shortDate } from "../schedule";
 import { openFace, minContentWidth, textWidth } from "./font-advance";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -93,5 +94,49 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     // Print what was asserted, so a green run is not a silent one.
     expect(report.length).toBe(LOCALES.length * 4);
     console.log(`[rail top line] ${report.join("  |  ")}`);
+  });
+});
+
+describe("public Schedule rail — the round view's short date (N1f f3)", () => {
+  it("carries no weekday, in any locale", () => {
+    for (const locale of LOCALES) {
+      const tag = dateTagFor(locale);
+      for (let month = 0; month < 12; month++) {
+        const iso = new Date(Date.UTC(2026, month, 24, 12)).toISOString();
+        const expected = new Date(`2026-${String(month + 1).padStart(2, "0")}-24T12:00`).toLocaleDateString(
+          tag,
+          { day: "numeric", month: "short" },
+        );
+        expect(shortDate(iso, "UTC", tag), `${locale} month ${month + 1}`).toBe(expected);
+      }
+    }
+  });
+
+  it("fits the rail track in every locale, on every month", () => {
+    const track = railPx();
+    const worst: string[] = [];
+    for (const locale of LOCALES) {
+      const tag = dateTagFor(locale);
+      let max = 0;
+      let arg = "";
+      for (let month = 0; month < 12; month++) {
+        for (const day of [1, 20, 24, 28]) {
+          const iso = new Date(Date.UTC(2026, month, day, 12)).toISOString();
+          // `text-[10px] uppercase tracking-wide` on the body face.
+          const label = shortDate(iso, "UTC", tag).toUpperCase();
+          const width = textWidth(BODY, label, 10, 0.025);
+          if (width > max) {
+            max = width;
+            arg = label;
+          }
+        }
+      }
+      worst.push(`${locale} ${JSON.stringify(arg)} ${max.toFixed(1)}px / ${track}px`);
+      expect(max, `${locale}: ${JSON.stringify(arg)} needs ${max.toFixed(1)}px in a ${track}px rail`).toBeLessThanOrEqual(
+        track,
+      );
+    }
+    expect(worst.length).toBe(LOCALES.length);
+    console.log(`[rail date] ${worst.join("  |  ")}`);
   });
 });

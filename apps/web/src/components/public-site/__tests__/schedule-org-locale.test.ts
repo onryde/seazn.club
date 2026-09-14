@@ -197,7 +197,14 @@ async function valueOf(locale: "en" | "es", probe: Pick<Probe, "ns" | "key" | "v
 /** Day heading and short rail date, as `Intl` writes them in a locale tag. */
 const longDay = (key: string, tag: string) =>
   new Date(`${key}T12:00`).toLocaleDateString(tag, { weekday: "long", day: "numeric", month: "long" });
+/** N1f f3 (review-n1e m2): the rail date is day + short month, with NO
+ *  weekday. The weekday form below is what it used to be, and it needed
+ *  68-72px in a ~56px rail, so every locale's date ended in an ellipsis; it is
+ *  kept here so the clipped form cannot come back unnoticed. Widths for all
+ *  four locales in all twelve months: `schedule-rail-fits.test.ts`. */
 const shortDay = (key: string, tag: string) =>
+  new Date(`${key}T12:00`).toLocaleDateString(tag, { day: "numeric", month: "short" });
+const clippedWeekdayDay = (key: string, tag: string) =>
   new Date(`${key}T12:00`).toLocaleDateString(tag, { weekday: "short", day: "numeric", month: "short" });
 
 describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (surface) => {
@@ -230,6 +237,7 @@ describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (sur
       es: true,
       enGB: false,
     });
+    expect(shows(html, clippedWeekdayDay(DAY_2, "es")), "the weekday form is what got clipped").toBe(false);
   });
 
   it("es org, no fixtures: the empty state is the es dictionary's", async () => {
@@ -248,6 +256,7 @@ describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (sur
     }
     expect(shows(html, longDay(DAY_1, "en-GB"))).toBe(true);
     expect(shows(roundViewHtml(schedule), shortDay(DAY_2, "en-GB"))).toBe(true);
+    expect(shows(roundViewHtml(schedule), clippedWeekdayDay(DAY_2, "en-GB"))).toBe(false);
     const empty = renderToStaticMarkup(await scheduleFrom(surface, "en", []));
     expect(shows(empty, await valueOf("en", { ns: "public", key: "division.scheduleEmpty" }))).toBe(true);
   });
