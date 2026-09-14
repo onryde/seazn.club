@@ -15,7 +15,7 @@
 // when present and `t(dict, "matchesHub.round", { round })` when it is null
 // — tested as a positive pair below.
 import { describe, expect, it } from "vitest";
-import { autoColour } from "@/components/ui/entity-logo";
+import { autoColour, initials } from "@/components/ui/entity-logo";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -437,6 +437,89 @@ describe("MatchCard", () => {
       }),
     );
     expect(withoutBadge).toContain(">BB<");
+  });
+
+  // ── D3 + review F1 (Knockout fix round 2) ──────────────────────────────────
+  // A side with NOBODY in it yet (`entrantId === ""`, `hubSides` in
+  // `competition-hub.ts`) used to get a crest like any entrant's: a colour
+  // derived from the NAME and initials from its first and last words. The
+  // Knockout tab's waiting pair "Priya Raman / Freya Nilsen" wore "PN" and read
+  // as one confirmed player; the engine's "Winner of R3·2" wore "WR". Every
+  // initial below is DERIVED from `initials()`, so each case asserts the absence
+  // of the exact letters the old card printed for that name.
+  const REAL = { entrantId: "e1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null };
+  const waiting = (name: string) => ({ entrantId: "", name, short: "", colour: null, badgeUrl: null });
+  /** The pending crest in one side row — its class tokens and its text — or null. */
+  const pendingCrest = (row: string) => {
+    const found = row.match(/<span aria-hidden="true" data-crest="pending" class="([^"]*)">([^<]*)<\/span>/);
+    return found ? { tokens: found[1]!.split(" "), text: found[2]! } : null;
+  };
+  /** The name span's class tokens: the one span in a side row with a title. */
+  const nameTokens = (row: string) => {
+    const cls = row.match(/<span class="([^"]*)" title="/)?.[1];
+    expect(cls, "the name span").toBeDefined();
+    return cls!.split(" ");
+  };
+  const box = (tokens: readonly string[]) => tokens.filter((x) => /^[hw]-\d+$/.test(x));
+
+  it.each([
+    ["the Knockout tab's waiting pair", "Priya Raman or Freya Nilsen"],
+    ["a waiting pair of DOUBLES entrants", "Ana Lee / Bo Kim or Cy Po / Di Wu"],
+    ["the third-place loser sentence", "Loser of Eli v Hal"],
+    ["the engine's slot label", "Winner of R3·2"],
+    ["a bye", "Bye"],
+  ])(
+    "D3: %s is not an entrant — a '?' placeholder crest with no letters and no hue, and a muted name; the real entrant beside it keeps its crest",
+    (_, name) => {
+      const h = card(hubMatch({ header: { sides: [REAL, waiting(name)] } }));
+      const row = sideHtml(h, 1);
+      // The premise: the old crest for this name printed letters.
+      expect(initials(name)).toMatch(/\p{L}/u);
+      const crest = pendingCrest(row);
+      expect(crest, "the waiting side wears the pending crest").not.toBeNull();
+      expect(crest!.text).toBe("?");
+      expect(crest!.text).not.toMatch(/\p{L}/u);
+      expect(row).not.toContain(`>${initials(name)}<`);
+      expect(row, "no colour reaches the placeholder").not.toContain("style=");
+      expect(row).toContain(`>${name}</span>`);
+      expect(nameTokens(row)).toEqual(expect.arrayContaining(["italic", "text-ink-muted"]));
+      // Decorative: the card's own name already says who is waiting.
+      expect(h).toContain(`aria-label="Blue Blazers v ${name}"`);
+
+      // The positive pair, same card: a real entrant's crest is unchanged.
+      const home = sideHtml(h, 0);
+      expect(pendingCrest(home)).toBeNull();
+      expect(home).not.toContain("data-crest");
+      expect(home).toContain(`background:${autoColour("Blue Blazers")}`);
+      expect(home).toContain(`>${initials("Blue Blazers")}<`);
+      expect(nameTokens(home)).not.toContain("italic");
+      expect(nameTokens(home)).not.toContain("text-ink-muted");
+    },
+  );
+
+  it("D3 reads the SIDE, not its position: a waiting HOME side takes the placeholder while a real away side keeps its crest, and two waiting sides both do", () => {
+    const home = card(
+      hubMatch({ header: { sides: [waiting("Winner of SF1"), { ...REAL, entrantId: "e2", name: "Queens" }] } }),
+    );
+    expect(pendingCrest(sideHtml(home, 0))?.text).toBe("?");
+    expect(pendingCrest(sideHtml(home, 1))).toBeNull();
+    expect(sideHtml(home, 1)).toContain(`>${initials("Queens")}<`);
+
+    const both = card(hubMatch({ header: { sides: [waiting("Winner of SF1"), waiting("Winner of SF2")] } }));
+    expect(pendingCrest(sideHtml(both, 0))?.text).toBe("?");
+    expect(pendingCrest(sideHtml(both, 1))?.text).toBe("?");
+  });
+
+  it("D3: the placeholder is the SAME box as a real crest at both card sizes, so a waiting row does not shift", () => {
+    for (const crestSize of [24, 32] as const) {
+      const h = card(hubMatch({ header: { sides: [REAL, waiting("Winner of SF1")] } }), NOW, { crestSize });
+      const real = sideHtml(h, 0).match(/<span aria-hidden="true" class="([^"]*)"/)?.[1]?.split(" ");
+      expect(real, "the real crest").toBeDefined();
+      const placeholder = pendingCrest(sideHtml(h, 1));
+      expect(placeholder, `the placeholder at ${crestSize}`).not.toBeNull();
+      expect(box(placeholder!.tokens)).toEqual(box(real!));
+      expect(box(real!)).toEqual(crestSize === 24 ? ["h-6", "w-6"] : ["h-8", "w-8"]);
+    }
   });
 
   it("a side's own COLOUR paints its crest, per side — the field crossed the wire and was read by nothing", () => {

@@ -25,7 +25,7 @@
 //
 // W3's poster icon has no DOM in W2 (design ruling R4: no "coming soon").
 import Link from "next/link";
-import { EntityLogo } from "@/components/ui/entity-logo";
+import { EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtDate, fmtTime } from "@/lib/format";
@@ -144,6 +144,15 @@ export function MatchCard({
   function sideRow(i: 0 | 1) {
     const side = m.header.sides[i];
     const isWinner = m.winnerIndex === i;
+    // A side with nobody in it yet (`entrantId === ""`, `hubSides` in
+    // `competition-hub.ts`): the engine's "Winner of R3·2", a bye, or the pair
+    // and loser sentences the Knockout tab puts in a waiting slot. It gets the
+    // owner-approved mock's waiting look — a "?" placeholder crest and a muted
+    // italic name — instead of a crest computed from its NAME, which gave a
+    // waiting pair a coloured "PN" and made it read as one confirmed player
+    // (Knockout fix round 2, D3). Decided here, where every tab's card is
+    // drawn, so the Matches and Overview tabs get the same rule for free.
+    const entrant = side.entrantId !== "";
     return (
       <div
         key={side.entrantId || i}
@@ -158,16 +167,23 @@ export function MatchCard({
             badge-less club was a coloured tile on the Teams tab and a grey one
             on every card of the same page. `EntityLogo` owns what a colour is
             allowed to be; this card only forwards it. */}
-        <EntityLogo
-          src={side.badgeUrl}
-          name={side.name}
-          colour={side.colour}
-          size={crestSize}
-        />
+        {entrant ? (
+          <EntityLogo
+            src={side.badgeUrl}
+            name={side.name}
+            colour={side.colour}
+            size={crestSize}
+          />
+        ) : (
+          <PendingCrest size={crestSize} />
+        )}
         {/* `min-w-0` is what lets `truncate` engage on a flex item — see
             AGENTS.md, "`truncate` needs `min-w-0` on the whole ancestor
             chain". */}
-        <span className="min-w-0 flex-1 truncate text-[15px]" title={side.name}>
+        <span
+          className={`min-w-0 flex-1 truncate text-[15px]${entrant ? "" : " italic text-ink-muted"}`}
+          title={side.name}
+        >
           {side.name}
         </span>
         <span className="shrink-0 font-display text-lg tabular-nums">

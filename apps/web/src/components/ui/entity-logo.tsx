@@ -232,7 +232,7 @@ export function EntityLogo({
   size?: 20 | 24 | 32 | 40;
   className?: string;
 }) {
-  const base = `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md align-middle ${SIZE_CLASS[size]} ${className}`;
+  const base = crestBox(size, className);
 
   if (src) {
     return (
@@ -282,6 +282,39 @@ export function EntityLogo({
       {initials(name)}
     </span>
   );
+}
+
+/**
+ * The crest for a side with NOBODY in it yet: a bracket slot waiting on a
+ * result ("Winner of R3·2"), the pair or loser sentence the Knockout tab puts in
+ * that slot instead, or a bye's empty side (Knockout fix round 2, D3).
+ *
+ * Not an `EntityLogo` arm, because there is no entity. Every arm above stands
+ * for one, and the last derives a colour AND initials from whatever name it is
+ * handed — so a waiting pair "Priya Raman / Freya Nilsen" became a coloured "PN"
+ * tile, one confirmed player to anyone reading the card. This is the
+ * owner-approved mock's waiting crest (`.crest.tbd`): the same box, a neutral
+ * fill, a muted outline and a "?" in muted ink. No `style`, so no hue can reach
+ * it; `aria-hidden` like every arm, because the side's own text already says
+ * who is waiting. `data-crest="pending"` is the handle tests and captures use.
+ */
+export function PendingCrest({ size = 20 }: { size?: 20 | 24 | 32 | 40 }) {
+  return (
+    <span
+      aria-hidden
+      data-crest="pending"
+      className={`${crestBox(size, "")} border border-zinc-300 bg-canvas font-semibold text-ink-muted`}
+    >
+      ?
+    </span>
+  );
+}
+
+/** The box every crest shares — each `EntityLogo` arm and `PendingCrest` — so a
+ *  waiting row and a filled one line up at every size, and the size table is
+ *  read in one place. */
+function crestBox(size: 20 | 24 | 32 | 40, className: string): string {
+  return `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md align-middle ${SIZE_CLASS[size]} ${className}`;
 }
 
 export function initials(name: string): string {
