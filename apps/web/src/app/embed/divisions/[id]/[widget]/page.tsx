@@ -17,6 +17,7 @@ import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
+import { t } from "@/lib/i18n-runtime";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
@@ -90,9 +91,10 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // through the same namer the hub, the match centre and the calendar use; any
   // other label keeps the board's text (`resolveSlotLabel`, inside the namer).
   const stageKind = new Map(stages.map((s) => [s.id, s.kind]));
+  const dict = await getDictionary(orgLocale, "public");
   const namer = publicRoundNamer({
     ui: lookup,
-    dict: await getDictionary(orgLocale, "public"),
+    dict,
     fixtures,
     stageKind: (stageId) => stageKind.get(stageId),
   });
@@ -101,11 +103,30 @@ export default async function EmbedWidgetPage({ params }: Props) {
     if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
     if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
   }
+  // N1d d5: the schedule's round view heads each group with the round's NAME,
+  // the hub rail's own label ("Round {n}" in the org's locale only for a
+  // fixture whose stage the namer does not know), and its two phrases come
+  // from the same org-locale dictionary.
+  const roundLabels = Object.fromEntries(
+    fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
+  );
+  const scheduleCopy = {
+    timeTbd: t(dict, "matchCentre.status.timeTbd"),
+    allEntrants: t(dict, "division.filter.allEntrants"),
+  };
 
   let body: React.ReactNode;
   if (widget === "schedule") {
     body = (
-      <Schedule fixtures={fixtures} entrantNames={entrantNames} divisionPath={publicPath} tz={tz} slotLabels={slotLabels} />
+      <Schedule
+        fixtures={fixtures}
+        entrantNames={entrantNames}
+        divisionPath={publicPath}
+        tz={tz}
+        slotLabels={slotLabels}
+        roundLabels={roundLabels}
+        copy={scheduleCopy}
+      />
     );
   } else if (widget === "bracket") {
     const stage = stages.find((s) => BRACKET_KINDS.has(s.kind));

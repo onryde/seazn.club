@@ -122,6 +122,17 @@ export default async function DivisionHomePage({ params }: Props) {
     if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
     if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
   }
+  // N1d d5: the schedule tab's round view heads each group with the round's
+  // NAME from the same namer ("Round {n}" in the org's locale only for a
+  // fixture whose stage the namer does not know), and its two phrases come
+  // from the page's org-locale dictionary, as the embed schedule widget does.
+  const roundLabels = Object.fromEntries(
+    fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
+  );
+  const scheduleCopy = {
+    timeTbd: t(dict, "matchCentre.status.timeTbd"),
+    allEntrants: t(dict, "division.filter.allEntrants"),
+  };
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -382,6 +393,8 @@ export default async function DivisionHomePage({ params }: Props) {
             divisionPath={basePath}
             tz={tz}
             slotLabels={slotLabels}
+            roundLabels={roundLabels}
+            copy={scheduleCopy}
           />,
           standingsPanel,
           entrantsPanel,

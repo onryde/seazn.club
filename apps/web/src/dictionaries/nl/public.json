@@ -393,6 +393,7 @@
   "division.seed": "Reekshoofd {seed}",
   "division.filter.label": "Wedstrijden filteren",
   "division.filter.all": "Alle",
+  "division.filter.allEntrants": "Alle deelnemers",
   "division.view.label": "Weergave",
   "division.view.day": "Per dag",
   "division.view.round": "Per ronde",

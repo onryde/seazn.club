@@ -393,6 +393,7 @@
   "division.seed": "Tête de série {seed}",
   "division.filter.label": "Filtrer les matchs",
   "division.filter.all": "Tous",
+  "division.filter.allEntrants": "Tous les participants",
   "division.view.label": "Vue",
   "division.view.day": "Par jour",
   "division.view.round": "Par tour",

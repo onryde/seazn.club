@@ -168,4 +168,35 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     }
     expect(scheduleHtml).not.toMatch(/R\d+·\d+/);
   });
+
+  // N1d d5 — the same Schedule heads its round view with each round's NAME and
+  // takes "Time TBD" and "All entrants" from the dictionary. The page builds
+  // both from its own namer and org-locale dictionaries, as the embed widget
+  // does. A fr org, so a hardcoded or en-locked value cannot pass.
+  it("hands its Schedule every fixture's round name and both phrases in the org's locale (N1d d5)", async () => {
+    const data = divisionData();
+    getPublicDivision.mockResolvedValue({ ...data, org: { ...data.org, default_locale: "fr" } });
+
+    const root = await DivisionHomePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+    });
+    const schedules = findElements(root, Schedule);
+    expect(schedules, "the page builds one Schedule").toHaveLength(1);
+    const { roundLabels, copy } = schedules[0]!.props as {
+      roundLabels: Record<string, string>;
+      copy: { timeTbd: string; allEntrants: string };
+    };
+
+    const ui = await getDictionary("fr", "ui");
+    const pub = await getDictionary("fr", "public");
+    const semi = t(ui, "bracket.round.semi");
+    expect(semi, "the premise: fr names the semi-finals differently from en").not.toBe(
+      t(await getDictionary("en", "ui"), "bracket.round.semi"),
+    );
+    expect(roundLabels).toEqual({ "semi-1": semi, "semi-2": semi, final: t(ui, "bracket.round.final") });
+    expect(copy).toEqual({
+      timeTbd: t(pub, "matchCentre.status.timeTbd"),
+      allEntrants: t(pub, "division.filter.allEntrants"),
+    });
+  });
 });

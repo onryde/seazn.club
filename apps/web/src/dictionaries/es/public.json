@@ -393,6 +393,7 @@
   "division.seed": "Cabeza de serie {seed}",
   "division.filter.label": "Filtrar partidos",
   "division.filter.all": "Todos",
+  "division.filter.allEntrants": "Todos los participantes",
   "division.view.label": "Vista",
   "division.view.day": "Por día",
   "division.view.round": "Por ronda",

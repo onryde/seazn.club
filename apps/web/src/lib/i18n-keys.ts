@@ -1653,6 +1653,7 @@ export type DictionaryKey =
   | "division.create.competitionEnded"
   | "division.entrantsEmpty"
   | "division.filter.all"
+  | "division.filter.allEntrants"
   | "division.filter.label"
   | "division.limit.archivedCount"
   | "division.metaDescription"

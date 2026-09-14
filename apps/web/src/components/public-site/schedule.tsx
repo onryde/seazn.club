@@ -13,8 +13,9 @@ import { fmtTime, fmtDate, fmtZoneAbbrev } from "@/lib/format";
 import { msg } from "@/lib/messages";
 // P6 fix round 1, finding #2 — this is a Client Component ("use client"
 // above) with no locale/<DictProvider> plumbing anywhere in its tree today
-// (confirmed: "Time TBD"/"Round"/"Live"/"Ended" etc. are all still hardcoded
-// English here, a pre-existing gap outside this task's scope). msgFor()
+// ("Live"/"Ended", the view toggle and the date headings are still hardcoded
+// English here, a gap outside that task's scope; the round headings, "Time
+// TBD" and "All entrants" arrive pre-resolved since N1d d5). msgFor()
 // carries `server-only` and cannot be imported here at all, so slot labels
 // can't be resolved client-side the way this file's OTHER copy is English.
 // Instead the SERVER parent (the division/embed page, which already holds
@@ -39,6 +40,22 @@ interface Props {
    *  the caller, keyed `${fixture.id}:home` / `${fixture.id}:away`. Absent
    *  for a filled slot (real entrant). */
   slotLabels: Record<string, string>;
+  /** N1d d5 — every fixture's round NAME in the org's locale ("Semi-finals",
+   *  "Losers' round 1"), keyed by fixture id, from the public round namer
+   *  (`publicRoundNamer`, the hub rail's own label). The round view groups and
+   *  heads by it, so a page playoff's Qualifier 1 and Eliminator, which share
+   *  a round_no, are two groups. Built server-side by the caller. */
+  roundLabels: Record<string, string>;
+  /** N1d d5 — phrases this client component cannot resolve itself, in the
+   *  org's locale, built server-side by the caller. */
+  copy: ScheduleCopy;
+}
+
+export interface ScheduleCopy {
+  /** The day view's heading for fixtures with no time yet. */
+  timeTbd: string;
+  /** The entrant filter's first option. */
+  allEntrants: string;
 }
 
 // Day bucket key as the venue-local calendar date (YYYY-MM-DD) so a 23:30 venue
@@ -153,7 +170,7 @@ function ScorebugRow({
   );
 }
 
-export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels }: Props) {
+export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels, roundLabels, copy }: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
   // timetable on the day. Round view stays a click away for bracket-style flow.
@@ -166,26 +183,31 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels 
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
   const mode = anyScheduled ? view : "round";
 
+  // Round view (N1d d5): one group per round NAME, not per round_no, in play
+  // order: groups are opened walking the fixtures by (round_no, seq_in_round),
+  // so each lands at its earliest match whatever order the caller passed.
+  const inPlayOrder = [...shown].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
   const groups = new Map<string, PublicFixture[]>();
-  for (const f of shown) {
-    const key = mode === "day" ? (dayKey(f.scheduled_at, tz) ?? UNSCHEDULED) : String(f.round_no);
+  for (const f of mode === "day" ? shown : inPlayOrder) {
+    const key =
+      mode === "day" ? (dayKey(f.scheduled_at, tz) ?? UNSCHEDULED) : (roundLabels[f.id] ?? String(f.round_no));
     const list = groups.get(key) ?? [];
     list.push(f);
     groups.set(key, list);
   }
 
-  const orderedGroups = [...groups.entries()].sort(([a], [b]) => {
-    if (mode === "day") {
-      if (a === UNSCHEDULED) return 1;
-      if (b === UNSCHEDULED) return -1;
-      return a.localeCompare(b);
-    }
-    return Number(a) - Number(b);
-  });
+  const orderedGroups =
+    mode === "day"
+      ? [...groups.entries()].sort(([a], [b]) => {
+          if (a === UNSCHEDULED) return 1;
+          if (b === UNSCHEDULED) return -1;
+          return a.localeCompare(b);
+        })
+      : [...groups.entries()];
 
   const groupLabel = (key: string): string => {
-    if (mode === "round") return `Round ${key}`;
-    if (key === UNSCHEDULED) return "Time TBD";
+    if (mode === "round") return key;
+    if (key === UNSCHEDULED) return copy.timeTbd;
     return new Date(`${key}T12:00`).toLocaleDateString("en-GB", {
       weekday: "long",
       day: "numeric",
@@ -207,7 +229,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels 
           onChange={(e) => setEntrant(e.target.value)}
           className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-line"
         >
-          <option value="">All entrants</option>
+          <option value="">{copy.allEntrants}</option>
           {options.map(([id, name]) => (
             <option key={id} value={id}>
               {name}

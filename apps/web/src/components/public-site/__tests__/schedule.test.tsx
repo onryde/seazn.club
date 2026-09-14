@@ -38,6 +38,11 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
 });
 
 const entrantNames = { e1: "Real Team" };
+// N1d d5 made both props required. These cases are about slot labels and
+// venue names, so the round names and phrases are neutral pass-throughs; what
+// the callers put in them is pinned by the embed and division page tests.
+const ROUND_LABELS: Record<string, string> = {};
+const COPY = { timeTbd: "(time tbd)", allEntrants: "(all entrants)" };
 
 describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
   it("renders the caller's pre-resolved slotLabels text for both unfilled sides, not English msg()", () => {
@@ -48,6 +53,8 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         entrantNames,
         divisionPath: "/shared/org/comp/div",
         tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
         slotLabels: { "final:home": "Ganador del Grupo A", "final:away": "Ganador del Grupo B" },
       }),
     );
@@ -66,6 +73,8 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         entrantNames,
         divisionPath: "/shared/org/comp/div",
         tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
         slotLabels: { "semi:away": "Runner-up of Group C" },
       }),
     );
@@ -81,6 +90,8 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         entrantNames,
         divisionPath: "/shared/org/comp/div",
         tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
         slotLabels: {},
       }),
     );
@@ -95,6 +106,8 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         entrantNames,
         divisionPath: "/shared/org/comp/div",
         tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
         slotLabels: {
           "final:home": "Best 2 of the 3-place teams",
           "final:away": "Winner of Group B",
@@ -124,6 +137,8 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
         entrantNames,
         divisionPath: "/shared/org/comp/div",
         tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy: COPY,
         slotLabels: {},
       }),
     );
