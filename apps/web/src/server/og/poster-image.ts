@@ -34,7 +34,13 @@ import sharp from "sharp";
  * guard cannot be reopened by a caller that forgets this module.
  */
 
-/** A slow host must not stall a share preview or a download. */
+/**
+ * A slow host must not stall a share preview or a download — and neither must
+ * a slow picture. This is the budget for the WHOLE operation: the fetch, the
+ * body read, and the decode and re-encode after it. Bounding the fetch alone
+ * left the expensive half unwatched, since a 4 Mpx canvas is real work and a
+ * `sharp` pipeline takes no `AbortSignal`.
+ */
 export const POSTER_IMAGE_TIMEOUT_MS = 1500;
 
 /** A crest is a few KB. Two megabytes is already generous; past it we stop
@@ -162,6 +168,22 @@ export function allowedPosterImageUrl(raw: string | null | undefined): URL | nul
   return url;
 }
 
+/**
+ * Rejects the moment the shared deadline fires. Raced against work that cannot
+ * be handed an `AbortSignal` — a sharp decode — it puts that work under the
+ * same clock as the fetch that preceded it, so the budget below means the
+ * WHOLE operation and not just its network half.
+ */
+function deadline(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason as Error);
+      return;
+    }
+    signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+  });
+}
+
 /** Drain a body we are not going to use, so the connection is not left open. */
 function discard(res: Response): void {
   void res.body?.cancel().catch(() => {});
@@ -228,22 +250,36 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
     const bytes = await readCapped(res);
     if (bytes === null) return null;
 
-    const image = sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS });
-    // The format the BYTES are, not the one the response called them. Also the
-    // point at which `limitInputPixels` fires: sharp reads the header here, so
-    // an oversized canvas is refused before anything is allocated for it.
-    const { format } = await image.metadata();
-    if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
+    // Never rejects: an unwinnable race would otherwise leave a rejection
+    // nobody is listening for, once the deadline has already answered.
+    const decode = (async (): Promise<Buffer | null> => {
+      try {
+        const image = sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS });
+        // The format the BYTES are, not the one the response called them. Also
+        // where `limitInputPixels` fires: sharp reads the header here, so an
+        // oversized canvas is refused before anything is allocated for it.
+        const { format } = await image.metadata();
+        if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
+        return await image
+          .resize({
+            width: POSTER_IMAGE_MAX_EDGE,
+            height: POSTER_IMAGE_MAX_EDGE,
+            fit: "inside",
+            withoutEnlargement: true,
+          })
+          // libvips' own watchdog. The race below bounds what the ROUTE waits
+          // for; this is what stops an abandoned decode carrying on burning a
+          // threadpool slot after we have already answered.
+          .timeout({ seconds: Math.ceil(POSTER_IMAGE_TIMEOUT_MS / 1000) })
+          .png()
+          .toBuffer();
+      } catch {
+        return null;
+      }
+    })();
 
-    const png = await image
-      .resize({
-        width: POSTER_IMAGE_MAX_EDGE,
-        height: POSTER_IMAGE_MAX_EDGE,
-        fit: "inside",
-        withoutEnlargement: true,
-      })
-      .png()
-      .toBuffer();
+    const png = await Promise.race([decode, deadline(controller.signal)]);
+    if (png === null) return null;
     return `data:image/png;base64,${png.toString("base64")}`;
   } catch {
     // A timeout, a socket error, bytes sharp cannot decode: all one answer.
