@@ -400,6 +400,8 @@
   "division.calendar": "Aan agenda toevoegen",
   "division.metaDescription": "Stand, programma en uitslagen van {division} voor {competition}.",
   "division.scheduleEmpty": "Nog geen wedstrijden gepland",
+  "division.timesIn": "tijden in {zone}",
+  "division.present": "Presenteren",
   "player.inThisCompetition": "In deze competitie",
   "player.noSquad": "Geen selectie vermeld",
   "player.stats": "Statistieken",

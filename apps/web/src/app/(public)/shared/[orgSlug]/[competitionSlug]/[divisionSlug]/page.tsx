@@ -333,7 +333,8 @@ export default async function DivisionHomePage({ params }: Props) {
             href={`/shared/${org.slug}/${competition.slug}/${division.slug}/present`}
             className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink"
           >
-            Present ▸
+            {/* N1e e7: the label in the org's locale; the ▸ is decoration. */}
+            {t(dict, "division.present")} <span aria-hidden="true">▸</span>
           </Link>
           {/* Standings share (v3/10 #2) — the link unfurls into the OG card. */}
           <ShareButton

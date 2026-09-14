@@ -11,6 +11,8 @@ import { notFound, permanentRedirect } from "next/navigation";
 import Image from "next/image";
 import { Barlow_Condensed } from "next/font/google";
 import { AttributionLink } from "@/components/attribution-link";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 import { isReservedSlug } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { getPublicOrg } from "@/server/public-site/data";
@@ -50,6 +52,14 @@ export default async function PublicOrgLayout({
     notFound();
   }
   const { org } = data;
+  // N1e e7: the header strip and the footer in the org's own default_locale,
+  // the same rule as every /shared page (ISR: the page's language is a
+  // function of the org, never of the visitor's request). The brand name
+  // stays literal and keeps its weight, so the footer template is split
+  // around `{brand}` rather than interpolated.
+  const dict = await getDictionary(toLocale(org.default_locale), "public");
+  const tagline = t(dict, "layout.tagline");
+  const [poweredByLead, poweredByTail = ""] = t(dict, "layout.poweredBy").split("{brand}");
 
   return (
     <div
@@ -94,11 +104,11 @@ export default async function PublicOrgLayout({
               `sm`+; below that it moves to its own line instead so it never
               crowds the org name/logo on a narrow header. */}
           <span className="ml-auto hidden shrink-0 text-[11px] font-medium uppercase tracking-[0.18em] text-court-muted sm:block">
-            Live scores · Schedules · Standings
+            {tagline}
           </span>
         </div>
         <div className="border-t border-white/10 px-4 py-1 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-court-muted sm:hidden">
-          Live scores · Schedules · Standings
+          {tagline}
         </div>
         {/* Accent keel — the one line of brand color on the slab. */}
         <div aria-hidden className="h-0.5 bg-accent" />
@@ -109,7 +119,9 @@ export default async function PublicOrgLayout({
             (branding entitlement, resolved server-side). */}
         {org.branded ? null : (
           <p>
-            Powered by <span className="font-medium">Seazn Club</span> ·{" "}
+            {poweredByLead}
+            <span className="font-medium">Seazn Club</span>
+            {poweredByTail} ·{" "}
             <AttributionLink surface="badge" />
           </p>
         )}

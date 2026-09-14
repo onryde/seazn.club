@@ -400,6 +400,8 @@
   "division.calendar": "Añadir al calendario",
   "division.metaDescription": "Clasificación, calendario y resultados de {division} para {competition}.",
   "division.scheduleEmpty": "Aún no hay partidos programados",
+  "division.timesIn": "horas en {zone}",
+  "division.present": "Presentar",
   "player.inThisCompetition": "En esta competición",
   "player.noSquad": "Sin plantilla registrada",
   "player.stats": "Estadísticas",
