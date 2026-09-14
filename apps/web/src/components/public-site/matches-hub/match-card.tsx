@@ -25,7 +25,7 @@
 //
 // W3's poster icon has no DOM in W2 (design ruling R4: no "coming soon").
 import Link from "next/link";
-import { EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
+import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtDate, fmtTime } from "@/lib/format";
@@ -153,6 +153,12 @@ export function MatchCard({
     // (Knockout fix round 2, D3). Decided here, where every tab's card is
     // drawn, so the Matches and Overview tabs get the same rule for free.
     const entrant = side.entrantId !== "";
+    // A BYE is not "to be decided" (Knockout fix round 2b, controller ruling):
+    // the draw left that slot empty for good, so it keeps the same placeholder
+    // box and muted name but shows no "?". Only the producer knows — it reads
+    // the stored bye slot label (`hubByeSides`); the name is locale copy and
+    // never decides. A doc cached before `byeSides` existed reads as no bye.
+    const bye = m.byeSides?.[i] === true;
     return (
       <div
         key={side.entrantId || i}
@@ -174,6 +180,8 @@ export function MatchCard({
             colour={side.colour}
             size={crestSize}
           />
+        ) : bye ? (
+          <EmptyCrest size={crestSize} />
         ) : (
           <PendingCrest size={crestSize} />
         )}

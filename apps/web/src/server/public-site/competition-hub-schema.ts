@@ -104,6 +104,13 @@ export const HubMatch = z.object({
   winnerIndex: z.union([z.literal(0), z.literal(1)]).nullable(),
   /** `decidedOutcomeText` — pre-resolved. */
   resultLine: z.string().nullable(),
+  /** `[home, away]`: true where that side is a BYE — the draw left the slot
+   *  empty for good (no entrant, and the stored `bracket.slot.bye` slot label
+   *  `stages.ts` writes), as opposed to a slot still waiting on a result. The
+   *  card draws a bye's crest as an empty box and a waiting side's as "?".
+   *  Optional because a hub document cached before the field existed (Redis
+   *  15s, ISR 30s) reaches the client without it — absent reads as "no bye". */
+  byeSides: z.tuple([z.boolean(), z.boolean()]).optional(),
 });
 
 export const TableColumn = z.object({

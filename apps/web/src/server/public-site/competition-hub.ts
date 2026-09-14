@@ -215,6 +215,32 @@ export function hubSides(
   return [side(home, homeShort), side(away, awayShort)];
 }
 
+/** The slot-label key `stages.ts` (`byeSlotLabel`) stores on a bye's phantom
+ *  side. It is the ONLY record of a bye: `hubSides` resolves the label to a
+ *  sentence and drops the key, so this must read the fixture, not the side. */
+const BYE_SLOT_KEY = "bracket.slot.bye";
+
+/**
+ * `HubMatch.byeSides` — `[home, away]`, true where that side is a bye: no
+ * entrant AND the stored bye slot label (Knockout fix round 2b). Never decided
+ * from the side's name, which is locale copy ("Bye", "Descanso", ...). A side
+ * with no entrant and any other label is a slot WAITING on a result, and stays
+ * false; an entrant is never a bye, whatever label rides beside it.
+ */
+export function hubByeSides(
+  fixture: Pick<
+    PublicFixture,
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+  >,
+): [boolean, boolean] {
+  const bye = (entrantId: string | null, label: SlotLabel | null) =>
+    entrantId === null && label?.key === BYE_SLOT_KEY;
+  return [
+    bye(fixture.home_entrant_id, fixture.home_slot_label),
+    bye(fixture.away_entrant_id, fixture.away_slot_label),
+  ];
+}
+
 // ------------------------------------------------------------------ header
 
 /**
@@ -684,6 +710,7 @@ export async function loadCompetitionHub(
         courtName: f.court_name,
         href: `${divHref}/fixtures/${f.id}`,
         header: hubHeader(f, sides, d.sport_key, generatedAt),
+        byeSides: hubByeSides(f),
         winnerIndex:
           winner === null
             ? null

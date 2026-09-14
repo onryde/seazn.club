@@ -467,7 +467,10 @@ describe("MatchCard", () => {
     ["a waiting pair of DOUBLES entrants", "Ana Lee / Bo Kim or Cy Po / Di Wu"],
     ["the third-place loser sentence", "Loser of Eli v Hal"],
     ["the engine's slot label", "Winner of R3·2"],
-    ["a bye", "Bye"],
+    // NOT a bye: a bye is flagged by the producer (`byeSides`, round 2b, below).
+    // A side merely NAMED "Bye" with no flag is still a waiting side — the name
+    // never decides, in any locale.
+    ["a side merely NAMED 'Bye' with no producer flag", "Bye"],
   ])(
     "D3: %s is not an entrant — a '?' placeholder crest with no letters and no hue, and a muted name; the real entrant beside it keeps its crest",
     (_, name) => {
@@ -519,6 +522,68 @@ describe("MatchCard", () => {
       expect(placeholder, `the placeholder at ${crestSize}`).not.toBeNull();
       expect(box(placeholder!.tokens)).toEqual(box(real!));
       expect(box(real!)).toEqual(crestSize === 24 ? ["h-6", "w-6"] : ["h-8", "w-8"]);
+    }
+  });
+
+  // ── Round 2b: a BYE is not "to be decided" (controller ruling) ─────────────
+  // The producer flags it (`HubMatch.byeSides`, from the stored
+  // `bracket.slot.bye` slot label — `competition-hub.test.ts` drives that
+  // through the real builder), and the card draws the SAME placeholder box
+  // with NO glyph and its own marker. "?" stays for sides waiting on a result.
+  /** The empty crest in one side row — its class tokens and its text — or null. */
+  const emptyCrest = (row: string) => {
+    const found = row.match(/<span aria-hidden="true" data-crest="empty" class="([^"]*)">([^<]*)<\/span>/);
+    return found ? { tokens: found[1]!.split(" "), text: found[2]! } : null;
+  };
+
+  it("Round 2b: a BYE side renders the empty box — no text, not the pending crest; the same card without the flag keeps its '?' (positive pair)", () => {
+    const bye = card(hubMatch({ byeSides: [false, true], header: { sides: [REAL, waiting("Bye")] } }));
+    const row = sideHtml(bye, 1);
+    const crest = emptyCrest(row);
+    expect(crest, "the bye side wears the empty crest").not.toBeNull();
+    expect(crest!.text).toBe("");
+    expect(row).not.toContain('data-crest="pending"');
+    expect(row).not.toContain(">?<");
+    expect(row, "no colour reaches the empty box").not.toContain("style=");
+    expect(row).toContain(">Bye</span>");
+    expect(nameTokens(row)).toEqual(expect.arrayContaining(["italic", "text-ink-muted"]));
+    expect(sideHtml(bye, 0)).not.toContain("data-crest");
+    expect(sideHtml(bye, 0)).toContain(`>${initials("Blue Blazers")}<`);
+
+    // The positive pair: the flag OFF, and the flag ABSENT (a document cached
+    // before the field existed) — both are a waiting side, so both say "?".
+    for (const m of [
+      hubMatch({ byeSides: [false, false], header: { sides: [REAL, waiting("Bye")] } }),
+      hubMatch({ header: { sides: [REAL, waiting("Bye")] } }),
+    ]) {
+      const other = sideHtml(card(m), 1);
+      expect(pendingCrest(other)?.text).toBe("?");
+      expect(other).not.toContain('data-crest="empty"');
+    }
+  });
+
+  it("Round 2b: the FLAG decides, never the name or the position — a Spanish 'Descanso' bye on the HOME side is empty, a flagged side with an entrant keeps its crest", () => {
+    const home = card(hubMatch({ byeSides: [true, false], header: { sides: [waiting("Descanso"), REAL] } }));
+    expect(emptyCrest(sideHtml(home, 0))?.text).toBe("");
+    expect(sideHtml(home, 1)).not.toContain("data-crest");
+
+    // A stray flag on a side that has an entrant: the entrant wins.
+    const stray = card(hubMatch({ byeSides: [true, false], header: { sides: [REAL, waiting("Winner of SF1")] } }));
+    expect(sideHtml(stray, 0)).not.toContain("data-crest");
+    expect(sideHtml(stray, 0)).toContain(`>${initials("Blue Blazers")}<`);
+    expect(pendingCrest(sideHtml(stray, 1))?.text).toBe("?");
+  });
+
+  it("Round 2b: the empty box is the SAME box as a real crest at both card sizes", () => {
+    for (const crestSize of [24, 32] as const) {
+      const h = card(hubMatch({ byeSides: [false, true], header: { sides: [REAL, waiting("Bye")] } }), NOW, {
+        crestSize,
+      });
+      const real = sideHtml(h, 0).match(/<span aria-hidden="true" class="([^"]*)"/)?.[1]?.split(" ");
+      expect(real, "the real crest").toBeDefined();
+      const empty = emptyCrest(sideHtml(h, 1));
+      expect(empty, `the empty box at ${crestSize}`).not.toBeNull();
+      expect(box(empty!.tokens)).toEqual(box(real!));
     }
   });
 

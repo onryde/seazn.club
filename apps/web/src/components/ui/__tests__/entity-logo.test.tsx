@@ -27,7 +27,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { contrastRatio } from "@/lib/contrast";
-import { autoColour, EntityLogo, initials, monogramInk, PendingCrest } from "../entity-logo";
+import { autoColour, EmptyCrest, EntityLogo, initials, monogramInk, PendingCrest } from "../entity-logo";
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
 
@@ -246,6 +246,30 @@ describe("PendingCrest — the crest of a side with nobody in it yet (Knockout f
 
   it("size defaults to 20, as EntityLogo's does", () => {
     expect(html(<PendingCrest />)).toBe(html(<PendingCrest size={20} />));
+  });
+});
+
+describe("EmptyCrest — a bye's side: the SAME placeholder box, with no glyph (Knockout fix round 2b)", () => {
+  // Controller ruling: a bye is not "to be decided", so its crest must not say
+  // "?". Same box and muted tone as `PendingCrest`; only the marker and the
+  // glyph differ, and that is asserted as a derivation from the pending crest's
+  // own markup so the two cannot drift apart.
+  for (const size of [20, 24, 32, 40] as const) {
+    it(`size ${size}: PendingCrest's exact box and tone, marked data-crest="empty", with nothing inside`, () => {
+      const empty = html(<EmptyCrest size={size} />);
+      expect(empty).toBe(
+        `<span aria-hidden="true" data-crest="empty" class="${base(SIZE_TOKENS[size])} border border-zinc-300 bg-canvas font-semibold text-ink-muted"></span>`,
+      );
+      expect(empty).toBe(
+        html(<PendingCrest size={size} />)
+          .replace('data-crest="pending"', 'data-crest="empty"')
+          .replace(">?</span>", "></span>"),
+      );
+    });
+  }
+
+  it("size defaults to 20", () => {
+    expect(html(<EmptyCrest />)).toBe(html(<EmptyCrest size={20} />));
   });
 });
 

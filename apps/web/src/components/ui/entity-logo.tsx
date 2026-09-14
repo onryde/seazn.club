@@ -299,13 +299,33 @@ export function EntityLogo({
  * who is waiting. `data-crest="pending"` is the handle tests and captures use.
  */
 export function PendingCrest({ size = 20 }: { size?: 20 | 24 | 32 | 40 }) {
+  return placeholderCrest(size, "pending", "?");
+}
+
+/**
+ * The crest for a BYE's side: a slot the draw left with nobody in it, for good
+ * (Knockout fix round 2b, controller ruling). A bye is not "to be decided", so
+ * it must not say "?" — it keeps `PendingCrest`'s exact box and muted tone and
+ * shows NO glyph. `data-crest="empty"` tells it apart from a waiting side;
+ * `aria-hidden`, so it has no accessible name of its own.
+ *
+ * What makes a side a bye is the producer's decision (`HubMatch.byeSides`, from
+ * the stored `bracket.slot.bye` slot label), never the side's name.
+ */
+export function EmptyCrest({ size = 20 }: { size?: 20 | 24 | 32 | 40 }) {
+  return placeholderCrest(size, "empty", null);
+}
+
+/** The one placeholder box both crests draw, so a bye and a waiting side can
+ *  differ only in their marker and their glyph. */
+function placeholderCrest(size: 20 | 24 | 32 | 40, marker: "pending" | "empty", glyph: "?" | null) {
   return (
     <span
       aria-hidden
-      data-crest="pending"
+      data-crest={marker}
       className={`${crestBox(size, "")} border border-zinc-300 bg-canvas font-semibold text-ink-muted`}
     >
-      ?
+      {glyph}
     </span>
   );
 }

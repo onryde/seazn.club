@@ -50075,6 +50075,17 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "byeSides": {
+                                "type": "array",
+                                "prefixItems": [
+                                  {
+                                    "type": "boolean"
+                                  },
+                                  {
+                                    "type": "boolean"
+                                  }
+                                ]
                               }
                             },
                             "required": [

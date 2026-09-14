@@ -1340,6 +1340,31 @@ describe("KnockoutTab — taps and polls", () => {
     expect(sideOf(h, 1)).toContain(`>${initials("Eve Ng / Fay Ho")}<`);
   });
 
+  it("Round 2b on the Knockout cards: a round-0 BYE side is the empty box, while the next round's slot still waiting on a result keeps its '?'", () => {
+    const doc = hubDoc({
+      matches: [
+        { ...ko("b1", "completed", QF, [S("Ivy"), tbd("Bye")], 0), byeSides: [false, true] },
+        ko("b2", "upcoming", QF, [S("Jon"), S("Kit")]),
+        ko("bs", "upcoming", SF, [S("Ivy"), tbd("Winner of R1·2")]),
+      ],
+      knockouts: [
+        knockoutView("cup", "premier", [koRound("main-1", QF, ["b1", "b2"]), koRound("main-2", SF, ["bs"])]),
+      ],
+    });
+    const island = mount(doc);
+    const b1 = cardHtml(island.tree(), "b1");
+    expect(sideOf(b1, 1)).toMatch(/<span aria-hidden="true" data-crest="empty" class="[^"]*"><\/span>/);
+    expect(sideOf(b1, 1)).not.toContain('data-crest="pending"');
+    expect(sideOf(b1, 0)).not.toContain("data-crest");
+
+    tap(island.tree(), `mh-knockout-round-${VIEW}-main-2`);
+    const bs = cardHtml(island.tree(), "bs");
+    // bs's away slot is fed by b2 (unplayed, both known): the tab names the pair, the card keeps "?".
+    expect(sideOf(bs, 1)).toContain(">Jon or Kit</span>");
+    expect(sideOf(bs, 1)).toMatch(PENDING);
+    expect(sideOf(bs, 1)).not.toContain('data-crest="empty"');
+  });
+
   it("a chosen round that a later poll no longer carries falls back to the default — never a rail with nothing pressed", () => {
     const island = mount(LATER);
     tap(island.tree(), `mh-knockout-round-${VIEW}-main-3`);

@@ -942,6 +942,74 @@ describe("loadCompetitionHub — the document", () => {
     expect(side.name).not.toContain("undefined");
   });
 
+  it("Round 2b: a BYE side is flagged from the STORED slot label (never the name), and the builder's own output draws it as the empty box on the real card while a pending side keeps '?'", async () => {
+    const ko: PublicStage = { ...STAGE, id: "ko", kind: "knockout", name: "Knockout" };
+    // How the tree writes a bye (`usecases/stages.ts`, `byeSlotLabel`): the
+    // fixture carries the award, the phantom side has no entrant and the slot
+    // label `{ key: "bracket.slot.bye" }`, and the status is `forfeited`.
+    const bye = F({
+      id: "ko-bye",
+      stage_id: "ko",
+      home_entrant_id: "e1",
+      away_entrant_id: null,
+      away_slot_label: { key: "bracket.slot.bye", params: {} },
+      status: "forfeited",
+      outcome: { kind: "award", winner: "e1" },
+    });
+    // A slot still waiting on a result: no entrant, a feeder label.
+    const pending = F({
+      id: "ko-pending",
+      stage_id: "ko",
+      round_no: 2,
+      home_entrant_id: null,
+      home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+      away_entrant_id: "e2",
+    });
+    // A bye label left on a side that HAS an entrant: the entrant, not a bye.
+    const filled = F({
+      id: "ko-filled",
+      stage_id: "ko",
+      round_no: 2,
+      seq_in_round: 2,
+      home_entrant_id: "e1",
+      home_slot_label: { key: "bracket.slot.bye", params: {} },
+      away_entrant_id: "e2",
+    });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ stages: [ko], fixtures: [bye, pending, filled], standings: [] }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    const byId = (id: string) => doc.matches.find((x) => x.fixtureId === id)!;
+    // The premise that makes a producer field necessary: both empty sides
+    // reach the document as `entrantId: ""`, indistinguishable by that field.
+    expect(byId("ko-bye").header.sides[1].entrantId).toBe("");
+    expect(byId("ko-pending").header.sides[0].entrantId).toBe("");
+    expect(byId("ko-bye").byeSides).toEqual([false, true]);
+    expect(byId("ko-pending").byeSides).toEqual([false, false]);
+    expect(byId("ko-filled").byeSides).toEqual([false, false]);
+    const parsed = CompetitionHubDoc.safeParse(doc);
+    expect(parsed.error?.issues ?? []).toEqual([]);
+
+    // The seam, producer to consumer: the builder's own matches through the real card.
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { MatchCard } = await import("@/components/public-site/matches-hub/match-card");
+    const en = (await import("@/dictionaries/en/public.json")).default;
+    const card = (id: string) =>
+      renderToStaticMarkup(
+        createElement(MatchCard, {
+          match: byId(id),
+          dict: en as unknown as Parameters<typeof MatchCard>[0]["dict"],
+          locale: "en",
+          now: 0,
+        }),
+      );
+    expect(card("ko-bye")).toMatch(/<span aria-hidden="true" data-crest="empty" class="[^"]*"><\/span>/);
+    expect(card("ko-bye")).not.toContain('data-crest="pending"');
+    expect(card("ko-pending")).toMatch(/<span aria-hidden="true" data-crest="pending" class="[^"]*">\?<\/span>/);
+    expect(card("ko-pending")).not.toContain('data-crest="empty"');
+  });
+
   it("the org's locale drives every resolved string, not English", async () => {
     getPublicCompetitionMock.mockResolvedValue({
       org: { ...ORG, default_locale: "fr" },
