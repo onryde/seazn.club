@@ -30,7 +30,7 @@
 // FORWARDING chain (`runSuite` -> the seam -> the row's real `run` ->
 // `runPackSuite`'s options) rather than a live dispatch — see this file's
 // own header for why no live suite11 dispatch test exists.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 
 const seen: { opts?: unknown; called: number } = { called: 0 };
@@ -52,6 +52,15 @@ vi.mock("../run-suite.ts", () => ({
 // module registry as the `run-suite.ts` mock above, so the real
 // `runSuite11`/`runTinySuite` bindings it returns both route into the
 // mocked `runPackSuite` too — exactly what this file needs.
+//
+// R34(c) (fix round 3) — OPT-IN, same as `tiny-suite-simulate.test.ts`'s own
+// registry mock: read at call time from `injectedPlay`, unset by default and
+// reset `afterEach`. Before this, EVERY `"suite11"` lookup in this file
+// carried `play: { "d-worlds": "tap" }` — harmless today (only the one test
+// below ever calls `runSuite("suite11", ...)`), but a latent trap for any
+// future test here that expects a normal `suite11` run.
+let injectedPlay: Record<string, "tap" | "api" | "import"> | undefined;
+
 vi.mock("../registry.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../registry.ts")>();
   return {
@@ -59,10 +68,16 @@ vi.mock("../registry.ts", async (importOriginal) => {
     lookupSuite: (key: string) => {
       const real = actual.lookupSuite(key);
       if (real === undefined) return real;
-      if (key === "suite11") return { ...real, play: { "d-worlds": "tap" as const } };
+      if (key === "suite11" && injectedPlay !== undefined) {
+        return { ...real, play: injectedPlay };
+      }
       return real;
     },
   };
+});
+
+afterEach(() => {
+  injectedPlay = undefined;
 });
 
 const { runSuite11, SUITE11_PACK_PATH } = await import("../suite11.ts");
@@ -112,6 +127,8 @@ describe("bench.ts's REAL runSuite drives the REAL `suite11` registry row (B07a 
   });
 
   it("the row's own `play` (injected by the registry mock above) reaches runPackSuite's options", async () => {
+    // Opt-in (R34(c)): set here, reset `afterEach` above.
+    injectedPlay = { "d-worlds": "tap" };
     // No `--suite` needed — `runSuite`'s `key` argument is independent of
     // `config.suites`. `sql` is a bare stub: `runPackSuite` itself is
     // mocked, so nothing ever reads it for real.

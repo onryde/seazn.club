@@ -235,30 +235,7 @@ export async function runSuite(
      * green. Nothing joined them. */
     ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
     ...(transport === undefined ? {} : { transport }),
-    // B07a T7 fix round 2 — a live run never supplies `probeTransport`
-    // either (`main()` below calls `runSuite` with neither), so reusing it
-    // for `PackSuiteInput`'s other test-only transport seams
-    // (`simTransport`/`importTransport`/`startTransport`/`advanceTransport`/
-    // `oracleTransport` — all declared `ProbeTransport`-shaped, per their own
-    // doc comments in `run-suite.ts`) changes nothing in production. A test
-    // that supplies ONE fake covering every one of these interfaces (as
-    // `tiny-suite-simulate.test.ts`'s own `fakeServer()`/`playInput()`
-    // already does for tests that call `runPackSuite` directly) needs this
-    // forward to drive a REAL pack through `runSuite` itself — without it,
-    // steps ahead of a division's own play-mode dispatch (division-start,
-    // discipline/suspension oracle reads) fall through to their OWN real,
-    // network-hitting defaults and abort the run before the dispatch this
-    // is testing is ever reached.
-    ...(probeTransport === undefined
-      ? {}
-      : {
-          probeTransport,
-          simTransport: probeTransport,
-          importTransport: probeTransport,
-          startTransport: probeTransport,
-          advanceTransport: probeTransport,
-          oracleTransport: probeTransport,
-        }),
+    ...(probeTransport === undefined ? {} : { probeTransport }),
   });
 }
 

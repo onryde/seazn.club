@@ -17,9 +17,9 @@
 // `conflictAt` knob on `raw()` so one test can prove a refusal actually
 // reaches `report.errors`/`report.gate`, not just `simulate.ts`'s own unit
 // suite (which already covers the fold logic exhaustively).
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RawResult, Session } from "../http.ts";
@@ -31,7 +31,7 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // runner's own options without needing a real registry row. (Fix round 1
 // gave `runTinySuite` its own `play` parameter — see the "fix round 1"
 // describe block further down, which drives `runTinySuite` itself.)
-import { runPackSuite } from "../suites/run-suite.ts";
+import { runPackSuite, type PackSuiteInput } from "../suites/run-suite.ts";
 import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
 // B07a T7 fix round 1 (I1) — the seam `bench.ts`'s own `runSuite` calls to
 // forward a registry row's `play` into its `.run()`. Imported here (rather
@@ -62,20 +62,48 @@ import {
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 import { OracleResult } from "../report.ts";
 
-// B07a T7 fix round 2 (I1(b)/(c)) — mocks ONLY `registry.ts`'s `lookupSuite`,
-// injecting a `play` declaration onto the REAL `_tiny` row returned by
-// `importOriginal()`, while leaving that row's own `run` binding
-// (`registry.ts`'s `run: runTinySuite`) completely untouched — the spread
-// (`{ ...real, play: {...} }`) is what lets the REAL row's REAL binding
-// execute when `bench.ts`'s `runSuite("_tiny", ...)` resolves it, rather
-// than a test-built fixture (exactly the gap the round-1 re-review found:
-// round 1's own seam test handed `invokeSuiteDefinition` a row it built
-// itself, so `registry.ts`'s actual `run: runTinySuite` binding never ran).
+// B07a T7 fix round 2 (I1(b)/(c)), narrowed in fix round 3 (R34) — mocks
+// ONLY `registry.ts`'s `lookupSuite`, injecting a `play` declaration onto
+// the REAL `_tiny` row returned by `importOriginal()`, while leaving that
+// row's own `run` binding (`registry.ts`'s `run: runTinySuite`) completely
+// untouched underneath a thin test-side wrapper — the spread
+// (`{ ...real, play: injectedPlay!, run: (input, play) => real.run({
+// ...input, ...injectedTransports }, play) }`) is what lets the REAL row's
+// REAL binding execute (the wrapper calls it, with `play` forwarded
+// UNTOUCHED as its own second argument) when `bench.ts`'s
+// `runSuite("_tiny", ...)` resolves it, rather than a test-built fixture
+// (the gap the round-1 re-review found: round 1's own seam test handed
+// `invokeSuiteDefinition` a row it built itself, so `registry.ts`'s actual
+// `run: runTinySuite` binding never ran).
+//
+// R34(a) — round 2 threaded a supplied `probeTransport` into
+// `PackSuiteInput`'s other test-only transport seams from PRODUCTION
+// `bench.ts` code. The re-review's own verified alternative (and the
+// controller's ruling) moves that threading HERE instead: `injectedTransports`
+// is spread into the row's `run` call, never into `bench.ts` itself, so
+// `runSuite`'s production behaviour for `probeTransport` goes back to
+// meaning only "the DLS-gate probe's transport" — Task 10 wires `tap`
+// through this exact path with REAL transports, and a single fake standing
+// in for five seams belongs on the test side, not in front of it.
+//
+// R34(c) — BOTH `injectedPlay` and `injectedTransports` are OPT-IN, read by
+// the mock factory AT CALL TIME (not baked into the factory itself): unset
+// (`undefined`/`{}`), `lookupSuite("_tiny")` returns the row completely
+// unmodified. Before this, EVERY `_tiny` lookup in this file carried
+// `play: { "d-tiny": "tap" }` — a latent trap for any future test in this
+// file that expects a normal `_tiny` run through `runSuite`. Each of the two
+// tests below sets these before calling `runSuite` and `afterEach` resets
+// them, so no other test in this file (there are ~40) is affected — proven
+// by the full-file run in the fix-round-3 report.
+//
 // `suiteKeys()`/`SUITE_REGISTRY` and every other row pass through
 // `...actual` unchanged. Nothing else in this file imports `registry.ts`
 // (directly or transitively — `run-suite.ts`/`tiny.ts`/`suite11.ts` do not
 // import it, only `bench.ts` does), so this mock cannot contaminate any
 // other test in this file.
+let injectedPlay: Record<string, PlayMode> | undefined;
+let injectedTransports: Partial<PackSuiteInput> = {};
+
 vi.mock("../suites/registry.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../suites/registry.ts")>();
   return {
@@ -83,10 +111,22 @@ vi.mock("../suites/registry.ts", async (importOriginal) => {
     lookupSuite: (key: string) => {
       const real = actual.lookupSuite(key);
       if (real === undefined) return real;
-      if (key === "_tiny") return { ...real, play: { "d-tiny": "tap" as const } };
+      if (key === "_tiny" && injectedPlay !== undefined) {
+        return {
+          ...real,
+          play: injectedPlay,
+          run: (input: PackSuiteInput, play?: Parameters<SuiteDefinition["run"]>[1]) =>
+            real.run({ ...input, ...injectedTransports }, play),
+        };
+      }
       return real;
     },
   };
+});
+
+afterEach(() => {
+  injectedPlay = undefined;
+  injectedTransports = {};
 });
 
 const silent = pino({ level: "silent" });
@@ -3088,20 +3128,63 @@ describe("an unplanned `play` key reds the gate instead of silently falling back
 // to carry an injected `play`, but with the row's own `run` untouched), so
 // all three links — `runSuite` -> the seam -> the row's real binding -> the
 // dispatch — are exercised in one call.
+//
+// Fix round 3 (R34): `probeTransport` is no longer auto-threaded into
+// `simTransport`/`importTransport`/`startTransport`/`advanceTransport`/
+// `oracleTransport` by PRODUCTION `bench.ts` code (that was round 2's own
+// deviation, reverted — see `bench.ts`'s `runSuite`). This test now supplies
+// all five itself, via `injectedTransports`, spread into the row's `run`
+// call by the mock above — a test-side seam, not a production one. It also
+// points `--report-dir` at a fresh `mkdtemp` directory, removed in
+// `afterEach`, so no `bench-report/<run-id>/` artifact is ever written into
+// the worktree (round 2's own `fix-round-2-i1bc` directory, R34(b)).
 // ---------------------------------------------------------------------------
 describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7 fix round 2, I1(b)/(c))", () => {
+  let reportDir: string | undefined;
+
+  afterEach(async () => {
+    if (reportDir !== undefined) {
+      await rm(reportDir, { recursive: true, force: true });
+      reportDir = undefined;
+    }
+  });
+
   it("a play declaration injected onto the real row reaches the real dispatch: tap refusal, zero writes", async () => {
     const { transport, sql, calls } = fakeServer();
 
+    // Opt-in (R34(c)): unset, `lookupSuite("_tiny")` returns the row
+    // completely unmodified — every OTHER test in this file, which calls
+    // `runTinySuite`/`runPackSuite` directly and never touches
+    // `lookupSuite`, is unaffected either way, but this keeps the mock
+    // honest for any FUTURE test here that calls `runSuite("_tiny", ...)`
+    // expecting a normal run.
+    injectedPlay = { "d-tiny": "tap" as PlayMode };
+    // `transport` doubles for all six: the SAME fake `fakeServer()` returns
+    // already answers every route the DLS-gate probe, division-start, and
+    // every other granular test-only transport seam need — one
+    // comprehensive fake, not five different ones. Threaded here, by the
+    // TEST, into the row's `run` call — never by `bench.ts`.
+    injectedTransports = {
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    };
+    reportDir = await mkdtemp(join(tmpdir(), "bench-report-fix-round-3-"));
+
     // No `--suite` needed: `runSuite`'s `key` argument is independent of
     // `config.suites` (that list only gates the CLI's own `--suite` flag
-    // validation). `transport` doubles as `probeTransport` — the SAME fake
-    // `fakeServer()` returns already answers every route the DLS-gate probe,
-    // division-start, and (per the bench.ts fix above) every other granular
-    // test-only transport seam need; it is one comprehensive fake, not five
-    // different ones.
-    const config = parseCliArgs(["--base", "http://bench.example", "--wipe"]);
-    const report = await runSuite("_tiny", config, "fix-round-2-i1bc", sql, transport, transport);
+    // validation).
+    const config = parseCliArgs([
+      "--base",
+      "http://bench.example",
+      "--wipe",
+      "--report-dir",
+      reportDir,
+    ]);
+    const report = await runSuite("_tiny", config, "fix-round-3-i1bc", sql, transport);
 
     expect(report.gate).toBe("red");
     expect((report.errors ?? []).join("\n")).toContain(
