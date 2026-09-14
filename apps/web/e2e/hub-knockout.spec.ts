@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
@@ -74,16 +76,44 @@ const divisionCalls = (scored: readonly number[]) =>
   6 + scored.reduce((calls, n) => calls + 1 + 2 * n, 0);
 /** Competition create + hub document read, around each competition's divisions. */
 const COMPETITION_CALLS = 2;
+/** The live competition's semi-finals are STARTED before any spectator opens
+ *  it: one fixtures read, then a state read and a `core.start` per semi. */
+const LIVE_START_CALLS = 1 + 2 * 2;
 const SEED_CALLS =
   1 + // the active org's slug
   COMPETITION_CALLS + divisionCalls(EIGHT_SCORED) +
   COMPETITION_CALLS + divisionCalls(SIXTEEN_SCORED) +
   COMPETITION_CALLS + divisionCalls(FIRST_DIVISION_SCORED) + divisionCalls(SECOND_DIVISION_SCORED) +
   COMPETITION_CALLS + divisionCalls([]) + // double elimination, unplayed
-  COMPETITION_CALLS + 5; // league: division create + read, entrants, stage create + generate
+  COMPETITION_CALLS + 5 + // league: division create + read, entrants, stage create + generate
+  COMPETITION_CALLS + divisionCalls([]) + LIVE_START_CALLS; // live: a 4-draw, both semis in play
 const SEED_BUDGET_MS = FLOOR_MS + SEED_CALLS * API_CALL_MS;
 
 const budget = (steps: number) => Math.max(FLOOR_MS, steps * STEP_MS);
+
+/**
+ * The hub's poll cadence while a match is live, read out of the hook's SOURCE
+ * rather than typed in here, so moving the constant moves the live test's
+ * budget with it (AGENTS.md 20).
+ *
+ * Why source text and not an import: the hook's module graph reaches
+ * `@/lib/client`, and a spec that loads a src module whose chain hits an
+ * unattributed JSON import fails to COLLECT ("No tests found").
+ *
+ * Why null and not a throw: a module-scope throw collects zero tests, so the
+ * live test asserts on the value instead.
+ */
+function hubPollMs(): number | null {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/components/public-site/use-live-competition.ts", import.meta.url)),
+    "utf8",
+  );
+  const match = /export const HUB_POLL_MS = ([\d_]+);/.exec(source);
+  return match ? Number(match[1]!.replaceAll("_", "")) : null;
+}
+/** On top of one poll interval: the refetch, React's render, and a machine
+ *  other sessions are also loading. */
+const LAND_SLACK_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // The document's shapes, as far as this file reads them
@@ -314,6 +344,8 @@ test.describe("competition hub: Knockout tab", () => {
   let twoDivisions: Seeded;
   let doubleElim: Seeded;
   let leagueOnly: Seeded;
+  /** R10: both semi-finals in play when the page opens; the live test posts one result. */
+  let live: Seeded & { semis: [string, string] };
 
   test.beforeAll(async ({ playwright }, testInfo) => {
     // A hook has its own clock; the test's `setTimeout` does not reach it.
@@ -361,6 +393,31 @@ test.describe("competition hub: Knockout tab", () => {
         expect(fixtureIds.length).toBeGreaterThan(0);
         leagueOnly = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
       }
+      {
+        // R10: a 4-draw with BOTH semi-finals in play. The live division gives
+        // the page its HUB_POLL_MS cadence, plus a `division:{id}` channel when
+        // the build has realtime. The live test posts the result.
+        const comp = await publicCompetition(request, "Hub KO Live");
+        const div = await bracketDivision(request, comp.id, "Live Cup", 4, "knockout", []);
+        const semis = bracketRounds(await divisionFixtures(request, div.id))[0] ?? [];
+        expect(semis, "the 4-draw's semi-finals").toHaveLength(2);
+        for (const semi of semis) {
+          const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${semi.id}/state`);
+          expect(state.status, JSON.stringify(state.error)).toBe(200);
+          const started = await apiJson(request, `/api/v1/fixtures/${semi.id}/events`, "POST", {
+            expected_seq: state.data!.last_seq,
+            type: "core.start",
+            payload: {},
+          });
+          expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+        }
+        live = {
+          compSlug: comp.slug,
+          divisionSlugs: [div.slug],
+          doc: await hubDoc(request, orgSlug, comp.slug),
+          semis: [semis[0]!.id, semis[1]!.id],
+        };
+      }
     } finally {
       await request.dispose();
     }
@@ -387,6 +444,18 @@ test.describe("competition hub: Knockout tab", () => {
 
     expect(leagueOnly.doc.knockouts).toHaveLength(0);
     expect(leagueOnly.doc.tabs).not.toContain("knockout");
+
+    // The live competition: one drawable 4-draw with both semi-finals in play.
+    // A live match is what puts the page on the HUB_POLL_MS cadence.
+    expect(live.doc.knockouts).toHaveLength(1);
+    const [liveView] = live.doc.knockouts;
+    expect(liveView!.drawable).toBe(true);
+    expect(liveView!.rounds.map((r) => r.fixtureIds.length)).toEqual([2, 1]);
+    expect([...liveView!.rounds[0]!.fixtureIds].sort()).toEqual([...live.semis].sort());
+    expect(
+      live.doc.matches.filter((m) => live.semis.includes(m.fixtureId)).map((m) => m.bucket),
+      "both semi-finals in play",
+    ).toEqual(["live", "live"]);
   });
 
   test("an 8-draw mid-event at 1280: opens on the first unfinished round; Draw writes view=draw, shows the tree, survives a reload", async ({
@@ -737,5 +806,113 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(page.getByTestId(`mh-tab-panel-${firstTab}`)).toBeVisible();
     await expect(page.getByTestId("mh-tab-knockout")).toHaveCount(0);
     await expect(page.getByTestId("mh-knockout")).toHaveCount(0);
+  });
+
+  // R10: the open page moves with NO reload. Measured on spectw2 at 168a3ca9e:
+  //   - a semi-final result was posted with this tab open;
+  //   - the push arrived and the hook refetched once;
+  //   - the browser answered that refetch from its HTTP cache
+  //     (stale-while-revalidate), with a document built BEFORE the write;
+  //   - polling was off while subscribed, so the tab stayed frozen until reload.
+  // The budget is one poll interval plus slack. That covers a build with
+  // realtime (a push lands in well under a second) and one without it (the
+  // HUB_POLL_MS poll).
+  //
+  // It fails against that build in both modes:
+  //   - realtime up: the cached refetch plus the stopped poll froze the tab.
+  //   - polling only: the post is lined up right after a poll tick, so the next
+  //     tick (the first that could show the result) is answered from the cache
+  //     with the pre-result copy, and the result lands a whole interval later,
+  //     past the budget.
+  // The cache is primed first, because a fresh context has no entry to answer
+  // from. A spectator who has had the page open for a tick, or has another tab
+  // on the same hub, has one.
+  test("live: an anonymous spectator on the Knockout tab sees a semi-final result land within one poll interval, with no reload", async ({
+    browser,
+    request,
+  }, testInfo) => {
+    const pollMs = hubPollMs();
+    expect(pollMs, "HUB_POLL_MS read out of use-live-competition.ts").not.toBeNull();
+    const landMs = pollMs! + LAND_SLACK_MS;
+    // Long enough for either a realtime subscription or one poll tick to line up on.
+    const lineUpMs = pollMs! + STEP_MS;
+    test.setTimeout(Math.max(FLOOR_MS, 3 * STEP_MS + lineUpMs + 3 * API_CALL_MS + landMs));
+
+    const [semiA, semiB] = live.semis;
+    const hubApi = `/api/v1/public/orgs/${orgSlug}/competitions/${live.compSlug}/hub`;
+
+    // A spectator: no session cookie and no storage from the organiser's state.
+    const context = await browser.newContext({
+      baseURL: testInfo.project.use.baseURL,
+      storageState: { cookies: [], origins: [] },
+      viewport: { width: 390, height: 844 },
+    });
+    try {
+      const page = await context.newPage();
+      await openKnockout(page, hubUrl(orgSlug, live, "?tab=knockout"));
+      const pathname = new URL(page.url()).pathname;
+      let loads = 0;
+      page.on("load", () => {
+        loads += 1;
+      });
+      // Survives anything short of a reload or a hard navigation.
+      await page.evaluate(() => {
+        (window as unknown as { __r10SamePage?: boolean }).__r10SamePage = true;
+      });
+
+      // The premise, on screen: both semis are in play, so semi A's next line
+      // still names semi B's pair. That line is what the result changes.
+      const nextA = page.getByTestId(`mh-knockout-next-${semiA}`);
+      const nextB = page.getByTestId(`mh-knockout-next-${semiB}`);
+      await expect(nextA).toBeVisible();
+      await expect(nextA).toContainText("Winner meets the winner of");
+      await expect(nextA).not.toContainText("goes through to the");
+      await expect(nextB).toContainText("Winner meets the winner of");
+
+      // Line the post up on the transport: at once once realtime is up, or
+      // just after a poll tick's document has come back.
+      const lined = await Promise.race([
+        page
+          .locator('[data-testid="mh-root"][data-transport="realtime"]')
+          .waitFor({ timeout: lineUpMs })
+          .then(
+            () => "realtime",
+            () => null,
+          ),
+        page
+          .waitForResponse((res) => new URL(res.url()).pathname === hubApi, { timeout: lineUpMs })
+          .then(
+            () => "a poll tick",
+            () => null,
+          ),
+      ]);
+      expect(lined, "neither a realtime subscription nor a poll tick").not.toBeNull();
+
+      // A pre-result copy in THIS browser's HTTP cache, fetched and stored
+      // before the write.
+      const primed = await page.evaluate(async (url) => (await fetch(url, { cache: "reload" })).status, hubApi);
+      expect(primed).toBe(200);
+
+      await scoreFixture(request, semiA, 2, 1);
+
+      await expect(nextA, `the result never reached the page (lined up on ${lined})`).toContainText(
+        "goes through to the",
+        { timeout: landMs },
+      );
+      // Semi B now names who it meets, not a pair.
+      await expect(nextB).toContainText("Winner meets ");
+      await expect(nextB).not.toContainText("Winner meets the winner of");
+
+      // All of it on the same page: no load event, the in-page marker survived,
+      // the same path.
+      expect(loads, "a load event fired: the page reloaded").toBe(0);
+      expect(
+        await page.evaluate(() => (window as unknown as { __r10SamePage?: boolean }).__r10SamePage),
+        "the in-page marker is gone: the document was replaced",
+      ).toBe(true);
+      expect(new URL(page.url()).pathname).toBe(pathname);
+    } finally {
+      await context.close();
+    }
   });
 });
