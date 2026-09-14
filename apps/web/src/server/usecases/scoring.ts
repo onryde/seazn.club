@@ -125,14 +125,37 @@ export async function scoreEvent(
     status: result.status,
   };
 
-  // A decision (or a void that may have erased one) moves brackets/standings.
-  if (result.outcome !== null || input.type === "core.void") {
-    await onDecided(auth, fixtureId, result.outcome);
-    await refreshDiscipline(auth, fixtureId);
-    await refreshNews(auth, fixtureId);
-  }
+  // R10 M3: everything from here on runs AFTER the event committed, so the
+  // invalidation and the pushes sit in `finally`. A post-commit hook that
+  // throws (`onDecided` and `refreshDiscipline` do not swallow their own
+  // failures) used to skip both, and the public pages kept serving the old
+  // document for a score that already stood: the shape F3 fixed in
+  // event-import.ts. The hook's error still propagates unchanged: `finally`
+  // rethrows it once the awaited invalidation is done, and the invalidation's
+  // own `.catch` means its failure can never replace it.
+  try {
+    // A decision (or a void that may have erased one) moves brackets/standings.
+    if (result.outcome !== null || input.type === "core.void") {
+      await onDecided(auth, fixtureId, result.outcome);
+      await refreshDiscipline(auth, fixtureId);
+      await refreshNews(auth, fixtureId);
+    }
 
-  if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
+    if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
+  } finally {
+    await invalidateAndPush(auth, fixtureId, input, result);
+  }
+  return out;
+}
+
+/** scoreEvent's post-commit invalidation and realtime pushes (R10 M3: run from
+ *  its `finally`). Never rejects. */
+async function invalidateAndPush(
+  auth: AuthCtx,
+  fixtureId: string,
+  input: AppendEventRequest,
+  result: { outcome: unknown },
+): Promise<void> {
   // After commit (doc 08 §4): realtime fire-and-forget, the public cache
   // awaited. Discovery surfaces refresh on decided/void/start writes only — and
   // only when the competition is discoverable (doc 15 §2, checked inside).
@@ -160,6 +183,9 @@ export async function scoreEvent(
   // DEL, not on a full-keyspace SCAN; the division's glob sweep is not waited
   // on at all. The division push is addressed from the invalidation's own
   // lookup rather than a second query.
+  //
+  // R10 I1: and never longer than PUSH_AFTER_DELETE_BOUND_MS. A DEL that
+  // never answers sends the pushes at the bound instead of never, once.
   await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
     void publishFixtureUpdate(fixtureId, "event");
     if (scope) void publishDivisionUpdate(scope.divisionId, "score");
@@ -170,7 +196,6 @@ export async function scoreEvent(
     // ledger, not Redis, and still need their ping.
     void publishFixtureUpdate(fixtureId, "event");
   });
-  return out;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -544,14 +569,24 @@ export async function finalizeFixture(
 // P1 — every caller AWAITS this inside its request (`scoreEvent`,
 // `importEvents`): the tag call below reaches Next's per-request flush only if
 // it happens before the route handler resolves.
+/**
+ * R10 I1: the longest `invalidatePublicCache` waits on its literal-key DEL
+ * before running `afterDeletes` anyway. ioredis has no command timeout
+ * (cache.ts sets none), so a Redis that stops answering without dropping the
+ * connection would never settle the DEL. Every push would then be lost while
+ * every subscribed page polls only as a slow safety net.
+ */
+export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
+
 export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
-  /** Runs once, after the literal-key DEL below has settled (resolved or
-   *  rejected), and is never awaited by this function, so it never holds the
-   *  caller's response. It does NOT wait for the division glob's SCAN (R10 H4).
-   *  Handed the fixture's division and competition, or null when the fixture no
+  /** Runs EXACTLY ONCE: when the literal-key DEL below settles (resolved or
+   *  rejected), or after PUSH_AFTER_DELETE_BOUND_MS, whichever comes first
+   *  (R10 I1). Never awaited by this function, so it never holds the caller's
+   *  response. It does NOT wait for the division glob's SCAN (R10 H4). Handed
+   *  the fixture's division and competition, or null when the fixture no
    *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
    *  F2). Must not throw. */
   afterDeletes?: (scope: { divisionId: string; competitionId: string } | null) => void,
@@ -606,8 +641,23 @@ export async function invalidatePublicCache(
   }
   // F2: the catch above means this cannot reject, so it settles exactly when
   // the DEL has, whichever way that went. It does not wait for the SCAN.
+  //
+  // R10 I1: nor longer than the bound. Whichever of the two comes first sends,
+  // the other finds `sent` and does nothing, so a DEL that settles after the
+  // bound never sends the pushes twice. A DEL that settles first clears the
+  // timer, so nothing stays armed after it.
   const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
-  void deleted.finally(() => afterDeletes?.(scope));
+  if (afterDeletes) {
+    let sent = false;
+    const send = () => {
+      if (sent) return;
+      sent = true;
+      clearTimeout(bound);
+      afterDeletes(scope);
+    };
+    const bound = setTimeout(send, PUSH_AFTER_DELETE_BOUND_MS);
+    void deleted.finally(send);
+  }
   if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
   // fires only for discoverable competitions.

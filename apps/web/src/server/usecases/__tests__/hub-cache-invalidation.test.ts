@@ -26,7 +26,12 @@
 // Which door each key goes through is asserted as "no literal key through a
 // SCAN, no glob through DEL", which keeps the key sets supersets (R-E). The
 // schedule path is unchanged: both of its keys still go through SCAN.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+//
+// R10 I1 — the pushes wait for that DEL, but never longer than
+// PUSH_AFTER_DELETE_BOUND_MS. ioredis has no command timeout, so a Redis that
+// stops answering without dropping the connection would otherwise hold every
+// push forever, and exactly once either way.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Typed on the parameter so `patterns()` below reads `string`, not `unknown` —
 // `void pattern` rather than an underscore prefix because this config's
@@ -105,7 +110,7 @@ vi.mock("@/lib/realtime", async (importOriginal) => ({
   publishDivisionUpdate,
 }));
 
-import { invalidatePublicCache } from "../scoring";
+import { invalidatePublicCache, PUSH_AFTER_DELETE_BOUND_MS } from "../scoring";
 import { afterScheduleWrite } from "../schedule";
 
 const ORG = "org-1";
@@ -291,6 +296,103 @@ describe("invalidatePublicCache — literal keys by one DEL, only the glob by SC
     await macrotask();
     expect(deletedKeys()).toEqual([FIXTURE_KEY]);
     expect(after).toHaveBeenCalledWith(null);
+  });
+});
+
+describe("invalidatePublicCache — the pushes wait for the DEL, never longer than the bound, and go out ONCE (R10 I1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** `release` for fake timers: settle the held calls of one kind, then flush
+   *  every microtask that queues without moving the clock. */
+  async function settleHeld(kind: "del" | "scan", outcome: { resolve: true } | { reject: Error }): Promise<void> {
+    const settling = redis.held.filter((gate) => gate.kind === kind);
+    redis.held = redis.held.filter((gate) => gate.kind !== kind);
+    for (const gate of settling) {
+      if ("reject" in outcome) gate.reject(outcome.reject);
+      else gate.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION };
+
+  it("the bound is the ruling's: 1500ms", () => {
+    expect(PUSH_AFTER_DELETE_BOUND_MS).toBe(1_500);
+  });
+
+  it("a DEL that NEVER settles: the pushes go out at the bound, once, and a late settle sends nothing more", async () => {
+    redis.hold = true;
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(after, "sent before the DEL settled and before the bound").not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(after, "a DEL that never answers held the pushes past the bound").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
+    expect(after, "the bound fired more than once").toHaveBeenCalledTimes(1);
+    await settleHeld("del", { resolve: true });
+    await settleHeld("scan", { resolve: true });
+    expect(after, "the late DEL sent the pushes a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("a DEL that settles at 200ms: the pushes go out then, once, and the bound's timer is cleared", async () => {
+    redis.hold = true;
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(after, "sent before the DEL settled").not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), "the bound is armed while the DEL is in flight").toBe(1);
+
+    await settleHeld("del", { resolve: true });
+    expect(after, "waited for the bound instead of the DEL").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+    expect(vi.getTimerCount(), "the bound's timer outlived the DEL").toBe(0);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+    expect(after, "the bound sent the pushes a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("a DEL that REJECTS: the pushes go out once, and the bound sends nothing more", async () => {
+    redis.hold = true;
+    const after = vi.fn();
+    const failure = new Error("simulated Redis failure");
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await settleHeld("del", { reject: failure });
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: failure, fixture: FIXTURE, keys: expect.arrayContaining([FIXTURE_KEY, HUB_KEY]) },
+      DELETE_FAILED,
+    );
+    expect(after, "a failed DEL swallowed the pushes").toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+    expect(after, "the bound sent the pushes a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("a DEL that settles AT the bound's own instant: still exactly once", async () => {
+    redis.hold = true;
+    const after = vi.fn();
+    await invalidatePublicCache(ORG, FIXTURE, false, after);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
+    await settleHeld("del", { resolve: true });
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
+    expect(after).toHaveBeenCalledTimes(1);
+  });
+
+  it("with no callback, nothing is armed", async () => {
+    redis.hold = true;
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

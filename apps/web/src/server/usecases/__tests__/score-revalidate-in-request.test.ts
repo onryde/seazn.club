@@ -47,6 +47,11 @@ const probe = vi.hoisted(() => ({
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
   failScoreTag: false,
   failOnDecided: null as Error | null,
+  // R10 M3: `scoreEvent` calls scoring.ts's own `onDecided` binding, which no
+  // module mock reaches. Its standings recompute (engine-db) is the dependency
+  // made to throw instead, so the real `onDecided` throws inside scoreEvent.
+  failStandings: null as Error | null,
+  standingsAttempts: 0,
   slowImportLookupMs: 0,
 }));
 
@@ -114,6 +119,19 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
     fireScoreRevalidate: (divisionId: string, competitionId: string) => {
       if (probe.failScoreTag) throw new Error("simulated invalidation failure");
       return actual.fireScoreRevalidate(divisionId, competitionId);
+    },
+  };
+});
+vi.mock("@/server/engine-db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/engine-db")>();
+  return {
+    ...actual,
+    recomputeStandings: async (...args: Parameters<typeof actual.recomputeStandings>) => {
+      if (probe.failStandings) {
+        probe.standingsAttempts += 1;
+        throw probe.failStandings;
+      }
+      return actual.recomputeStandings(...args);
     },
   };
 });
@@ -265,6 +283,8 @@ afterEach(() => {
   probe.store = null;
   probe.failScoreTag = false;
   probe.failOnDecided = null;
+  probe.failStandings = null;
+  probe.standingsAttempts = 0;
   probe.slowImportLookupMs = 0;
   for (const fn of Object.values(logMock)) fn.mockClear();
 });
@@ -510,6 +530,90 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(probe.gates).toEqual([]);
     expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
     expect(probe.divisionPushes).toEqual([]);
+  });
+
+  // R10 M3. `onDecided` / `refreshDiscipline` / `refreshNews` run after the
+  // event has COMMITTED. A throw there used to skip the invalidation and both
+  // pushes, so the public pages kept serving a score that already stood: the
+  // shape F3 fixed in event-import.ts.
+  /** A deciding write whose standings recompute throws, run the way the route
+   *  handler runs it: a thrown error becomes the response and the handler still
+   *  RESOLVES, so Next's flush runs either way. `result` is what the caller got. */
+  async function decidingWriteWithAThrowingHook(auth: Parameters<typeof scoreEvent>[0], fixtureId: string) {
+    // The start decides nothing, so it runs no hook; its own deletes are released.
+    await unblocked(
+      inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
+    );
+    await settleSweeps({ resolve: true });
+    const hookFailure = new Error("simulated standings failure");
+    probe.failStandings = hookFailure;
+    const cachedAt = await cachedJustBefore();
+    const run = await unblocked(
+      inRequest(async () => {
+        try {
+          return await scoreEvent(auth, fixtureId, {
+            expected_seq: 1,
+            type: "generic.result",
+            payload: { p1Score: 3, p2Score: 1 },
+          });
+        } catch (err) {
+          return err;
+        }
+      }),
+    );
+    return { ...run, hookFailure, cachedAt };
+  }
+
+  it("scoreEvent: a post-commit hook that THROWS still lands the tags inside the request and still sends both pushes; the caller receives the hook's own error (R10 M3)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const competitionId = await competitionOf(divisionId);
+    const div = divisionTag(divisionId);
+    const comp = competitionTag(competitionId);
+
+    const { result, calls, hookFailure, cachedAt } = await decidingWriteWithAThrowingHook(auth, fixtureId);
+
+    // The premise: the hook really ran and really threw, and the error reached
+    // the caller unchanged.
+    expect(probe.standingsAttempts, "the standings recompute never ran").toBe(1);
+    expect(result, "the caller did not receive the hook's own error").toBe(hookFailure);
+    // The score stands.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(n).toBe(2);
+
+    // The invalidation ran anyway, in time for the flush.
+    expect(calls, "a throwing hook skipped the tag").toContainEqual({ tags: [div], durations: { expire: 0 } });
+    expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
+    expect(areTagsStale([comp], cachedAt)).toBe(true);
+    expect(targetsOf("del")).toEqual(
+      expect.arrayContaining([`pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
+    );
+
+    // And the pushes still wait for the DEL, then go out once each.
+    expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+    await settleSweeps({ resolve: true }, "del");
+    expect(probe.fixturePushes, "a throwing hook skipped the fixture push").toEqual([{ fixtureId, reason: "event" }]);
+    expect(probe.divisionPushes, "a throwing hook skipped the division push").toEqual([
+      { divisionId, reason: "score" },
+    ]);
+    expect(errorMessages()).not.toContain("scoring: public cache invalidation failed (the score stands)");
+  });
+
+  it("scoreEvent: when the hook throws AND the invalidation fails, the caller still receives the HOOK's error, and the invalidation failure is only logged (R10 M3)", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    probe.failScoreTag = true;
+
+    const { result, hookFailure } = await decidingWriteWithAThrowingHook(auth, fixtureId);
+
+    expect(probe.standingsAttempts).toBe(1);
+    expect(result, "the invalidation failure replaced the hook's error").toBe(hookFailure);
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: new Error("simulated invalidation failure"), fixture: fixtureId },
+      "scoring: public cache invalidation failed (the score stands)",
+    );
+    expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
   });
 
   // F3 (P1 round 2). The invalidation used to run after the post-commit try
