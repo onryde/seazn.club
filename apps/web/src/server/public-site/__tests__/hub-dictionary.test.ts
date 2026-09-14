@@ -96,6 +96,10 @@ export const W2_KEYS = [
   "knockout.view.label", "knockout.view.rounds", "knockout.view.draw", "knockout.drawLabel",
   // A bracket slot still waiting on its feeder (Knockout fix round, D2).
   "knockout.pendingPair", "knockout.pendingLoser",
+  // A slot waiting on a match with no pair to name (fix round N1): the feeder's
+  // ROUND, as the rail names it, and its place in that round — never the
+  // organiser board's "R1·2" short code.
+  "knockout.feederWinner", "knockout.feederLoser",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
@@ -179,6 +183,12 @@ describe("W2 public dictionary coverage", () => {
       // either name tells a spectator only half of who could be there.
       "knockout.pendingPair": ["a", "b"],
       "knockout.pendingLoser": ["a", "b"],
+      // A waiting slot with no pair to name (fix round N1): the builders
+      // (`competition-hub.ts`, `match-centre-load.ts`) pass the feeder's round
+      // name and its place in that round. A locale that drops `{seq}` names a
+      // round of eight matches without saying which.
+      "knockout.feederWinner": ["round", "seq"],
+      "knockout.feederLoser": ["round", "seq"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

@@ -366,6 +366,8 @@
   "knockout.drawLabel": "Knockout draw",
   "knockout.pendingPair": "{a} or {b}",
   "knockout.pendingLoser": "Loser of {a} v {b}",
+  "knockout.feederWinner": "Winner of {round}, match {seq}",
+  "knockout.feederLoser": "Loser of {round}, match {seq}",
   "leaders.title": "Leaders",
   "leaders.empty": "No stats yet",
   "teams.title": "Teams",

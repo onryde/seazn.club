@@ -65,6 +65,10 @@ vi.mock("../data", async (importOriginal) => ({
 import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeText } from "@/lib/scoring-vocab";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { t } from "@/lib/i18n-runtime";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import enPublic from "@/dictionaries/en/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import {
@@ -1326,6 +1330,175 @@ describe("loadCompetitionHub — round names are ranked WITHIN a stage", () => {
       msgFor("en", "bracket.round.plain", { n: 2 }),
       msgFor("en", "bracket.round.plain", { n: 3 }),
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round N1 — a slot waiting on a match names that match's ROUND
+// ---------------------------------------------------------------------------
+
+describe("loadCompetitionHub — N1: a slot waiting on a match names that match's ROUND, never the board's R·code", () => {
+  const cup: PublicStage = { ...STAGE, id: "ko", seq: 2, kind: "knockout", name: "Cup" };
+  const league: PublicStage = { ...STAGE, id: "lg", seq: 1, kind: "league", name: "League" };
+  const en = enPublic as unknown as Parameters<typeof t>[0];
+  const fr = frPublic as unknown as Parameters<typeof t>[0];
+  type Doc = NonNullable<Awaited<ReturnType<typeof loadCompetitionHub>>>;
+  type Label = { key: string; params: { round: number; seq: number } };
+  const R_CODE = /R\d+·\d+/;
+
+  /** A whole single-elimination draw of `size`: round one seeded, every later
+   *  slot waiting on the round before it. Round r's fixture j is fed on side s
+   *  by round r-1's fixture 2j-1+s, as its winner — `generateSingleElim`'s
+   *  wiring, stored the way `stages.ts` `matchSlotLabel` stores it: the
+   *  FEEDER's `{round, seq}`, as numbers. */
+  const draw = (size: number, stage_id = "ko"): PublicFixture[] => {
+    const rounds = Math.log2(size);
+    const out: PublicFixture[] = [];
+    for (let r = 1; r <= rounds; r++) {
+      for (let j = 1; j <= size / 2 ** r; j++) {
+        const fed = (s: 0 | 1): Label => ({ key: "slot.winner_match", params: { round: r - 1, seq: 2 * j - 1 + s } });
+        out.push(
+          F({
+            id: `${stage_id}-r${r}-${j}`,
+            stage_id,
+            round_no: r,
+            seq_in_round: j,
+            is_final: r === rounds,
+            ...(r === 1
+              ? {}
+              : { home_entrant_id: null, away_entrant_id: null, home_slot_label: fed(0), away_slot_label: fed(1) }),
+          }),
+        );
+      }
+    }
+    return out;
+  };
+
+  const load = async (fixtures: PublicFixture[], stages: PublicStage[] = [cup], org: PublicOrg = ORG) => {
+    getPublicCompetitionMock.mockResolvedValue({ org, competition: COMP, divisions: [DIV], liveNow: [] });
+    getPublicDivisionMock.mockResolvedValue(divisionDetail({ stages, fixtures, standings: [] }));
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    return doc;
+  };
+  const nameOf = (doc: Doc, fixtureId: string, side: 0 | 1) =>
+    doc.matches.find((m) => m.fixtureId === fixtureId)!.header.sides[side].name;
+  /** The rail chip's own text for the round holding `fixtureId`, read out of
+   *  the document's knockout view — the string the Knockout rail renders. */
+  const railLabel = (doc: Doc, fixtureId: string) =>
+    doc.knockouts.flatMap((v) => v.rounds).find((r) => r.fixtureIds.includes(fixtureId))!.label;
+  const codes = (doc: Doc) =>
+    doc.matches.flatMap((m) => m.header.sides.map((s) => s.name)).filter((name) => R_CODE.test(name));
+
+  it.each([
+    [8, "no round of sixteen"],
+    [16, "a round of sixteen first"],
+  ])("a %i-draw (%s): the semi-final side waiting on quarter-final 2 reads 'Winner of Quarter-finals, match 2'", async (size) => {
+    const doc = await load(draw(size));
+    const semiRound = Math.log2(size) - 1;
+    const semi = `ko-r${semiRound}-1`;
+    const feeder = `ko-r${semiRound - 1}-2`;
+    // The premise: on the rail, the feeder's round IS the quarter-finals —
+    // at a different `round_no` in each draw.
+    expect(railLabel(doc, feeder)).toBe(msgFor("en", "bracket.round.quarter"));
+    expect(nameOf(doc, semi, 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, feeder), seq: 2 }));
+    expect(nameOf(doc, semi, 1)).toBe("Winner of Quarter-finals, match 2");
+    expect(nameOf(doc, semi, 0)).toBe("Winner of Quarter-finals, match 1");
+    expect(codes(doc)).toEqual([]);
+  });
+
+  it("a 32-draw: round two's sides name round one by the rail's 'Round of 32'", async () => {
+    const doc = await load(draw(32));
+    expect(railLabel(doc, "ko-r1-1")).toBe(msgFor("en", "bracket.round.roundOf", { n: 32 }));
+    expect(nameOf(doc, "ko-r2-1", 0)).toBe(
+      t(en, "knockout.feederWinner", { round: railLabel(doc, "ko-r1-1"), seq: 1 }),
+    );
+    expect(nameOf(doc, "ko-r2-8", 1)).toBe("Winner of Round of 32, match 16");
+    expect(codes(doc)).toEqual([]);
+  });
+
+  it("double elimination: a losers' slot names the winners' round it drops from — 'Loser of Semi-finals, match 2'", async () => {
+    const de: PublicStage = { ...STAGE, id: "de", seq: 1, kind: "double_elim", name: "Double" };
+    const at = (
+      id: string,
+      round_no: number,
+      seq_in_round: number,
+      lane: "WB" | "LB" | "GF",
+      over: Partial<PublicFixture> = {},
+    ) => F({ id, stage_id: "de", round_no, seq_in_round, lane, ...over });
+    const winner = (round: number, seq: number): Label => ({ key: "slot.winner_match", params: { round, seq } });
+    const loser = (round: number, seq: number): Label => ({ key: "slot.loser_match", params: { round, seq } });
+    const waiting = (home: Label, away: Label): Partial<PublicFixture> => ({
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: home,
+      away_slot_label: away,
+    });
+    // `bracketToGen`'s numbering: the losers' lane is offset past the winners'
+    // rounds and the grand final past both, so `round_no` never repeats across lanes.
+    const doc = await load(
+      [
+        at("wb-1", 1, 1, "WB"),
+        at("wb-2", 1, 2, "WB"),
+        at("wb-f", 2, 1, "WB", waiting(winner(1, 1), winner(1, 2))),
+        at("lb-1", 3, 1, "LB", waiting(loser(1, 2), loser(1, 1))),
+        at("lb-f", 4, 1, "LB", waiting(loser(2, 1), winner(3, 1))),
+        at("gf", 5, 1, "GF", waiting(winner(2, 1), winner(4, 1))),
+      ],
+      [de],
+    );
+    expect(railLabel(doc, "wb-2")).toBe(msgFor("en", "bracket.round.semi"));
+    expect(nameOf(doc, "lb-1", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-2"), seq: 2 }));
+    expect(nameOf(doc, "lb-1", 0)).toBe("Loser of Semi-finals, match 2");
+    // Each lane's feeds name the FEEDER's lane round: the winners' final a
+    // loser drops from, the losers' round a winner climbs out of, and so on up.
+    expect(nameOf(doc, "lb-f", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-f"), seq: 1 }));
+    expect(nameOf(doc, "lb-f", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "lb-1"), seq: 1 }));
+    expect(nameOf(doc, "gf", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "lb-f"), seq: 1 }));
+    expect(codes(doc)).toEqual([]);
+  });
+
+  it("a label whose round is not in the stage keeps today's text, never a sentence with a hole in it", async () => {
+    const lostRound: Label = { key: "slot.winner_match", params: { round: 7, seq: 1 } };
+    const lostSeq: Label = { key: "slot.loser_match", params: { round: 1, seq: 9 } };
+    const fixtures = draw(4).map((f) =>
+      f.id === "ko-r2-1" ? { ...f, home_slot_label: lostRound, away_slot_label: lostSeq } : f,
+    );
+    const doc = await load(fixtures);
+    const today = (label: Label) => resolveSlotLabel(label, (k, v) => msgFor("en", k, v), "schedule.tbd");
+    expect(nameOf(doc, "ko-r2-1", 0)).toBe(today(lostRound));
+    expect(nameOf(doc, "ko-r2-1", 0)).toBe("Winner of R7·1");
+    expect(nameOf(doc, "ko-r2-1", 1)).toBe(today(lostSeq));
+  });
+
+  it.each(["league first", "league last"])(
+    "the feeder is found in the side's OWN stage (%s): a league's round 1 match 2 never names a knockout slot",
+    async (order) => {
+      const leagueRound = [
+        F({ id: "lg-1", stage_id: "lg", round_no: 1, seq_in_round: 1 }),
+        F({ id: "lg-2", stage_id: "lg", round_no: 1, seq_in_round: 2 }),
+      ];
+      const cupDraw = draw(4);
+      const doc = await load(
+        order === "league first" ? [...leagueRound, ...cupDraw] : [...cupDraw, ...leagueRound],
+        [league, cup],
+      );
+      expect(railLabel(doc, "ko-r1-2")).toBe(msgFor("en", "bracket.round.semi"));
+      expect(nameOf(doc, "ko-r2-1", 1)).toBe("Winner of Semi-finals, match 2");
+      expect(nameOf(doc, "ko-r2-1", 1)).not.toBe(
+        t(en, "knockout.feederWinner", { round: msgFor("en", "bracket.round.plain", { n: 1 }), seq: 2 }),
+      );
+    },
+  );
+
+  it("the org's locale names the round: a French hub puts the French rail label in the French sentence", async () => {
+    const doc = await load(draw(8), [cup], { ...ORG, default_locale: "fr" });
+    expect(doc.locale).toBe("fr");
+    expect(railLabel(doc, "ko-r1-2")).toBe(msgFor("fr", "bracket.round.quarter"));
+    expect(nameOf(doc, "ko-r2-1", 1)).toBe(t(fr, "knockout.feederWinner", { round: railLabel(doc, "ko-r1-2"), seq: 2 }));
+    expect(nameOf(doc, "ko-r2-1", 1)).not.toBe(
+      t(en, "knockout.feederWinner", { round: railLabel(doc, "ko-r1-2"), seq: 2 }),
+    );
   });
 });
 

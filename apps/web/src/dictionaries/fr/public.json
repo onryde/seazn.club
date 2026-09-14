@@ -366,6 +366,8 @@
   "knockout.drawLabel": "Tableau à élimination directe",
   "knockout.pendingPair": "{a} ou {b}",
   "knockout.pendingLoser": "Perdant de {a} contre {b}",
+  "knockout.feederWinner": "Vainqueur de {round}, match {seq}",
+  "knockout.feederLoser": "Perdant de {round}, match {seq}",
   "leaders.title": "Meilleurs joueurs",
   "leaders.empty": "Pas encore de statistiques",
   "teams.title": "Équipes",

@@ -366,6 +366,8 @@
   "knockout.drawLabel": "Cuadro eliminatorio",
   "knockout.pendingPair": "{a} o {b}",
   "knockout.pendingLoser": "Perdedor de {a} contra {b}",
+  "knockout.feederWinner": "Ganador de {round}, partido {seq}",
+  "knockout.feederLoser": "Perdedor de {round}, partido {seq}",
   "leaders.title": "Líderes",
   "leaders.empty": "Aún no hay estadísticas",
   "teams.title": "Equipos",

@@ -35,8 +35,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolveSlotLabel } from "@/lib/slot-label";
-import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { fixtureRoundLabel, publicSlotLabel, stageFixtureAt } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import {
   bucketFixture,
@@ -606,7 +605,6 @@ export async function loadCompetitionHub(
       });
       colours[e.id] = primaryColour(e.team_display?.colors);
     }
-    const slot = (label: SlotLabel | null) => resolveSlotLabel(label, ui, "schedule.tbd");
     const divHref = `${base}/${d.slug}`;
 
     hubDivisions.push({
@@ -658,42 +656,59 @@ export async function loadCompetitionHub(
     }
     // Each fixture's resolved round name, kept so a knockout round reuses the
     // exact string its matches carry instead of resolving it a second time.
+    // Resolved in a pass of its own, BEFORE any side: a side waiting on a match
+    // names that match's round with this same string (fix round N1), and the
+    // feeder can sit anywhere in `fixtures`' order.
+    //
+    // `fixtureRoundLabel` answers for EVERY stage kind — a non-bracket stage's
+    // rounds are a dense ordinal sequence and come back as `plain_round`
+    // (`round-role.ts` says so outright: its display consumers "each used
+    // to keep their own copy of this set purely as a GUARD in front of a
+    // call this function could not safely take"). So no BRACKET_KINDS
+    // guard here, and the ordinal is the fixture's rank within its own
+    // lane rather than a raw `round_no` a sparse bracket numbering would
+    // print wrong.
+    //
+    // Dropping that guard does NOT mean dropping the stage scoping: the
+    // ranking list is this fixture's OWN stage. See `laneByStage` above.
     const labelByFixture = new Map<string, string | null>();
     for (const f of fixtures) {
-      const sides = hubSides(f, { names, kinds, badges, colours, slot });
+      const stage = stageById.get(f.stage_id);
+      labelByFixture.set(
+        f.id,
+        stage ? fixtureRoundLabel(ui, laneByStage.get(f.stage_id) ?? [], f, stage.kind) : null,
+      );
+    }
+    // An unfilled side's text (fix round N1). A side waiting on a match names
+    // that match's round exactly as the rail does — "Winner of Quarter-finals,
+    // match 2", never the organiser board's "R3·2" — and the match is looked up
+    // in the side's OWN stage, for the reason `laneByStage` is per stage: a
+    // league's round 1 match 2 and a knockout's share a `{round, seq}`.
+    const fixtureAtByStage = new Map(
+      [...laneByStage.keys()].map((stageId) => [
+        stageId,
+        stageFixtureAt(fixtures.filter((f) => f.stage_id === stageId)),
+      ]),
+    );
+    const slotIn =
+      (stageId: string) =>
+      (label: SlotLabel | null): string =>
+        publicSlotLabel(
+          label,
+          ui,
+          (key, vars) => t(dict, key, vars),
+          (round, seq) => {
+            const feeder = fixtureAtByStage.get(stageId)?.(round, seq);
+            return feeder === undefined ? null : (labelByFixture.get(feeder.id) ?? null);
+          },
+        );
+    for (const f of fixtures) {
+      const sides = hubSides(f, { names, kinds, badges, colours, slot: slotIn(f.stage_id) });
       const stage = stageById.get(f.stage_id);
       if (f.venue_name) venues.add(f.venue_name);
       const { bucket } = hubLiveness(f.status);
       const winner = f.outcome?.winner ?? null;
-      // `roundRoleFor` answers for EVERY stage kind — a non-bracket stage's
-      // rounds are a dense ordinal sequence and come back as `plain_round`
-      // (`round-role.ts` says so outright: its display consumers "each used
-      // to keep their own copy of this set purely as a GUARD in front of a
-      // call this function could not safely take"). So no BRACKET_KINDS
-      // guard here, and the ordinal is the fixture's rank within its own
-      // lane rather than a raw `round_no` a sparse bracket numbering would
-      // print wrong.
-      //
-      // Dropping that guard does NOT mean dropping the stage scoping: the
-      // ranking list is this fixture's OWN stage. See `laneByStage` above.
-      const roundLabel = stage
-        ? roundRoleLabel(
-            ui,
-            roundRoleFor(
-              laneByStage.get(f.stage_id) ?? [],
-              {
-                round_no: f.round_no,
-                lane: f.lane ?? null,
-                is_final: f.is_final === true,
-                third_place: f.third_place === true,
-                conditional: f.conditional === true,
-              },
-              stage.kind,
-              null,
-            ),
-          )
-        : null;
-      labelByFixture.set(f.id, roundLabel);
+      const roundLabel = labelByFixture.get(f.id) ?? null;
       matches.push({
         fixtureId: f.id,
         divisionId: d.id,

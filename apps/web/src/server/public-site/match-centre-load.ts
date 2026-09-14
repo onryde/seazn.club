@@ -22,8 +22,10 @@ import { resolveVenueTz } from "@/lib/tz";
 import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
-import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabelLookup } from "@/lib/slot-label";
+import { getDictionary, t, toLocale } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import { fixtureRoundLabel, publicSlotLabel, stageFixtureAt } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
 import { buildMatchCentre, type MatchCentreInput } from "./match-centre";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
@@ -155,15 +157,16 @@ interface SidePre {
 }
 
 /** Home/away `Side`s (minus `short`, resolved together below). Handles the
- *  bye/TBD case (an entrant id still null — the same state the fixture page
- *  already renders via `resolveSlotLabel`) without throwing: a bye/TBD slot
- *  has no real entrant kind to disambiguate by, so it is treated as a team
- *  for the abbreviation rule, same as before this fix. */
+ *  bye/TBD case (an entrant id still null) without throwing: its name is
+ *  `slot(label)` — the feeder's round for a side waiting on a match
+ *  (`feeder-slot-label.ts`), else the board's `resolveSlotLabel` text. A
+ *  bye/TBD slot has no real entrant kind to disambiguate by, so it is treated
+ *  as a team for the abbreviation rule, same as before this fix. */
 async function loadSides(
   sql: Sql,
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   division: { youth: boolean; playerNameDisplay: string | null },
-  slotLabelLookup: SlotLabelLookup,
+  slot: (label: SlotLabel | null) => string,
 ): Promise<[SideT, SideT]> {
   const ids = [fixture.home_entrant_id, fixture.away_entrant_id].filter(
     (id): id is string => id !== null,
@@ -187,7 +190,7 @@ async function loadSides(
 
   const sideOf = (entrantId: string | null, slotLabel: SlotLabel | null): SidePre => {
     if (entrantId === null) {
-      const name = resolveSlotLabel(slotLabel, slotLabelLookup, "schedule.tbd");
+      const name = slot(slotLabel);
       return { entrantId: "", name, colour: null, badgeUrl: null, isPerson: false };
     }
     const row = byId.get(entrantId);
@@ -279,8 +282,8 @@ export async function loadMatchCentre(
     select config_snapshot from fixtures where id = ${fixture.id}`;
   const [divisionRow] = await sql<{ config: unknown }[]>`
     select config from divisions where id = ${fixture.division_id}`;
-  const [stageRow] = await sql<{ config: Record<string, unknown> | null }[]>`
-    select config from stages where id = ${fixture.stage_id}`;
+  const [stageRow] = await sql<{ config: Record<string, unknown> | null; kind: string }[]>`
+    select config, kind from stages where id = ${fixture.stage_id}`;
   const rawCfg = resolveFixtureCfg(fixtureRow?.config_snapshot, divisionRow?.config, stageRow?.config);
 
   const sportModule =
@@ -314,11 +317,45 @@ export async function loadMatchCentre(
     youth: ctx.division.youth,
     player_name_display: ctx.division.playerNameDisplay,
   });
+  // Fix round N1 — a side waiting on a match names that match's ROUND the way
+  // the hub's Knockout rail does ("Winner of Semi-finals, match 2"), never the
+  // organiser board's "R1·2" short code. The feeder is looked up among THIS
+  // fixture's stage's rows and named by `fixtureRoundLabel`, the namer the hub
+  // labels every round with; `publicSlotLabel` keeps today's text for anything
+  // that is not a feeder label, or names no match of the stage.
+  const stageRows = await sql<
+    {
+      round_no: number;
+      seq_in_round: number;
+      lane: "WB" | "LB" | "GF" | null;
+      is_final: boolean | null;
+      third_place: boolean | null;
+      conditional: boolean | null;
+    }[]
+  >`
+    select round_no, seq_in_round, lane, is_final, third_place, conditional
+    from public_fixtures_v where stage_id = ${fixture.stage_id}`;
+  const laneRows = stageRows.map((r) => ({ round_no: r.round_no, lane: r.lane }));
+  const stageFixture = stageFixtureAt(stageRows);
+  const publicDict = await getDictionary(toLocale(ctx.locale), "public");
+  const slot = (label: SlotLabel | null): string =>
+    publicSlotLabel(
+      label,
+      ctx.slotLabelLookup,
+      (key, vars) => t(publicDict, key, vars),
+      (round, seq) => {
+        const feeder = stageFixture(round, seq);
+        // `stageRow` exists for every fixture (a foreign key); the check is
+        // for the type, which the destructured query result leaves optional.
+        if (feeder === undefined || stageRow === undefined) return null;
+        return fixtureRoundLabel(ctx.slotLabelLookup, laneRows, feeder, stageRow.kind);
+      },
+    );
   const sides = await loadSides(
     sql,
     fixture,
     { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay },
-    ctx.slotLabelLookup,
+    slot,
   );
   const venueTz = resolveVenueTz(ctx.division.tz, ctx.orgTz);
 
