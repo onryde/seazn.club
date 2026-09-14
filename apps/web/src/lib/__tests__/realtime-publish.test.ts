@@ -43,7 +43,7 @@ describe("publishFixtureUpdate", () => {
 describe("mintPublicFixtureToken", () => {
   afterEach(() => {
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     delete process.env.SUPABASE_JWT_KID;
     delete process.env.SUPABASE_JWT_ALG;
@@ -77,7 +77,7 @@ describe("mintPublicFixtureToken", () => {
     expect(payload.role).toBe("authenticated");
   });
 
-  it("mints ES256 from SUPABASE_JWT_PRIVATE_KEY_B64 when the raw key is unset", async () => {
+  it("mints ES256 from SUPABASE_JWT_SIGNING_KEY_B64 when the raw key is unset", async () => {
     vi.resetModules();
     const { privateKey, publicKey } = await generateKeyPair("ES256", {
       extractable: true,
@@ -89,7 +89,7 @@ describe("mintPublicFixtureToken", () => {
     publicJwk.kid = "test-kid-b64";
     publicJwk.alg = "ES256";
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;
-    process.env.SUPABASE_JWT_PRIVATE_KEY_B64 = Buffer.from(
+    process.env.SUPABASE_JWT_SIGNING_KEY_B64 = Buffer.from(
       JSON.stringify(jwk),
       "utf8",
     ).toString("base64");
@@ -109,7 +109,7 @@ describe("mintPublicFixtureToken", () => {
   it("falls back to HS256 for a non-UUID shared secret", async () => {
     vi.resetModules();
     delete process.env.SUPABASE_JWT_PRIVATE_KEY;
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     process.env.SUPABASE_JWT_SECRET = "a-long-shared-secret-not-a-uuid";
 
     const { mintPublicFixtureToken } = await import("../realtime");
@@ -129,7 +129,7 @@ describe("mintPublicFixtureToken", () => {
   // prefixed message instead.
   it("throws a clear error for malformed JWK JSON, not a raw SyntaxError", async () => {
     vi.resetModules();
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     process.env.SUPABASE_JWT_PRIVATE_KEY = "{not valid json";
 
@@ -147,7 +147,7 @@ describe("mintPublicFixtureToken", () => {
     const { privateKey } = await generateKeyPair("ES256", { extractable: true });
     const jwk = await exportJWK(privateKey);
     jwk.alg = "ES512"; // declared, but not one this function can mint with
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     process.env.SUPABASE_JWT_PRIVATE_KEY = JSON.stringify(jwk);
 
@@ -170,7 +170,7 @@ describe("mintPublicFixtureToken", () => {
       modulusLength: 2048,
     });
     const pem = await exportPKCS8(privateKey);
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     process.env.SUPABASE_JWT_PRIVATE_KEY = pem;
     process.env.SUPABASE_JWT_ALG = "RS256";
@@ -196,7 +196,7 @@ describe("mintPublicFixtureToken", () => {
       modulusLength: 2048,
     });
     const pem = await exportPKCS8(privateKey);
-    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SIGNING_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     delete process.env.SUPABASE_JWT_ALG;
     process.env.SUPABASE_JWT_PRIVATE_KEY = pem;

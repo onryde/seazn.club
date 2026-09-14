@@ -98,9 +98,9 @@ type MintKey = {
   kid?: string;
 };
 
-/** Decode `SUPABASE_JWT_PRIVATE_KEY_B64` when the raw JWK/PEM env is absent. */
+/** Decode `SUPABASE_JWT_SIGNING_KEY_B64` when the raw JWK/PEM env is absent. */
 function decodePrivateKeyB64(): string | undefined {
-  const b64 = process.env.SUPABASE_JWT_PRIVATE_KEY_B64?.trim();
+  const b64 = process.env.SUPABASE_JWT_SIGNING_KEY_B64?.trim();
   if (!b64) return undefined;
   try {
     const decoded = Buffer.from(b64, "base64").toString("utf8").trim();
@@ -122,11 +122,16 @@ function decodePrivateKeyB64(): string | undefined {
  * imported signing key (Supabase cannot export the private half — import your
  * own). Optional `SUPABASE_JWT_KID` when using PEM.
  *
- * CI alternative: `SUPABASE_JWT_PRIVATE_KEY_B64` = the same material, base64.
- * GitHub Actions strips raw JWK private keys from job env (the plaintext
- * `SUPABASE_JWT_PRIVATE_KEY` line never appears beside its siblings in the
- * runner dump — measured run 34784354416), so e2e.yml ships the ES256 JWK
- * only in this encoding.
+ * CI alternative: `SUPABASE_JWT_SIGNING_KEY_B64` = the same material, base64.
+ * GitHub Actions strips job-env vars by NAME, not by value shape — the
+ * plaintext `SUPABASE_JWT_PRIVATE_KEY` line never appeared beside its
+ * siblings in the runner dump (measured run 34784354416), and base64-encoding
+ * the value under the name `SUPABASE_JWT_PRIVATE_KEY_B64` did not dodge it
+ * either — the same var, absent from every one of ~15 step `env:` dumps in a
+ * run that then minted HS256 (measured run 34830995761, job 103934064629;
+ * PR #782 review, 2026-09-14). The filter reads the substring `PRIVATE_KEY`
+ * in the var NAME, so this var is named to avoid it — do not rename it back
+ * to anything containing `PRIVATE_KEY`, in this file or in `e2e.yml`.
  *
  * Fallback: `SUPABASE_JWT_SECRET` = legacy / shared-secret signing key (long
  * random string). Rejected when it looks like a JWKS `kid` (UUID).
@@ -136,9 +141,9 @@ function decodePrivateKeyB64(): string | undefined {
  * algorithm the key is for (unlike the PKCS1 `BEGIN RSA PRIVATE KEY` header,
  * which `importPKCS8` does not even accept), so there is no reliable way to
  * tell an RS256 PKCS8 key from an ES256 one by sniffing the PEM text. Set
- * `SUPABASE_JWT_ALG=RS256` when `SUPABASE_JWT_PRIVATE_KEY`/`_B64` is an RSA
- * PKCS8 key; anything else (including unset) defaults to ES256, matching this
- * project's actual Supabase signing keys.
+ * `SUPABASE_JWT_ALG=RS256` when `SUPABASE_JWT_PRIVATE_KEY`/the CI `_B64` var
+ * is an RSA PKCS8 key; anything else (including unset) defaults to ES256,
+ * matching this project's actual Supabase signing keys.
  *
  * @see https://supabase.com/docs/guides/auth/signing-keys
  */

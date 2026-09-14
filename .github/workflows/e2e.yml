@@ -237,9 +237,14 @@ jobs:
       # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts).
       # Prefer ES256 (project JWKS shape); HS256 remains as fallback for older
       # helpers. CI-only dummy keypair — not a real Supabase signing key.
-      # Base64 JWK — Actions strips plaintext private JWKs from job env
-      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
-      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       # x-cron-secret bearer for /api/cron/registrations (RS012's walkthrough
       # drives the sweep directly, apps/web/e2e/walkthrough/rs012-solo-signup-
@@ -734,9 +739,14 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
-      # Base64 JWK — Actions strips plaintext private JWKs from job env
-      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
-      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
@@ -1019,9 +1029,14 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
-      # Base64 JWK — Actions strips plaintext private JWKs from job env
-      # (PRIVATE_KEY never appeared next to SECRET/CRON in run 34784354416).
-      SUPABASE_JWT_PRIVATE_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
