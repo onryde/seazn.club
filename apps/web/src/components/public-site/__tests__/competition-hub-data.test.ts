@@ -43,6 +43,24 @@ describe("fetchCompetitionHub", () => {
     expect(Object.hasOwn(res as object, "data")).toBe(false);
   });
 
+  // R10 H1. The hub route answers `Cache-Control: public, s-maxage=30,
+  // stale-while-revalidate=300` for the CDN (usecases/public.ts), and Chromium
+  // applies stale-while-revalidate to its OWN cache too. Measured on spectw2: a
+  // push-triggered refetch came back with a `generatedAt` from BEFORE the
+  // score, and the Knockout tab never moved. With the browser cache disabled
+  // over CDP, the same run updated in 462ms. This goes through the real `api()`,
+  // so the option has to survive its RequestInit spread to reach `fetch`.
+  it("asks fetch for no-store, so the live refetch never reuses the browser's HTTP cache", async () => {
+    stubFetch({ ok: true, data: { competitionId: "c1" } });
+
+    await fetchCompetitionHub("riverside", "autumn-cup");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/public/orgs/riverside/competitions/autumn-cup/hub",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
   it("throws on error payloads instead of resolving undefined", async () => {
     stubFetch({ ok: false, error: "not found" }, false, 404);
     await expect(fetchCompetitionHub("riverside", "autumn-cup")).rejects.toThrow("not found");

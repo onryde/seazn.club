@@ -12,5 +12,14 @@ export async function fetchCompetitionHub(
   orgSlug: string,
   competitionSlug: string,
 ): Promise<CompetitionHubDocT> {
-  return api<CompetitionHubDocT>(`/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub`);
+  // R10 H1: never the browser's HTTP cache. The route answers `Cache-Control:
+  // public, s-maxage=30, stale-while-revalidate=300`, which is meant for the
+  // CDN in front of share-link traffic and stays as it is. Chromium applies
+  // stale-while-revalidate to its own private cache as well, though. Measured
+  // on spectw2: a push-triggered refetch came back from that cache with a
+  // document built BEFORE the score, and the page never moved. PR #782 made the
+  // same fix for `fetchLiveFixture`.
+  return api<CompetitionHubDocT>(`/api/v1/public/orgs/${orgSlug}/competitions/${competitionSlug}/hub`, {
+    cache: "no-store",
+  });
 }
