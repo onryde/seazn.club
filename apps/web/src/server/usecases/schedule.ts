@@ -12,7 +12,7 @@ import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
-import { publishDivisionUpdate } from "@/lib/realtime";
+import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
@@ -98,6 +98,10 @@ export function afterScheduleWrite(
   divisionId: string,
   competitionId: string,
   reason: "schedule" | "publish" | "start",
+  /** R10d n2: every fixture this write changed. A write that moves no single
+   *  fixture (publish, start) passes its division's fixtures, read in its own
+   *  transaction, never found by a keyspace SCAN. */
+  fixtureIds: readonly string[],
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
   sweepPublicKey(`pub:v1:div:${divisionId}:*`);
@@ -112,13 +116,31 @@ export function afterScheduleWrite(
   // for that DEL, never longer than PUSH_AFTER_DELETE_BOUND_MS, exactly once. A
   // push sent first sends the hub's refetch to a Redis copy the delete has not
   // reached yet. The glob's SCAN above is not waited on: no push depends on it.
-  const key = `pub:v1:hub:${competitionId}`;
+  //
+  // R10d n2: the match centre and the overlay read `pub:v1:fixture:{id}`
+  // (`publicFixture`, usecases/public.ts), a 30s cache of a fixture's kick-off,
+  // venue and court. Every fixture this write changed has its key in the SAME
+  // one DEL and its `fixture:{id}` push in the same bounded send, so an open
+  // match centre refetches now instead of at its poll, and never before the
+  // delete. A write that changed more than SCHEDULE_FIXTURE_PUSH_CAP fixtures
+  // (a whole-division apply, publish or start) still drops every key but sends
+  // no per-fixture push: one write must not fan out hundreds of broadcasts, and
+  // those match centres catch up on their poll.
+  const keys = [`pub:v1:hub:${competitionId}`, ...fixtureIds.map((id) => `pub:v1:fixture:${id}`)];
   // F4: never left to reject unhandled, for the reason `sweepPublicKey` gives.
-  const deleted = cacheDel(key).catch((err: unknown) => {
-    log.error({ err, key }, "schedule: a public Redis delete failed (the write stands)");
+  const deleted = cacheDel(...keys).catch((err: unknown) => {
+    log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
   });
-  sendAfterDeleteOrBound(deleted, () => void publishDivisionUpdate(divisionId, reason));
+  const pushFixtures = fixtureIds.length <= SCHEDULE_FIXTURE_PUSH_CAP;
+  sendAfterDeleteOrBound(deleted, () => {
+    void publishDivisionUpdate(divisionId, reason);
+    if (pushFixtures) for (const id of fixtureIds) void publishFixtureUpdate(id, "schedule");
+  });
 }
+
+/** R10d n2: a schedule write that changed MORE fixtures than this sends no
+ *  per-fixture push. Its DEL still drops every one of their keys. */
+export const SCHEDULE_FIXTURE_PUSH_CAP = 50;
 
 /** A public Redis sweep, not awaited, that can never reject unhandled (P1
  *  round 2, F4). `cacheDelPattern` fails open inside its own try, but its
@@ -2794,9 +2816,16 @@ export async function applySchedule(
         : {}),
     });
     await tx`update divisions set seq = ${seq} where id = ${stage.division_id}`;
-    return { divisionId: stage.division_id, competitionId: stage.competition_id, applied: input.assignments.length, conflicts };
+    return {
+      divisionId: stage.division_id,
+      competitionId: stage.competition_id,
+      applied: input.assignments.length,
+      conflicts,
+      // R10d n2: the fixtures this apply wrote, and only those.
+      fixtureIds: input.assignments.map((a) => a.fixture_id),
+    };
   });
-  afterScheduleWrite(out.divisionId, out.competitionId, "schedule");
+  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", out.fixtureIds);
   return { applied: out.applied, conflicts: out.conflicts };
 }
 
@@ -3204,6 +3233,8 @@ export async function moveFixture(
     return {
       divisionId: fixture.division_id,
       competitionId: fixture.competition_id,
+      // R10d n2: the one fixture this move wrote.
+      fixtureId: fixture.id,
       conflicts,
       changeNotices,
       // P9 pass 3a: the officials-change EMAIL renders human text, so this
@@ -3237,7 +3268,7 @@ export async function moveFixture(
       venue: out.change.venueName,
     }).catch(() => {});
   }
-  afterScheduleWrite(out.divisionId, out.competitionId, "schedule");
+  afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [out.fixtureId]);
   return out.conflicts;
 }
 
@@ -3625,9 +3656,12 @@ export async function publishSchedule(
     }
     const seq = await appendPublishedEvent(tx, divisionId, conflicts, acknowledged, input.reason);
     await tx`update divisions set seq = ${seq} where id = ${divisionId}`;
-    return { competitionId: division.competition_id, status };
+    // R10d n2: a publish moves no single fixture, so every public fixture
+    // document of the division drops with the hub key.
+    const fixtures = await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`;
+    return { competitionId: division.competition_id, status, fixtureIds: fixtures.map((f) => f.id) };
   });
-  afterScheduleWrite(divisionId, out.competitionId, "publish");
+  afterScheduleWrite(divisionId, out.competitionId, "publish", out.fixtureIds);
   return { division_id: divisionId, status: out.status, published: true };
 }
 
@@ -3718,7 +3752,13 @@ export async function startDivision(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx<{ status: string; competition_id: string }[]>`
       select status, competition_id from divisions where id = ${divisionId}`;
-    if (!division || division.status === "active") return { started: false };
+    // R10d n2: a start moves no single fixture (it may generate the first stage
+    // and write rolling times across it), so every public fixture document of
+    // the division drops with the hub key. Read under the lock, after generation.
+    const fixtureIds = (
+      await tx<{ id: string }[]>`select id from fixtures where division_id = ${divisionId}`
+    ).map((f) => f.id);
+    if (!division || division.status === "active") return { started: false, fixtureIds };
 
     // Rolling quick-start times (doc 12 §1.A) — only for a straight
     // setup→active start; a published timetable is left untouched.
@@ -3769,8 +3809,8 @@ export async function startDivision(
       from: division.status,
     });
     await tx`update divisions set seq = ${seq} where id = ${divisionId}`;
-    return { started: true };
+    return { started: true, fixtureIds };
   });
-  afterScheduleWrite(divisionId, pre.competition_id, "start");
+  afterScheduleWrite(divisionId, pre.competition_id, "start", out.fixtureIds);
   return { division_id: divisionId, status: "active", started: out.started, generated };
 }
