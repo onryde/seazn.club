@@ -49,6 +49,7 @@ import {
 //
 // Fix round N1:
 //   N1 a waiting double-elimination card names its feeder's round with the rail's label ↔ no "R1·1" code anywhere in the panel
+//   M6 (fix round 1) a LOSERS' card names the winners' round its sides drop from ↔ the same panel, still no R·code
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -813,7 +814,7 @@ test.describe("competition hub: Knockout tab", () => {
   test("N1 at 1280: a double-elimination card waiting on a match names that match's round with the rail's own label, and no R·code is anywhere in the panel", async ({
     page,
   }) => {
-    test.setTimeout(budget(3));
+    test.setTimeout(budget(5));
     await page.setViewportSize({ width: 1280, height: 900 });
     const view = doubleElim.doc.knockouts[0]!;
     const byId = new Map(doubleElim.doc.matches.map((m) => [m.fixtureId, m]));
@@ -839,6 +840,31 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(card.getByTestId("mh-match-side-1")).toContainText(expected[1]!);
     // The chip the round's name comes from says the same words on the rail.
     await expect(roundChip(page, view, first)).toContainText(first.label);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+
+    // Fix round 1, M6: a LOSERS' bracket card names the winners' round its
+    // sides drop from. The first losers' round's first match takes the losers
+    // of the winners' first round's matches 1 and 2 (`generateDoubleElim`, LB
+    // round 0, emitted in index order, so `bracketToGen` numbers them seq 1 and
+    // 2). That winners' round holds four matches, so each side keeps its number.
+    const losers = view.rounds.filter((round) => round.lane === "LB");
+    expect(losers.length, JSON.stringify(view.rounds.map((r) => [r.key, r.lane]))).toBeGreaterThanOrEqual(1);
+    const lbFirst = losers[0]!;
+    const lbTargetId = lbFirst.fixtureIds[0]!;
+    const lbTarget = byId.get(lbTargetId)!;
+    expect(first.fixtureIds, "the winners' first round of an 8-draw").toHaveLength(4);
+    expect(lbTarget.header.sides.map((s) => s.entrantId), JSON.stringify(lbTarget)).toEqual(["", ""]);
+    // `knockout.feederLoser`, en "Loser of {round}, match {seq}" — literal words,
+    // the round read from the same document.
+    const lbExpected = [`Loser of ${first.label}, match 1`, `Loser of ${first.label}, match 2`];
+    expect(lbTarget.header.sides.map((s) => s.name)).toEqual(lbExpected);
+
+    await roundChip(page, view, lbFirst).click();
+    await expect(roundChip(page, view, lbFirst)).toHaveAttribute("aria-pressed", "true");
+    const lbCard = page.getByTestId(`mh-match-${lbTargetId}`);
+    await expect(lbCard).toBeVisible();
+    await expect(lbCard.getByTestId("mh-match-side-0")).toContainText(lbExpected[0]!);
+    await expect(lbCard.getByTestId("mh-match-side-1")).toContainText(lbExpected[1]!);
     await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
   });
 

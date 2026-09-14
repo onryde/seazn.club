@@ -1434,8 +1434,12 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
       home_slot_label: home,
       away_slot_label: away,
     });
-    // `bracketToGen`'s numbering: the losers' lane is offset past the winners'
-    // rounds and the grand final past both, so `round_no` never repeats across lanes.
+    // Hand-numbered DENSE here (WB 1-2, LB 3-4, GF 5) — NOT `bracketToGen`'s
+    // real numbering, which offsets the losers' lane by k and the grand final
+    // by 2k (for k = 2: WB 1-2, LB 5-6, GF 9, reset 10; the reset case below
+    // uses exactly that). The feeder lookup is a Map keyed on `(round, seq)`
+    // within the stage, so only uniqueness matters, and `round_no` never
+    // repeats across lanes in either numbering.
     const doc = await load(
       [
         at("wb-1", 1, 1, "WB"),
