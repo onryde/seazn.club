@@ -51,6 +51,12 @@ const probe = vi.hoisted(() => ({
   failAtLock: null as number | null,
   locks: 0,
   injected: new Error("injected: a later transaction of this write failed"),
+  /** M2 r1: when set, `fireScoreRevalidate` throws it. That is one of the two
+   *  points at which `invalidatePublicCache` itself can reject (the other is
+   *  its `withTenant` lookup), and it is reached BEFORE any `cacheDel` — so
+   *  arming it drives `scoreEvent`'s `.catch` fallback with no DEL having
+   *  gone out, which is exactly the state that fallback reasons about. */
+  failRevalidate: null as Error | null,
 }));
 
 vi.mock("@/lib/cache", async (importOriginal) => {
@@ -120,6 +126,20 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
 }));
+// M2 r1 — a passthrough that diverges only when `probe.failRevalidate` is
+// armed, which exactly one case does and `quiesce()` disarms. Every other case
+// in this file, and every other write inside the armed one, gets the real
+// `fireScoreRevalidate`.
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...actual,
+    fireScoreRevalidate: (divisionId: string, competitionId: string) => {
+      if (probe.failRevalidate) throw probe.failRevalidate;
+      return actual.fireScoreRevalidate(divisionId, competitionId);
+    },
+  };
+});
 
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
@@ -164,6 +184,7 @@ const fixtureKey = (fixtureId: string) => `pub:v1:fixture:${fixtureId}`;
 async function quiesce(): Promise<void> {
   probe.hold = false;
   probe.failAtLock = null;
+  probe.failRevalidate = null;
   probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
@@ -1251,5 +1272,60 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
       .toEqual([...advanced].sort());
     expect(new Set(probe.fixturePushes.slice(1).map(([, reason]) => reason))).toEqual(new Set(["schedule"]));
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  // M2 r1 (review-p2-r10h R10h-m2) — the OTHER half of the R10h decision, and
+  // until now the unpinned one.
+  //
+  // `invalidatePublicCache` can reject in exactly two places, its `withTenant`
+  // lookup and the `fireScoreRevalidate` tag call, and BOTH sit before any
+  // `cacheDel`: the two inner Redis calls carry their own catches, and
+  // `sendAfterDeleteOrBound` is never reached on that path. So when it
+  // rejects, no DEL went out at all, and `scoreEvent`'s `.catch` fallback
+  // (scoring.ts:215-227) deliberately pushes ONLY the decided fixture — the
+  // scorer's other devices still need their ping, while a push for a fixture
+  // this score advanced a name INTO would send its spectators straight back
+  // to the stale cached document they are already showing. They keep their
+  // own 30 s poll, which is what every score did before R10h.
+  //
+  // That is the right call and nothing asserted it: `hub-cache-invalidation`
+  // covers a rejecting DEL and a rejecting SCAN but not the function itself
+  // rejecting, and none of the cases above exercise it. A later edit that
+  // "helpfully" added `for (const id of advanced) void
+  // publishFixtureUpdate(id, "schedule")` to that catch would have stayed
+  // green everywhere.
+  it("when the invalidation itself rejects, no DEL goes out and ONLY the decided fixture is pushed — never the one it advanced into", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.failRevalidate = new Error("injected: the ISR tag call failed");
+    // No `probe.hold`: there is nothing to hold. The point of the case is that
+    // the DEL is never issued, so the pushes cannot be waiting on one.
+    const out = await decide(rig, semi!.id, 1);
+    expect(out.outcome, "the score itself still stands — the invalidation is post-commit").not.toBeNull();
+
+    // ANTI-VACUITY, and the half R10h-m2 asked for: the advance really did
+    // happen, so `advanced` was NON-EMPTY when the fallback chose what to
+    // push. Without this the case would pass just as well on a score that
+    // advanced nobody, and would be pinning nothing.
+    const { moved: advanced, deleted, created } = diff(before, await lineups(rig.divisionId));
+    expect([deleted, created]).toEqual([[], []]);
+    expect(advanced, "the winner was still named into the fixture this one feeds")
+      .toEqual([semi!.winner_to]);
+
+    expect(probe.dels, "the invalidation rejected before `cacheDel`, so no key was dropped").toEqual([]);
+    // Late arrivals too: `sendAfterDeleteOrBound` is never reached on this
+    // path, so nothing can turn up on the bound either.
+    await sleep(40);
+    expect(probe.dels, "a DEL turned up later").toEqual([]);
+    expect(
+      probe.fixturePushes,
+      "the fallback pushed something other than the decided fixture — a push for a fixture whose Redis copy was NOT dropped sends its spectators back to the stale document they already have",
+    ).toEqual([[semi!.id, "event"]]);
+    expect(probe.divisionPushes, "the division push rides the callback, which is never reached").toEqual([]);
   }, 120_000);
 });
