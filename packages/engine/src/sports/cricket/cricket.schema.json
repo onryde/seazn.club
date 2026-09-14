@@ -799,6 +799,9 @@
       "innings[].fine.striker": [
         "string"
       ],
+      "innings[].fine.unfacedIncoming": [
+        "string"
+      ],
       "innings[].legalBalls": [
         "number"
       ],

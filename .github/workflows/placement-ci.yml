@@ -206,6 +206,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-smoke -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
           trap 'echo "--- container logs ---"; docker logs placement-smoke || true; docker rm -f placement-smoke >/dev/null 2>&1 || true' EXIT
 
@@ -361,6 +362,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-integration -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-integration-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
 
           opened=""

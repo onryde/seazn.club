@@ -823,11 +823,17 @@ test.describe("private realtime push to the overlay", () => {
       // CI builds against stub.supabase.co — no Realtime websocket (run
       // 34834966169 stayed on poll after a valid ES256 mint). Live Supabase
       // still must flip to realtime and paint under POLL_MS.
+      // `waitForFunction(fn, arg, options)` — options is the THIRD argument.
+      // Passing `{ timeout }` as arg (as #783 did) leaves the default timeout,
+      // which is this test's 120s budget: on stub.supabase.co transport never
+      // flips to realtime, so CI hung until the whole test timed out
+      // (run 34844721555).
       const subscribed = await anon
         .waitForFunction(
           () =>
             document.querySelector('[data-testid="ovl-root"]')?.getAttribute("data-transport") ===
             "realtime",
+          undefined,
           { timeout: 8_000 },
         )
         .then(() => true)

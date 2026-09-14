@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, eligibleBowlers, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters } from "@seazn/engine/sports/cricket";
+import { activeInnings, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -195,6 +195,14 @@ interface CricketFineShape {
    *  1291). Absent from this shape until this fix, same "add the field this
    *  fix needs" pattern every other addition here already follows. */
   dismissed?: string[];
+  /** Incoming-batter picker: cursor into batting order + retired-not-out
+   *  resumptions (Law 25.4.2). Same "add the field this fix needs" pattern. */
+  nextBatterIndex?: number;
+  retiredNotOut?: string[];
+  /** Mirrors `FineInnings.unfacedIncoming` — the batter who just walked in
+   *  and has not faced yet. That crease end stays editable, like a new-over
+   *  bowler, until they face. */
+  unfacedIncoming?: string;
 }
 interface CricketInningsShape {
   battingSide?: "home" | "away";
@@ -296,21 +304,28 @@ function opponentSide(side: "home" | "away"): "home" | "away" {
 
 /**
  * Defect 3 (R2 review finding, `docs/superpowers/plans/2026-08-16-scorepad-
- * v3-r2-cricket.md`): bowler is genuinely editable ONLY at an over
- * boundary — `fine.currentBowler === null` ("null = new over pending",
- * cricket.ts:414/1152). Once a bowler is on record for the over
- * (`fine.currentBowler` a person id), the strict fold refuses any other pick
- * outright (cricket.ts:1173-1178, "over in progress belongs to X") — the
- * SAME refusal shape striker/non-striker already get `readOnly: true` for
- * (`buildContext` below), so the chip must not offer a choice mid-over
- * either. No `fine` at all (a coarse-fidelity innings) can neither prove a
- * boundary nor submit a ball event regardless of who is picked
- * (cricket.ts:1130, "recorded at summary fidelity") — defaults read-only,
- * the safe side of "never a control that merely LOOKS disabled"
- * (ContextSlot.readOnly's own doc, ../types.ts).
+ * v3-r2-cricket.md`): bowler is genuinely editable at an over boundary
+ * (`fine.currentBowler === null`, "null = new over pending") AND before the
+ * innings exists at all (`innings == null` — opening bowler, the first
+ * ball creates the innings). `undefined !== null` used to make that
+ * no-innings window read-only, so the opening bowler could never be
+ * changed. Mid-over (`currentBowler` a person id) and coarse fidelity
+ * (`fine` absent) stay read-only: the fold refuses a mid-over swap, and a
+ * summary innings cannot accept a ball.
  */
 export function bowlerIsReadOnly(innings: CricketInningsShape | null): boolean {
-  return innings?.fine?.currentBowler !== null;
+  if (innings == null) return false;
+  if (innings.closed === true) return true;
+  if (innings.fine == null) return true;
+  return innings.fine.currentBowler != null;
+}
+
+function creaseEndLocked(scoring: CricketInningsShape | null, end: "striker" | "nonStriker"): boolean {
+  const id = scoring?.fine?.[end];
+  if (typeof id !== "string" || id.length === 0) return false;
+  // Same window as a new-over bowler: the incoming batter can be renamed
+  // until they face. The surviving partner stays locked even at 0 balls.
+  return scoring?.fine?.unfacedIncoming !== id;
 }
 
 /**
@@ -639,11 +654,34 @@ export function resolvePeople(
   );
   let soNextIdx = 0;
   const nextEligible = (): string => soEligible[soNextIdx++] ?? "";
+  // Super-over null ends still walk a sequential eligible cursor so both
+  // vacant crease slots cannot be handed the same name. Ordinary unopened
+  // innings must NOT share that cursor: an override of only striker used
+  // to skip the first nextEligible() call, so non-striker fell to
+  // battingOrder[0] and silently replaced the default other-end batter.
+  // Stable defaults are order[0]/order[1]; a single-end override keeps
+  // the other default unless that would put the same person at both ends
+  // (striker tapped onto the default non-striker → the pair swaps).
+  const defStriker = battingOrder[0] ?? "";
+  const defNonStriker = battingOrder[1] ?? "";
+  const soMode = state.phase === "super_over";
+  const striker = soMode
+    ? (overrides.striker ?? fine?.striker ?? nextEligible())
+    : (overrides.striker ?? (typeof fine?.striker === "string" ? fine.striker : defStriker));
+  let nonStriker = soMode
+    ? (overrides.nonStriker ?? fine?.nonStriker ?? nextEligible())
+    : (overrides.nonStriker ?? (typeof fine?.nonStriker === "string" ? fine.nonStriker : defNonStriker));
+  if (!soMode && striker !== "" && nonStriker === striker) {
+    nonStriker = striker === defStriker ? defNonStriker : defStriker;
+    if (nonStriker === striker) {
+      nonStriker = battingOrder.find((id) => id !== striker) ?? "";
+    }
+  }
   return {
     battingSide,
     bowlingSide,
-    striker: overrides.striker ?? fine?.striker ?? nextEligible(),
-    nonStriker: overrides.nonStriker ?? fine?.nonStriker ?? nextEligible(),
+    striker,
+    nonStriker,
     bowler:
       overrides.bowler ??
       fine?.currentBowler ??
@@ -1841,11 +1879,12 @@ export function bowlerBlocked(
 // "picker opens and silently fails" shape G5 closed, reopened for two of
 // three slots. Bowler is different: `currentBowler === null` (an over
 // boundary, cricket.ts:1152-1172) accepts ANY eligible bowler with no
-// fold-match check at all — a genuine edit — so only striker/nonStriker get
-// an UNCONDITIONAL `readOnly: true` below (ContextSlot.readOnly,
-// ../types.ts). The two names stay in the strip regardless: they are real,
-// useful information (who is on strike right now) even though a scorer
-// cannot reassign them from here.
+// fold-match check at all — a genuine edit. Striker/nonStriker stay
+// locked once they have faced; the incoming batter after a wicket is
+// the same window as that new-over bowler (`fine.unfacedIncoming`)
+// until they face. ContextSlot.readOnly, ../types.ts. The two names
+// stay in the strip regardless: they are real, useful information
+// (who is on strike right now) even when a scorer cannot reassign them.
 //
 // DEFECT 3 (found by a later review, 2026-08-16, same plan doc): blocker 2's
 // own bowler comment left the chip unconditionally tappable and flagged,
@@ -1990,36 +2029,72 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
   if (state.phase !== "live" && state.phase !== "super_over") return null;
   const cfg = asCfg(view.cfg);
   const superOverSlot = superOverNoticeSlot(state, t);
-  const innings = currentInnings(state);
-  if (innings === null) return superOverSlot ? { slots: [superOverSlot] } : null;
-  // R2b-next (owner-confirmed live blocker, 2026-08-17): closed, with
-  // another innings due, is treated identically to "no innings open yet"
-  // (the check right above) — there is genuinely no fold-backed state to
-  // show or edit for an innings that has not been created (same reasoning
-  // `scoringInnings`'s own doc gives). This is not new UI to design: it is
-  // the SAME strip-less window innings ONE's own first ball already scores
-  // through today. `basePayload`/`resolvePeople` (below, and in buildTiles)
-  // still compute correct silent defaults for that first tap, exactly as
-  // they already do before innings one's own first ball.
-  if (dueBattingSide(state, cfg) !== null) return superOverSlot ? { slots: [superOverSlot] } : null;
+  const scoring = scoringInnings(state, cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
+  const battingOrder = state.orders?.[people.battingSide] ?? [];
+  const soDismissed = state.superOver?.dismissed?.[people.battingSide] ?? [];
+  const batterCandidates =
+    state.phase === "super_over"
+      ? soEligibleBatters(battingOrder, scoring?.fine?.dismissed ?? [], soDismissed, [
+          scoring?.fine?.striker,
+          scoring?.fine?.nonStriker,
+        ].filter((p): p is string => typeof p === "string"))
+      : battingOrder;
+  const otherEndBlock = (otherId: string): Blocked =>
+    otherId === "" ? {} : { [otherId]: t("pad.cricket.context.batter.blocked.otherEnd") };
+
+  // Unopened innings (before ball 1 of innings 1 or 2, or a super-over gap):
+  // the strip used to be absent, so opening pair/bowler could never be
+  // changed. Show it, chips editable, no mode slot (nothing has locked in).
+  if (scoring === null) {
+    const blockReason = bowlerBlockReason(state, people, cfg);
+    return {
+      slots: [
+        ...(superOverSlot ? [superOverSlot] : []),
+        {
+          id: "striker",
+          label: "pad.cricket.context.striker",
+          personId: people.striker || undefined,
+          pool: "onfield",
+          required: true,
+          candidates: batterCandidates,
+          blocked: otherEndBlock(people.nonStriker),
+        },
+        {
+          id: "nonStriker",
+          label: "pad.cricket.context.nonStriker",
+          personId: people.nonStriker || undefined,
+          pool: "onfield",
+          required: true,
+          candidates: batterCandidates,
+          blocked: otherEndBlock(people.striker),
+        },
+        {
+          id: "bowler",
+          label: "pad.cricket.context.bowler",
+          personId: people.bowler || undefined,
+          pool: "onfield",
+          required: true,
+          candidates: state.orders?.[people.bowlingSide] ?? [],
+          blocked: bowlerBlocked(t, state, people, cfg),
+          readOnly: bowlerIsReadOnly(null) ? true : undefined,
+          message: blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined,
+        },
+      ],
+    };
+  }
+
+  const innings = scoring;
   const bowlerReadOnly = bowlerIsReadOnly(innings);
-  // R2b (owner ruling, live-tile audit defect 2, `_INDEX.md`): closure is the
-  // ROOT cause once it applies — a bowler-eligibility read off the CLOSED
-  // innings' own stale `fine` would be a second, possibly-misleading message
-  // stacked on (or shown INSTEAD of) the real one, so the eligibility check
-  // is skipped entirely rather than computed and overridden. Mirrors
-  // `buildTiles`'s own `inningsClosed`/`closedTile` — see that function's
-  // header for the full defect/investigation writeup (not duplicated here).
   const inningsClosed = innings.closed === true;
   const closedMessage = inningsClosed ? t("pad.cricket.context.innings.closed") : undefined;
-  // R2b (owner ruling, bowler-eligibility block, 2026-08-17): the SAME
-  // decision `buildTiles` gates its own `disabled` tiles on — the strip and
-  // the tap can never disagree about WHETHER the bowler is blocked, same
-  // "one default computed in one place" reasoning G5 already established
-  // for WHO the bowler is.
   const blockReason = inningsClosed ? null : bowlerBlockReason(state, people, cfg);
   const mode = modeSlot(innings, t);
+  const strikerLocked = inningsClosed || creaseEndLocked(innings, "striker");
+  const nonStrikerLocked = inningsClosed || creaseEndLocked(innings, "nonStriker");
+  const dismissed = innings.fine?.dismissed ?? [];
+  const unlockedIncoming = (otherEnd: string): string[] =>
+    eligibleIncomingBatters(battingOrder, dismissed, [otherEnd]);
   return {
     slots: [
       ...(superOverSlot ? [superOverSlot] : []),
@@ -2029,8 +2104,10 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.striker || undefined,
         pool: "onfield",
         required: true,
-        readOnly: true, // blocker 2 — see this file's header above
-        message: closedMessage, // defect 2 — see this file's header above
+        readOnly: strikerLocked ? true : undefined,
+        candidates: strikerLocked ? undefined : unlockedIncoming(people.nonStriker),
+        blocked: strikerLocked ? undefined : otherEndBlock(people.nonStriker),
+        message: closedMessage,
       },
       {
         id: "nonStriker",
@@ -2038,66 +2115,22 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
         personId: people.nonStriker || undefined,
         pool: "onfield",
         required: true,
-        readOnly: true, // blocker 2 — see this file's header above
-        message: closedMessage, // defect 2 — see this file's header above
+        readOnly: nonStrikerLocked ? true : undefined,
+        candidates: nonStrikerLocked ? undefined : unlockedIncoming(people.striker),
+        blocked: nonStrikerLocked ? undefined : otherEndBlock(people.striker),
+        message: closedMessage,
       },
       {
-        // CANDIDATE-LIST GAP (checked as part of the R2b live bug fix,
-        // 2026-08-17 — reported, not fixed here): when this slot is
-        // editable (over boundary, not readOnly), tapping it opens a picker
-        // whose candidates come from `pad-host.tsx`'s `combinedPool(squads)`
-        // — resolved through `ContextSlot.pool` alone, via
-        // `context-strip.tsx`'s `resolvePool`. `ContextSlot` (types.ts) has
-        // no `candidates`/`side` field — only `SheetPersonStep` (the wicket
-        // sheet's own `out`/`fielder` steps, G6 above) supports narrowing a
-        // person picker's list; a context-strip slot cannot. Two consequences,
-        // neither fixable from this file alone: (1) the picker offers BOTH
-        // sides' on-field roster, not just the bowling side (`combinedPool`'s
-        // own header already flags this as a "slightly wider-than-ideal"
-        // pre-existing gap); (2) within the bowling side, it offers every
-        // on-field player regardless of the SAME eligibility this fix just
-        // taught the default to respect (consecutive-over/quota) — the chip
-        // does not stop a scorer from tapping an ineligible name, the same
-        // shape of defect this fix closes for the untouched default, just
-        // reachable through the picker instead. Fixing this needs a
-        // `candidates`-like field on `ContextSlot` (types.ts) plus a
-        // `context-strip.tsx` change to honour it — both out of this file's
-        // grant (types.ts is a concurrent task's file this wave; see this
-        // task's own report). Flagged here rather than silently left
-        // unmentioned, per the brief's own ask to report even a null result.
-        //
-        // R2b UPDATE (bowler-eligibility block, 2026-08-17): the picker
-        // itself is STILL unfixed — it still offers an ineligible name —
-        // but the CONSEQUENCE of tapping one is no longer a silent trip to
-        // the server. `blockReason`/`message` below catch it here: the next
-        // render shows this exact slot's `message` and every ball tile
-        // goes `disabled` (`buildTiles`), so an ineligible pick now surfaces
-        // immediately, in the pad, naming the reason — never a bare 422.
         id: "bowler",
         label: "pad.cricket.context.bowler",
         personId: people.bowler || undefined,
         pool: "onfield",
         required: true,
-        // R2c / C1 — closes the CANDIDATE-LIST GAP recorded above. SCOPE:
-        // the fielding side only, so the engine's "not in the fielding
-        // lineup" refusal is now structurally unreachable from the picker
-        // rather than merely caught after the fact. ELIGIBILITY: the
-        // fielding side's own ineligible bowlers stay visible, each with
-        // its reason (bowlerBlocked, above).
         candidates: state.orders?.[people.bowlingSide] ?? [],
         blocked: inningsClosed ? {} : bowlerBlocked(t, state, people, cfg),
-        // defect 3 (readOnly) / defect 2 (closure) — see this file's header
-        // above for both. Closure forces readOnly too: there is no "over
-        // boundary" concept once the innings itself is over.
         readOnly: inningsClosed || bowlerReadOnly ? true : undefined,
         message: closedMessage ?? (blockReason ? bowlerBlockMessage(t, blockReason, people.bowler, view.personNames, cfg) : undefined),
       },
-      // R8 — LAST, deliberately. The three chips above are the strip's
-      // working surface (bowler is a real control at an over boundary) and at
-      // 320px the strip wraps; an ambient, permanently-locked statement must
-      // not push them down a row. The super-over notice keeps its place at
-      // the FRONT for the opposite reason — it explains five greyed tiles, so
-      // it is closer to a fault than to ambient context.
       ...(mode ? [mode] : []),
     ],
   };
@@ -2116,6 +2149,39 @@ const CLOSE_REASONS: readonly (readonly [string, string])[] = [
   ["all_out", "allOut"], ["overs_complete", "oversComplete"], ["target_reached", "targetReached"],
   ["time", "time"], ["weather", "weather"], ["forfeited", "forfeited"], ["other", "other"],
 ];
+
+function incomingPersonStep(
+  state: CricketStateShape,
+  cfg: CricketCfgShape,
+  people: ResolvedPeople,
+  title: MessageKey,
+): GuidedSheetStep | null {
+  const battingOrder = state.orders?.[people.battingSide] ?? [];
+  const fine = scoringInnings(state, cfg)?.fine;
+  const crease = [people.striker, people.nonStriker];
+  const dismissed = fine?.dismissed ?? [];
+  const eligible = eligibleIncomingBatters(battingOrder, dismissed, crease);
+  if (eligible.length === 0) return null;
+  const suggested = suggestedIncomingBatter(
+    battingOrder,
+    dismissed,
+    fine?.retiredNotOut ?? [],
+    crease,
+    fine?.nextBatterIndex ?? 0,
+  );
+  const candidates =
+    suggested !== null && eligible.includes(suggested)
+      ? [suggested, ...eligible.filter((id) => id !== suggested)]
+      : eligible;
+  return {
+    id: "incoming",
+    kind: "person",
+    title,
+    pool: "onfield",
+    side: people.battingSide,
+    candidates,
+  };
+}
 
 /**
  * Kind -> who out (runout only) -> fielder (caught/runout/stumped only).
@@ -2201,6 +2267,8 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       when: (answers) => FIELDER_ELIGIBLE_KINDS.has(answers.kind as WicketKind),
     },
   ];
+  const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.wicket.incoming.title");
+  if (incoming) steps.push(incoming);
 
   return {
     event: ballEventType(state),
@@ -2216,6 +2284,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
           kind,
           out,
           ...(fielder ? { fielder } : {}),
+          ...(answers.incoming ? { incoming: answers.incoming } : {}),
           bowlerCredited: BOWLER_CREDITED_KINDS.has(kind),
         },
       };
@@ -2276,13 +2345,9 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
  * sheet. That is the same mechanism the old `{swap:true}` tile could NOT
  * trigger, which is precisely how the two divergent entry points arose.
  *
- * `incoming` is deliberately NOT asked. The engine's own payload marks it
- * optional and defaults it to the next batter in the order
- * (`CricketRetire`), which is the ordinary case, so asking would add a tap
- * to every retirement to restate what the fold already knows — the same
- * "never re-ask what the fold already knows" rule the chassis is built on,
- * and the same fewer-taps-on-the-common-case trade the R2b dock ruling made.
- * A sport that later needs an explicit incoming batter adds a third step.
+ * Incoming batter IS asked: Law 25.1 leaves the replacement to the
+ * captain, and the auto next-in-order is only a default. The incoming
+ * step is omitted when nobody is eligible (last wicket / all out).
  *
  * The crease is `fine.striker`/`fine.nonStriker` — verbatim what the engine
  * itself checks (`applyRetire`: `"… is not at the crease"`). Empty-string
@@ -2295,6 +2360,7 @@ function retireSheet(view: PadHostView): GuidedSheetSpec {
   const cfg = asCfg(view.cfg);
   const people = resolvePeople(state, view.contextOverrides, cfg);
   const creaseCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
+  const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.retire.incoming.title");
   return {
     event: "cricket.retire",
     steps: [
@@ -2316,8 +2382,13 @@ function retireSheet(view: PadHostView): GuidedSheetSpec {
           { id: "other", label: "pad.cricket.sheet.retire.reason.other" },
         ],
       },
+      ...(incoming ? [incoming] : []),
     ],
-    buildPayload: (answers) => ({ person: answers.person, reason: answers.reason }),
+    buildPayload: (answers) => ({
+      person: answers.person,
+      reason: answers.reason,
+      ...(answers.incoming ? { incoming: answers.incoming } : {}),
+    }),
   };
 }
 

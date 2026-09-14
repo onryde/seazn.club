@@ -733,6 +733,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-smoke -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
 
           opened=""
@@ -1011,6 +1012,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-usecases -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-usecases-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
 
           opened=""
@@ -1321,6 +1323,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-smoke -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-smoke-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
 
           opened=""
@@ -1375,6 +1378,10 @@ jobs:
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-smoke-secret
+          # Default pino level is info — every accepted score event + route
+          # floods the Actions log and buries the failure. warn keeps refusals
+          # and faults; silent would hide the only signal when a red is real.
+          LOG_LEVEL: warn
           # smoke signs in by reading `login_url` off the magic-link response,
           # and this server runs as NODE_ENV=production. Production stopped
           # exposing that link on a failed send — it used to, so a Resend
