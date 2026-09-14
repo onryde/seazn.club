@@ -3,6 +3,7 @@ import { tossMoment, warmingTossLine } from "../overlay-openers";
 import {
   closedOverBaselineOf,
   CLOSED_OVER_BASELINE_NONE,
+  END_OF_OVER_HOLD_MS,
   endOfOverMoment,
   endOfOverSeq,
   isClosedOverAfter,
@@ -102,22 +103,34 @@ describe("endOfOverMoment", () => {
     expect(endOfOverMoment({ closed, since: { inningsIndex: 0, over: 13 }, msg })).toBeNull();
   });
 
-  it("fires once for a newer closed over with full payload", () => {
-    const m = endOfOverMoment({ closed, since: { inningsIndex: 0, over: 11 }, msg })!;
-    expect(m.graphic).toBe("endOfOver");
-    expect(m.seq).toBe(endOfOverSeq(closed));
-    expect(m.headline).toBe("End of over 12");
-    expect(m.line).toBe("8 runs · 142/6");
-    expect(m.endOfOver).toEqual(closed);
+  it("fires TWICE (doubleBeat) for a newer closed over with full payload — same mechanism as SIX/FOUR/OUT/GOAL", () => {
+    const [first, second] = endOfOverMoment({
+      closed,
+      since: { inningsIndex: 0, over: 11 },
+      msg,
+    })!;
+    expect(first.graphic).toBe("endOfOver");
+    expect(first.kind).toBe("endOfOver");
+    expect(second.kind).toBe("endOfOver.bis");
+    // Both beats are otherwise identical — the queue's seq:kind dedupe is
+    // what lets the second through, and the render branch keys off `graphic`
+    // alone, so both must carry the same payload.
+    for (const m of [first, second]) {
+      expect(m.graphic).toBe("endOfOver");
+      expect(m.seq).toBe(endOfOverSeq(closed));
+      expect(m.headline).toBe("End of over 12");
+      expect(m.line).toBe("8 runs · 142/6");
+      expect(m.endOfOver).toEqual(closed);
+      expect(m.holdMs).toBe(END_OF_OVER_HOLD_MS);
+    }
     expect(isFullEndOfOver(closed)).toBe(true);
   });
 
   it("compact when glyphs are empty", () => {
     const coarse: OverlayClosedOver = { ...closed, glyphs: [] };
     expect(isFullEndOfOver(coarse)).toBe(false);
-    expect(
-      endOfOverMoment({ closed: coarse, since: CLOSED_OVER_BASELINE_NONE, msg })!.endOfOver!.glyphs,
-    ).toEqual([]);
+    const [first] = endOfOverMoment({ closed: coarse, since: CLOSED_OVER_BASELINE_NONE, msg })!;
+    expect(first.endOfOver!.glyphs).toEqual([]);
   });
 
   it("compact when glyphs exist but every name is masked", () => {
@@ -149,7 +162,8 @@ describe("endOfOverMoment", () => {
     // Mounted while innings 1 was on over 15 — old `over <= sinceOver` would drop this.
     const since = { inningsIndex: 0, over: 15 };
     expect(isClosedOverAfter(chaseFirst, since)).toBe(true);
-    expect(endOfOverMoment({ closed: chaseFirst, since, msg })!.seq).toBe(endOfOverSeq(chaseFirst));
+    const [first] = endOfOverMoment({ closed: chaseFirst, since, msg })!;
+    expect(first.seq).toBe(endOfOverSeq(chaseFirst));
     expect(endOfOverSeq(chaseFirst)).not.toBe(endOfOverSeq({ ...closed, over: 1 }));
   });
 

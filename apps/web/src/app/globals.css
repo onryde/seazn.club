@@ -1959,43 +1959,48 @@ body {
 }
 
 /* —— End-of-over card (anchored, same slot as moment slabs) —— */
+/* Sizes bumped 2026-09-14: the card sat well under its 216px slot ceiling
+   (`.ovl-moment-slot--bar`/`--bug`, both themes — the card is theme-agnostic,
+   one CSS block renders inside either slot) at 120px min-height, so there was
+   room to grow without a layout change. Shared by both themes on purpose;
+   `_THEMES.md` §4's "the bar and the bug are twins" rule applies here too. */
 .ovl-end-of-over {
   display: flex;
   background: color-mix(in srgb, var(--sport-board) 92%, transparent);
   color: var(--sport-ink);
-  border-left: 3px solid var(--sport-led);
-  padding: 14px 22px;
-  gap: 18px;
-  max-width: 720px;
+  border-left: 4px solid var(--sport-led);
+  padding: 20px 28px;
+  gap: 24px;
+  max-width: 860px;
   font-variant-numeric: tabular-nums;
 }
 .ovl-end-of-over--full {
-  min-height: 120px;
+  min-height: 156px;
 }
 .ovl-end-of-over--compact {
   flex-direction: column;
-  gap: 6px;
-  min-width: 280px;
+  gap: 8px;
+  min-width: 320px;
 }
 .ovl-end-of-over-main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
   flex: 1.2;
 }
 .ovl-end-of-over-side {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   border-left: 1px solid color-mix(in srgb, var(--sport-ink) 20%, transparent);
-  padding-left: 16px;
+  padding-left: 20px;
   min-width: 0;
   flex: 1;
 }
 .ovl-end-of-over-title {
   color: var(--sport-led);
-  font-size: 18px;
+  font-size: 23px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2003,7 +2008,7 @@ body {
 .ovl-end-of-over-batter,
 .ovl-end-of-over-bowler,
 .ovl-end-of-over-line {
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -2011,10 +2016,10 @@ body {
 }
 .ovl-end-of-over-bowler {
   color: color-mix(in srgb, var(--sport-ink) 75%, transparent);
-  font-size: 14px;
+  font-size: 17px;
 }
 .ovl-end-of-over-side-label {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2023,18 +2028,18 @@ body {
 .ovl-end-of-over-glyphs {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 8px;
 }
 .ovl-end-of-over-glyph {
   background: color-mix(in srgb, var(--sport-led) 18%, transparent);
   color: var(--sport-led);
-  padding: 2px 7px;
-  border-radius: 3px;
-  font-size: 14px;
+  padding: 5px 13px;
+  border-radius: 5px;
+  font-size: 22px;
   font-weight: 700;
 }
 .ovl-end-of-over-runs {
-  font-size: 22px;
+  font-size: 28px;
   font-weight: 800;
   color: var(--sport-ink);
 }

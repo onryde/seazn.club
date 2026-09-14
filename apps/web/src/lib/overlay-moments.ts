@@ -88,8 +88,12 @@ const WICKET_KEYS: Readonly<Record<string, string>> = {
  * shared hold ≈ 5s wall time including folds). The second beat uses kind
  * `${kind}.bis` so the queue's seq:kind dedupe still lets both through (same
  * pattern as tennis setWon + match point on one seq).
+ *
+ * Exported: `overlay-end-of-over.ts` reuses it for the end-of-over card (the
+ * same two-beat treatment SIX/FOUR/OUT/GOAL get), with its own `holdMs`
+ * spread into the base moment before calling this — both beats inherit it.
  */
-const doubleBeat = (moment: OverlayMoment): readonly [OverlayMoment, OverlayMoment] => [
+export const doubleBeat = (moment: OverlayMoment): readonly [OverlayMoment, OverlayMoment] => [
   moment,
   { ...moment, kind: `${moment.kind}.bis` },
 ];

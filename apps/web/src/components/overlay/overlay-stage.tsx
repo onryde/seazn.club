@@ -184,7 +184,7 @@ export function OverlayStage(props: OverlayStageProps) {
               scoringStarted: data.scoringStarted === true,
               msg,
             });
-        return [...moments, ...(eoo ? [eoo] : []), ...(toss ? [toss] : [])];
+        return [...moments, ...(eoo ?? []), ...(toss ? [toss] : [])];
       })();
 
   const { current: moment, phase } = useMomentQueue(incoming, { reducedMotion });

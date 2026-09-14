@@ -22,6 +22,7 @@ import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
+import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import {
   HOCKEY_CARD_TONES,
@@ -1302,11 +1303,18 @@ test.describe("cricket crease band (W2 Task 3)", () => {
  */
 test.describe("cricket end-of-over card (EOO)", () => {
   const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
+  // The EOO card doubleBeats (2026-09-14, same mechanism as SIX/FOUR/OUT/
+  // GOAL) at its own longer hold, not the slab default — deriving the
+  // per-beat cost from END_OF_OVER_HOLD_MS rather than reusing CYCLE_MS
+  // (which is keyed to OVERLAY_MOMENT_HOLD_MS) so a future change to either
+  // constant moves this budget with it, not past it (AGENTS.md rule 20).
+  const EOO_BEAT_MS = OVERLAY_MOMENT_FOLD_MS * 2 + END_OF_OVER_HOLD_MS;
+  const EOO_CYCLE_MS = EOO_BEAT_MS * 2;
 
   test("completing an over while open raises ovl-end-of-over; remount does not replay it", async ({
     browser,
   }) => {
-    test.setTimeout(CYCLE_MS * 10 + 180_000);
+    test.setTimeout(EOO_CYCLE_MS * 5 + 180_000);
     // Empty storage on purpose (review 2026-09-14, M9 — same fix as the
     // beforeAll above and `anonPage`, "seen 2026-09-13"). A bare
     // `browser.newContext()` inherits the project's Pro `storageState`;
@@ -1319,10 +1327,14 @@ test.describe("cricket end-of-over card (EOO)", () => {
     await grantOverlay(rig.orgId);
 
     const anon = await anonPage(browser);
+    const anonBug = await anonPage(browser);
     try {
       await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
       await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      await anonBug.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
+      await expect(anonBug.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
       const eoo = anon.locator('[data-testid="ovl-end-of-over"]');
+      const eooBug = anonBug.locator('[data-testid="ovl-end-of-over"]');
 
       const watchUntil = Date.now() + CYCLE_MS * 2;
       while (Date.now() < watchUntil) {
@@ -1346,8 +1358,15 @@ test.describe("cricket end-of-over card (EOO)", () => {
         "data-variant",
         "full",
       );
+      // Bug theme shares the same `.ovl-end-of-over*` CSS block and moment
+      // data on purpose (`_THEMES.md` §4, "the bar and the bug are twins") —
+      // prove it actually raises there too, not just on the bar.
+      await expect(eooBug).toHaveAttribute("data-phase", "hold", { timeout: 5_000 });
       await expect(eoo, "end-of-over must leave the air").toHaveCount(0, {
-        timeout: CYCLE_MS * 2,
+        timeout: EOO_CYCLE_MS + CYCLE_MS,
+      });
+      await expect(eooBug, "bug theme's end-of-over must leave the air too").toHaveCount(0, {
+        timeout: EOO_CYCLE_MS + CYCLE_MS,
       });
 
       await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
@@ -1359,6 +1378,7 @@ test.describe("cricket end-of-over card (EOO)", () => {
       }
     } finally {
       await anon.context().close();
+      await anonBug.context().close();
       await owner.close();
     }
   });
