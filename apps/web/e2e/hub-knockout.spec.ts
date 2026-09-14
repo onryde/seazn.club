@@ -31,6 +31,12 @@ import {
 //   both division headings under All  ↔ one heading after a division chip
 //   `mh-tab-knockout` on a knockout   ↔ absent on a league-only competition
 //   pressed chip inside the rail      ↔ the same chip is clipped at scrollLeft 0
+//
+// Fix round (P2, D1, D2, C1, C2) added three, each non-vacuous against the
+// build before it:
+//   D2 the final's empty slot names the undecided semi's pair ↔ "Winner of" gone from that slot only
+//   C2 the switch's y-centre equals the heading's / chips'    ↔ the ~70px band it sat in before
+//   C1 the last chip of a rail too long for one row is hit    ↔ one-row width asserted > the rail's
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -105,10 +111,15 @@ interface HubView {
   drawable: boolean;
   championFixtureId: string | null;
 }
+interface HubMatch {
+  fixtureId: string;
+  bucket: string;
+  header: { sides: { entrantId: string; name: string }[] };
+}
 interface HubDoc {
   tabs: string[];
   knockouts: HubView[];
-  matches: { fixtureId: string }[];
+  matches: HubMatch[];
 }
 interface Seeded {
   compSlug: string;
@@ -332,7 +343,9 @@ test.describe("competition hub: Knockout tab", () => {
       }
       {
         const comp = await publicCompetition(request, "Hub KO Double");
-        const div = await bracketDivision(request, comp.id, "Double", 4, "double_elim", []);
+        // EIGHT entrants (was four): its round rail is the long rail the C1
+        // test needs — nine rounds, too wide for one row at 1280.
+        const div = await bracketDivision(request, comp.id, "Double", 8, "double_elim", []);
         doubleElim = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
       }
       {
@@ -563,6 +576,131 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(page.getByTestId(`mh-knockout-rail-${view.id}`)).toBeVisible();
     await expect(page.getByTestId("mh-knockout-view")).toHaveCount(0);
     await expect(page.getByTestId(`mh-knockout-draw-${view.id}`)).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("D2 at 1280: the final's empty slot names the undecided semi-final's pair — in the Draw node and on its card in Rounds", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = eight.doc.knockouts[0]!;
+    const [, semis, final] = view.rounds as [HubRound, HubRound, HubRound];
+    const byId = new Map(eight.doc.matches.map((m) => [m.fixtureId, m]));
+    const decidedSemi = byId.get(semis.fixtureIds[0]!)!;
+    const feeder = byId.get(semis.fixtureIds[1]!)!;
+    const finalId = final.fixtureIds[0]!;
+    const finalMatch = byId.get(finalId)!;
+
+    // The premise, read from the document the page renders: the second semi
+    // (the final's AWAY feeder) is unplayed with both sides known, and the
+    // final's home slot is filled while its away slot waits on that semi.
+    expect(decidedSemi.bucket).toBe("completed");
+    expect(feeder.bucket, JSON.stringify(feeder)).not.toBe("completed");
+    expect(feeder.header.sides.map((s) => s.entrantId).every((id) => id !== "")).toBe(true);
+    expect(finalMatch.header.sides[0]!.entrantId).not.toBe("");
+    expect(finalMatch.header.sides[1]!.entrantId).toBe("");
+    const pair = `${feeder.header.sides[0]!.name} / ${feeder.header.sides[1]!.name}`;
+
+    await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout&view=draw"));
+    const node = page.getByTestId(`mh-knockout-node-${finalId}`);
+    await expect(node).toBeVisible();
+    await expect(node).toContainText(pair);
+    await expect(node).toContainText(finalMatch.header.sides[0]!.name);
+    await expect(node).not.toContainText("Winner of");
+    // The decided semi's own node is two real names, no pair.
+    await expect(page.getByTestId(`mh-knockout-node-${decidedSemi.fixtureId}`)).not.toContainText(" / ");
+
+    await page.getByTestId("mh-knockout-view-rounds").click();
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${finalId}`);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(pair);
+    await expect(card).not.toContainText("Winner of");
+  });
+
+  test("C2 at 1280: the Rounds|Draw switch shares ONE row — with the heading for one division, with the division chips for two", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(3));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const centreY = (box: { y: number; height: number }) => box.y + box.height / 2;
+    const viewSwitch = page.getByTestId("mh-knockout-view");
+
+    // One division: no chip rail, so the heading is what the switch sits beside.
+    await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout"));
+    await expect(viewSwitch).toBeVisible();
+    const heading = page.getByTestId(`mh-knockout-heading-${eight.divisionSlugs[0]}`);
+    await expect(heading).toBeVisible();
+    const switchBox = await viewSwitch.boundingBox();
+    const headingBox = await heading.boundingBox();
+    const one = JSON.stringify({ switchBox, headingBox });
+    expect(switchBox, one).not.toBeNull();
+    expect(headingBox, one).not.toBeNull();
+    expect(Math.abs(centreY(switchBox!) - centreY(headingBox!)), one).toBeLessThanOrEqual(2);
+    expect(switchBox!.x, one).toBeGreaterThan(headingBox!.x + headingBox!.width);
+    await expect(page.getByTestId("mh-knockout-toolbar")).toHaveCount(0);
+
+    // Two divisions: the chip rail leads the row, the switch follows it.
+    await openKnockout(page, hubUrl(orgSlug, twoDivisions, "?tab=knockout"));
+    const rail = page.getByTestId("mh-knockout-divisions");
+    await expect(rail).toBeVisible();
+    await expect(viewSwitch).toBeVisible();
+    const switchBox2 = await viewSwitch.boundingBox();
+    const railBox = await rail.boundingBox();
+    const two = JSON.stringify({ switchBox2, railBox });
+    expect(switchBox2, two).not.toBeNull();
+    expect(railBox, two).not.toBeNull();
+    expect(Math.abs(centreY(switchBox2!) - centreY(railBox!)), two).toBeLessThanOrEqual(2);
+    expect(switchBox2!.x, two).toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("C1 at 1280: a round rail too long for one row wraps — its last chip is hit-testable, nothing scrolls sideways, and pressing it moves nothing", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(2));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = doubleElim.doc.knockouts[0]!;
+    const last = view.rounds[view.rounds.length - 1]!;
+    await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    await expect(rail).toBeVisible();
+    await rail.scrollIntoViewIfNeeded();
+
+    const g = await rail.evaluate((el) => {
+      const chips = [...el.querySelectorAll("button")];
+      const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 0;
+      const lastChip = chips[chips.length - 1]!;
+      const box = lastChip.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {
+        chips: chips.length,
+        oneRowWidth: chips.reduce((w, c) => w + c.getBoundingClientRect().width, 0) + gap * (chips.length - 1),
+        clientWidth: el.clientWidth,
+        scrollWidth: el.scrollWidth,
+        scrollLeft: el.scrollLeft,
+        railRight: el.getBoundingClientRect().right,
+        firstTop: chips[0]!.getBoundingClientRect().top,
+        lastTop: box.top,
+        lastRight: box.right,
+        lastTestid: lastChip.getAttribute("data-testid"),
+        hitIsLast: hit !== null && lastChip.contains(hit),
+      };
+    });
+    const seen = JSON.stringify(g);
+    // Non-vacuous: laid out in one row these chips would not fit the rail.
+    expect(g.oneRowWidth, seen).toBeGreaterThan(g.clientWidth);
+    expect(g.lastTestid, seen).toBe(`mh-knockout-round-${view.id}-${last.key}`);
+    expect(g.lastTop, seen).toBeGreaterThan(g.firstTop);
+    expect(g.scrollWidth, seen).toBeLessThanOrEqual(g.clientWidth + 1);
+    expect(g.lastRight, seen).toBeLessThanOrEqual(g.railRight + 0.5);
+    expect(g.hitIsLast, seen).toBe(true);
+
+    await roundChip(page, view, last).click();
+    await expect(roundChip(page, view, last)).toHaveAttribute("aria-pressed", "true");
+    expect(await rail.evaluate((el) => el.scrollLeft)).toBe(0);
     await expectNoHorizontalScroll(page);
   });
 
