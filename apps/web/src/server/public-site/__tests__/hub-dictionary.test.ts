@@ -94,6 +94,8 @@ export const W2_KEYS = [
   "knockout.champion", "knockout.championLine", "knockout.championLineWalkover", "knockout.roundsLabel", "knockout.liveRound",
   "knockout.next.through", "knockout.next.meets", "knockout.next.meetsWinnerOf", "knockout.next.advances",
   "knockout.view.label", "knockout.view.rounds", "knockout.view.draw", "knockout.drawLabel",
+  // A bracket slot still waiting on its feeder (Knockout fix round, D2).
+  "knockout.pendingPair", "knockout.pendingLoser",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
@@ -171,6 +173,12 @@ describe("W2 public dictionary coverage", () => {
       "knockout.next.meets": ["name", "round"],
       "knockout.next.meetsWinnerOf": ["a", "b", "round"],
       "knockout.next.advances": ["round"],
+      // A bracket slot still waiting on its feeder (fix round, D2): the two
+      // entrants of the undecided match that feeds it — as a pair in a winner's
+      // slot, as "the loser of" in the bronze match's. A locale that drops
+      // either name tells a spectator only half of who could be there.
+      "knockout.pendingPair": ["a", "b"],
+      "knockout.pendingLoser": ["a", "b"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

@@ -2442,6 +2442,8 @@ export type DictionaryKey =
   | "knockout.next.meets"
   | "knockout.next.meetsWinnerOf"
   | "knockout.next.through"
+  | "knockout.pendingLoser"
+  | "knockout.pendingPair"
   | "knockout.roundsLabel"
   | "knockout.view.draw"
   | "knockout.view.label"

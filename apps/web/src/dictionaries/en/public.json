@@ -364,6 +364,8 @@
   "knockout.view.rounds": "Rounds",
   "knockout.view.draw": "Draw",
   "knockout.drawLabel": "Knockout draw",
+  "knockout.pendingPair": "{a} / {b}",
+  "knockout.pendingLoser": "Loser of {a} v {b}",
   "leaders.title": "Leaders",
   "leaders.empty": "No stats yet",
   "teams.title": "Teams",

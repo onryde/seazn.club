@@ -44,11 +44,13 @@ vi.mock("../use-tab-param", async (importOriginal) => ({
 }));
 
 import { MatchCard } from "../matches-hub/match-card";
+import { MatchesTab } from "../matches-hub/matches-tab";
 import {
   KnockoutTab,
   defaultRoundKey,
   knockoutMode,
   nextLine,
+  pendingSide,
   revealScrollLeft,
 } from "../matches-hub/knockout-tab";
 import { hubDoc, knockoutView, koRound, koSide, m } from "./hub-fixtures";
@@ -418,12 +420,167 @@ describe("KnockoutTab — the round rail", () => {
     expect(sf).not.toContain("sr-only");
   });
 
+  it("WRAPS from lg instead of scrolling, and stays a swipe rail below it — the round rail and the division rail alike (C1)", () => {
+    // At 1280 a double-elimination rail cut its last chip mid-word, and a
+    // mouse has no way to scroll a rail sideways. Token-exact: a bare
+    // `flex-wrap` would wrap the phone rail too, which is the swipe rail the
+    // owner signed off.
+    const h = render(MULTI);
+    for (const testid of [`mh-knockout-rail-${VIEW}`, "mh-knockout-divisions"]) {
+      const tokens = classOf(h, testid);
+      expect(tokens, testid).toContain("lg:flex-wrap");
+      expect(tokens, testid).not.toContain("flex-wrap");
+      expect(tokens, testid).toContain("overflow-x-auto");
+    }
+    // Still a focusable, named group at every width (AGENTS.md 23): tabindex
+    // cannot vary by media query, so wrapping does not take it away.
+    expect(h).toMatch(/data-testid="mh-knockout-divisions"[^>]*role="group"[^>]*tabindex="0"[^>]*aria-label="/);
+  });
+
   it("exactly one chip is pressed PER VIEW when two views render", () => {
     const h = render(MULTI);
     expect(pressedRounds(h)).toEqual([
       `mh-knockout-round-${VIEW}-main-1`,
       "mh-knockout-round-sunday-league-plate-main-2",
     ]);
+  });
+});
+
+describe("KnockoutTab — the cards (D1)", () => {
+  it("a Knockout card carries no STAGE · ROUND caption — the stage heading and the pressed chip already say it — while the SAME match on the Matches tab keeps it", () => {
+    const h = render(LATER);
+    expect(cardIds(h)).toEqual(["s1", "s2"]); // the premise: cards rendered
+    expect(h).not.toMatch(/>Cup · /);
+    // The positive pair, same document: the Matches tab's card is the default
+    // MatchCard and keeps its caption.
+    const matches = renderToStaticMarkup(<MatchesTab doc={LATER} dict={dict} locale="en" now={NOW} />);
+    expect(matches).toMatch(/>Cup · (Quarter-finals|Semi-finals|Third place|Final)</);
+  });
+});
+
+describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
+  // The feeder of bracket round k+1's fixture j, side s, is round k's fixture
+  // 2j+s — `generateSingleElim`'s own wiring (`homeFrom: winnerOf(prev[2i])`,
+  // `awayFrom: winnerOf(prev[2i+1])`), the relationship the tree's connectors
+  // draw, and verified against two real hub documents in the fix-round report.
+  // The third-place fixture's sides are the semi-finals' LOSERS.
+  const index = (doc: CompetitionHubDocT) => new Map(doc.matches.map((x) => [x.fixtureId, x]));
+  const pair = (a: string, b: string) => ({ key: "knockout.pendingPair", vars: { a, b } });
+
+  it("pendingSide, enumerated on MID: a pair only where the feeder is undecided with BOTH sides known", () => {
+    const view = MID.knockouts[0]!;
+    const mx = index(MID);
+    // s1's home is Ana, already through: the real entrant stays.
+    expect(pendingSide(view, "s1", 0, mx)).toBeNull();
+    // s1's away ← q2 (index 1): not started, Cara v Dev.
+    expect(pendingSide(view, "s1", 1, mx)).toEqual(pair("Cara", "Dev"));
+    // s2's home ← q3 (index 2): one side is itself a slot → unchanged.
+    expect(pendingSide(view, "s2", 0, mx)).toBeNull();
+    // s2's away ← q4 (index 3): LIVE, Gus v Hal.
+    expect(pendingSide(view, "s2", 1, mx)).toEqual(pair("Gus", "Hal"));
+    // The final ← the semis, neither of which has both sides yet.
+    expect(pendingSide(view, "f1", 0, mx)).toBeNull();
+    expect(pendingSide(view, "f1", 1, mx)).toBeNull();
+    // Round 0 has no feeder, even for a slot with nobody in it.
+    expect(pendingSide(view, "q3", 1, mx)).toBeNull();
+  });
+
+  it("THIRD PLACE is fed by the semi-finals' LOSERS: one undecided semi reads 'Loser of Eli v Hal' there and 'Eli / Hal' in the final", () => {
+    // LATER: s1 decided (Dev beat Ana), s2 not started (Eli v Hal). Ana is in
+    // the bronze match and Dev in the final; the other slot of each waits on s2.
+    const view = LATER.knockouts[0]!;
+    const mx = index(LATER);
+    expect(pendingSide(view, "f1", 1, mx)).toEqual(pair("Eli", "Hal"));
+    expect(pendingSide(view, "t1", 1, mx)).toEqual({ key: "knockout.pendingLoser", vars: { a: "Eli", b: "Hal" } });
+    expect(pendingSide(view, "t1", 0, mx)).toBeNull();
+    expect(pendingSide(view, "f1", 0, mx)).toBeNull();
+  });
+
+  it("a FILLED slot is the real entrant even while its feeder is open again — a corrected result reopens the match, the advanced name stays", () => {
+    // The mutation sweep found this gate unwitnessed: in every other document
+    // a filled slot's feeder is already decided, so the decided-feeder gate
+    // answered for it. A score correction that takes q1 back into play does
+    // not empty s1's home slot, and a pair there would hide the entrant who
+    // is actually in it.
+    const matches = MID_MATCHES.map((x) => (x.fixtureId === "q1" ? ko("q1", "live", QF, [S("Ana"), S("Ben")]) : x));
+    const doc = hubDoc({ matches, knockouts: [knockoutView("cup", "premier", ROUNDS)] });
+    expect(pendingSide(doc.knockouts[0]!, "s1", 0, index(doc))).toBeNull();
+    // The positive pair on the same document: the empty slot beside it still pairs.
+    expect(pendingSide(doc.knockouts[0]!, "s1", 1, index(doc))).toEqual(pair("Cara", "Dev"));
+  });
+
+  it("a DECIDED feeder never pairs: a semi that ended with nobody through (abandoned) leaves both waiting slots their own sentence", () => {
+    const matches = LATER_MATCHES.map((x) =>
+      x.fixtureId === "s2" ? ko("s2", "completed", SF, [S("Eli"), S("Hal")]) : x,
+    );
+    const doc = hubDoc({ matches, knockouts: [knockoutView("cup", "premier", ROUNDS)] });
+    expect(pendingSide(doc.knockouts[0]!, "f1", 1, index(doc))).toBeNull();
+    expect(pendingSide(doc.knockouts[0]!, "t1", 1, index(doc))).toBeNull();
+  });
+
+  it("a slot fed by a BYE never pairs — the bye's empty side is not an entrant — while its neighbour fed by a real pair does", () => {
+    // `generateSingleElim` awards a bye at generation: round 0 holds the real
+    // entrant against an empty "Bye" side, already decided.
+    const doc = hubDoc({
+      matches: [
+        ko("b1", "completed", QF, [S("Ivy"), tbd("Bye")], 0),
+        ko("b2", "upcoming", QF, [S("Jon"), S("Kit")]),
+        ko("bs", "upcoming", SF, [tbd("Winner of R1·1"), tbd("Winner of R1·2")]),
+      ],
+      knockouts: [
+        knockoutView("bye", "premier", [koRound("main-1", QF, ["b1", "b2"]), koRound("main-2", SF, ["bs"])]),
+      ],
+    });
+    const view = doc.knockouts[0]!;
+    expect(pendingSide(view, "bs", 0, index(doc))).toBeNull();
+    expect(pendingSide(view, "bs", 1, index(doc))).toEqual(pair("Jon", "Kit"));
+  });
+
+  it("a NON-drawable view never pairs, on the very shape that pairs when it can be drawn", () => {
+    const flat = knockoutView("cup", "premier", ROUNDS, { drawable: false });
+    const mx = index(MID);
+    expect(pendingSide(flat, "s1", 1, mx)).toBeNull();
+    expect(pendingSide(flat, "s2", 1, mx)).toBeNull();
+    // The positive pair: the same rounds, drawable.
+    expect(pendingSide(MID.knockouts[0]!, "s1", 1, mx)).toEqual(pair("Cara", "Dev"));
+  });
+
+  /** One Draw node's markup, from its testid to the end of its link. */
+  const nodeOf = (h: string, id: string) => {
+    const at = h.indexOf(`data-testid="mh-knockout-node-${id}"`);
+    expect(at, `node ${id}`).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf("</a>", at));
+  };
+
+  it("the Draw: a node waiting on a live or unplayed pair names the pair in the empty slot's muted style; a slot whose feeder is not ready keeps its sentence", () => {
+    url.view = "draw";
+    const h = render(MID);
+    expect(nodeOf(h, "s1")).toMatch(/<span class="[^"]*italic[^"]*" title="Cara \/ Dev">Cara \/ Dev<\/span>/);
+    expect(nodeOf(h, "s1")).not.toContain("Winner of QF 2");
+    expect(nodeOf(h, "s1")).toContain(">Ana<");
+    expect(nodeOf(h, "s2")).toContain(">Gus / Hal<");
+    expect(nodeOf(h, "s2")).toContain(">Winner of QF 3<");
+    expect(nodeOf(h, "f1")).toContain(">Winner of SF 1<");
+    expect(nodeOf(h, "f1")).toContain(">Winner of SF 2<");
+  });
+
+  it("the Draw's bronze node reads the loser sentence while the final above it reads the pair — one semi, two slots", () => {
+    url.view = "draw";
+    const h = render(LATER);
+    expect(nodeOf(h, "f1")).toContain(">Eli / Hal<");
+    expect(nodeOf(h, "t1")).toContain(">Loser of Eli v Hal<");
+    expect(nodeOf(h, "t1")).not.toContain("Eli / Hal");
+    expect(nodeOf(h, "t1")).not.toContain("Loser of SF 2");
+  });
+
+  it("the copy is the dictionary's — Spanish renders both sentences in Spanish", () => {
+    url.view = "draw";
+    const h = render(LATER, { dict: es as Dict, locale: "es" });
+    const fill = (key: string) =>
+      (es as Record<string, string>)[key]!.replace("{a}", "Eli").replace("{b}", "Hal");
+    expect(nodeOf(h, "f1")).toContain(`>${esc(fill("knockout.pendingPair"))}<`);
+    expect(nodeOf(h, "t1")).toContain(`>${esc(fill("knockout.pendingLoser"))}<`);
+    expect(fill("knockout.pendingLoser")).not.toBe("Loser of Eli v Hal");
   });
 });
 
@@ -648,23 +805,68 @@ describe("KnockoutTab — the view switch and the Draw", () => {
     expect(classOf(h, "mh-knockout-node-q2")).not.toContain("border-emerald-400");
   });
 
-  it("the switch and the division rail are DIRECT children of the root — no wrapper to keep its spacing where the switch is hidden", () => {
-    // Tailwind v4's `space-y-*` is `margin-block-end` on every child but the
-    // last (`tailwindcss/dist/lib.js`). A hidden element generates no box and
-    // so no margin — but a VISIBLE wrapper whose only child is the hidden
-    // switch keeps its margin, a blank band at the top of the panel on every
-    // phone, for the commonest document there is: one division, one drawable
-    // bracket. Only a browser sees the band; the structure that causes it is
-    // what this pins.
-    expect(render(MID)).toMatch(
-      /^<div data-testid="mh-knockout" class="[^"]*"><div data-testid="mh-knockout-view"/,
+  // C2 (fix round): at lg the switch sat on a row of its own — under the
+  // division chips, or alone above the one division's heading, a ~70px band.
+  // It now shares ONE row: the division chips on the left when there is a
+  // rail, otherwise the division's heading; the switch on the right.
+  //
+  // What these REPLACE is the earlier "the switch is a direct child of the
+  // root" pin, and its reason still holds: Tailwind v4's `space-y-*` is
+  // `margin-block-end` on every child but the last, so a VISIBLE wrapper whose
+  // only content is the switch (hidden below lg) would keep that margin as a
+  // blank band on every phone. The wrappers below never hold the switch alone
+  // — the heading, or the division rail, is always beside it and always shown
+  // — and every class they carry is `lg:`-prefixed, so below lg each is a
+  // plain block that lays out exactly as its content did without it.
+  const lgOnly = (tokens: string[]) => tokens.filter((c) => !c.startsWith("lg:"));
+
+  it("ONE division: the switch shares the division heading's row, in a bar that is a plain block below lg", () => {
+    const h = render(MID);
+    expect(h).toMatch(
+      /^<div data-testid="mh-knockout" class="[^"]*"><section [^>]*><div data-testid="mh-knockout-titlebar-premier" class="[^"]*"><h2 data-testid="mh-knockout-heading-premier" class="[^"]*">Premier<\/h2><div data-testid="mh-knockout-view"/,
     );
+    const bar = classOf(h, "mh-knockout-titlebar-premier");
+    for (const token of ["lg:flex", "lg:items-center", "lg:justify-between"]) expect(bar, token).toContain(token);
+    expect(lgOnly(bar), "nothing applies below lg").toEqual([]);
+    expect(h.match(/data-testid="mh-knockout-view"/g)).toHaveLength(1);
+    // No toolbar at all: there is no rail for the switch to sit beside.
+    expect(h).not.toContain(`data-testid="mh-knockout-toolbar"`);
+  });
+
+  it("ONE division, TWO stages: still one heading row and one switch in it", () => {
+    const h = render(
+      hubDoc({
+        matches: [...MID_MATCHES, ...PLATE_MATCHES.map((x) => ({ ...x, divisionSlug: "premier", divisionId: "d-premier", divisionName: "Premier" }))],
+        knockouts: [
+          knockoutView("cup", "premier", ROUNDS),
+          knockoutView("plate", "premier", PLATE_ROUNDS, { stageName: "Plate", drawable: true }),
+        ],
+      }),
+    );
+    expect(h.match(/data-testid="mh-knockout-view"/g)).toHaveLength(1);
+    expect(h).toMatch(/<\/h2><div data-testid="mh-knockout-view"/);
+  });
+
+  it("TWO divisions: the division chips lead the toolbar and the switch follows them in the same bar; no heading holds a switch", () => {
     const multi = render(MULTI);
     expect(multi).toMatch(
-      /^<div data-testid="mh-knockout" class="[^"]*"><div data-testid="mh-knockout-divisions"/,
+      /^<div data-testid="mh-knockout" class="[^"]*"><div data-testid="mh-knockout-toolbar" class="[^"]*"><div data-testid="mh-knockout-divisions"/,
     );
-    // …and the switch opens straight after the division rail closes.
-    expect(multi).toMatch(/<\/button><\/div><div data-testid="mh-knockout-view"/);
+    // The switch opens straight after the division rail closes, and the bar
+    // closes straight after the switch — both inside it.
+    expect(multi).toMatch(/<\/button><\/div><div data-testid="mh-knockout-view"[^>]*>(<button[^>]*>[^<]*<\/button>){2}<\/div><\/div><section/);
+    const bar = classOf(multi, "mh-knockout-toolbar");
+    for (const token of ["lg:flex", "lg:items-start", "lg:justify-between"]) expect(bar, token).toContain(token);
+    expect(lgOnly(bar), "nothing applies below lg").toEqual([]);
+    expect(multi.match(/data-testid="mh-knockout-view"/g)).toHaveLength(1);
+    expect(multi).not.toMatch(/<\/h2><div data-testid="mh-knockout-view"/);
+  });
+
+  it("the division rail is still FIRST in the panel and each heading still FIRST in its section — what a phone reads is unmoved", () => {
+    const multi = render(MULTI);
+    expect(multi.indexOf(`data-testid="mh-knockout-divisions"`)).toBeLessThan(multi.indexOf("<section"));
+    expect(multi).toMatch(/<section [^>]*><div data-testid="mh-knockout-titlebar-premier" class="[^"]*"><h2 /);
+    expect(multi).toMatch(/<section [^>]*><div data-testid="mh-knockout-titlebar-sunday-league" class="[^"]*"><h2 /);
   });
 
   it("?view=draw below lg: the stage lays out with a flex GAP, not space-y — the hidden tree leaves no margin under the rounds", () => {
@@ -986,6 +1188,38 @@ describe("KnockoutTab — taps and polls", () => {
     tap(island.tree(), "mh-knockout-division-all");
     expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=knockout");
     expect(cards(island.tree())).toEqual(["q1", "q2", "q3", "q4", "p3"]);
+  });
+
+  /** The side names a card in the Rounds list was HANDED — `walk` never calls
+   *  `MatchCard`, so this is the prop, the thing the card renders from. */
+  const cardSides = (tree: ReactElement[], fixtureId: string) => {
+    const card = tree.find((x) => x.type === MatchCard && (propsOf(x).match as HubMatchT).fixtureId === fixtureId);
+    expect(card, `card ${fixtureId}`).toBeDefined();
+    return (propsOf(card!).match as HubMatchT).header.sides.map((side) => side.name);
+  };
+
+  it("D1: every card in the Rounds list is told to drop its round caption", () => {
+    const island = mount(MID);
+    const handed = island.tree().filter((x) => x.type === MatchCard).map((x) => propsOf(x).showRound);
+    expect(handed).toHaveLength(4);
+    expect(handed.every((value) => value === false)).toBe(true);
+  });
+
+  it("D2 in the Rounds list: the final's card is handed the pair, the bronze card its loser sentence — the tree's own derivation", () => {
+    const island = mount(LATER);
+    tap(island.tree(), `mh-knockout-round-${VIEW}-main-3`);
+    expect(cardSides(island.tree(), "f1")).toEqual(["Dev", "Eli / Hal"]);
+    tap(island.tree(), `mh-knockout-round-${VIEW}-third-place`);
+    expect(cardSides(island.tree(), "t1")).toEqual(["Ana", "Loser of Eli v Hal"]);
+  });
+
+  it("D2 in the Rounds list, NON-drawable: the semi-final card keeps the engine's sentence", () => {
+    const island = mount(
+      hubDoc({ matches: MID_MATCHES, knockouts: [knockoutView("cup", "premier", ROUNDS, { drawable: false })] }),
+    );
+    tap(island.tree(), `mh-knockout-round-${VIEW}-main-2`);
+    expect(cardSides(island.tree(), "s1")).toEqual(["Ana", "Winner of QF 2"]);
+    expect(cardSides(island.tree(), "s2")).toEqual(["Winner of QF 3", "Winner of QF 4"]);
   });
 
   it("a chosen round that a later poll no longer carries falls back to the default — never a rail with nothing pressed", () => {

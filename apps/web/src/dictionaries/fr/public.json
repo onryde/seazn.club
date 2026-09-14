@@ -364,6 +364,8 @@
   "knockout.view.rounds": "Tours",
   "knockout.view.draw": "Tableau",
   "knockout.drawLabel": "Tableau à élimination directe",
+  "knockout.pendingPair": "{a} / {b}",
+  "knockout.pendingLoser": "Perdant de {a} contre {b}",
   "leaders.title": "Meilleurs joueurs",
   "leaders.empty": "Pas encore de statistiques",
   "teams.title": "Équipes",

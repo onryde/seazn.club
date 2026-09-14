@@ -10,11 +10,12 @@
 // their rounds in bracket order, each round's pre-resolved label, whether a
 // Draw can be drawn, and which fixture crowns the stage. Nothing here
 // re-derives any of those. What this file DOES decide is written out where it
-// happens, and it is five things:
+// happens, and it is six things:
 //
 //  • which round a rail opens on (`defaultRoundKey`), and what happens to a
 //    chosen round a later poll no longer carries (`selectedRoundKey`);
 //  • the "next" sentence under each card (`nextLine`);
+//  • what a slot still waiting on its feeder reads (`pendingSide`);
 //  • which division is showing, reconciled against the chips on screen;
 //  • Rounds or Draw (`knockoutMode`);
 //  • scrolling the pressed round chip into view (`revealScrollLeft`).
@@ -210,6 +211,94 @@ export function nextLine(
     };
   }
   return { key: "knockout.next.advances", vars: { round: next.label } };
+}
+
+export type PendingSideKey = "knockout.pendingPair" | "knockout.pendingLoser";
+
+/**
+ * What an EMPTY slot of a drawable bracket reads while the match that feeds
+ * it is still to be decided: the two entrants who could fill it (fix round,
+ * D2 — the owner-approved mock). Null leaves the slot the engine's own
+ * sentence ("Winner of R3·1").
+ *
+ * THE FEEDER is `generateSingleElim`'s wiring, and the relationship the tree's
+ * connectors already draw: bracket round k+1's fixture j is fed on side s by
+ * round k's fixture 2j+s, as its WINNER. The third-place fixture is fed on
+ * side s by the semi-finals' fixture s, as its LOSER — so it reads "Loser of
+ * {a} v {b}": "{a} / {b}" there would be the same words as the final's slot
+ * waiting on the same semi, with nothing to say one gets the winner and the
+ * other the loser. Both relationships checked against two real hub documents
+ * in the fix-round report.
+ *
+ * Four conditions, each with its own reason:
+ *  • DRAWABLE only — the one shape `twoSidedBracket` has proved pairs its
+ *    rounds this way. A double-elimination or odd-sized bracket does not, and
+ *    a wrong pair is worse than the engine's sentence.
+ *  • the slot is EMPTY (`entrantId === ""`). A filled slot is the real entrant.
+ *  • the feeder is NOT decided (`bucket !== "completed"`): live, or still to
+ *    play. A decided feeder has filled the slot already; one that ended with
+ *    nobody through (abandoned, cancelled) never will, and a pair would
+ *    promise that it might.
+ *  • BOTH of the feeder's sides are known. A feeder still waiting on a slot of
+ *    its own, or a bye's empty side, is not a pair of entrants.
+ */
+export function pendingSide(
+  view: KnockoutViewT,
+  fixtureId: string,
+  side: 0 | 1,
+  matches: MatchIndex,
+): { key: PendingSideKey; vars: { a: string; b: string } } | null {
+  if (!view.drawable) return null;
+  const slot = matches.get(fixtureId)?.header.sides[side];
+  if (slot === undefined || slot.entrantId !== "") return null;
+
+  const bracket = view.rounds.filter((round) => round.key !== THIRD_PLACE_KEY);
+  const third = view.rounds.find((round) => round.key === THIRD_PLACE_KEY);
+  let feederId: string | undefined;
+  let key: PendingSideKey;
+  if (third !== undefined && third.fixtureIds.includes(fixtureId)) {
+    const semis = bracket[bracket.length - 2];
+    feederId = semis?.fixtureIds[2 * third.fixtureIds.indexOf(fixtureId) + side];
+    key = "knockout.pendingLoser";
+  } else {
+    const at = bracket.findIndex((round) => round.fixtureIds.includes(fixtureId));
+    // Not in the bracket, or in round 0: nothing feeds it.
+    if (at < 1) return null;
+    feederId = bracket[at - 1]!.fixtureIds[2 * bracket[at]!.fixtureIds.indexOf(fixtureId) + side];
+    key = "knockout.pendingPair";
+  }
+
+  const feeder = feederId === undefined ? undefined : matches.get(feederId);
+  if (feeder === undefined || feeder.bucket === "completed") return null;
+  const [a, b] = feeder.header.sides;
+  if (a.entrantId === "" || b.entrantId === "") return null;
+  return { key, vars: { a: a.name, b: b.name } };
+}
+
+/**
+ * `match` with each waiting side renamed per `pendingSide`, for the two places
+ * a side's name is shown — the Draw's node and the Rounds list's card — so the
+ * two can never disagree. The SAME object when neither side changes. The side
+ * keeps `entrantId === ""`, so every reader that asks "is anyone here yet"
+ * (the node's muted style, `nextLine`) still gets the true answer.
+ */
+function withPendingSides(
+  view: KnockoutViewT,
+  match: HubMatchT,
+  matches: MatchIndex,
+  dict: PublicDict,
+): HubMatchT {
+  const nameOf = (side: 0 | 1) => {
+    const pending = pendingSide(view, match.fixtureId, side, matches);
+    return pending === null ? null : t(dict, pending.key, pending.vars);
+  };
+  const names = [nameOf(0), nameOf(1)] as const;
+  if (names[0] === null && names[1] === null) return match;
+  const rename = (side: 0 | 1) => {
+    const name = names[side];
+    return name === null ? match.header.sides[side] : { ...match.header.sides[side], name };
+  };
+  return { ...match, header: { ...match.header, sides: [rename(0), rename(1)] } };
 }
 
 /**
@@ -440,7 +529,7 @@ function drawTree(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): R
                             className={`${CONNECTOR} right-full top-1/2 border-t-2`}
                           ></span>
                         ) : null}
-                        {match ? drawNode(match, dict) : null}
+                        {match ? drawNode(withPendingSides(view, match, matches, dict), dict) : null}
                       </div>
                     );
                   })}
@@ -452,7 +541,7 @@ function drawTree(view: KnockoutViewT, matches: MatchIndex, dict: PublicDict): R
                       const match = matches.get(id);
                       return match ? (
                         <div key={id} className="relative flex items-center" style={{ height: CELL_PX }}>
-                          {drawNode(match, dict)}
+                          {drawNode(withPendingSides(view, match, matches, dict), dict)}
                         </div>
                       ) : null;
                     })}
@@ -540,47 +629,59 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
   };
   // Whether the Rounds/Draw switch exists: some bracket on screen can be drawn.
   const canDraw = shown.some((view) => view.drawable);
+  const viewSwitch = canDraw ? (
+    // Hidden below the large breakpoint, where there is no Draw to switch
+    // to: a `?view=draw` link opened on a phone shows Rounds.
+    <div
+      data-testid="mh-knockout-view"
+      role="group"
+      aria-label={t(dict, "knockout.view.label")}
+      className="flex shrink-0 gap-2 max-lg:hidden"
+    >
+      {hubChip("mh-knockout-view-rounds", t(dict, "knockout.view.rounds"), mode === "rounds", () =>
+        chooseMode("rounds"),
+      )}
+      {hubChip("mh-knockout-view-draw", t(dict, "knockout.view.draw"), mode === "draw", () =>
+        chooseMode("draw"),
+      )}
+    </div>
+  ) : null;
 
   return (
     <div data-testid="mh-knockout" className="min-w-0 space-y-6">
-      {/* The division rail and the switch are DIRECT children of this root,
-          never wrapped together. The root spaces every child but its last;
-          a hidden element takes no space, but a visible wrapper around a
-          switch hidden below the large breakpoint would keep it, as a blank
-          band at the top of the panel on every phone. */}
+      {/* ONE toolbar row at lg (fix round, C2): the division chips on the
+          left when there is a rail, else the one division's heading (below,
+          in its section); the switch on the right. It used to sit on a row
+          of its own, a ~70px band.
+
+          Both bars carry `lg:` classes only, so below lg each is a plain
+          block and the panel lays out exactly as before. And neither ever
+          holds the switch ALONE: the root spaces every child but its last,
+          and a visible wrapper whose only content is hidden below lg would
+          keep that margin as a blank band on every phone. Beside the switch
+          there is always the rail or the heading, both always shown. */}
       {divisions.length > 0 ? (
         <div
-          data-testid="mh-knockout-divisions"
-          role="group"
-          tabIndex={0}
-          aria-label={t(dict, "matchesHub.divisionsLabel")}
-          className={HUB_RAIL_CLASS}
+          data-testid="mh-knockout-toolbar"
+          className="lg:flex lg:items-start lg:justify-between lg:gap-4"
         >
-          {hubChip("mh-knockout-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
-            chooseDivision(null),
-          )}
-          {divisions.map((d) =>
-            hubChip(`mh-knockout-division-${d.slug}`, d.name, division === d.slug, () =>
-              chooseDivision(d.slug),
-            ),
-          )}
-        </div>
-      ) : null}
-      {canDraw ? (
-        // Hidden below the large breakpoint, where there is no Draw to
-        // switch to: a `?view=draw` link opened on a phone shows Rounds.
-        <div
-          data-testid="mh-knockout-view"
-          role="group"
-          aria-label={t(dict, "knockout.view.label")}
-          className="flex justify-end gap-2 max-lg:hidden"
-        >
-          {hubChip("mh-knockout-view-rounds", t(dict, "knockout.view.rounds"), mode === "rounds", () =>
-            chooseMode("rounds"),
-          )}
-          {hubChip("mh-knockout-view-draw", t(dict, "knockout.view.draw"), mode === "draw", () =>
-            chooseMode("draw"),
-          )}
+          <div
+            data-testid="mh-knockout-divisions"
+            role="group"
+            tabIndex={0}
+            aria-label={t(dict, "matchesHub.divisionsLabel")}
+            className={HUB_RAIL_CLASS}
+          >
+            {hubChip("mh-knockout-division-all", t(dict, "matchesHub.division.all"), division === null, () =>
+              chooseDivision(null),
+            )}
+            {divisions.map((d) =>
+              hubChip(`mh-knockout-division-${d.slug}`, d.name, division === d.slug, () =>
+                chooseDivision(d.slug),
+              ),
+            )}
+          </div>
+          {viewSwitch}
         </div>
       ) : null}
 
@@ -588,12 +689,20 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
         const first = views[0]!;
         return (
           <section key={first.divisionId} className="min-w-0 space-y-4">
-            <h2
-              data-testid={`mh-knockout-heading-${first.divisionSlug}`}
-              className="font-display text-xl font-semibold tracking-tight text-ink md:text-2xl"
+            <div
+              data-testid={`mh-knockout-titlebar-${first.divisionSlug}`}
+              className="lg:flex lg:items-center lg:justify-between lg:gap-4"
             >
-              {first.divisionName}
-            </h2>
+              <h2
+                data-testid={`mh-knockout-heading-${first.divisionSlug}`}
+                className="font-display text-xl font-semibold tracking-tight text-ink md:text-2xl"
+              >
+                {first.divisionName}
+              </h2>
+              {/* With no division rail there is exactly one division, so this
+                  is the one heading on the tab and the switch's only row. */}
+              {divisions.length > 0 ? null : viewSwitch}
+            </div>
             {views.map((view) => {
               const roundKey = selected.get(view.id)!;
               const round = view.rounds.find((r) => r.key === roundKey)!;
@@ -649,12 +758,16 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
                         const line = nextLine(view, round.key, id, matches);
                         return (
                           <li key={id} className="min-w-0 space-y-1">
+                            {/* No round caption (fix round, D1): the stage's
+                                heading and the pressed round chip right
+                                above already name both. */}
                             <MatchCard
-                              match={match}
+                              match={withPendingSides(view, match, matches, dict)}
                               dict={dict}
                               locale={locale}
                               now={now}
                               showDivision={false}
+                              showRound={false}
                             />
                             {line ? (
                               <p
