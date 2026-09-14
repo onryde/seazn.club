@@ -133,17 +133,24 @@ export async function scoreEvent(
   // event-import.ts. The hook's error still propagates unchanged: `finally`
   // rethrows it once the awaited invalidation is done, and the invalidation's
   // own `.catch` means its failure can never replace it.
+  // R10h: the fixtures this score named a winner (or loser) INTO, from the
+  // advance's own write. The `finally` below reads it as it stands when it
+  // runs, so a throw from a LATER hook (discipline, news) still publishes
+  // them. A throw from inside `onDecided` itself, after its fill committed,
+  // does not — that path leaves the next fixture on its own 30s TTL, which is
+  // what every score did before this change.
+  let advanced: readonly string[] = [];
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
     if (result.outcome !== null || input.type === "core.void") {
-      await onDecided(auth, fixtureId, result.outcome);
+      advanced = await onDecided(auth, fixtureId, result.outcome);
       await refreshDiscipline(auth, fixtureId);
       await refreshNews(auth, fixtureId);
     }
 
     if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
   } finally {
-    await invalidateAndPush(auth, fixtureId, input, result);
+    await invalidateAndPush(auth, fixtureId, input, result, advanced);
   }
   return out;
 }
@@ -155,6 +162,9 @@ async function invalidateAndPush(
   fixtureId: string,
   input: AppendEventRequest,
   result: { outcome: unknown },
+  /** R10h: the fixtures this score advanced a name into (`onDecided`'s own
+   *  write). Empty for every score that advances nobody. */
+  advanced: readonly string[] = [],
 ): Promise<void> {
   // After commit (doc 08 §4): realtime fire-and-forget, the public cache
   // awaited. Discovery surfaces refresh on decided/void/start writes only — and
@@ -186,14 +196,29 @@ async function invalidateAndPush(
   //
   // R10 I1: and never longer than PUSH_AFTER_DELETE_BOUND_MS. A DEL that
   // never answers sends the pushes at the bound instead of never, once.
+  //
+  // R10h: a score that advances a winner (or a loser) into the next fixture
+  // changes THAT fixture's public document too — the slot label it showed
+  // becomes a name. Its key joins the one DEL above, and its push goes out
+  // from this same callback, so it waits on that DEL exactly as the decided
+  // fixture's does. Without it a spectator already watching the next round
+  // (the final, opened while the semis play) sat on "TBD" until the 30s TTL
+  // expired and the next poll landed. The reason is "schedule", the same one
+  // every other slot-fill sends (`afterScheduleWrite`): what changed is who
+  // is playing, not this fixture's score.
   await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
     void publishFixtureUpdate(fixtureId, "event");
     if (scope) void publishDivisionUpdate(scope.divisionId, "score");
-  }).catch((err: unknown) => {
+    for (const id of advanced) void publishFixtureUpdate(id, "schedule");
+  }, advanced).catch((err: unknown) => {
     log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
     // It failed before any sweep started (the lookup, or the tag call), so
     // there is nothing to wait for. The scorer's other devices read the
     // ledger, not Redis, and still need their ping.
+    //
+    // R10h: and only that one. No DEL went out, so a push for a fixture this
+    // score advanced a name into would send its spectators straight back to
+    // the stale copy they are already showing; they keep their own poll.
     void publishFixtureUpdate(fixtureId, "event");
   });
 }
@@ -429,9 +454,16 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 
 // A decided fixture feeds brackets (winner_to/loser_to slots) and refreshes
 // the table-stage standings snapshot.
-export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
+//
+// R10h: returns the fixtures it named an entrant INTO, taken from the fill's
+// own `returning id` — never from a re-read or a scan of the bracket, so a
+// slot that was already filled (the update touches no row) is not reported as
+// changed. `scoreEvent` DELs and pushes them beside the decided fixture; the
+// batch importer ignores them, as it ignores its own pushes.
+export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<string[]> {
   // outcome may be null here (a void erased the decision) — recompute only.
   const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
+  const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<
       {
@@ -456,10 +488,12 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
     const winner = o.kind === "win" || o.kind === "award" ? o.winner : undefined;
     const loser = o.kind === "win" ? o.loser : undefined;
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
-      await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      if (filled !== null) advanced.push(filled);
     }
     if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
-      await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+      const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+      if (filled !== null) advanced.push(filled);
     }
     // Placement games (Jul3/08 §4, 3 Jun/17 May): "winner of game X = 15th" —
     // the decided fixture writes rank locks via the Jul3/05 mechanism, never
@@ -507,6 +541,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
   if (context && o.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
+  // Only ever reached once the transaction above COMMITTED: a rollback throws
+  // out of `withTenant`, so the ids of a fill that was undone never leave.
+  return advanced;
 }
 
 async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
@@ -581,6 +618,12 @@ export async function invalidatePublicCache(
    *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
    *  F2). Must not throw. */
   afterDeletes?: (scope: { divisionId: string; competitionId: string } | null) => void,
+  /** R10h: other fixtures this same write changed — the ones a bracket advance
+   *  named a winner or loser INTO. Their public documents are stale for the
+   *  same reason the decided fixture's is, so their keys join the ONE DEL
+   *  below instead of a second one. Caller-supplied, and already the product
+   *  of its own write: this function never derives or re-reads them. */
+  alsoFixtureIds: readonly string[] = [],
 ): Promise<void> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
@@ -616,7 +659,11 @@ export async function invalidatePublicCache(
   // `pub:v1:div:{id}:*` backs only the public schedule, standings and entrants
   // endpoints.
   const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+  // R10h: the advanced-into fixtures' own documents ride the same DEL, after
+  // the two keys every score drops. One round trip, and the pushes below then
+  // wait on the delete that covers all of them.
   const keys = row ? [fixtureKey, `pub:v1:hub:${row.competition_id}`] : [fixtureKey];
+  for (const id of alsoFixtureIds) keys.push(`pub:v1:fixture:${id}`);
   // F4: neither call is ever left to reject unhandled. Both helpers fail open
   // inside their try, but `client()` sits outside it (cache.ts). ioredis's
   // constructor throws synchronously on a REDIS_URL it cannot parse, so every

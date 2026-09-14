@@ -13,7 +13,11 @@
 // into a templated bracket's placeholders (`POST /stages/{id}/seed-proposal/
 // confirm`); its "changed" fixtures are the ones whose entrants it filled.
 // R10g also makes every stage COMPLETION that commits publish the hub key
-// (stage and division status show on the hub), drawn or not.
+// (stage and division status show on the hub), drawn or not. R10h adds the
+// last writer of this class that a spectator can watch: a SCORE that advances
+// a winner (or, in a double elimination, a loser) into the next fixture, where
+// the fixture whose slot was filled is a different fixture from the one that
+// was scored, with its own open match centre.
 // Each is driven through
 // its real use-case against Postgres, and each must:
 //   - send ONE DEL of the hub key plus the keys of exactly the fixtures its own
@@ -1040,5 +1044,145 @@ describe.skipIf(!HAS_DB)("confirming a seed proposal publishes the names it fill
     expect(again.body.error?.code).toBe("SEEDING_ALREADY_CONFIRMED");
     expect(diff(before, await lineups(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
     await expectNothingSent();
+  }, 120_000);
+});
+
+interface BracketRow {
+  id: string;
+  ext_key: string | null;
+  home: string | null;
+  away: string | null;
+  winner_to: string | null;
+  loser_to: string | null;
+}
+
+/** A started bracket of four on a Pro org: `knockout` is two semi-finals
+ *  feeding one final; `double_elim` also drops each loser into the losers'
+ *  bracket. Deciding a first-round fixture through the real `scoreEvent`
+ *  advances a name into the next fixture — the write under test. */
+async function bracketRig(kind: "knockout" | "double_elim" = "knockout") {
+  const { auth } = await seedOrgOnPlan("pro");
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Advance Cup", visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG,
+  });
+  await createEntrants(auth, division.id, ["A", "B", "C", "D"].map((name, i) => ({
+    kind: "individual" as const, display_name: name, seed: i + 1, members: [],
+  })));
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: "Bracket", config: {} });
+  await generateStageFixtures(auth, stage!.id);
+  await startDivision(auth, division.id);
+  const fixtures = await sql<BracketRow[]>`
+    select id, ext_key, home_entrant_id as home, away_entrant_id as away,
+           winner_to_fixture as winner_to, loser_to_fixture as loser_to
+    from fixtures where stage_id = ${stage!.id} order by ext_key`;
+  await quiesce();
+  return { auth, divisionId: division.id, competitionId: competition.id, stageId: stage!.id, fixtures };
+}
+
+/** Both sides known, so the fixture can actually be played now. */
+const playable = (f: BracketRow) => f.home !== null && f.away !== null;
+
+const decide = (rig: { auth: AuthCtx }, fixtureId: string, seq: number) =>
+  scoreEvent(rig.auth, fixtureId, {
+    expected_seq: seq, type: "generic.result", payload: { p1Score: 2, p2Score: 0 },
+  });
+
+const start = (rig: { auth: AuthCtx }, fixtureId: string) =>
+  scoreEvent(rig.auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+
+describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture publishes THAT fixture too (R10h)", () => {
+  it("deciding a semi-final: the final's key rides scoring's own one DEL, and its push goes out after that DEL", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.hold = true;
+    await decide(rig, semi!.id, 1);
+    const { moved: advanced, deleted, created } = diff(before, await lineups(rig.divisionId));
+    expect([deleted, created]).toEqual([[], []]);
+    expect(advanced, "the winner was named into exactly the fixture this one feeds").toEqual([semi!.winner_to]);
+
+    expect(probe.dels, "scoring's own two keys, plus the advanced-into fixture's, in ONE DEL").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId), ...advanced.map(fixtureKey)],
+    ]);
+    expect(probe.inTxAtDel, "the DEL went out after the score committed, not from inside its transaction")
+      .toEqual([false]);
+    await sleep(20);
+    expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+    expect(probe.divisionPushes, "division push before the DEL settled").toEqual([]);
+
+    await releaseDel();
+    expect(probe.fixturePushes, "scoring's own push, plus one for the fixture the winner advanced into").toEqual([
+      [semi!.id, "event"],
+      ...advanced.map((id) => [id, "schedule"]),
+    ]);
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  it("deciding the FINAL advances nobody: the DEL and the pushes are exactly the two keys and the one push scoring sends on its own", async () => {
+    const rig = await bracketRig();
+    const semis = rig.fixtures.filter((f) => playable(f) && f.winner_to !== null);
+    const finals = rig.fixtures.filter((f) => f.winner_to === null);
+    expect(finals, "a four-entrant knockout ends in exactly one fixture that feeds nothing").toHaveLength(1);
+    const final = finals[0]!;
+    for (const semi of semis) {
+      await start(rig, semi.id);
+      await decide(rig, semi.id, 1);
+    }
+    await start(rig, final.id);
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.hold = true;
+    await decide(rig, final.id, 1);
+    expect(diff(before, await lineups(rig.divisionId)), "a final's winner is named into nothing")
+      .toEqual({ moved: [], deleted: [], created: [] });
+
+    expect(probe.dels, "no third key: nothing advanced").toEqual([
+      [fixtureKey(final.id), hubKey(rig.competitionId)],
+    ]);
+    expect(probe.inTxAtDel).toEqual([false]);
+    await releaseDel();
+    expect(probe.fixturePushes, "no second push: nothing advanced").toEqual([[final.id, "event"]]);
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
+  it("double elimination: the loser's drop is advanced too, so BOTH fixtures ride the one DEL and both are pushed after it", async () => {
+    const rig = await bracketRig("double_elim");
+    const first = rig.fixtures.find((f) => playable(f) && f.winner_to !== null && f.loser_to !== null);
+    expect(first, "a double-elimination first round feeds a winners' AND a losers' fixture").toBeDefined();
+    await start(rig, first!.id);
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    probe.hold = true;
+    await decide(rig, first!.id, 1);
+    const { moved: advanced, deleted, created } = diff(before, await lineups(rig.divisionId));
+    expect([deleted, created]).toEqual([[], []]);
+    expect(advanced, "the winner went up and the loser dropped")
+      .toEqual([first!.winner_to, first!.loser_to].sort());
+
+    expect(probe.dels, "one DEL").toHaveLength(1);
+    const del = probe.dels[0]!;
+    expect(del.slice(0, 2), "scoring's own two keys first").toEqual([
+      fixtureKey(first!.id), hubKey(rig.competitionId),
+    ]);
+    expect([...del.slice(2)].sort(), "then both advanced-into fixtures").toEqual(advanced.map(fixtureKey).sort());
+    expect(probe.inTxAtDel).toEqual([false]);
+    await sleep(20);
+    expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+
+    await releaseDel();
+    expect(probe.fixturePushes[0], "scoring's own push first").toEqual([first!.id, "event"]);
+    expect(probe.fixturePushes.slice(1).map(([id]) => id).sort(), "one push per advanced-into fixture")
+      .toEqual([...advanced].sort());
+    expect(new Set(probe.fixturePushes.slice(1).map(([, reason]) => reason))).toEqual(new Set(["schedule"]));
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
   }, 120_000);
 });
