@@ -251,8 +251,15 @@ describe("buildMatchCentre — cricket", () => {
     expect(doc.tabs).toEqual(["summary", "scorecard", "commentary", "info"]);
     expect(doc.header.live).toBe(true);
     expect(card.live).not.toBeNull();
+    // M1 k1 — `needFrom`, not `need`. This branch has always passed `balls`,
+    // and `matchCentre.chase.need` ("{side} need {runs} to win") names no
+    // placeholder for it in any of the four locales, so the balls remaining
+    // were computed and then dropped. `matchCentre.chase.needFrom` is the
+    // translated sibling that renders all three — the sentence
+    // `match-centre-schema.ts:21` documents ("Queens need 34 from 21") — and
+    // is what `match-centre-msg-params.test.ts` now holds the builder to.
     expect(doc.header.statusLine).toEqual({
-      key: "matchCentre.chase.need",
+      key: "matchCentre.chase.needFrom",
       params: { side: AWAY_SIDE.name, runs: card.live!.needRuns, balls: card.live!.ballsLeft },
     });
     expect(doc.header.rateLine).toMatch(/^CRR \d+\.\d\d · RRR \d+\.\d\d$/);

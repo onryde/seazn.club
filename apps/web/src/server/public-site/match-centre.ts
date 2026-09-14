@@ -800,7 +800,16 @@ function buildHeader(
         dateStyle: "medium",
         timeStyle: "short",
       }).format(new Date(fixture.scheduled_at));
-      statusLine = { key: "matchCentre.status.startsAt", params: { when } };
+      // `time`, not `when`: the param name is the DICTIONARY's placeholder
+      // name. All four locales write "Starts {time}" / "Begint {time}", and
+      // `t()` prints an unsupplied brace verbatim (`lib/i18n-runtime.ts:24`) —
+      // so `{ when }` shipped the literal text "Starts {time}" to every
+      // spectator looking at an upcoming match, on main since 544697031 (W1).
+      // `match-centre-msg-params.test.ts` now walks every Msg this builder can
+      // emit and renders it against all four dictionaries, which is the only
+      // comparison that can see this (the existing dictionary gate compares
+      // locales with each other, and they agreed).
+      statusLine = { key: "matchCentre.status.startsAt", params: { time: when } };
     }
   } else if (status === "decided") {
     // The margin has TWO sources, because the two win vocabularies do. Cricket's
@@ -831,8 +840,19 @@ function buildHeader(
   } else if (status === "in_play" && card?.live) {
     const live = card.live;
     if (live.target !== null && live.needRuns !== null && live.ballsLeft !== null) {
+      // `needFrom`, not `need` — the SECOND mismatch M1's class guard found.
+      // This branch only runs with `ballsLeft` known, and it has always passed
+      // that number as a param; `matchCentre.chase.need` is "{side} need
+      // {runs} to win" in all four locales and simply drops it, so the balls
+      // remaining never reached a reader. `matchCentre.chase.needFrom` is the
+      // translated sibling that names `{balls}` ("{side} need {runs} from
+      // {balls} balls"), it is the sentence `match-centre-schema.ts:21`'s own
+      // doc comment documents ("Queens need 34 from 21"), and it is the same
+      // pair the overlay already chooses between correctly
+      // (`lib/overlay-model.ts:703-704`, `overlay.chase.need` vs
+      // `overlay.chase.needBalls`).
       statusLine = {
-        key: "matchCentre.chase.need",
+        key: "matchCentre.chase.needFrom",
         params: { side: sideNameOf(sides, live.battingSide), runs: live.needRuns, balls: live.ballsLeft },
       };
     }
