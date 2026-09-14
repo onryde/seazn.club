@@ -36,6 +36,14 @@ const webp = () =>
     .webp()
     .toBuffer();
 
+/** A perfectly ordinary crest-shaped SVG — with a `viewBox`, so satori itself
+ *  would not even throw on it. What makes it inadmissible is that it is markup
+ *  an organiser wrote, not that it is malformed. */
+const svgBytes = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">' +
+    '<rect width="64" height="64" fill="#c81e3c"/></svg>',
+);
+
 function imageResponse(bytes: Buffer, type: string, extra: Record<string, string> = {}): Response {
   return new Response(new Uint8Array(bytes), {
     status: 200,
@@ -221,6 +229,25 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
       spyFetch(async () => imageResponse(await png(), type));
       expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
     }
+  });
+
+  it("refuses SVG bytes that DECLARE themselves a png, because the declaration is the attacker's", async () => {
+    // The content-type is organiser-controlled end to end: `setEntrantBadge`
+    // (`usecases/entrants.ts`) stores the CLIENT's declared `contentType`
+    // verbatim, without sniffing a single byte, and storage then serves it
+    // back under that name. So the content-type gate above cannot be the
+    // thing the SVG decision rests on — sharp SNIFFS, and rasterises a raw
+    // SVG buffer happily. The format is decided from the bytes.
+    spyFetch(async () => imageResponse(svgBytes, "image/png"));
+    expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
+  });
+
+  it("and those SVG bytes really are something sharp would have drawn", async () => {
+    // The anti-vacuous half of the test above: if these bytes merely failed to
+    // decode, the refusal would prove nothing. librsvg is in sharp's prebuilt
+    // libvips, so unguarded they become a picture.
+    const drawn = await sharp(svgBytes).png().toBuffer();
+    expect(drawn.subarray(1, 4).toString()).toBe("PNG");
   });
 
   // The next two carry a VALID image body and a valid content type on purpose.

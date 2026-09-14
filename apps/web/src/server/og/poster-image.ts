@@ -68,6 +68,23 @@ export const POSTER_IMAGE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The same four types as sharp NAMES them once it has sniffed the bytes, and
+ * derived from the list above so the two gates cannot drift apart.
+ *
+ * Why a second gate at all: the content type is the organiser's to choose.
+ * `setEntrantBadge` (`server/usecases/entrants.ts`) passes the client's
+ * multipart `contentType` to storage verbatim, without reading a byte of the
+ * file, and storage serves it back under that name. So `image/png` is a claim,
+ * not a fact — while sharp decides the real format by sniffing, and will
+ * cheerfully rasterise a raw SVG buffer (librsvg ships in its prebuilt
+ * libvips). The type we refuse above has to be refused from the BYTES, or the
+ * refusal is decorative for exactly the input it was written to exclude.
+ */
+const POSTER_IMAGE_FORMATS: ReadonlySet<string> = new Set(
+  [...POSTER_IMAGE_TYPES].map((type) => type.slice("image/".length)),
+);
+
+/**
  * The allow-list: the host this app builds its own public asset URLs from.
  *
  * Derived from the same environment variable `publicStorageUrl`
@@ -182,7 +199,14 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
     const bytes = await readCapped(res);
     if (bytes === null) return null;
 
-    const png = await sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS })
+    const image = sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS });
+    // The format the BYTES are, not the one the response called them. Also the
+    // point at which `limitInputPixels` fires: sharp reads the header here, so
+    // an oversized canvas is refused before anything is allocated for it.
+    const { format } = await image.metadata();
+    if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
+
+    const png = await image
       .resize({
         width: POSTER_IMAGE_MAX_EDGE,
         height: POSTER_IMAGE_MAX_EDGE,
