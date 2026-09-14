@@ -88,6 +88,30 @@ describe("allowedPosterImageUrl — the only host is the one this app serves its
     expect(allowedPosterImageUrl(uploadedBadge().replace("https://", "http://"))).toBeNull();
   });
 
+  it("refuses the right host on a port we do not serve uploads from", () => {
+    // `https://<storage host>:9999/` is a different SERVICE, and on a host we
+    // do not otherwise control it is the obvious way to reach one. The URL the
+    // app's own uploader builds carries no port at all, so neither may this.
+    const { protocol, hostname } = new URL(STORAGE_ORIGIN);
+    expect(allowedPosterImageUrl(`${protocol}//${hostname}:9999/storage/v1/object/public/assets/a.png`)).toBeNull();
+  });
+
+  it("matches whatever port the configured storage URL names, rather than a written-down one", () => {
+    // Both sides come from NEXT_PUBLIC_SUPABASE_URL. A deployment whose storage
+    // really is on 8443 keeps working; the default-port form of that same
+    // deployment does not, because it is a different service.
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://storage.example.test:8443");
+    expect(allowedPosterImageUrl("https://storage.example.test:8443/a.png")).not.toBeNull();
+    expect(allowedPosterImageUrl("https://storage.example.test/a.png")).toBeNull();
+  });
+
+  it("treats the redundant :443 as the default port it is", () => {
+    // WHATWG `URL` normalises it away on both sides, so an honest URL written
+    // the long way is still the same origin — no 443 is written down here.
+    const { protocol, hostname } = new URL(STORAGE_ORIGIN);
+    expect(allowedPosterImageUrl(`${protocol}//${hostname}:443/a.png`)).not.toBeNull();
+  });
+
   it("refuses an internal address even when the CONFIGURED storage host is one", () => {
     // Defence in depth: a misconfigured or injected NEXT_PUBLIC_SUPABASE_URL
     // must not turn the allow-list itself into a hole pointed at the host's

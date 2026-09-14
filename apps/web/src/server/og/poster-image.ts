@@ -84,8 +84,16 @@ const POSTER_IMAGE_FORMATS: ReadonlySet<string> = new Set(
   [...POSTER_IMAGE_TYPES].map((type) => type.slice("image/".length)),
 );
 
+/** `host:port` as this module compares it — the port left empty when it is the
+ *  protocol's default, which is exactly how WHATWG `URL` reports it, so the two
+ *  sides of the comparison are built the same way from the same parser. */
+function hostPort(url: URL): string {
+  return `${url.hostname.toLowerCase()}:${url.port}`;
+}
+
 /**
- * The allow-list: the host this app builds its own public asset URLs from.
+ * The allow-list: the host AND port this app builds its own public asset URLs
+ * from.
  *
  * Derived from the same environment variable `publicStorageUrl`
  * (`lib/storage-url.ts`) and `resolveLogoUrl` (`server/public-site/data.ts`)
@@ -93,12 +101,18 @@ const POSTER_IMAGE_FORMATS: ReadonlySet<string> = new Set(
  * `images.remotePatterns` — never a hardcoded host, so a project move cannot
  * leave a stale origin trusted here. Read per call, not at module load: the
  * value is environment, and a test that changes it must change this.
+ *
+ * The port is part of it because a different port is a different service. Our
+ * storage URLs carry no port, so `https://<storage host>:9999/…` is something
+ * else living on that name, and nothing we publish ever points at it. Both
+ * sides come from the configured URL — no 443 is written down here, so a
+ * deployment that really does serve uploads from a port keeps working.
  */
-function allowedHosts(): ReadonlySet<string> {
+function allowedOrigins(): ReadonlySet<string> {
   const configured = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!configured) return new Set();
   try {
-    return new Set([new URL(configured).hostname.toLowerCase()]);
+    return new Set([hostPort(new URL(configured))]);
   } catch {
     return new Set();
   }
@@ -129,7 +143,7 @@ export function allowedPosterImageUrl(raw: string | null | undefined): URL | nul
   if (url.protocol !== "https:") return null;
   const hostname = url.hostname.toLowerCase();
   if (isInternalHost(hostname)) return null;
-  if (!allowedHosts().has(hostname)) return null;
+  if (!allowedOrigins().has(hostPort(url))) return null;
   return url;
 }
 
