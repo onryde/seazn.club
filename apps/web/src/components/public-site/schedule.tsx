@@ -9,24 +9,28 @@ import Link from "next/link";
 import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
-import { fmtTime, fmtDate, fmtZoneAbbrev } from "@/lib/format";
+import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
+import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { msg } from "@/lib/messages";
-// P6 fix round 1, finding #2 — this is a Client Component ("use client"
-// above) with no locale/<DictProvider> plumbing anywhere in its tree today
-// ("Live"/"Ended", the view toggle and the date headings are still hardcoded
-// English here, a gap outside that task's scope; the round headings, "Time
-// TBD" and "All entrants" arrive pre-resolved since N1d d5). msgFor()
-// carries `server-only` and cannot be imported here at all, so slot labels
-// can't be resolved client-side the way this file's OTHER copy is English.
-// Instead the SERVER parent (the division/embed page, which already holds
-// `org.default_locale` per PublicOrg) pre-resolves every unfilled slot's
-// text via resolveSlotLabel(label, (k,v) => msgFor(orgLocale, k, v), …) and
-// hands the finished strings down as `slotLabels`, keyed `${fixtureId}:home`
-// / `${fixtureId}:away` — same shape as the existing `entrantNames` prop,
-// which is also a pre-resolved Record<string,string>, not a raw id to look
-// up here. `msg()` stays ONLY as the last-resort defensive fallback for a
-// key `slotLabels` should always carry (mirrors this file's existing
-// "never throws" convention).
+// Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
+// N1d d5, N1e e5). This is a Client Component ("use client" above) with no
+// locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
+// it resolves no phrase itself. Its two SERVER callers (the division page's
+// schedule tab and the embed schedule widget) already hold
+// `org.default_locale` and hand down, as plain props:
+// - `slotLabels`: every unfilled slot's text, keyed `${fixtureId}:home` /
+//   `${fixtureId}:away`, from the public round namer (same shape as
+//   `entrantNames`, a pre-resolved Record<string,string>);
+// - `roundLabels`: every fixture's round name, for the round view;
+// - `copy`: every other phrase — the row rail's Live / Ended / TBD, the
+//   filter's label and first option, the view toggle and its group name, the
+//   calendar link, the zone caption, the untimed day heading and the empty
+//   state (`publicScheduleCopy`);
+// - `locale`: the org's locale, which writes the day headings and the round
+//   view's short rail date.
+// The language is the org's, never the visitor's: both pages are ISR. `msg()`
+// stays ONLY as the last-resort, English, fallback for a slot name
+// `slotLabels` should always carry (this file's "never throws" convention).
 
 interface Props {
   fixtures: PublicFixture[];
@@ -50,9 +54,12 @@ interface Props {
    *  every stage, so the round view orders its groups by stage first. A stage
    *  missing here sorts after every stage that is present. */
   stageOrder: Record<string, number>;
-  /** N1d d5 — phrases this client component cannot resolve itself, in the
-   *  org's locale, built server-side by the caller. */
+  /** N1d d5, N1e e5 — every phrase this client component cannot resolve
+   *  itself, in the org's locale, built server-side by the caller. */
   copy: ScheduleCopy;
+  /** N1e e5 — the org's locale ("en", "es", …): the day headings and the
+   *  round view's short rail date are written in it. */
+  locale: string;
 }
 
 export interface ScheduleCopy {
@@ -60,12 +67,31 @@ export interface ScheduleCopy {
   timeTbd: string;
   /** The entrant filter's first option. */
   allEntrants: string;
+  /** Row rail: a match in play. */
+  live: string;
+  /** Row rail: a decided match. */
+  ended: string;
+  /** Row rail: a match with no time yet. */
+  tbd: string;
+  /** The entrant filter's screen-reader label. */
+  filterLabel: string;
+  /** The day/round toggle's group name. */
+  viewLabel: string;
+  /** The toggle's day button. */
+  viewDay: string;
+  /** The toggle's round button. */
+  viewRound: string;
+  /** The calendar (.ics) link. */
+  calendar: string;
+  /** A group heading's zone caption; `{zone}` is the venue zone's abbreviation. */
+  timesIn: string;
+  /** No fixtures at all. */
+  empty: string;
 }
 
 // Day bucket key as the venue-local calendar date (YYYY-MM-DD) so a 23:30 venue
 // match doesn't slide onto the next/previous day for a viewer in another zone.
-function dayKey(iso: string | null, tz: string): string | null {
-  if (!iso) return null;
+function dayKey(iso: string, tz: string): string {
   try {
     return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(iso)); // YYYY-MM-DD
   } catch {
@@ -73,11 +99,15 @@ function dayKey(iso: string | null, tz: string): string | null {
   }
 }
 
+/** The Intl tag dates are written in: the org's locale, "en" as en-GB
+ *  ("Friday 25 September"), as every public date was before N1e e5. */
+const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : locale);
+
 const UNSCHEDULED = "unscheduled";
 
 const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
-const shortDate = (iso: string, tz: string) =>
-  fmtDate(tz, iso, { weekday: "short", day: "numeric", month: "short" });
+/** The round view's rail date ("vie 25 sept"): the venue-local day, in the tag. */
+const shortDate = (iso: string, tz: string, dateTag: string) => dayLabel(dayKey(iso, tz), dateTag);
 
 /** Per-side score lines fit the stacked layout only when short ("3", "21").
     Long lines (cricket innings, set strings) fall back to the headline chip. */
@@ -98,6 +128,8 @@ function ScorebugRow({
   railMode,
   tz,
   slotLabels,
+  copy,
+  dateTag,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -105,6 +137,8 @@ function ScorebugRow({
   railMode: "time" | "date";
   tz: string;
   slotLabels: Record<string, string>;
+  copy: ScheduleCopy;
+  dateTag: string;
 }) {
   const live = f.status === "in_play";
   const decided = f.status === "decided" || f.status === "finalized";
@@ -140,16 +174,16 @@ function ScorebugRow({
         {live ? (
           <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-600">
             <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            Live
+            {copy.live}
           </span>
         ) : (
           <span className="font-display text-sm font-semibold text-ink">
-            {decided ? "Ended" : f.scheduled_at ? timeOf(f.scheduled_at, tz) : "TBD"}
+            {decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : copy.tbd}
           </span>
         )}
         <span className="mt-0.5 max-w-[3.25rem] truncate text-[10px] uppercase tracking-wide text-ink-muted">
           {!decided && !live && railMode === "date" && f.scheduled_at
-            ? shortDate(f.scheduled_at, tz)
+            ? shortDate(f.scheduled_at, tz, dateTag)
             : (f.court_name ?? "")}
         </span>
       </span>
@@ -174,7 +208,17 @@ function ScorebugRow({
   );
 }
 
-export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels, roundLabels, stageOrder, copy }: Props) {
+export function Schedule({
+  fixtures,
+  entrantNames,
+  divisionPath,
+  tz,
+  slotLabels,
+  roundLabels,
+  stageOrder,
+  copy,
+  locale,
+}: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
   // timetable on the day. Round view stays a click away for bracket-style flow.
@@ -182,6 +226,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
   const shown = entrant
     ? fixtures.filter((f) => f.home_entrant_id === entrant || f.away_entrant_id === entrant)
     : fixtures;
+  const dateTag = dateTagFor(locale);
 
   // Only offer the day view when at least one fixture actually has a date.
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
@@ -202,7 +247,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
   for (const f of mode === "day" ? shown : inPlayOrder) {
     let key: string;
     if (mode === "day") {
-      key = dayKey(f.scheduled_at, tz) ?? UNSCHEDULED;
+      key = f.scheduled_at ? dayKey(f.scheduled_at, tz) : UNSCHEDULED;
     } else {
       const name = roundLabels[f.id] ?? String(f.round_no);
       key = JSON.stringify([f.stage_id, name]);
@@ -225,11 +270,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
   const groupLabel = (key: string): string => {
     if (mode === "round") return roundNames.get(key) ?? key;
     if (key === UNSCHEDULED) return copy.timeTbd;
-    return new Date(`${key}T12:00`).toLocaleDateString("en-GB", {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-    });
+    return dayLabelLong(key, dateTag);
   };
 
   const options = Object.entries(entrantNames).sort(([, a], [, b]) => a.localeCompare(b));
@@ -238,7 +279,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <label className="sr-only" htmlFor="entrant-filter">
-          Show matches for
+          {copy.filterLabel}
         </label>
         <select
           id="entrant-filter"
@@ -256,7 +297,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
         {anyScheduled && (
           <div
             role="group"
-            aria-label="Group fixtures by"
+            aria-label={copy.viewLabel}
             className="inline-flex overflow-hidden rounded-lg border border-zinc-300 text-sm"
           >
             {(["day", "round"] as const).map((v) => (
@@ -265,13 +306,13 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
                 type="button"
                 aria-pressed={mode === v}
                 onClick={() => setView(v)}
-                className={`px-3 py-1.5 font-medium capitalize transition ${
+                className={`px-3 py-1.5 font-medium transition ${
                   mode === v
                     ? "bg-accent text-accent-ink"
                     : "bg-surface text-ink-muted hover:bg-accent-soft hover:text-accent-strong"
                 }`}
               >
-                {v}
+                {v === "day" ? copy.viewDay : copy.viewRound}
               </button>
             ))}
           </div>
@@ -281,7 +322,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
           className="inline-flex items-center gap-1.5 text-sm font-medium text-accent-strong underline-offset-2 hover:underline"
         >
           <CalendarPlus aria-hidden className="h-4 w-4" />
-          Add to calendar
+          {copy.calendar}
         </a>
       </div>
 
@@ -293,7 +334,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
               const anchor = list.find((x) => x.scheduled_at)?.scheduled_at;
               return anchor ? (
                 <span className="font-sans text-[10px] font-medium normal-case tracking-normal text-ink-muted/70">
-                  times in {fmtZoneAbbrev(tz, anchor)}
+                  {copy.timesIn.replace("{zone}", fmtZoneAbbrev(tz, anchor))}
                 </span>
               ) : null;
             })()}
@@ -316,6 +357,8 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
                     railMode={mode === "day" ? "time" : "date"}
                     tz={tz}
                     slotLabels={slotLabels}
+                    copy={copy}
+                    dateTag={dateTag}
                   />
                 </li>
               ))}
@@ -324,7 +367,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
       ))}
       {shown.length === 0 ? (
         <p className="rounded-xl border border-dashed border-zinc-300 bg-surface p-6 text-center text-sm text-ink-muted">
-          No fixtures yet — the schedule appears once the draw is made.
+          {copy.empty}
         </p>
       ) : null}
     </div>

@@ -392,6 +392,7 @@
   "division.entrantsEmpty": "No entrants yet",
   "division.seed": "Seed {seed}",
   "division.filter.label": "Filter matches",
+  "division.filter.showFor": "Show matches for",
   "division.filter.all": "All",
   "division.filter.allEntrants": "All entrants",
   "division.view.label": "View",

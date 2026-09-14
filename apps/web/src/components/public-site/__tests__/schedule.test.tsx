@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { Schedule } from "../schedule";
+import { Schedule, type ScheduleCopy } from "../schedule";
 import type { PublicFixture } from "@/server/public-site/data";
 
 const F = (over: Partial<PublicFixture>): PublicFixture => ({
@@ -38,11 +38,26 @@ const F = (over: Partial<PublicFixture>): PublicFixture => ({
 });
 
 const entrantNames = { e1: "Real Team" };
-// N1d d5 made both props required. These cases are about slot labels and
-// venue names, so the round names and phrases are neutral pass-throughs; what
-// the callers put in them is pinned by the embed and division page tests.
+// N1d d5 and N1e e5 made these props required. These cases are about slot
+// labels, venue names and stage order, so the round names, phrases and locale
+// are neutral pass-throughs; what the callers put in them is pinned by the
+// embed and division page tests and schedule-org-locale.test.ts.
 const ROUND_LABELS: Record<string, string> = {};
-const COPY = { timeTbd: "(time tbd)", allEntrants: "(all entrants)" };
+const COPY: ScheduleCopy = {
+  timeTbd: "(time tbd)",
+  allEntrants: "(all entrants)",
+  live: "(live)",
+  ended: "(ended)",
+  tbd: "(tbd)",
+  filterLabel: "(filter)",
+  viewLabel: "(view)",
+  viewDay: "(day)",
+  viewRound: "(round)",
+  calendar: "(calendar)",
+  timesIn: "(times in {zone})",
+  empty: "(empty)",
+};
+const LOCALE = "en";
 // N1e e1 made stage order a prop; these cases hold one stage, so it is empty.
 const STAGE_ORDER: Record<string, number> = {};
 
@@ -57,6 +72,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
+        locale: LOCALE,
         stageOrder: STAGE_ORDER,
         slotLabels: { "final:home": "Ganador del Grupo A", "final:away": "Ganador del Grupo B" },
       }),
@@ -78,6 +94,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
+        locale: LOCALE,
         stageOrder: STAGE_ORDER,
         slotLabels: { "semi:away": "Runner-up of Group C" },
       }),
@@ -96,6 +113,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
+        locale: LOCALE,
         stageOrder: STAGE_ORDER,
         slotLabels: {},
       }),
@@ -113,6 +131,7 @@ describe("public Schedule — slotLabels prop (P6 finding #2)", () => {
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
+        locale: LOCALE,
         stageOrder: STAGE_ORDER,
         slotLabels: {
           "final:home": "Best 2 of the 3-place teams",
@@ -145,6 +164,7 @@ describe("public Schedule — court_name/venue_name, never the frozen court_labe
         tz: "UTC",
         roundLabels: ROUND_LABELS,
         copy: COPY,
+        locale: LOCALE,
         stageOrder: STAGE_ORDER,
         slotLabels: {},
       }),
@@ -194,6 +214,7 @@ describe("public Schedule — the round view reads stage by stage, then round (N
         slotLabels: {},
         roundLabels,
         copy: COPY,
+        locale: LOCALE,
         stageOrder,
       }),
     );

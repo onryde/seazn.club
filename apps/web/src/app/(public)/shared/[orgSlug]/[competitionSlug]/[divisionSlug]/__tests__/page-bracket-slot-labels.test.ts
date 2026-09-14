@@ -182,9 +182,10 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     });
     const schedules = findElements(root, Schedule);
     expect(schedules, "the page builds one Schedule").toHaveLength(1);
-    const { roundLabels, copy } = schedules[0]!.props as {
+    const { roundLabels, copy, locale } = schedules[0]!.props as {
       roundLabels: Record<string, string>;
       copy: { timeTbd: string; allEntrants: string };
+      locale: string;
     };
 
     const ui = await getDictionary("fr", "ui");
@@ -194,10 +195,13 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
       t(await getDictionary("en", "ui"), "bracket.round.semi"),
     );
     expect(roundLabels).toEqual({ "semi-1": semi, "semi-2": semi, final: t(ui, "bracket.round.final") });
-    expect(copy).toEqual({
+    // N1e e5: the rest of `copy`, and what `locale` writes, are pinned by
+    // components/public-site/__tests__/schedule-org-locale.test.ts.
+    expect(copy).toMatchObject({
       timeTbd: t(pub, "matchCentre.status.timeTbd"),
       allEntrants: t(pub, "division.filter.allEntrants"),
     });
+    expect(locale).toBe("fr");
   });
 
   // N1e e1 (review-n1d I1) — the schedule tab's round view orders its groups by

@@ -111,6 +111,7 @@ interface ScheduleProps {
   roundLabels: Record<string, string>;
   stageOrder: Record<string, number>;
   copy: { timeTbd: string; allEntrants: string };
+  locale: string;
 }
 
 /** The page's `Schedule`, its props, and its initial markup. `stages` is one
@@ -188,14 +189,20 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
     const { props, html } = await scheduleOf("en", "knockout", knockout("2026-09-25T09:00:00.000Z", null));
     const pub = await getDictionary("en", "public");
 
-    expect(props.copy).toEqual({
+    // N1e e5: the rest of `copy`, and what `locale` writes, are pinned by
+    // components/public-site/__tests__/schedule-org-locale.test.ts.
+    expect(props.copy).toMatchObject({
       timeTbd: t(pub, "matchCentre.status.timeTbd"),
       allEntrants: t(pub, "division.filter.allEntrants"),
     });
+    expect(props.locale).toBe("en");
     expect(shows(html, t(pub, "matchCentre.status.timeTbd"))).toBe(true);
   });
 
-  it("es org: round names, 'Time TBD' and 'All entrants' are the es dictionary's, with none of the English left", async () => {
+  // N1e e6 (review-n1d m5): this case probes the round names and these two
+  // phrases only; every other word the Schedule shows or announces, and its
+  // dates, are probed in components/public-site/__tests__/schedule-org-locale.test.ts.
+  it("es org: the round names (Semi-finals, Final, never 'Round N'), 'Time TBD' and 'All entrants' are the es dictionary's, and none of them is left in English", async () => {
     const [uiEn, uiEs, pubEn, pubEs] = await Promise.all([
       getDictionary("en", "ui"),
       getDictionary("es", "ui"),

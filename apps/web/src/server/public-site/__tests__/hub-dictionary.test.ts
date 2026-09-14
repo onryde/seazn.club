@@ -112,7 +112,7 @@ export const W2_KEYS = [
   "division.tab.schedule", "division.tab.standings", "division.tab.entrants", "division.tabsLabel", "division.champion", "division.resultsGrid", "division.standingsEmpty", "division.entrantsEmpty",
   "division.seed", "division.filter.label", "division.filter.all", "division.filter.allEntrants", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
   // the schedule's zone caption and the division page's kiosk link (N1e e5, e7)
-  "division.timesIn", "division.present",
+  "division.timesIn", "division.present", "division.filter.showFor",
   // player page
   "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling", "player.line.result",
   "player.result.won", "player.result.lost", "player.result.drawn", "player.result.live",

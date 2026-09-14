@@ -17,6 +17,7 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareButton } from "@/components/share-button";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
+import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -124,15 +125,13 @@ export default async function DivisionHomePage({ params }: Props) {
   }
   // N1d d5: the schedule tab's round view heads each group with the round's
   // NAME from the same namer ("Round {n}" in the org's locale only for a
-  // fixture whose stage the namer does not know), and its two phrases come
-  // from the page's org-locale dictionary, as the embed schedule widget does.
+  // fixture whose stage the namer does not know). N1e e5: every other word it
+  // shows or announces comes from the page's org-locale dictionaries, and its
+  // dates are written in the org's locale, as the embed schedule widget does.
   const roundLabels = Object.fromEntries(
     fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
   );
-  const scheduleCopy = {
-    timeTbd: t(dict, "matchCentre.status.timeTbd"),
-    allEntrants: t(dict, "division.filter.allEntrants"),
-  };
+  const scheduleCopy = publicScheduleCopy(dict, lookup);
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first, as the embed schedule widget does.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
@@ -400,6 +399,7 @@ export default async function DivisionHomePage({ params }: Props) {
             roundLabels={roundLabels}
             stageOrder={stageOrder}
             copy={scheduleCopy}
+            locale={orgLocale}
           />,
           standingsPanel,
           entrantsPanel,

@@ -1655,6 +1655,7 @@ export type DictionaryKey =
   | "division.filter.all"
   | "division.filter.allEntrants"
   | "division.filter.label"
+  | "division.filter.showFor"
   | "division.limit.archivedCount"
   | "division.metaDescription"
   | "division.present"

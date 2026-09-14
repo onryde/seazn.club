@@ -12,12 +12,12 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { Schedule } from "@/components/public-site/schedule";
+import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { t } from "@/lib/i18n-runtime";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
@@ -105,15 +105,13 @@ export default async function EmbedWidgetPage({ params }: Props) {
   }
   // N1d d5: the schedule's round view heads each group with the round's NAME,
   // the hub rail's own label ("Round {n}" in the org's locale only for a
-  // fixture whose stage the namer does not know), and its two phrases come
-  // from the same org-locale dictionary.
+  // fixture whose stage the namer does not know). N1e e5: every other word it
+  // shows or announces comes from the same org-locale dictionaries, and its
+  // dates are written in the org's locale.
   const roundLabels = Object.fromEntries(
     fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
   );
-  const scheduleCopy = {
-    timeTbd: t(dict, "matchCentre.status.timeTbd"),
-    allEntrants: t(dict, "division.filter.allEntrants"),
-  };
+  const scheduleCopy = publicScheduleCopy(dict, lookup);
   // N1e e1: round_no restarts in every stage, so the round view orders its
   // groups by each stage's seq first.
   const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
@@ -130,6 +128,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         roundLabels={roundLabels}
         stageOrder={stageOrder}
         copy={scheduleCopy}
+        locale={orgLocale}
       />
     );
   } else if (widget === "bracket") {

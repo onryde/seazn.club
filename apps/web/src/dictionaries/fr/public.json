@@ -392,6 +392,7 @@
   "division.entrantsEmpty": "Pas encore de participants",
   "division.seed": "Tête de série {seed}",
   "division.filter.label": "Filtrer les matchs",
+  "division.filter.showFor": "Afficher les matchs de",
   "division.filter.all": "Tous",
   "division.filter.allEntrants": "Tous les participants",
   "division.view.label": "Vue",
