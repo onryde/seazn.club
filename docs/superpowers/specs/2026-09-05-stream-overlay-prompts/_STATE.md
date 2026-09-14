@@ -49,6 +49,139 @@ data".
 review, and the owner's per-screen sign-off. R2's plan follows PR-R1's merge; R3 lives in the
 capture repo.
 
+## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
+
+- `DATABASE_URL=postgresql://postgres@127.0.0.1:54484/seazn_rly` `DATABASE_SSL=disable`
+- `SMOKE_BASE=http://localhost:3372` = `PLAYWRIGHT_BASE`; `E2E_PROD_TARGET=1`; `RELAY_DRIVERS=fake` on
+  the server once the relay code exists. The port is the label's snapshot — re-read
+  `seazn-env env --label rly` after every `rebuild`.
+- Placement service up for `rly` on `:50257` (native). `PLACEMENT_SERVICE_HOST` reaches the test
+  process only through `seazn-env env`, so gate scripts load that env inside the script and never
+  echo the secret.
+- `show data_directory` → `/tmp/seazn-env/rly/pg` (contains `rly`; the script also printed "data_directory verified").
+- Deltas tail on this branch at Task 0: `V403__realtime_fixture_broadcast_policy.sql`; all-refs `V4*`
+  tail: the same `V403`. **Task 1 takes V404** and records it AS LANDED in `_INDEX.md`.
+- Baseline (`apps/web`, full, fresh DB, placement up): **passed 17064 / total 17141 / failed 0 /
+  pending 77** — 1266 files, 0 failed suites, `outside-worktree 0`, runner `EXIT=0`. JSON at
+  `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/3a628426-b486-4e22-bbd6-008e2676b7d0/scratchpad/r1/baseline-web.json`.
+  No red files (with placement up, `schedule-build-honours-locks.test.ts` is green, unlike the `ovl`
+  baseline).
+- Lint `✖ 143 problems (0 errors, 143 warnings)`, `LINT_EXIT=0` (via `rtk proxy`); tsc `EXIT=0`;
+  `openapi:gen` + `i18n:gen-keys` porcelain: no generated diff (only the two Task 0 docs).
+- `stream-overlay.spec.ts` preflight against `http://localhost:3372`: **25 expected / 0 unexpected /
+  0 flaky / 0 skipped**, `PW_EXIT=0`, 120 s. This is the regression witness Task 17 compares
+  against. #782's overlay drift left W1's spec green on this tree.
+- `FLY_API_TOKEN`: owed by the owner (Task 5A's live test skips loudly until it lands).
+- Worktree extras: `.env.local` symlinks (root + `apps/web`), `.claude/agent-memory` → the main
+  checkout's (listed in the worktree's own `info/exclude`), `RELAY_KEK` confirmed in both env files
+  by length check.
+- Recreate: `POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_KEY= ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label rly --server`
+  from the worktree; `rebuild --label rly` after every code change; `down --label rly` at wave close.
+
+## R1 Task 0 pins (2026-09-14 @ `453d95cd6`)
+
+Worktree `.claude/worktrees/relay`, branch `feat/stream-relay`, cut from `origin/main` @
+`453d95cd6`. Line numbers are SNAPSHOTS; every brief cites the SYMBOL. **The plan carries no
+`file:line` cites of its own** (a raw `grep -o` for `<file>.<ext>:<n>` over the plan returns 0),
+so this symbol table IS the re-pin. Every one of the 26 symbol probes in Task 0 Step 6 HIT.
+
+| Symbol | Seen at |
+|---|---|
+| `requireResourceAuth` / `requireOrgAuth` | `server/api-v1/auth.ts:362` / `:210` |
+| `ROUTES` | `server/api-v1/openapi.ts:67` |
+| `NEVER_KEY_ROUTES` | `server/api-v1/key-scopes.ts:301` |
+| `reply` / `v1` / `parseBody` | `server/api-v1/http.ts:96` / `:124` / `:252` |
+| `handler` | `lib/http.ts:69` |
+| `hasFeature` / `requireFeature` | `lib/entitlements.ts:456` / `:668` |
+| `UpgradeGate` | `components/upgrade-gate.tsx:252` |
+| `setFixtureStreamUrl` | `server/usecases/fixtures.ts:201` |
+| `streamUrlSchema` | `lib/stream-url.ts:61` |
+| `Tx` / `withTenant` / `sql` | `lib/db.ts:5` / `:183` / `:221` |
+| `log` | `server/logger.ts:24` |
+| `getStripe` | `lib/stripe.ts:5` |
+| `requireBillingOwner` | `server/usecases/billing-manage.ts:174` |
+| `credit_pack` branch / `processStripeEvent` / `runEvent` / `sweepStuckEvents` | `server/usecases/billing-events.ts:151` / `:2080` / `:2259` / `:2318` |
+| `buildCreditPackCheckoutParams` / `createCreditPackCheckout` | `lib/credit-packs.ts:62` / `:156` (`ui_mode: "embedded_page"` `:76`, `return_url` `:113`, 30 s idempotency key `:179`) |
+| `balance` | `lib/credits.ts:94` |
+| `mintPublicFixtureToken` | `lib/realtime.ts:224` |
+| `CREDIT_PACKS` / `StreamPanelContext` / `relayEntitled` / `stream-tab-phone` / `stream-phone-gate` | `components/v2/fixture-stream-panel.tsx:98` / `:136` / `:141` / `:366` / `:519` |
+| `const [streamOpen` | `components/v2/desk/run-sheet-row.tsx:162` |
+| `SEED_KINDS` / `SEED_PARAMS` | `e2e/visual/manifest.ts:17` / `:19` |
+| `expectNoHorizontalScroll` / `mintLoginPathBySql` / `setBoolEntitlementOverrideSql` / `seedRosteredFixture` | `e2e/helpers.ts:49` / `:274` / `:660` / `:1860` |
+| `WALKTHROUGH_SPECS` | `lib/__tests__/e2e-ci-wiring.test.ts:159` |
+| `releaseBoth` / `bothStarted` | `server/usecases/__tests__/registration-concurrency.test.ts:481-487` |
+| `NEXT_PUBLIC_SENTRY_DSN` (commented) | `fly.toml:11` |
+| `jose` / `qrcode` / `@types/qrcode` | `apps/web/package.json:37` / `:47` / `:69` |
+| embedded-Checkout donors | `components/buy-credits.tsx:24` (`BuyCredits`; `EmbeddedCheckoutProvider` `:82`); `lib/billing-checkout-client.ts:42` (`orgScopeHeaders()`); `app/api/billing/credit-pack-checkout/route.ts:29` (`POST`, `{ client_secret }` `:57`) |
+| Stripe frame idiom | `e2e/walkthrough/event-pass.spec.ts:339` (`frameLocator('iframe[src*="stripe.com"]')`) |
+| admin overrides editor | `app/admin/orgs/[id]/page.tsx`; `app/api/admin/orgs/[id]/entitlement-override/route.ts:17` (`POST`) / `:53` (`DELETE`) |
+| cron pair idiom | `app/api/cron/registrations/route.ts:15` (503) / `:17` (401) |
+| P21 division gate | `run-sheet-row.tsx:386` `showStream`; `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:259` `editable`, `:424` `streamOffered`, `:426` `hasFeature(… "streaming.overlay" …)`, `:431` `"streaming.relay"` |
+| P14 panel gate | `fixture-stream-panel.tsx:524` `<UpgradeGate feature="streaming.relay" …>`; `en/ui.json:5083` first `"stream.` key |
+
+Negatives, all as expected: no `.github/workflows/relay-sweep.yml`; no `docs/contracts/`; no
+`apps/web/src/server/relay/`; `stream-phone-tab` 0 hits (P13); `POLL_MS` in `live-score.tsx` 0
+(watch 4 FALSE — Task 13 defines `STREAM_POLL_MS`).
+
+**Drift since the plan's pin `54a125d9f`** (#782 `9a7393cf4`, #783 `198a4a130`, #784). None of
+the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `billing-events.ts`,
+`credit-packs.ts` or `server/api-v1/**` changed. What did, and what it does to the plan:
+
+- **FT0-1 — the migration tail is `V403__realtime_fixture_broadcast_policy.sql`, not V402.** It
+  was ADDED by #782 itself, so the plan's "unchanged at `9a7393cf4`" is false. The all-refs scan
+  shows nothing past V403. **Task 1 takes V404** — re-read both commands when Task 1 starts.
+- **FT0-2 — the plan's P3 review grep reds on a clean tree.** `grep -a -rn "SUPABASE_JWT_SECRET"
+  apps/web/src --include=*.ts | grep -v "lib/realtime.ts"` prints 8 lines, all in
+  `lib/__tests__/realtime-publish.test.ts` (added by #782). Task 6's own `tokens.test.ts` will
+  add more by design. The review probe becomes: exclude `__tests__` directories, and fail on any
+  hit in production code. (Also quote `--include='*.ts'`: zsh aborts on the bare glob with "no
+  matches found".)
+- **FT0-3 — `lib/realtime.ts` now exports FOUR functions** (`resolveRealtimeMintKey` added by
+  #782: an ES256/RS256 private key preferred, `SUPABASE_JWT_SECRET` only as the HS256 fallback).
+  P2 still holds — none of the four is a producer mint. Task 6's G1 witness (same claims signed
+  with `SUPABASE_JWT_SECRET` → 401) is still valid, because relay tokens verify on `AUTH_SECRET`
+  only.
+- **FT0-4 — `ui.stream.*` has 31 keys, not 33.** #782 removed `stream.tab.slate` and
+  `stream.preview.slate` (the two surviving mentions are string probes in
+  `overlay-dict-coverage.test.ts`). P15 reads "extends the 31 existing keys".
+- **FT0-5 — P6's e2e replay witness is VACUOUS as written.** `sweepStuckEvents` selects only
+  `processed_at is null and received_at < now() - 10 minutes` (`billing-events.ts:2324-2330`), so
+  a purchase the webhook already processed is never selected. "Drive `POST
+  /api/cron/billing-events`, assert the balance is unchanged" stays green with the
+  `stripe_event_id` dedupe deleted. The replay must go through the real claim instead:
+  `runEvent(sameEvent)` → `false`, or `replayEvent` → `"already_processed"`, plus a direct
+  second call of the webhook branch asserting one ledger row. Owed to Tasks 8 and 15.
+- **FT0-6 — `R0-CORRECTIONS-FOR-R1.md` was not in the repo.** The plan names it as the overriding
+  authority (6 references), but it existed only in the plan session's `/tmp` scratchpad. It is now
+  committed beside this file.
+
+**Owner data rulings at Task 0 (2026-09-14), folded into Task 1's migration (V404):**
+- **Telemetry retention — "2 is ok":** `fixture_stream_events` and `stream_provider_calls` kept
+  indefinitely; raw `fixture_stream_samples` deleted after 90 days by the daily sweep
+  (`SAMPLE_RETENTION_DAYS = 90`); the per-session `sample_summary` kept regardless.
+- **Non-personal additions — "all":** (a) app build sha on every event and sample; (b) sport,
+  competition, division, scheduled start, venue (via `fixtures.court_id` → `courts.venue_id`,
+  null when no court) and org timezone snapshotted on the session; (c) entitlement source at
+  admission; (d) recording facts after finalise (size, resolution, codecs, duration — only fields
+  Task 4 sees in the live Cloudflare API); (e) QR shown / credentials revealed, first-at and count;
+  (f) per-session cost estimate; (g) destination output uid and output error codes; (h) Cloudflare
+  ingest edge location (verified in Task 4). Still never stored: raw IP, user agent, device ids,
+  credentials.
+- **Device GPS — owner wants it ("GPS").** Recommendation, not an owner ruling: it lands in
+  **R3**, not R1. In R1 the phone streams straight to Cloudflare and no phone→app call exists, so
+  an R1 column would have no writer. **Owed to R3's plan:** GPS from the capture app to our API,
+  behind the OS permission prompt and consent copy, plus four owner questions — precision (raw or
+  rounded to ~1 km), cadence (once at go-live or a track), retention, and privacy-policy copy.
+
+**P7 — confirmed.** `requireBillingOwner` resolves the org from `x-seazn-org` or the `seazn_org`
+cookie, then requires `subscriptions.owner_user_id` = the caller (a group payer, not the org
+owner). `requireOrgAuth` is an org-role gate. So the plan's choice holds: the relay-checkout
+route uses `requireBillingOwner` AND asserts the resolved `orgId` equals the body's `orgId`.
+**P6 — as read.** The webhook route calls `runEvent` synchronously: it claims the row, runs
+`processStripeEvent`, then stamps `processed_at`. `sweepStuckEvents` is a retry after 10 minutes,
+capped at 3 attempts. So the purchase lands on the webhook; the cron is the fallback, not the
+path (and see FT0-5).
+
 Earlier the same day, by the R1 plan session (branch `docs/streaming-r1-plan`): R1's plan was
 written, with fourteen owner rulings recorded in `_INDEX.md` "2026-09-14 — R1's plan WRITTEN".
 
