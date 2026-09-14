@@ -198,6 +198,8 @@ import type {
 } from "../report.ts";
 import { computeEventsPerSecond, simulateDivisionStreams, type SimulateResult } from "../simulate.ts";
 import { defaultLedgerTransport } from "../ledger.ts";
+import { personOutsideByEntrantFindings, saveTapLineups, tapLineupSides } from "../tap-setup.ts";
+import { specialStateThroughPackEvents } from "../special-state.ts";
 import {
   adapterForSport,
   browserTapPlayer,
@@ -1792,6 +1794,9 @@ export async function runPackSuite(
    *  than two `let`s: both are written inside a closure, which control-flow
    *  narrowing cannot see. */
   const tapState: { player?: TapPlayer; report?: TapPlayReport } = {};
+  // Fix round 2 (R64) — fixtures the tap path played, and so signed off with a
+  // bench-appended core.finalize that is not a pack event.
+  const tapPlayedFixtureIds = new Set<string>();
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -3402,6 +3407,24 @@ export async function runPackSuite(
           );
           continue;
         }
+        // Fix round 2 (R62) — the team sheets are SETUP, written through the
+        // real lineups API with the organiser session before any scorer is
+        // handed the fixture: player-attributed pad scoring needs a saved
+        // lineup. Built from each side's own seeded members; a pack event
+        // naming a non-member, or a refused sheet, is a finding that reds.
+        const lineupFindings = [
+          ...personOutsideByEntrantFindings(pack, st),
+          ...(await saveTapLineups({
+            base,
+            session: s,
+            fixtureId,
+            sides: tapLineupSides(pack, st),
+            entrantIdByRef: seeded.entrantIdByRef,
+            personIdByRef: seeded.personIdByRef,
+            transport: input.oracleTransport,
+          })),
+        ];
+        for (const finding of lineupFindings) errors.push(`tap: ${division.ref}/${st.fixtureExtKey}: ${finding}`);
         // The round comes off the REAL board, same reasoning as the api
         // branch's dependency waves. A board row with no round sorts last.
         const round = row.roundNo ?? Number.MAX_SAFE_INTEGER;
@@ -3458,6 +3481,7 @@ export async function runPackSuite(
 
       // Driver findings RED the gate; observations are reported, never gated.
       for (const { job, result } of played) {
+        tapPlayedFixtureIds.add(job.fixtureId);
         for (const finding of result.findings) errors.push(`tap: ${division.ref}/${job.fixtureExtKey}: ${finding}`);
         for (const observation of result.observations) {
           log.info({ division: division.ref, fixture: job.fixtureExtKey, observation }, "tap_observation");
@@ -4508,7 +4532,57 @@ export async function runPackSuite(
             .get(sp.divisionRef)
             ?.find((row) => row.extKey === sp.fixtureExtKey)?.outcome;
           if (specialFixtureId !== undefined) {
-            const specialState = await fetchFixtureModuleState(base, s, specialFixtureId, input.oracleTransport);
+            let specialState: unknown;
+            if (tapPlayedFixtureIds.has(specialFixtureId)) {
+              // Fix round 2 (R64) — a pack claim describes the STREAM's end
+              // state. A tapped fixture's stored state is folded through the
+              // bench-appended core.finalize (generic: "done" -> "final"), so
+              // the claim is judged on the product's own ledger rows through
+              // the last pack event instead. Never a fallback to /state: a
+              // failed fold reds, and the claims read `(absent)`.
+              const specialStream = pack.streams.find(
+                (st) => st.divisionRef === sp.divisionRef && st.fixtureExtKey === sp.fixtureExtKey,
+              );
+              const specialDivision = pack.divisions.find((d) => d.ref === sp.divisionRef);
+              const homeEntrantId = specialStream === undefined ? undefined : seeded.entrantIdByRef.get(specialStream.home);
+              const awayEntrantId = specialStream === undefined ? undefined : seeded.entrantIdByRef.get(specialStream.away);
+              try {
+                if (
+                  specialStream === undefined ||
+                  specialDivision === undefined ||
+                  homeEntrantId === undefined ||
+                  awayEntrantId === undefined
+                ) {
+                  throw new Error("its stream, division or entrant ids did not resolve");
+                }
+                const specialModule = bootRegistry().get(specialDivision.sportKey, specialDivision.moduleVersion);
+                const specialCfg = resolveDivisionCfg(specialModule, specialDivision);
+                if (!specialCfg.ok) throw new Error(`its cfg could not be resolved (${specialCfg.reason})`);
+                const folded = await specialStateThroughPackEvents({
+                  base,
+                  session: s,
+                  fixtureId: specialFixtureId,
+                  homeEntrantId,
+                  awayEntrantId,
+                  packEventTypes: specialStream.events.map((event) => event.type),
+                  module: specialModule,
+                  cfg: specialCfg.cfg,
+                  transport: input.oracleTransport,
+                });
+                specialState = folded.state;
+                log.info(
+                  { fixture: specialKey, signOffRows: folded.signOffRows },
+                  `${suiteKey}: special state judged through the pack's own events (R64)`,
+                );
+              } catch (err) {
+                errors.push(
+                  `oracle: specials: ${specialKey} was tapped, and its state through the pack's own events could not be ` +
+                    `folded — ${err instanceof Error ? err.message : String(err)} (never judged off the signed-off /state)`,
+                );
+              }
+            } else {
+              specialState = await fetchFixtureModuleState(base, s, specialFixtureId, input.oracleTransport);
+            }
             specialSubjects.set(specialKey, {
               outcome: specialOutcome,
               state: specialState,

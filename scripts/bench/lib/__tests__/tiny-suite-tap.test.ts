@@ -52,6 +52,7 @@ import {
   echoSpecialSubjects,
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
+import { resolvePayloadRefs } from "../simulate.ts";
 
 const silent = pino({ level: "silent" });
 
@@ -81,6 +82,10 @@ interface TapWorldOptions {
   /** Report every fixture of these division NAMES as round 1 on the board, so
    *  one round carries more matches than the division has courts. */
   flattenRoundsOf?: readonly string[];
+  /** Fix round 2 (R62) — the lineups route refuses every team sheet (422). */
+  refuseLineupWrites?: boolean;
+  /** Fix round 2 (R64) — the ledger read answers 500. */
+  refuseLedgerReads?: boolean;
 }
 
 function fakeServer(opts: TapWorldOptions): {
@@ -106,6 +111,10 @@ function fakeServer(opts: TapWorldOptions): {
   const fixtureNoById = new Map<string, number>();
   const fixtureCountByDivision = new Map<string, number>();
   const statusById = new Map<string, string>();
+  // Fix round 2 (R64) — the ledger each fixture's events route actually
+  // stored, served back on `GET .../events?since_seq=N`, so the specials
+  // oracle's fold reads the PRODUCT's rows rather than the pack's.
+  const ledgerById = new Map<string, { id: string; seq: number; type: string; payload: unknown }[]>();
   let divisionCounter = 0;
   let stageCounter = 0;
   let fixtureCounter = 0;
@@ -132,9 +141,14 @@ function fakeServer(opts: TapWorldOptions): {
   const entrantByDivisionPerson = new Map<string, string>();
   const discipline = makeDisciplineRoutesWorld({
     entrantForPerson: (divisionId, personId) => entrantByDivisionPerson.get(`${divisionId}|${personId}`),
+    ...(opts.refuseLineupWrites === true ? { refuseEveryLineupWrite: true } : {}),
   });
   const oracleRoutes = makeOracleRoutesWorld({
-    getFixtureModuleState: () => TINY_SPECIAL_STATE,
+    // Fix round 2 (R64) — the PRODUCT's post-sign-off truth: `match_states`
+    // is the fold at the last row, and on a signed-off fixture that row is
+    // core.finalize, which moves phase "done" -> "final".
+    getFixtureModuleState: (fixtureId) =>
+      statusById.get(fixtureId) === "finalized" ? { ...TINY_SPECIAL_STATE, phase: "final" } : TINY_SPECIAL_STATE,
     getRankedEntrantIds: (stageId) => {
       const divisionId = divisionIdByStageId.get(stageId);
       return divisionId === undefined ? undefined : schedule.entrantsOfDivision(divisionId);
@@ -356,6 +370,27 @@ function fakeServer(opts: TapWorldOptions): {
       if (method === "DELETE" && /^\/api\/v1\/fixtures\/[^/]+\/device-links\/[^/]+$/.test(path)) {
         return { status: 200, json: { ok: true, data: { id: "dl-1", revoked_at: "2026-09-14T12:00:00Z" } } as never };
       }
+      // Fix round 2 (R64) — the product's ledger read, off what the POSTs stored.
+      const ledgerRead = /^\/api\/v1\/fixtures\/([^/]+)\/events\?since_seq=(\d+)$/.exec(path);
+      if (method === "GET" && ledgerRead !== null) {
+        if (opts.refuseLedgerReads === true) {
+          return { status: 500, json: { ok: false, error: { code: "INTERNAL", message: "ledger unavailable" } } as never };
+        }
+        const rows = (ledgerById.get(ledgerRead[1]!) ?? []).filter((r) => r.seq > Number(ledgerRead[2]));
+        return {
+          status: 200,
+          json: {
+            ok: true,
+            data: rows.map((r) => ({
+              ...r,
+              recorded_at: "2026-09-14T12:00:00.000Z",
+              recorded_by: "user-organiser",
+              voids_event_id: null,
+              device_link_id: null,
+            })),
+          } as never,
+        };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const { type, payload } = body as { type: string; payload: { target?: unknown; oversPerSide?: unknown } };
@@ -365,7 +400,11 @@ function fakeServer(opts: TapWorldOptions): {
           json: { ok: false, error: { code: "INVALID_EVENT", message: "revise needs oversPerSide and/or target" } } as never,
         };
       }
-      return { status: 201, json: { ok: true, data: { seq: 1 } } as never };
+      const ledger = ledgerById.get(m[1]!) ?? [];
+      const seq = ledger.length + 1;
+      ledger.push({ id: `ev-${m[1]!}-${seq}`, seq, type, payload });
+      ledgerById.set(m[1]!, ledger);
+      return { status: 201, json: { ok: true, data: { seq } } as never };
     },
   };
 
@@ -437,7 +476,12 @@ interface TapJobLike {
   readonly fixtureExtKey: string;
   readonly fixtureId: string;
   readonly consolePath: string;
-  readonly stream: { readonly events: readonly { readonly type: string; readonly payload?: unknown }[] };
+  readonly stream: {
+    readonly home: string;
+    readonly away: string;
+    readonly events: readonly { readonly type: string; readonly payload?: unknown }[];
+  };
+  readonly refIdByKey: ReadonlyMap<string, string>;
 }
 
 interface FakeTapPlayerOptions {
@@ -463,12 +507,23 @@ function fakeTapPlayer(world: ReturnType<typeof fakeServer>, opts: FakeTapPlayer
         await new Promise((resolve) => setTimeout(resolve, 5));
         let seq = 0;
         for (const event of job.stream.events) {
+          // Refs resolved exactly as the real pad writes them (ids, not `@refs`),
+          // so a fold over the stored rows sees what the product would.
           await world.transport.raw(ctx.base, ctx.session, `/api/v1/fixtures/${job.fixtureId}/events`, "POST", {
             type: event.type,
-            payload: event.payload ?? {},
+            payload: resolvePayloadRefs(event.payload ?? {}, job.refIdByKey, "fake-tap-player"),
             expected_seq: seq,
           });
           seq += 1;
+        }
+        // The organiser's sign-off is a ROW on the ledger, after the pack's
+        // own events — exactly what the real tap path appends (R64).
+        if (opts.skipFinalize !== true) {
+          await world.transport.raw(ctx.base, ctx.session, `/api/v1/fixtures/${job.fixtureId}/events`, "POST", {
+            type: "core.finalize",
+            payload: {},
+            expected_seq: seq,
+          });
         }
         world.setFixtureStatus(job.fixtureId, opts.skipFinalize === true ? "decided" : "finalized");
         state.inFlight -= 1;
@@ -651,5 +706,124 @@ describe("tap mode — what gates, and what is only reported (B07a T10)", () => 
     });
     expect((report.errors ?? []).join("\n")).toBe("");
     expect(player.state.maxInFlight).toBe(courts);
+  });
+});
+
+describe("tap mode — a tapped fixture's team sheets are SETUP, saved before the scorer taps (fix round 2, R62)", () => {
+  it("PUTs each side's sheet of its OWN seeded members through the lineups route, before that fixture's first tap", async () => {
+    const world = fakeServer({ deviceLinksSold: true });
+    const player = fakeTapPlayer(world);
+    const report = await runPackSuite(tapInput(world, player.factory), {
+      suiteKey: "fixture",
+      packPath: FIXTURE_PACK_PATH,
+      play: TAP_D_TINY,
+    });
+    expect((report.errors ?? []).join("\n")).toBe("");
+    // Members from the PACK's rosters (what the bench seeds as entrant
+    // members), never a literal — and the two d-tiny sides differ, so a sheet
+    // built from the wrong entrant cannot read the same.
+    const pack = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      entrants: { ref: string; roster: { person: string }[] }[];
+    };
+    const membersOf = (ref: string) => pack.entrants.find((e) => e.ref === ref)?.roster.map((m) => m.person) ?? [];
+    const dTiny = (await tinyStreams()).filter((s) => s.divisionRef === "d-tiny");
+    expect(player.jobs.map((j) => j.fixtureExtKey).sort()).toEqual(dTiny.map((s) => s.fixtureExtKey).sort());
+    for (const job of player.jobs) {
+      const firstTap = world.calls.findIndex(
+        (c) => c.method === "POST" && c.path === `/api/v1/fixtures/${job.fixtureId}/events`,
+      );
+      expect(firstTap, job.fixtureExtKey).toBeGreaterThan(-1);
+      const sides = [job.stream.home, job.stream.away];
+      expect(new Set(sides.map(membersOf).map((m) => m.join(","))).size, job.fixtureExtKey).toBe(2);
+      for (const sideRef of sides) {
+        const members = membersOf(sideRef);
+        expect(members.length, `${job.fixtureExtKey} ${sideRef}`).toBeGreaterThan(0);
+        const entrantId = job.refIdByKey.get(sideRef);
+        expect(entrantId, `${job.fixtureExtKey} ${sideRef}`).toBeDefined();
+        const puts = world.calls
+          .map((c, i) => ({ c, i }))
+          .filter(({ c }) => c.method === "PUT" && c.path === `/api/v1/fixtures/${job.fixtureId}/lineups/${entrantId}`);
+        expect(puts.length, `${job.fixtureExtKey} ${sideRef}`).toBe(1);
+        expect(puts[0]!.i, `${job.fixtureExtKey} ${sideRef} saved before the first tap`).toBeLessThan(firstTap);
+        expect(puts[0]!.c.body).toEqual({
+          slots: members.map((ref, i) => ({ person_id: job.refIdByKey.get(ref), slot: "starting", order_no: i + 1 })),
+        });
+      }
+    }
+  });
+});
+
+describe("tap mode — a special's state claim describes the STREAM, never the sign-off (fix round 2, R64)", () => {
+  it("judges rr-r3's phase on the product's rows through the last pack event, while /state reads the signed-off 'final'", async () => {
+    const world = fakeServer({ deviceLinksSold: true });
+    const player = fakeTapPlayer(world);
+    // The REAL specials path: no echoed subjects.
+    const input = { ...tapInput(world, player.factory), specialSubjects: undefined };
+    const report = await runPackSuite(input, { suiteKey: "fixture", packPath: FIXTURE_PACK_PATH, play: TAP_D_TINY });
+    const specials = (report.oracles ?? []).filter((o) => o.name === "oracle: specials");
+    expect(specials.map((o) => [o.verdict, o.passed, o.detail])).toEqual([["pass", true, expect.stringContaining("claim(s) checked")]]);
+    expect((report.errors ?? []).join("\n")).toBe("");
+
+    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1");
+    expect(rr3).toBeDefined();
+    // The run never read the signed-off state for the tapped special…
+    expect(world.calls.some((c) => c.path === `/api/v1/fixtures/${rr3!.fixtureId}/state`)).toBe(false);
+    // Control 1 — the product's stored state IS post-sign-off here, so a
+    // claim judged off /state would have read "final".
+    const stateRead = await world.transport.raw(
+      "http://bench.example",
+      {} as Session,
+      `/api/v1/fixtures/${rr3!.fixtureId}/state`,
+      "GET",
+    );
+    expect((stateRead.json as unknown as { data: { state: { phase: string } } }).data.state.phase).toBe("final");
+    // Control 2 — the ledger that was folded ends in the sign-off row.
+    const posted = world.calls
+      .filter((c) => c.method === "POST" && c.path === `/api/v1/fixtures/${rr3!.fixtureId}/events`)
+      .map((c) => (c.body as { type: string }).type);
+    expect(posted.at(-1)).toBe("core.finalize");
+    expect(
+      world.calls.some((c) => c.method === "GET" && c.path === `/api/v1/fixtures/${rr3!.fixtureId}/events?since_seq=0`),
+    ).toBe(true);
+  });
+
+  it("a tapped special whose ledger cannot be read reds, named — and is never judged off /state instead", async () => {
+    const world = fakeServer({ deviceLinksSold: true, refuseLedgerReads: true });
+    const player = fakeTapPlayer(world);
+    const input = { ...tapInput(world, player.factory), specialSubjects: undefined };
+    const report = await runPackSuite(input, { suiteKey: "fixture", packPath: FIXTURE_PACK_PATH, play: TAP_D_TINY });
+    const rr3 = player.jobs.find((j) => j.fixtureExtKey === "rr-r3-c1");
+    expect(rr3).toBeDefined();
+    expect(report.gate).toBe("red");
+    expect(report.errors).toContain(
+      "oracle: specials: d-tiny/rr-r3-c1 was tapped, and its state through the pack's own events could not be folded — " +
+        `special state: the ledger read /api/v1/fixtures/${rr3!.fixtureId}/events?since_seq=0 answered HTTP 500 ` +
+        "(never judged off the signed-off /state)",
+    );
+    expect(world.calls.some((c) => c.path === `/api/v1/fixtures/${rr3!.fixtureId}/state`)).toBe(false);
+    const specials = (report.oracles ?? []).filter((o) => o.name === "oracle: specials");
+    expect(specials.map((o) => o.verdict)).toEqual(["fail"]);
+  });
+});
+
+describe("tap mode — a refused team sheet is a finding that reds (fix round 2, R62)", () => {
+  it("names the division, fixture, side and the product's refusal", async () => {
+    const world = fakeServer({ deviceLinksSold: true, refuseLineupWrites: true });
+    const player = fakeTapPlayer(world);
+    const report = await runPackSuite(tapInput(world, player.factory), {
+      suiteKey: "fixture",
+      packPath: FIXTURE_PACK_PATH,
+      play: TAP_D_TINY,
+    });
+    expect(report.gate).toBe("red");
+    const errors = report.errors ?? [];
+    const lineupErrors = errors.filter((e) => e.startsWith("tap: d-tiny/") && e.includes(": lineup: "));
+    // Two sides for every tapped d-tiny fixture, each refused.
+    const dTiny = (await tinyStreams()).filter((s) => s.divisionRef === "d-tiny");
+    expect(lineupErrors).toHaveLength(dTiny.length * 2);
+    expect(errors).toContain(
+      'tap: d-tiny/rr-r1-c1: lineup: saving the home sheet for "e-alpha" answered HTTP 422 SUSPENDED_PLAYER ' +
+        "— its players cannot be named on the pad",
+    );
   });
 });
