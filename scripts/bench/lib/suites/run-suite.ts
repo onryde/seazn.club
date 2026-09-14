@@ -3492,16 +3492,19 @@ export async function runPackSuite(
         oracles.push({
           name: `tap: ${division.ref}/${job.fixtureExtKey} finalized`,
           passed,
+          // Worded for what was OBSERVED — the status once tap play ended —
+          // never "after the sign-off": the first live run stopped every match
+          // on an adapter finding before the organiser was ever asked to sign.
           detail: passed
             ? "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
-            : `the product reads "${status}" after the organiser's sign-off, not "finalized"`,
+            : `the product reads "${status}" once tap play ended, not "finalized"`,
         });
         log.info(oracleLogFields("tap_fixture_finalized", passed ? "pass" : "fail"), "oracle_checked");
         if (!passed) {
           errors.push(
-            `tap: ${division.ref}/${job.fixtureExtKey} reads "${status}" after the organiser's sign-off — a tapped ` +
-              `fixture must be finalized, not merely decided (the per-match oracle's SETTLED_STATUSES accepts ` +
-              `"decided"; this check does not)`,
+            `tap: ${division.ref}/${job.fixtureExtKey} reads "${status}" once tap play ended — a tapped fixture must be ` +
+              `finalized by the organiser's sign-off, not left "${status}" (the per-match oracle's SETTLED_STATUSES ` +
+              `accepts "decided"; this check does not)`,
           );
         }
       }
