@@ -134,6 +134,10 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
     spyFetch(async () => imageResponse(await webp(), "image/webp"));
     const out = await posterImageDataUrl(uploadedBadge());
     expect(out?.startsWith("data:image/png;base64,")).toBe(true);
+    // The LABEL is not the proof: satori renders webp bytes wearing a
+    // `data:image/png` label as an empty box just the same. Assert the bytes.
+    const bytes = Buffer.from(out!.slice("data:image/png;base64,".length), "base64");
+    expect(bytes.subarray(1, 4).toString()).toBe("PNG");
   });
 
   it("gives up on a host that never answers, at the timeout rather than never", async () => {
@@ -188,13 +192,17 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
 
   it("stops reading a body that lies about its length once it passes the cap", async () => {
     const CHUNK = 256 * 1024;
+    const CAP_PULLS = POSTER_IMAGE_MAX_BYTES / CHUNK;
+    // Twice the cap, then ends — a truly endless stream would make the
+    // UNCAPPED mutant allocate until the runner died rather than fail.
+    const SENT = CAP_PULLS * 2;
     let pulls = 0;
     spyFetch(
       async () =>
         new Response(
           new ReadableStream({
             pull(controller) {
-              pulls++;
+              if (pulls++ >= SENT) return controller.close();
               controller.enqueue(new Uint8Array(CHUNK));
             },
           }),
@@ -202,9 +210,10 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
         ),
     );
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
-    // Bounded by the cap, not by the sender: a stream that never ends would
-    // otherwise buffer the whole of whatever it feels like sending.
-    expect(pulls).toBeLessThanOrEqual(POSTER_IMAGE_MAX_BYTES / CHUNK + 2);
+    // Bounded by the cap, not by the sender. This is the assertion that dies
+    // when the cap goes: the RESULT stays null either way, because 4 MB of
+    // zeroes is not an image sharp will decode.
+    expect(pulls).toBeLessThanOrEqual(CAP_PULLS + 2);
   });
 
   it("refuses a response that is not one of the image types we draw", async () => {
