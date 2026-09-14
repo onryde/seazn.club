@@ -46,6 +46,9 @@ import {
 //
 // Fix round 2b (R10 follow-up):
 //   2b a bye's side is the EMPTY box, no glyph, not "pending" ↔ the same draw's waiting side keeps "?", not "empty"
+//
+// Fix round N1:
+//   N1 a waiting double-elimination card names its feeder's round with the rail's label ↔ no "R1·1" code anywhere in the panel
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -797,6 +800,46 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(waitingCrest).toHaveCount(1);
     await expect(waitingCrest).toHaveText("?");
     await expect(waitingSideBox.locator('[data-crest="empty"]'), "a waiting side drawn as a bye").toHaveCount(0);
+  });
+
+  // Fix round N1: a slot waiting on a match with no pair to name reads that
+  // match's ROUND as the rail names it, plus its place in the round — "Winner
+  // of Semi-finals, match 1" — never the organiser board's short code "R1·1".
+  // The double-elimination draw is where that text shows: it is not drawable,
+  // so no waiting slot there becomes a pair (F5), and it is unplayed, so every
+  // slot past its first round waits. The winners' second round is fed by the
+  // first round's matches 2j-1 and 2j (`buildSingleElim`), so its first match
+  // waits on matches 1 and 2.
+  test("N1 at 1280: a double-elimination card waiting on a match names that match's round with the rail's own label, and no R·code is anywhere in the panel", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(3));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = doubleElim.doc.knockouts[0]!;
+    const byId = new Map(doubleElim.doc.matches.map((m) => [m.fixtureId, m]));
+    const winners = view.rounds.filter((round) => round.lane === "WB");
+    expect(winners.length, JSON.stringify(view.rounds.map((r) => [r.key, r.lane]))).toBeGreaterThanOrEqual(2);
+    const [first, second] = winners as [HubRound, HubRound];
+    const targetId = second.fixtureIds[0]!;
+    const target = byId.get(targetId)!;
+    // The premise, read from the document the page renders: both sides wait.
+    expect(target.header.sides.map((s) => s.entrantId), JSON.stringify(target)).toEqual(["", ""]);
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}". The words are
+    // literal (a spec cannot import a JSON-backed module); the round is the
+    // rail's own label, out of the same document.
+    const expected = [`Winner of ${first.label}, match 1`, `Winner of ${first.label}, match 2`];
+    expect(target.header.sides.map((s) => s.name)).toEqual(expected);
+
+    await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+    await roundChip(page, view, second).click();
+    await expect(roundChip(page, view, second)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${targetId}`);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("mh-match-side-0")).toContainText(expected[0]!);
+    await expect(card.getByTestId("mh-match-side-1")).toContainText(expected[1]!);
+    // The chip the round's name comes from says the same words on the rail.
+    await expect(roundChip(page, view, first)).toContainText(first.label);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
   });
 
   test("C2 at 1280: the Rounds|Draw switch shares ONE row — with the heading for one division, with the division chips for two", async ({
