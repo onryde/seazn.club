@@ -151,7 +151,11 @@ describe("embed bracket widget — a waiting side names its feeder's ROUND (R10d
 
     const dict = await getDictionary("fr", "public");
     const home = t(dict, "knockout.feederWinner", { round: msgFor("fr", "bracket.round.semi"), seq: 1 });
-    expect(home).toMatch(/ : vainqueur$/);
+    const english = t(await getDictionary("en", "public"), "knockout.feederWinner", {
+      round: msgFor("en", "bracket.round.semi"),
+      seq: 1,
+    });
+    expect(home, "the premise: the fr sentence is not the English one").not.toBe(english);
     expect(html).toContain(`title="${attr(home)}"`);
 
     const bracketTbd = msgFor("fr", "bracket.tbd");

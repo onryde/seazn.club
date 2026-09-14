@@ -161,6 +161,10 @@ describe("embed schedule widget — a waiting side names its feeder's ROUND (N1 
     const dict = await getDictionary("fr", "public");
     const semi = msgFor("fr", "bracket.round.semi");
     expect(slotLabels["final:home"]).toBe(t(dict, "knockout.feederWinner", { round: semi, seq: 1 }));
-    expect(slotLabels["final:home"]).toMatch(/ : vainqueur$/);
+    const english = t(await getDictionary("en", "public"), "knockout.feederWinner", {
+      round: msgFor("en", "bracket.round.semi"),
+      seq: 1,
+    });
+    expect(slotLabels["final:home"], "the premise: the fr sentence is not the English one").not.toBe(english);
   });
 });

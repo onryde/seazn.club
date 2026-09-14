@@ -322,24 +322,39 @@ describe("the round label reads the same whether the builder or the card supplie
 //
 // `{round}` is a capitalised round name ("Cuartos de final", "Quarts de
 // finale", "Kwartfinales") that wants an article mid-sentence, so "Ganador de
-// Cuartos de final, partido 2" reads as a machine wrote it. Each locale already
-// has a convention for placing `{round}` in the Knockout tab's own
-// `knockout.next.*` sentences: es and fr put the round FIRST, with a colon, and
-// never need the article; nl writes "de {round}". The feeder phrases follow the
-// same conventions, and the convention is read out of each locale's own
-// dictionary rather than assumed here.
-describe("feeder-slot phrases follow each locale's own {round} convention (N1 fix round 1, M1)", () => {
+// Cuartos de final, partido 2" reads as a machine wrote it. nl writes
+// "de {round}", as its `knockout.next.*` sentences do; es and fr avoid the
+// article with a colon.
+//
+// N1c (review-n1f m2) — the ROLE word comes first in every locale. M1 had es
+// and fr put the round first and the role last ("… match 1 : vainqueur"), and a
+// waiting side's name sits in a `truncate` box: on a 320px losers'-round card
+// the ellipsis ate "vainqueur"/"perdant", the one word that says which result
+// fills the slot. So the text before `{round}` must already name the role, and
+// name it differently for a winner and a loser. Read out of each dictionary,
+// never a table of words typed in here.
+describe("feeder-slot phrases name the role BEFORE the round, in every locale (N1c m2)", () => {
   const FEEDER = [
     "knockout.feederWinner",
     "knockout.feederLoser",
     "knockout.feederWinnerOnly",
     "knockout.feederLoserOnly",
   ] as const;
+  /** Everything a phrase says before its round name. */
+  const lead = (dict: Record<string, string>, k: (typeof FEEDER)[number]) => {
+    const at = dict[k]!.indexOf("{round}");
+    expect(at, `${k} has a {round}: ${dict[k]}`).toBeGreaterThanOrEqual(0);
+    return dict[k]!.slice(0, at);
+  };
 
-  for (const [locale, dict] of Object.entries({ es, fr }) as [string, Record<string, string>][]) {
-    it(`${locale} puts the round first, the way its knockout.next.* sentences already do`, () => {
-      expect(dict["knockout.next.advances"]!.startsWith("{round}"), dict["knockout.next.advances"]).toBe(true);
-      for (const k of FEEDER) expect(dict[k]!.startsWith("{round}"), `${k}: ${dict[k]}`).toBe(true);
+  for (const [locale, dict] of Object.entries({ en, es, fr, nl }) as [string, Record<string, string>][]) {
+    it(`${locale}: each phrase opens with its role word, the winner's differs from the loser's, and "Only" keeps the same opening`, () => {
+      for (const k of FEEDER) expect(lead(dict, k).trim(), `${k}: ${dict[k]}`).not.toBe("");
+      expect(lead(dict, "knockout.feederWinner"), `${locale} winner vs loser opening`).not.toBe(
+        lead(dict, "knockout.feederLoser"),
+      );
+      expect(lead(dict, "knockout.feederWinnerOnly"), `${locale} winner opening`).toBe(lead(dict, "knockout.feederWinner"));
+      expect(lead(dict, "knockout.feederLoserOnly"), `${locale} loser opening`).toBe(lead(dict, "knockout.feederLoser"));
     });
   }
 
