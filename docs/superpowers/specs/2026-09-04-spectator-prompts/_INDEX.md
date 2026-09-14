@@ -802,3 +802,28 @@ with verdicts for owner sign-off; then a final whole-branch review):
   division chips, with one division it sits alone above the heading. One toolbar row at `lg`: division chips on
   the left when there is a rail, otherwise the single division's heading; the switch on the right.
 Also owed (separate wave, owner told): double-elim unowed reset never voided / `bracketRanks` ranking.
+
+### Knockout tab — fix round 1 (2026-09-14)
+
+Committed, implementer → controller-checked counts; task review and post-fix gates in progress when written.
+- UI (`34edeb70b` P2, `ecfc6e0b6` D1 MatchCard `showRound`, `b58c3fd8d` C1, `03ba3d914` D2 + D1 caller + C2,
+  `8d0f5db1b` e2e). Unit 970/970 over 39 files, 0 pending, paths confirmed in this worktree (controller read the
+  JSON); tsc 0; 21 mutants all killed — M4 (the "slot already filled" gate) first SURVIVED because every fixture's
+  filled slot had a decided feeder; killed by a corrected-result case (a reopened feeder while its winner still
+  sits in the next slot).
+- Decisions the implementer made, accepted pending review: P2 adds the six called-off status keys by exact key,
+  not the `matchCentre.` prefix. D2's feeder rule (fixture j fed by 2j and 2j+1) checked against 46 slots of two
+  real hub documents, 0 mismatches. **Third place before the semis finish reads a new key
+  `knockout.pendingLoser` "Loser of {a} v {b}"** (4 locales) — a bare "{a} / {b}" there would repeat the final's
+  slot text for the same semi. C2: the old test pinning the switch as a direct child of the root was replaced by
+  structure tests. The e2e double-elim seed grew to 8 entrants so its rail cannot fit one row at 1280.
+- P1 (`168a3ca9e`): both parts per the ruling above; the scoring and import call sites await the invalidation;
+  selects merged (one query fewer per score). Deviations accepted pending review: a logging `.catch` on the awaited
+  call (a failed lookup must not 500 a saved score); `fireScoreRevalidate` fires the competition `"max"` BEFORE the
+  division `{ expire: 0 }` because the tag manifest is last-write-wins inside a request (implementer's reading,
+  reviewer verifying). 33/33 touched, 546/546 across 47 importing files, tsc 0, 8 mutants killed.
+- **P1c (open, found by the P1 implementer, NOT this round):** `void fireStageRevalidate` at `stages.ts:1152`,
+  `:1534`, `:2395` (`completeStage`, reachable from `scoreEvent`) and `:3248` drops its tag the same way. A score
+  that completes a stage is covered by the score's own division expiry; console-driven stage writes are not.
+- **P1 concern, open:** in `event-import.ts` the invalidation now runs last inside its try, so an earlier throw
+  skips it (reviewer judging against the old order).
