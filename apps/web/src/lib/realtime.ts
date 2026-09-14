@@ -12,12 +12,16 @@ import {
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
  * forget, never throws.
  *
- * Two messages on purpose (measured 2026-09-12):
- * - `private: true` for scorepad / private subscribers.
- * - a public twin for the spectator overlay when the minted public JWT fails
- *   Realtime auth (`JwtSignatureError`) and the client falls back to a public
- *   channel (slideshow pattern). Private-only publish left the overlay on the
- *   15 s poll; public-only never reaches private scorepad subscribers.
+ * PRIVATE ONLY (review 2026-09-14, I1). Every fixture-topic subscriber in this
+ * codebase joins `{private: true}` (`use-fixture-stream.ts`,
+ * `use-live-fixture.ts`), and `use-live-fixture.ts` falls back to POLLING on a
+ * token failure rather than opening a public channel — there is no "public
+ * twin" consumer anywhere in this branch. A second, non-private message used
+ * to ship alongside this one; it doubled Realtime send cost for zero
+ * subscribers, and — because a non-private broadcast on `fixture:{id}` is
+ * joinable by anyone holding the public anon key (ships in the client bundle)
+ * — bypassed the `realtime` entitlement gate on the token-mint route
+ * (`api/v1/public/fixtures/[id]/realtime-token/route.ts`). Removed.
  */
 export async function publishFixtureUpdate(
   fixtureId: string,
@@ -37,10 +41,7 @@ export async function publishFixtureUpdate(
         apikey: key,
       },
       body: JSON.stringify({
-        messages: [
-          { topic, event: "state_changed", payload, private: true },
-          { topic, event: "state_changed", payload },
-        ],
+        messages: [{ topic, event: "state_changed", payload, private: true }],
       }),
     });
     if (!res.ok) {
@@ -130,6 +131,15 @@ function decodePrivateKeyB64(): string | undefined {
  * Fallback: `SUPABASE_JWT_SECRET` = legacy / shared-secret signing key (long
  * random string). Rejected when it looks like a JWKS `kid` (UUID).
  *
+ * `SUPABASE_JWT_ALG` (optional, PEM branch only — review 2026-09-14, I7b): a
+ * PKCS8 PEM's `-----BEGIN PRIVATE KEY-----` header does not encode which
+ * algorithm the key is for (unlike the PKCS1 `BEGIN RSA PRIVATE KEY` header,
+ * which `importPKCS8` does not even accept), so there is no reliable way to
+ * tell an RS256 PKCS8 key from an ES256 one by sniffing the PEM text. Set
+ * `SUPABASE_JWT_ALG=RS256` when `SUPABASE_JWT_PRIVATE_KEY`/`_B64` is an RSA
+ * PKCS8 key; anything else (including unset) defaults to ES256, matching this
+ * project's actual Supabase signing keys.
+ *
  * @see https://supabase.com/docs/guides/auth/signing-keys
  */
 export async function resolveRealtimeMintKey(): Promise<MintKey> {
@@ -137,8 +147,27 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
     process.env.SUPABASE_JWT_PRIVATE_KEY?.trim() || decodePrivateKeyB64();
   if (privateRaw) {
     if (privateRaw.startsWith("{")) {
-      const jwk = JSON.parse(privateRaw) as JWK;
-      const alg = (jwk.alg === "RS256" ? "RS256" : "ES256") as "ES256" | "RS256";
+      let jwk: JWK;
+      try {
+        jwk = JSON.parse(privateRaw) as JWK;
+      } catch (err) {
+        // Unguarded JSON.parse used to throw a raw SyntaxError straight out of
+        // mintPublicFixtureToken, 500ing the token route on a malformed key
+        // (review 2026-09-14, I7a).
+        throw new Error(
+          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
+      // Use the JWK's own declared alg when it is one this function can mint
+      // with; a silent coercion to ES256 for anything else (ES512, EdDSA, …)
+      // would sign a token with the wrong algorithm header (review 2026-09-14,
+      // I7c).
+      if (jwk.alg !== "ES256" && jwk.alg !== "RS256" && jwk.alg !== "HS256") {
+        throw new Error(
+          `Realtime JWT mint: SUPABASE_JWT_PRIVATE_KEY JWK has unsupported alg ${JSON.stringify(jwk.alg)} — expected ES256, RS256, or HS256`,
+        );
+      }
+      const alg = jwk.alg;
       const key = await importJWK(jwk, alg);
       return {
         key,
@@ -147,7 +176,9 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
       };
     }
     const alg =
-      privateRaw.includes("BEGIN RSA PRIVATE KEY") || privateRaw.includes("RSA PRIVATE")
+      process.env.SUPABASE_JWT_ALG?.trim().toUpperCase() === "RS256" ||
+      privateRaw.includes("BEGIN RSA PRIVATE KEY") ||
+      privateRaw.includes("RSA PRIVATE")
         ? "RS256"
         : "ES256";
     const key = await importPKCS8(privateRaw, alg);

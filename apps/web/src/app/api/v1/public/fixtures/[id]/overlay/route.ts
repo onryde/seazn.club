@@ -4,10 +4,14 @@ import { loadOverlayLiveData } from "@/server/overlay/load";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Live overlay JSON — never CDN/browser-cached. `PUBLIC_CACHE_CONTROL`
- *  (s-maxage=30) is correct for static public pages; on this route it made
- *  OBS/browser polls reuse the pre-ball body while the match moved on. */
-const LIVE_CACHE_CONTROL = "private, no-store";
+/** Live overlay JSON. Review 2026-09-14 (I9, twin of the fixture summary
+ *  route's fix): this used to be `private, no-store`, which fixed OBS/browser
+ *  polls reusing the pre-ball body but also killed CDN collapsing on this
+ *  high-traffic poll target. The browser-staleness bug is fixed client-side —
+ *  `fetchOverlayFixture` (`live-score-data.ts`) already sends
+ *  `{cache: "no-store"}` — so the edge can hold a short PUBLIC, collapsible
+ *  window instead: 2s bounds staleness well under the old 30s. */
+const LIVE_CACHE_CONTROL = "public, s-maxage=2, stale-while-revalidate=30";
 
 /** The stream overlay's one poll target (design §3.2): the public live
  *  summary plus the two folded-state facts a scorebug needs. Visibility is

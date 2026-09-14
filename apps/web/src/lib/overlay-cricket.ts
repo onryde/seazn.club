@@ -153,9 +153,25 @@ export function scoringStartedFromScorecard(scorecard: CricketScorecard): boolea
 /**
  * The most recently *completed* over in the latest innings.
  *
- * Mid-over (`thisOver.length > 0`), that is `overs.at(-2)` — the current over
- * is already in `overs` as the tip. Between overs (`thisOver` empty) the tip
- * itself is complete.
+ * Completeness is read from the engine's OWN authority — `total.overs`'s
+ * integer part (`fmtOvers` in scorecard.ts: `floor(legalBalls /
+ * ballsPerOver)`) — never from `scorecard.live`. `live` goes `null` the
+ * instant the innings (or the match) ends, including MID-OVER: a chase won,
+ * an all-out or a declaration can land on any ball, and the `OverLog` tip
+ * `innings.overs` was already carrying (one opens on an over's first ball,
+ * scorecard.ts) is then a PARTIAL over, not a closed one. Reading `live ===
+ * null` as "the tip is closed" airs that partial over as if it had finished,
+ * and — because this becomes the mount baseline for `endOfOverSeq`
+ * (overlay-end-of-over.ts) — permanently skips the real last completed over.
+ *
+ * `total.overs`'s integer part does not have this problem, live or not: it
+ * names exactly how many overs are complete, so `overs[completeOvers - 1]`
+ * is the true last complete over whether the innings is mid-over-and-live,
+ * mid-over-and-just-ended, or sitting exactly on an over boundary. It also
+ * survives a trailing over that logged only extras (a wide can WIN a chase
+ * without ever crediting a legal ball): that tail over shares the completed
+ * over's `legalBalls` boundary but is excluded because it is not the over at
+ * index `completeOvers - 1`.
  */
 export function lastClosedOverFromScorecard(
   scorecard: CricketScorecard,
@@ -164,8 +180,8 @@ export function lastClosedOverFromScorecard(
   const inningsIndex = scorecard.innings.length - 1;
   const innings = scorecard.innings.at(-1);
   if (!innings || innings.overs.length === 0 || inningsIndex < 0) return null;
-  const midOver = (scorecard.live?.thisOver.length ?? 0) > 0;
-  const over = midOver ? innings.overs.at(-2) : innings.overs.at(-1);
+  const completeOvers = Number(innings.total.overs.split(".")[0]);
+  const over = completeOvers > 0 ? innings.overs[completeOvers - 1] : undefined;
   if (!over) return null;
 
   const bowlLine =
@@ -282,11 +298,6 @@ export function ballGlyphText(g: BallGlyph): string {
     case "wicket":
       return "W";
   }
-}
-
-/** @deprecated Use `ballGlyphText` — kept so existing call sites stay stable. */
-function glyph(g: BallGlyph): string {
-  return ballGlyphText(g);
 }
 
 /**

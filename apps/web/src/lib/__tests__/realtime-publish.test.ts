@@ -1,7 +1,8 @@
-// publishFixtureUpdate fans out private + public — scorepad is private;
-// spectator overlay falls back to public when the minted JWT fails auth.
+// publishFixtureUpdate sends ONE private message on the fixture topic (review
+// 2026-09-14, I1) — every subscriber in this codebase joins private, and a
+// non-private twin was joinable by anyone holding the public anon key.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify } from "jose";
+import { createLocalJWKSet, exportJWK, exportPKCS8, generateKeyPair, jwtVerify } from "jose";
 
 describe("publishFixtureUpdate", () => {
   const fetchMock = vi.fn();
@@ -21,7 +22,7 @@ describe("publishFixtureUpdate", () => {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   });
 
-  it("posts private and public twins on the fixture topic", async () => {
+  it("posts exactly one PRIVATE message on the fixture topic — no public twin", async () => {
     const { publishFixtureUpdate } = await import("../realtime");
     await publishFixtureUpdate("fx-1", "event");
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -30,17 +31,12 @@ describe("publishFixtureUpdate", () => {
     const body = JSON.parse((init as RequestInit).body as string) as {
       messages: { topic: string; event: string; private?: boolean }[];
     };
-    expect(body.messages).toHaveLength(2);
+    expect(body.messages).toHaveLength(1);
     expect(body.messages[0]).toMatchObject({
       topic: "fixture:fx-1",
       event: "state_changed",
       private: true,
     });
-    expect(body.messages[1]).toMatchObject({
-      topic: "fixture:fx-1",
-      event: "state_changed",
-    });
-    expect(body.messages[1]).not.toHaveProperty("private");
   });
 });
 
@@ -50,6 +46,7 @@ describe("mintPublicFixtureToken", () => {
     delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
     delete process.env.SUPABASE_JWT_SECRET;
     delete process.env.SUPABASE_JWT_KID;
+    delete process.env.SUPABASE_JWT_ALG;
     vi.restoreAllMocks();
   });
 
@@ -124,5 +121,87 @@ describe("mintPublicFixtureToken", () => {
     );
     expect(protectedHeader.alg).toBe("HS256");
     expect(payload.fixture_id).toBe("fx-2");
+  });
+
+  // Review 2026-09-14, I7a — a malformed JWK JSON string used to throw a raw
+  // SyntaxError straight out of mintPublicFixtureToken (500ing the token
+  // route). The fix wraps JSON.parse in try/catch and throws a clear,
+  // prefixed message instead.
+  it("throws a clear error for malformed JWK JSON, not a raw SyntaxError", async () => {
+    vi.resetModules();
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SECRET;
+    process.env.SUPABASE_JWT_PRIVATE_KEY = "{not valid json";
+
+    const { mintPublicFixtureToken } = await import("../realtime");
+    await expect(mintPublicFixtureToken("fx-3", 60)).rejects.toThrow(
+      /SUPABASE_JWT_PRIVATE_KEY is not valid JWK JSON/,
+    );
+  });
+
+  // Review 2026-09-14, I7c — an unrecognized jwk.alg (ES512, EdDSA, …) used to
+  // be silently coerced to ES256 rather than rejected, so the minted token's
+  // header would lie about the algorithm that actually signed it.
+  it("throws a clear error for a JWK with an unsupported alg, rather than silently minting ES256", async () => {
+    vi.resetModules();
+    const { privateKey } = await generateKeyPair("ES256", { extractable: true });
+    const jwk = await exportJWK(privateKey);
+    jwk.alg = "ES512"; // declared, but not one this function can mint with
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SECRET;
+    process.env.SUPABASE_JWT_PRIVATE_KEY = JSON.stringify(jwk);
+
+    const { mintPublicFixtureToken } = await import("../realtime");
+    await expect(mintPublicFixtureToken("fx-4", 60)).rejects.toThrow(
+      /unsupported alg "ES512"/,
+    );
+  });
+
+  // Review 2026-09-14, I7b — RS256 detection sniffed for the PKCS1
+  // "BEGIN RSA PRIVATE KEY" header, but importPKCS8 requires PKCS8
+  // ("BEGIN PRIVATE KEY"), which carries no algorithm signal in its header
+  // text. A real RS256 PKCS8 PEM was therefore never detected as RS256 and
+  // got imported as ES256, which throws from jose. SUPABASE_JWT_ALG=RS256 is
+  // the fix — proved here against a REAL generated RSA keypair, not a stub.
+  it("mints RS256 from a PKCS8 PEM when SUPABASE_JWT_ALG=RS256 names it", async () => {
+    vi.resetModules();
+    const { privateKey, publicKey } = await generateKeyPair("RS256", {
+      extractable: true,
+      modulusLength: 2048,
+    });
+    const pem = await exportPKCS8(privateKey);
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SECRET;
+    process.env.SUPABASE_JWT_PRIVATE_KEY = pem;
+    process.env.SUPABASE_JWT_ALG = "RS256";
+    process.env.SUPABASE_JWT_KID = "test-kid-rs256";
+
+    const { mintPublicFixtureToken } = await import("../realtime");
+    const token = await mintPublicFixtureToken("fx-5", 60);
+    const { payload, protectedHeader } = await jwtVerify(token, publicKey, {
+      audience: "authenticated",
+    });
+    expect(protectedHeader.alg).toBe("RS256");
+    expect(protectedHeader.kid).toBe("test-kid-rs256");
+    expect(payload.fixture_id).toBe("fx-5");
+  });
+
+  // Sibling of the above: without SUPABASE_JWT_ALG (and no PKCS1 header —
+  // real RSA PKCS8 keys never carry one), the same RS256 PEM is misdetected
+  // as ES256 and jose throws rather than minting silently-wrong output.
+  it("without SUPABASE_JWT_ALG, an RS256 PKCS8 PEM is misdetected as ES256 and throws", async () => {
+    vi.resetModules();
+    const { privateKey } = await generateKeyPair("RS256", {
+      extractable: true,
+      modulusLength: 2048,
+    });
+    const pem = await exportPKCS8(privateKey);
+    delete process.env.SUPABASE_JWT_PRIVATE_KEY_B64;
+    delete process.env.SUPABASE_JWT_SECRET;
+    delete process.env.SUPABASE_JWT_ALG;
+    process.env.SUPABASE_JWT_PRIVATE_KEY = pem;
+
+    const { mintPublicFixtureToken } = await import("../realtime");
+    await expect(mintPublicFixtureToken("fx-6", 60)).rejects.toThrow();
   });
 });

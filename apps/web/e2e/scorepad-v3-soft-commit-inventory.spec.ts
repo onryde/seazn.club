@@ -10,8 +10,13 @@ import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TA
 test.describe.configure({ mode: "parallel" });
 
 const ARTIFACT = "e2e-artifacts/soft-commit-inventory";
-/** Immediate taps must beat this; must stay strictly below HOLD_MS. */
-const IMMEDIATE_MS = 2_500;
+/** Immediate taps must beat this; must stay strictly below HOLD_MS. DERIVED,
+ *  not flat (review 2026-09-14, I6): CI sets `NEXT_PUBLIC_SCOREPAD_HOLD_MS`
+ *  to 3000, and a flat 2_500 left only a 500ms margin there — flaky by
+ *  construction (AGENTS.md class 20, "a flat timeout beside a derived cost is
+ *  a latent red"). Half of HOLD_MS, floored at 1_500 so a very short
+ *  HOLD_MS still leaves taps a real budget. */
+const IMMEDIATE_MS = Math.max(1_500, Math.floor(HOLD_MS * 0.5));
 /** Hold proof: ledger must still be quiet this long before Send now. */
 const HOLD_PROOF_MS = Math.min(Math.floor(HOLD_MS * 0.45), 2_000);
 

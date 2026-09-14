@@ -608,14 +608,6 @@ export function overlayCricketBundleIds(
   }
 }
 
-/** @deprecated Prefer `overlayCricketBundleIds` — kept as a thin alias for call sites that only need live. */
-export function overlayCricketLiveIds(
-  inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
-  active: readonly EventEnvelope[],
-): OverlayCricketLive | null {
-  return overlayCricketBundleIds(inputs, active).live;
-}
-
 /**
  * The names, applied OUTSIDE the cache — see `overlayCricketBundleIds`.
  *
@@ -623,11 +615,10 @@ export function overlayCricketLiveIds(
  * exactly as `liveFromScorecard` decides: the crease is a fact, the name is
  * consent.
  */
-export function nameCricketLive(
-  live: OverlayCricketLive | null,
+function nameLiveBlock(
+  live: OverlayCricketLive,
   personOf: (id: unknown) => RecentPerson | undefined,
-): OverlayCricketLive | null {
-  if (live === null) return null;
+): OverlayCricketLive {
   const named = (id: string | undefined) => (id === undefined ? undefined : personOf(id)?.name);
   return {
     batters: live.batters.map((b) => {
@@ -644,19 +635,26 @@ export function nameCricketLive(
   };
 }
 
+export function nameCricketLive(
+  live: OverlayCricketLive | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayCricketLive | null {
+  return live === null ? null : nameLiveBlock(live, personOf);
+}
+
 function nameClosedOver(
   closed: OverlayClosedOver | null,
   personOf: (id: unknown) => RecentPerson | undefined,
 ): OverlayClosedOver | null {
   if (closed === null) return null;
-  const liveNamed = nameCricketLive(
+  // `nameLiveBlock` takes a non-null block, so unlike `nameCricketLive` this
+  // never has a null result to fall back on — there is no `batters: []` case
+  // to write.
+  const liveNamed = nameLiveBlock(
     { batters: closed.batters, bowler: closed.bowler, thisOver: closed.glyphs },
     personOf,
   );
   const { bowler: _omit, ...rest } = closed;
-  if (!liveNamed) {
-    return { ...rest, batters: [] };
-  }
   return {
     ...rest,
     batters: liveNamed.batters,
@@ -672,8 +670,12 @@ function nameHighlights(
   const chip = (c: { name: string; line: string; detail?: string } | undefined) => {
     if (!c) return undefined;
     const person = personOf(c.name);
-    // Masked / unnamed: never put an id or youth-hidden name on the ended card.
-    if (!person || person.masked || !person.name) return undefined;
+    // Unnamed: never put a bare id on the ended card. `masked` is NOT a
+    // reason to drop the chip — it means "the display name was shortened for
+    // consent", not "suppress entirely" (`nameCricketLive`, which puts the
+    // same masked name on air in the crease band and the end-of-over card
+    // with no masked check at all, is the proof this guard disagreed with).
+    if (!person || !person.name) return undefined;
     return {
       name: person.name,
       line: c.line,

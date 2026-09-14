@@ -132,11 +132,17 @@ export function queueStatus(params: {
  *  one-name pick, and taps with nothing to enrich skip the hold entirely
  *  (null / empty dock: period advance, plain cricket ball, etc.). The dock
  *  blocks nothing while it is open.
+ *  5000 -> 10000 (PR #782 review, 2026-09-14) — the 5s cut landed under the
+ *  6s the 12s ruling itself said was too short to read eleven names on a
+ *  phone, for exactly the attribution case that ruling protected. 10s keeps
+ *  the overlay-latency headroom the 5s cut was chasing while staying above
+ *  that floor. e2e/walkthrough specs are unaffected: they always run under
+ *  `NEXT_PUBLIC_SCOREPAD_HOLD_MS` (CI pins it to 3000), never this default.
  *
  *  This is the DEFAULT, and the floor test in soft-commit.test.ts pins THIS
  *  symbol rather than `HOLD_MS` — see `resolveHoldMs` immediately below for
  *  why that distinction is the whole point. */
-export const HOLD_MS_DEFAULT = 5000;
+export const HOLD_MS_DEFAULT = 10_000;
 
 /** The env override's name, exported so a test names the same string the
  *  build-time substitution below does rather than a copy of it. */
@@ -171,7 +177,7 @@ export function resolveHoldMs(raw: string | undefined): number {
  *  the env var above, which exists so e2e can run the same production bundle
  *  at a shorter window. The walkthrough specs tap a whole match — sixteen taps
  *  for badminton — and each tap waits out a full window before the ledger can
- *  be polled, so the shipped 5s puts those specs past their 180s budget.
+ *  be polled, so the shipped 10s puts those specs way past their 180s budget.
  *
  *  Written as a full `process.env.NEXT_PUBLIC_...` member expression on
  *  purpose: Next substitutes that TEXT at build time, so a dynamic read

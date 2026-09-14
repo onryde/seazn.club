@@ -1307,7 +1307,13 @@ test.describe("cricket end-of-over card (EOO)", () => {
     browser,
   }) => {
     test.setTimeout(CYCLE_MS * 10 + 180_000);
-    const owner = await browser.newContext();
+    // Empty storage on purpose (review 2026-09-14, M9 — same fix as the
+    // beforeAll above and `anonPage`, "seen 2026-09-13"). A bare
+    // `browser.newContext()` inherits the project's Pro `storageState`;
+    // `seedCricketOverlayFreshOver` calls `signInAs`, and afterwards
+    // `ownerPage.request` (used below for every `sendEvent` ball) still rides
+    // the inherited Pro cookie jar and 401s.
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const ownerPage = await owner.newPage();
     const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
     await grantOverlay(rig.orgId);

@@ -42,13 +42,21 @@ const halfOf = (value: string, row: 0 | 1): string => {
  * the cell resizing (a score going 9 → 10, the context line changing); the
  * probes cover the web font arriving, which changes every natural width without
  * moving a single box.
+ *
+ * THE PROBE REF CALLBACK DOES NOT MEASURE (review 2026-09-14, M2). It used to
+ * call the effect's own `measure()` on every attach, but React re-invokes an
+ * inline ref callback (a fresh function identity) on EVERY commit, not just
+ * mount — that forced a full re-measure per render for no reason: React runs
+ * every ref callback for a commit before that commit's layout effects, so by
+ * the time the `useLayoutEffect` below runs, `probeRefs.current` is already
+ * fully populated and its own synchronous `measure()` call covers mount. The
+ * ResizeObserver above covers everything after mount.
  */
 function TeamName({ ladder }: { ladder: readonly string[] }) {
   const boxRef = useRef<HTMLSpanElement>(null);
   const probeRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const [rung, setRung] = useState(0);
   const [settled, setSettled] = useState(false);
-  const measureRef = useRef<() => void>(() => {});
   // The ladder's identity, not the array's: `overlayModel` builds a fresh one
   // every poll. NUL cannot occur in an entrant name.
   const key = ladder.join("\u0000");
@@ -77,7 +85,6 @@ function TeamName({ ladder }: { ladder: readonly string[] }) {
       // `overflow: hidden` — realClips, not truncatedByDesign.
       setSettled(widths[next]! <= available + 1);
     };
-    measureRef.current = measure;
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -106,7 +113,6 @@ function TeamName({ ladder }: { ladder: readonly string[] }) {
           className="ovl-team-name-probe"
           ref={(el) => {
             probeRefs.current[i] = el;
-            if (el !== null && i === ladder.length - 1) measureRef.current();
           }}
         >
           {text}

@@ -217,6 +217,82 @@ describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromSc
     const sc = scorecardOf(OVER);
     expect(lastClosedOverFromScorecard(sc, nameOf)).toBeNull();
   });
+
+  /**
+   * Innings 1: two balls (5 runs), closed explicitly — just enough to set a
+   * target of 6. Innings 2: a complete maiden over, then the winning runs
+   * land on the SECOND ball of the next over — the chase ends mid-over.
+   *
+   * `scorecard.live` goes `null` the instant this happens (`autoClose`
+   * closes the innings and the match), but `innings.overs.at(-1)` at that
+   * point is the PARTIAL over (2 balls, not 6) — the C1 bug read `live ===
+   * null` as "the tip is closed" and aired that partial over as the
+   * end-of-over card.
+   */
+  const CHASE_WON_MID_OVER = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    makeEnvelope(3, {
+      type: "cricket.ball",
+      payload: {
+        over: 0,
+        ballInOver: 1,
+        striker: "H-p1",
+        nonStriker: "H-p2",
+        bowler: "A-p1",
+        runs: { bat: 4 },
+        boundary: 4,
+      },
+    } as never),
+    makeEnvelope(4, {
+      type: "cricket.ball",
+      payload: { over: 0, ballInOver: 2, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: 1 } },
+    } as never),
+    makeEnvelope(5, { type: "cricket.innings.close", payload: {} } as never),
+    // Innings 2 (away chasing 6): over 0, six dot balls — a complete maiden.
+    ...[1, 2, 3, 4, 5, 6].map((ballInOver) =>
+      makeEnvelope(5 + ballInOver, {
+        type: "cricket.ball",
+        payload: { over: 0, ballInOver, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p1", runs: { bat: 0 } },
+      } as never),
+    ),
+    // Over 1: ball 1 brings the score to 4, ball 2 to 6 — target reached,
+    // chase over on the second ball of the over.
+    makeEnvelope(12, {
+      type: "cricket.ball",
+      payload: {
+        over: 1,
+        ballInOver: 1,
+        striker: "A-p2",
+        nonStriker: "A-p1",
+        bowler: "H-p1",
+        runs: { bat: 4 },
+        boundary: 4,
+      },
+    } as never),
+    makeEnvelope(13, {
+      type: "cricket.ball",
+      payload: { over: 1, ballInOver: 2, striker: "A-p2", nonStriker: "A-p1", bowler: "H-p1", runs: { bat: 2 } },
+    } as never),
+  ];
+
+  it("C1: chase won MID-OVER — lastClosedOver is the PRIOR complete over, never the partial tip", () => {
+    const sc = scorecardOf(CHASE_WON_MID_OVER);
+    // The match really has ended mid-over: live is gone, and the last
+    // logged over in the ledger really is the 2-ball partial one.
+    expect(sc.live).toBeNull();
+    const innings2 = sc.innings.at(-1)!;
+    expect(innings2.overs.length).toBe(2);
+    expect(innings2.overs.at(-1)!.balls.length).toBe(2);
+    expect(innings2.overs.at(-1)!.runs).toBe(6);
+
+    const closed = lastClosedOverFromScorecard(sc, nameOf);
+    expect(closed).not.toBeNull();
+    expect(closed!.over).toBe(1); // the complete maiden, NOT the partial over 2
+    expect(closed!.glyphs.length).toBe(6);
+    expect(closed!.runs).toBe(0);
+    expect(closed!.wickets).toBe(0);
+  });
 });
 
 describe("highlightsFromScorecard — ended-card top batter / bowler", () => {

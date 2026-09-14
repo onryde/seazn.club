@@ -45,15 +45,25 @@ begin
     return;
   end if;
 
-  execute $sql$
-    create policy "fixture broadcast read by claim"
-    on realtime.messages
-    for select
-    to authenticated
-    using (
-      extension = 'broadcast'
-      and realtime.topic() = ('fixture:' || (select auth.jwt() ->> 'fixture_id'))
-    )
-  $sql$;
+  -- `realtime.messages` is owned by `supabase_admin` on Supabase; if the
+  -- Flyway role is not that owner, `create policy` raises `insufficient_
+  -- privilege` — uncaught, that ABORTS the whole Flyway run and blocks every
+  -- later delta. Skip cleanly instead, matching the existence-check style
+  -- above: this delta is best-effort on a schema Flyway does not own.
+  begin
+    execute $sql$
+      create policy "fixture broadcast read by claim"
+      on realtime.messages
+      for select
+      to authenticated
+      using (
+        extension = 'broadcast'
+        and realtime.topic() = ('fixture:' || (select auth.jwt() ->> 'fixture_id'))
+      )
+    $sql$;
+  exception
+    when insufficient_privilege then
+      raise notice 'V403: insufficient privilege on realtime.messages — skip (not owner)';
+  end;
 end
 $migrate$;
