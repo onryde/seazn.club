@@ -82,9 +82,14 @@ function spyFetch(bytes: Buffer, type = "image/png") {
   const spy = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     requested.push(url);
-    // satori loads its own default font through fetch; let anything that is
-    // not one of the image hosts under test go through to the real one, so a
-    // font request cannot be mistaken for a badge request (or break the render).
+    // A render does reach `fetch`, but not for a font and not over the
+    // network: next/og reads its Geist default off disk with
+    // `fs.readFileSync`, and the one request a clean render makes is a
+    // `data:application/octet-stream` URI carrying the resvg wasm (measured
+    // here — exactly one call, and its bytes begin `\0asm`). Let anything that
+    // is not one of the image hosts under test through to the real fetch: a
+    // stub that swallowed that URI would break the render outright, and the
+    // pass-through is what keeps it from being counted as a badge request.
     if (!/attacker\.example|169\.254|projectref\.supabase\.co/.test(url)) {
       return real(input as RequestInfo, init);
     }
@@ -124,7 +129,11 @@ describe("the fixture share card and the downloadable poster never fetch an orga
     expect(bytes.subarray(1, 4).toString()).toBe("PNG");
     expect(requested.filter((u) => u.includes("attacker.example"))).toEqual([]);
     expect(requested.filter((u) => u.includes("169.254"))).toEqual([]);
-    expect(spy).toHaveBeenCalled(); // the font — proves the spy was live
+    // Stronger than the two filters above, and it is what proves the spy was
+    // live at all: NOTHING left this process over the network. The only thing
+    // the render asked for is the wasm it carries inline.
+    expect(spy).toHaveBeenCalled();
+    expect(requested.filter((u) => !u.startsWith("data:"))).toEqual([]);
   });
 
   it("the downloadable poster makes no request to the badge's host either", async () => {
