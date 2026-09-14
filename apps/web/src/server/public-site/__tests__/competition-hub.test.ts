@@ -1452,9 +1452,67 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
     expect(nameOf(doc, "lb-1", 0)).toBe("Loser of Semi-finals, match 2");
     // Each lane's feeds name the FEEDER's lane round: the winners' final a
     // loser drops from, the losers' round a winner climbs out of, and so on up.
-    expect(nameOf(doc, "lb-f", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-f"), seq: 1 }));
-    expect(nameOf(doc, "lb-f", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "lb-1"), seq: 1 }));
-    expect(nameOf(doc, "gf", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "lb-f"), seq: 1 }));
+    // Each of those rounds holds ONE match, so the sentence drops its number
+    // (N1 fix round 1, M2).
+    expect(nameOf(doc, "lb-f", 0)).toBe(t(en, "knockout.feederLoserOnly", { round: railLabel(doc, "wb-f") }));
+    expect(nameOf(doc, "lb-f", 1)).toBe(t(en, "knockout.feederWinnerOnly", { round: railLabel(doc, "lb-1") }));
+    expect(nameOf(doc, "gf", 1)).toBe(t(en, "knockout.feederWinnerOnly", { round: railLabel(doc, "lb-f") }));
+    expect(codes(doc)).toEqual([]);
+  });
+
+  it("a feeder round of ONE match drops the number — the reset reads 'Winner of Grand final' — while a round of two keeps ', match N' (M2)", async () => {
+    // A 4-entrant double elimination with a reset, numbered exactly as
+    // `bracketToGen` numbers it for k = 2 winners' rounds: WB 1-2, the losers'
+    // lane offset by k (5-6), the grand final offset by 2k (9) and its
+    // conditional reset after it (10). Wired as `generateDoubleElim` wires it:
+    // LB 1 takes both WB round-one losers, LB 2 the LB 1 winner and the winners'
+    // final loser, the grand final both lane champions, the reset both of its
+    // players.
+    const de: PublicStage = { ...STAGE, id: "de", seq: 1, kind: "double_elim", name: "Double" };
+    const at = (
+      id: string,
+      round_no: number,
+      seq_in_round: number,
+      lane: "WB" | "LB" | "GF",
+      over: Partial<PublicFixture> = {},
+    ) => F({ id, stage_id: "de", round_no, seq_in_round, lane, ...over });
+    const winner = (round: number, seq: number): Label => ({ key: "slot.winner_match", params: { round, seq } });
+    const loser = (round: number, seq: number): Label => ({ key: "slot.loser_match", params: { round, seq } });
+    const waiting = (home: Label, away: Label): Partial<PublicFixture> => ({
+      home_entrant_id: null,
+      away_entrant_id: null,
+      home_slot_label: home,
+      away_slot_label: away,
+    });
+    const doc = await load(
+      [
+        at("wb-1", 1, 1, "WB"),
+        at("wb-2", 1, 2, "WB"),
+        at("wb-f", 2, 1, "WB", waiting(winner(1, 1), winner(1, 2))),
+        at("lb-1", 5, 1, "LB", waiting(loser(1, 1), loser(1, 2))),
+        at("lb-f", 6, 1, "LB", waiting(winner(5, 1), loser(2, 1))),
+        at("gf", 9, 1, "GF", { ...waiting(winner(2, 1), winner(6, 1)), is_final: true }),
+        at("reset", 10, 1, "GF", { ...waiting(winner(9, 1), loser(9, 1)), is_final: true, conditional: true }),
+      ],
+      [de],
+    );
+    // The premise, off the rail: the round that feeds the reset is the grand
+    // final, alone in its round; the round that feeds LB 1 holds two matches.
+    expect(railLabel(doc, "gf")).toBe(msgFor("en", "bracket.round.grandFinal"));
+    expect(doc.knockouts.flatMap((v) => v.rounds).find((r) => r.fixtureIds.includes("gf"))!.fixtureIds).toEqual(["gf"]);
+    expect(doc.knockouts.flatMap((v) => v.rounds).find((r) => r.fixtureIds.includes("wb-1"))!.fixtureIds).toHaveLength(2);
+
+    // One match in the feeder's round: no number.
+    expect(nameOf(doc, "reset", 0)).toBe(t(en, "knockout.feederWinnerOnly", { round: railLabel(doc, "gf") }));
+    expect(nameOf(doc, "reset", 1)).toBe(t(en, "knockout.feederLoserOnly", { round: railLabel(doc, "gf") }));
+    expect(nameOf(doc, "reset", 0)).toBe("Winner of Grand final");
+    expect(nameOf(doc, "reset", 1)).toBe("Loser of Grand final");
+    expect(nameOf(doc, "gf", 0)).toBe(t(en, "knockout.feederWinnerOnly", { round: railLabel(doc, "wb-f") }));
+    expect(nameOf(doc, "lb-f", 1)).toBe(t(en, "knockout.feederLoserOnly", { round: railLabel(doc, "wb-f") }));
+    // Two matches in the feeder's round: the number stays.
+    expect(nameOf(doc, "lb-1", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-1"), seq: 1 }));
+    expect(nameOf(doc, "lb-1", 1)).toBe("Loser of Semi-finals, match 2");
+    expect(nameOf(doc, "wb-f", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "wb-2"), seq: 2 }));
     expect(codes(doc)).toEqual([]);
   });
 

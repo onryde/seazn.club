@@ -100,6 +100,9 @@ export const W2_KEYS = [
   // ROUND, as the rail names it, and its place in that round — never the
   // organiser board's "R1·2" short code.
   "knockout.feederWinner", "knockout.feederLoser",
+  // The same, when the feeder's round holds ONE match (N1 fix round 1, M2):
+  // "Winner of Grand final", never "Winner of Grand final, match 1".
+  "knockout.feederWinnerOnly", "knockout.feederLoserOnly",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
@@ -189,6 +192,10 @@ describe("W2 public dictionary coverage", () => {
       // round of eight matches without saying which.
       "knockout.feederWinner": ["round", "seq"],
       "knockout.feederLoser": ["round", "seq"],
+      // A feeder round of one match (M2): the round name alone. A locale that
+      // drops `{round}` says "Winner of" and stops.
+      "knockout.feederWinnerOnly": ["round"],
+      "knockout.feederLoserOnly": ["round"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -322,7 +329,12 @@ describe("the round label reads the same whether the builder or the card supplie
 // same conventions, and the convention is read out of each locale's own
 // dictionary rather than assumed here.
 describe("feeder-slot phrases follow each locale's own {round} convention (N1 fix round 1, M1)", () => {
-  const FEEDER = ["knockout.feederWinner", "knockout.feederLoser"] as const;
+  const FEEDER = [
+    "knockout.feederWinner",
+    "knockout.feederLoser",
+    "knockout.feederWinnerOnly",
+    "knockout.feederLoserOnly",
+  ] as const;
 
   for (const [locale, dict] of Object.entries({ es, fr }) as [string, Record<string, string>][]) {
     it(`${locale} puts the round first, the way its knockout.next.* sentences already do`, () => {

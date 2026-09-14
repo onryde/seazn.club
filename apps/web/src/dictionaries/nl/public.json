@@ -368,6 +368,8 @@
   "knockout.pendingLoser": "Verliezer van {a} tegen {b}",
   "knockout.feederWinner": "Winnaar van de {round}, wedstrijd {seq}",
   "knockout.feederLoser": "Verliezer van de {round}, wedstrijd {seq}",
+  "knockout.feederWinnerOnly": "Winnaar van de {round}",
+  "knockout.feederLoserOnly": "Verliezer van de {round}",
   "leaders.title": "Topspelers",
   "leaders.empty": "Nog geen statistieken",
   "teams.title": "Teams",

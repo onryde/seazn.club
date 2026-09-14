@@ -35,7 +35,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { fixtureRoundLabel, publicSlotLabel, stageFixtureAt } from "./feeder-slot-label";
+import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import {
   bucketFixture,
@@ -631,84 +631,27 @@ export async function loadCompetitionHub(
     });
 
     const stageById = new Map(stages.map((s) => [s.id, s]));
-    // PER STAGE, and that is the whole point of this map.
-    //
-    // `laneRoundRank` (`lib/round-role-label.ts`) filters by LANE only, and
-    // `lane` is null for a league AND for a single-elimination bracket
-    // (`data.ts`: "null for single-lane brackets and non-bracket stages"). So a
-    // list pooled across the division puts a league's rounds and a knockout's
-    // rounds in one sorted sequence, and `lastRoundInLane` comes off the union
-    // — a knockout FINAL in a division whose league ran more rounds resolves as
-    // `semi_final` and the page prints "Semi-finals" on the final. `is_final`
-    // does not rescue it: `round-role.ts` never reads `isFinal`, the role is
-    // `lastRoundInLane - roundInLane`. Measured, on the ordinary
-    // league-then-knockout shape.
-    //
-    // Every other caller of this helper in the repo is stage-scoped
-    // (`stages-panel.tsx`'s parameter is literally `stageFixtures`;
-    // `stage-court-tags.ts` selects `where stage_id = $1`; a public bracket IS
-    // one stage). The hub was the only pooling caller.
-    const laneByStage = new Map<string, { round_no: number; lane: "WB" | "LB" | "GF" | null }[]>();
+    // Every fixture's round name and every unfilled side's text, from the ONE
+    // public namer (`feeder-slot-label.ts`). The match centre builds its names
+    // through the same function, so a waiting side cannot read one way on a hub
+    // card and another in the match centre, and its `{round}` is the rail chip's
+    // own string. The namer ranks each fixture within its OWN stage — why that
+    // matters (a league pooled with a knockout printed "Semi-finals" on the
+    // final) is on the function — and keeps each name, so a knockout round
+    // below reuses the exact string its matches carry.
+    const namer = publicRoundNamer({
+      ui,
+      dict,
+      fixtures,
+      stageKind: (stageId) => stageById.get(stageId)?.kind,
+    });
     for (const f of fixtures) {
-      const inStage = laneByStage.get(f.stage_id) ?? [];
-      inStage.push({ round_no: f.round_no, lane: f.lane ?? null });
-      laneByStage.set(f.stage_id, inStage);
-    }
-    // Each fixture's resolved round name, kept so a knockout round reuses the
-    // exact string its matches carry instead of resolving it a second time.
-    // Resolved in a pass of its own, BEFORE any side: a side waiting on a match
-    // names that match's round with this same string (fix round N1), and the
-    // feeder can sit anywhere in `fixtures`' order.
-    //
-    // `fixtureRoundLabel` answers for EVERY stage kind — a non-bracket stage's
-    // rounds are a dense ordinal sequence and come back as `plain_round`
-    // (`round-role.ts` says so outright: its display consumers "each used
-    // to keep their own copy of this set purely as a GUARD in front of a
-    // call this function could not safely take"). So no BRACKET_KINDS
-    // guard here, and the ordinal is the fixture's rank within its own
-    // lane rather than a raw `round_no` a sparse bracket numbering would
-    // print wrong.
-    //
-    // Dropping that guard does NOT mean dropping the stage scoping: the
-    // ranking list is this fixture's OWN stage. See `laneByStage` above.
-    const labelByFixture = new Map<string, string | null>();
-    for (const f of fixtures) {
-      const stage = stageById.get(f.stage_id);
-      labelByFixture.set(
-        f.id,
-        stage ? fixtureRoundLabel(ui, laneByStage.get(f.stage_id) ?? [], f, stage.kind) : null,
-      );
-    }
-    // An unfilled side's text (fix round N1). A side waiting on a match names
-    // that match's round exactly as the rail does — "Winner of Quarter-finals,
-    // match 2", never the organiser board's "R3·2" — and the match is looked up
-    // in the side's OWN stage, for the reason `laneByStage` is per stage: a
-    // league's round 1 match 2 and a knockout's share a `{round, seq}`.
-    const fixtureAtByStage = new Map(
-      [...laneByStage.keys()].map((stageId) => [
-        stageId,
-        stageFixtureAt(fixtures.filter((f) => f.stage_id === stageId)),
-      ]),
-    );
-    const slotIn =
-      (stageId: string) =>
-      (label: SlotLabel | null): string =>
-        publicSlotLabel(
-          label,
-          ui,
-          (key, vars) => t(dict, key, vars),
-          (round, seq) => {
-            const feeder = fixtureAtByStage.get(stageId)?.(round, seq);
-            return feeder === undefined ? null : (labelByFixture.get(feeder.id) ?? null);
-          },
-        );
-    for (const f of fixtures) {
-      const sides = hubSides(f, { names, kinds, badges, colours, slot: slotIn(f.stage_id) });
+      const sides = hubSides(f, { names, kinds, badges, colours, slot: (label) => namer.slot(f.stage_id, label) });
       const stage = stageById.get(f.stage_id);
       if (f.venue_name) venues.add(f.venue_name);
       const { bucket } = hubLiveness(f.status);
       const winner = f.outcome?.winner ?? null;
-      const roundLabel = labelByFixture.get(f.id) ?? null;
+      const roundLabel = namer.roundLabel(f.id);
       matches.push({
         fixtureId: f.id,
         divisionId: d.id,
@@ -798,7 +741,7 @@ export async function loadCompetitionHub(
         stage,
         division: { id: d.id, slug: d.slug, name: d.name },
         fixtures: fixtures.filter((f) => f.stage_id === stage.id),
-        labelOf: (id) => labelByFixture.get(id) ?? null,
+        labelOf: (id) => namer.roundLabel(id),
       });
       if (view) knockouts.push(view);
     }

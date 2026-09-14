@@ -23,9 +23,9 @@ import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
 import type { SlotLabelLookup } from "@/lib/slot-label";
-import { getDictionary, t, toLocale } from "@/lib/i18n";
+import { getDictionary, toLocale } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { fixtureRoundLabel, publicSlotLabel, stageFixtureAt } from "./feeder-slot-label";
+import { publicRoundNamer } from "./feeder-slot-label";
 import { readPublicLineups } from "./public-lineups";
 import { buildMatchCentre, type MatchCentreInput } from "./match-centre";
 import type { MatchCentreDocT, SideT } from "./match-centre-schema";
@@ -318,13 +318,16 @@ export async function loadMatchCentre(
     player_name_display: ctx.division.playerNameDisplay,
   });
   // Fix round N1 — a side waiting on a match names that match's ROUND the way
-  // the hub's Knockout rail does ("Winner of Semi-finals, match 2"), never the
-  // organiser board's "R1·2" short code. The feeder is looked up among THIS
-  // fixture's stage's rows and named by `fixtureRoundLabel`, the namer the hub
-  // labels every round with; `publicSlotLabel` keeps today's text for anything
-  // that is not a feeder label, or names no match of the stage.
+  // the hub's Knockout rail does ("Winner of Semi-finals, match 2", or "Winner
+  // of Grand final" when that round holds one match), never the organiser
+  // board's "R1·2" short code. The words come from `publicRoundNamer`, the SAME
+  // namer the hub builds its cards and rail with, over THIS fixture's stage's
+  // rows; anything that is not a feeder label, or names no match of the stage,
+  // keeps today's text.
   const stageRows = await sql<
     {
+      id: string;
+      stage_id: string;
       round_no: number;
       seq_in_round: number;
       lane: "WB" | "LB" | "GF" | null;
@@ -333,24 +336,17 @@ export async function loadMatchCentre(
       conditional: boolean | null;
     }[]
   >`
-    select round_no, seq_in_round, lane, is_final, third_place, conditional
+    select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional
     from public_fixtures_v where stage_id = ${fixture.stage_id}`;
-  const laneRows = stageRows.map((r) => ({ round_no: r.round_no, lane: r.lane }));
-  const stageFixture = stageFixtureAt(stageRows);
-  const publicDict = await getDictionary(toLocale(ctx.locale), "public");
-  const slot = (label: SlotLabel | null): string =>
-    publicSlotLabel(
-      label,
-      ctx.slotLabelLookup,
-      (key, vars) => t(publicDict, key, vars),
-      (round, seq) => {
-        const feeder = stageFixture(round, seq);
-        // `stageRow` exists for every fixture (a foreign key); the check is
-        // for the type, which the destructured query result leaves optional.
-        if (feeder === undefined || stageRow === undefined) return null;
-        return fixtureRoundLabel(ctx.slotLabelLookup, laneRows, feeder, stageRow.kind);
-      },
-    );
+  const namer = publicRoundNamer({
+    ui: ctx.slotLabelLookup,
+    dict: await getDictionary(toLocale(ctx.locale), "public"),
+    fixtures: stageRows,
+    // `stageRow` exists for every fixture (a foreign key); undefined only in
+    // the type the destructured query result leaves, and then nothing is named.
+    stageKind: () => stageRow?.kind,
+  });
+  const slot = (label: SlotLabel | null): string => namer.slot(fixture.stage_id, label);
   const sides = await loadSides(
     sql,
     fixture,

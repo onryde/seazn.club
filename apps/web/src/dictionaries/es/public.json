@@ -368,6 +368,8 @@
   "knockout.pendingLoser": "Perdedor de {a} contra {b}",
   "knockout.feederWinner": "{round}, partido {seq}: ganador",
   "knockout.feederLoser": "{round}, partido {seq}: perdedor",
+  "knockout.feederWinnerOnly": "{round}: ganador",
+  "knockout.feederLoserOnly": "{round}: perdedor",
   "leaders.title": "Líderes",
   "leaders.empty": "Aún no hay estadísticas",
   "teams.title": "Equipos",
