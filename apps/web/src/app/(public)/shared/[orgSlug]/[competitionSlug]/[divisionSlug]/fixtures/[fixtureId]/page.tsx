@@ -16,7 +16,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getPublicFixture } from "@/server/public-site/data";
+import { getPublicFixture, type PublicFixture } from "@/server/public-site/data";
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
@@ -103,6 +103,33 @@ function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | n
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/**
+ * The two side names this page prints: its h1, `<title>` and description, the
+ * share text, the poster's file name and the JSON-LD teams.
+ *
+ * A side with an entrant is that entrant's (masked) name. A side still WAITING
+ * is the match centre's own name for it — `matchCentre.header.sides`, built by
+ * `loadMatchCentre` beside this fixture in `getPublicFixture` — so the headline
+ * and the court card directly below it say the same words ("Winner of
+ * Semi-finals, match 1"). Resolving the stored slot label a second time here
+ * printed the organiser board's "Winner of R1·1" above a court card that said
+ * otherwise (N1 fix round 1, I1): one authority, already loaded, no extra query.
+ */
+function sideNamesFor(
+  data: {
+    fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id">;
+    entrantNames: Record<string, string>;
+    matchCentre: MatchCentreDocT;
+  },
+  msgFn: ReturnType<typeof lookup>,
+): [string, string] {
+  const nameOf = (entrantId: string | null, side: 0 | 1): string =>
+    entrantId
+      ? (data.entrantNames[entrantId] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+      : data.matchCentre.header.sides[side].name;
+  return [nameOf(data.fixture.home_entrant_id, 0), nameOf(data.fixture.away_entrant_id, 1)];
+}
+
 export const revalidate = 30;
 
 // ISR (task-8): empty-array generateStaticParams is required for on-demand
@@ -136,12 +163,7 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   const msgFn = lookup(locale);
   const dict = await getDictionary(locale, "public");
   const ui = await getDictionary(locale, "ui");
-  const home = data.fixture.home_entrant_id
-    ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
-  const away = data.fixture.away_entrant_id
-    ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
+  const [home, away] = sideNamesFor(data, msgFn);
   const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key);
   const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
   // Task 14 acceptance (a) — a decided fixture's title carries both the raw
@@ -181,12 +203,7 @@ export default async function FixturePage({ params }: Props) {
   const dict = await getDictionary(locale, "public");
   const ui = await getDictionary(locale, "ui");
 
-  const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(fixture.home_slot_label, msgFn, "schedule.tbd");
-  const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
+  const [home, away] = sideNamesFor(data, msgFn);
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key);
 

@@ -22,6 +22,10 @@ import { posterFileName } from "@/lib/poster-file-name";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import { toLocale } from "@/lib/i18n-constants";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 // Real dictionaries, not a table typed into this test (rule 19/reference_
 // html_grep_for_dictionary_copy...): Dutch's own `matchCentre.status.live`
@@ -52,20 +56,60 @@ const baseData = (
   locale: string,
   fixtureOver: Record<string, unknown> = {},
   entrantNamesOver: Record<string, string> = {},
-) => ({
-  org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
-  competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
-  division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
-  fixture: {
+) => {
+  const fixture = {
     id: "f1", division_id: "d1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
     home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
     scheduled_at: null, venue: null, court_label: null, venue_name: null, court_name: null,
     status: "scheduled", outcome: null, summary: null, last_seq: null,
     ...fixtureOver,
-  },
-  entrantNames: entrantNamesOver,
-  realtime: false,
-});
+  };
+  return {
+    org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
+    competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
+    division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
+    fixture,
+    entrantNames: entrantNamesOver,
+    realtime: false,
+    // N1 fix round 1 (I1): `getPublicFixture` always returns `matchCentre`,
+    // and the page names a WAITING side from it rather than resolving the slot
+    // label a second time. See `docNaming` below.
+    matchCentre: docNaming(locale, fixture),
+  };
+};
+
+/**
+ * The match-centre document a bare `baseData()` fixture comes with:
+ * `cricketDocFor`'s, with each side named the way `loadMatchCentre` names it —
+ * the entrant's side as is, a waiting side by its stored slot label. The labels
+ * these tests store are group-finish labels, not feeder labels, and for those
+ * `publicSlotLabel` is exactly `resolveSlotLabel` in the org's locale. The
+ * fixture page's own real-loader case is `page-waiting-side.test.ts`.
+ */
+function docNaming(
+  locale: string,
+  fixture: { home_entrant_id: unknown; away_entrant_id: unknown; home_slot_label: unknown; away_slot_label: unknown },
+): MatchCentreDocT {
+  const doc = cricketDocFor("in_play");
+  const inLocale = (key: Parameters<typeof msgFor>[1], vars?: Record<string, string | number>) =>
+    msgFor(toLocale(locale), key, vars);
+  const waiting = (side: MatchCentreDocT["header"]["sides"][0], label: unknown) => ({
+    ...side,
+    entrantId: "",
+    name: resolveSlotLabel(label as SlotLabel | null, inLocale, "schedule.tbd"),
+  });
+  const [home, away] = doc.header.sides;
+  return {
+    ...doc,
+    header: {
+      ...doc.header,
+      sides: [
+        fixture.home_entrant_id ? home : waiting(home, fixture.home_slot_label),
+        fixture.away_entrant_id ? away : waiting(away, fixture.away_slot_label),
+      ],
+    },
+  };
+}
 
 // Task 14 — `getPublicFixture` now also returns `matchCentre` (Task 9); a
 // full band-3 cricket document exercises the REAL `<MatchCentre>` tree (tab
