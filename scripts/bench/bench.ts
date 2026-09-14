@@ -16,6 +16,7 @@ import { createRealPreflightProbes, runPreflight, type PreflightResult } from ".
 import { log, suiteLogger } from "./lib/log.ts";
 import { gateOf, resolveRunId, writeReport, type BenchReport, type SuiteReport } from "./lib/report.ts";
 import { lookupSuite, suiteKeys } from "./lib/suites/registry.ts";
+import type { SuiteDefinition } from "./lib/suites/types.ts";
 import { createRealPlanSql, type PlanSql } from "./lib/plan.ts";
 import type { SeedTransport } from "./lib/seed.ts";
 import type { ProbeTransport } from "./lib/dls-gate.ts";
@@ -162,6 +163,30 @@ async function gitSha(): Promise<string> {
  * test, independent of `lib/__tests__/tiny-suite-plan.test.ts`'s own
  * coverage of what `runTinySuite` DOES once it has one.
  */
+/**
+ * B07a T7 fix round 1 (I1) — the ONE line that turns a resolved registry row
+ * into a call to its own `run`, forwarding the row's OWN `play` declaration.
+ * Before this existed, `runSuite` called `definition.run({...})` directly and
+ * never read `definition.play` at all: a suite could declare
+ * `play: { "d-tiny": "tap" }` on its registry row and the declaration would
+ * sit there, typed and unit-green, with zero readers — silently reproducing
+ * today's positional write path no matter what the row said.
+ *
+ * Exported (rather than left as a private call inside `runSuite`) so a test
+ * can drive this exact forwarding line with an INJECTED `SuiteDefinition`
+ * that declares `play`, without mutating the real `SUITE_REGISTRY` — every
+ * real row leaves `play` undeclared today (Task 10 is the first to add one,
+ * to `_tiny` alone), so a test that only ever calls `runSuite("_tiny", ...)`
+ * against the real registry can never observe a NON-undefined `play` being
+ * forwarded or dropped.
+ */
+export function invokeSuiteDefinition(
+  definition: SuiteDefinition,
+  input: Parameters<SuiteDefinition["run"]>[0],
+): ReturnType<SuiteDefinition["run"]> {
+  return definition.run(input, definition.play);
+}
+
 export async function runSuite(
   key: string,
   config: BenchConfig,
@@ -181,7 +206,7 @@ export async function runSuite(
   if (definition === undefined) {
     throw new Error(`unknown suite "${key}" — known suites: ${suiteKeys().join(", ")}`);
   }
-  return definition.run({
+  return invokeSuiteDefinition(definition, {
     base: config.base,
     /* B04: `--engine` is an ASSERTION, not a selector (design §2.1/§1.1 —
      * `AutoScheduleRequest` has no engine field, so nothing in the product

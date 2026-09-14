@@ -11,6 +11,7 @@
 import { fileURLToPath } from "node:url";
 import type { SuiteReport } from "../report.ts";
 import { runPackSuite, type PackSuiteInput } from "./run-suite.ts";
+import type { PlayDeclaration } from "./types.ts";
 
 /** The committed micro-pack, resolved from THIS module rather than from the
  *  process cwd — the bench is run from the repo root by `npm run
@@ -27,9 +28,24 @@ export type TinySuiteInput = PackSuiteInput;
  *  The suite key is `"_tiny"` and the pack is this module's own: passing both
  *  explicitly is what lets `run-suite.ts` refuse to guess. The runner used to
  *  default a missing `packPath` to `TINY_PACK_PATH`, which meant a suite that
- *  forgot to pass one ran the proof pack and reported under its own name. */
-export async function runTinySuite(input: TinySuiteInput): Promise<SuiteReport> {
-  return await runPackSuite(input, { suiteKey: "_tiny", packPath: TINY_PACK_PATH });
+ *  forgot to pass one ran the proof pack and reported under its own name.
+ *
+ *  `play` (B07a T7 fix round 1, I1) is the registry row's OWN declaration,
+ *  forwarded by `bench.ts`'s `invokeSuiteDefinition` as this function's
+ *  second parameter — `runTinySuite` cannot read it off `SuiteDefinition`
+ *  itself, since it is a free function, not a method on the row. Omitted
+ *  entirely from `runPackSuite`'s options (never passed as `play: undefined`)
+ *  when the caller supplies none, matching `cliEntry`/`transport`'s own
+ *  spread-if-present convention just below. */
+export async function runTinySuite(
+  input: TinySuiteInput,
+  play?: PlayDeclaration["play"],
+): Promise<SuiteReport> {
+  return await runPackSuite(input, {
+    suiteKey: "_tiny",
+    packPath: TINY_PACK_PATH,
+    ...(play === undefined ? {} : { play }),
+  });
 }
 
 // The pipeline's own helpers, re-exported because eight test files import them

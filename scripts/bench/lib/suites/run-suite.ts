@@ -3292,6 +3292,24 @@ export async function runPackSuite(
         );
       }
 
+      // B07a T7 fix round 1 (I2) — a `play` key naming no planned division
+      // used to fall straight through `playModeFor`'s `declared?.[divisionRef]`
+      // lookup to the positional default, with nothing to say the key was
+      // ever read. A misspelled division ref then turns a suite's intended
+      // `tap` (or any other override) into a silent no-op behind a GREEN
+      // gate — exactly the "hidden API fallback on a tapped division" Global
+      // Constraint 3 forbids. Same fail-loud shape as the stream guard just
+      // above: named, pushed, and the fold still runs (a typo'd key affects
+      // no real division either way), so the run reports red rather than
+      // clean.
+      for (const key of Object.keys(opts.play ?? {})) {
+        if (plannedDivisionRefs.has(key)) continue;
+        errors.push(
+          `${suiteKey}: play declares division "${key}", which is not a planned division — planned ` +
+            `divisions: ${[...plannedDivisionRefs].join(", ")}`,
+        );
+      }
+
       // `@`-sigilled payload refs (pack-schema.ts header note 6) name EITHER
       // an entrant or a person — ONE namespace, so merging both maps is
       // exactly as authoritative as keeping them separate. Built once here

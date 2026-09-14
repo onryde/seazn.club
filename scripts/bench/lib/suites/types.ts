@@ -87,5 +87,16 @@ export interface SuiteDefinition extends PlayDeclaration {
   readonly title: string;
   /** ABSOLUTE, resolved from the defining module — never `process.cwd()`. */
   readonly packPath: string;
-  readonly run: (input: PackSuiteInput) => Promise<SuiteReport>;
+  /**
+   * B07a T7 fix round 1 (I1) — `run` takes the row's OWN `play` declaration
+   * as an explicit second parameter, rather than trusting an entry-point
+   * function to read `this.play` off the row it was defined on (it can't;
+   * `runTinySuite`/`runSuite11` are free functions, not methods). Every
+   * caller of `.run` — `bench.ts`'s forwarding seam is the one production
+   * caller — must pass `definition.play` through, or a suite's declared
+   * play mode never reaches `runPackSuite`'s dispatch (the exact defect this
+   * parameter exists to close; see `run-suite.ts`'s `RunPackSuiteOptions`
+   * and `playModeFor`).
+   */
+  readonly run: (input: PackSuiteInput, play?: PlayDeclaration["play"]) => Promise<SuiteReport>;
 }

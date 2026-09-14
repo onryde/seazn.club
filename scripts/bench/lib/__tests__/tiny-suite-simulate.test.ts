@@ -30,7 +30,12 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // `runTinySuite`, because the declaration lives on the runner's own options
 // and `runTinySuite` builds those itself (see this file's own T7 block).
 import { runPackSuite } from "../suites/run-suite.ts";
-import type { PlayMode } from "../suites/types.ts";
+import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
+// B07a T7 fix round 1 (I1) — the seam `bench.ts`'s own `runSuite` calls to
+// forward a registry row's `play` into its `.run()`. Imported here (rather
+// than mutating `SUITE_REGISTRY`, which the ruling forbids in a test) so a
+// hand-built `SuiteDefinition` can drive the SAME line production uses.
+import { invokeSuiteDefinition } from "../../bench.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -2901,5 +2906,120 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     // indistinguishable from the dispatch never having run.
     expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
     expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 fix round 1 — I1 (the registry row's `play` had zero readers) and
+// I2 (an unplanned `play` key silently falls back instead of refusing).
+//
+// I1's dispatch test above (`runPackSuite — B07a T7 play-mode dispatch`)
+// proves `run-suite.ts`'s OWN dispatch refuses a declared `tap`. It does NOT
+// prove the declaration ever gets there from the registry row — `runPackSuite`
+// was called directly, with a hand-built `opts.play`, bypassing every hop a
+// live run actually takes. These tests drive the two hops a live run takes
+// instead: `bench.ts`'s own forwarding seam (`invokeSuiteDefinition`), and
+// `runTinySuite`'s own forwarding of its new `play` parameter.
+// ---------------------------------------------------------------------------
+describe("a registry row's `play` reaches the dispatch (B07a T7 fix round 1, I1)", () => {
+  it("runTinySuite forwards its `play` parameter into runPackSuite's dispatch", async () => {
+    // Drives the REAL `runTinySuite` (not `runPackSuite` directly) with a
+    // declared `play`, exactly as `bench.ts`'s forwarding seam would call it
+    // once handed a row's `definition.play`. Deleting `runTinySuite`'s own
+    // `...(play === undefined ? {} : { play })` spread reds this test and
+    // nothing else in this hop.
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runTinySuite(playInput(transport, sql), {
+      "d-tiny": "tap" as PlayMode,
+    });
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join("\n")).toContain(
+      "tap mode requires the scorer driver (Task 10)",
+    );
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  it("bench.ts's own forwarding seam passes a registry row's `play` into its `.run()`", async () => {
+    // `SUITE_REGISTRY` is never mutated here (the ruling forbids it, and
+    // every real row leaves `play` undeclared until Task 10 touches `_tiny`
+    // alone) — this drives `invokeSuiteDefinition`, the exact line
+    // `runSuite("_tiny", ...)` calls in production, with a hand-built
+    // `SuiteDefinition` that both declares `play` AND wires its own `run` to
+    // the real `runPackSuite`, so the assertion below can only pass if
+    // `definition.play` actually crossed this one line.
+    const { transport, sql, calls } = fakeServer();
+
+    const definition: SuiteDefinition = {
+      key: "_tiny",
+      title: "fake row for the forwarding-seam test",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "tap" as PlayMode },
+      run: (input, play) =>
+        runPackSuite(input, {
+          suiteKey: "_tiny",
+          packPath: TINY_PACK_PATH,
+          ...(play === undefined ? {} : { play }),
+        }),
+    };
+
+    const report = await invokeSuiteDefinition(definition, playInput(transport, sql));
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join("\n")).toContain(
+      "tap mode requires the scorer driver (Task 10)",
+    );
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+});
+
+describe("an unplanned `play` key reds the gate instead of silently falling back (B07a T7 fix round 1, I2)", () => {
+  it("names the misspelled key and lists the planned divisions, gate red", async () => {
+    // Same shape as CHECK 2's probe in the review: a typo'd division ref in
+    // `play` used to produce NO refusal, NO warning, `d-tiny` single-POSTed
+    // positionally, and `report.gate === "green"`. This pins the fixed
+    // behaviour: an error naming the bad key, and a red gate.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tinyy": "tap" as PlayMode },
+    });
+
+    expect(report.gate).toBe("red");
+    const errorText = (report.errors ?? []).join("\n");
+    expect(errorText).toContain('play declares division "d-tinyy"');
+    // "lists the planned refs" — every real division ref from the pack
+    // appears in the error text, not just a bare "not planned" refusal.
+    for (const ref of ["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]) {
+      expect(errorText).toContain(ref);
+    }
+    // The typo never touched `d-tiny`'s OWN play — it still single-POSTs
+    // positionally, proving the guard doesn't fail the run's data, only its
+    // gate.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-tiny") ?? 0);
+  });
+
+  // The positive pair for the test above. Without it, a guard that compares
+  // every key against the WRONG set (e.g. an always-empty one, rather than
+  // `plannedDivisionRefs`) would flag a correctly-named key too — reddening
+  // every run that declares `play` at all — and nothing above would catch
+  // it, since the misspelled-key test only proves an unplanned key gets
+  // flagged, never that a PLANNED one does not.
+  it("a correctly-named play key never trips the unplanned-division guard", async () => {
+    const { transport, sql } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode },
+    });
+
+    expect((report.errors ?? []).join("\n")).not.toContain("play declares division");
   });
 });
