@@ -5135,5 +5135,9 @@
   "slideshow.status.abandoned": "Gestaakt",
   "slideshow.status.cancelled": "Afgelast",
   "slideshow.slideN": "Dia {n}",
-  "slideshow.rung": "Trede {n}"
+  "slideshow.rung": "Trede {n}",
+  "slideshow.tvHint.label": "Tip voor groot scherm",
+  "slideshow.tvHint.message": "Gemaakt voor een tv of groot scherm.",
+  "slideshow.tvHint.phoneView": "Telefoonweergave openen",
+  "slideshow.tvHint.fullScreen": "Volledig scherm"
 }

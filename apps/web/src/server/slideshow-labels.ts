@@ -96,3 +96,26 @@ export function slideshowLabels(locale: string | null | undefined): SlideshowLab
     },
   };
 }
+
+/** The public /present kiosk's "made for a TV" banner (N1d d6), in the same
+ *  locale as the board. Public kiosk pages only; organiser boards get none. */
+export interface KioskTvHintLabels {
+  /** The banner region's accessible name. */
+  region: string;
+  message: string;
+  phoneView: string;
+  fullScreen: string;
+  /** The ✕'s accessible label. */
+  dismiss: string;
+}
+
+export function kioskTvHintLabels(locale: string | null | undefined): KioskTvHintLabels {
+  const l = toLocale(locale);
+  return {
+    region: msgFor(l, "slideshow.tvHint.label"),
+    message: msgFor(l, "slideshow.tvHint.message"),
+    phoneView: msgFor(l, "slideshow.tvHint.phoneView"),
+    fullScreen: msgFor(l, "slideshow.tvHint.fullScreen"),
+    dismiss: msgFor(l, "tips.dismiss"),
+  };
+}

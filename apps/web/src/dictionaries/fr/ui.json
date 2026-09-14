@@ -5135,5 +5135,9 @@
   "slideshow.status.abandoned": "Abandonné",
   "slideshow.status.cancelled": "Annulé",
   "slideshow.slideN": "Diapositive {n}",
-  "slideshow.rung": "Échelon {n}"
+  "slideshow.rung": "Échelon {n}",
+  "slideshow.tvHint.label": "Conseil grand écran",
+  "slideshow.tvHint.message": "Conçu pour une télévision ou un grand écran.",
+  "slideshow.tvHint.phoneView": "Ouvrir la vue mobile",
+  "slideshow.tvHint.fullScreen": "Plein écran"
 }

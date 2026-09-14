@@ -6,8 +6,10 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
 import { buildPublicDivisionSlides, type Slide } from "@/server/slideshow-data";
-import { slideshowLabels } from "@/server/slideshow-labels";
+import { kioskTvHintLabels, slideshowLabels } from "@/server/slideshow-labels";
 import { Slideshow } from "@/components/v2/slideshow";
+import { KioskTvHint } from "@/components/public-site/kiosk-tv-hint";
+import { kioskHubHref } from "@/components/public-site/kiosk-tv-hint-logic";
 import { publicThemeStyle } from "@/lib/public-theme";
 
 export const metadata: Metadata = { robots: { index: false } };
@@ -39,6 +41,14 @@ export default async function PresentCompetitionPage({
       // R10e u1: the board's own strings in the org's locale, the same one
       // every division deck above is built in.
       labels={slideshowLabels(shell.org.default_locale)}
+      // N1d d6: a phone that opens the kiosk gets a banner pointing at the
+      // competition's hub, in the same locale as the board.
+      notice={
+        <KioskTvHint
+          hubHref={kioskHubHref(orgSlug, competitionSlug)}
+          labels={kioskTvHintLabels(shell.org.default_locale)}
+        />
+      }
     />
   );
 }

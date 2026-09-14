@@ -13,7 +13,7 @@
 // type (Barlow Condensed via the slideshow layout), an accent keel under the
 // masthead, and scorebug strips sized for a TV across the hall.
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -54,6 +54,7 @@ export function Slideshow({
   logo = null,
   sponsors = [],
   labels,
+  notice,
 }: {
   title: string;
   slides: Slide[];
@@ -72,6 +73,9 @@ export function Slideshow({
   /** Every string on the board, in one locale, resolved server-side by
    *  `slideshowLabels` (the public kiosk passes the org's default_locale). */
   labels: SlideshowLabels;
+  /** A banner the page pins over the board: the public kiosk's TV hint
+   *  (N1d d6). Organiser boards pass none. */
+  notice?: ReactNode;
 }) {
   const router = useRouter();
   // v13 (PROMPT-64): rotation is step-based so the in-play slide can pin —
@@ -178,6 +182,7 @@ export function Slideshow({
       style={themeStyle}
       className="relative flex min-h-screen flex-col overflow-hidden bg-court text-court-ink"
     >
+      {notice}
       {/* Static backdrop — soft accent wash from the top, vignette below.
           No animation: this board is left running on a TV all day. */}
       <div aria-hidden className="pointer-events-none absolute inset-0">

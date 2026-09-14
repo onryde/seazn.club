@@ -36,6 +36,7 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 import PresentDivisionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
 import PresentCompetitionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/present/page";
 import { Slideshow } from "@/components/v2/slideshow";
+import { KioskTvHint } from "@/components/public-site/kiosk-tv-hint";
 import type { BracketSlideFixture, FixtureSlideItem, Slide } from "@/server/slideshow-data";
 import { slideshowLabels } from "@/server/slideshow-labels";
 import { getDictionary } from "@/lib/i18n";
@@ -447,5 +448,83 @@ describe("public /present kiosk: fixtures rows name the round, not the organiser
     expect(leaks(markups, [...englishProbes, ...englishNames])).toEqual([]);
     const code = roundCode(t(es, "slideshow.round"));
     expect(markups.filter((h) => code.test(h))).toEqual([]);
+  });
+});
+
+// --- N1d d6: the "made for a TV" hint, public kiosk only ----------------------
+//
+// The kiosk is built for a screen across a hall; a spectator who opens the
+// link on a phone gets a banner pointing them at the hub. The pages hand the
+// board the hint as its `notice`, with the hub link and the copy resolved on
+// the server in the org's locale. Whether it SHOWS (width, dismissal) is the
+// hint's own client logic: kiosk-tv-hint.test.tsx and e2e/kiosk-tv-hint.spec.ts.
+
+/** Where each field of the hint's copy comes from. */
+const TV_HINT_KEYS = {
+  region: "slideshow.tvHint.label",
+  message: "slideshow.tvHint.message",
+  phoneView: "slideshow.tvHint.phoneView",
+  fullScreen: "slideshow.tvHint.fullScreen",
+  dismiss: "tips.dismiss",
+} as const;
+type TvHintField = keyof typeof TV_HINT_KEYS;
+const TV_HINT_FIELDS = Object.keys(TV_HINT_KEYS) as TvHintField[];
+
+async function tvHintCopy(locale: Parameters<typeof getDictionary>[0]): Promise<Record<TvHintField, string>> {
+  const dict = await getDictionary(locale, "ui");
+  return Object.fromEntries(TV_HINT_FIELDS.map((f) => [f, t(dict, TV_HINT_KEYS[f])])) as Record<TvHintField, string>;
+}
+
+type Notice = ReactElement<{ hubHref: string; labels: Record<TvHintField, string> }>;
+
+describe("public /present kiosk: the 'made for a TV' hint (N1d d6)", () => {
+  it("the premise: every field of the hint's copy exists and es spells it differently from en", async () => {
+    const [es, en] = await Promise.all([tvHintCopy("es"), tvHintCopy("en")]);
+    for (const f of TV_HINT_FIELDS) {
+      expect(en[f], `en ${TV_HINT_KEYS[f]} is in the dictionary`).not.toBe(TV_HINT_KEYS[f]);
+      expect(es[f], `es ${TV_HINT_KEYS[f]} differs from en`).not.toBe(en[f]);
+    }
+  });
+
+  it("division kiosk, es org: the hint links the hub filtered to this division, with its copy in es", async () => {
+    const es = await tvHintCopy("es");
+    getPublicDivision.mockResolvedValue(orgData("es"));
+    const board = (await PresentDivisionPage(
+      params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
+    )) as ReactElement<{ notice?: Notice }>;
+
+    const notice = board.props.notice;
+    expect(notice?.type, "the board's notice is the TV hint").toBe(KioskTvHint);
+    expect(notice?.props.hubHref).toBe("/shared/o/c?division=d");
+    expect(notice?.props.labels).toEqual(es);
+  });
+
+  it("competition kiosk, es org: the hint links the whole competition's hub, copy in the shell's locale", async () => {
+    const es = await tvHintCopy("es");
+    getPublicCompetition.mockResolvedValue({
+      org: { default_locale: "es" },
+      competition: { name: "Copa", branding: null },
+      divisions: [{ slug: "open" }],
+    });
+    getPublicDivision.mockResolvedValue(orgData("es"));
+    const board = (await PresentCompetitionPage(
+      params({ orgSlug: "o", competitionSlug: "c" }),
+    )) as ReactElement<{ notice?: Notice }>;
+
+    const notice = board.props.notice;
+    expect(notice?.type, "the board's notice is the TV hint").toBe(KioskTvHint);
+    expect(notice?.props.hubHref).toBe("/shared/o/c");
+    expect(notice?.props.labels).toEqual(es);
+  });
+
+  it("the board renders the notice it is handed, and a board handed none renders no trace of one", async () => {
+    getPublicDivision.mockResolvedValue(orgData("en"));
+    const board = (await PresentDivisionPage(
+      params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
+    )) as ReactElement<{ notice?: ReactElement }>;
+
+    const probe = createElement("aside", { "data-probe": "notice" });
+    expect(renderToStaticMarkup(cloneElement(board, { notice: probe }))).toContain('data-probe="notice"');
+    expect(renderToStaticMarkup(cloneElement(board, { notice: undefined }))).not.toContain("data-probe");
   });
 });

@@ -123,6 +123,10 @@ describe.skipIf(!HAS_DB)("noticeboard slideshows resolve `realtime` against thei
     expect(passed.props.realtime).toBe(true);
     // The pass lifts ONE competition — a sibling board must stay static.
     expect(plain.props.realtime).toBe(false);
+    // N1d d6: the "made for a TV" hint is the public /present kiosk's alone;
+    // an organiser board is handed no notice.
+    expect(passed.props.notice).toBeUndefined();
+    expect(plain.props.notice).toBeUndefined();
   });
 
   it("division board: live under the passed competition, static under an unpassed one", async () => {
@@ -142,5 +146,9 @@ describe.skipIf(!HAS_DB)("noticeboard slideshows resolve `realtime` against thei
 
     expect(passed.props.realtime).toBe(true);
     expect(plain.props.realtime).toBe(false);
+    // N1d d6: the "made for a TV" hint is the public /present kiosk's alone;
+    // an organiser board is handed no notice.
+    expect(passed.props.notice).toBeUndefined();
+    expect(plain.props.notice).toBeUndefined();
   });
 });

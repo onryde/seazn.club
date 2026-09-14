@@ -5135,5 +5135,9 @@
   "slideshow.status.abandoned": "Abandoned",
   "slideshow.status.cancelled": "Cancelled",
   "slideshow.slideN": "Slide {n}",
-  "slideshow.rung": "Rung {n}"
+  "slideshow.rung": "Rung {n}",
+  "slideshow.tvHint.label": "Big-screen tip",
+  "slideshow.tvHint.message": "Made for a TV or big screen.",
+  "slideshow.tvHint.phoneView": "Open phone view",
+  "slideshow.tvHint.fullScreen": "Full screen"
 }
