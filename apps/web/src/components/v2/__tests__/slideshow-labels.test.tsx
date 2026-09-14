@@ -320,4 +320,132 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
     }
     expect(shows(cell("in_play"), t(es, "chip.live"))).toBe(true);
   });
+
+  // review-r10e m3 — the es case above cannot see four of the moved strings,
+  // because es spells them exactly as en does: hardcoding "R{round}", "vs",
+  // "Pts" or "Final" back into the component would still render the es value.
+  // So each is checked in a locale that spells it DIFFERENTLY from en, picked
+  // per key out of the fr and nl dictionaries rather than named here.
+  it("R{round}, vs, Pts and Final each render from labels, in a locale whose value differs from en", async () => {
+    const en = await getDictionary("en", "ui");
+    const others = { fr: await getDictionary("fr", "ui"), nl: await getDictionary("nl", "ui") };
+    const cases: { key: string; vars?: Record<string, number> }[] = [
+      { key: "slideshow.round", vars: { round: 1 } },
+      { key: "schedule.vs" },
+      { key: "slideshow.col.points" },
+      { key: "bracket.round.final" },
+    ];
+    for (const { key, vars } of cases) {
+      const english = t(en, key, vars);
+      const locale = (["fr", "nl"] as const).find((l) => t(others[l], key, vars) !== english);
+      expect(locale, `${key}: fr or nl must spell "${english}" differently`).toBeDefined();
+      const local = t(others[locale!], key, vars);
+      const board = createElement(Slideshow, {
+        title: "Copa",
+        slides: EVERY_BRANCH,
+        backHref: "/shared/o/c",
+        labels: slideshowLabels(locale!),
+      }) as ReactElement<{ slides: Slide[] }>;
+      const all = renderEachSlide(board);
+      expect({ key, locale, local, shown: all.some((h) => shows(h, local)) }).toEqual({ key, locale, local, shown: true });
+      expect({ key, locale, english, shown: all.some((h) => shows(h, english)) }).toEqual({
+        key,
+        locale,
+        english,
+        shown: false,
+      });
+    }
+  });
+});
+
+// --- N1d d4: a kiosk fixtures row names its ROUND, never the organiser code ---
+//
+// The public /present fixtures rows printed `slideshow.round` ("R{round}") over
+// the raw round_no, so a double-elimination losers' round read "R3" on a venue
+// TV, right beside sides the namer already called "Loser of Semi-finals, match
+// 1". The public builder now hands every row its round NAME from the one
+// public round namer, and the board renders it. Expected names are read from
+// the `bracket.round.*` keys `roundRoleLabel` resolves, never from the namer,
+// so a builder that stopped naming cannot move its own expectation.
+
+const DOUBLE_ELIM = {
+  division: { id: "d2", name: "Open" },
+  stages: [{ id: "de", kind: "double_elim", name: "Double elimination" }],
+  pools: [],
+  fixtures: [
+    { id: "w1", stage_id: "de", lane: "WB", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "decided", summary: { headline: "2–1" } },
+    { id: "w2", stage_id: "de", lane: "WB", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4", status: "decided", summary: { headline: "3–0" } },
+    { id: "wf", stage_id: "de", lane: "WB", round_no: 2, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e3", status: "scheduled", summary: null },
+    { id: "l1", stage_id: "de", lane: "LB", round_no: 3, seq_in_round: 1, home_entrant_id: "e2", away_entrant_id: "e4", status: "scheduled", summary: null },
+    { id: "lf", stage_id: "de", lane: "LB", round_no: 4, seq_in_round: 1, home_entrant_id: null, away_entrant_id: null, status: "scheduled", summary: null },
+    { id: "gf", stage_id: "de", lane: "GF", round_no: 5, seq_in_round: 1, home_entrant_id: null, away_entrant_id: null, status: "scheduled", summary: null },
+  ],
+  standings: [],
+  entrants: DIVISION.entrants,
+  competition: { name: "Copa", branding: null },
+};
+
+/** Every round the double-elimination board above plays, as its dictionary key:
+ *  WB round 1 is the semi-finals, then the winners' final; the losers' lane
+ *  runs round 1 then its final; the grand final closes it. */
+const DE_ROUND_KEYS: [string, Record<string, number>?][] = [
+  ["bracket.round.semi"],
+  ["bracket.round.winnersFinal"],
+  ["bracket.round.losersRound", { n: 1 }],
+  ["bracket.round.losersFinal"],
+  ["bracket.round.grandFinal"],
+];
+
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A whole text node shaped like the organiser round code, from the locale's
+ *  own `slideshow.round` template ("R{round}" → />R\d+</). */
+function roundCode(template: string): RegExp {
+  expect(template, "slideshow.round keeps its {round} placeholder").toContain("{round}");
+  const [before, after] = template.split("{round}") as [string, string];
+  return new RegExp(`>${reEscape(esc(before))}\\d+${reEscape(esc(after))}<`);
+}
+
+async function presentDoubleElim(locale: string): Promise<string[]> {
+  getPublicDivision.mockResolvedValue({ ...DOUBLE_ELIM, org: { default_locale: locale } });
+  const board = (await PresentDivisionPage(
+    params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
+  )) as ReactElement<{ slides: Slide[] }>;
+  return renderEachSlide(board);
+}
+
+describe("public /present kiosk: fixtures rows name the round, not the organiser code (N1d d4)", () => {
+  it("en org: the losers' round row reads 'Losers' round 1', every round is named, and no row prints R{n}", async () => {
+    const en = await getDictionary("en", "ui");
+    const markups = await presentDoubleElim("en");
+
+    const names = DE_ROUND_KEYS.map(([k, v]) => t(en, k, v));
+    expect(names.filter((name) => !markups.some((h) => shows(h, name)))).toEqual([]);
+    const code = roundCode(t(en, "slideshow.round"));
+    expect(markups.filter((h) => code.test(h))).toEqual([]);
+
+    // Positive pair: the same probe DOES see the code on a board whose rows
+    // carry no round name, the organiser board's shape.
+    const organiser = renderToStaticMarkup(
+      createElement(Slideshow, {
+        title: "Copa",
+        slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item("scheduled", 3)] }],
+        backHref: "/",
+        labels: slideshowLabels("en"),
+      }),
+    );
+    expect(code.test(organiser)).toBe(true);
+  });
+
+  it("es org: every round name is the es dictionary's, with no English round name, chrome or R{n} left", async () => {
+    const { en, es, englishProbes } = await catalogs();
+    const markups = await presentDoubleElim("es");
+
+    const esNames = DE_ROUND_KEYS.map(([k, v]) => t(es, k, v));
+    expect(esNames.filter((name) => !markups.some((h) => shows(h, name)))).toEqual([]);
+    const englishNames = DE_ROUND_KEYS.map(([k, v]) => t(en, k, v)).filter((name) => !esNames.includes(name));
+    expect(englishNames.length, "some en round name must differ from es to witness a leak").toBeGreaterThan(0);
+    expect(leaks(markups, [...englishProbes, ...englishNames])).toEqual([]);
+    const code = roundCode(t(es, "slideshow.round"));
+    expect(markups.filter((h) => code.test(h))).toEqual([]);
+  });
 });

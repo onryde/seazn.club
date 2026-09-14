@@ -22,7 +22,8 @@ import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
 // Type-only: every string on the board arrives resolved in ONE locale as the
 // `labels` prop (R10e u1). The page builds it on the server
 // (`slideshowLabels`), so no catalog ships to the browser and there is no
-// English left in this file.
+// English left in this file. Per-slide text (titles, side names and, on the
+// public kiosk, each row's round name — N1d d4) arrives on the slides.
 import type { SlideshowLabels } from "@/server/slideshow-labels";
 // Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
 // now drags `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
@@ -306,10 +307,19 @@ export function Slideshow({
               <ul className="space-y-2.5">
                 {slide.items.map((f, i) => {
                   const live = f.status === "in_play";
+                  // N1d d4: a public kiosk row carries its round NAME
+                  // ("Losers' round 1") and takes a wider first column that
+                  // may wrap to two lines; an organiser board row carries none
+                  // and keeps its short code in the original 4rem column.
+                  const named = f.roundName !== undefined;
                   return (
                     <li
                       key={i}
-                      className={`relative grid grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem] items-center gap-x-6 rounded-lg px-7 py-3.5 ring-1 ring-inset ring-white/10 ${
+                      className={`relative grid ${
+                        named
+                          ? "grid-cols-[9rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem]"
+                          : "grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem]"
+                      } items-center gap-x-6 rounded-lg px-7 py-3.5 ring-1 ring-inset ring-white/10 ${
                         live ? "bg-white/[0.09]" : "bg-white/[0.05]"
                       }`}
                     >
@@ -319,8 +329,14 @@ export function Slideshow({
                           className="absolute inset-y-0 left-0 w-1 rounded-l-lg bg-emerald-400"
                         />
                       )}
-                      <span className="font-display text-xl font-semibold uppercase text-court-muted">
-                        {fill(labels.round, "round", f.round)}
+                      <span
+                        className={
+                          named
+                            ? "line-clamp-2 min-w-0 break-words font-display text-lg font-semibold uppercase leading-tight text-court-muted"
+                            : "font-display text-xl font-semibold uppercase text-court-muted"
+                        }
+                      >
+                        {f.roundName ?? fill(labels.round, "round", f.round)}
                       </span>
                       <span className="flex min-w-0 items-center justify-end gap-3 text-right font-display text-4xl font-semibold">
                         <span className="min-w-0 truncate">{f.home}</span>

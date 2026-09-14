@@ -42,6 +42,12 @@ export interface FixtureSlideItem {
   line: string | null;
   status: string;
   round: number;
+  /** N1d d4 — the fixture's round NAME in the org's locale ("Losers' round 1"),
+   *  from the one public round namer (`publicRoundNamer`). Set by the PUBLIC
+   *  builder only: the organiser board leaves it out and keeps its short code
+   *  (`slideshow.round`, "R5"). Empty for a fixture whose stage the namer does
+   *  not know, so a public row never falls back to the code. */
+  roundName?: string;
 }
 
 /** v13 (PROMPT-64): bracket-slide node — the geometry is computed client-side
@@ -468,6 +474,9 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     line: f.summary?.headline ?? null,
     status: f.status,
     round: f.round_no,
+    // N1d d4 — the row's round as the hub's rail names it, never the board's
+    // "R{round}" code over the raw round_no (a losers' round 1 read "R3").
+    roundName: namer.roundLabel(f.id) ?? "",
   });
   const live = data.fixtures.filter((f) => f.status === "in_play").map(item);
   const results = data.fixtures
