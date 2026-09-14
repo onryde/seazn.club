@@ -50,6 +50,7 @@ import {
 // Fix round N1:
 //   N1 a waiting double-elimination card names its feeder's round with the rail's label ↔ no "R1·1" code anywhere in the panel
 //   M6 (fix round 1) a LOSERS' card names the winners' round its sides drop from ↔ the same panel, still no R·code
+//   M5 (fix round 1) a DRAWABLE slot whose feeder still waits names the feeder's round, on the Draw node and the card ↔ no R·code in either view
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -94,7 +95,8 @@ const SEED_CALLS =
   COMPETITION_CALLS + divisionCalls([]) + // double elimination, unplayed
   COMPETITION_CALLS + 5 + // league: division create + read, entrants, stage create + generate
   COMPETITION_CALLS + divisionCalls([]) + LIVE_START_CALLS + // live: a 4-draw, both semis in play
-  COMPETITION_CALLS + divisionCalls([]); // bye: a 3-draw, unplayed
+  COMPETITION_CALLS + divisionCalls([]) + // bye: a 3-draw, unplayed
+  COMPETITION_CALLS + divisionCalls([]); // unplayed: an 8-draw, nothing scored (fix round 1, M5)
 const SEED_BUDGET_MS = FLOOR_MS + SEED_CALLS * API_CALL_MS;
 
 const budget = (steps: number) => Math.max(FLOOR_MS, steps * STEP_MS);
@@ -359,6 +361,9 @@ test.describe("competition hub: Knockout tab", () => {
   let live: Seeded & { semis: [string, string] };
   /** Fix round 2b: a 3-draw, so one first-round slot is a bye. */
   let byeDraw: Seeded;
+  /** Fix round 1, M5: an 8-draw with nothing scored, so the final waits on
+   *  semi-finals that themselves still wait — no pair to name. */
+  let unplayed: Seeded;
 
   test.beforeAll(async ({ playwright }, testInfo) => {
     // A hook has its own clock; the test's `setTimeout` does not reach it.
@@ -440,6 +445,17 @@ test.describe("competition hub: Knockout tab", () => {
         const div = await bracketDivision(request, comp.id, "Bye Cup", 3, "knockout", []);
         byeDraw = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
       }
+      {
+        // Fix round 1, M5: an EIGHT-draw knockout, unplayed. Its quarter-finals
+        // hold entrants, so each semi-final's slots name a pair (F5); the final's
+        // slots wait on semi-finals with no entrants yet, so no pair exists and
+        // the document's own round-named sentence is what the page shows. No
+        // other seed here has that case: every drawable one leaves its waiting
+        // slots fed by matches whose two sides are known.
+        const comp = await publicCompetition(request, "Hub KO Unplayed");
+        const div = await bracketDivision(request, comp.id, "Unplayed Cup", 8, "knockout", []);
+        unplayed = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
     } finally {
       await request.dispose();
     }
@@ -463,6 +479,10 @@ test.describe("competition hub: Knockout tab", () => {
     expect(doubleElim.doc.knockouts).toHaveLength(1);
     expect(doubleElim.doc.knockouts[0]!.kind).toBe("double_elim");
     expect(doubleElim.doc.knockouts[0]!.drawable).toBe(false);
+
+    expect(unplayed.doc.knockouts).toHaveLength(1);
+    expect(unplayed.doc.knockouts[0]!.drawable).toBe(true);
+    expect(unplayed.doc.knockouts[0]!.rounds.map((r) => r.fixtureIds.length)).toEqual([4, 2, 1]);
 
     expect(leagueOnly.doc.knockouts).toHaveLength(0);
     expect(leagueOnly.doc.tabs).not.toContain("knockout");
@@ -865,6 +885,56 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(lbCard).toBeVisible();
     await expect(lbCard.getByTestId("mh-match-side-0")).toContainText(lbExpected[0]!);
     await expect(lbCard.getByTestId("mh-match-side-1")).toContainText(lbExpected[1]!);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+  });
+
+  // Fix round 1, M5: on a DRAWABLE bracket a waiting slot names its feeder's
+  // pair (F5) only when both of that feeder's sides are known. A slot whose
+  // feeder still waits itself falls through to the document's sentence, which
+  // since N1 names the feeder's round as the rail does ("Winner of
+  // Semi-finals, match 1"), never the board's "R2·1". The final of an unplayed
+  // 8-draw is that slot: its semi-finals have no entrants yet. The semi-finals
+  // are fed by matches 2j-1 and 2j (`buildSingleElim`), so the final's sides wait
+  // on semi-finals 1 and 2, a round of two, so each keeps its number (M2).
+  test("M5 at 1280: a drawable slot whose feeder still waits names that feeder's round — on the Draw node and on the Rounds card — and no R·code is in either view", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(5));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = unplayed.doc.knockouts[0]!;
+    const [, semis, final] = view.rounds as [HubRound, HubRound, HubRound];
+    const byId = new Map(unplayed.doc.matches.map((m) => [m.fixtureId, m]));
+    const finalId = final.fixtureIds[0]!;
+    const finalMatch = byId.get(finalId)!;
+    // The premise, read from the document the page renders: both of the final's
+    // sides wait, and so do both sides of each semi-final feeding them — so F5
+    // has no pair to name and the sentence is what shows.
+    expect(finalMatch.header.sides.map((s) => s.entrantId), JSON.stringify(finalMatch)).toEqual(["", ""]);
+    for (const semiId of semis.fixtureIds) {
+      const semi = byId.get(semiId)!;
+      expect(semi.header.sides.map((s) => s.entrantId), JSON.stringify(semi)).toEqual(["", ""]);
+    }
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}". The words are
+    // literal (a spec cannot import a JSON-backed module); the round is the
+    // rail's own label, out of the same document.
+    const expected = [`Winner of ${semis.label}, match 1`, `Winner of ${semis.label}, match 2`];
+    expect(finalMatch.header.sides.map((s) => s.name)).toEqual(expected);
+
+    await openKnockout(page, hubUrl(orgSlug, unplayed, "?tab=knockout&view=draw"));
+    const node = page.getByTestId(`mh-knockout-node-${finalId}`);
+    await expect(node).toBeVisible();
+    await expect(node).toContainText(expected[0]!);
+    await expect(node).toContainText(expected[1]!);
+    await expect(node).not.toContainText(" or ");
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+
+    await page.getByTestId("mh-knockout-view-rounds").click();
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${finalId}`);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("mh-match-side-0")).toContainText(expected[0]!);
+    await expect(card.getByTestId("mh-match-side-1")).toContainText(expected[1]!);
     await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
   });
 
