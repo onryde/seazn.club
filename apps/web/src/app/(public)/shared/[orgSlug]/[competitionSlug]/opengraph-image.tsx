@@ -4,6 +4,7 @@ import { ImageResponse } from "next/og";
 import { getPublicCompetition } from "@/server/public-site/data";
 import { ogTheme } from "@/server/og/model";
 import { CardFrame, LivePill, OG_SIZE } from "@/server/og/card";
+import { posterImageDataUrl } from "@/server/og/poster-image";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -27,9 +28,14 @@ export default async function Image({ params }: Props) {
   const entrants = data?.divisions.reduce((n, d) => n + d.entrant_count, 0) ?? 0;
   const live = data?.liveNow.length ?? 0;
 
+  // The crest reaches satori as BYTES. Handed the URL, satori would make the
+  // request itself — server-side, on a public route, to whatever host the
+  // org's logo points at — and would draw an uploaded `.webp` as an empty box.
+  const logo = await posterImageDataUrl(data?.org.logo);
+
   return new ImageResponse(
     (
-      <CardFrame theme={theme} orgName={data?.org.name ?? "seazn.club"} logo={data?.org.logo ?? null}>
+      <CardFrame theme={theme} orgName={data?.org.name ?? "seazn.club"} logo={logo}>
         <div
           style={{
             display: "flex",

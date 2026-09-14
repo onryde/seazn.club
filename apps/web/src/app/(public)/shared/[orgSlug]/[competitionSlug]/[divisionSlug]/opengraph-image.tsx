@@ -6,6 +6,7 @@ import { sql } from "@/lib/db";
 import { getPublicDivision } from "@/server/public-site/data";
 import { standingsCardModel } from "@/server/og/model";
 import { CardFrame, OG_SIZE } from "@/server/og/card";
+import { posterImageDataUrl } from "@/server/og/poster-image";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
 
 export const size = OG_SIZE;
@@ -26,11 +27,15 @@ export default async function Image({ params }: Props) {
     : [];
 
   const rows = (data?.standings[0]?.rows ?? []) as StandingsSnapshotRow[];
+  // The crest reaches satori as BYTES. Handed the URL, satori would make the
+  // request itself — server-side, on a public route, to whatever host the
+  // org's logo points at — and would draw an uploaded `.webp` as an empty box.
+  const logo = await posterImageDataUrl(data?.org.logo);
   const model = standingsCardModel({
     orgName: data?.org.name ?? "seazn.club",
     competitionName: data?.competition.name ?? "",
     divisionName: data?.division.name ?? "Division",
-    logo: data?.org.logo ?? null,
+    logo,
     branding: [data?.competition.branding, data?.org.branding],
     youth: priv?.youth ?? false,
     entrantKind: data?.entrants[0]?.kind ?? null,

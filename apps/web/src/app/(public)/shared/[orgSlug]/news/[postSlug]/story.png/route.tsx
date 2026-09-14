@@ -9,6 +9,7 @@ import { getPublicOrg } from "@/server/public-site/data";
 import { publicPost } from "@/server/usecases/org-posts";
 import { HttpError } from "@/lib/errors";
 import { postCardModel, PostShareCard, STORY_SIZE } from "@/server/og/post-card";
+import { posterImageDataUrl } from "@/server/og/poster-image";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, DEFAULT_LOCALE } from "@/lib/i18n-constants";
 
@@ -35,11 +36,15 @@ export async function GET(_req: Request, { params }: Ctx) {
   }
   const locale = hasLocale(org.default_locale) ? org.default_locale : DEFAULT_LOCALE;
   const dict = await getDictionary(locale, "public");
+  // The crest reaches satori as BYTES. Handed the URL, satori would make the
+  // request itself — server-side, on a public route, to whatever host the
+  // org's logo points at — and would draw an uploaded `.webp` as an empty box.
+  const logo = await posterImageDataUrl(org.logo);
   const model = postCardModel({
     branding: [org.branding],
     branded: org.branded,
     orgName: org.name,
-    logo: org.logo,
+    logo,
     kind: post.kind,
     title: post.title,
   });

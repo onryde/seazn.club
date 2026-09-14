@@ -10,6 +10,7 @@ import "server-only";
 // declares display:flex.
 import { ogTheme, type OgTheme } from "./model";
 import { OG_SIZE } from "./card";
+import { drawableImage } from "./drawable";
 import {
   kindEyebrow,
   parseScoreline,
@@ -105,6 +106,10 @@ export function PostShareCard({
 }) {
   const story = size === "story";
   const { theme, scoreline } = model;
+  // Bytes only. A remote URL is DROPPED, not drawn — satori would fetch it
+  // server-side from a public route; the masthead then carries the org name
+  // alone, exactly as it does for an org with no logo at all.
+  const crest = drawableImage(model.logo);
   const pad = story ? 72 : 56;
   const crestS = story ? 180 : 132;
   const scoreFs = story ? 210 : 150;
@@ -125,10 +130,10 @@ export function PostShareCard({
       <div style={{ display: "flex", height: story ? 16 : 12, background: model.accent }} />
       {/* masthead: org crest + name */}
       <div style={{ display: "flex", alignItems: "center", gap: 18, padding: `${pad * 0.5}px ${pad}px 0` }}>
-        {model.logo ? (
+        {crest ? (
           // eslint-disable-next-line @next/next/no-img-element -- satori
           <img
-            src={model.logo}
+            src={crest}
             alt=""
             width={story ? 64 : 52}
             height={story ? 64 : 52}

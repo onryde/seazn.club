@@ -22,6 +22,8 @@ import "server-only";
 // ImageResponse supports flexbox only — every div declares display:flex.
 import { ogTheme, type OgTheme } from "./model";
 import { OG_SIZE } from "./card";
+// Bytes only, never a URL — the one rule shared by every satori frame here.
+import { drawableImage } from "./drawable";
 import { monogramInk, autoColour } from "@/components/ui/entity-logo";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 
@@ -54,7 +56,7 @@ export interface MatchPosterSide {
   bg: string;
   ink: string;
   /** The badge as a `data:` URI — bytes this app fetched itself — or null for
-   *  the monogram tile. Never a URL: see `drawableImage` below. */
+   *  the monogram tile. Never a URL: see `drawableImage` in ./drawable. */
   badgeUrl: string | null;
   score: string | null;
   sub: string | null;
@@ -186,22 +188,6 @@ function paintPair(home: SideT, away: SideT): [{ bg: string; ink: string }, { bg
     a = monogramInk(autoColour(`${away.name}#${n}`)) ?? a;
   }
   return [h, a];
-}
-
-/**
- * The ONLY thing this layout will put in an `<img src>`: bytes, already
- * fetched and re-encoded by `server/og/poster-image.ts`.
- *
- * satori does not merely read a `src` — it FETCHES it, server-side, from
- * inside our own network, and both surfaces that draw this are public routes
- * whose badge and logo URLs are organiser-typed free text. Refusing anything
- * that is not a `data:` URI here means the guard holds even for a caller that
- * forgets the fetcher: a raw URL renders the monogram tile, never a request.
- * (It also keeps the original reason this function existed — a relative path
- * throws inside satori and takes the WHOLE image down, not one tile.)
- */
-function drawableImage(src: string | null): string | null {
-  return src !== null && src.startsWith("data:image/") ? src : null;
 }
 
 export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
