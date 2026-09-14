@@ -163,25 +163,39 @@ function ScorebugRow({
     return `pl-2 text-right font-display text-lg tabular-nums leading-6 ${weight} ${color}`;
   };
 
+  // N1f f1: the rail track (first column) holds the LONGEST word any of the
+  // four dictionaries puts in it, measured in the face it actually paints in —
+  // Barlow Condensed SemiBold at 14px, where fr "déterminer" is 55.2px, the
+  // widest of them. `schedule-rail-fits.test.ts` reads this number back out of
+  // the class and re-measures every rail string against it, so a narrower
+  // track or a longer translation reds instead of shipping.
   return (
     <Link
       href={href}
-      className="relative grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-2.5 transition hover:bg-accent-soft/60"
+      className="relative grid grid-cols-[3.5rem_minmax(0,1fr)_auto] items-center gap-x-3 px-3.5 py-2.5 transition hover:bg-accent-soft/60"
     >
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
 
-      <span className="row-span-2 flex flex-col items-start">
+      {/* `min-w-0`: a grid item's automatic minimum is its min-content width,
+          so without it a long status word makes this CELL wider than the track
+          and paints across the gap into the entrant name (N1f f1). With it the
+          cell is exactly the track, and the status line below can wrap — or,
+          as a last resort, break — INSIDE the column instead. */}
+      <span className="row-span-2 flex min-w-0 flex-col items-start">
         {live ? (
           <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-600">
             <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
             {copy.live}
           </span>
         ) : (
-          <span className="font-display text-sm font-semibold text-ink">
+          <span className="w-full break-words font-display text-sm font-semibold text-ink">
             {decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : copy.tbd}
           </span>
         )}
-        <span className="mt-0.5 max-w-[3.25rem] truncate text-[10px] uppercase tracking-wide text-ink-muted">
+        {/* A court name is free text, so this line DOES truncate — but at the
+            track's own width (the cell is `min-w-0`), not at a second literal
+            that can drift away from the grid above. */}
+        <span className="mt-0.5 w-full truncate text-[10px] uppercase tracking-wide text-ink-muted">
           {!decided && !live && railMode === "date" && f.scheduled_at
             ? shortDate(f.scheduled_at, tz, dateTag)
             : (f.court_name ?? "")}
