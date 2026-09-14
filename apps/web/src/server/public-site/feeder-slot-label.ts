@@ -18,9 +18,13 @@
 // When the feeder's round holds ONE match the number says nothing, so the
 // sentence names the round alone: "Winner of Grand final" (N1 fix round 1, M2).
 //
-// Every public caller — the hub, the match centre — builds its names through
-// `publicRoundNamer` below, so the ranking, the round name and the one-match
-// count are computed one way.
+// Every public caller builds its names through `publicRoundNamer` below, so the
+// ranking, the round name and the one-match count are computed one way:
+//   - the competition hub (`competition-hub.ts`);
+//   - the match centre (`match-centre-load.ts`);
+//   - the division calendar feed (`[divisionSlug]/calendar.ics/route.ts`);
+//   - the embed widgets, schedule AND bracket (`embed/divisions/[id]/[widget]/page.tsx`);
+//   - the public division page's bracket (`[divisionSlug]/page.tsx`).
 //
 // Pure: no `server-only`, no database. The callers own the reads.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
