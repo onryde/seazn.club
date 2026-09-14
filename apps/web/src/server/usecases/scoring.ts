@@ -6,7 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { cacheGet, cacheSet, cacheDel, cacheDelPattern } from "@/lib/cache";
+import { cacheGet, cacheSet, cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
@@ -569,15 +569,6 @@ export async function finalizeFixture(
 // P1 — every caller AWAITS this inside its request (`scoreEvent`,
 // `importEvents`): the tag call below reaches Next's per-request flush only if
 // it happens before the route handler resolves.
-/**
- * R10 I1: the longest `invalidatePublicCache` waits on its literal-key DEL
- * before running `afterDeletes` anyway. ioredis has no command timeout
- * (cache.ts sets none), so a Redis that stops answering without dropping the
- * connection would never settle the DEL. Every push would then be lost while
- * every subscribed page polls only as a slow safety net.
- */
-export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
-
 export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
@@ -642,22 +633,11 @@ export async function invalidatePublicCache(
   // F2: the catch above means this cannot reject, so it settles exactly when
   // the DEL has, whichever way that went. It does not wait for the SCAN.
   //
-  // R10 I1: nor longer than the bound. Whichever of the two comes first sends,
-  // the other finds `sent` and does nothing, so a DEL that settles after the
-  // bound never sends the pushes twice. A DEL that settles first clears the
-  // timer, so nothing stays armed after it.
+  // R10 I1: nor longer than PUSH_AFTER_DELETE_BOUND_MS, and exactly once.
+  // `sendAfterDeleteOrBound` (cache.ts) owns that, and the schedule path sends
+  // through the same helper (R10c m1).
   const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
-  if (afterDeletes) {
-    let sent = false;
-    const send = () => {
-      if (sent) return;
-      sent = true;
-      clearTimeout(bound);
-      afterDeletes(scope);
-    };
-    const bound = setTimeout(send, PUSH_AFTER_DELETE_BOUND_MS);
-    void deleted.finally(send);
-  }
+  if (afterDeletes) sendAfterDeleteOrBound(deleted, () => afterDeletes(scope));
   if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
   // fires only for discoverable competitions.

@@ -9,7 +9,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { requireFeature } from "@/lib/entitlements";
-import { cacheDelPattern } from "@/lib/cache";
+import { cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { publishDivisionUpdate } from "@/lib/realtime";
@@ -106,8 +106,18 @@ export function afterScheduleWrite(
   // exactly as a score does. Scoring's own `invalidatePublicCache` drops the
   // same key; a hub whose matches go stale on a reschedule is precisely the
   // defect that costs a spectator the trip.
-  sweepPublicKey(`pub:v1:hub:${competitionId}`);
-  void publishDivisionUpdate(divisionId, reason);
+  //
+  // R10c m1: scoring's shape. The key is literal, so it goes out in one direct
+  // DEL instead of a SCAN over the whole keyspace, and the division push waits
+  // for that DEL, never longer than PUSH_AFTER_DELETE_BOUND_MS, exactly once. A
+  // push sent first sends the hub's refetch to a Redis copy the delete has not
+  // reached yet. The glob's SCAN above is not waited on: no push depends on it.
+  const key = `pub:v1:hub:${competitionId}`;
+  // F4: never left to reject unhandled, for the reason `sweepPublicKey` gives.
+  const deleted = cacheDel(key).catch((err: unknown) => {
+    log.error({ err, key }, "schedule: a public Redis delete failed (the write stands)");
+  });
+  sendAfterDeleteOrBound(deleted, () => void publishDivisionUpdate(divisionId, reason));
 }
 
 /** A public Redis sweep, not awaited, that can never reject unhandled (P1

@@ -24,13 +24,18 @@
 // the division's glob (`pub:v1:div:{id}:*`) is still a SCAN over the whole
 // keyspace (`cacheDelPattern`). The realtime pushes wait on the DEL alone.
 // Which door each key goes through is asserted as "no literal key through a
-// SCAN, no glob through DEL", which keeps the key sets supersets (R-E). The
-// schedule path is unchanged: both of its keys still go through SCAN.
+// SCAN, no glob through DEL", which keeps the key sets supersets (R-E).
 //
 // R10 I1 — the pushes wait for that DEL, but never longer than
 // PUSH_AFTER_DELETE_BOUND_MS. ioredis has no command timeout, so a Redis that
 // stops answering without dropping the connection would otherwise hold every
 // push forever, and exactly once either way.
+//
+// R10c m1 — the SCHEDULE path gets the same shape. Its hub key is literal, so
+// it goes out in one DEL, and only the division glob is still a SCAN. Its
+// division push waits on that DEL, never longer than the bound, exactly once.
+// Both paths send through ONE helper (`sendAfterDeleteOrBound`, lib/cache.ts),
+// so the two describes below that pin the bound are two witnesses of it.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Typed on the parameter so `patterns()` below reads `string`, not `unknown` —
@@ -110,7 +115,8 @@ vi.mock("@/lib/realtime", async (importOriginal) => ({
   publishDivisionUpdate,
 }));
 
-import { invalidatePublicCache, PUSH_AFTER_DELETE_BOUND_MS } from "../scoring";
+import { PUSH_AFTER_DELETE_BOUND_MS } from "@/lib/cache";
+import { invalidatePublicCache } from "../scoring";
 import { afterScheduleWrite } from "../schedule";
 
 const ORG = "org-1";
@@ -122,23 +128,39 @@ const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
 const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
 const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
 const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
+const SCHEDULE_SWEEP_FAILED = "schedule: a public Redis sweep failed (the write stands)";
+const SCHEDULE_DELETE_FAILED = "schedule: a public Redis delete failed (the write stands)";
 
 const patterns = () => cacheDelPattern.mock.calls.map(([pattern]) => pattern);
 const deletedKeys = () => cacheDel.mock.calls.flat();
 
 const macrotask = () => new Promise((resolve) => setTimeout(resolve, 20));
 
-/** Settle every held call of one kind, then return only after a macrotask,
- *  so every microtask the settlement queues (a callback chained on it, Node's
- *  unhandled-rejection report) has already run. */
-async function release(kind: "del" | "scan", outcome: { resolve: true } | { reject: Error }): Promise<void> {
+type Outcome = { resolve: true } | { reject: Error };
+
+/** Settle every held call of one kind, synchronously. */
+function settle(kind: "del" | "scan", outcome: Outcome): void {
   const settling = redis.held.filter((gate) => gate.kind === kind);
   redis.held = redis.held.filter((gate) => gate.kind !== kind);
   for (const gate of settling) {
     if ("reject" in outcome) gate.reject(outcome.reject);
     else gate.resolve();
   }
+}
+
+/** Settle every held call of one kind, then return only after a macrotask,
+ *  so every microtask the settlement queues (a callback chained on it, Node's
+ *  unhandled-rejection report) has already run. */
+async function release(kind: "del" | "scan", outcome: Outcome): Promise<void> {
+  settle(kind, outcome);
   await macrotask();
+}
+
+/** `release` for fake timers: settle the held calls of one kind, then flush
+ *  every microtask that queues without moving the clock. */
+async function settleHeld(kind: "del" | "scan", outcome: Outcome): Promise<void> {
+  settle(kind, outcome);
+  await vi.advanceTimersByTimeAsync(0);
 }
 
 /** Every unhandled rejection raised while `body` runs. */
@@ -307,18 +329,6 @@ describe("invalidatePublicCache — the pushes wait for the DEL, never longer th
     vi.useRealTimers();
   });
 
-  /** `release` for fake timers: settle the held calls of one kind, then flush
-   *  every microtask that queues without moving the clock. */
-  async function settleHeld(kind: "del" | "scan", outcome: { resolve: true } | { reject: Error }): Promise<void> {
-    const settling = redis.held.filter((gate) => gate.kind === kind);
-    redis.held = redis.held.filter((gate) => gate.kind !== kind);
-    for (const gate of settling) {
-      if ("reject" in outcome) gate.reject(outcome.reject);
-      else gate.resolve();
-    }
-    await vi.advanceTimersByTimeAsync(0);
-  }
-
   const SCOPE = { divisionId: DIVISION, competitionId: COMPETITION };
 
   it("the bound is the ruling's: 1500ms", () => {
@@ -378,15 +388,36 @@ describe("invalidatePublicCache — the pushes wait for the DEL, never longer th
     expect(after, "the bound sent the pushes a second time").toHaveBeenCalledTimes(1);
   });
 
-  it("a DEL that settles AT the bound's own instant: still exactly once", async () => {
+  // R10c m6: a genuine same-instant race. The DEL's resolve is itself a fake
+  // timer due at exactly the bound, and ONE advance runs both. Two timers due
+  // at the same instant fire in the order they were armed, and the async
+  // advance drains microtasks between them, so each order is built by arming
+  // the resolve before or after the bound. What `after` had seen when the
+  // resolve ran proves which order actually happened.
+  it.each([
+    ["the bound's timer fires first, the DEL settles in the same tick", "after", 1],
+    ["the DEL settles first, the bound's timer is due in the same tick", "before", 0],
+  ] as const)("a DEL that settles AT the bound's own instant (%s): exactly once", async (_label, armResolve, sentAtResolve) => {
     redis.hold = true;
     const after = vi.fn();
+    let seenAtResolve: number | undefined;
+    const resolveAtBound = () =>
+      setTimeout(() => {
+        seenAtResolve = after.mock.calls.length;
+        settle("del", { resolve: true });
+      }, PUSH_AFTER_DELETE_BOUND_MS);
+
+    if (armResolve === "before") resolveAtBound();
     await invalidatePublicCache(ORG, FIXTURE, false, after);
+    if (armResolve === "after") resolveAtBound();
+    expect(vi.getTimerCount(), "the bound and the resolve are both armed").toBe(2);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
-    await settleHeld("del", { resolve: true });
-    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
-    expect(after).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seenAtResolve, "the race ran in the other order").toBe(sentAtResolve);
+    expect(after, "sent by both the bound and the DEL").toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(SCOPE);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("with no callback, nothing is armed", async () => {
@@ -398,10 +429,12 @@ describe("invalidatePublicCache — the pushes wait for the DEL, never longer th
 
 describe("afterScheduleWrite — a schedule write", () => {
   it.each(["schedule", "publish", "start"] as const)(
-    "drops the hub key on a %s write",
-    (reason) => {
+    "drops the hub key on a %s write, and pushes that reason",
+    async (reason) => {
       afterScheduleWrite(DIVISION, COMPETITION, reason);
-      expect(patterns()).toContain(HUB_KEY);
+      await macrotask();
+      expect(deletedKeys()).toContain(HUB_KEY);
+      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, reason);
     },
   );
 
@@ -409,59 +442,170 @@ describe("afterScheduleWrite — a schedule write", () => {
     afterScheduleWrite(DIVISION, COMPETITION, "schedule");
     expect(patterns()).toContain(DIVISION_GLOB);
     expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
-    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
   });
 
   it("uses the SAME key the scoring path does — one document, one key", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "schedule");
-    const fromSchedule = patterns().filter((p) => p.startsWith("pub:v1:hub:"));
-    cacheDelPattern.mockClear();
+    const fromSchedule = deletedKeys().filter((key) => key.startsWith("pub:v1:hub:"));
+    cacheDel.mockClear();
     await invalidatePublicCache(ORG, FIXTURE);
-    // The scoring path deletes it directly now (H4); the key is the same string.
     const fromScoring = deletedKeys().filter((key) => key.startsWith("pub:v1:hub:"));
     expect(fromSchedule).toEqual(fromScoring);
     expect(fromSchedule).toEqual([HUB_KEY]);
   });
 });
 
-// F4 (P1 round 2) — `cacheDelPattern` fails open inside its own try, but its
-// `client()` call sits OUTSIDE it (cache.ts), and ioredis's constructor throws
-// synchronously on a REDIS_URL it cannot parse (`new URL`: "redis://host:99999"
-// is `TypeError: Invalid URL`). Every call would then reject, and a voided
-// sweep with no handler is an unhandled rejection on every schedule write.
-describe("afterScheduleWrite — a Redis sweep that REJECTS", () => {
-  it("is logged per sweep and never left as an unhandled rejection", async () => {
-    const failure = new Error("simulated Redis failure");
-    redis.failScan = failure;
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      afterScheduleWrite(DIVISION, COMPETITION, "schedule");
-      // Node reports an unhandled rejection once the microtask queue drains.
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
-      for (const pattern of [DIVISION_GLOB, HUB_KEY]) {
-        expect(logMock.error, pattern).toHaveBeenCalledWith(
-          { err: failure, pattern },
-          "schedule: a public Redis sweep failed (the write stands)",
-        );
-      }
-      // The write's other effects still happened.
-      expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
-      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
-    } finally {
-      redis.failScan = null;
-      process.off("unhandledRejection", onUnhandled);
-    }
+describe("afterScheduleWrite — the hub key by one DEL, only the division glob by SCAN (R10c m1)", () => {
+  it("the hub key goes out in ONE direct DEL; no literal key goes through a SCAN, and no glob through DEL", () => {
+    afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+    expect(cacheDel, "one round trip for the literal key").toHaveBeenCalledTimes(1);
+    expect(deletedKeys()).toContain(HUB_KEY);
+    expect(patterns()).toContain(DIVISION_GLOB);
+    expect(patterns().filter((pattern) => !pattern.endsWith("*")), "a literal key sent through a SCAN").toEqual([]);
+    expect(deletedKeys().filter((key) => key.includes("*")), "a glob sent through DEL").toEqual([]);
   });
 
-  it("a sweep that succeeds logs nothing (the quiet twin)", async () => {
+  it("the push waits for the DEL: nothing while it is in flight, nothing when only the SCAN has settled", async () => {
+    redis.hold = true;
     afterScheduleWrite(DIVISION, COMPETITION, "schedule");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(patterns()).toEqual([DIVISION_GLOB, HUB_KEY]);
+    expect(redis.held.map((gate) => gate.kind).sort()).toEqual(["del", "scan"]);
+
+    await macrotask();
+    expect(publishDivisionUpdate, "pushed before the DEL settled").not.toHaveBeenCalled();
+    await release("scan", { resolve: true });
+    expect(publishDivisionUpdate, "released by the SCAN").not.toHaveBeenCalled();
+
+    await release("del", { resolve: true });
+    expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
+    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
+  });
+});
+
+// F4 (P1 round 2) — `cacheDelPattern` and `cacheDel` fail open inside their own
+// try, but their `client()` call sits OUTSIDE it (cache.ts), and ioredis's
+// constructor throws synchronously on a REDIS_URL it cannot parse (`new URL`:
+// "redis://host:99999" is `TypeError: Invalid URL`). Every call would then
+// reject, and a voided call with no handler is an unhandled rejection on every
+// schedule write.
+describe("afterScheduleWrite — a Redis call that REJECTS", () => {
+  it("a SCAN that rejects is logged and never left unhandled; the push still goes out", async () => {
+    await watchingUnhandled(async (unhandled) => {
+      const failure = new Error("simulated Redis failure");
+      redis.failScan = failure;
+      afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+      // Node reports an unhandled rejection once the microtask queue drains.
+      await macrotask();
+      expect(unhandled, "a voided SCAN rejected with no handler").toEqual([]);
+      expect(logMock.error).toHaveBeenCalledWith({ err: failure, pattern: DIVISION_GLOB }, SCHEDULE_SWEEP_FAILED);
+      expect(logMock.error).toHaveBeenCalledTimes(1);
+      // The write's other effects still happened.
+      expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
+      expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
+      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
+    });
+  });
+
+  it("a DEL that rejects is logged and never left unhandled; the push still goes out", async () => {
+    await watchingUnhandled(async (unhandled) => {
+      const failure = new Error("simulated Redis failure");
+      redis.failDel = failure;
+      afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+      await macrotask();
+      expect(unhandled, "a DEL rejected with no handler").toEqual([]);
+      expect(logMock.error).toHaveBeenCalledWith({ err: failure, key: HUB_KEY }, SCHEDULE_DELETE_FAILED);
+      expect(logMock.error).toHaveBeenCalledTimes(1);
+      expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
+      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
+    });
+  });
+
+  it("the quiet twin: a DEL and a SCAN that succeed log nothing", async () => {
+    afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+    await macrotask();
+    expect(deletedKeys()).toEqual([HUB_KEY]);
+    expect(patterns()).toEqual([DIVISION_GLOB]);
+    expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
     expect(logMock.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("afterScheduleWrite — the push waits for the DEL, never longer than the bound, and goes out ONCE (R10c m1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a DEL that settles first (at 200ms): the push goes out then, once, and the bound's timer is cleared", async () => {
+    redis.hold = true;
+    afterScheduleWrite(DIVISION, COMPETITION, "publish");
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(publishDivisionUpdate, "pushed before the DEL settled").not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), "the bound is armed while the DEL is in flight").toBe(1);
+
+    await settleHeld("del", { resolve: true });
+    expect(publishDivisionUpdate, "waited for the bound instead of the DEL").toHaveBeenCalledTimes(1);
+    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "publish");
+    expect(vi.getTimerCount(), "the bound's timer outlived the DEL").toBe(0);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+    expect(publishDivisionUpdate, "the bound pushed a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("a DEL that NEVER settles: the push goes out at the bound, once, and a late settle sends nothing more", async () => {
+    redis.hold = true;
+    afterScheduleWrite(DIVISION, COMPETITION, "start");
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS - 1);
+    expect(publishDivisionUpdate, "pushed before the DEL settled and before the bound").not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(publishDivisionUpdate, "a DEL that never answers held the push past the bound").toHaveBeenCalledTimes(1);
+    expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "start");
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
+    expect(publishDivisionUpdate, "the bound fired more than once").toHaveBeenCalledTimes(1);
+    await settleHeld("del", { resolve: true });
+    await settleHeld("scan", { resolve: true });
+    expect(publishDivisionUpdate, "the late DEL pushed a second time").toHaveBeenCalledTimes(1);
+  });
+
+  it("a DEL that REJECTS: the push goes out once, and the bound sends nothing more", async () => {
+    redis.hold = true;
+    const failure = new Error("simulated Redis failure");
+    afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+
+    await settleHeld("del", { reject: failure });
+    expect(logMock.error).toHaveBeenCalledWith({ err: failure, key: HUB_KEY }, SCHEDULE_DELETE_FAILED);
+    expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
+    expect(publishDivisionUpdate, "the bound pushed a second time").toHaveBeenCalledTimes(1);
+  });
+
+  // The same two-order race as scoring's (R10c m6), on this path.
+  it.each([
+    ["the bound's timer fires first, the DEL settles in the same tick", "after", 1],
+    ["the DEL settles first, the bound's timer is due in the same tick", "before", 0],
+  ] as const)("a DEL that settles AT the bound's own instant (%s): exactly one push", async (_label, armResolve, sentAtResolve) => {
+    redis.hold = true;
+    let seenAtResolve: number | undefined;
+    const resolveAtBound = () =>
+      setTimeout(() => {
+        seenAtResolve = publishDivisionUpdate.mock.calls.length;
+        settle("del", { resolve: true });
+      }, PUSH_AFTER_DELETE_BOUND_MS);
+
+    if (armResolve === "before") resolveAtBound();
+    afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+    if (armResolve === "after") resolveAtBound();
+    expect(vi.getTimerCount(), "the bound and the resolve are both armed").toBe(2);
+
+    await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(seenAtResolve, "the race ran in the other order").toBe(sentAtResolve);
+    expect(publishDivisionUpdate, "pushed by both the bound and the DEL").toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

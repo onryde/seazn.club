@@ -76,6 +76,41 @@ export async function cacheDel(...keys: string[]): Promise<void> {
   }
 }
 
+/**
+ * R10 I1: the longest a public-cache writer waits on its literal-key DEL before
+ * sending its realtime pushes anyway. ioredis has no command timeout (`client()`
+ * above sets none), so a Redis that stops answering without dropping the
+ * connection would never settle the DEL. Every push would then be lost while
+ * every subscribed page polls only as a slow safety net.
+ */
+export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
+
+/**
+ * Run `send` EXACTLY ONCE: when `deleted` settles, or after
+ * PUSH_AFTER_DELETE_BOUND_MS, whichever comes first (R10 I1). Not awaited, so it
+ * never holds the caller's response. Whichever of the two comes first sends; the
+ * other finds `sent` and does nothing, so a DEL that settles after the bound
+ * never sends twice. A DEL that settles first clears the timer, so nothing stays
+ * armed after it.
+ *
+ * Both public-cache writers send through here, so the two cannot drift: a score
+ * write (`invalidatePublicCache`, usecases/scoring.ts) and a schedule write
+ * (`afterScheduleWrite`, usecases/schedule.ts, R10c m1). `deleted` must not
+ * reject: each caller attaches its logging `.catch` first (F4), because a
+ * rejection chained here would be left unhandled. `send` must not throw.
+ */
+export function sendAfterDeleteOrBound(deleted: Promise<unknown>, send: () => void): void {
+  let sent = false;
+  const once = () => {
+    if (sent) return;
+    sent = true;
+    clearTimeout(bound);
+    send();
+  };
+  const bound = setTimeout(once, PUSH_AFTER_DELETE_BOUND_MS);
+  void deleted.finally(once);
+}
+
 /** Delete keys matching a glob pattern (e.g. "ent:{org}:*"). No-op on error. */
 export async function cacheDelPattern(pattern: string): Promise<void> {
   const c = client();

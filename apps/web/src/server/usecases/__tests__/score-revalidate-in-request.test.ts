@@ -211,6 +211,10 @@ async function inRequest<T>(handler: () => Promise<T>): Promise<{ result: T; cal
   // Sweeps a PREVIOUS write left held (the rig's own `startDivision` runs
   // `afterScheduleWrite`) are not this request's: let them finish.
   for (const gate of probe.gates.splice(0)) gate.resolve();
+  // R10c m1: that schedule write's division push waits on its hub DEL, so it
+  // goes out only once the release above has run through its chain. Let it
+  // land before the recorders are cleared, or it reads as this request's push.
+  await sleep(20);
   probe.sweeps.length = 0;
   probe.fixturePushes.length = 0;
   probe.divisionPushes.length = 0;
