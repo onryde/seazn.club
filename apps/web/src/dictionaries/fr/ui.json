@@ -5114,5 +5114,8 @@
   "stream.credits.popular": "Le plus choisi",
   "stream.credits.footnote": "Tarifs de test jusqu'au lancement.",
   "stream.credits.soon": "Bientôt disponible",
-  "og.matchCentre": "Centre de match"
+  "og.matchCentre": "Centre de match",
+  "slideshow.slide.inPlay": "En cours",
+  "slideshow.slide.latestResults": "Derniers résultats",
+  "slideshow.slide.comingUp": "À venir"
 }

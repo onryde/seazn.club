@@ -5114,5 +5114,8 @@
   "stream.credits.popular": "Most clubs",
   "stream.credits.footnote": "Sandbox prices until launch.",
   "stream.credits.soon": "Coming soon",
-  "og.matchCentre": "Match centre"
+  "og.matchCentre": "Match centre",
+  "slideshow.slide.inPlay": "In play",
+  "slideshow.slide.latestResults": "Latest results",
+  "slideshow.slide.comingUp": "Coming up"
 }

@@ -5114,5 +5114,8 @@
   "stream.credits.popular": "Meeste clubs",
   "stream.credits.footnote": "Testprijzen tot de lancering.",
   "stream.credits.soon": "Binnenkort",
-  "og.matchCentre": "Wedstrijdcentrum"
+  "og.matchCentre": "Wedstrijdcentrum",
+  "slideshow.slide.inPlay": "Bezig",
+  "slideshow.slide.latestResults": "Laatste uitslagen",
+  "slideshow.slide.comingUp": "Binnenkort"
 }

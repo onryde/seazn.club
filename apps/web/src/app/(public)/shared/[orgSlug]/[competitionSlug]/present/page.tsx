@@ -24,7 +24,7 @@ export default async function PresentCompetitionPage({
       const data = await getPublicDivision(orgSlug, competitionSlug, d.slug);
       // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not
       // English by construction (this builder is pure/no request scope).
-      return data === null ? [] : buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale });
+      return data === null ? [] : await buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale });
     }),
   );
   const slides: Slide[] = decks.flat();

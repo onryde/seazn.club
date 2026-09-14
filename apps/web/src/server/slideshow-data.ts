@@ -13,6 +13,8 @@ import { BRACKET_SLIDE_KINDS, bracketSlideLaysOut } from "@/components/v2/slides
 import { resolveLogoUrl } from "@/server/public-site/data";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { getDictionary } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
@@ -359,6 +361,14 @@ export interface PublicSlideInput {
     away_slot_label?: SlotLabel | null;
     status: string;
     summary: { headline?: string } | null;
+    /** N1c c3 — the round ROLE the public round namer reads to name a waiting
+     *  side's feeder round (`getPublicDivision` carries all five). Optional:
+     *  hand-built inputs predate them, and absent reads as a plain lane. */
+    lane?: "WB" | "LB" | "GF" | null;
+    is_final?: boolean | null;
+    third_place?: boolean | null;
+    conditional?: boolean | null;
+    ext_key?: string | null;
   }[];
   standings: { stage_id: string; pool_id: string | null; rows: StandingsSlideSnapshotRow[] }[];
   entrants: {
@@ -399,9 +409,20 @@ interface StandingsSlideSnapshotRow {
   rank?: number;
 }
 
-export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
+export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise<Slide[]> {
   const orgLocale = toLocale(data.orgLocale);
   const lookup: SlotLabelLookup = (k, v) => msgFor(orgLocale, k, v);
+  // N1c c3 — a side still waiting on a match reads its feeder's ROUND ("Winner
+  // of Semi-finals, match 1") through the one public round namer the hub, the
+  // match centre and the division page use, never the organiser board's
+  // "Winner of R1·2". Its phrases live in the PUBLIC dictionary, loaded here
+  // from the same `orgLocale` as `lookup`, so the two cannot disagree.
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict: await getDictionary(orgLocale, "public"),
+    fixtures: data.fixtures,
+    stageKind: (stageId) => data.stages.find((s) => s.id === stageId)?.kind,
+  });
   // RS008 review fix #2 — this "pure public twin" of buildDivisionSlides had
   // NO masking at all, not even by youth: the anonymous kiosk (/present)
   // could show an opted-out (or underage) person's full name where the
@@ -447,10 +468,10 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.home_slot_label ?? null, lookup, "schedule.tbd"),
+      : namer.slot(f.stage_id, f.home_slot_label ?? null),
     away: f.away_entrant_id
       ? (names[f.away_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))
-      : resolveSlotLabel(f.away_slot_label ?? null, lookup, "schedule.tbd"),
+      : namer.slot(f.stage_id, f.away_slot_label ?? null),
     homeLogo: null,
     awayLogo: null,
     line: f.summary?.headline ?? null,
@@ -463,11 +484,11 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
     .slice(-8).map(item);
   const upcoming = data.fixtures.filter((f) => f.status === "scheduled").slice(0, 8).map(item);
   if (live.length > 0)
-    slides.push({ kind: "fixtures", division: data.division.name, title: "In play", items: live, pinned: true });
+    slides.push({ kind: "fixtures", division: data.division.name, title: lookup("slideshow.slide.inPlay"), items: live, pinned: true });
   if (results.length > 0)
-    slides.push({ kind: "fixtures", division: data.division.name, title: "Latest results", items: results });
+    slides.push({ kind: "fixtures", division: data.division.name, title: lookup("slideshow.slide.latestResults"), items: results });
   if (upcoming.length > 0)
-    slides.push({ kind: "fixtures", division: data.division.name, title: "Coming up", items: upcoming });
+    slides.push({ kind: "fixtures", division: data.division.name, title: lookup("slideshow.slide.comingUp"), items: upcoming });
 
   for (const stage of data.stages.filter((s) => BRACKET_SLIDE_KINDS.has(s.kind))) {
     const stageFixtures = data.fixtures.filter((f) => f.stage_id === stage.id);
@@ -487,14 +508,23 @@ export function buildPublicDivisionSlides(data: PublicSlideInput): Slide[] {
         // msg, …)` fallback is now unreachable from this (public) builder;
         // it stays live for buildDivisionSlides's org-authed slides above,
         // which are a DIFFERENT, out-of-scope surface (not a "visitor").
+        //
+        // N1c c3: a labelled side goes through the round namer; a side with NO
+        // label keeps the bracket's own "to be decided" (`bracket.tbd`), which
+        // differs from the namer's `schedule.tbd` in es/fr/nl — the same split
+        // the public Bracket component makes (R10d n4).
         fixtures: stageFixtures.map((f) => ({
           id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round,
           home: f.home_entrant_id
             ? (names[f.home_entrant_id] ?? null)
-            : resolveSlotLabel(f.home_slot_label ?? null, lookup, "bracket.tbd"),
+            : f.home_slot_label
+              ? namer.slot(f.stage_id, f.home_slot_label)
+              : resolveSlotLabel(null, lookup, "bracket.tbd"),
           away: f.away_entrant_id
             ? (names[f.away_entrant_id] ?? null)
-            : resolveSlotLabel(f.away_slot_label ?? null, lookup, "bracket.tbd"),
+            : f.away_slot_label
+              ? namer.slot(f.stage_id, f.away_slot_label)
+              : resolveSlotLabel(null, lookup, "bracket.tbd"),
           home_slot_label: f.home_slot_label ?? null,
           away_slot_label: f.away_slot_label ?? null,
           line: f.summary?.headline ?? null,

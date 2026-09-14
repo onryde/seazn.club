@@ -5114,5 +5114,8 @@
   "stream.credits.popular": "La mayoría de clubes",
   "stream.credits.footnote": "Precios de prueba hasta el lanzamiento.",
   "stream.credits.soon": "Muy pronto",
-  "og.matchCentre": "Centro de partido"
+  "og.matchCentre": "Centro de partido",
+  "slideshow.slide.inPlay": "En juego",
+  "slideshow.slide.latestResults": "Últimos resultados",
+  "slideshow.slide.comingUp": "Próximamente"
 }
