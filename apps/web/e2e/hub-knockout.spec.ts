@@ -43,6 +43,9 @@ import {
 // Fix round 2 (D3, F5) extended D2's case:
 //   D3 the waiting side's crest is the "?" placeholder, no letters ↔ the filled side on the same card is not one
 //   F5 the pair reads "{a} or {b}"                             ↔ the decided semi's node carries no " or "
+//
+// Fix round 2b (R10 follow-up):
+//   2b a bye's side is the EMPTY box, no glyph, not "pending" ↔ the same draw's waiting side keeps "?", not "empty"
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -86,7 +89,8 @@ const SEED_CALLS =
   COMPETITION_CALLS + divisionCalls(FIRST_DIVISION_SCORED) + divisionCalls(SECOND_DIVISION_SCORED) +
   COMPETITION_CALLS + divisionCalls([]) + // double elimination, unplayed
   COMPETITION_CALLS + 5 + // league: division create + read, entrants, stage create + generate
-  COMPETITION_CALLS + divisionCalls([]) + LIVE_START_CALLS; // live: a 4-draw, both semis in play
+  COMPETITION_CALLS + divisionCalls([]) + LIVE_START_CALLS + // live: a 4-draw, both semis in play
+  COMPETITION_CALLS + divisionCalls([]); // bye: a 3-draw, unplayed
 const SEED_BUDGET_MS = FLOOR_MS + SEED_CALLS * API_CALL_MS;
 
 const budget = (steps: number) => Math.max(FLOOR_MS, steps * STEP_MS);
@@ -149,6 +153,9 @@ interface HubMatch {
   fixtureId: string;
   bucket: string;
   header: { sides: { entrantId: string; name: string }[] };
+  /** `[home, away]`, true where that side is a bye (fix round 2b). Absent on
+   *  a document built before the field existed. */
+  byeSides?: [boolean, boolean];
 }
 interface HubDoc {
   tabs: string[];
@@ -346,6 +353,8 @@ test.describe("competition hub: Knockout tab", () => {
   let leagueOnly: Seeded;
   /** R10: both semi-finals in play when the page opens; the live test posts one result. */
   let live: Seeded & { semis: [string, string] };
+  /** Fix round 2b: a 3-draw, so one first-round slot is a bye. */
+  let byeDraw: Seeded;
 
   test.beforeAll(async ({ playwright }, testInfo) => {
     // A hook has its own clock; the test's `setTimeout` does not reach it.
@@ -418,6 +427,15 @@ test.describe("competition hub: Knockout tab", () => {
           semis: [semis[0]!.id, semis[1]!.id],
         };
       }
+      {
+        // Fix round 2b: THREE entrants in a knockout. The draw is padded to
+        // four, so one first-round fixture is a bye (`stages.ts`,
+        // `byeSlotLabel`). Unplayed: the final still has a side waiting on
+        // the real semi-final, which is the positive pair's '?'.
+        const comp = await publicCompetition(request, "Hub KO Bye");
+        const div = await bracketDivision(request, comp.id, "Bye Cup", 3, "knockout", []);
+        byeDraw = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
     } finally {
       await request.dispose();
     }
@@ -456,6 +474,24 @@ test.describe("competition hub: Knockout tab", () => {
       live.doc.matches.filter((m) => live.semis.includes(m.fixtureId)).map((m) => m.bucket),
       "both semi-finals in play",
     ).toEqual(["live", "live"]);
+
+    // The bye draw: one knockout; exactly one match flagged as a bye BY THE
+    // PRODUCER (`byeSides`, never the side's name), in the first round, on a
+    // side with no entrant; and a final with a side still waiting that is
+    // not a bye.
+    expect(byeDraw.doc.knockouts).toHaveLength(1);
+    const byeView = byeDraw.doc.knockouts[0]!;
+    expect(byeView.rounds.length, "a 3-draw has a first round and a final").toBeGreaterThanOrEqual(2);
+    const flagged = byeDraw.doc.matches.filter((m) => m.byeSides?.includes(true));
+    expect(flagged, "exactly one bye in a 3-draw").toHaveLength(1);
+    const [byeMatch] = flagged;
+    expect(byeView.rounds[0]!.fixtureIds).toContain(byeMatch!.fixtureId);
+    expect(byeMatch!.header.sides[byeMatch!.byeSides!.indexOf(true)]!.entrantId).toBe("");
+    const byeFinal = byeDraw.doc.matches.find((m) => m.fixtureId === byeView.rounds.at(-1)!.fixtureIds[0])!;
+    expect(
+      byeFinal.header.sides.some((s, i) => s.entrantId === "" && byeFinal.byeSides?.[i] !== true),
+      JSON.stringify(byeFinal),
+    ).toBe(true);
   });
 
   test("an 8-draw mid-event at 1280: opens on the first unfinished round; Draw writes view=draw, shows the tree, survives a reload", async ({
@@ -707,6 +743,60 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(card.getByTestId("mh-match-side-0").locator('span[aria-hidden="true"]').first()).toHaveText(
       /\p{L}/u,
     );
+  });
+
+  // Fix round 2b (27941e5b4): a bye is not "to be decided", so its side
+  // keeps the placeholder box but shows NO glyph (`data-crest="empty"`). A
+  // side waiting on a result keeps the "?" (`data-crest="pending"`). Both
+  // are read from the producer's `byeSides`, so this drives the real stored
+  // bye label through the real card.
+  test("2b at 1280: a bye's side is the EMPTY box with no text and not the waiting '?'; the final's waiting side on the same draw keeps '?'", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(5));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = byeDraw.doc.knockouts[0]!;
+    const byId = new Map(byeDraw.doc.matches.map((m) => [m.fixtureId, m]));
+    const firstRound = view.rounds[0]!;
+    const final = view.rounds.at(-1)!;
+    const byeMatch = firstRound.fixtureIds.map((id) => byId.get(id)!).find((m) => m.byeSides?.includes(true))!;
+    const byeSide = byeMatch.byeSides!.indexOf(true);
+    const filledSide = 1 - byeSide;
+    const finalMatch = byId.get(final.fixtureIds[0]!)!;
+    const waitingSide = finalMatch.header.sides.findIndex(
+      (s, i) => s.entrantId === "" && finalMatch.byeSides?.[i] !== true,
+    );
+
+    // The premise, from the document the page renders.
+    expect(byeMatch.header.sides[filledSide]!.entrantId, "the bye's other side is the entrant it advances").not.toBe("");
+    expect(waitingSide, JSON.stringify(finalMatch)).toBeGreaterThanOrEqual(0);
+
+    await openKnockout(page, hubUrl(orgSlug, byeDraw, "?tab=knockout"));
+    await roundChip(page, view, firstRound).click();
+    await expect(roundChip(page, view, firstRound)).toHaveAttribute("aria-pressed", "true");
+    const byeCard = page.getByTestId(`mh-match-${byeMatch.fixtureId}`);
+    await expect(byeCard).toBeVisible();
+    const byeSideBox = byeCard.getByTestId(`mh-match-side-${byeSide}`);
+    const emptyCrest = byeSideBox.locator('[data-crest="empty"]');
+    await expect(emptyCrest).toHaveCount(1);
+    await expect(emptyCrest).toBeVisible();
+    await expect(emptyCrest).toHaveText("");
+    expect(await emptyCrest.textContent(), "a bye's crest carries a glyph").toBe("");
+    await expect(byeSideBox.locator('[data-crest="pending"]'), "a bye drawn as the waiting '?'").toHaveCount(0);
+    // The same card's entrant side is neither placeholder.
+    await expect(byeCard.getByTestId(`mh-match-side-${filledSide}`).locator("[data-crest]")).toHaveCount(0);
+
+    // The positive pair, same draw: a side WAITING on a result keeps the "?"
+    // and is not the empty box.
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const finalCard = page.getByTestId(`mh-match-${finalMatch.fixtureId}`);
+    await expect(finalCard).toBeVisible();
+    const waitingSideBox = finalCard.getByTestId(`mh-match-side-${waitingSide}`);
+    const waitingCrest = waitingSideBox.locator('[data-crest="pending"]');
+    await expect(waitingCrest).toHaveCount(1);
+    await expect(waitingCrest).toHaveText("?");
+    await expect(waitingSideBox.locator('[data-crest="empty"]'), "a waiting side drawn as a bye").toHaveCount(0);
   });
 
   test("C2 at 1280: the Rounds|Draw switch shares ONE row — with the heading for one division, with the division chips for two", async ({
