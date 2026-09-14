@@ -22,7 +22,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import { disambiguatedShorts } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { resolvePersonDisplayName, anyOptedOut } from "@/lib/name-display";
-import type { SlotLabelLookup } from "@/lib/slot-label";
+import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
 import { getDictionary, toLocale } from "@/lib/i18n";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { publicRoundNamer } from "./feeder-slot-label";
@@ -325,31 +325,39 @@ export async function loadMatchCentre(
   // rows; anything that is not a feeder label, or names no match of the stage,
   // keeps today's text. `ext_key` is read the way `getPublicDivision` reads it
   // (a page playoff's rounds are told apart by it — fix round 1, M3).
-  const stageRows = await sql<
-    {
-      id: string;
-      stage_id: string;
-      round_no: number;
-      seq_in_round: number;
-      lane: "WB" | "LB" | "GF" | null;
-      is_final: boolean | null;
-      third_place: boolean | null;
-      conditional: boolean | null;
-      ext_key: string | null;
-    }[]
-  >`
-    select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional,
-           (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
-    from public_fixtures_v where stage_id = ${fixture.stage_id}`;
-  const namer = publicRoundNamer({
-    ui: ctx.slotLabelLookup,
-    dict: await getDictionary(toLocale(ctx.locale), "public"),
-    fixtures: stageRows,
-    // `stageRow` exists for every fixture (a foreign key); undefined only in
-    // the type the destructured query result leaves, and then nothing is named.
-    stageKind: () => stageRow?.kind,
-  });
-  const slot = (label: SlotLabel | null): string => namer.slot(fixture.stage_id, label);
+  //
+  // Fix round 1, M7: `loadSides` names only a side whose entrant is still null,
+  // so a fixture with both entrants set (every live and finished match) reads
+  // neither the stage's rows nor the dictionary; its `slot` is today's text,
+  // never asked for.
+  let slot = (label: SlotLabel | null): string => resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd");
+  if (fixture.home_entrant_id === null || fixture.away_entrant_id === null) {
+    const stageRows = await sql<
+      {
+        id: string;
+        stage_id: string;
+        round_no: number;
+        seq_in_round: number;
+        lane: "WB" | "LB" | "GF" | null;
+        is_final: boolean | null;
+        third_place: boolean | null;
+        conditional: boolean | null;
+        ext_key: string | null;
+      }[]
+    >`
+      select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional,
+             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
+      from public_fixtures_v where stage_id = ${fixture.stage_id}`;
+    const namer = publicRoundNamer({
+      ui: ctx.slotLabelLookup,
+      dict: await getDictionary(toLocale(ctx.locale), "public"),
+      fixtures: stageRows,
+      // `stageRow` exists for every fixture (a foreign key); undefined only in
+      // the type the destructured query result leaves, and then nothing is named.
+      stageKind: () => stageRow?.kind,
+    });
+    slot = (label) => namer.slot(fixture.stage_id, label);
+  }
   const sides = await loadSides(
     sql,
     fixture,
