@@ -31,6 +31,24 @@ import { seedFootballCatalog, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** A `starts_on` comfortably in the future, computed from the real clock
+ *  rather than a hardcoded literal. `seedTeamDivision` used to write a fixed
+ *  "2026-09-15" — one calendar day past "today" when this test file's own
+ *  date fiction was set — and every one of its callers went red the moment
+ *  wall-clock time caught up: `unassignSoloSignUp`'s `started` gate reads
+ *  `competitions.starts_on <= current_date` in Postgres, so a division whose
+ *  fixture asserted "not started" silently became "started" with no code
+ *  change and no seed change, purely from the calendar turning over (found
+ *  PR #782 review, 2026-09-14 — reproduced on `main` too, not a #782
+ *  regression). +60 days keeps every test in this file well clear of that
+ *  boundary for a long time; the one test that needs "started" (below) still
+ *  forces `starts_on` into the past itself. */
+function farFutureDate(daysFromNow = 60): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 // RS005 found `sendRegistrationEmail` had ZERO callers — the mailer existed,
 // the copy existed in four locales, and nothing ever sent it. So this asserts
 // the SEND, not the template: a notification nothing calls is the same defect
@@ -58,8 +76,8 @@ async function seedTeamDivision(
     name: "Assign Cup " + randomUUID().slice(0, 6),
     visibility: "public",
     branding: {},
-    starts_on: "2026-09-15",
-    ends_on: "2026-09-20",
+    starts_on: farFutureDate(),
+    ends_on: farFutureDate(65),
   });
   const division = await createDivision(auth, competition.id, {
     name: "Open " + randomUUID().slice(0, 6),

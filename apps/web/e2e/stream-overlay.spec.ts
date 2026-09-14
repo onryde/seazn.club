@@ -22,11 +22,14 @@ import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
+import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
+import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
   grantOverlay,
   seedCricketOverlayFixture,
+  seedCricketOverlayFreshOver,
   seedOverlayFixture,
   sendEvent,
   signInAs,
@@ -115,13 +118,11 @@ let statusBeforeGrant = 0;
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(180_000);
-  // `seedOverlayFixture` leaves this context signed in as the rig's OWNER, and
-  // the entitlement drop below needs exactly that session: it borrows staff on
-  // the org's owner row, so a bare `browser.newContext()` — which inherits the
-  // shared Pro storageState — flips the rig owner to staff and then calls the
-  // admin route as somebody else. That is a 401, and it is how this hook first
-  // failed.
-  const owner = await browser.newContext();
+  // Empty storage on purpose. A bare `browser.newContext()` inherits the
+  // project's Pro `storageState`; after `signInAs` the page can show the rig
+  // owner while `page.request` still rides the Pro cookie jar — persons POST
+  // then 401s (seen 2026-09-13). Same empty shape as `anonPage` below.
+  const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const ownerPage = await owner.newPage();
   try {
     rig = await seedOverlayFixture(ownerPage);
@@ -786,6 +787,77 @@ test.describe("§8's live preview", () => {
 });
 
 // ===========================================================================
+// Private Realtime → overlay scorebug (JWT mint + Realtime Authorization)
+// Must stay BEFORE the stream-link describe: that one decides the fixture.
+// ===========================================================================
+
+test.describe("private realtime push to the overlay", () => {
+  test("subscribes private and paints a goal well under POLL_MS", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const anon = await anonPage(browser);
+    try {
+      await signInAs(ownerPage, rig.ownerEmail);
+      await anon.setViewportSize({ width: 1920, height: 1080 });
+
+      const tokenResPromise = anon.waitForResponse(
+        (r) =>
+          r.url().includes(`/api/v1/public/fixtures/${rig.fixtureId}/realtime-token`) &&
+          r.request().method() === "GET",
+        { timeout: 30_000 },
+      );
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
+      await expect(anon.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
+
+      const tokenRes = await tokenResPromise;
+      expect(tokenRes.status(), "Pro org must mint a spectator realtime token").toBe(200);
+      const tokenBody = (await tokenRes.json()) as { data?: { token?: string }; token?: string };
+      const jwt = tokenBody.data?.token ?? tokenBody.token;
+      expect(jwt, "token body").toBeTruthy();
+      const headerJson = Buffer.from(String(jwt).split(".")[0]!, "base64url").toString("utf8");
+      const header = JSON.parse(headerJson) as { alg?: string; kid?: string };
+      expect(header.alg, "mint must be ES256 after JWKS key import").toBe("ES256");
+      expect(header.kid, "mint must carry the imported signing kid").toBeTruthy();
+
+      await expect(
+        anon.locator('[data-testid="ovl-root"]'),
+        "private channel must reach SUBSCRIBED (poll alone never flips this)",
+      ).toHaveAttribute("data-transport", "realtime", { timeout: 20_000 });
+
+      const home = anon.locator('[data-testid="ovl-big-home"]');
+      const before = ((await home.textContent()) ?? "").trim();
+      expect(before.length, "home score must be painted before the push").toBeGreaterThan(0);
+
+      const t0 = Date.now();
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", {
+        by: rig.homeEntrantId,
+      });
+
+      await expect
+        .poll(
+          async () => ((await home.textContent()) ?? "").trim(),
+          {
+            message: `home score must move off "${before}" via realtime, not the ${POLL_MS}ms poll`,
+            timeout: 8_000,
+            intervals: [200, 400, 800],
+          },
+        )
+        .not.toBe(before);
+
+      const elapsed = Date.now() - t0;
+      expect(
+        elapsed,
+        `push took ${elapsed}ms — at or above POLL_MS (${POLL_MS}) this is poll, not realtime`,
+      ).toBeLessThan(POLL_MS);
+    } finally {
+      await owner.close();
+      await anon.context().close();
+    }
+  });
+});
+
+// ===========================================================================
 // The public match page's link to the club's broadcast (Task 7)
 // ===========================================================================
 
@@ -1065,6 +1137,102 @@ test.describe("moments (W2)", () => {
 });
 
 /**
+ * 2026-09-13 — pad Pause / Correct publish `*.clock`; the OBS clock must hold
+ * when `running: false`. Own rig: the shared hockey fixture is decided earlier.
+ */
+test.describe("overlay clock holds when paused (*.clock)", () => {
+  let clockRig: OverlayRig;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    try {
+      clockRig = await seedOverlayFixture(ownerPage);
+      await grantOverlay(clockRig.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test("a paused stamp freezes .ovl-bug-clock; resume lets it advance again", async ({ browser }) => {
+    test.setTimeout(120_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    await signInAs(ownerPage, clockRig.ownerEmail);
+    const anon = await anonPage(browser);
+    const clockCell = anon.locator(".ovl-bug-clock");
+
+    const parseFace = (text: string): number => {
+      const m = /^(\d+):(\d{2})$/.exec(text.trim());
+      if (!m) throw new Error(`not MM:SS: "${text}"`);
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+
+    try {
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: true,
+      });
+
+      await anon.goto(`/overlay/fixtures/${clockRig.fixtureId}?style=bug`);
+      await expect
+        .poll(async () => ((await clockCell.count()) > 0 ? (await clockCell.innerText()).trim() : ""), {
+          timeout: 60_000,
+          intervals: [2_000],
+          message: "bug clock must appear once asOf is stamped",
+        })
+        .toMatch(/^\d+:\d{2}$/);
+
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: false,
+      });
+
+      // Overlay paints via formatClock → zero-padded MM:SS (`01:30`, not `1:30`).
+      let held = "";
+      await expect
+        .poll(
+          async () => {
+            await anon.reload();
+            held = (await clockCell.innerText()).trim();
+            return held;
+          },
+          { timeout: 60_000, intervals: [2_000], message: "paused stamp must paint 01:30" },
+        )
+        .toBe("01:30");
+
+      await anon.waitForTimeout(2_500);
+      await anon.reload();
+      await expect(clockCell, "paused clock must not advance on wall time alone").toHaveText("01:30", {
+        timeout: 30_000,
+      });
+      expect(parseFace(held)).toBe(90);
+
+      await sendEvent(ownerPage.request, clockRig.fixtureId, "hockey.clock", {
+        at: { period: "Q1", elapsed: 90 },
+        running: true,
+      });
+
+      await expect
+        .poll(
+          async () => {
+            await anon.reload();
+            const face = (await clockCell.innerText()).trim();
+            if (!/^\d+:\d{2}$/.test(face)) return 0;
+            return parseFace(face);
+          },
+          { timeout: 60_000, intervals: [1_000], message: "resume must let the bug clock tick past 01:30" },
+        )
+        .toBeGreaterThan(90);
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+});
+
+/**
  * W2 TASK 3 — the cricket bar's SECOND BAND, in a browser and in CI.
  *
  * Its own describe and its own rig, for the reason the moments describe states:
@@ -1124,6 +1292,94 @@ test.describe("cricket crease band (W2 Task 3)", () => {
       await expect(band).toContainText(/Bat \d+ /);
     } finally {
       await anon.context().close();
+    }
+  });
+});
+
+/**
+ * End-of-over card (design 2026-09-12 Feature B) — browser gate.
+ * Unit tests cover builders; this proves the card raises after an over
+ * completes while the overlay is open, and does not replay on mount.
+ */
+test.describe("cricket end-of-over card (EOO)", () => {
+  const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
+  // The EOO card doubleBeats (2026-09-14, same mechanism as SIX/FOUR/OUT/
+  // GOAL) at its own longer hold, not the slab default — deriving the
+  // per-beat cost from END_OF_OVER_HOLD_MS rather than reusing CYCLE_MS
+  // (which is keyed to OVERLAY_MOMENT_HOLD_MS) so a future change to either
+  // constant moves this budget with it, not past it (AGENTS.md rule 20).
+  const EOO_BEAT_MS = OVERLAY_MOMENT_FOLD_MS * 2 + END_OF_OVER_HOLD_MS;
+  const EOO_CYCLE_MS = EOO_BEAT_MS * 2;
+
+  test("completing an over while open raises ovl-end-of-over; remount does not replay it", async ({
+    browser,
+  }) => {
+    test.setTimeout(EOO_CYCLE_MS * 5 + 180_000);
+    // Empty storage on purpose (review 2026-09-14, M9 — same fix as the
+    // beforeAll above and `anonPage`, "seen 2026-09-13"). A bare
+    // `browser.newContext()` inherits the project's Pro `storageState`;
+    // `seedCricketOverlayFreshOver` calls `signInAs`, and afterwards
+    // `ownerPage.request` (used below for every `sendEvent` ball) still rides
+    // the inherited Pro cookie jar and 401s.
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
+    await grantOverlay(rig.orgId);
+
+    const anon = await anonPage(browser);
+    const anonBug = await anonPage(browser);
+    try {
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      await anonBug.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
+      await expect(anonBug.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const eoo = anon.locator('[data-testid="ovl-end-of-over"]');
+      const eooBug = anonBug.locator('[data-testid="ovl-end-of-over"]');
+
+      const watchUntil = Date.now() + CYCLE_MS * 2;
+      while (Date.now() < watchUntil) {
+        expect(await eoo.count(), "pre-over mount must not show end-of-over").toBe(0);
+        await anon.waitForTimeout(250);
+      }
+
+      for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+        await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+          over: 0,
+          ballInOver,
+          striker,
+          nonStriker,
+          bowler,
+          runs: { bat: 0 },
+        });
+      }
+
+      await expect(eoo).toHaveAttribute("data-phase", "hold", { timeout: 30_000 });
+      await expect(eoo, "fine scoring must paint the full split card, not compact").toHaveAttribute(
+        "data-variant",
+        "full",
+      );
+      // Bug theme shares the same `.ovl-end-of-over*` CSS block and moment
+      // data on purpose (`_THEMES.md` §4, "the bar and the bug are twins") —
+      // prove it actually raises there too, not just on the bar.
+      await expect(eooBug).toHaveAttribute("data-phase", "hold", { timeout: 5_000 });
+      await expect(eoo, "end-of-over must leave the air").toHaveCount(0, {
+        timeout: EOO_CYCLE_MS + CYCLE_MS,
+      });
+      await expect(eooBug, "bug theme's end-of-over must leave the air too").toHaveCount(0, {
+        timeout: EOO_CYCLE_MS + CYCLE_MS,
+      });
+
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      const remountUntil = Date.now() + CYCLE_MS * 3;
+      while (Date.now() < remountUntil) {
+        expect(await eoo.count(), "OBS remount must not replay a closed over").toBe(0);
+        await anon.waitForTimeout(250);
+      }
+    } finally {
+      await anon.context().close();
+      await anonBug.context().close();
+      await owner.close();
     }
   });
 });

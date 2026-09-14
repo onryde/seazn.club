@@ -34,7 +34,17 @@ import {
 } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { activeInnings, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
-import { liveFromScorecard, type OverlayCricketLive } from "@/lib/overlay-cricket";
+import {
+  highlightsFromScorecard,
+  lastClosedOverFromScorecard,
+  liveFromScorecard,
+  scoringStartedFromScorecard,
+  tossFromScorecard,
+  type OverlayClosedOver,
+  type OverlayCricketLive,
+  type OverlayCricketToss,
+  type OverlayHighlights,
+} from "@/lib/overlay-cricket";
 import { servingSide, setBreakdown } from "@/lib/public-site";
 import { log } from "@/server/logger";
 import { readPublicLineups } from "@/server/public-site/public-lineups";
@@ -518,6 +528,16 @@ export async function loadRecentPersonOf(
   return (id: unknown) => (typeof id === "string" ? byId.get(id) : undefined);
 }
 
+/** Cricket overlay block cached WITHOUT consent names (ids stand in for names). */
+export type OverlayCricketBundleIds = {
+  live: OverlayCricketLive | null;
+  toss: OverlayCricketToss | null;
+  lastClosedOver: OverlayClosedOver | null;
+  scoringStarted: boolean;
+  /** Ended-card top batter / bowler; `name` holds person id until named. */
+  highlights: OverlayHighlights | null;
+};
+
 /**
  * The cricket bar's second band (W2 Task 3) — the batters at the crease and the
  * bowler's analysis, through `deriveCricketScorecard`: the ENGINE'S own public
@@ -544,16 +564,26 @@ export async function loadRecentPersonOf(
  *
  * Best effort throughout, like everything else on this path: a club is on air,
  * and a missing second band is a smaller loss than a dark overlay.
+ *
+ * Also projects toss / lastClosedOver / scoringStarted for match openers and
+ * the end-of-over card (2026-09-12 design) from the SAME scorecard — one fold.
  */
-export function overlayCricketLiveIds(
+export function overlayCricketBundleIds(
   inputs: { sportKey: string; module: AnySportModule; cfg: unknown; lineups: LineupPair },
   active: readonly EventEnvelope[],
-): OverlayCricketLive | null {
-  if (inputs.sportKey !== "cricket") return null;
+): OverlayCricketBundleIds {
+  const empty: OverlayCricketBundleIds = {
+    live: null,
+    toss: null,
+    lastClosedOver: null,
+    scoringStarted: false,
+    highlights: null,
+  };
+  if (inputs.sportKey !== "cricket") return empty;
   const parsed = inputs.module.configSchema.safeParse(inputs.cfg);
   if (!parsed.success) {
     log.warn({ sportKey: inputs.sportKey }, "overlay: cricket cfg did not parse, serving no crease band");
-    return null;
+    return empty;
   }
   try {
     const scorecard = deriveCricketScorecard({
@@ -563,25 +593,32 @@ export function overlayCricketLiveIds(
     });
     // The id IS the name at this stage; `nameOf` below swaps them for the
     // consent-resolved ones once the cache has been crossed.
-    return liveFromScorecard(scorecard, (id) => id);
+    const idAsName = (id: string) => id;
+    const sides: [string, string] = [inputs.lineups.home.entrantId, inputs.lineups.away.entrantId];
+    return {
+      live: liveFromScorecard(scorecard, idAsName),
+      toss: tossFromScorecard(scorecard, sides),
+      lastClosedOver: lastClosedOverFromScorecard(scorecard, idAsName),
+      scoringStarted: scoringStartedFromScorecard(scorecard),
+      highlights: highlightsFromScorecard(scorecard, idAsName),
+    };
   } catch (err) {
     log.warn({ err }, "overlay: cricket scorecard failed, serving no crease band");
-    return null;
+    return empty;
   }
 }
 
 /**
- * The names, applied OUTSIDE the cache — see `overlayCricketLiveIds`.
+ * The names, applied OUTSIDE the cache — see `overlayCricketBundleIds`.
  *
  * A person the line-up never named loses their name and keeps their figures,
  * exactly as `liveFromScorecard` decides: the crease is a fact, the name is
  * consent.
  */
-export function nameCricketLive(
-  live: OverlayCricketLive | null,
+function nameLiveBlock(
+  live: OverlayCricketLive,
   personOf: (id: unknown) => RecentPerson | undefined,
-): OverlayCricketLive | null {
-  if (live === null) return null;
+): OverlayCricketLive {
   const named = (id: string | undefined) => (id === undefined ? undefined : personOf(id)?.name);
   return {
     batters: live.batters.map((b) => {
@@ -598,6 +635,72 @@ export function nameCricketLive(
   };
 }
 
+export function nameCricketLive(
+  live: OverlayCricketLive | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayCricketLive | null {
+  return live === null ? null : nameLiveBlock(live, personOf);
+}
+
+function nameClosedOver(
+  closed: OverlayClosedOver | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayClosedOver | null {
+  if (closed === null) return null;
+  // `nameLiveBlock` takes a non-null block, so unlike `nameCricketLive` this
+  // never has a null result to fall back on — there is no `batters: []` case
+  // to write.
+  const liveNamed = nameLiveBlock(
+    { batters: closed.batters, bowler: closed.bowler, thisOver: closed.glyphs },
+    personOf,
+  );
+  const { bowler: _omit, ...rest } = closed;
+  return {
+    ...rest,
+    batters: liveNamed.batters,
+    ...(liveNamed.bowler === undefined ? {} : { bowler: liveNamed.bowler }),
+  };
+}
+
+function nameHighlights(
+  highlights: OverlayHighlights | null,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayHighlights | null {
+  if (highlights === null) return null;
+  const chip = (c: { name: string; line: string; detail?: string } | undefined) => {
+    if (!c) return undefined;
+    const person = personOf(c.name);
+    // Unnamed: never put a bare id on the ended card. `masked` is NOT a
+    // reason to drop the chip — it means "the display name was shortened for
+    // consent", not "suppress entirely" (`nameCricketLive`, which puts the
+    // same masked name on air in the crease band and the end-of-over card
+    // with no masked check at all, is the proof this guard disagreed with).
+    if (!person || !person.name) return undefined;
+    return {
+      name: person.name,
+      line: c.line,
+      ...(c.detail ? { detail: c.detail } : {}),
+    };
+  };
+  const batter = chip(highlights.batter);
+  const bowler = chip(highlights.bowler);
+  if (!batter && !bowler) return null;
+  return { ...(batter ? { batter } : {}), ...(bowler ? { bowler } : {}) };
+}
+
+export function nameCricketBundle(
+  bundle: OverlayCricketBundleIds,
+  personOf: (id: unknown) => RecentPerson | undefined,
+): OverlayCricketBundleIds {
+  return {
+    live: nameCricketLive(bundle.live, personOf),
+    toss: bundle.toss,
+    lastClosedOver: nameClosedOver(bundle.lastClosedOver, personOf),
+    scoringStarted: bundle.scoringStarted,
+    highlights: nameHighlights(bundle.highlights, personOf),
+  };
+}
+
 /** The person ids the cricket band will publish — the two at the crease and the
  *  bowler. Read off the id-carrying block itself, so the lookup cannot drift
  *  from what is rendered. */
@@ -605,4 +708,20 @@ export function cricketPersonIdsIn(live: OverlayCricketLive | null): string[] {
   if (live === null) return [];
   const ids = [...live.batters.map((b) => b.name), live.bowler?.name];
   return [...new Set(ids.filter((id): id is string => typeof id === "string"))];
+}
+
+export function cricketBundlePersonIdsIn(bundle: OverlayCricketBundleIds): string[] {
+  const ids = new Set(cricketPersonIdsIn(bundle.live));
+  if (bundle.lastClosedOver) {
+    for (const id of cricketPersonIdsIn({
+      batters: bundle.lastClosedOver.batters,
+      bowler: bundle.lastClosedOver.bowler,
+      thisOver: bundle.lastClosedOver.glyphs,
+    })) {
+      ids.add(id);
+    }
+  }
+  if (bundle.highlights?.batter?.name) ids.add(bundle.highlights.batter.name);
+  if (bundle.highlights?.bowler?.name) ids.add(bundle.highlights.bowler.name);
+  return [...ids];
 }

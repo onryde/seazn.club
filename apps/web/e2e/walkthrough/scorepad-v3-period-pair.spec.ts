@@ -254,21 +254,45 @@ async function tapShootoutAttempt(
 }
 
 /** Start/pause is the SAME control, toggled — `data-running` is the
- *  rendered proof, not an inference from which label was tapped. */
-async function toggleClock(page: Page, expectRunning: boolean): Promise<void> {
+ *  rendered proof, not an inference from which label was tapped.
+ *  2026-09-13: also waits for `*.clock` on the ledger (overlay publish). */
+async function toggleClock(
+  page: Page,
+  request: APIRequestContext,
+  fixtureId: string,
+  clockType: string,
+  expectRunning: boolean,
+): Promise<void> {
+  const before = (await ledger(request, fixtureId)).filter((e) => e.type === clockType).length;
   await pace(page);
   await clockToggle(page).click();
   await expect(clockBar(page), `the clock must read data-running="${expectRunning ? "yes" : "no"}"`).toHaveAttribute(
     "data-running",
     expectRunning ? "yes" : "no",
   );
+  await expect
+    .poll(
+      async () => {
+        const events = (await ledger(request, fixtureId)).filter((e) => e.type === clockType);
+        if (events.length < before + 1) return null;
+        return events[events.length - 1]!.payload.running === expectRunning;
+      },
+      { timeout: 20_000, message: `${clockType} must land with running=${expectRunning}` },
+    )
+    .toBe(true);
 }
 
 /** Opens the correction panel, taps "+1:00" `times` times, closes it again.
- *  Purely local (no ledger growth to wait for — `clock.ts`'s `adjustClock`
- *  touches only host state, never dispatches), so the proof is the
- *  READOUT'S OWN TEXT moving, read back before and after. */
-async function correctClockForward(page: Page, times: number): Promise<{ before: string; after: string }> {
+ *  Proof is the READOUT moving AND one `*.clock` per nudge on the ledger
+ *  (2026-09-13 — Correct re-anchors the overlay immediately). */
+async function correctClockForward(
+  page: Page,
+  request: APIRequestContext,
+  fixtureId: string,
+  clockType: string,
+  times: number,
+): Promise<{ before: string; after: string }> {
+  const beforeCount = (await ledger(request, fixtureId)).filter((e) => e.type === clockType).length;
   await pace(page);
   await clockValue(page).click();
   await expect(clockAdjust(page), "the correction panel must open").toBeVisible({ timeout: 10_000 });
@@ -279,6 +303,12 @@ async function correctClockForward(page: Page, times: number): Promise<{ before:
   const after = (await clockValue(page).textContent()) ?? "";
   await clockValue(page).click(); // close it again
   await expect(clockAdjust(page), "the correction panel must close").toHaveCount(0);
+  await expect
+    .poll(async () => (await ledger(request, fixtureId)).filter((e) => e.type === clockType).length, {
+      timeout: 20_000,
+      message: `${clockType} must publish once per Correct nudge`,
+    })
+    .toBe(beforeCount + times);
   return { before, after };
 }
 
@@ -384,7 +414,7 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
 
   await expect(clockBar(page), "clock() is declared — the bar must be on screen").toBeVisible({ timeout: 20_000 });
-  await toggleClock(page, true);
+  await toggleClock(page, page.request, fx.fixtureId, "hockey.clock", true);
   await expect(clockValue(page), "a running clock must read a real M:SS face").toHaveText(/^\d+:\d{2}$/);
   await shot(page, "hockey", "clock-running");
 
@@ -404,29 +434,31 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   await shot(page, "hockey", "suspension-fields-chosen");
 
   // ---- Pause, then correct forward past the 1-minute award -----------------
-  await toggleClock(page, false);
+  await toggleClock(page, page.request, fx.fixtureId, "hockey.clock", false);
   await shot(page, "hockey", "clock-paused");
 
-  const { before, after } = await correctClockForward(page, 1); // +1:00
+  const { before, after } = await correctClockForward(page, page.request, fx.fixtureId, "hockey.clock", 1); // +1:00
   expect(parseClock(after), `clock correction never moved the readout off "${before}"`).toBeGreaterThan(
     parseClock(before),
   );
   expect(parseClock(after) - parseClock(before), "a single +1:00 tap must move the clock by exactly 60s").toBe(60);
   await shot(page, "hockey", "clock-corrected");
 
-  // The 1-minute card is now expired by the CORRECTED reading — proof the
-  // countdown is measured against the live clock, not the fold's last
-  // stamp (R6 fix pass 2 gap 2's own defect).
+  // Correct publishes `*.clock` with the new stamp (2026-09-13). The kernel
+  // sweeps expired suspensions on that stamped event, so the box is already
+  // gone — not stuck displaying 0:00 until the next goal. Pre-publish, Correct
+  // was host-local only and the pad showed 0:00 against clockAt while the fold
+  // still held the card.
   await expect(
     strip(page, "box"),
-    "the box must read the suspension as expired once the clock has run past its own award",
-  ).toContainText("0:00", { timeout: 20_000 });
+    "a Correct that jumps past the award must sweep the card off the box",
+  ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "hockey", "countdown-expired");
 
   // Resume and score again — a real stamped event, which SWEEPS the expired
   // card server-side (kernel.ts sweeps before applying). The proof it is
   // genuinely gone, not merely displaying zero: the Release tile vanishes.
-  await toggleClock(page, true);
+  await toggleClock(page, page.request, fx.fixtureId, "hockey.clock", true);
   await tapGoal(page, page.request, fx.fixtureId, "home");
   await expect(halfScore(page, "home")).toHaveText("2", { timeout: 20_000 });
   await expect(
@@ -531,7 +563,7 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   await expect(halfScore(page, "home")).toHaveText("1", { timeout: 20_000 });
 
   await expect(clockBar(page), "clock() is declared — the bar must be on screen").toBeVisible({ timeout: 20_000 });
-  await toggleClock(page, true);
+  await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", true);
   await shot(page, "icehockey", "clock-running");
 
   // A suspension with its OWN minutes/servedBy — the SHORT side (2' minor is
@@ -549,16 +581,18 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   await shot(page, "icehockey", "suspension-fields-chosen");
 
   // ---- Pause, correct forward past the 1-minute award, prove the expiry ---
-  await toggleClock(page, false);
-  const { before, after } = await correctClockForward(page, 1);
+  await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", false);
+  const { before, after } = await correctClockForward(page, page.request, fx.fixtureId, "icehockey.clock", 1);
   expect(parseClock(after) - parseClock(before), "a single +1:00 tap must move the clock by exactly 60s").toBe(60);
+  // Correct publishes `*.clock`; the kernel sweeps on that stamp — box gone,
+  // not a lingering 0:00 face (same as hockey above).
   await expect(
     strip(page, "box"),
-    "the box must read the penalty as expired once the clock has run past its own award",
-  ).toContainText("0:00", { timeout: 20_000 });
+    "a Correct that jumps past the award must sweep the penalty off the box",
+  ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "icehockey", "countdown-expired");
 
-  await toggleClock(page, true);
+  await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", true);
   await tapGoal(page, page.request, fx.fixtureId, "away"); // levels it, and sweeps the expired penalty
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
   await expect(
@@ -567,9 +601,28 @@ test("R6 — ice hockey: a suspension with its own minutes/servedBy, the clock r
   ).toHaveCount(0, { timeout: 20_000 });
   await shot(page, "icehockey", "suspension-swept-levelled");
 
+  // Pause before the whistle ladder — stop-clock sports whistle with the
+  // clock stopped. (OT→SHOOTOUT used to die on DOUBLE_SUBMIT when two
+  // unstamped `{to:"FT"}` advances landed inside the window; `whistleAt` on
+  // the advance tile closes that. Pause stays for realism, not as the fix.)
+  await toggleClock(page, page.request, fx.fixtureId, "icehockey.clock", false);
+
   // ---- LEVEL THROUGH THE WHOLE LADDER — the shoot-out is the only thing
   // left that can decide it. No more goals from here. ------------------------
   await tapAdvanceUntil(page, page.request, fx.fixtureId, "SHOOTOUT");
+  // whistleAt: every FT advance on the ladder must name a DISTINCT period so
+  // consecutive {to:"FT"} taps cannot trip DOUBLE_SUBMIT (P3→OT vs OT→SO).
+  {
+    const ft = (await ledger(page.request, fx.fixtureId)).filter(
+      (e) => e.type === "icehockey.period.advance" && e.payload.to === "FT",
+    );
+    expect(ft.length, "tied ice hockey must whistle FT at least twice").toBeGreaterThanOrEqual(2);
+    const periods = ft.map((e) => (e.payload.at as { period?: string } | undefined)?.period);
+    expect(periods.every((p) => typeof p === "string" && p.length > 0), "each FT advance carries whistleAt").toBe(
+      true,
+    );
+    expect(new Set(periods).size, "FT advances must not share at.period").toBe(periods.length);
+  }
   // "Game-winning shots" — pad.icehockey.phase.SHOOTOUT (icehockey.tsx's own
   // header: "The shoot-out is a GWS", reaching the pad as COPY, not a code
   // branch).

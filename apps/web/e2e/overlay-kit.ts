@@ -346,6 +346,92 @@ export async function seedCricketOverlayFixture(page: Page): Promise<OverlayRig>
 }
 
 /**
+ * Cricket overlay at toss+start with an empty over — for end-of-over e2e that
+ * bowls a full over while the browser is watching. The crease-band seed above
+ * ends mid-over after a wicket; continuing from its `offenderIds` fails the
+ * ledger's striker check.
+ */
+export async function seedCricketOverlayFreshOver(page: Page): Promise<{
+  rig: OverlayRig;
+  striker: string;
+  nonStriker: string;
+  bowler: string;
+}> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const ownerEmail = `delivered+ovleoo-${tag}@resend.dev`;
+  const orgSlug = `ovleoo-org-${tag}`;
+
+  const { orgId } = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${ownerEmail}, ${"Overlay EOO Owner " + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by)
+      values (${"Overlay EOO Org " + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status)
+      values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return { orgId: newOrgId };
+  });
+
+  await signInAs(page, ownerEmail);
+  const request = page.request;
+  const home = Array.from({ length: 11 }, (_, i) => ({ fullName: `EOO Bat ${i + 1} ${tag}` }));
+  const away = Array.from({ length: 11 }, (_, i) => ({ fullName: `EOO Bowl ${i + 1} ${tag}` }));
+  const seeded = await seedRosteredFixture(request, {
+    label: `Overlay EOO ${tag}`,
+    sportKey: "cricket",
+    variantKey: "t20",
+    home,
+    away,
+    entrantKind: "team",
+  });
+  const person = (name: string): string => {
+    const id = seeded.personIds[name];
+    if (id === undefined) throw new Error(`EOO seed: no person for "${name}"`);
+    return id;
+  };
+  const striker = person(`EOO Bat 1 ${tag}`);
+  const nonStriker = person(`EOO Bat 2 ${tag}`);
+  const bowler = person(`EOO Bowl 11 ${tag}`);
+  await sendEvent(request, seeded.fixtureId, "cricket.toss", {
+    wonBy: seeded.homeEntrantId,
+    elected: "bat",
+  });
+  await sendEvent(request, seeded.fixtureId, "core.start", {});
+
+  const comp = await apiJson<{ slug: string }>(
+    request,
+    `/api/v1/competitions/${seeded.competitionId}`,
+  );
+  const div = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${seeded.divisionId}`);
+  if (!comp.data?.slug || !div.data?.slug) {
+    throw new Error(`EOO seed: slugs missing (comp ${comp.status}, div ${div.status})`);
+  }
+
+  return {
+    rig: {
+      orgId,
+      orgSlug,
+      ownerEmail,
+      competitionId: seeded.competitionId,
+      compSlug: comp.data.slug,
+      divisionId: seeded.divisionId,
+      divSlug: div.data.slug,
+      fixtureId: seeded.fixtureId,
+      homeEntrantId: seeded.homeEntrantId,
+      awayEntrantId: seeded.awayEntrantId,
+      offenderIds: [striker, nonStriker, bowler],
+    },
+    striker,
+    nonStriker,
+    bowler,
+  };
+}
+
+/**
  * A LIVE ROSTERED fixture with nothing on the ledger but `core.start` — the
  * shared body behind the two rigs below (stream overlay W2, rulings 28 and 31).
  *

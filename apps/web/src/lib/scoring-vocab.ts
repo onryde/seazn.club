@@ -123,6 +123,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "cricket.toss": "event.cricket.toss",
 
   "football.card": "event.football.card",
+  "football.clock": "event.football.clock",
   "football.goal": "event.football.goal",
   "football.penalty": "event.football.penalty",
   "football.period": "event.football.period",
@@ -135,6 +136,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "generic.result": "event.generic.result",
   "generic.score": "event.generic.score",
 
+  "hockey.clock": "event.hockey.clock",
   "hockey.goal": "event.hockey.goal",
   "hockey.period.advance": "event.hockey.period.advance",
   "hockey.set_piece": "event.hockey.set_piece",
@@ -143,6 +145,7 @@ export const EVENT_KEY: Record<string, MessageKey> = {
   "hockey.suspension.start": "event.hockey.suspension.start",
   "hockey.suspension.end": "event.hockey.suspension.end",
 
+  "icehockey.clock": "event.icehockey.clock",
   "icehockey.goal": "event.icehockey.goal",
   "icehockey.period.advance": "event.icehockey.period.advance",
   "icehockey.set_piece": "event.icehockey.set_piece",
@@ -902,6 +905,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.cricket.ribbon.toss",
 
   "pad.football.action.card",
+  "pad.football.action.clock",
+  "pad.football.action.clock.field.running",
   "pad.football.action.goal",
   "pad.football.action.penalty",
   "pad.football.action.period",
@@ -918,16 +923,13 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.football.panel.shots",
   "pad.football.panel.sinbin",
   "pad.football.panel.subs",
-  // R3/task C (v3 ribbon). Football is the first sport whose ribbon coverage
-  // is COMPLETE: these nine are every `football.*` type the engine's fidelity
-  // tiers declare, so no football event falls to the generic
-  // `pad.ribbon.fallback` ("{event} recorded"). Registered HERE, not only in
-  // the dictionaries — buildRibbon (v3/ribbon.ts) gates its per-sport lookup
-  // on PAD_LABEL_KEYS membership, so dictionary copy with no entry here stays
-  // on the fallback forever with nothing failing. Suffixes are
-  // `ribbonKeyFor`'s split-on-FIRST-dot output, hence the two-segment
-  // `sinbin.*`/`shootout.*` tails.
+  // R3/task C (v3 ribbon). Football ribbon coverage is COMPLETE: these are
+  // every `football.*` type the engine's fidelity tiers declare, so no
+  // football event falls to the generic `pad.ribbon.fallback`. Registered
+  // HERE, not only in the dictionaries — buildRibbon (v3/ribbon.ts) gates
+  // its per-sport lookup on PAD_LABEL_KEYS membership.
   "pad.football.ribbon.card",
+  "pad.football.ribbon.clock",
   "pad.football.ribbon.goal",
   "pad.football.ribbon.penalty",
   "pad.football.ribbon.period",
@@ -962,6 +964,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.generic.scorebug.tally.hint",
 
   "pad.hockey.action.advance",
+  "pad.hockey.action.clock",
+  "pad.hockey.action.clock.field.running",
   "pad.hockey.action.goal",
   "pad.hockey.action.goal.field.emptyNet",
   "pad.hockey.action.setPiece",
@@ -981,6 +985,8 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.panel.shot",
 
   "pad.icehockey.action.advance",
+  "pad.icehockey.action.clock",
+  "pad.icehockey.action.clock.field.running",
   "pad.icehockey.action.goal",
   "pad.icehockey.action.goal.field.emptyNet",
   "pad.icehockey.action.setPiece",
@@ -1139,6 +1145,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   // "Unreachable" is a claim about config, and config is the thing that varies
   // — the exact reasoning that put badminton's `timeout` on this list in R5.
   "pad.hockey.ribbon.goal",
+  "pad.hockey.ribbon.clock",
   "pad.hockey.ribbon.period.advance",
   "pad.hockey.ribbon.set_piece",
   "pad.hockey.ribbon.shootout.attempt",
@@ -1146,6 +1153,7 @@ export const PAD_LABEL_KEYS: readonly MessageKey[] = [
   "pad.hockey.ribbon.suspension.end",
   "pad.hockey.ribbon.suspension.start",
   "pad.icehockey.ribbon.goal",
+  "pad.icehockey.ribbon.clock",
   "pad.icehockey.ribbon.period.advance",
   "pad.icehockey.ribbon.set_piece",
   "pad.icehockey.ribbon.shootout.attempt",

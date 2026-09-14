@@ -756,6 +756,37 @@
           "outcome"
         ],
         "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "at": {
+            "additionalProperties": false,
+            "properties": {
+              "elapsed": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "period": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "elapsed",
+              "period"
+            ],
+            "type": "object"
+          },
+          "running": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "running"
+        ],
+        "type": "object"
       }
     ]
   },
@@ -814,6 +845,9 @@
       ],
       "cardLog[].startedAt.period": [
         "string"
+      ],
+      "clockRunning": [
+        "boolean"
       ],
       "entrants": [
         "object"

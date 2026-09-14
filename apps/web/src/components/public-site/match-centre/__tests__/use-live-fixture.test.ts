@@ -68,32 +68,36 @@ afterEach(() => {
 });
 
 describe("useLiveFixture", () => {
-  it("renders the initial data immediately, before any poll has fired", () => {
+  it("renders the initial data immediately", () => {
     const hook = mount("fx-1", scheduled, false);
     expect(hook.current.data).toBe(scheduled);
     expect(hook.current.transport).toBe("poll");
-    expect(fetchLiveFixture).not.toHaveBeenCalled();
   });
 
-  it("a poll tick after POLL_MS replaces the WHOLE document with the fresh fetch", async () => {
+  it("undelayed live mount refreshes once immediately, then again on POLL_MS", async () => {
     const next: LiveFixtureData = {
       status: "in_play",
       summary: { headline: "1 – 0" },
       outcome: null,
     } as LiveFixtureData;
-    vi.mocked(fetchLiveFixture).mockResolvedValueOnce(next);
+    vi.mocked(fetchLiveFixture).mockResolvedValue(next);
     const hook = mount("fx-1", scheduled, false);
-    expect(hook.current.data).toBe(scheduled); // positive pair: unchanged before the tick
+    expect(hook.current.data).toBe(scheduled);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchLiveFixture).toHaveBeenCalledTimes(1);
+    expect(hook.current.data).toBe(next);
 
     await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(fetchLiveFixture).toHaveBeenCalledTimes(2);
     expect(fetchLiveFixture).toHaveBeenCalledWith("fx-1");
-    expect(hook.current.data).toBe(next); // the WHOLE document, not a merge
   });
 
   it("a failed poll fetch keeps the last known data — never throws to the UI", async () => {
-    vi.mocked(fetchLiveFixture).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(fetchLiveFixture).mockRejectedValue(new Error("offline"));
     const hook = mount("fx-1", scheduled, false);
 
+    await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
     await expect(vi.advanceTimersByTimeAsync(POLL_MS)).resolves.not.toThrow();
     expect(hook.current.data).toBe(scheduled); // unchanged, not undefined/null
   });
@@ -110,14 +114,14 @@ describe("useLiveFixture", () => {
   // unmounts must not apply its result once it lands.
   it("a poll fetch that resolves AFTER unmount does not update state (no crash, no stale write)", async () => {
     let resolveFetch!: (v: LiveFixtureData) => void;
-    vi.mocked(fetchLiveFixture).mockImplementationOnce(
+    vi.mocked(fetchLiveFixture).mockImplementation(
       () =>
         new Promise<LiveFixtureData>((resolve) => {
           resolveFetch = resolve;
         }),
     );
     const hook = mount("fx-1", scheduled, false);
-    await vi.advanceTimersByTimeAsync(POLL_MS); // arms the tick; fetch now in flight
+    await vi.advanceTimersByTimeAsync(0); // immediate refresh in flight
     hook.unmount();
 
     const late: LiveFixtureData = { status: "in_play", summary: null, outcome: null } as LiveFixtureData;
@@ -130,10 +134,10 @@ describe("useLiveFixture", () => {
 
   it("polls the public fixture URL by default — every existing caller is byte-identical", async () => {
     // The default fetcher IS `fetchLiveFixture` (mocked here), called with the id.
-    vi.mocked(fetchLiveFixture).mockResolvedValueOnce({ ...scheduled, status: "in_play" } as LiveFixtureData);
+    vi.mocked(fetchLiveFixture).mockResolvedValue({ ...scheduled, status: "in_play" } as LiveFixtureData);
     const hook = mount("fx-1", scheduled, false);
     expect(hook.current.presentationNowOffsetMs, "no delay → offset 0, by value").toBe(0);
-    await vi.advanceTimersByTimeAsync(POLL_MS);
+    await vi.advanceTimersByTimeAsync(0);
     expect(fetchLiveFixture).toHaveBeenCalledWith("fx-1");
     expect(hook.current.data.status).toBe("in_play");
   });
@@ -141,7 +145,7 @@ describe("useLiveFixture", () => {
   it("uses the fetcher it is given, and then never calls fetchLiveFixture (one transport, two payloads)", async () => {
     const own = vi.fn(async (id: string) => ({ ...scheduled, status: "in_play", summary: { headline: `own:${id}` } }) as LiveFixtureData);
     const hook = mount("fx-1", scheduled, false, { fetcher: own });
-    await vi.advanceTimersByTimeAsync(POLL_MS);
+    await vi.advanceTimersByTimeAsync(0);
     expect(own).toHaveBeenCalledWith("fx-1");
     expect(fetchLiveFixture).not.toHaveBeenCalled();
     expect(hook.current.data.summary?.headline).toBe("own:fx-1");
@@ -159,13 +163,15 @@ describe("useLiveFixture", () => {
     const a = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "a" } }) as LiveFixtureData);
     const b = vi.fn(async () => ({ ...scheduled, status: "in_play", summary: { headline: "b" } }) as LiveFixtureData);
     const hook = mount("fx-1", scheduled, false, { fetcher: a });
+    await vi.advanceTimersByTimeAsync(0); // immediate → a
+    expect(a).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(POLL_MS - 1000); // t = 14 000 — no tick yet
+    await vi.advanceTimersByTimeAsync(POLL_MS - 1000); // t = 14 000 — no interval tick yet
     hook.rerender({ fetcher: b }); // a new options object AND a new fetcher identity
     await vi.advanceTimersByTimeAsync(1000); // t = 15 000 — the ORIGINAL interval's first tick
 
     expect(b, "the interval was never cleared, so it fired on its own schedule").toHaveBeenCalledWith("fx-1");
-    expect(a, "the ref is re-pointed every render, so the stale fetcher is never called").not.toHaveBeenCalled();
+    expect(a, "after the ref re-point, the interval does not call the stale fetcher").toHaveBeenCalledTimes(1);
     expect(hook.current.data.summary?.headline).toBe("b");
   });
 
@@ -219,8 +225,9 @@ describe("useLiveFixture", () => {
         throw new Error("overlay endpoint is dead");
       });
       const hook = mount("fx-1", scheduled, false, { fetcher });
+      await vi.advanceTimersByTimeAsync(0); // immediate
       await vi.advanceTimersByTimeAsync(POLL_MS);
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(2);
       expect(hook.current.data).toBe(scheduled);
       // The rejection is created under fake timers; node only reports an
       // unhandled one on a later REAL turn, so hand the loop one.
@@ -276,6 +283,13 @@ describe("useLiveFixture", () => {
 
   const scored = (headline: string): LiveFixtureData =>
     ({ ...scheduled, status: "in_play", summary: { headline } }) as LiveFixtureData;
+
+  it("delayMs: does NOT refresh immediately — the seed must mature before any polled tip", async () => {
+    const fetcher = vi.fn(async () => scored("3 — 1"));
+    mount("fx-1", scored("2 — 1"), false, { fetcher, delayMs: 3000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetcher, "immediate refresh would race the delayed seed (I1)").not.toHaveBeenCalled();
+  });
 
   it("no delayMs: awaitingDelay is false at mount and the initial document is presented immediately", () => {
     const hook = mount("fx-1", scheduled, false);
@@ -351,14 +365,14 @@ describe("useLiveFixture", () => {
   it("delayMs 0 → N: the undelayed pass counts as seeded — no wind-back to the mount-time score", async () => {
     const fetcher = vi.fn(async () => scored("3 — 1"));
     const hook = mount("fx-1", scored("2 — 1"), false, { fetcher }); // no delay: live
-    await vi.advanceTimersByTimeAsync(POLL_MS); // t = 15 000, presented immediately
-    expect(hook.current.data.summary?.headline, "undelayed: the poll paints at once").toBe("3 — 1");
+    await vi.advanceTimersByTimeAsync(0); // immediate refresh presents the poll tip
+    expect(hook.current.data.summary?.headline, "undelayed: the immediate refresh paints at once").toBe("3 — 1");
 
     hook.rerender({ fetcher, delayMs: 10_000 }); // arms the drain for the first time
-    await vi.advanceTimersByTimeAsync(10_000); // t = 25 000 — when a seed would mature
+    await vi.advanceTimersByTimeAsync(10_000); // when a seed would mature
     expect(
       hook.current.data.summary?.headline,
-      "the mount-time document was presented 25 s ago and must not come back",
+      "the mount-time document was presented earlier and must not come back",
     ).toBe("3 — 1");
   });
 

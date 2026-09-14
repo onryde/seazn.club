@@ -72,9 +72,10 @@ export const WIDTH_MATRIX_PAD_UNCOVERED: readonly { key: string; why: string }[]
   },
 ];
 
-/** The two skins that declare `SkinDefV3.clock()`, driven as one parameterised
- *  width test. Read back by `mobile.spec.ts` itself, so this pair is the part
- *  of this module that cannot drift from the spec. */
+/** Period-kernel clock skins driven by the parameterised 44px width test in
+ *  `mobile.spec.ts` (suspension sheet + goal tiles). Football also declares
+ *  `SkinDefV3.clock()` — pinned in pad-host "clock sports inventory" — but is
+ *  not in this loop (render-only width tier; different tile vocabulary). */
 export const WIDTH_MATRIX_CLOCK_SPORTS: readonly (readonly [key: string, short: string])[] = [
   ["hockey", "HK"],
   ["icehockey", "IH"],

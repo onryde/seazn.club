@@ -416,6 +416,13 @@ export const FootballShot = z.strictObject({
   at: GameTime.optional(),
 });
 
+/** Pad game-clock publish (2026-09-13). See PeriodClock — not `core.suspend`. */
+export const FootballClock = z.strictObject({
+  at: GameTime.optional(),
+  running: z.boolean(),
+});
+export type FootballClock = z.infer<typeof FootballClock>;
+
 export const FootballEv = z.union([
   FootballGoal,
   FootballCard,
@@ -426,6 +433,7 @@ export const FootballEv = z.union([
   FootballSinBinStart,
   FootballSinBinEnd,
   FootballShot,
+  FootballClock,
 ]);
 export type FootballEv = z.infer<typeof FootballEv>;
 
@@ -433,7 +441,7 @@ export type FootballEv = z.infer<typeof FootballEv>;
 // REFERENCES already used as FootballEv's union members and in applyEvent's
 // dispatch switch below, now also keyed by type string in one place.
 // `testkit/conformance-pad.ts` asserts this is a bijection onto FootballEv's
-// 8 branches, by reference. Unlike cricket's registry, no two type strings
+// branches, by reference. Unlike cricket's registry, no two type strings
 // share one schema object here — every branch has exactly one envelope type.
 export const FOOTBALL_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
   "football.goal": FootballGoal,
@@ -445,6 +453,7 @@ export const FOOTBALL_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
   "football.sinbin.start": FootballSinBinStart,
   "football.sinbin.end": FootballSinBinEnd,
   "football.shot": FootballShot,
+  "football.clock": FootballClock,
 };
 
 // ---------------------------------------------------------------------------
@@ -598,6 +607,12 @@ export interface FootballState {
    * two different state shapes across the eleven sports.
    */
   asOf?: GameTime;
+  /**
+   * Whether the pad's game clock is RUNNING for broadcast (2026-09-13).
+   * Absent ⇒ assume running (pre-wave streams). Explicit `false` holds the
+   * overlay. Orthogonal to `core.suspend`.
+   */
+  clockRunning?: boolean;
 }
 
 interface PenaltyRecord {
@@ -2087,6 +2102,13 @@ function liftSquads(state: FootballState): KernelSquads {
 // dispatch, sweep again for the one release case, record `asOf` — rather than
 // threading a stamp through every branch. The switch returning directly is what
 // made post-processing impossible before.
+function applyFootballClock(state: FootballState, payload: FootballClock): FootballState {
+  if (!isPlayPhase(state.phase)) {
+    wrongPhase(`clock not allowed in phase "${state.phase}"`);
+  }
+  return { ...state, clockRunning: payload.running };
+}
+
 function applyEvent(
   state: FootballState,
   ev: EventEnvelope<FootballEv | CoreEv>,
@@ -2103,7 +2125,9 @@ function applyEvent(
     case "football.sub":
       return applySub(state, parsePayload(FootballSub, ev.payload, ev.type), ctx);
     case "football.period":
-      return applyPeriod(state, parsePayload(FootballPeriod, ev.payload, ev.type));
+      return { ...applyPeriod(state, parsePayload(FootballPeriod, ev.payload, ev.type)), clockRunning: false };
+    case "football.clock":
+      return applyFootballClock(state, parsePayload(FootballClock, ev.payload, ev.type));
     case "football.shootout.kick":
       return applyShootoutKick(state, parsePayload(FootballShootoutKick, ev.payload, ev.type));
     case "football.penalty":
@@ -2235,6 +2259,20 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     attribution: [], // a whistle belongs to neither side — FootballPeriod has no `by`
   };
 
+  const clockAction: PadAction = {
+    type: "football.clock",
+    labelKey: { key: "pad.football.action.clock", label: "Clock" },
+    fields: [
+      {
+        kind: "toggle",
+        path: "running",
+        labelKey: { key: "pad.football.action.clock.field.running", label: "Running" },
+      },
+      ...stamp,
+    ],
+    attribution: [],
+  };
+
   // --- Shoot-out (spec 04 §1.4) -----------------------------------------------
   const shootoutKickAction: PadAction = {
     type: "football.shootout.kick",
@@ -2321,7 +2359,7 @@ export function padSpec(cfg: FootballCfg): PadSpec {
       labelKey: { key: "pad.football.panel.period", label: "Period" },
       phase: "live",
       layout: "primary",
-      actions: [periodAction],
+      actions: [periodAction, clockAction],
     },
     {
       labelKey: { key: "pad.football.panel.cards", label: "Cards" },
@@ -2376,6 +2414,7 @@ export function padSpec(cfg: FootballCfg): PadSpec {
     fidelity: {
       "football.goal": 0,
       "football.period": 0,
+      "football.clock": 0,
       "football.shootout.kick": 0,
       "football.card": 2,
       "football.sub": 2,
@@ -2959,6 +2998,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         },
       };
     }
+    if (roll < 0.28) {
+      // PadClockBar Pause/Start/Correct — must appear in generated walks or
+      // EXTEND_GOLDEN cannot cover `football.clock` / `clockRunning`.
+      return {
+        type: "football.clock",
+        payload: { running: rng() < 0.5, at: stamp(state.phase) },
+      };
+    }
     if (roll < 0.72) {
       const side = randomSide();
       const ownGoal = rng() < 0.05;
@@ -3056,6 +3103,7 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
         case "football.sinbin.start":
         case "football.sinbin.end":
         case "football.shot": // S8/#417 W6 — never moves state.goals, same arm
+        case "football.clock": // pad clock publish — broadcast only, no score
           break; // no score effect — dropped at coarse fidelity
         default:
           out.push({ type: event.type, payload: event.payload });

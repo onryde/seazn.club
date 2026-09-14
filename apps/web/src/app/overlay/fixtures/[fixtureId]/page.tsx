@@ -73,7 +73,17 @@ export default async function OverlayPage({
   if (!slugs) notFound();
   const data = await getPublicFixture(slugs.orgSlug, slugs.compSlug, slugs.divSlug, fixtureId);
   if (!data) notFound();
-  const { org, competition, division, fixture, entrantNames, realtime, venueTz } = data;
+  const {
+    org,
+    competition,
+    division,
+    fixture,
+    entrantNames,
+    realtime,
+    venueTz,
+    matchCentre,
+    stageName,
+  } = data;
 
   // Competition-scoped, like every other spectator-side entitlement read here:
   // an Event Pass grants for the competition it was bought for.
@@ -91,17 +101,22 @@ export default async function OverlayPage({
   const locale = toLocale(lang ?? org.default_locale);
   const dict = (await getDictionary(locale, "public")) as Record<string, string>;
 
+  const mcSides = matchCentre.header.sides;
   const sides: [
-    { id: string; name: string },
-    { id: string; name: string },
+    { id: string; name: string; short?: string | null; colour?: string | null },
+    { id: string; name: string; short?: string | null; colour?: string | null },
   ] = [
     {
       id: fixture.home_entrant_id ?? "home",
-      name: fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? "—") : "—",
+      name: fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? mcSides[0].name) : "—",
+      short: mcSides[0].short,
+      colour: mcSides[0].colour,
     },
     {
       id: fixture.away_entrant_id ?? "away",
-      name: fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? "—") : "—",
+      name: fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? mcSides[1].name) : "—",
+      short: mcSides[1].short,
+      colour: mcSides[1].colour,
     },
   ];
 
@@ -131,6 +146,11 @@ export default async function OverlayPage({
       style={resolveTheme(style, division.sport_key).id}
       sides={sides}
       startLabel={startLabel}
+      slateMeta={{
+        competition: competition.name,
+        // stages.name — not division.name (that is the league/flight label).
+        ...(stageName ? { stage: stageName } : {}),
+      }}
       dict={dict}
       decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
       delayMs={delayMs}

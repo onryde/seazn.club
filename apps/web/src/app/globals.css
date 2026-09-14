@@ -1343,7 +1343,9 @@ body {
 /* Theme A — broadcast bar (_THEMES.md §3) */
 .ovl-bar { position: absolute; left: 72px; right: 72px; bottom: var(--ovl-bar-bottom);
            border-radius: 6px; overflow: hidden;
-           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
+           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5);
+           /* Above `.ovl-slate` (sibling match card) — not a child of it. */
+           z-index: 3; }
 /* The two band heights are CUSTOM PROPERTIES because §5's slab placement is
    derived from them (see `.ovl-moment-slot--bar`). Typed as literals in both
    places they drifted: the slot froze their SUM at 231 while the detail band
@@ -1387,6 +1389,21 @@ body {
                color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-team-cell { position: relative; display: flex; align-items: center; gap: 24px;
                  flex: 1 1 auto; min-width: 0; padding: 0 42px; }
+/* Cricket live focus: one batting hero spans the two former team columns. */
+.ovl-team-cell--hero { flex: 1 1 0; }
+/* Closed innings + absolute target between the live cell and the hero. */
+.ovl-innings-strip { display: flex; align-items: center; padding: 0 24px;
+                     font-size: 21px; font-weight: 600; letter-spacing: 0.02em;
+                     color: color-mix(in srgb, var(--sport-ink) 70%, transparent);
+                     white-space: nowrap; background: var(--sport-board-2);
+                     border-right: 1px solid color-mix(in srgb, var(--sport-ink) 12%, transparent); }
+.ovl-bug-innings-strip { display: flex; align-items: center; min-height: 36px;
+                         padding: 0 18px 0 26px; font-size: 18px; font-weight: 600;
+                         letter-spacing: 0.02em;
+                         color: color-mix(in srgb, var(--sport-ink) 70%, transparent);
+                         background: var(--sport-board-2); white-space: nowrap;
+                         overflow: hidden; text-overflow: ellipsis; }
+.ovl-bug-row--hero { min-height: 90px; }
 /* W2-F45 — §1's ladder needs a box that can be MEASURED and cannot spill.
    `flex: 0 1 auto` + `min-width: 0` lets the name shrink instead of pushing the
    score into the other cell and the away name over the brand mark (measured at
@@ -1482,12 +1499,36 @@ body {
    auto-height label whose text is made to wrap grows rather than clipping, so
    a defeated `nowrap` still reaches the tile. */
 .ovl-detail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ovl-detail-copy { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+/* Live this-over chips — larger circles than the end-of-over pill strip. */
+.ovl-ball-glyphs { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ovl-ball-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 999px;
+  font-size: 15px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--sport-led) 22%, transparent);
+  color: var(--sport-led);
+  border: 1px solid color-mix(in srgb, var(--sport-ink) 35%, transparent);
+}
+.ovl-ball-glyph--boundary {
+  background: var(--sport-led);
+  color: var(--sport-board);
+  border-color: transparent;
+}
+.ovl-ball-glyph--wicket {
+  background: var(--sport-dismissal);
+  color: var(--sport-ink);
+  border-color: transparent;
+}
+
 
 /* Theme B — corner bug (_THEMES.md §4) */
 .ovl-bug { position: absolute; left: 60px; top: 54px; width: 480px;
            border-radius: 12px; overflow: hidden;
            background: var(--sport-board);
-           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5); }
+           box-shadow: 0 21px 66px rgba(0, 0, 0, 0.5);
+           /* Above `.ovl-slate` (sibling match card) — not a child of it. */
+           z-index: 3; }
 .ovl-bug-header { display: flex; align-items: center; gap: 12px; height: 48px;
                   padding: 0 21px; background: var(--sport-board-2);
                   font-size: 21px; font-weight: 600; }
@@ -1599,44 +1640,115 @@ body {
 .ovl-chip-caution { background: var(--sport-caution); }
 .ovl-chip-dismissal { background: var(--sport-dismissal); }
 
-/* Theme C — slate (_THEMES.md §4a). Full bleed, opaque, no inset/radius/
-   shadow ("it IS the frame"). `.ovl-slate`'s box is `inset: 0` inside
-   `.ovl-canvas`, which is itself `top:0; left:0; width:1920px; height:1080px`
-   — so it is PIXEL-IDENTICAL to the canvas's own box, and the `.ovl-bug`
-   overlay-slate.tsx nests inside it keeps its stated inset (left 60, top 54)
-   unchanged, exactly as §4a requires ("at its own inset, unchanged in every
-   value"). Radial highlight: color-mix(board-2 60%) centred 50%/40%, radius
-   900 — a single `background` shorthand, gradient over the opaque ground so
-   the ground itself never carries any transparency (the "one opaque theme"
-   property `_THEMES.md` §4a names). */
-.ovl-slate { position: absolute; inset: 0; overflow: hidden;
-             background:
-               radial-gradient(circle 900px at 50% 40%,
-                 color-mix(in srgb, var(--sport-board-2) 60%, transparent), transparent),
-               var(--sport-board); }
+/* Theme C — slate (_THEMES.md §4a, amended 2026-09-12). Transparent canvas
+   over the camera (bar/bug posture) — NOT the old opaque full-bleed board.
+   Warming/ended content sits in `.ovl-slate-card`: stadium-night plate
+   (`--sport-board`) with a `--sport-led` limelight border. The composited
+   scorebug keeps its own inset unchanged. */
+.ovl-slate { position: absolute; inset: 0; overflow: hidden; background: transparent; z-index: 1; }
 .ovl-slate-brand { position: absolute; left: 72px; top: 54px;
                     font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
-                    color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+                    color: color-mix(in srgb, var(--sport-ink) 75%, transparent); z-index: 2;
+                    text-shadow: 0 1px 8px color-mix(in srgb, var(--sport-board) 70%, transparent); }
+/* Centre the card in the safe frame ABOVE the composited scorebug. Bottom
+   pad = bar inset + main + detail band (always reserved) + 24px gap — the
+   same stack `.ovl-moment-slot--bar` uses. z-index below the scorebug so a
+   tall card never paints over team names / LED. */
 .ovl-slate-content { position: absolute; inset: 0; display: flex; flex-direction: column;
-                      align-items: center; justify-content: center; text-align: center; }
-/* `text-transform: uppercase` rather than relying on the dictionary string
-   being typed upper case (§4a's own words) — deliberately, because the
-   headline text reaching this element today is `model.header.context`
-   ("Final", a start-time label), NOT the new `overlay.slate.*` keys
-   (overlay-slate.tsx's header, gap 1): those already-resolved strings are
-   normal case elsewhere (the bar/bug header uses them unchanged), so the
-   transform keeps the SLATE headline visually upper case regardless of which
-   source string it is standing in for, and becomes a harmless no-op the day
-   gap 1 closes and the dictionary's own upper-case string arrives here. */
-.ovl-slate-headline { font-size: 96px; font-weight: 800; letter-spacing: 0.02em;
-                       color: var(--sport-ink); text-transform: uppercase; }
-.ovl-slate-line { margin-top: 12px; font-size: 27px; font-weight: 500;
+                      align-items: center; justify-content: center; text-align: center;
+                      padding: 72px 96px
+                               calc(var(--ovl-bar-bottom) + var(--ovl-bar-main-h) + var(--ovl-bar-band-h) + 24px);
+                      z-index: 1; }
+.ovl-slate-card {
+  display: flex; flex-direction: column; align-items: center; gap: 24px;
+  max-width: 1100px; width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  padding: 44px 56px 40px;
+  border-radius: 28px;
+  /* Plate ~30 points more open than the first cut (92% → 62%) so the camera
+     reads through; ink / LED border stay full strength (not `opacity` on the
+     whole card, which would wash the type and limelight). */
+  background:
+    radial-gradient(circle 640px at 50% 28%,
+      color-mix(in srgb, var(--sport-board-2) 35%, transparent), transparent),
+    color-mix(in srgb, var(--sport-board) 62%, transparent);
+  border: 2px solid var(--sport-led);
+  box-shadow:
+    0 24px 64px color-mix(in srgb, #000 35%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--sport-led) 28%, transparent);
+}
+.ovl-slate-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  max-width: 90%; padding: 10px 28px; border-radius: 9999px;
+  background: color-mix(in srgb, var(--sport-board-2) 62%, #000);
+  border: 1px solid color-mix(in srgb, var(--sport-led) 40%, transparent);
+  font-size: 18px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--sport-ink) 82%, transparent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ovl-slate-headline { font-size: 64px; font-weight: 800; letter-spacing: 0.02em;
+                       color: var(--sport-ink); text-transform: uppercase;
+                       line-height: 1.08; max-width: 1400px;
+                       text-shadow: 0 2px 14px color-mix(in srgb, var(--sport-board) 75%, transparent); }
+.ovl-slate-line { margin-top: 4px; font-size: 24px; font-weight: 500;
                    color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
-/* Warming's three dots sit UNDER the line (§4a); each --sport-led, 15px,
-   breathing on the same `ovl-breathe` keyframes the live dot already uses,
-   staggered 300ms per dot. */
+.ovl-slate-matchup {
+  display: flex; align-items: center; justify-content: center; gap: 36px;
+  margin-top: 8px;
+}
+.ovl-slate-team { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.ovl-slate-tile {
+  width: 220px; height: 220px; border-radius: 28px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+}
+.ovl-slate-tile-code {
+  font-size: 72px; font-weight: 800; letter-spacing: 0.04em; line-height: 1;
+  color: #fff; text-transform: uppercase;
+}
+.ovl-slate-tile-score {
+  font-size: 28px; font-weight: 600; color: color-mix(in srgb, #fff 88%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.ovl-slate-vs {
+  font-size: 42px; font-weight: 600; letter-spacing: 0.04em;
+  color: color-mix(in srgb, var(--sport-ink) 45%, transparent);
+  text-transform: lowercase; padding-bottom: 48px;
+}
+.ovl-slate-name-pill {
+  display: inline-flex; max-width: 280px; padding: 10px 22px; border-radius: 9999px;
+  background: var(--sport-ink); color: var(--sport-board);
+  font-size: 20px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ovl-slate-highlights {
+  display: flex; gap: 24px; margin-top: 4px; width: min(920px, 100%);
+}
+.ovl-slate-highlight {
+  flex: 1; min-width: 0;
+  background: color-mix(in srgb, var(--sport-board-2) 48%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sport-led) 32%, transparent);
+  border-radius: 16px; padding: 18px 22px; text-align: left;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ovl-slate-highlight--empty { visibility: hidden; }
+.ovl-slate-highlight-role {
+  font-size: 14px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
+}
+.ovl-slate-highlight-name { font-size: 26px; font-weight: 700; color: var(--sport-ink); }
+.ovl-slate-highlight-stats { display: flex; align-items: baseline; gap: 12px; }
+.ovl-slate-highlight-line {
+  font-size: 28px; font-weight: 700; color: var(--sport-ink);
+  font-variant-numeric: tabular-nums;
+}
+.ovl-slate-highlight-detail {
+  font-size: 18px; font-weight: 500;
+  color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
+}
 .ovl-slate-warming-dots { display: flex; align-items: center; justify-content: center;
-                           gap: 12px; margin-top: 12px; }
+                           gap: 12px; margin-top: 4px; }
 .ovl-slate-warming-dots span { width: 15px; height: 15px; border-radius: 9999px;
                                 background: var(--sport-led);
                                 animation: ovl-breathe 2s ease-in-out infinite; }
@@ -1760,10 +1872,10 @@ body {
 
    A transition needs a frame in which the element already exists at its start
    value, so `in` could only ever mean "mounted, hidden, not yet moving" — the
-   slide then happened at the START OF `hold` and ate 250 ms of the 4000 ms it
+   slide then happened at the START OF `hold` and ate 250 ms of the 2000 ms it
    is supposed to be still for, while `in` painted nothing at all. §6 asks for
-   "→ 0 250 ms ease-out, hold 4000 ms, → -100% 250 ms ease-in", which is
-   exactly 250 sliding + 4000 still + 250 sliding; an animation runs on mount
+   "→ 0 250 ms ease-out, hold 2000 ms, → -100% 250 ms ease-in", which is
+   exactly 250 sliding + 2000 still + 250 sliding; an animation runs on mount
    and delivers that.
 
    The easings were also inverted: the entrance took the `hold` rule's ease-in
@@ -1842,6 +1954,201 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .ovl-slab--in,
   .ovl-slab--out {
+    animation: none;
+  }
+}
+
+/* —— End-of-over card (anchored, same slot as moment slabs) —— */
+/* Sizes bumped 2026-09-14: the card sat well under its 216px slot ceiling
+   (`.ovl-moment-slot--bar`/`--bug`, both themes — the card is theme-agnostic,
+   one CSS block renders inside either slot) at 120px min-height, so there was
+   room to grow without a layout change. Shared by both themes on purpose;
+   `_THEMES.md` §4's "the bar and the bug are twins" rule applies here too. */
+.ovl-end-of-over {
+  display: flex;
+  background: color-mix(in srgb, var(--sport-board) 92%, transparent);
+  color: var(--sport-ink);
+  border-left: 4px solid var(--sport-led);
+  padding: 20px 28px;
+  gap: 24px;
+  max-width: 860px;
+  font-variant-numeric: tabular-nums;
+}
+.ovl-end-of-over--full {
+  min-height: 156px;
+}
+.ovl-end-of-over--compact {
+  flex-direction: column;
+  gap: 8px;
+  min-width: 320px;
+}
+.ovl-end-of-over-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1.2;
+}
+.ovl-end-of-over-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--sport-ink) 20%, transparent);
+  padding-left: 20px;
+  min-width: 0;
+  flex: 1;
+}
+.ovl-end-of-over-title {
+  color: var(--sport-led);
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ovl-end-of-over-batter,
+.ovl-end-of-over-bowler,
+.ovl-end-of-over-line {
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ovl-end-of-over-bowler {
+  color: color-mix(in srgb, var(--sport-ink) 75%, transparent);
+  font-size: 17px;
+}
+.ovl-end-of-over-side-label {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--sport-ink) 55%, transparent);
+}
+.ovl-end-of-over-glyphs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ovl-end-of-over-glyph {
+  background: color-mix(in srgb, var(--sport-led) 18%, transparent);
+  color: var(--sport-led);
+  padding: 5px 13px;
+  border-radius: 5px;
+  font-size: 22px;
+  font-weight: 700;
+}
+.ovl-end-of-over-runs {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--sport-ink);
+}
+/* Reuse slab fold phases (transform/opacity only). */
+.ovl-end-of-over--in {
+  animation: ovl-slab-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-end-of-over--hold {
+  opacity: 1;
+  transform: none;
+}
+.ovl-end-of-over--out {
+  animation: ovl-slab-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+/* Staggered reveal on hold — title → batters → bowler → glyphs (broadcast beat). */
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-title,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler,
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > * {
+  animation: ovl-eoo-step 280ms ease-out both;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter:nth-child(2) {
+  animation-delay: 120ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter:nth-child(3) {
+  animation-delay: 180ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler {
+  animation-delay: 240ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(1) {
+  animation-delay: 300ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(2) {
+  animation-delay: 360ms;
+}
+.ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *:nth-child(3) {
+  animation-delay: 420ms;
+}
+@keyframes ovl-eoo-step {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* —— Toss center card (A2) —— */
+.ovl-toss-card {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--sport-board) 94%, transparent);
+  border: 2px solid var(--sport-led);
+  padding: 28px 48px;
+  max-width: 1100px;
+  text-align: center;
+  z-index: 5;
+}
+.ovl-toss-card-headline {
+  color: var(--sport-ink);
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+}
+.ovl-toss-card--in {
+  animation: ovl-toss-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-toss-card--hold {
+  opacity: 1;
+}
+.ovl-toss-card--out {
+  animation: ovl-toss-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+@keyframes ovl-toss-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -46%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+@keyframes ovl-toss-out {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -54%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ovl-end-of-over--in,
+  .ovl-end-of-over--out,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-title,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-batter,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-bowler,
+  .ovl-end-of-over--full.ovl-end-of-over--hold .ovl-end-of-over-side > *,
+  .ovl-toss-card--in,
+  .ovl-toss-card--out {
     animation: none;
   }
 }

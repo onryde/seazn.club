@@ -46,10 +46,11 @@ import {
   buildSheets as footballSheets,
   buildSwap as footballSwap,
   buildTiles as footballTiles,
+  footballSkinV3,
   refusedEventTypes as footballRefused,
   resolvePhase as resolveFootballPhase,
 } from "../skins/football";
-import { dedicatedEventTypes, filterTilesByBand, moreActions, suppressEmptyMoreTile } from "../pad-host";
+import { claimPadClockDedicated, dedicatedEventTypes, filterTilesByBand, moreActions, suppressEmptyMoreTile } from "../pad-host";
 import { MORE_SHEET_KEY, type PadHostView, type TileSpec } from "../types";
 import { footballCfg, foldFootball } from "./_football-fold";
 
@@ -59,6 +60,7 @@ const cricketPadSpec = cricket.padSpec;
 const footballPadSpec = football.padSpec;
 
 const t = (key: string, vars?: Record<string, string | number>): string => (vars ? `${key}(${JSON.stringify(vars)})` : key);
+const footballSkin = footballSkinV3(t);
 
 function hasMoreTile(tiles: readonly TileSpec[]): boolean {
   return tiles.some((tile) => "sheet" in tile.action && tile.action.sheet === MORE_SHEET_KEY);
@@ -179,8 +181,8 @@ function cricketPipeline(view: PadHostView): PipelineResult {
 // football has no dedicated "post" panel at all (its own padSpec doc: every
 // registered type is a "live" action), so this proves the property along
 // the OTHER axis instead: band alone, at a REAL folded "H1" (live) state.
-// Goal(0)/period(0) are both dedicated by football's own always-on tiles, so
-// at band 0 nothing else in band survives — empty. At band 2,
+// Goal(0)/period(0)/clock(0) are dedicated (tiles + PadClockBar), so at
+// band 0 nothing else in band survives — empty. At band 2,
 // `football.sinbin.start`/`football.sinbin.end` (band 2) have NO tile or
 // sheet anywhere in `skins/football.tsx` (its own `buildTiles` doc: they
 // "ride the chassis's generic sheet") — non-empty.
@@ -218,7 +220,11 @@ function footballPipeline(view: PadHostView): PipelineResult {
   const allTiles = footballTiles(view);
   const tiles = filterTilesByBand(allTiles, sheets, slots, spec.fidelity, view.band);
   const scorebug = footballScorebug(view, t);
-  const dedicated = dedicatedEventTypes(tiles, sheets, slots, scorebug);
+  const dedicated = claimPadClockDedicated(
+    dedicatedEventTypes(tiles, sheets, slots, scorebug),
+    footballSkin,
+    spec.fidelity,
+  );
   const refused = new Set(footballRefused(view));
   const moreList = moreActions(
     spec,
@@ -263,7 +269,7 @@ describe("More-tile suppression is chassis-wide and phase-aware (R7-39/R7-39a)",
       expect(footballPipeline(footballView(0)).rawHasMore).toBe(true);
     });
 
-    it("band 0: goal + period are the only band-0 types and both are dedicated by football's own tiles — NO More tile", () => {
+    it("band 0: goal + period + clock are dedicated (tiles / PadClockBar) — NO More tile", () => {
       const result = footballPipeline(footballView(0));
       expect(result.moreListLength, "sanity: the real chassis computation must actually be empty here").toBe(0);
       expect(result.visibleHasMore).toBe(false);

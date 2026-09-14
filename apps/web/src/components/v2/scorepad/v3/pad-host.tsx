@@ -37,7 +37,7 @@
 // concretely while building action-form.tsx's own list — see that file's
 // header). The React shell is covered by e2e in a later task; this file's
 // own suite proves every DECISION, not the DOM.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
@@ -382,6 +382,27 @@ export function dedicatedEventTypes(
   // not a second opinion about what tappable means.
   for (const half of scorebug.halves) {
     if (half.tappable === true && half.tapEvent) out.add(half.tapEvent.type);
+  }
+  return out;
+}
+
+/**
+ * PadClockBar is a dedicated surface that never appears in tiles/sheets/swaps/
+ * scorebug, so `dedicatedEventTypes` cannot see it. When the skin declares
+ * `clock()`, every `*.clock` fidelity key is already reachable there and must
+ * stay out of More — the same de-duplication ruling as Goal / Sub / a
+ * tappable half. Callers that rebuild the host's own More exclusion set must
+ * run this after `dedicatedEventTypes`.
+ */
+export function claimPadClockDedicated(
+  dedicated: ReadonlySet<string>,
+  skin: SkinDefV3,
+  fidelity: Readonly<Record<string, FidelityBand>>,
+): Set<string> {
+  if (typeof skin.clock !== "function") return new Set(dedicated);
+  const out = new Set(dedicated);
+  for (const type of Object.keys(fidelity)) {
+    if (type.endsWith(".clock")) out.add(type);
   }
   return out;
 }
@@ -814,8 +835,13 @@ export function reachableControls(
   const refused = new Set(skin.refusedEventTypes?.(at) ?? []);
 
   // `dedicated` is built exactly as the host builds it, and used for exactly
-  // what the host uses it for: deciding what the More sheet holds.
-  const dedicated = dedicatedEventTypes(bandTiles, sheets, swaps, scorebug);
+  // what the host uses it for: deciding what the More sheet holds. PadClockBar
+  // is a fifth surface `dedicatedEventTypes` cannot see — claim it here.
+  const dedicated = claimPadClockDedicated(
+    dedicatedEventTypes(bandTiles, sheets, swaps, scorebug),
+    skin,
+    spec.fidelity,
+  );
   const more = moreActions(spec, { state: at.state, summary: at.summary, phase: at.phase, band }, dedicated, refused);
 
   // A DISABLED tile is drawn but cannot be pressed, so it is not a control —
@@ -1191,6 +1217,20 @@ export function resolveDockSpec(
 ): DockSpec | null {
   if (!held) return null;
   return skin.dock(held.eventType, view, held.payload as Record<string, unknown> | undefined);
+}
+
+/**
+ * Soft-commit only when the skin has chips to enrich. Null dock, empty-chip
+ * dock (plain cricket ball, unresolved card side), period advance, and any
+ * other "nothing left to ask" event send immediately — waiting out HOLD_MS
+ * would only delay the overlay (owner ruling 2026-09-13). A real dock (goal /
+ * card person / six / noball bat-runs) still holds for the full window.
+ *
+ * `*.clock` (Pause / Start / Correct) never reaches this gate: `publishClock`
+ * always `pipeline.submit`s. Soft-commit is for `send()` after dock resolution.
+ */
+export function usesSoftCommit(dock: DockSpec | null): boolean {
+  return dock !== null && dock.chips.length > 0;
 }
 
 /**
@@ -1615,7 +1655,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // takes a fresh `Date.now()` at tap time, so a stamp is never up to a
   // tick-interval stale.
   //
-  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Seven of the nine v3 skins
+  // SEEDED 0, NOT `Date.now()` (R6 review, gap 7). Eight of the eleven v3 skins
   // declare no `clock()` at all, and a lazy initialiser still runs on every one
   // of their mounts to produce a value nothing will ever read. Zero is not a
   // placeholder here, it is unreachable: `elapsedOf` ignores `nowMs` entirely
@@ -1624,6 +1664,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // `toggleClockNow` below — which sets a real `Date.now()` in the same update
   // that starts it. Both facts are pinned in `__tests__/clock.test.ts`.
   const [clock, setClock] = useState<PadClock | null>(null);
+  // Updated only in mutators + reseat — never mirrored from render `clock`, so a
+  // Correct tap that races a parent re-render cannot lose a nudge already
+  // written to the ref ahead of the committed state.
+  const clockRef = useRef<PadClock | null>(null);
   const [nowMs, setNowMs] = useState(0);
   // R6 fix pass 2 (gap 7) — whether the clock's correction row is showing. Held
   // HERE rather than inside `PadClockBar` so that component stays pure and both
@@ -1746,6 +1790,12 @@ export function PadHostV3(props: PadHostV3Props) {
     // here rather than in an effect keeps it in the same render as the re-seat.
     if (adjusting) setAdjusting(false);
   }
+  // Sync the ref AFTER render — react-hooks/refs forbids writing `.current`
+  // during render (CI lint gate). Mutators still write the ref synchronously
+  // so Correct/toggle see the latest seat before the next paint.
+  useEffect(() => {
+    clockRef.current = clock;
+  }, [clock]);
 
   // W1/Task 4 review, M-1: `entitlements` used to ride along here. `PadViewCtx`
   // no longer declares it (view-model.ts) and `buildPadView` never reads it, so
@@ -1763,8 +1813,17 @@ export function PadHostV3(props: PadHostV3Props) {
   // G4's reasoning for not memoizing it lives with that declaration.
   // R3/football: `swapSlots` is the third argument — without it a swap's own
   // event stays listed in the More sheet as an un-narrowed generic form
-  // beside its Sub tile (see dedicatedEventTypes' own doc).
-  const dedicated = useMemo(() => dedicatedEventTypes(tiles, sheets, swapSlots, scorebugSpec), [tiles, sheets, swapSlots, scorebugSpec]);
+  // beside its Sub tile (see dedicatedEventTypes' own doc). PadClockBar is a
+  // fifth surface the tile/sheet/swap/scorebug walk cannot see.
+  const dedicated = useMemo(
+    () =>
+      claimPadClockDedicated(
+        dedicatedEventTypes(tiles, sheets, swapSlots, scorebugSpec),
+        props.skin,
+        spec.fidelity,
+      ),
+    [tiles, sheets, swapSlots, scorebugSpec, props.skin, spec.fidelity],
+  );
   // R3 review round: the skin's own "the fold refuses this right now" set —
   // `moreActions`' second exclusion set, see its doc for why the two are not
   // one. Built from `view` (not `padViewCtx`), because it is a SKIN call and
@@ -1791,8 +1850,10 @@ export function PadHostV3(props: PadHostV3Props) {
   // sends — tile taps, guided-sheet completions, action-form confirms,
   // swap completions, context selections — passes through
   // `createSkinDispatch`'s "a skin cannot invent an event" guard, then
-  // this function's own soft-commit (submitHeld, never plain submit —
-  // spec §2.3).
+  // either soft-commit (when the skin's dock has chips to enrich) or an
+  // immediate `pipeline.submit` (null / empty dock — period advance, plain
+  // cricket ball, etc. — owner ruling 2026-09-13: do not make the overlay wait
+  // out HOLD_MS for nothing).
   //
   // R8/#675 — the RETURNED result is new, and exists for the amendment
   // (`runAmend` above): `submitHeld` answers `null` on its double-submit
@@ -1819,9 +1880,14 @@ export function PadHostV3(props: PadHostV3Props) {
   const dispatch = useMemo(
     () =>
       createSkinDispatch(padView, async (type, payload) => {
+        const dock = props.skin.dock(type, view, payload as Record<string, unknown> | undefined);
+        if (!usesSoftCommit(dock)) {
+          await pipeline.submit(type, payload);
+          return;
+        }
         await heldSubmit(type, payload);
       }),
-    [padView, heldSubmit],
+    [padView, heldSubmit, props.skin, view, pipeline],
   );
 
   /**
@@ -1891,10 +1957,33 @@ export function PadHostV3(props: PadHostV3Props) {
     return () => clearInterval(id);
   }, [clock]);
 
+  const publishClock = useCallback(
+    async (next: NonNullable<typeof clock>, now: number) => {
+      const type = `${props.module.key}.clock`;
+      if (props.module.eventSchemas?.[type] === undefined) return;
+      try {
+        await pipeline.submit(type, {
+          at: { period: next.period, elapsed: elapsedOf(next, now) },
+          running: next.runningSince !== null,
+        });
+      } catch (err: unknown) {
+        console.error("scorepad v3: clock publish failed", type, err);
+        setDispatchRefusal(msg("scorepad.rejection.fallback"));
+      }
+    },
+    [pipeline, props.module, msg],
+  );
+
   const toggleClockNow = useCallback(() => {
-    setClock((prev) => (prev === null ? prev : toggleClock(prev, Date.now())));
-    setNowMs(Date.now());
-  }, []);
+    const current = clockRef.current;
+    if (!current) return;
+    const now = Date.now();
+    const next = toggleClock(current, now);
+    clockRef.current = next;
+    setClock(next);
+    setNowMs(now);
+    void publishClock(next, now);
+  }, [publishClock]);
 
   // R6 fix pass 2, gap 7. `adjustClock` touches `base` only — host state — so
   // nothing already stamped moves and nothing is dispatched. `setNowMs` so a
@@ -1911,18 +2000,28 @@ export function PadHostV3(props: PadHostV3Props) {
   // moves `state.asOf` forward; `clockSpec` cannot, because it is rebuilt on
   // every render from the SAME `view` the rest of this render pass uses.
   // `clockSpec` in the dependency list keeps this callback's closure as
-  // fresh as that value, unlike `toggleClockNow` above, which needs no cfg
-  // read at all.
+  // fresh as that value. 2026-09-13: also publishes `*.clock` so the overlay
+  // re-anchors immediately (no soft-commit).
+  //
+  // `clockRef` (not the render-closed `clock`) is the source of truth for
+  // rapid Correct taps — each tap must stack on the previous local nudge
+  // before React re-renders.
   const adjustClockNow = useCallback(
     (deltaSeconds: number) => {
+      const current = clockRef.current;
+      if (!current) return;
+      const now = Date.now();
       const floor =
         clockSpec !== null && clockSpec.seed !== undefined
           ? { period: clockSpec.period, elapsed: clockSpec.seed }
           : undefined;
-      setClock((prev) => (prev === null ? prev : adjustClock(prev, deltaSeconds, Date.now(), floor)));
-      setNowMs(Date.now());
+      const next = adjustClock(current, deltaSeconds, now, floor);
+      clockRef.current = next;
+      setClock(next);
+      setNowMs(now);
+      void publishClock(next, now);
     },
-    [clockSpec],
+    [clockSpec, publishClock],
   );
 
   const handleTileAction = useCallback(

@@ -99,46 +99,21 @@ describe("themesForSport — the console and the route read ONE filter", () => {
       expect(theme.labelKey, theme.id).toMatch(/^stream\.tab\./);
       expect(typeof theme.component, theme.id).toBe("function");
     }
-    // Task 5e: slate is the registry's third entry.
-    expect(Object.keys(OVERLAY_THEMES).sort()).toEqual(["bar", "bug", "slate"]);
+    // 2026-09-12: match card is a layer, not a third theme.
+    expect(Object.keys(OVERLAY_THEMES).sort()).toEqual(["bar", "bug"]);
   });
 });
 
-describe("slate — the registry's third entry (_THEMES.md §4a, task 5e)", () => {
-  it("resolveTheme('slate', sport) returns it for every sport — sports: 'all'", () => {
-    for (const key of [
-      "cricket",
-      "football",
-      "hockey",
-      "icehockey",
-      "tennis",
-      "badminton",
-      "tabletennis",
-      "volleyball",
-      "boardgame",
-      "carrom",
-      "generic",
-    ]) {
-      expect(resolveTheme("slate", key).id, key).toBe("slate");
-    }
+describe("retired ?style=slate — falls through to the sport default (2026-09-12)", () => {
+  it("resolveTheme('slate', sport) returns the sport default, never a slate theme", () => {
+    expect(resolveTheme("slate", "cricket").id).toBe("bar");
+    expect(resolveTheme("slate", "football").id).toBe("bug");
   });
 
-  it("themesForSport offers slate ALONGSIDE the sport's own bar/bug default, never instead of it", () => {
+  it("themesForSport offers only bar and bug", () => {
     for (const key of ["cricket", "football", "generic"]) {
-      const offered = themesForSport(key).map((t) => t.id);
-      expect(offered, key).toContain("slate");
-      expect(offered, key).toContain(defaultThemeFor(key));
-      // Three, not two — slate does not displace bar/bug from the offer set.
-      expect(offered.length, key).toBe(3);
+      const offered = themesForSport(key).map((t) => t.id).sort();
+      expect(offered, key).toEqual(["bar", "bug"]);
     }
-  });
-
-  it("carries the labelKey and component the sheet names, and is never a sport's default", () => {
-    expect(OVERLAY_THEMES.slate.labelKey).toBe("stream.tab.slate");
-    expect(typeof OVERLAY_THEMES.slate.component).toBe("function");
-    expect(OVERLAY_THEMES.slate.sports).toBe("all");
-    // defaultThemeFor is unchanged by adding a theme nobody defaults to.
-    expect(defaultThemeFor("cricket")).toBe("bar");
-    expect(defaultThemeFor("football")).toBe("bug");
   });
 });

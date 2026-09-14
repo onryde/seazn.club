@@ -1092,11 +1092,12 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     expect(src).toContain("[livePeriod, liveElapsed]");
   });
 
-  it("does NOT read the wall clock on every pad mount — seven of the nine skins have no clock at all", () => {
+  it("does NOT read the wall clock on every pad mount — eight of the eleven skins have no clock at all", () => {
     // R6 review, gap 7. The lazy initialiser ran `Date.now()` for every pad in
     // the product to produce a value only a clocked skin ever reads. The two
     // properties that make 0 unreachable rather than merely unread are pinned
-    // as BEHAVIOUR in the block below this one, not here.
+    // as BEHAVIOUR in the block below this one, not here. Inventory of who
+    // declares `clock()` lives in pad-host.test.ts ("clock sports inventory").
     expect(src).not.toContain("useState(() => Date.now())");
     expect(src).toContain("const [nowMs, setNowMs] = useState(0);");
   });
@@ -1110,12 +1111,25 @@ describe("the host's own wiring, audited at the source (a mirror — see the not
     // this session's own prior dispatch) moves the fold's high-water mark.
     expect(src).toContain("clockSpec !== null && clockSpec.seed !== undefined");
     expect(src).toContain("{ period: clockSpec.period, elapsed: clockSpec.seed }");
-    expect(src).toContain("adjustClock(prev, deltaSeconds, Date.now(), floor)");
-    // The callback's own closure stays as fresh as `clockSpec` — a stable
-    // `[]` dependency array (the shape `toggleClockNow` uses, which needs no
-    // cfg read at all) would close over the render this callback was BUILT
-    // in and apply that render's floor forever after.
-    expect(src).toContain("[clockSpec]");
+    // Rapid Correct taps read `clockRef.current`, not the render-closed `clock`.
+    // Mutators write the ref synchronously; reseat only `setClock`s, and an
+    // effect mirrors `clock` → `clockRef` (react-hooks/refs forbids writing
+    // the ref during render — CI lint gate).
+    expect(src).toContain("const current = clockRef.current");
+    expect(src).toContain("adjustClock(current, deltaSeconds, now, floor)");
+    expect(src).toContain("useEffect(() => {\n    clockRef.current = clock;\n  }, [clock]);");
+    expect(src).not.toContain("clockRef.current = nextClock");
+    expect(src).toContain("[clockSpec, publishClock]");
+  });
+
+  it("publishes *.clock on toggle and correct — overlay pause must not wait on soft-commit", () => {
+    // 2026-09-13. Pad Pause used to be host-local only; the OBS clock kept
+    // ticking. Both sites must call publishClock → pipeline.submit (immediate,
+    // no HOLD_MS). Deleting either call reds here before the e2e can miss it.
+    expect(src).toContain("const type = `${props.module.key}.clock`");
+    expect(src).toContain("await pipeline.submit(type,");
+    expect(src).toContain("void publishClock(next, now)");
+    expect(src.split("void publishClock(next, now)").length - 1).toBe(2);
   });
 
   it("hands PadClockBar the pad's OWN fixtureId, not a placeholder", () => {

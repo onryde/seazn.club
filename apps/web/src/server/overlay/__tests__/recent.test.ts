@@ -17,7 +17,15 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
-import { buildOverlayRecent, diffClosedSets, personIdsIn, recentWindow, replayDerived } from "../recent";
+import {
+  buildOverlayRecent,
+  diffClosedSets,
+  nameCricketBundle,
+  personIdsIn,
+  recentWindow,
+  replayDerived,
+  type OverlayCricketBundleIds,
+} from "../recent";
 import { OVERLAY_RECENT_WINDOW, type RecentPerson } from "@/lib/overlay-recent-types";
 
 const moduleFor = (key: string) => {
@@ -611,5 +619,62 @@ describe("replayDerived — the dismissed batter's figures", () => {
     expect(
       [...run({ batterRuns: { "H-p1": 7 }, batterBalls: { "H-p1": 3 } }).bySeq.values()][0]?.batter,
     ).toEqual({ runs: 7, balls: 3 });
+  });
+});
+
+describe("nameCricketBundle — the ended-card name resolution (I2/M11)", () => {
+  const EMPTY_BUNDLE: OverlayCricketBundleIds = {
+    live: null,
+    toss: null,
+    lastClosedOver: null,
+    scoringStarted: true,
+    highlights: null,
+  };
+
+  it("a MASKED person's highlight renders — masked means shortened for consent, not suppressed", () => {
+    // "H-p1" is masked in NAMED (`{ name: "H. One", masked: true }`). The
+    // old guard (`person.masked`) dropped this chip even though
+    // `nameCricketLive` puts the SAME masked name on air in the crease band
+    // and (via `nameClosedOver`) the end-of-over card, with no masked check
+    // at all — the inconsistency this fix removes.
+    const bundle: OverlayCricketBundleIds = {
+      ...EMPTY_BUNDLE,
+      highlights: { batter: { name: "H-p1", line: "50 (30)", detail: "SR 166.7" } },
+    };
+    const named = nameCricketBundle(bundle, personOf);
+    expect(named.highlights?.batter).toEqual({ name: "H. One", line: "50 (30)", detail: "SR 166.7" });
+  });
+
+  it("an unresolved person is still dropped from highlights — the guard still refuses something", () => {
+    const bundle: OverlayCricketBundleIds = {
+      ...EMPTY_BUNDLE,
+      highlights: { bowler: { name: "unknown-id", line: "2/10" } },
+    };
+    expect(nameCricketBundle(bundle, personOf).highlights).toBeNull();
+  });
+
+  it("lastClosedOver batters/bowler are named, including a MASKED batter", () => {
+    const bundle: OverlayCricketBundleIds = {
+      ...EMPTY_BUNDLE,
+      lastClosedOver: {
+        inningsIndex: 0,
+        over: 3,
+        runs: 8,
+        wickets: 1,
+        score: "24/2",
+        glyphs: [],
+        bowler: { name: "A-p1", overs: "3.0", maidens: 0, runs: 8, wickets: 1 },
+        batters: [{ name: "H-p1", runs: 12, balls: 9, onStrike: true }],
+      },
+    };
+    const named = nameCricketBundle(bundle, personOf);
+    expect(named.lastClosedOver?.batters).toEqual([{ name: "H. One", runs: 12, balls: 9, onStrike: true }]);
+    expect(named.lastClosedOver?.bowler).toEqual({
+      name: "Away One",
+      overs: "3.0",
+      maidens: 0,
+      runs: 8,
+      wickets: 1,
+    });
   });
 });

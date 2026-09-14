@@ -26,10 +26,7 @@
               "div",
               "div[data-testid=mc-root]"
             ],
-            "inline": [
-              "a",
-              "a"
-            ],
+            "inline": [],
             "offscreen": [
               "button[data-testid=mc-tab-info]"
             ]
@@ -79,10 +76,7 @@
           ],
           "exempt": {
             "bleeds": [],
-            "inline": [
-              "a",
-              "a"
-            ],
+            "inline": [],
             "offscreen": []
           }
         },

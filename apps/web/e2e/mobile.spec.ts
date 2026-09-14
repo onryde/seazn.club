@@ -172,7 +172,15 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
       await expect(activityToggle).toBeVisible();
       expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(1);
       await activityToggle.click();
-      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(rowCount);
+      // Re-count after expand: a tap's ledger row can land between the initial
+      // `rowCount` snapshot and this click (badminton's two half-taps are
+      // back-to-back with no poll), and `max-md:hidden` only toggles on the
+      // rows that exist at render time — stale `rowCount` then reads "expected
+      // 2, got 3 visible" even though the product is correct.
+      const expandedCount = await rows.count();
+      expect(await rows.evaluateAll((els) => els.filter((e) => (e as HTMLElement).offsetHeight > 0).length)).toBe(
+        expandedCount,
+      );
       await activityToggle.click();
     }
     // Lineup disclosures: rows visible, editors folded.
@@ -1819,15 +1827,22 @@ test("lineup editor role/pair-order selects hold at phone width", async ({ page,
   await expect(roleSelects.first(), "no role select rendered").toBeAttached({ timeout: 30_000 });
   // BOTH sides, not the first: each side mounts its own disclosure, so opening
   // one leaves the other's selects boxless and the loop below fails on them.
-  // Gated on the toggle being VISIBLE rather than on a width literal — at
-  // `tablet-768`/`tablet-834` the toggle is `md:hidden` and the body is
-  // already open, and clicking a hidden control would throw.
+  // Gated on the toggle being VISIBLE rather than on a width literal.
+  //
+  // The lineup's own PhoneDisclosure is `desktopCollapsible` (PR #782, fold
+  // the lineup once the match starts, every width) — its toggle is visible at
+  // every width here, not just phone-narrow. At `tablet-768`/`tablet-834`
+  // (real `md`-and-up viewports) the body also starts OPEN pre-match, since
+  // this fixture never sends `core.start`, so the toggle may already read
+  // `aria-expanded="true"` before any click — only click when it does not.
   const lineupDisclosures = page.locator('[data-role="phone-disclosure"]:has([data-testid="lineup-role-select"])');
   expect(await lineupDisclosures.count(), "lineup editor is not inside a PhoneDisclosure").toBeGreaterThan(0);
   for (const wrapper of await lineupDisclosures.all()) {
     const toggle = wrapper.locator('[data-role="phone-disclosure-toggle"]');
     if (!(await toggle.isVisible())) continue;
-    await toggle.click();
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
   }
   await expect(roleSelects.first(), "role select still folded after its disclosure was opened").toBeVisible({
@@ -3991,6 +4006,21 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   await expect(serverItem, "two tapped rallies must bring the server onto the strip").toBeVisible({
     timeout: 20_000,
   });
+  // Same poll the cricket v3 test pays before `expectPhoneComposition`: the
+  // ledger assertion snapshots row count once, and both taps can outrun the
+  // fold before that snapshot if we only wait on UI chrome (the server strip).
+  await expect
+    .poll(
+      async () => {
+        const res = await apiJson<{ type: string }[]>(
+          page.request,
+          `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`,
+        );
+        return (res.data ?? []).filter((e) => e.type === "badminton.rally").length;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(2);
   await expectNoHorizontalScroll(page);
   await expectPhoneComposition(page, "S");
 });
@@ -4269,10 +4299,10 @@ function v3Sheet(page: Page): Locator {
 // one engine kernel under two presets, so they are driven by one parametrised
 // test rather than two hand-copied ones — but they get a test EACH (the loop
 // mints two `test()` calls), so a failure names the sport a scorer would be
-// holding. They are also the only two skins in the product that declare
-// `SkinDefV3.clock()`, and the clock's own start/pause toggle is the SMALLEST
-// operable target either pad has — 58.17 x 44 at rest, i.e. exactly on the
-// floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
+// holding. Football also declares `SkinDefV3.clock()` (pad-host inventory) but
+// is not in this width loop. The clock's start/pause toggle is the SMALLEST
+// operable target either period pad has — 58.17 x 44 at rest, i.e. exactly on
+// the floor with zero headroom (reference_v3_pad_44px_floor_has_zero_headroom).
 // It is therefore the one control here most likely to go red on a restyle,
 // and the one no other project measures at 320px.
 // WS-M fix round 1, item 3: the pair comes from `v3-width-matrix-coverage.ts`,

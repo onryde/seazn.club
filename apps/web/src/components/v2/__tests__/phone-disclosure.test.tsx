@@ -37,3 +37,53 @@ describe("PhoneDisclosure", () => {
     expect(controls).toBe(bodyId);
   });
 });
+
+describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup once the match starts, every sport)", () => {
+  it("startOpen=false renders the toggle WITHOUT md:hidden and the body folded at every width", () => {
+    const closedHtml = renderToStaticMarkup(
+      <PhoneDisclosure
+        summary="Home Lions"
+        showLabel="Show lineup"
+        hideLabel="Hide lineup"
+        desktopCollapsible
+        startOpen={false}
+      >
+        <p data-role="body">the editor</p>
+      </PhoneDisclosure>,
+    );
+    // Same word-boundary trap as the phone-only case above: assert the class
+    // attribute does NOT end in `md:hidden` rather than merely NOT containing
+    // it, so `max-md:hidden` (still present on nothing here, but a future
+    // regression) cannot satisfy a loose check.
+    expect(closedHtml).toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*"/);
+    expect(closedHtml).not.toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*\smd:hidden"/);
+    expect(closedHtml).toMatch(/<div class="grid h-full hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+  });
+
+  it("startOpen=true still renders CLOSED on first paint — the open-at-desktop default is a client-only layout effect, never SSR/hydration state (review fix, PR #782)", () => {
+    // A shared `useState(startOpen)` here used to open the lineup editor on
+    // PHONE-NARROW widths too (there is no `window` in this render at all —
+    // `renderToStaticMarkup` never runs effects — so if `open` ever started
+    // `true` for `startOpen=true` it would prove exactly the regression this
+    // guards: no width signal available yet, so opening by default here can
+    // only mean the two widths share one wrongly-unconditional initial
+    // state). `apps/web` vitest is `environment: "node"` (no DOM), so the
+    // matchMedia-gated desktop-open effect itself is unit-untestable —
+    // covered instead by `mobile.spec.ts`'s tablet-768/834 projects (real
+    // `md`-and-up viewports) and this file's own desktop screenshot
+    // verification (PR #782 review).
+    const html = renderToStaticMarkup(
+      <PhoneDisclosure
+        summary="Home Lions"
+        showLabel="Show lineup"
+        hideLabel="Hide lineup"
+        desktopCollapsible
+        startOpen
+      >
+        <p data-role="body">the editor</p>
+      </PhoneDisclosure>,
+    );
+    expect(html).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-expanded="false"/);
+    expect(html).toMatch(/<div class="grid h-full hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+  });
+});

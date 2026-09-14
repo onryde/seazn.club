@@ -169,6 +169,11 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
 
   // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
   // websocket refused — leaves `subscribed` false and polling takes over.
+  //
+  // Private channel + setAuth (scorepad shape). Mint is ES256 via
+  // SUPABASE_JWT_PRIVATE_KEY; Realtime Authorization SELECT on
+  // realtime.messages binds topic to JWT fixture_id claim (proved 2026-09-13).
+  // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
   const [subscribed, setSubscribed] = useState(false);
   useEffect(() => {
     if (!realtime || !live) return;
@@ -189,6 +194,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       const { supabaseBrowser } = await import("@/lib/supabase-browser");
       const sb = supabaseBrowser();
       await sb.realtime.setAuth(token.token);
+      if (cancelled) return;
       channel = sb
         .channel(token.channel, { config: { private: true } })
         .on("broadcast", { event: "state_changed" }, () => {
@@ -245,12 +251,22 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     return () => clearInterval(id);
   }, [delayMs]);
 
-  // 15 s polling fallback (Community, or realtime not connected).
+  // 15 s polling — primary on Community / when push is not connected; slower
+  // safety net once SUBSCRIBED (slideshow pattern). NEVER stop polling entirely
+  // while live: a SUBSCRIBED private channel that receives no broadcasts (e.g.
+  // public HTTP publish vs private subscribe mismatch, fixed 2026-09-12) would
+  // otherwise freeze the overlay on first paint.
+  //
+  // Immediate refresh only when undelayed: under `?delay=` a mount-time fetch
+  // would land in the buffer next to the seed and the drain would present the
+  // NEWER undelayed tip first (I1 regression). Interval still arms either way.
   useEffect(() => {
-    if (!live || subscribed) return;
-    const id = setInterval(refresh, POLL_MS);
+    if (!live) return;
+    if (delayMs <= 0) void refresh();
+    const ms = subscribed ? 60_000 : POLL_MS;
+    const id = setInterval(refresh, ms);
     return () => clearInterval(id);
-  }, [live, subscribed, refresh]);
+  }, [live, subscribed, refresh, delayMs]);
 
   return {
     data,

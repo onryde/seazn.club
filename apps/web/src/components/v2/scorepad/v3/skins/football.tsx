@@ -15,12 +15,13 @@
 // evaluation, before any request has picked a locale, so it can only ever hold
 // the factory (registry.ts's own header has the full reasoning).
 //
-// EVENT VOCABULARY (9 `football.*` types, `FOOTBALL_EVENT_SCHEMAS`). Where
+// EVENT VOCABULARY (`football.*` types in `FOOTBALL_EVENT_SCHEMAS`). Where
 // each is reachable, per ruling R3-4:
 //   goal / card / sub / period / penalty  — dedicated tiles + sheets here
+//   clock                                 — PadClockBar (Pause/Start/Correct)
 //   shot / sinbin.start / sinbin.end / shootout.kick — the generic More sheet
-// `__tests__/football-dispatch-totality.test.ts` sweeps all nine across the
-// whole cfg space rather than trusting this comment.
+// `__tests__/football-dispatch-totality.test.ts` sweeps the registry across
+// the whole cfg space rather than trusting this comment.
 //
 // THREE ENGINE FACTS THIS FILE MIRRORS RATHER THAN IMPORTS (the closed
 // vocabularies below, and `periodMarkersOf`). Football's barrel exports the
@@ -56,6 +57,7 @@ import { expectedKicker, shootoutTally, type ShootoutKick } from "@seazn/engine/
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
+import type { PadClockSpec } from "../clock";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
@@ -185,6 +187,7 @@ export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
   "football.goal": 0,
   "football.period": 0,
   "football.shootout.kick": 0,
+  "football.clock": 0,
   "football.card": 2,
   "football.sub": 2,
   "football.penalty": 2,
@@ -305,21 +308,12 @@ const SIDES: readonly Side[] = ["home", "away"];
  * MM:SS, only when the fold's own `asOf` names the CURRENT phase — and
  * `undefined` when it does not.
  *
- * The guard is v2's (`readClock`, skins/football-skin.tsx:115), which mirrors
- * the one football's own (unexported) `footballPosition` applies: a stamp left
- * over from a phase the match has since left must never read as "now".
- * `buildSwap` below depends on this same decision for the `at` it stamps, so
- * the two can never disagree about whether the clock is current.
+ * The guard mirrors football's own (unexported) `footballPosition`: a stamp
+ * left over from a phase the match has since left must never read as "now".
+ * `buildSwap` depends on this same decision for the `at` it stamps.
  *
- * B3 changed the MISS from v2's "—" placeholder to `undefined`, so the caller
- * can drop the strip item rather than render a labelled em-dash forever. The
- * clock is genuinely reachable — `state.asOf` is a `GameTime` the fold keeps
- * (`{...swept, asOf: at}`, football.ts:2528) — but ONLY a stamped event sets
- * it, and no v3 tile sends `at` except the swap, which copies an `asOf` that
- * already exists. A stream recorded entirely through this pad therefore has
- * no clock at all, which is exactly the case the placeholder was papering
- * over. Restoring the value is an engine-side question (nothing here can
- * bootstrap a stamp), recorded in this wave's report rather than faked.
+ * With `clock()` on the skin, Pause/Start/Correct publish `football.clock`
+ * and seed `asOf`; the strip still prefers the fold's reading when present.
  */
 export function readClock(state: unknown, phase: string): string | undefined {
   const asOf = asState(state).asOf;
@@ -328,6 +322,24 @@ export function readClock(state: unknown, phase: string): string | undefined {
     return undefined;
   }
   return `${Math.floor(elapsed / 60)}:${String(Math.floor(elapsed % 60)).padStart(2, "0")}`;
+}
+
+/**
+ * Declares `PadClockBar` for regulation / ET play phases — same contract as
+ * period-shared `buildClock`. Absent in pre / post / SHOOTOUT.
+ */
+export function buildFootballClock(view: PadHostView): PadClockSpec | null {
+  const state = asState(view.state);
+  const phase = readPhase(state);
+  if (!PLAY_PHASES.has(phase)) return null;
+  const asOf = state.asOf;
+  const fresh =
+    asOf !== undefined &&
+    asOf.period === phase &&
+    typeof asOf.elapsed === "number" &&
+    Number.isFinite(asOf.elapsed) &&
+    asOf.elapsed >= 0;
+  return fresh ? { period: phase, seed: asOf.elapsed } : { period: phase };
 }
 
 /**
@@ -417,6 +429,7 @@ export function legalPeriodMarkers(phase: string, cfg: unknown): readonly string
  */
 const PLAY_PHASE_ONLY: readonly string[] = [
   "football.goal",
+  "football.clock",
   "football.sub",
   "football.penalty",
   "football.shot",
@@ -1504,12 +1517,13 @@ export function buildDock(
   }
 
   if (eventType === "football.card") {
-    if (side === null) return { title: t("pad.football.dock.card.title"), chips: [] };
+    if (side === null) return null;
     // `cardCandidates` is the SAME list the card sheet blocks its colour step
     // against — see its doc for why one implementation rather than two.
     const chips = cardCandidates(state, side, payload?.color).map((id) =>
       personChip(`person:${id}`, "person", id, nameOf(view, id, t)),
     );
+    if (chips.length === 0) return null;
     return { title: t("pad.football.dock.card.title"), chips };
   }
 
@@ -1525,6 +1539,7 @@ export function buildDock(
   if (eventType === "football.shootout.kick") {
     if (side === null || view.band < 2) return null;
     const chips = squadOf(state, side).onPitch.map((id) => personChip(`person:${id}`, "person", id, nameOf(view, id, t)));
+    if (chips.length === 0) return null;
     return { title: t("pad.football.dock.shootoutKick.title"), chips };
   }
 
@@ -1640,6 +1655,8 @@ export function footballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     // never wired ships INERT — its unit tests pass while every activity row
     // still reads "Goal recorded".
     activityDetail: footballDetail,
+    // 2026-09-13 — mounts PadClockBar; Pause/Start/Correct publish football.clock.
+    clock: buildFootballClock,
     // No `context`/`contextSelect` — see this file's header.
   };
 }

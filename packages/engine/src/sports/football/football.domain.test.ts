@@ -593,6 +593,8 @@ describe("event union disambiguation", () => {
     // for the "saved"/"missed" tokens this canonical payload deliberately
     // avoids, so the round-trip test above stays a real, non-ambiguous proof).
     "football.shot": { by: "H", taker: "H-p9", goalkeeper: "A-p1", outcome: "blocked" },
+    // PadClockBar Pause/Start/Correct — `running` is required; `at` optional.
+    "football.clock": { running: true, at: { period: "H1", elapsed: 60 } },
   };
 
   it("round-trips every branch's canonical payload through the union unchanged", () => {

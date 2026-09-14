@@ -12,7 +12,7 @@ The band above the score says which of those is in force: *3 × 20 min · Overti
 
 ## The clock
 
-Ice hockey is one of the two sports whose pad runs a clock. **Start** and **Pause** it as play runs, and **Correct the clock** nudges it by a minute or ten seconds when it has drifted from the rink clock — that only moves this pad's clock, never the times already recorded.
+Ice hockey is one of the two sports whose pad runs a clock. **Start** and **Pause** it as play runs, and **Correct the clock** nudges it by a coarse step (a minute) or a fine one (a few seconds) when it has drifted from the rink clock — that only moves this pad's clock, never the times already recorded.
 
 Every entry you record while it's running is stamped with the game time it happened at, which is what lets the penalty box count down properly instead of sitting still between whistles.
 

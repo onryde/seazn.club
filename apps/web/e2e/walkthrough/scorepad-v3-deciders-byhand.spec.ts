@@ -78,12 +78,12 @@ async function postEvent(
   }
 }
 
-/** The v3 pad soft-commits: a tap sits in the dock for HOLD_MS before it
- *  reaches the ledger (spec §2.3). Every hand-driven tap here flushes through
- *  the dock's own "Send now" rather than sleeping — waiting out the hold would
- *  add a minute per test and would still be a race. */
+/** Soft-commit only when the dock has enrichment chips (`usesSoftCommit`).
+ *  Plain cricket balls / empty docks submit immediately — waiting for "Send
+ *  now" hangs forever. Match fullmatch's defensive count, not a required click. */
 async function sendHeldNow(page: Page): Promise<void> {
-  await pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true }).click();
+  const btn = pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true });
+  if (await btn.count()) await btn.click();
 }
 
 /** Tap a tile, pick an option in the sheet it opens, flush the hold, and

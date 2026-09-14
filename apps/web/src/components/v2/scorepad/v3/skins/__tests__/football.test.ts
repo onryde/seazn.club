@@ -250,7 +250,7 @@ describe("engine mirrors (a module change must red HERE, not drift silently)", (
 
   it("EVENT_BAND mirrors padSpec's own fidelity map exactly — every type, every band", () => {
     expect(EVENT_BAND).toEqual(spec.fidelity);
-    expect(Object.keys(EVENT_BAND)).toHaveLength(9);
+    expect(Object.keys(EVENT_BAND)).toHaveLength(10);
   });
 
   it("periodMarkersOf mirrors football.period's own marker enum for halves, quarters and extra time", () => {
@@ -1673,6 +1673,19 @@ describe("footballSkinV3", () => {
     expect(Object.keys(skin.sheets!(view())).length).toBeGreaterThan(0);
   });
 
+  it("declares clock() so PadClockBar mounts in play — Pause/Start/Correct publish football.clock", () => {
+    const skin = footballSkinV3(t);
+    expect(typeof skin.clock).toBe("function");
+    expect(skin.clock!(view({ state: state({ phase: "H1" }) }))).toEqual({ period: "H1" });
+    expect(skin.clock!(view({ state: state({ phase: "H1", asOf: { period: "H1", elapsed: 761 } }) }))).toEqual({
+      period: "H1",
+      seed: 761,
+    });
+    expect(skin.clock!(view({ state: state({ phase: "pre" }) }))).toBeNull();
+    expect(skin.clock!(view({ state: state({ phase: "SHOOTOUT" }) }))).toBeNull();
+    expect(skin.clock!(view({ state: state({ phase: "final" }) }))).toBeNull();
+  });
+
   it("declares no context strip — football has no persistent per-person slot the fold can hold", () => {
     expect(footballSkinV3(t).context).toBeUndefined();
     expect(footballSkinV3(t).contextSelect).toBeUndefined();
@@ -1970,6 +1983,7 @@ describe("phaseAllows / legalPeriodMarkers — the fold's phase rules, stated on
   it("refusedEventTypes is the complement, derived from EVENT_BAND rather than a second hand-list", () => {
     const shootout = view({ state: state({ phase: "SHOOTOUT" }), cfg: cfg({ shootout: true }) });
     expect(refusedEventTypes(shootout).sort()).toEqual([
+      "football.clock",
       "football.goal",
       "football.penalty",
       "football.period",
@@ -2107,8 +2121,8 @@ describe("second_yellow needs someone on a caution (R3 review, the unattributabl
   it("the sheet leaves it enabled EXACTLY when the dock can name somebody", () => {
     for (const fixture of [view(), view({ state: yellowFor("h2") })]) {
       const enabled = colourStep(fixture).blocked!({}).second_yellow === undefined;
-      const chips = buildDock("football.card", fixture, t, { by: "home-1", color: "second_yellow" })!.chips;
-      expect(chips.length > 0, `enabled=${enabled} chips=${chips.length}`).toBe(enabled);
+      const dock = buildDock("football.card", fixture, t, { by: "home-1", color: "second_yellow" });
+      expect((dock?.chips.length ?? 0) > 0, `enabled=${enabled} chips=${dock?.chips.length ?? 0}`).toBe(enabled);
     }
   });
 

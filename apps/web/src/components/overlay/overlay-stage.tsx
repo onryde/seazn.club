@@ -9,8 +9,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
 import { maxSeq, momentsFor } from "@/lib/overlay-moments";
+import { endOfOverMoment, closedOverBaselineOf } from "@/lib/overlay-end-of-over";
+import { tossMoment } from "@/lib/overlay-openers";
 import { useMomentQueue } from "./use-moment-queue";
 import { OverlayMomentSlab } from "./overlay-moment";
+import { OverlayEndOfOverCard } from "./overlay-end-of-over";
+import { OverlayTossCard } from "./overlay-toss-card";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import {
@@ -27,6 +31,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // imports neither `overlay-bar` nor `overlay-bug` — registering a third theme
 // must not touch this file, and an import here would be exactly that edit.
 import { OVERLAY_THEMES, slabPlacementFor, type ThemeId } from "./theme-registry";
+import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -42,6 +47,8 @@ export interface OverlayStageProps {
   style: ThemeId;
   sides: [OverlaySideInput, OverlaySideInput];
   startLabel: string | null;
+  /** Competition / stage for the slate card meta pill. */
+  slateMeta?: { competition?: string; stage?: string } | null;
   /** The `public` namespace, en-merged server-side. A plain object, so the
    *  island carries only the active locale. */
   dict: Record<string, string>;
@@ -97,7 +104,7 @@ export function OverlayStage(props: OverlayStageProps) {
   // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
   // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
   // subtracts it either way.
-  const { data, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
+  const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
     delayMs: props.delayMs,
   });
@@ -132,6 +139,7 @@ export function OverlayStage(props: OverlayStageProps) {
    * shown.
    */
   const [momentBaseline] = useState(() => maxSeq(props.initial.recent));
+  const [closedOverBaseline] = useState(() => closedOverBaselineOf(props.initial.lastClosedOver));
   const placement = slabPlacementFor(props.style, props.sportKey);
   const reducedMotion = usePrefersReducedMotion();
 
@@ -143,21 +151,43 @@ export function OverlayStage(props: OverlayStageProps) {
     clockLabel,
     msg,
     decidedTemplates: props.decidedTemplates,
+    slateMeta: props.slateMeta,
   });
 
-  // The slab's queue. `momentsFor` is pure and cheap; the queue owns every
-  // decision about WHEN, and this hands it the short codes the set-won line
-  // names a winner with — the same `model.sides[].short` the scorebug paints,
-  // never a second derivation.
-  const { current: moment, phase } = useMomentQueue(
-    awaitingDelay
-      ? EMPTY_MOMENTS
-      : momentsFor(props.sportKey, data.recent ?? [], momentBaseline, msg, [
-          model.sides[0].short,
-          model.sides[1].short,
-        ]),
-    { reducedMotion },
-  );
+  const cardState = slateStateOf(model);
+  const showMatchCard = cardState === "warming" || cardState === "ended";
+
+  // Moments first, then end-of-over (so OUT precedes the over card), then toss
+  // (only when the match card is NOT up — card owns warming openers).
+  const sideShorts: [string, string] = [model.sides[0].short, model.sides[1].short];
+  const sideNames: [string, string] = [model.sides[0].name, model.sides[1].name];
+  const incoming = awaitingDelay
+    ? EMPTY_MOMENTS
+    : (() => {
+        const moments = momentsFor(
+          props.sportKey,
+          data.recent ?? [],
+          momentBaseline,
+          msg,
+          sideShorts,
+        );
+        const eoo = endOfOverMoment({
+          closed: data.lastClosedOver,
+          since: closedOverBaseline,
+          msg,
+        });
+        const toss = showMatchCard
+          ? null
+          : tossMoment({
+              toss: data.cricketToss,
+              sideNames,
+              scoringStarted: data.scoringStarted === true,
+              msg,
+            });
+        return [...moments, ...(eoo ?? []), ...(toss ? [toss] : [])];
+      })();
+
+  const { current: moment, phase } = useMomentQueue(incoming, { reducedMotion });
 
   // Score tick: the ONE `big` that changed, and only that one (R13). The
   // previous pair lives in a ref that is read AND written only inside this
@@ -220,6 +250,7 @@ export function OverlayStage(props: OverlayStageProps) {
           data-testid="ovl-root"
           data-style={props.style}
           data-sport-theme={sportThemeAttr(props.sportKey)}
+          data-transport={transport}
           data-awaiting-delay="1"
           data-led="none"
           className="ovl-canvas ovl-label ovl-static"
@@ -235,14 +266,16 @@ export function OverlayStage(props: OverlayStageProps) {
         data-testid="ovl-root"
         data-style={props.style}
         data-sport-theme={sportThemeAttr(props.sportKey)}
+        data-transport={transport}
         data-led={model.sides[0].led ? "home" : model.sides[1].led ? "away" : "none"}
         className={`ovl-canvas ovl-label${model.live ? "" : " ovl-static"}`}
         style={{ ...sportThemeStyle(props.sportKey), transform: `scale(${scale})` }}
       >
-        {/* `OverlayThemeProps` (theme-registry.ts) — the model, the score
-            tick, the ONE `msg` above, and the sport. The last two are what
-            let a theme carry its own copy and composite the sport's own
-            scorebug; §3's bar and §4's bug ignore both. */}
+        {/* Scorebug theme (bar|bug). Match/end card is a LAYER above it when
+            warming or ended — not a third ?style= (2026-09-12). */}
+        {showMatchCard ? (
+          <OverlayMatchCard model={model} msg={msg} cricketToss={data.cricketToss} />
+        ) : null}
         <Theme model={model} tick={tick} msg={msg} sportKey={props.sportKey} />
         {/* W2's slab attaches here (R4). The slot CLIPS: the slab slides out
             from under the scorebug rather than appearing beside it, so the
@@ -250,6 +283,10 @@ export function OverlayStage(props: OverlayStageProps) {
             transform. The fold duration crosses into CSS as a custom property
             from `moment-timing.ts`, so the paint and the state machine cannot
             disagree about how long a fold takes. */}
+        {/* Toss is a CENTER card (A2), not the anchored moment slot. */}
+        {moment !== null && moment.graphic === "toss" ? (
+          <OverlayTossCard moment={moment} phase={phase} />
+        ) : null}
         <div
           data-testid="ovl-moment-slot"
           className={`ovl-moment-slot ovl-moment-slot--${placement}`}
@@ -261,7 +298,10 @@ export function OverlayStage(props: OverlayStageProps) {
           data-band={hasDetailBand(model) ? "" : undefined}
           style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
         >
-          {moment === null ? null : (
+          {moment === null || moment.graphic === "toss" ? null : moment.graphic === "endOfOver" &&
+            moment.endOfOver ? (
+            <OverlayEndOfOverCard moment={moment} phase={phase} msg={msg} />
+          ) : (
             <OverlayMomentSlab moment={moment} phase={phase} placement={placement} />
           )}
         </div>

@@ -38,6 +38,7 @@ import { initSquads } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { foldClient } from "../../module-client";
 import {
+  claimPadClockDedicated,
   dedicatedEventTypes,
   filterTilesByBand,
   moreActions,
@@ -190,7 +191,11 @@ describe("the Recording sheet's counts do not depend on the band the scorer is c
       const sheets = footballSkin.sheets?.(view);
       const swaps = footballSkin.swap?.(view) ?? [];
       const bandTiles = filterTilesByBand(footballSkin.tiles(view), sheets ?? {}, swaps, spec.fidelity, band);
-      const dedicated = dedicatedEventTypes(bandTiles, sheets, swaps, footballSkin.scorebug(view));
+      const dedicated = claimPadClockDedicated(
+        dedicatedEventTypes(bandTiles, sheets, swaps, footballSkin.scorebug(view)),
+        footballSkin,
+        spec.fidelity,
+      );
       const refused = new Set(footballSkin.refusedEventTypes?.(view) ?? []);
       const more = moreActions(spec, { state: view.state, summary: view.summary, phase: view.phase, band }, dedicated, refused);
       const onScreen = suppressEmptyMoreTile(bandTiles, more).filter((tile) => tile.disabled !== true);

@@ -467,7 +467,7 @@ function Innings({
     <details
       data-testid={`mc-innings-${position}`}
       open={open}
-      className="group rounded-xl border border-zinc-200/80 bg-surface"
+      className="group min-w-0 max-w-full rounded-xl border border-zinc-200/80 bg-surface"
     >
       {/* `display: flex` on a <summary> REMOVES the UA disclosure marker
           (`summary { display: list-item }`), so a closed innings showed no
@@ -612,7 +612,7 @@ export function ScorecardTab({ doc, dict }: ScorecardTabProps): ReactNode {
     // `md`: at 768 a half-width panel is ~360px, and a batting table has six
     // numeric columns plus a name — the width the innings gain has to come
     // from somewhere, and below `lg` there is none to give.
-    <div data-testid="mc-scorecard" className="grid items-start gap-2 lg:grid-cols-2">
+    <div data-testid="mc-scorecard" className="grid min-w-0 items-start gap-2 lg:grid-cols-2">
       {innings.map((entry, index) => (
         <Innings
           // KEY AND TESTID SCOPE, from ONE expression — see note 5. `index + 1`

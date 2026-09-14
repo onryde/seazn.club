@@ -11,7 +11,7 @@
 // folded state) for `chaseBalls` — amended 2026-09-07. No summary field is
 // invented here; the clock is not a reader at all (it is the stage's timer).
 import { describe, expect, it } from "vitest";
-import { battingEntrantId, chaseBalls, chaseNeed } from "@/lib/public-site";
+import { battingEntrantId, chaseBalls, chaseNeed, chaseTargetRuns } from "@/lib/public-site";
 import { formatClock, formatClockCapped } from "@/lib/overlay-model";
 
 const innings = (entrantId: string, runs: number, closed: boolean) => ({
@@ -56,6 +56,25 @@ describe("chaseNeed", () => {
 
   it("is null for a sport with no innings", () => {
     expect(chaseNeed({ detail: { periods: [{ phase: "H1", home: 1, away: 0 }] } })).toBeNull();
+  });
+});
+
+describe("chaseTargetRuns", () => {
+  it("is the first innings' total plus one while a chase is open", () => {
+    const summary = { detail: { innings: [innings("e-home", 180, true), innings("e-away", 91, false)] } };
+    expect(chaseTargetRuns(summary)).toBe(181);
+  });
+
+  it("prefers an explicit revised target (DLS / manual)", () => {
+    const summary = {
+      detail: { target: 160, targetSource: "dls", innings: [innings("e-home", 180, true), innings("e-away", 91, false)] },
+    };
+    expect(chaseTargetRuns(summary)).toBe(160);
+  });
+
+  it("is null in the first innings and once the chase has closed", () => {
+    expect(chaseTargetRuns({ detail: { innings: [innings("e-home", 91, false)] } })).toBeNull();
+    expect(chaseTargetRuns({ detail: { innings: [innings("e-home", 180, true), innings("e-away", 181, true)] } })).toBeNull();
   });
 });
 

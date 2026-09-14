@@ -330,10 +330,10 @@ export function StandingsTableView({
             aria-label={`${view.divisionName} — ${view.caption}`}
             className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
           >
-            {/* The two floors ride as custom properties so the `md:` variant
+            {/* The two floors ride as custom properties so the md: variant
                 can pick the wider one — a computed length has no other way to
-                vary by media query. `settings-nav.tsx` uses the same
-                `[var(--…)]` + `md:` shape. */}
+                vary by media query. settings-nav.tsx uses the same
+                CSS-var arbitrary value + md: shape. */}
             <table
               className="w-full table-fixed text-sm tabular-nums min-w-[var(--sv-min)] md:min-w-[var(--sv-min-md)]"
               style={

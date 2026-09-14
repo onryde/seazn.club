@@ -321,6 +321,10 @@ export function probePayload(module: AnySportModule, type: string, state: Period
       return { by, kind: firstSetPiece };
     case `${key}.shot`:
       return { by, outcome: "saved" };
+    case `${key}.clock`: {
+      const phase = typeof state.phase === "string" ? state.phase : "P1";
+      return { at: { period: phase, elapsed: 0 }, running: false };
+    }
     default:
       throw new Error(`no probe payload for "${type}" — the period kernel's vocabulary grew, extend this switch`);
   }

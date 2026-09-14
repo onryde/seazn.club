@@ -578,8 +578,7 @@ test("football skin: a substitution, through the SAME reducer core.lineup.substi
   await swap.locator(`[data-candidate-id="${on}"]`).click();
 
   // No "Send now" here: `buildDock` returns null for `football.sub`, so the
-  // dock renders nothing and there is no flush control — this waits the hold
-  // window out, which the 20s budget already covers.
+  // tap submits immediately (usesSoftCommit) — poll the ledger, not HOLD_MS.
   await expect
     .poll(
       async () => (await ledger(request, fx.fixtureId)).filter((e) => e.type === "football.sub").length,

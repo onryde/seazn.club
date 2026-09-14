@@ -109,8 +109,177 @@ export function liveFromScorecard(
   return { batters, ...(bowler === undefined ? {} : { bowler }), thisOver: live.thisOver };
 }
 
+export type OverlayCricketToss = {
+  wonBySide: 0 | 1;
+  elected: "bat" | "bowl";
+};
+
+export type OverlayClosedOver = {
+  /** 0-based index into `scorecard.innings` — pairs with `over` for identity
+   *  across the innings break (bare over numbers restart at 1). */
+  inningsIndex: number;
+  /** 1-based over number within that innings. */
+  over: number;
+  runs: number;
+  wickets: number;
+  /** Team total after the over, e.g. `142/6`. */
+  score: string;
+  glyphs: BallGlyph[];
+  bowler?: OverlayCricketBowler;
+  batters: OverlayCricketBatter[];
+};
+
+/**
+ * Scorecard toss → overlay side index. `sides` is `[homeEntrantId, awayEntrantId]`.
+ * Null when no toss, or when `wonBy` is not one of the two sides.
+ */
+export function tossFromScorecard(
+  scorecard: CricketScorecard,
+  sides: readonly [string, string],
+): OverlayCricketToss | null {
+  const toss = scorecard.toss;
+  if (!toss) return null;
+  const wonBySide = toss.wonBy === sides[0] ? 0 : toss.wonBy === sides[1] ? 1 : undefined;
+  if (wonBySide === undefined) return null;
+  return { wonBySide, elected: toss.elected };
+}
+
+/** True once any over log or live delivery exists — the first scoring fact. */
+export function scoringStartedFromScorecard(scorecard: CricketScorecard): boolean {
+  if (scorecard.live && scorecard.live.thisOver.length > 0) return true;
+  return scorecard.innings.some((inn) => inn.overs.length > 0 || inn.total.legalBalls > 0);
+}
+
+/**
+ * The most recently *completed* over in the latest innings.
+ *
+ * Completeness is read from the engine's OWN authority — `total.overs`'s
+ * integer part (`fmtOvers` in scorecard.ts: `floor(legalBalls /
+ * ballsPerOver)`) — never from `scorecard.live`. `live` goes `null` the
+ * instant the innings (or the match) ends, including MID-OVER: a chase won,
+ * an all-out or a declaration can land on any ball, and the `OverLog` tip
+ * `innings.overs` was already carrying (one opens on an over's first ball,
+ * scorecard.ts) is then a PARTIAL over, not a closed one. Reading `live ===
+ * null` as "the tip is closed" airs that partial over as if it had finished,
+ * and — because this becomes the mount baseline for `endOfOverSeq`
+ * (overlay-end-of-over.ts) — permanently skips the real last completed over.
+ *
+ * `total.overs`'s integer part does not have this problem, live or not: it
+ * names exactly how many overs are complete, so `overs[completeOvers - 1]`
+ * is the true last complete over whether the innings is mid-over-and-live,
+ * mid-over-and-just-ended, or sitting exactly on an over boundary. It also
+ * survives a trailing over that logged only extras (a wide can WIN a chase
+ * without ever crediting a legal ball): that tail over shares the completed
+ * over's `legalBalls` boundary but is excluded because it is not the over at
+ * index `completeOvers - 1`.
+ */
+export function lastClosedOverFromScorecard(
+  scorecard: CricketScorecard,
+  nameOf: (personId: string) => string | undefined,
+): OverlayClosedOver | null {
+  const inningsIndex = scorecard.innings.length - 1;
+  const innings = scorecard.innings.at(-1);
+  if (!innings || innings.overs.length === 0 || inningsIndex < 0) return null;
+  const completeOvers = Number(innings.total.overs.split(".")[0]);
+  const over = completeOvers > 0 ? innings.overs[completeOvers - 1] : undefined;
+  if (!over) return null;
+
+  const bowlLine =
+    over.bowler === null ? undefined : innings.bowling.find((b) => b.person === over.bowler);
+  const bowlerName = over.bowler === null ? undefined : nameOf(over.bowler);
+  const bowler: OverlayCricketBowler | undefined =
+    bowlLine === undefined || bowlerName === undefined
+      ? undefined
+      : {
+          name: bowlerName,
+          overs: bowlLine.overs,
+          maidens: bowlLine.maidens,
+          runs: bowlLine.runs,
+          wickets: bowlLine.wickets,
+        };
+
+  // Crease figures at projection time (best available for the full card).
+  const liveBlock = liveFromScorecard(scorecard, nameOf);
+
+  return {
+    inningsIndex,
+    over: over.number,
+    runs: over.runs,
+    wickets: over.wickets,
+    score: `${over.scoreAfter.runs}/${over.scoreAfter.wickets}`,
+    glyphs: over.balls,
+    ...(bowler === undefined ? {} : { bowler }),
+    batters: liveBlock?.batters ?? [],
+  };
+}
+
+/** One ended-card performer chip — same shape as `OverlayHighlight` on the model. */
+export type OverlayHighlights = {
+  batter?: { name: string; line: string; detail?: string };
+  bowler?: { name: string; line: string; detail?: string };
+};
+
+function fmt1(n: number): string {
+  return (Math.round(n * 10) / 10).toFixed(1);
+}
+
+function pickBest<T>(rows: readonly T[], better: (a: T, b: T) => number): T | null {
+  if (rows.length === 0) return null;
+  return rows.reduce((best, row) => (better(row, best) < 0 ? row : best));
+}
+
+/**
+ * Match top batter / bowler for the ended card — same ranking as match-centre
+ * (`runs` then strike rate; `wickets` then economy), across every innings.
+ *
+ * Structured fields only — never `parseFloat` on the display line (a bowler
+ * line `"3/24"` would otherwise ignore conceded runs on a wickets tie).
+ *
+ * `nameOf` is consent-resolved; an unnameable person is omitted rather than
+ * shown as an id on a broadcast graphic.
+ */
+export function highlightsFromScorecard(
+  scorecard: CricketScorecard,
+  nameOf: (personId: string) => string | undefined,
+): OverlayHighlights | null {
+  const batting = scorecard.innings.flatMap((inn) => inn.batting);
+  const bowling = scorecard.innings.flatMap((inn) => inn.bowling);
+
+  const bestBatter = pickBest(batting, (a, b) => {
+    if (a.runs !== b.runs) return b.runs - a.runs;
+    return (b.strikeRate ?? -1) - (a.strikeRate ?? -1);
+  });
+  const bestBowler = pickBest(bowling, (a, b) => {
+    if (a.wickets !== b.wickets) return b.wickets - a.wickets;
+    return (a.economy ?? Number.POSITIVE_INFINITY) - (b.economy ?? Number.POSITIVE_INFINITY);
+  });
+
+  const batterName = bestBatter ? nameOf(bestBatter.person) : undefined;
+  const bowlerName = bestBowler ? nameOf(bestBowler.person) : undefined;
+
+  const batter =
+    bestBatter && batterName
+      ? {
+          name: batterName,
+          line: `${bestBatter.runs} (${bestBatter.balls})`,
+          ...(bestBatter.strikeRate === null ? {} : { detail: `SR ${fmt1(bestBatter.strikeRate)}` }),
+        }
+      : undefined;
+  const bowler =
+    bestBowler && bowlerName
+      ? {
+          name: bowlerName,
+          line: `${bestBowler.wickets}/${bestBowler.runs}`,
+          ...(bestBowler.economy === null ? {} : { detail: `Econ ${fmt1(bestBowler.economy)}` }),
+        }
+      : undefined;
+
+  if (!batter && !bowler) return null;
+  return { ...(batter ? { batter } : {}), ...(bowler ? { bowler } : {}) };
+}
+
 /** One delivery, as a scorer would write it. Notation, never copy. */
-function glyph(g: BallGlyph): string {
+export function ballGlyphText(g: BallGlyph): string {
   switch (g.kind) {
     case "runs":
       // A dot ball is a DOT. "0" on a broadcast graphic reads as a score.
@@ -138,8 +307,19 @@ function glyph(g: BallGlyph): string {
  *
  * The second line survives an unnamed bowler: the glyphs are the OVER, not the
  * person, and dropping them with the name would lose the more useful half.
+ *
+ * Glyphs ride as structured chips (`glyphs`) so bar/bug can circle them —
+ * never flattened into `text` (a string cannot carry pill geometry).
  */
-export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: OverlayMsg): string[] {
+export type CricketDetailLine = {
+  text: string;
+  glyphs?: readonly string[];
+};
+
+export function cricketDetail(
+  live: OverlayCricketLive | null | undefined,
+  msg: OverlayMsg,
+): CricketDetailLine[] {
   // TWO guards, and they ask DIFFERENT questions: "there is no crease block at
   // all" (between innings, not cricket) versus "there is one, and nobody on it
   // can be named". The third — `batters.length === 0` — was the redundant one,
@@ -153,10 +333,8 @@ export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: 
     .map((b) => `${b.name}${b.onStrike ? mark : ""} ${b.runs} (${b.balls})`)
     .join(" · ");
 
-  const over =
-    live.thisOver.length === 0
-      ? undefined
-      : `${msg("overlay.cricket.thisOver")} ${live.thisOver.map(glyph).join(" ")}`;
+  const glyphLabels =
+    live.thisOver.length === 0 ? undefined : live.thisOver.map(ballGlyphText);
   const bowler =
     live.bowler === undefined
       ? undefined
@@ -167,6 +345,16 @@ export function cricketDetail(live: OverlayCricketLive | null | undefined, msg: 
           String(live.bowler.wickets),
         ].join("-")}`;
 
-  const second = [bowler, over].filter((part) => part !== undefined).join(" · ");
-  return second === "" ? [batters] : [batters, second];
+  // No "this over" label on the live band — the circular glyphs carry that
+  // meaning. The end-of-over card keeps `overlay.cricket.thisOver` as its
+  // column heading.
+  const second: CricketDetailLine | undefined =
+    bowler === undefined && glyphLabels === undefined
+      ? undefined
+      : {
+          text: bowler ?? "",
+          ...(glyphLabels === undefined ? {} : { glyphs: glyphLabels }),
+        };
+
+  return second === undefined ? [{ text: batters }] : [{ text: batters }, second];
 }

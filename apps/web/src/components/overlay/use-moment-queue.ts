@@ -10,6 +10,10 @@
 // continuous ticker, no setInterval for visuals"). An OBS browser source runs
 // for the length of a match; a 60 Hz loop that exists to notice three state
 // changes is the kind of thing that shows up as heat.
+//
+// 2026-09-12: each identity change also `sync`s against the live window so a
+// scorer undo folds away a slab that would otherwise keep announcing a voided
+// ball (see moment-queue `sync` + undo tests).
 import { useEffect, useReducer } from "react";
 import type { OverlayMoment } from "@/lib/overlay-moments";
 import { INITIAL, momentQueueReducer, nextDeadline, type Phase } from "./moment-queue";
@@ -31,10 +35,17 @@ export function useMomentQueue(
   // effect is keyed on the moments' IDENTITIES rather than the array. The
   // reducer would drop the repeats anyway (it remembers what it has shown);
   // this keeps the dispatch itself from running fifteen times a minute.
+  //
+  // Sync runs even when the live set is EMPTY: that is the undo case — the
+  // only moment on air was voided and `momentsFor` returns nothing. Enqueue
+  // alone would early-return and leave the lie on screen.
   const key = incoming.map((m) => `${m.seq}:${m.kind}`).join(",");
   useEffect(() => {
-    if (incoming.length === 0) return;
-    dispatch({ type: "enqueue", moments: incoming, now: Date.now(), foldMs, holdMs });
+    const now = Date.now();
+    dispatch({ type: "sync", live: incoming, now, foldMs, holdMs });
+    if (incoming.length > 0) {
+      dispatch({ type: "enqueue", moments: incoming, now, foldMs, holdMs });
+    }
     // `incoming` is read from the closure and deliberately NOT a dependency: a
     // fresh array arrives on every poll even when nothing changed, so the
     // effect keys on the moments' IDENTITIES instead. Writing it to a ref

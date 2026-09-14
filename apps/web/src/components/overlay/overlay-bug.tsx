@@ -4,6 +4,7 @@
 // construction in `overlayModel`, so each row renders its own half of it —
 // that split lives here, in the renderer, rather than widening the model.
 import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import { OverlayBallGlyphs } from "./overlay-ball-glyphs";
 
 const halfOf = (value: string, row: 0 | 1): string => {
   const parts = value.split("–");
@@ -23,13 +24,15 @@ export function OverlayBug({
     <div className="ovl-bug">
       <div className="ovl-bug-header">
         {model.live ? <span data-testid="ovl-live-dot" className="ovl-live-dot" /> : null}
-        <span className="ovl-bug-status">{model.header.context}</span>
+        {model.header.context ? (
+          <span className="ovl-bug-status">{model.header.context}</span>
+        ) : null}
         {/* §4 (product ruling 2026-09-10, review finding IMPORTANT 1) — "the
             bug's header never carries the result sentence". `header.period`
             is ONE field and BOTH themes read it, but once a fixture is decided
             it holds the short RESULT sentence, and §4 puts the bug's result in
             the FOOTER while spec'ing this slot at 19.5/500 for "2nd half"-sized
-            labels. ~291px ≈ 32 characters are free here after "Final", the gaps
+            labels. ~291px ≈ 32 characters are free here after the status word, the gaps
             and "seazn": "NOR won by 8 wickets with 12 balls remaining" wraps
             inside a fixed 48px header and clips, and fr/nl run 15-25% longer.
             `decided` covers a verdict-carrying void too; a void with NO verdict
@@ -52,13 +55,18 @@ export function OverlayBug({
           <span className="ovl-bug-brand ovl-display">{msg("overlay.brand")}</span>
         )}
       </div>
-      {([0, 1] as const).map((row) => {
+      {model.focus?.strip ? (
+        <div data-testid="ovl-innings-strip" className="ovl-bug-innings-strip ovl-label">
+          {model.focus.strip}
+        </div>
+      ) : null}
+      {(model.focus ? ([model.focus.hero] as const) : ([0, 1] as const)).map((row) => {
         const side = model.sides[row];
         return (
           <div
             key={side.short + row}
             data-testid={row === 0 ? "ovl-side-home" : "ovl-side-away"}
-            className={`ovl-bug-row ovl-display${side.led ? " ovl-side-led" : ""}${model.voided ? " ovl-voided" : ""}`}
+            className={`ovl-bug-row ovl-display${model.focus ? " ovl-bug-row--hero" : ""}${side.led ? " ovl-side-led" : ""}${model.voided ? " ovl-voided" : ""}`}
           >
             {side.led ? <span data-testid="ovl-led" className="ovl-led" /> : null}
             <span className="ovl-bug-code">{side.short}</span>
@@ -122,7 +130,12 @@ export function OverlayBug({
                   overflows. An anonymous flex item is not one, so without this
                   span the rule has nothing to match and a long locale
                   overflows the tile again. */}
-              <span className="ovl-detail-label">{line.text}</span>
+              <span className="ovl-detail-copy">
+                {line.text ? <span className="ovl-detail-label">{line.text}</span> : null}
+                {line.glyphs && line.glyphs.length > 0 ? (
+                  <OverlayBallGlyphs glyphs={line.glyphs} />
+                ) : null}
+              </span>
             </span>
           ))}
         </div>

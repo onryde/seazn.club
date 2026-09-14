@@ -412,6 +412,7 @@ export interface PeriodEventTypes {
   readonly attempt: string;
   readonly setPiece: string;
   readonly shot: string;
+  readonly clock: string;
 }
 
 export function eventTypesOf(spec: PeriodSkinSpec): PeriodEventTypes {
@@ -424,6 +425,7 @@ export function eventTypesOf(spec: PeriodSkinSpec): PeriodEventTypes {
     attempt: `${k}.shootout.attempt`,
     setPiece: `${k}.set_piece`,
     shot: `${k}.shot`,
+    clock: `${k}.clock`,
   };
 }
 
@@ -439,6 +441,7 @@ export function bandsOf(spec: PeriodSkinSpec): Readonly<Record<string, FidelityB
     [e.goal]: 0,
     [e.advance]: 0,
     [e.attempt]: 0,
+    [e.clock]: 0,
     [e.suspStart]: 1,
     [e.suspEnd]: 1,
     [e.setPiece]: 2,
@@ -487,6 +490,7 @@ export function phaseAllows(
   const hasClasses = Object.keys(cfg.suspensions?.classes ?? {}).length > 0;
 
   if (eventType === e.goal || eventType === e.shot) return play;
+  if (eventType === e.clock) return play;
   if (eventType === e.setPiece) return play && (cfg.setPieceKinds ?? []).length > 0;
   if (eventType === e.suspStart || eventType === e.suspEnd) {
     return hasClasses && (phase === "pre" || play || phase === SHOOTOUT_PHASE);
@@ -501,6 +505,30 @@ export function phaseAllows(
 export function nextAdvanceOf(view: PadHostView): string | null {
   const next = asSummary(view.summary).detail?.nextAdvance;
   return typeof next === "string" && next.length > 0 ? next : null;
+}
+
+/**
+ * Stamp for a period whistle. Names the phase being CLOSED, so two "FT"
+ * advances in a row (regulation → OT, then OT → shoot-out) cannot share a
+ * payload and trip the chassis double-submit guard. Prefer the host's live
+ * `clockAt` when it is seated on that same phase; otherwise `{period, 0}` —
+ * a stop-clock whistle with no running pad clock is still "the end of this
+ * period at its origin", not an unstamped event.
+ */
+export function whistleAt(view: PadHostView): GameTimeShape | undefined {
+  const phase = readPhase(view.state);
+  if (!isPlayPhaseToken(phase)) return undefined;
+  const clockAt = view.clockAt;
+  if (
+    clockAt !== undefined &&
+    clockAt.period === phase &&
+    typeof clockAt.elapsed === "number" &&
+    Number.isFinite(clockAt.elapsed) &&
+    clockAt.elapsed >= 0
+  ) {
+    return { period: phase, elapsed: clockAt.elapsed };
+  }
+  return { period: phase, elapsed: 0 };
 }
 
 export function refusedEventTypesFor(spec: PeriodSkinSpec, view: PadHostView): string[] {
@@ -906,8 +934,18 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
   // THE WHISTLE. One tap, no sheet: `expectedAdvance` leaves nothing to choose,
   // and the tile says which marker it is about to record rather than making the
   // scorer open a picker to find out.
+  //
+  // `at` is ALWAYS on the payload (current play phase + live elapsed, or 0 when
+  // the pad clock has not been told the time). Without it, two consecutive
+  // advances that both target "FT" — P3→OT then OT→SHOOTOUT on a stop-clock
+  // pad whose clock reseated unknown — are byte-identical `{to:"FT"}` and the
+  // pipeline's DOUBLE_SUBMIT_WINDOW_MS guard eats the second tap
+  // (`use-pad-pipeline.ts`). Found 2026-09-13 on the ice-hockey walkthrough.
+  // `stampFor` leaves a skin-supplied `at` untouched, so this is the stamp the
+  // ledger sees.
   const next = nextAdvanceOf(view);
   if (next !== null && offerable(e.advance)) {
+    const at = whistleAt(view);
     tiles.push({
       id: "advance",
       label: periodKey(spec, "action.advance"),
@@ -915,7 +953,12 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
       kind: "standard",
       span: 2,
       phases: ["live"],
-      action: { event: { type: e.advance, payload: { to: next } } },
+      action: {
+        event: {
+          type: e.advance,
+          payload: at === undefined ? { to: next } : { to: next, at },
+        },
+      },
     });
   }
 
@@ -1558,12 +1601,13 @@ export function buildDock(
   }
 
   if (eventType === e.suspStart) {
-    if (side === null) return { title: t(`pad.${spec.key}.dock.suspension.title`), chips: [] };
+    if (side === null) return null;
     const escalating = escalatingOf(view);
     const offender = typeof payload?.person === "string" ? payload.person : undefined;
     const chips = onFieldOf(view, side).map((id) =>
       personChip(spec, `person:${id}`, "person", id, personName(view, id, t)),
     );
+    if (chips.length === 0) return null;
     // The FIH escalation hint, reusing the sentence S13 already shipped in four
     // locales (`pad.pp.escalation`) rather than minting a second one. It fires
     // exactly where the v2 period skin fired it — once the offender is named and
@@ -1610,6 +1654,7 @@ export function buildDock(
     for (const id of onFieldOf(view, otherSide(side))) {
       chips.push(roleChip(`goalkeeper:${id}`, "goalkeeper", id, personName(view, id, t), `pad.${spec.key}.dock.goalkeeper`));
     }
+    if (chips.length === 0) return null;
     return { title: t(`pad.${spec.key}.dock.setPiece.title`), chips };
   }
 

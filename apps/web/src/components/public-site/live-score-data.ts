@@ -5,7 +5,7 @@
 import { api } from "@/lib/client";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
-import type { OverlayCricketLive } from "@/lib/overlay-cricket";
+import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 
 export interface LiveFixtureData {
   status: string;
@@ -66,7 +66,14 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  `nominalSecondsOf`). The stage shows `45+` past it instead of counting on;
    *  ABSENT when the state declares no readable length, and the stage then
    *  HOLDS at the anchor rather than ticking without a bound. */
-  clock?: { phase: string; anchorSeconds: number; anchorAtWallMs: number; nominalSeconds?: number };
+  clock?: {
+    phase: string;
+    anchorSeconds: number;
+    anchorAtWallMs: number;
+    nominalSeconds?: number;
+    /** Absent/true = tick; false = hold at anchorSeconds (pad Pause). */
+    running?: boolean;
+  };
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
   };
@@ -89,6 +96,14 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  before its first ball. `cricket` above carries the SCORE; this carries the
    *  people. */
   cricketLive?: OverlayCricketLive | null;
+  /** Match openers — toss winner side + bat/bowl election. */
+  cricketToss?: OverlayCricketToss | null;
+  /** End-of-over card — most recently completed over in the active innings. */
+  lastClosedOver?: OverlayClosedOver | null;
+  /** True once any scoring (ball / over) has been recorded. */
+  scoringStarted?: boolean;
+  /** Ended match card — top batter / bowler from the cricket scorecard fold. */
+  highlights?: OverlayHighlights | null;
 }
 
 export interface PublicRealtimeToken {
@@ -97,11 +112,16 @@ export interface PublicRealtimeToken {
 }
 
 export async function fetchLiveFixture(fixtureId: string): Promise<LiveFixtureData> {
-  return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`);
+  // Live scores must never reuse a cached GET — the route's Cache-Control is
+  // for shared CDNs; a browser default cache made a 15 s poll return the
+  // pre-ball payload in 1 ms (measured 2026-09-12).
+  return api<LiveFixtureData>(`/api/v1/public/fixtures/${fixtureId}`, { cache: "no-store" });
 }
 
 export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiveData> {
-  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`);
+  return api<OverlayLiveData>(`/api/v1/public/fixtures/${fixtureId}/overlay`, {
+    cache: "no-store",
+  });
 }
 
 export async function fetchPublicRealtimeToken(

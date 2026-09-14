@@ -1599,14 +1599,11 @@ export function refusedEventTypes(view: PadHostView): string[] {
 // longer declares what the fold already knows, and the client never sends
 // `freeHit: true` at all any more.
 //
-// `buildDock` itself stays non-null for every ball event type even once
-// `chips` ends up empty (a plain run/wide/penalty tap, now that freeHit is
-// gone) — `e2e/scorepad-v3-cricket.spec.ts`'s undo tests tap a PLAIN run and
-// assert `[data-role="v3-dock"]` becomes visible, using dock PRESENCE as a
-// generic "this tap is still in the hold window" proxy, unrelated to free
-// hit specifically; returning `null` there would silently break that
-// already-passing coverage. The dock still shows its title, dismiss
-// control, and countdown with no chips in that case.
+// `buildDock` returns null when there is nothing to enrich (plain run / wide /
+// penalty). Soft-commit only holds when chips exist (`usesSoftCommit`); an
+// empty dock used to HOLD for undo-proxy e2e only and delayed the overlay for
+// no enrichment (owner ruling 2026-09-13). Undo of an immediate ball goes
+// through `core.void` after send, same as any settled event.
 //
 // R2b task 4 (`_INDEX.md`, owner ruling): `heldPayload`, the optional 3rd
 // argument (the widened chassis contract, `SkinDefV3.dock`, ../types.ts),
@@ -1619,7 +1616,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
 // "bat runs are impossible off a wide"). A bye/leg-bye's dock offers
 // extra-run chips (2/3/4) that raise the EXTRA's own `runs`, never `bat`.
 // Every other case — a plain run tap, a wide, a penalty, or the pre-existing
-// 2-arg call with no payload at all — now offers no chips at all.
+// 2-arg call with no payload at all — returns null (nothing to hold for).
 // ---------------------------------------------------------------------------
 
 const BAT_RUN_VALUES = [1, 2, 3, 4, 6] as const;
@@ -1671,6 +1668,7 @@ export function buildDock(eventType: string, t: TFn, heldPayload?: Record<string
   } else if (extraKind === "bye" || extraKind === "legbye") {
     for (const n of EXTRA_RUN_VALUES) chips.push(extraRunChip(n));
   }
+  if (chips.length === 0) return null;
   return { title: t("pad.cricket.dock.title"), chips };
 }
 

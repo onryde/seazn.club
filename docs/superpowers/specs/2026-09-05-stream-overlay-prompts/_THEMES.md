@@ -372,7 +372,7 @@ Per-sport content of the bar (W1 unless marked W2):
 
 | Sport | Live cell context | Team cell score / meta | Between cells | Detail band |
 |---|---|---|---|---|
-| cricket | format + innings ("T20, 2nd innings") | `142/6` / overs `20`; chasing side LED | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR, **plus the revision marker below when the target was revised** |
+| cricket | format + innings ("T20, 2nd innings") | **Live focus:** one hero = batting side `142/6` / overs; LED on hero. Compact strip when chasing: `{short} {closed}` · `Target N` (DLS/Revised marker on Target when revised). 1st innings: hero only, no strip. Decided/void: both sides again | divider | W2: striker* R (B), non-striker R (B), bowler O-M-R-W, "This over 1 4 W 0 2"; W1: chase line "Need 45 off 45", CRR, RRR, **plus the revision marker below when the target was revised** |
 
 **The chase line names the method when the target was revised** (owner ruling,
 2026-09-10: *"add the DLS hint in W1"*). Without it a rain-revised chase shows
@@ -602,8 +602,10 @@ The bug's card chips and its live dot carry the **1-px `--sport-ink` hairline**
 on the same terms as §3's — same reasoning, same measurements, same reason not
 to reach for `board`. Nothing about it is per-theme.
 
-Per-sport content of the bug: cricket rows `code · score · overs`, footer
-"Need 45 off 45 · CRR 7.84 · RRR 6.00"; football family rows `code · [card
+Per-sport content of the bug: cricket **live focus** — compact strip
+`{short} {closed} · Target N` when chasing, then one hero row
+`code · score · overs` (batting side only); decided/void restores two rows;
+footer "Need 45 off 45 · CRR 7.84 · RRR 6.00"; football family rows `code · [card
 chips] · goals`, header clock, footer scorers; tennis rows `surname · set
 cells · points (LED for server)`, footer "Novak serving · Quarter-final";
 badminton and table tennis rows `pair · games won · points`, footer server
@@ -628,7 +630,14 @@ the same reason: `resultMsg` has nothing to return for a null outcome. Same
 
 ## 4a. Theme C — Slate (`?style=slate`)
 
-> **This section IS registry entry `slate`** (owner pick 1A, 2026-09-08):
+> **SUPERSEDED 2026-09-12.** Slate is no longer a `?style=` theme. The warming /
+> ended match card is a **layer** `OverlayStage` mounts above bar|bug; the
+> scorebug stays visible underneath. `?style=slate` falls through to the sport
+> default. See
+> `docs/superpowers/specs/2026-09-12-overlay-match-card-layer-design.md`.
+> Historical design below is retained for the card UI copy / layout values.
+
+> **This section WAS registry entry `slate`** (owner pick 1A, 2026-09-08):
 > `{ id: "slate", labelKey: "stream.tab.slate", component: OverlaySlate,
 > sports: "all" }` in `OVERLAY_THEMES`
 > (`apps/web/src/components/overlay/theme-registry.ts`). It is the registry's
@@ -820,7 +829,7 @@ source of truth. No palette hex changes: the answer lives here.
 | Score tick | a side's `big` changed | that value only: `transform: scale(1) → 1.12 → 1`, 300 ms ease-out; its LED bar `opacity 1` for one frame then back | off |
 | Side change | `led` moved to the other side | LED bar `transform: translateY(±90px)` (bug) / `translateX` (bar) over 200 ms ease-in-out | instant |
 | Live dot | `live` true | `opacity 0.55 ↔ 1`, 2 s ease-in-out infinite | steady 1 |
-| Slab (W2) | a moment dequeued | `translateX(-100%) → 0` 250 ms ease-out, hold 4000 ms, `→ -100%` 250 ms ease-in; slab clipped behind the bug (`overflow: hidden` on the wrapper) | show and hide with no transition |
+| Slab (W2) | a moment dequeued | `translateX(-100%) → 0` 250 ms ease-out, hold 2000 ms, `→ -100%` 250 ms ease-in; slab clipped behind the bug (`overflow: hidden` on the wrapper) | show and hide with no transition |
 
 Transform and opacity only. No animation on mount, no continuous ticker, no
 `setInterval` for visuals; the tick is a class toggled from a previous-value

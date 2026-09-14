@@ -93,10 +93,17 @@ function sentences(markdown: string): string[] {
  * about how long an entry stays changeable — and each is verified against the
  * thing it describes, not against another document:
  *
- *   - ice hockey's fine clock nudge is `CLOCK_NUDGE_FINE_SECONDS` beside the
- *     coarse `CLOCK_NUDGE_SECONDS = 60` (`v3/clock.ts`), i.e. literally "a
- *     minute or ten seconds";
  *   - badminton's interval at 11 is a rule of the sport, on the page about it.
+ *
+ * Ice hockey's clock-nudge sentence USED to be here too ("a minute or ten
+ * seconds", `CLOCK_NUDGE_FINE_SECONDS` beside coarse `CLOCK_NUDGE_SECONDS =
+ * 60`, `v3/clock.ts`) — removed 2026-09-14 when `HOLD_MS_DEFAULT` became
+ * 10000ms and the fine nudge's "ten seconds" started colliding with the hold
+ * window's own spelling (the test below exists for exactly this). The page
+ * now says "a fine one (a few seconds)" instead, which DURATION does not
+ * match at all, so no row is needed. If a future HOLD_MS_DEFAULT stops
+ * colliding, the exact figure could return — but qualitative prose does not
+ * go stale, so there is no reason to chase the number back in.
  *
  * A row here is a decision someone has to make and write down. Adding one is
  * the whole cost of this gate, and the two tests after the scan make sure the
@@ -104,11 +111,6 @@ function sentences(markdown: string): string[] {
  * the hold window's own duration defeats the file's purpose.
  */
 const ALLOWED: readonly { slug: string; fragment: string; why: string }[] = [
-  {
-    slug: "scoring/icehockey",
-    fragment: "nudges it by a minute or ten seconds",
-    why: "the two steps **Correct the clock** moves the MATCH clock by (v3/clock.ts) — a different control, and a fixed one",
-  },
   {
     slug: "scoring/badminton",
     fragment: "60-second break",

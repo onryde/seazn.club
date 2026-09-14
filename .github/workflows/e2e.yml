@@ -89,12 +89,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # `runs-on` for all three jobs reads the E2E_RUNNER repo variable (Settings
-  # -> Secrets and variables -> Actions -> Variables), so the runner can
-  # change without editing this file. Defaults to ubuntu-latest (a stock
-  # GitHub-hosted runner) when unset. Blacksmith runners and their builder
-  # actions were removed repo-wide; the builder steps below are stock
-  # docker/* actions unconditionally now.
+  # `runs-on` for every job reads the E2E_RUNNER repo variable (Settings ->
+  # Secrets and variables -> Actions -> Variables), so the runner can change
+  # without editing this file. Defaults to ubuntu-latest when unset. CI jobs
+  # use CI_RUNNER separately — do not share the label.
   # ---------------------------------------------------------------------
   # Specs that only touch state they create (own competitions/divisions) —
   # safe at several workers, tests within a file too. See
@@ -236,10 +234,17 @@ jobs:
       DATABASE_SSL: disable
       # Session signing secret (jose HS256) — CI-only dummy.
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
-      # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts)
-      # needs an HS256 secret to sign with. CI-only dummy, same convention as
-      # AUTH_SECRET/CRON_SECRET — nothing here calls the real Supabase realtime
-      # service, this only has to satisfy jose's SignJWT call.
+      # Public realtime-token minting (mintPublicFixtureToken, lib/realtime.ts).
+      # Prefer ES256 (project JWKS shape); HS256 remains as fallback for older
+      # helpers. CI-only dummy keypair — not a real Supabase signing key.
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       # x-cron-secret bearer for /api/cron/registrations (RS012's walkthrough
       # drives the sweep directly, apps/web/e2e/walkthrough/rs012-solo-signup-
@@ -257,11 +262,12 @@ jobs:
       # login tokens straight in the Postgres service above and skip the specs
       # that assert dev link exposure.
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -269,7 +275,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
@@ -733,15 +739,24 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -749,7 +764,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.
@@ -1014,15 +1029,24 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
       DATABASE_SSL: disable
       AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJKa1hMRlRLQkZtY05aajN1eG85SUdfQ2hHeTRxZTBPOHVSamdJOGl5RjFRIiwieSI6Il8yQ2tJOXU3RVZ1bFdZeTU4cGNVd1pwaUZCaEM1cWJhOHhaVHJIZlZpMHMiLCJjcnYiOiJQLTI1NiIsImQiOiJlbkxZdTAzLWJQOE8tWVR5NURqV2J0OENsMm9jbTJLb3JOSmxCRDViVXpZIiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
       SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
       NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
       NEXT_TELEMETRY_DISABLED: "1"
       E2E_PROD_TARGET: "1"
-      # The v3 scoring pad soft-commits every tap: the event enters the durable
-      # queue at once but is not SENT for queue.ts's HOLD_MS, and a spec that
-      # polls the ledger has to wait that window out per tap. Shipped is 12s
-      # (the attribution dock has to be readable on a phone), which puts the
-      # walkthrough specs — badminton alone taps sixteen rallies — past their
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
       # 180s budget. 3s here, set at JOB level so the identical value reaches
       # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
       # bundle at build time, so the pad in the browser holds for 3s) and the
@@ -1030,7 +1054,7 @@ jobs:
       # the same number). Setting it on only one of those two would leave the
       # specs racing a window the browser is not using.
       #
-      # queue.ts's `resolveHoldMs` falls back to the SHIPPED 12s for anything
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
       # unusable, so a typo here slows this leg down rather than turning the
       # hold off — and the shipped value keeps its own floor test, which is
       # pinned on the default and is therefore untouched by this override.

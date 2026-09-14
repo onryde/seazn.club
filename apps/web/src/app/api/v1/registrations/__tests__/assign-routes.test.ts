@@ -10,6 +10,17 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** A `starts_on` comfortably in the future, computed from the real clock.
+ *  Same fix as registration-assign.test.ts's own farFutureDate (this file's
+ *  copy of seedTeamDivision used to carry the same hardcoded "2026-09-15"
+ *  that literal rotted past, PR #782 review 2026-09-14) — kept as a separate
+ *  copy here too, matching this file's own "copied, not imported" policy. */
+function farFutureDate(daysFromNow = 60): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
 const authState = vi.hoisted(() => ({ userId: "" }));
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
@@ -62,8 +73,8 @@ async function seedTeamDivision(auth: AuthCtx): Promise<{ divisionId: string }> 
     name: "Assign Route Cup " + randomUUID().slice(0, 6),
     visibility: "public",
     branding: {},
-    starts_on: "2026-09-15",
-    ends_on: "2026-09-20",
+    starts_on: farFutureDate(),
+    ends_on: farFutureDate(65),
   });
   const division = await createDivision(auth, competition.id, {
     name: "Open " + randomUUID().slice(0, 6),

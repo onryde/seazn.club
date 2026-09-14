@@ -221,6 +221,10 @@ export function probePayload(type: string, state: FootballState): Record<string,
       return { by, scored: true };
     case "football.period":
       return { phase: "FT" };
+    case "football.clock": {
+      const phase = typeof state.phase === "string" ? state.phase : "H1";
+      return { at: { period: phase, elapsed: 0 }, running: false };
+    }
     default:
       throw new Error(`no probe payload for "${type}" — football's vocabulary grew, extend this switch`);
   }

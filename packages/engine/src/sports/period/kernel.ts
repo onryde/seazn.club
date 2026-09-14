@@ -256,6 +256,18 @@ export const PeriodAdvance = z.strictObject({
   // `asOf` and the kernel's monotonic high-water mark.
   at: GameTime.optional(),
 });
+
+/**
+ * Pad game-clock publish (2026-09-13). Pause / Start / Correct on the scorepad
+ * — NOT `core.suspend` (that freezes the LEDger and refuses play events).
+ * Updates `asOf` (via the apply wrapper when `at` is present) and `clockRunning`
+ * so the stream overlay can hold or tick without waiting on soft-commit.
+ */
+export const PeriodClock = z.strictObject({
+  at: GameTime.optional(),
+  running: z.boolean(),
+});
+export type PeriodClock = z.infer<typeof PeriodClock>;
 // S4 (#428) — the closed infraction vocabulary for BOTH sports on this
 // kernel. ONE shared union, deliberately: the kernel's job is to accept a
 // structurally valid payload from whichever sport's fold reads it — same
@@ -451,6 +463,7 @@ export const PeriodEv = z.union([
   PeriodShootoutAttempt,
   PeriodSetPiece,
   PeriodShot,
+  PeriodClock,
 ]);
 export type PeriodEv = z.infer<typeof PeriodEv>;
 
@@ -567,6 +580,13 @@ export interface PeriodState {
    * core.suspend / core.resume pair never does.
    */
   asOf?: GameTime;
+  /**
+   * Whether the pad's game clock is RUNNING for broadcast (2026-09-13).
+   * Absent means "assume running" — pre-wave streams tick from `asOf` + wall
+   * time as before. Explicit `false` holds the overlay at the last stamp.
+   * Orthogonal to `core.suspend` (match stoppage that refuses play events).
+   */
+  clockRunning?: boolean;
   /**
    * S3/W4b (#426) — WHO IS ON THE PITCH AND WHERE, as `core/lineup.ts` folded
    * it. This is what settles the two personnel rows both period dossiers
@@ -1141,8 +1161,17 @@ function applyAdvance(
   // it is over even if no stamped event ever arrived to sweep it. Runs on the
   // full-time advance too, or a side reads short-handed in the FINAL state.
   const swept = sweepThroughPhase(state, state.phase);
-  if (expected !== "FT") return pushPeriod(swept, expected);
-  return resolveEnd(swept, inOvertime(swept) ? "overtime" : "regulation");
+  // A new period (or FT) reseats the pad clock paused — publish that on the fold
+  // so the overlay does not keep ticking across the whistle.
+  const next = expected !== "FT" ? pushPeriod(swept, expected) : resolveEnd(swept, inOvertime(swept) ? "overtime" : "regulation");
+  return { ...next, clockRunning: false };
+}
+
+function applyClock(state: PeriodState, payload: PeriodClock): PeriodState {
+  if (!isPlayPhase(state)) {
+    wrongPhase(`clock not allowed in phase "${state.phase}"`);
+  }
+  return { ...state, clockRunning: payload.running };
 }
 
 function suspensionAllowed(state: PeriodState): boolean {
@@ -1827,6 +1856,7 @@ export function makePeriodModule(
   const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? []);
   const goalType = `${preset.key}.goal`;
   const advanceType = `${preset.key}.period.advance`;
+  const clockType = `${preset.key}.clock`;
   const suspStartType = `${preset.key}.suspension.start`;
   const suspEndType = `${preset.key}.suspension.end`;
   const attemptType = `${preset.key}.shootout.attempt`;
@@ -1867,6 +1897,7 @@ export function makePeriodModule(
   const eventSchemas: Readonly<Record<string, z.ZodTypeAny>> = {
     [goalType]: PeriodGoal,
     [advanceType]: PeriodAdvance,
+    [clockType]: PeriodClock,
     [suspStartType]: PeriodSuspensionStart,
     [suspEndType]: PeriodSuspensionEnd,
     [attemptType]: PeriodShootoutAttempt,
@@ -1939,6 +1970,19 @@ export function makePeriodModule(
       type: advanceType,
       labelKey: { key: `pad.${preset.key}.action.advance`, label: "Advance period" },
       fields: [{ kind: "enum", path: "to", values: advanceTargets }],
+      attribution: [],
+    };
+
+    const clockAction: PadAction = {
+      type: clockType,
+      labelKey: { key: `pad.${preset.key}.action.clock`, label: "Clock" },
+      fields: [
+        {
+          kind: "toggle",
+          path: "running",
+          labelKey: { key: `pad.${preset.key}.action.clock.field.running`, label: "Running" },
+        },
+      ],
       attribution: [],
     };
 
@@ -2118,7 +2162,7 @@ export function makePeriodModule(
         labelKey: { key: `pad.${preset.key}.panel.period`, label: "Period" },
         phase: "live",
         layout: "drawer",
-        actions: [advanceAction],
+        actions: [advanceAction, clockAction],
       },
       ...disciplinePanels,
       ...shootoutPanels,
@@ -2155,6 +2199,7 @@ export function makePeriodModule(
       fidelity: {
         [goalType]: 0,
         [advanceType]: 0,
+        [clockType]: 0,
         [attemptType]: 0,
         [suspStartType]: 1,
         [suspEndType]: 1,
@@ -2355,6 +2400,8 @@ export function makePeriodModule(
         return applyGoal(state, parsePayload(PeriodGoal, ev.payload, ev.type), strict);
       case advanceType:
         return applyAdvance(state, parsePayload(PeriodAdvance, ev.payload, ev.type), strict);
+      case clockType:
+        return applyClock(state, parsePayload(PeriodClock, ev.payload, ev.type));
       case suspStartType:
         return applySuspensionStart(
           state,
@@ -2771,6 +2818,14 @@ export function makePeriodModule(
             ...(rng() < 0.6 ? { person: `${sideId(side)}-p6` } : {}),
             ...(rng() < 0.5 ? { goalkeeper: `${sideId(opponent(side))}-g1` } : {}),
           },
+        };
+      }
+      if (roll < 0.33) {
+        // PadClockBar Pause/Start/Correct — required for EXTEND_GOLDEN to
+        // cover `${key}.clock` once the type lands in fidelity.
+        return {
+          type: clockType,
+          payload: { running: rng() < 0.5, at: stamp(state.phase) },
         };
       }
       if (roll < 0.62) {

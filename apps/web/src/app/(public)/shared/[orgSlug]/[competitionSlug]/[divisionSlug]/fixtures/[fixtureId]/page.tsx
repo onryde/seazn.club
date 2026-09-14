@@ -234,12 +234,15 @@ export default async function FixturePage({ params }: Props) {
           <span aria-hidden>‹</span>
           <Link
             href={`/shared/${org.slug}/${competition.slug}`}
-            className="hover:text-accent-strong hover:underline"
+            className="inline-flex min-h-11 items-center hover:text-accent-strong hover:underline"
           >
             {competition.name}
           </Link>
           <span aria-hidden>·</span>
-          <Link href={basePath} className="hover:text-accent-strong hover:underline">
+          <Link
+            href={basePath}
+            className="inline-flex min-h-11 items-center hover:text-accent-strong hover:underline"
+          >
             {division.name}
           </Link>
         </nav>

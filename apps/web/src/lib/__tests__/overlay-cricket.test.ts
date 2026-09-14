@@ -10,7 +10,15 @@
 import { describe, expect, it } from "vitest";
 import { cricket, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
-import { cricketDetail, liveFromScorecard, type OverlayCricketLive } from "../overlay-cricket";
+import {
+  cricketDetail,
+  highlightsFromScorecard,
+  lastClosedOverFromScorecard,
+  liveFromScorecard,
+  scoringStartedFromScorecard,
+  tossFromScorecard,
+  type OverlayCricketLive,
+} from "../overlay-cricket";
 
 const msg = (key: string) =>
   (({ "overlay.cricket.strikerMark": "*", "overlay.cricket.thisOver": "this over" }) as Record<string, string>)[
@@ -80,14 +88,15 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     expect(sc.live!.striker).toBe("H-p3");
     expect(sc.live!.nonStriker).toBe("H-p1");
     const line = sc.innings.at(-1)!.batting.find((b) => b.person === "H-p1")!;
-    expect(cricketDetail(live, msg)[0]).toBe(`Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`);
+    expect(cricketDetail(live, msg)[0]?.text).toBe(`Iyer* 0 (0) · Sharma ${line.runs} (${line.balls})`);
   });
 
-  it("the bowler's line is O-M-R-W from the engine, then this over's glyphs", () => {
+  it("the bowler's line is O-M-R-W from the engine; this over's glyphs are structured chips", () => {
     const bowl = sc.innings.at(-1)!.bowling.find((b) => b.person === "A-p11")!;
-    expect(cricketDetail(live, msg)[1]).toBe(
-      `Bumrah ${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets} · this over 1 4 wd W`,
-    );
+    expect(cricketDetail(live, msg)[1]).toEqual({
+      text: `Bumrah ${bowl.overs}-${bowl.maidens}-${bowl.runs}-${bowl.wickets}`,
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("a maiden count the ledger cannot state is DROPPED, not printed as null", () => {
@@ -95,11 +104,14 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
       ...live,
       bowler: { ...live.bowler!, maidens: null, overs: "2.3", runs: 14, wickets: 1 },
     };
-    expect(cricketDetail(coarse, msg)[1]).toBe("Bumrah 2.3-14-1 · this over 1 4 wd W");
+    expect(cricketDetail(coarse, msg)[1]).toEqual({
+      text: "Bumrah 2.3-14-1",
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("an empty over drops the this-over segment entirely rather than trailing a label", () => {
-    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toBe("Bumrah 0.3-0-6-1");
+    expect(cricketDetail({ ...live, thisOver: [] }, msg)[1]).toEqual({ text: "Bumrah 0.3-0-6-1" });
   });
 
   it("every glyph the engine can emit renders as notation, and a dot ball is a dot", () => {
@@ -115,9 +127,10 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
       { kind: "penalty", runs: 5 },
       { kind: "wicket", dismissal: "caught" },
     ] as never;
-    expect(cricketDetail({ ...live, thisOver: glyphs }, msg)[1]).toBe(
-      "Bumrah 0.3-0-6-1 · this over · 3 wd wd+2 nb nb+2 2b 1lb 5p W",
-    );
+    expect(cricketDetail({ ...live, thisOver: glyphs }, msg)[1]).toEqual({
+      text: "Bumrah 0.3-0-6-1",
+      glyphs: ["·", "3", "wd", "wd+2", "nb", "nb+2", "2b", "1lb", "5p", "W"],
+    });
   });
 
   it("nothing at the crease yields NO band at all — never an empty line", () => {
@@ -128,7 +141,7 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
   it("a batter the line-up never named is dropped from the LINE but stays a fact on the wire", () => {
     const anon = liveFromScorecard(sc, (id) => (id === "H-p1" ? undefined : NAMES[id]));
     expect(anon!.batters.map((b) => b.name)).toEqual(["Iyer", undefined]);
-    expect(cricketDetail(anon, msg)[0]).toBe("Iyer* 0 (0)");
+    expect(cricketDetail(anon, msg)[0]?.text).toBe("Iyer* 0 (0)");
   });
 
   it("the marker follows the STRIKER, not the first name that survives", () => {
@@ -138,18 +151,216 @@ describe("cricketDetail, from a real fold through the engine's own scorecard", (
     const anon = liveFromScorecard(sc, (id) => (id === "H-p3" ? undefined : NAMES[id]));
     expect(anon!.batters[0]!.onStrike).toBe(true);
     expect(anon!.batters[0]!.name).toBeUndefined();
-    expect(cricketDetail(anon, msg)[0]).toBe("Sharma 1 (1)");
-    expect(cricketDetail(anon, msg)[0]).not.toContain("*");
+    expect(cricketDetail(anon, msg)[0]?.text).toBe("Sharma 1 (1)");
+    expect(cricketDetail(anon, msg)[0]?.text).not.toContain("*");
   });
 
   it("a bowler with no name loses the BOWLER line but keeps the over — the glyphs are the over, not the person", () => {
     const anon = liveFromScorecard(sc, (id) => (id === "A-p11" ? undefined : NAMES[id]));
     expect(anon!.bowler).toBeUndefined();
-    expect(cricketDetail(anon, msg)[1]).toBe("this over 1 4 wd W");
+    expect(cricketDetail(anon, msg)[1]).toEqual({
+      text: "",
+      glyphs: ["1", "4", "wd", "W"],
+    });
   });
 
   it("a scorecard with no live block at all (not started, between innings) yields null", () => {
     const notStarted = scorecardOf([OVER[0]!, OVER[1]!]);
     expect(liveFromScorecard(notStarted, nameOf)).toBeNull();
+  });
+});
+
+describe("tossFromScorecard / lastClosedOverFromScorecard / scoringStartedFromScorecard", () => {
+  const sides: [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
+
+  /** Six legal dots — over 1 complete, no ball of over 2 yet. */
+  const OVER_COMPLETE = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    ...[1, 2, 3, 4, 5, 6].map((ballInOver) =>
+      makeEnvelope(2 + ballInOver, {
+        type: "cricket.ball",
+        payload: { ...base, over: 0, ballInOver, runs: { bat: 0 } },
+      } as never),
+    ),
+  ];
+
+  it("toss maps wonBy entrant to a side index and keeps elected", () => {
+    const sc = scorecardOf([OVER_COMPLETE[0]!]);
+    expect(tossFromScorecard(sc, sides)).toEqual({ wonBySide: 0, elected: "bat" });
+  });
+
+  it("no toss yet yields null", () => {
+    expect(tossFromScorecard(scorecardOf([]), sides)).toBeNull();
+  });
+
+  it("scoringStarted is false until a ball (or over) has been recorded", () => {
+    expect(scoringStartedFromScorecard(scorecardOf([OVER_COMPLETE[0]!, OVER_COMPLETE[1]!]))).toBe(
+      false,
+    );
+    expect(scoringStartedFromScorecard(scorecardOf(OVER_COMPLETE.slice(0, 3)))).toBe(true);
+  });
+
+  it("after a completed over with empty thisOver, lastClosedOver is that over", () => {
+    const sc = scorecardOf(OVER_COMPLETE);
+    const closed = lastClosedOverFromScorecard(sc, nameOf);
+    expect(closed).not.toBeNull();
+    expect(closed!.over).toBe(1);
+    expect(closed!.inningsIndex).toBe(0);
+    expect(closed!.runs).toBe(0);
+    expect(closed!.score).toBe("0/0");
+    expect(closed!.glyphs.length).toBe(6);
+    expect(closed!.bowler?.name).toBe("Bumrah");
+  });
+
+  it("before any over completes, lastClosedOver is null", () => {
+    const sc = scorecardOf(OVER);
+    expect(lastClosedOverFromScorecard(sc, nameOf)).toBeNull();
+  });
+
+  /**
+   * Innings 1: two balls (5 runs), closed explicitly — just enough to set a
+   * target of 6. Innings 2: a complete maiden over, then the winning runs
+   * land on the SECOND ball of the next over — the chase ends mid-over.
+   *
+   * `scorecard.live` goes `null` the instant this happens (`autoClose`
+   * closes the innings and the match), but `innings.overs.at(-1)` at that
+   * point is the PARTIAL over (2 balls, not 6) — the C1 bug read `live ===
+   * null` as "the tip is closed" and aired that partial over as the
+   * end-of-over card.
+   */
+  const CHASE_WON_MID_OVER = [
+    makeEnvelope(1, { type: "cricket.toss", payload: { wonBy: "H", elected: "bat" } } as never),
+    makeEnvelope(2, { type: "core.start", payload: {} } as never),
+    makeEnvelope(3, {
+      type: "cricket.ball",
+      payload: {
+        over: 0,
+        ballInOver: 1,
+        striker: "H-p1",
+        nonStriker: "H-p2",
+        bowler: "A-p1",
+        runs: { bat: 4 },
+        boundary: 4,
+      },
+    } as never),
+    makeEnvelope(4, {
+      type: "cricket.ball",
+      payload: { over: 0, ballInOver: 2, striker: "H-p1", nonStriker: "H-p2", bowler: "A-p1", runs: { bat: 1 } },
+    } as never),
+    makeEnvelope(5, { type: "cricket.innings.close", payload: {} } as never),
+    // Innings 2 (away chasing 6): over 0, six dot balls — a complete maiden.
+    ...[1, 2, 3, 4, 5, 6].map((ballInOver) =>
+      makeEnvelope(5 + ballInOver, {
+        type: "cricket.ball",
+        payload: { over: 0, ballInOver, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p1", runs: { bat: 0 } },
+      } as never),
+    ),
+    // Over 1: ball 1 brings the score to 4, ball 2 to 6 — target reached,
+    // chase over on the second ball of the over.
+    makeEnvelope(12, {
+      type: "cricket.ball",
+      payload: {
+        over: 1,
+        ballInOver: 1,
+        striker: "A-p2",
+        nonStriker: "A-p1",
+        bowler: "H-p1",
+        runs: { bat: 4 },
+        boundary: 4,
+      },
+    } as never),
+    makeEnvelope(13, {
+      type: "cricket.ball",
+      payload: { over: 1, ballInOver: 2, striker: "A-p2", nonStriker: "A-p1", bowler: "H-p1", runs: { bat: 2 } },
+    } as never),
+  ];
+
+  it("C1: chase won MID-OVER — lastClosedOver is the PRIOR complete over, never the partial tip", () => {
+    const sc = scorecardOf(CHASE_WON_MID_OVER);
+    // The match really has ended mid-over: live is gone, and the last
+    // logged over in the ledger really is the 2-ball partial one.
+    expect(sc.live).toBeNull();
+    const innings2 = sc.innings.at(-1)!;
+    expect(innings2.overs.length).toBe(2);
+    expect(innings2.overs.at(-1)!.balls.length).toBe(2);
+    expect(innings2.overs.at(-1)!.runs).toBe(6);
+
+    const closed = lastClosedOverFromScorecard(sc, nameOf);
+    expect(closed).not.toBeNull();
+    expect(closed!.over).toBe(1); // the complete maiden, NOT the partial over 2
+    expect(closed!.glyphs.length).toBe(6);
+    expect(closed!.runs).toBe(0);
+    expect(closed!.wickets).toBe(0);
+  });
+});
+
+describe("highlightsFromScorecard — ended-card top batter / bowler", () => {
+  it("empty scorecard yields null", () => {
+    expect(highlightsFromScorecard(scorecardOf([]), nameOf)).toBeNull();
+  });
+
+  it("picks highest runs (then SR) and most wickets (then best economy) across the card", () => {
+    const sc = scorecardOf(OVER);
+    const h = highlightsFromScorecard(sc, nameOf);
+    expect(h).not.toBeNull();
+    expect(h!.batter).toMatchObject({ name: "Kohli", line: expect.stringMatching(/^\d+ \(\d+\)$/) });
+    expect(h!.bowler).toMatchObject({ name: "Bumrah", line: expect.stringMatching(/^\d+\/\d+$/) });
+  });
+
+  it("bowler tie on wickets prefers lower economy — not parseFloat on the display line", () => {
+    // Same wickets, different economy: `"2/40"` vs `"2/20"` — parseFloat both
+    // yield 2; structured pick must prefer the tighter spell.
+    const sc = {
+      innings: [
+        {
+          batting: [
+            {
+              order: 1,
+              person: "H-p1",
+              runs: 10,
+              balls: 10,
+              fours: 0,
+              sixes: 0,
+              strikeRate: 100,
+              dismissal: { kind: "not_out" },
+            },
+          ],
+          bowling: [
+            {
+              person: "A-p11",
+              legalBalls: 30,
+              overs: "5.0",
+              maidens: 0,
+              runs: 40,
+              wickets: 2,
+              economy: 8.0,
+              wides: 0,
+              noBalls: 0,
+            },
+            {
+              person: "A-p10",
+              legalBalls: 30,
+              overs: "5.0",
+              maidens: 0,
+              runs: 20,
+              wickets: 2,
+              economy: 4.0,
+              wides: 0,
+              noBalls: 0,
+            },
+          ],
+        },
+      ],
+    } as unknown as Parameters<typeof highlightsFromScorecard>[0];
+    const names: Record<string, string> = { "H-p1": "Sharma", "A-p11": "Bumrah", "A-p10": "Shami" };
+    const h = highlightsFromScorecard(sc, (id) => names[id]);
+    expect(h?.bowler).toMatchObject({ name: "Shami", line: "2/20", detail: "Econ 4.0" });
+  });
+
+  it("drops a performer the name resolver cannot name", () => {
+    const sc = scorecardOf(OVER);
+    const h = highlightsFromScorecard(sc, () => undefined);
+    expect(h).toBeNull();
   });
 });
