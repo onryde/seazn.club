@@ -7,12 +7,21 @@ import sharp from "sharp";
  *
  * Why it exists. `ImageResponse` hands `<img src>` to satori, and satori
  * FETCHES it: server-side, from inside our own network, on a route any
- * anonymous visitor can hit by URL. The values reaching those `src` props are
- * organiser-typed free text — `entrants.badge_url` and `orgs.logo_url` are
- * `z.string().min(1).max(1000)` in `api-v1/schemas.ts`, kept verbatim by
- * `resolveEntrantBadge` / `resolveLogoUrl` when they already look like a URL.
- * So "draw this badge" was, unguarded, "make this request": to any host
- * including an internal one, with no timeout, no size cap and no fallback.
+ * anonymous visitor can hit by URL. So "draw this badge" was, unguarded,
+ * "make this request": to any host including an internal one, with no
+ * timeout, no size cap and no fallback.
+ *
+ * The badge is the live one. `entrants.badge_url` is organiser-typed free
+ * text — `z.string().min(1).max(1000)` (`api-v1/schemas.ts:573`, `:618`), set
+ * through `PATCH /entrants/{id}` — and `resolveEntrantBadge` keeps it verbatim
+ * when it already looks like a URL.
+ *
+ * The org logo is guarded too, on a weaker premise, deliberately:
+ * `resolveLogoUrl` falls back to `organizations.logo_url` (V106) — but no
+ * write path in the app sets that column today (the org PATCH takes
+ * `logo_storage_path` only), so in practice the logo is already a storage
+ * URL. It goes through here anyway, because the fallback is live code and a
+ * future writer for it would otherwise reopen this silently.
  *
  * What it does instead. Only the host this app serves its OWN uploads from is
  * fetched at all, over https, with a hard timeout and a byte cap; the bytes are

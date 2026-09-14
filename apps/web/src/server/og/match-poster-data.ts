@@ -83,10 +83,10 @@ export async function loadMatchPosterModel(
   // Every remote image the two match surfaces draw is fetched HERE, through
   // the one guarded fetcher, and reaches satori as bytes. Left as URLs, satori
   // would make these requests itself — server-side, on a public route, to
-  // whatever host an organiser typed into `badge_url` / `logo_url`. In
-  // parallel because each is independently bounded by its own timeout, so
-  // three of them cost one; `posterImageDataUrl` never rejects, so no failure
-  // here can take the image down.
+  // whatever host an organiser typed into `entrants.badge_url`. In parallel
+  // because each is independently bounded by its own timeout, so three of them
+  // cost one; `posterImageDataUrl` never rejects, so no failure here can take
+  // the image down.
   const [logo, homeBadge, awayBadge] = await Promise.all([
     posterImageDataUrl(org.logo),
     posterImageDataUrl(header.sides[0].badgeUrl),
