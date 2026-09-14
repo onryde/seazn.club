@@ -30,7 +30,7 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
-import { divisionLockState } from "./schedule";
+import { afterScheduleWrite, divisionLockState } from "./schedule";
 
 type Tx = postgres.TransactionSql;
 
@@ -61,15 +61,17 @@ async function decidedFixtureIds(tx: Tx, divisionId: string): Promise<Set<string
 interface DivisionMeta {
   seq: number;
   edit_watermark: number | null;
+  competition_id: string;
 }
 
 async function divisionMeta(tx: Tx, divisionId: string): Promise<DivisionMeta> {
-  const [row] = await tx<{ seq: number; edit_watermark: string | number | null }[]>`
-    select seq, edit_watermark from divisions where id = ${divisionId}`;
+  const [row] = await tx<{ seq: number; edit_watermark: string | number | null; competition_id: string }[]>`
+    select seq, edit_watermark, competition_id from divisions where id = ${divisionId}`;
   if (!row) throw new HttpError(404, "division not found");
   return {
     seq: Number(row.seq),
     edit_watermark: row.edit_watermark === null ? null : Number(row.edit_watermark),
+    competition_id: row.competition_id,
   };
 }
 
@@ -121,12 +123,20 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
 
 // Execute one history event against the fixture tables. Undo/redo of a
 // fixtures_generated with no snapshots re-runs the deterministic generator.
+//
+// R10e: returns the ids of the fixtures its own statements wrote (each one
+// `returning id`), so a caller publishes exactly those, never the payload's
+// list — a row the `status <> 'decided'` filter skipped was not changed.
 async function execute(
   tx: Tx,
   divisionId: string,
   event: { type: string; payload: Record<string, unknown> },
-): Promise<void> {
+): Promise<string[]> {
   const p = event.payload;
+  const written: string[] = [];
+  const wrote = (rows: readonly { id: string }[]) => {
+    for (const row of rows) written.push(row.id);
+  };
   switch (event.type) {
     // P9 pass 3a: `court`/`.court` on every payload below is a `courts.id`
     // now (schedule.ts's `moveFixture`/`applySchedule` write it that way —
@@ -142,11 +152,11 @@ async function execute(
       for (const m of moves) {
         const court = resolveCourtWrite(m.to.court, { divisionId, fixtureId: m.fixture, eventType: event.type });
         if (court.write) {
-          await tx`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
-                   where id = ${m.fixture} and status <> 'decided'`;
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${court.value}
+                   where id = ${m.fixture} and status <> 'decided' returning id`);
         } else {
-          await tx`update fixtures set scheduled_at = ${m.to.at}
-                   where id = ${m.fixture} and status <> 'decided'`;
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
+                   where id = ${m.fixture} and status <> 'decided' returning id`);
         }
       }
       break;
@@ -155,22 +165,22 @@ async function execute(
       const to = p.to as { at: string | null; court: string | null; locked?: boolean };
       const court = resolveCourtWrite(to.court, { divisionId, fixtureId: p.fixture, eventType: event.type });
       if (court.write) {
-        await tx`
+        wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at}, court_id = ${court.value},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided'`;
+          where id = ${p.fixture as string} and status <> 'decided' returning id`);
       } else {
-        await tx`
+        wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and status <> 'decided'`;
+          where id = ${p.fixture as string} and status <> 'decided' returning id`);
       }
       break;
     }
     case "schedule_cleared": {
       for (const s of (p.cleared as FixtureSnapshot[]) ?? []) {
-        await tx`update fixtures set scheduled_at = null, court_id = null
-                 where id = ${s.id} and status <> 'decided'`;
+        wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = null, court_id = null
+                 where id = ${s.id} and status <> 'decided' returning id`);
       }
       break;
     }
@@ -178,11 +188,11 @@ async function execute(
       for (const s of (p.restored as FixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
         if (court.write) {
-          await tx`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
-                   where id = ${s.id} and status <> 'decided'`;
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${court.value}
+                   where id = ${s.id} and status <> 'decided' returning id`);
         } else {
-          await tx`update fixtures set scheduled_at = ${s.at ?? null}
-                   where id = ${s.id} and status <> 'decided'`;
+          wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}
+                   where id = ${s.id} and status <> 'decided' returning id`);
         }
       }
       break;
@@ -194,7 +204,7 @@ async function execute(
           ? ((p.fixture_ids as string[]) ?? [])
           : ((p.fixtures as FixtureSnapshot[]) ?? []).map((s) => s.id);
       if (ids.length > 0) {
-        await tx`delete from fixtures where id in ${tx(ids)} and status <> 'decided'`;
+        wrote(await tx<{ id: string }[]>`delete from fixtures where id in ${tx(ids)} and status <> 'decided' returning id`);
       }
       break;
     }
@@ -208,13 +218,13 @@ async function execute(
       // safe fallback for a fresh INSERT is court_id = null.
       for (const s of (p.fixtures as FixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: event.type });
-        await tx`
+        wrote(await tx<{ id: string }[]>`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                                 home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
                   ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
-          on conflict (id) do nothing`;
+          on conflict (id) do nothing returning id`);
       }
       break;
     }
@@ -226,6 +236,7 @@ async function execute(
     default:
       throw new HttpError(500, `no executor for history event '${event.type}'`);
   }
+  return written;
 }
 
 export interface HistoryStepOut {
@@ -238,13 +249,21 @@ export interface HistoryStepOut {
 const StepInput = z.object({ expected_seq: z.number().int().optional() });
 export { StepInput as HistoryStepInput };
 
-async function step(
+/** One undo/redo step's committed write (R10e): what it returns, its
+ *  competition, and the fixtures its own statements changed. */
+interface StepWrite {
+  out: HistoryStepOut;
+  competitionId: string;
+  fixtureIds: string[];
+}
+
+async function stepWrite(
   auth: AuthCtx,
   divisionId: string,
   direction: "undo" | "redo",
   expectedSeq: number | undefined,
-): Promise<HistoryStepOut> {
-  const out = await withTenant(auth.orgId, async (tx) => {
+): Promise<StepWrite> {
+  const write = await withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const meta = await divisionMeta(tx, divisionId);
     // optimistic token (Jul3/03 §8): a stale client gets 409 + refetch
@@ -317,7 +336,7 @@ async function step(
         result.event.payload.fixtures = rows;
       }
     }
-    await execute(tx, divisionId, result.event);
+    const fixtureIds = await execute(tx, divisionId, result.event);
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = ${result.newWatermark}
              where id = ${divisionId}`;
@@ -335,27 +354,53 @@ async function step(
     if (result.event.type === "fixtures_generated" && result.event.payload.fixtures !== undefined) {
       for (const s of (result.event.payload.fixtures as FixtureSnapshot[]) ?? []) {
         const court = resolveCourtWrite(s.court, { divisionId, fixtureId: s.id, eventType: result.event.type });
-        await tx`
+        fixtureIds.push(...(await tx<{ id: string }[]>`
           insert into fixtures (id, stage_id, division_id, pool_id, round_no, seq_in_round,
                                 home_entrant_id, away_entrant_id, scheduled_at, court_id, status)
           values (${s.id}, ${s.stage_id!}, ${divisionId}, ${s.pool_id ?? null},
                   ${s.round_no ?? 1}, ${s.seq_in_round ?? 1}, ${s.home_entrant_id ?? null},
                   ${s.away_entrant_id ?? null}, ${s.at ?? null}, ${court.write ? court.value : null}, 'scheduled')
-          on conflict (id) do nothing`;
+          on conflict (id) do nothing returning id`).map((row) => row.id));
       }
     }
     return {
-      watermark: result.newWatermark,
-      seq,
-      applied: { type: result.event.type },
-      ...(regen !== undefined ? { regenerate_stage_id: regen } : {}),
+      out: {
+        watermark: result.newWatermark,
+        seq,
+        applied: { type: result.event.type },
+        ...(regen !== undefined ? { regenerate_stage_id: regen } : {}),
+      },
+      competitionId: meta.competition_id,
+      fixtureIds,
     };
   });
-  // generator re-run outside the history tx (it takes its own division lock)
-  if (out.regenerate_stage_id !== undefined) {
-    await generateStageFixtures(auth, out.regenerate_stage_id);
+  // generator re-run outside the history tx (it takes its own division lock).
+  // It publishes its own write; this step's transaction changed no fixture in
+  // that case (`fixtures_generated` has no executor statement).
+  if (write.out.regenerate_stage_id !== undefined) {
+    await generateStageFixtures(auth, write.out.regenerate_stage_id);
   }
-  return out;
+  return write;
+}
+
+/** R10e (review-r10d m1): a history write that changed fixtures drops the hub
+ *  key and exactly those fixtures' public documents in one DEL, after its
+ *  commit, then pushes (`afterScheduleWrite`, 50-fixture push cap). An undo is
+ *  the move it reverses, so the hub and an open match centre must follow it
+ *  at once, not at the next poll. A write that changed nothing sends nothing. */
+function publishHistoryWrite(divisionId: string, competitionId: string, fixtureIds: readonly string[]): void {
+  if (fixtureIds.length > 0) afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
+}
+
+async function step(
+  auth: AuthCtx,
+  divisionId: string,
+  direction: "undo" | "redo",
+  expectedSeq: number | undefined,
+): Promise<HistoryStepOut> {
+  const write = await stepWrite(auth, divisionId, direction, expectedSeq);
+  publishHistoryWrite(divisionId, write.competitionId, write.fixtureIds);
+  return write.out;
 }
 
 export const undoDivision = (auth: AuthCtx, id: string, expectedSeq?: number) =>
@@ -716,17 +761,28 @@ export async function restoreCheckpoint(
     return Number(cp.seq);
   });
   let steps = 0;
-  // Each undo is its own single-writer append (concurrency-safe); stop once
-  // the watermark reaches the checkpoint.
-  for (let i = 0; i < 500; i++) {
-    const meta = await withTenant(auth.orgId, (tx) => divisionMeta(tx, divisionId));
-    const ledger = await withTenant(auth.orgId, (tx) => loadLedger(tx, divisionId));
-    const wm = meta.edit_watermark ?? (ledger[ledger.length - 1]?.seq ?? 0);
-    if (wm <= target) return { watermark: wm, steps };
-    await undoDivision(auth, divisionId);
-    steps++;
+  // R10e: every fixture any step changed, published ONCE when the rewind ends
+  // (or stops part-way: the steps that committed stay committed), not once
+  // per step — a restore is one organiser write.
+  const changed = new Set<string>();
+  let competitionId = "";
+  try {
+    // Each undo is its own single-writer append (concurrency-safe); stop once
+    // the watermark reaches the checkpoint.
+    for (let i = 0; i < 500; i++) {
+      const meta = await withTenant(auth.orgId, (tx) => divisionMeta(tx, divisionId));
+      competitionId = meta.competition_id;
+      const ledger = await withTenant(auth.orgId, (tx) => loadLedger(tx, divisionId));
+      const wm = meta.edit_watermark ?? (ledger[ledger.length - 1]?.seq ?? 0);
+      if (wm <= target) return { watermark: wm, steps };
+      const write = await stepWrite(auth, divisionId, "undo", undefined);
+      for (const id of write.fixtureIds) changed.add(id);
+      steps++;
+    }
+    throw new HttpError(500, "restore did not converge");
+  } finally {
+    publishHistoryWrite(divisionId, competitionId, [...changed]);
   }
-  throw new HttpError(500, "restore did not converge");
 }
 
 // ---------------------------------------------------------------------------
@@ -773,10 +829,11 @@ export async function clearScheduleScoped(
   auth: AuthCtx,
   input: ClearScheduleInput,
 ): Promise<{ cleared: number; skipped: { locked: number; decided: number }; seq: number }> {
-  return withTenant(auth.orgId, async (tx) => {
-    const divisionId = input.division_id;
+  const divisionId = input.division_id;
+  const write = await withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     // Clear is the control whose whole point is that it is destructive, so a
     // frozen board refusing it is the least surprising guard in the file.
@@ -802,14 +859,16 @@ export async function clearScheduleScoped(
     const { event, cleared, skipped } = engineClearSchedule(fixtures, input.scope);
     if (cleared.length === 0) {
       const meta = await divisionMeta(tx, divisionId);
-      return { cleared: 0, skipped, seq: meta.seq };
+      return { out: { cleared: 0, skipped, seq: meta.seq }, competitionId: division.competition_id, fixtureIds: [] };
     }
-    await execute(tx, divisionId, event);
+    const fixtureIds = await execute(tx, divisionId, event);
     const seq = await appendEvent(tx, divisionId, event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = null
              where id = ${divisionId}`;
-    return { cleared: cleared.length, skipped, seq };
+    return { out: { cleared: cleared.length, skipped, seq }, competitionId: division.competition_id, fixtureIds };
   });
+  publishHistoryWrite(divisionId, write.competitionId, write.fixtureIds);
+  return write.out;
 }
 
 export async function clearPoolEntrants(
@@ -818,9 +877,10 @@ export async function clearPoolEntrants(
   confirm: boolean,
 ): Promise<{ removed: number; seq: number }> {
   if (!confirm) throw new HttpError(422, "clear-entrants requires confirm: true");
-  return withTenant(auth.orgId, async (tx) => {
-    const [pool] = await tx<{ stage_id: string; division_id: string }[]>`
-      select p.stage_id, s.division_id from pools p join stages s on s.id = p.stage_id
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const [pool] = await tx<{ stage_id: string; division_id: string; competition_id: string }[]>`
+      select p.stage_id, s.division_id, d.competition_id
+      from pools p join stages s on s.id = p.stage_id join divisions d on d.id = s.division_id
       where p.id = ${poolId}`;
     if (!pool) throw new HttpError(404, "pool not found");
     const divisionId = pool.division_id;
@@ -875,12 +935,21 @@ export async function clearPoolEntrants(
     } catch (err) {
       toEngineError(err);
     }
-    await execute(tx, divisionId, result.event);
+    const fixtureIds = await execute(tx, divisionId, result.event);
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = null
              where id = ${divisionId}`;
-    return { removed: result.removed.length, seq };
+    return {
+      out: { removed: result.removed.length, seq },
+      divisionId,
+      competitionId: pool.competition_id,
+      fixtureIds,
+    };
   });
+  // R10e (found beside m1): removing a pool's entrants DELETES its fixtures, so
+  // the hub and their match centres drop them the same way.
+  publishHistoryWrite(write.divisionId, write.competitionId, write.fixtureIds);
+  return write.out;
 }
 
 // ---------------------------------------------------------------------------

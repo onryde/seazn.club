@@ -74,6 +74,19 @@ vi.mock("@/lib/db", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { shiftDivisionSchedule } from "../schedule-plus";
+import {
+  clearPoolEntrants,
+  clearScheduleScoped,
+  createCheckpoint,
+  redoDivision,
+  restoreCheckpoint,
+  undoDivision,
+} from "../history";
+import { moveFixture } from "../schedule";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
 import { divisionRig, seedOrg } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -184,6 +197,29 @@ async function timedRig() {
   return { auth, rig, competitionId, pinned: pinned! };
 }
 
+/** A six-entrant group stage in two pools, so a pool's fixtures can be
+ *  removed while the other pool's stay. */
+async function groupRig() {
+  const { auth } = await seedOrg();
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Rain Cup", visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "generic", variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  await createEntrants(auth, division.id, ["A", "B", "C", "D", "E", "F"].map((name, i) => ({
+    kind: "individual" as const, display_name: name, seed: i + 1, members: [],
+  })));
+  const [stage] = await createStages(auth, division.id, {
+    seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } },
+  });
+  await generateStageFixtures(auth, stage!.id);
+  const pools = await sql<{ id: string }[]>`select id from pools where stage_id = ${stage!.id} order by key`;
+  await quiesce();
+  return { auth, divisionId: division.id, competitionId: competition.id, poolA: pools[0]!.id };
+}
+
 afterEach(async () => {
   await quiesce();
 });
@@ -228,5 +264,144 @@ describe.skipIf(!HAS_DB)("a slot-moving write drops the fixture documents it cha
     expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
     expect(out.shifted).toBe(0);
     await expectNothingSent();
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("undo, redo, restore and clear drop the fixture documents they changed, then push them (R10e)", () => {
+  it("undo: the fixture the undone move had moved rides the hub key's one DEL after commit; pushes wait for it", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const competitionId = await competitionOf(rig.divisionId);
+    await moveFixture(auth, rig.fixtureIds[0]!, { scheduled_at: "2030-06-01T10:00:00.000Z" });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    await undoDivision(auth, rig.divisionId);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(moved, "the undo put exactly the moved fixture back").toEqual([rig.fixtureIds[0]]);
+    expect([deleted, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, moved);
+  }, 120_000);
+
+  it("redo: the fixture the redone move moves again rides the hub key's one DEL after commit; pushes wait for it", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const competitionId = await competitionOf(rig.divisionId);
+    await moveFixture(auth, rig.fixtureIds[1]!, { scheduled_at: "2030-06-01T11:00:00.000Z" });
+    await undoDivision(auth, rig.divisionId);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    await redoDivision(auth, rig.divisionId);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(moved, "the redo moved exactly that fixture again").toEqual([rig.fixtureIds[1]]);
+    expect([deleted, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, moved);
+  }, 120_000);
+
+  it("undo with nothing to undo, and redo with nothing to redo, change nothing and send nothing", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    await quiesce();
+    const before = await board(rig.divisionId);
+    await expect(redoDivision(auth, rig.divisionId), "nothing was undone, so nothing redoes").rejects.toThrow();
+
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31", name: "Empty Cup", visibility: "public", branding: {},
+    });
+    const empty = await createDivision(auth, competition.id, {
+      name: "Open", sport_key: "generic", variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await quiesce();
+    await expect(undoDivision(auth, empty.id), "a division with no history has nothing to undo").rejects.toThrow();
+
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("restore: every fixture the rewind moved, across ALL its undo steps, rides ONE DEL after commit", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const competitionId = await competitionOf(rig.divisionId);
+    const checkpoint = await createCheckpoint(auth, rig.divisionId, "before the rain");
+    await moveFixture(auth, rig.fixtureIds[0]!, { scheduled_at: "2030-06-01T10:00:00.000Z" });
+    await moveFixture(auth, rig.fixtureIds[1]!, { scheduled_at: "2030-06-01T11:00:00.000Z" });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const out = await restoreCheckpoint(auth, rig.divisionId, checkpoint.id, true);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(out.steps, "the restore took more than one undo step").toBeGreaterThan(1);
+    expect(moved.length, "the restore moved fixtures back").toBe(2);
+    expect([deleted, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, moved);
+  }, 120_000);
+
+  it("restore to a save point the board is already at takes no step and sends nothing", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    await moveFixture(auth, rig.fixtureIds[0]!, { scheduled_at: "2030-06-01T10:00:00.000Z" });
+    const checkpoint = await createCheckpoint(auth, rig.divisionId, "right here");
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    const out = await restoreCheckpoint(auth, rig.divisionId, checkpoint.id, true);
+    expect(out.steps).toBe(0);
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("clear: the fixtures the clear emptied, and ONLY those, ride the hub key's one DEL after commit", async () => {
+    const { auth, rig, competitionId, pinned } = await timedRig();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const out = await clearScheduleScoped(auth, {
+      division_id: rig.divisionId,
+      scope: { excludeLocked: true },
+      confirm: true,
+    });
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(out.cleared, "the clear landed").toBe(moved.length);
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved, "the pinned fixture kept its slot").not.toContain(pinned);
+    expect([deleted, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, moved);
+  }, 120_000);
+
+  it("clear of a board with nothing left to clear sends nothing", async () => {
+    const { auth, rig } = await timedRig();
+    const input = { division_id: rig.divisionId, scope: { excludeLocked: true }, confirm: true as const };
+    await clearScheduleScoped(auth, input);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    const out = await clearScheduleScoped(auth, input);
+    expect(out.cleared).toBe(0);
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("clear-entrants (found, R10e): the pool fixtures it deleted ride the hub key's one DEL after commit", async () => {
+    const { auth, divisionId, competitionId, poolA } = await groupRig();
+    const before = await board(divisionId);
+
+    probe.hold = true;
+    const out = await clearPoolEntrants(auth, poolA, true);
+    const { moved, deleted, created } = diff(before, await board(divisionId));
+    expect(out.removed, "the clear-entrants landed").toBe(deleted.length);
+    expect(deleted.length).toBeGreaterThan(0);
+    expect(deleted.length, "the other pool kept its fixtures").toBeLessThan(before.size);
+    expect([moved, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(divisionId, competitionId, deleted);
   }, 120_000);
 });
