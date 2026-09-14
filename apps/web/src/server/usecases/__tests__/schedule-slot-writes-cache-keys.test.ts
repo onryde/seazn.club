@@ -36,6 +36,12 @@ const probe = vi.hoisted(() => ({
   gates: [] as Array<() => void>,
   fixturePushes: [] as Array<[string, string]>,
   divisionPushes: [] as Array<[string, string]>,
+  /** R10f: when set, the Nth statement that takes a division's advisory lock
+   *  (counted in `locks`) throws `injected`, so that transaction rolls back
+   *  while the ones before it stay committed. */
+  failAtLock: null as number | null,
+  locks: 0,
+  injected: new Error("injected: a later transaction of this write failed"),
 }));
 
 vi.mock("@/lib/cache", async (importOriginal) => {
@@ -69,7 +75,23 @@ vi.mock("@/lib/db", async (importOriginal) => {
     // Code running inside a transaction callback (before its COMMIT) sees the
     // mark; the caller's continuation after `await withTenant(...)` does not.
     withTenant: (orgId: string, fn: Parameters<typeof actual.withTenant>[1]) =>
-      actual.withTenant(orgId, (tx) => probe.inTx.run(true, () => fn(tx))),
+      actual.withTenant(orgId, (tx) => {
+        // R10f: armed only by the part-way failure cases. The Nth statement
+        // that takes a division's advisory lock throws, and the transaction
+        // that sent it rolls back. Every other call, and every other case,
+        // gets the real `tx`.
+        const handed = probe.failAtLock === null ? tx : new Proxy(tx, {
+          apply(target, thisArg, args: unknown[]) {
+            const strings = args[0];
+            if (Array.isArray(strings) && "raw" in strings && strings.join("").includes("pg_advisory_xact_lock")) {
+              probe.locks += 1;
+              if (probe.locks === probe.failAtLock) throw probe.injected;
+            }
+            return Reflect.apply(target, thisArg, args);
+          },
+        });
+        return probe.inTx.run(true, () => fn(handed));
+      }),
   };
 });
 // R10f: the manual stage completion is driven through its real route handler
@@ -130,6 +152,8 @@ const fixtureKey = (fixtureId: string) => `pub:v1:fixture:${fixtureId}`;
  *  recorders. */
 async function quiesce(): Promise<void> {
   probe.hold = false;
+  probe.failAtLock = null;
+  probe.locks = 0;
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
   probe.dels.length = 0;
@@ -776,5 +800,50 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
       [rig.divisionId, "score"],
     ]);
     expect(probe.fixturePushes).toEqual([[last!, "event"]]);
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("a restore or rebuild that fails part-way still publishes what it committed (R10f)", () => {
+  it("restore whose SECOND undo step throws: the error propagates, and the first step's fixture alone rides the hub key's one DEL after commit; pushes wait for it", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const competitionId = await competitionOf(rig.divisionId);
+    const checkpoint = await createCheckpoint(auth, rig.divisionId, "before the rain");
+    await moveFixture(auth, rig.fixtureIds[0]!, { scheduled_at: "2030-06-01T10:00:00.000Z" });
+    await moveFixture(auth, rig.fixtureIds[1]!, { scheduled_at: "2030-06-01T11:00:00.000Z" });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    probe.failAtLock = 2;
+    await expect(restoreCheckpoint(auth, rig.divisionId, checkpoint.id, true), "the step's own error reaches the caller")
+      .rejects.toBe(probe.injected);
+    expect(probe.locks, "the second undo step's transaction was the one that failed").toBe(2);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(moved, "the first step committed (the later move undone); the second rolled back (the earlier move stands)")
+      .toEqual([rig.fixtureIds[1]]);
+    expect([deleted, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, moved);
+  }, 120_000);
+
+  it("rebuild whose regenerate throws after the delete committed: the error propagates, and the deleted fixtures ride the hub key's one DEL after commit; pushes wait for it", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3, start: false });
+    const competitionId = await competitionOf(rig.divisionId);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    probe.failAtLock = 2;
+    await expect(rebuildStageFixtures(auth, rig.stages[0]!.stageId), "the regenerate's error reaches the caller")
+      .rejects.toBe(probe.injected);
+    expect(probe.locks, "the regenerate's transaction, after the delete's, was the one that failed").toBe(2);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(deleted.length, "the delete committed: the whole old board is gone").toBe(before.size);
+    expect(deleted.length).toBeGreaterThan(0);
+    expect([moved, created], "the regenerate rolled back: nothing new on the board").toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, deleted);
   }, 120_000);
 });
