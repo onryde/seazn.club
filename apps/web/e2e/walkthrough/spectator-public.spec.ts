@@ -24,6 +24,7 @@
 import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, fixturePath, TAG } from "../helpers";
+import { spectatorSetupBudgetMs } from "../spectator-public-budget";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
 import {
   type Team,
@@ -80,6 +81,30 @@ let matchC = "";
 const MATCH_C_KICK_OFF = "2026-11-03T09:05:00.000Z";
 const MATCH_C_RAIN_DELAY = "2026-11-05T16:47:00.000Z";
 
+/** EVERY division the setup stands up, and the config each is created with.
+ *  The setup's own clock is derived from this table's SIZE (`SETUP_BUDGET_MS`
+ *  below), so a fourth division cannot be added without moving the budget with
+ *  it — the flat `180_000` this file used to carry survived M1 k2 adding a
+ *  whole third division, in a `mode: "serial"` file where a blown setup aborts
+ *  everything after it and reports itself as a data defect (AGENTS.md #20/#21).
+ *  `src/lib/__tests__/spectator-walkthrough-budget.test.ts` reds if a division
+ *  is created with an inline config instead of an entry here. */
+const SETUP_DIVISIONS = {
+  /** Match A: 8 overs, 8 a side. Two innings posted ball by ball. */
+  live: { name: `Live ${TAG}`, ballsPerInnings: 48, playersPerSide: 8 },
+  /** Match B: band 2 (`cricket.player.line`). `playersPerSide` matches the
+   *  actual 4-player rosters below — `allOutWickets`'s strict check reads the
+   *  real lineup size, not a config value divorced from it (a mismatched 11
+   *  here rejected `wickets: 5` as "exceed all-out (3)"). */
+  finished: { name: `Finished ${TAG}`, ballsPerInnings: 48, playersPerSide: 4 },
+  /** Match C: generated, never played, so its court card still says "Starts …". */
+  upcoming: { name: `Upcoming ${TAG}`, ballsPerInnings: 48, playersPerSide: 4 },
+} as const;
+
+/** Derived, never typed: see `spectator-public-budget.ts` for the arithmetic
+ *  and for why it lives in a module of its own. */
+const SETUP_BUDGET_MS = spectatorSetupBudgetMs({ divisions: Object.keys(SETUP_DIVISIONS).length });
+
 test.afterEach(closeOpenContexts);
 
 // ---------------------------------------------------------------------------
@@ -91,7 +116,7 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   page,
   request,
 }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(SETUP_BUDGET_MS);
   const org = await activeOrg(page);
   orgSlug = org.slug;
 
@@ -105,11 +130,7 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   compSlug = comp.data.slug;
 
   // === cricket "live" division — match A: 8 overs, 8 a side ================
-  const liveDivId = await makeCricketDivision(request, compId, {
-    name: `Live ${TAG}`,
-    ballsPerInnings: 48,
-    playersPerSide: 8,
-  });
+  const liveDivId = await makeCricketDivision(request, compId, SETUP_DIVISIONS.live);
   liveDivSlug = await divisionSlug(request, liveDivId);
   matchATeams = await makeTeams(request, liveDivId, [
     {
@@ -126,7 +147,14 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   matchA = liveFixtures[0]!;
   const [blazers, comets] = matchATeams as [Team, Team];
   await startCricketMatch(request, matchA, matchATeams, blazers);
-  await playInnings(request, matchA, blazers, comets, { ballsPerInnings: 48, playersPerSide: 8, seed: 11 });
+  // Innings config off the SAME table the division was created from, so the
+  // two cannot drift (a `playersPerSide` divorced from the real roster is what
+  // `allOutWickets` rejects — see `SETUP_DIVISIONS.finished`).
+  const liveOvers = {
+    ballsPerInnings: SETUP_DIVISIONS.live.ballsPerInnings,
+    playersPerSide: SETUP_DIVISIONS.live.playersPerSide,
+  };
+  await playInnings(request, matchA, blazers, comets, { ...liveOvers, seed: 11 });
   const inn1 = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${matchA}/state`);
   expect(inn1.status, "match A must still be reachable after innings 1").toBe(200);
   // seed=41 (the original choice) leaves the chase only 4 runs short of
@@ -141,21 +169,13 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   // (+14: 1+4+wide1+0+wicket0+2+6), so the chase stays open through
   // every tap.
   await playInnings(request, matchA, comets, blazers, {
-    ballsPerInnings: 48,
-    playersPerSide: 8,
+    ...liveOvers,
     stopAtLegalBalls: 27,
     seed: 43,
   });
 
   // === cricket "finished" division — match B: band 2 (cricket.player.line) =
-  const finishedDivId = await makeCricketDivision(request, compId, {
-    name: `Finished ${TAG}`,
-    ballsPerInnings: 48,
-    // Matches the actual 4-player rosters below — `allOutWickets`'s strict
-    // check reads the real lineup size, not a config value divorced from it
-    // (a mismatched 11 here rejected `wickets: 5` as "exceed all-out (3)").
-    playersPerSide: 4,
-  });
+  const finishedDivId = await makeCricketDivision(request, compId, SETUP_DIVISIONS.finished);
   finishedDivSlug = await divisionSlug(request, finishedDivId);
   // The enriched line's person is a real ENTRANT MEMBER from the start — a
   // lineup slot alone isn't enough (a person must be a member of the
@@ -221,11 +241,7 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   // division, rather than a second fixture in an existing one, so match A's
   // and match B's seeded worlds (entrant counts, standings, generated fixture
   // order) are untouched.
-  const upcomingDivId = await makeCricketDivision(request, compId, {
-    name: `Upcoming ${TAG}`,
-    ballsPerInnings: 48,
-    playersPerSide: 4,
-  });
+  const upcomingDivId = await makeCricketDivision(request, compId, SETUP_DIVISIONS.upcoming);
   upcomingDivSlug = await divisionSlug(request, upcomingDivId);
   await makeTeams(request, upcomingDivId, [
     { name: `Kites ${TAG}`, names: Array.from({ length: 4 }, (_, i) => `Kite ${i + 1} ${TAG}`) },
