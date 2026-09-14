@@ -26,7 +26,6 @@ import type { MetricSpecLike } from "@/lib/public-site";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { resolveSlotLabel } from "@/lib/slot-label";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
@@ -104,15 +103,6 @@ export default async function DivisionHomePage({ params }: Props) {
   const dict = await getDictionary(orgLocale, "public");
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
-  // <Schedule> is a Client Component — it cannot call msgFor() itself
-  // (server-only), so every unfilled slot's text is pre-resolved HERE and
-  // handed down as a plain Record<string,string>, same shape as
-  // `entrantNames` above.
-  const slotLabels: Record<string, string> = {};
-  for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
-  }
   // R10d n4: the Bracket names a side still waiting on a match through the
   // public round namer ("Winner of Semi-finals, match 1"), as the hub, the
   // match centre and the embed widgets do.
@@ -122,6 +112,16 @@ export default async function DivisionHomePage({ params }: Props) {
     fixtures,
     stageKind: (stageId) => stageById.get(stageId)?.kind,
   });
+  // <Schedule> is a Client Component — it cannot call msgFor() itself
+  // (server-only), so every unfilled slot's text is pre-resolved HERE and
+  // handed down as a plain Record<string,string>, same shape as
+  // `entrantNames` above. N1c c5: through the SAME namer as the Bracket, so the
+  // schedule tab and the bracket name one waiting side with one text.
+  const slotLabels: Record<string, string> = {};
+  for (const f of fixtures) {
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
+  }
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.

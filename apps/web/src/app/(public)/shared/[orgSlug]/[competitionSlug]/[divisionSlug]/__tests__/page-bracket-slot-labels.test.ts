@@ -23,6 +23,7 @@ import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
 import { Bracket } from "@/components/public-site/bracket";
+import { Schedule } from "@/components/public-site/schedule";
 import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
 import DivisionHomePage from "../page";
 
@@ -72,53 +73,55 @@ function findElements(node: unknown, type: unknown, out: ReactElement[] = []): R
   return out;
 }
 
+const divisionData = () => ({
+  org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: "en" },
+  competition: {
+    id: "c1",
+    org_id: "o1",
+    name: "Test Comp",
+    slug: "test-comp",
+    description: null,
+    starts_on: null,
+    ends_on: null,
+    branding: {},
+    status: "active",
+    visibility: "public",
+  },
+  division: {
+    id: "d1",
+    competition_id: "c1",
+    name: "Open",
+    slug: "open",
+    description: null,
+    sport_key: "generic",
+    variant_key: "score",
+    status: "active",
+    module_version: "1.0.0",
+    tiebreakers: null,
+    sport_name: null,
+    entrant_count: 4,
+  },
+  stages: [{ id: "ko", division_id: "d1", seq: 1, kind: "knockout", name: "Knockout", status: "active" }],
+  pools: [],
+  fixtures: [
+    F({ id: "semi-1", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+    F({ id: "semi-2", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
+    F({
+      id: "final",
+      round_no: 2,
+      seq_in_round: 1,
+      home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+      away_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 2 } },
+    }),
+  ],
+  standings: [],
+  entrants: [entrant("e1", "Side 1", 1), entrant("e2", "Side 2", 2), entrant("e3", "Side 3", 3), entrant("e4", "Side 4", 4)],
+  tz: "UTC",
+});
+
 describe("public division page — its Bracket names a waiting side's feeder ROUND (R10d n4)", () => {
   it("a knockout final waiting on both semi-finals reads 'Winner of Semi-finals, match N' in the Bracket's markup, never an R·code", async () => {
-    getPublicDivision.mockResolvedValue({
-      org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: "en" },
-      competition: {
-        id: "c1",
-        org_id: "o1",
-        name: "Test Comp",
-        slug: "test-comp",
-        description: null,
-        starts_on: null,
-        ends_on: null,
-        branding: {},
-        status: "active",
-        visibility: "public",
-      },
-      division: {
-        id: "d1",
-        competition_id: "c1",
-        name: "Open",
-        slug: "open",
-        description: null,
-        sport_key: "generic",
-        variant_key: "score",
-        status: "active",
-        module_version: "1.0.0",
-        tiebreakers: null,
-        sport_name: null,
-        entrant_count: 4,
-      },
-      stages: [{ id: "ko", division_id: "d1", seq: 1, kind: "knockout", name: "Knockout", status: "active" }],
-      pools: [],
-      fixtures: [
-        F({ id: "semi-1", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
-        F({ id: "semi-2", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
-        F({
-          id: "final",
-          round_no: 2,
-          seq_in_round: 1,
-          home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
-          away_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 2 } },
-        }),
-      ],
-      standings: [],
-      entrants: [entrant("e1", "Side 1", 1), entrant("e2", "Side 2", 2), entrant("e3", "Side 3", 3), entrant("e4", "Side 4", 4)],
-      tz: "UTC",
-    });
+    getPublicDivision.mockResolvedValue(divisionData());
 
     const root = await DivisionHomePage({
       params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
@@ -135,5 +138,34 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     expect(html).toContain(`title="${home}"`);
     expect(html).toContain(`title="${away}"`);
     expect(html).not.toMatch(/R\d+·\d+/);
+  });
+
+  // N1c c5 — the SAME page's schedule tab still printed the organiser board's
+  // "Winner of R1·2" for the side its bracket calls "Winner of Semi-finals,
+  // match 1": one page, two texts. The Schedule is a client island; its element
+  // is found in the page's tree and rendered with the props the page handed it.
+  it("the schedule tab names each waiting side with the SAME text as the bracket, never an R·code (N1c c5)", async () => {
+    getPublicDivision.mockResolvedValue(divisionData());
+
+    const root = await DivisionHomePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+    });
+    const schedules = findElements(root, Schedule);
+    expect(schedules, "the page builds one Schedule").toHaveLength(1);
+    const scheduleHtml = renderToStaticMarkup(schedules[0]!);
+    const brackets = findElements(root, Bracket);
+    expect(brackets, "the page builds one Bracket").toHaveLength(1);
+    const bracketHtml = renderToStaticMarkup(brackets[0]!);
+    const { slotLabels } = schedules[0]!.props as { slotLabels: Record<string, string> };
+
+    const dict = await getDictionary("en", "public");
+    const semi = msgFor("en", "bracket.round.semi");
+    for (const [side, seq] of [["home", 1], ["away", 2]] as const) {
+      const text = t(dict, "knockout.feederWinner", { round: semi, seq });
+      expect(slotLabels[`final:${side}`], `schedule slot text, final:${side}`).toBe(text);
+      expect(scheduleHtml, `schedule markup, final:${side}`).toContain(text);
+      expect(bracketHtml, `bracket markup, final:${side}`).toContain(`title="${text}"`);
+    }
+    expect(scheduleHtml).not.toMatch(/R\d+·\d+/);
   });
 });
