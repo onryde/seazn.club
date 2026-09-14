@@ -298,6 +298,12 @@ export interface PublicFixture {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The generator's stable id (`fixtures.ext_key`, e.g. "pp-q1"). `roundRole`
+   *  reads it to tell a page playoff's Qualifier 1 from its Eliminator, which
+   *  share a round and a match count (fix round 1, M3). NOT a column of
+   *  `public_fixtures_v`: `getPublicDivision` selects it as a subquery on the
+   *  view row's own id. Optional, same convention as the four fields above. */
+  ext_key?: string | null;
   /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
@@ -693,12 +699,17 @@ export async function getPublicDivision(
         from public_pools_v p
         join public_stages_v s on s.id = p.stage_id
         where s.division_id = ${division.id} order by p.key`;
+      // `ext_key` is the generator's stable id, which `roundRole` needs to tell a
+      // page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). The
+      // view does not expose it, so it is read off `fixtures` by the VIEW row's
+      // own id: the view still decides which rows exist.
       const rawFixtures = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional
+               lane, is_final, third_place, conditional,
+               (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const fixtures = await withCourtVenueNames(rawFixtures);

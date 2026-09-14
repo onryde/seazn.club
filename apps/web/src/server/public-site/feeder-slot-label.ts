@@ -37,6 +37,9 @@ export interface RoundRoleFixture {
   is_final?: boolean | null;
   third_place?: boolean | null;
   conditional?: boolean | null;
+  /** The generator's stable id ("pp-q1", "pp-elim"): the only thing that tells
+   *  a page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). */
+  ext_key?: string | null;
 }
 
 /**
@@ -68,7 +71,7 @@ export function fixtureRoundLabel(
         conditional: fixture.conditional === true,
       },
       stageKind,
-      null,
+      fixture.ext_key ?? null,
     ),
   );
 }

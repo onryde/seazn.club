@@ -384,7 +384,8 @@ function laneRank(lane: KnockoutLane): number {
  * One bracket stage as a knockout view, or null when the stage has no
  * fixtures yet (an undrawn bracket publishes nothing, and earns no tab).
  *
- * ROUNDS group by `(lane, round_no)`, ordered by lane then round, each in
+ * ROUNDS group by `(lane, round_no)` and the round's name (see below), ordered
+ * by lane then round, each in
  * `seq_in_round` order. The bronze match (`third_place`) shares the final's
  * `round_no` in the engine (`generateSingleElim`), so it is pulled into a
  * round of its own and placed immediately BEFORE the final round: a spectator
@@ -412,6 +413,11 @@ function buildKnockoutView(a: {
   if (a.fixtures.length === 0) return null;
   const bySeq = (x: PublicFixture, y: PublicFixture) => x.seq_in_round - y.seq_in_round;
 
+  // A round is its lane, its `round_no` AND its name. For every bracket kind
+  // but one, the name is the same across a `(lane, round_no)`, so this groups
+  // exactly as `(lane, round_no)` alone did. A page playoff is the exception:
+  // Qualifier 1 and the Eliminator share round one (fix round 1, M3), and one
+  // chip named for whichever match came first would hide the other round.
   const groups = new Map<string, { key: string; lane: KnockoutLane; roundNo: number; fixtures: PublicFixture[] }>();
   const bronze: PublicFixture[] = [];
   for (const f of a.fixtures) {
@@ -421,14 +427,27 @@ function buildKnockoutView(a: {
     }
     const lane = f.lane ?? null;
     const key = `${lane ?? "main"}-${f.round_no}`;
-    const group = groups.get(key) ?? { key, lane, roundNo: f.round_no, fixtures: [] };
+    const identity = JSON.stringify([key, a.labelOf(f.id)]);
+    const group = groups.get(identity) ?? { key, lane, roundNo: f.round_no, fixtures: [] };
     group.fixtures.push(f);
-    groups.set(key, group);
+    groups.set(identity, group);
   }
-  const ordered = [...groups.values()].sort(
-    (x, y) => laneRank(x.lane) - laneRank(y.lane) || x.roundNo - y.roundNo,
-  );
+  const ordered = [...groups.values()];
   for (const group of ordered) group.fixtures.sort(bySeq);
+  ordered.sort(
+    (x, y) =>
+      laneRank(x.lane) - laneRank(y.lane) ||
+      x.roundNo - y.roundNo ||
+      x.fixtures[0]!.seq_in_round - y.fixtures[0]!.seq_in_round,
+  );
+  // Keys stay `{lane}-{round_no}`. Only rounds that SHARE one take their first
+  // match's seq as a suffix, so every other bracket's keys — and the URLs and
+  // test ids built from them — are unchanged.
+  const sharing = new Map<string, number>();
+  for (const group of ordered) sharing.set(group.key, (sharing.get(group.key) ?? 0) + 1);
+  for (const group of ordered) {
+    if ((sharing.get(group.key) ?? 0) > 1) group.key = `${group.key}-${group.fixtures[0]!.seq_in_round}`;
+  }
 
   const rounds = [...ordered];
   if (bronze.length > 0) {

@@ -323,7 +323,8 @@ export async function loadMatchCentre(
   // board's "R1·2" short code. The words come from `publicRoundNamer`, the SAME
   // namer the hub builds its cards and rail with, over THIS fixture's stage's
   // rows; anything that is not a feeder label, or names no match of the stage,
-  // keeps today's text.
+  // keeps today's text. `ext_key` is read the way `getPublicDivision` reads it
+  // (a page playoff's rounds are told apart by it — fix round 1, M3).
   const stageRows = await sql<
     {
       id: string;
@@ -334,9 +335,11 @@ export async function loadMatchCentre(
       is_final: boolean | null;
       third_place: boolean | null;
       conditional: boolean | null;
+      ext_key: string | null;
     }[]
   >`
-    select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional
+    select id, stage_id, round_no, seq_in_round, lane, is_final, third_place, conditional,
+           (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
     from public_fixtures_v where stage_id = ${fixture.stage_id}`;
   const namer = publicRoundNamer({
     ui: ctx.slotLabelLookup,

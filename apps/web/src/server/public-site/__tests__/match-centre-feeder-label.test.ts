@@ -13,7 +13,15 @@
 // Driven through `publicFixture`, the API loader, so the real `loadMatchCentre`
 // reads the real stored label and the real stage rows. Real Postgres required;
 // skipped without DATABASE_URL, like every DB-backed suite here.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// The hub loader (`loadCompetitionHub`, fix round 1 M3 below) reads through
+// `unstable_cache`, a Next server-runtime API with no incremental cache outside
+// a real request: a passthrough, never a memoising double.
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
+  revalidateTag: vi.fn(),
+}));
 import { sql } from "@/lib/db";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
@@ -27,6 +35,8 @@ import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { publicFixture } from "@/server/usecases/public";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import type { MatchCentreDocT } from "../match-centre-schema";
+import type { MessageKey } from "@/lib/messages";
+import { loadCompetitionHub } from "../competition-hub";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -152,5 +162,106 @@ describe.skipIf(!HAS_DB)("the public match centre — a feeder slot names its RO
     expect(awayName).toBe("Winner of R1·9");
     // The positive pair, same fixture: the side whose feeder exists is round-named.
     expect(homeName).toBe(t(dict, "knockout.feederWinner", { round: railName(home), seq: home.params.seq }));
+  });
+});
+
+// Fix round 1, M3 — a page playoff's rounds are Qualifier 1, the Eliminator,
+// Qualifier 2 and the Final. The engine can only tell Qualifier 1 from the
+// Eliminator by the generator's stable id (`fixtures.ext_key`, "pp-q1" /
+// "pp-elim"): they share round one and a match count. Without that id the rail
+// named both "Quarter-finals" and Qualifier 2 "Semi-finals", and N1 copied those
+// names into every waiting slot — Qualifier 2 read "Loser of Quarter-finals,
+// match 1". Driven through the engine's REAL generator and both real loaders.
+describe.skipIf(!HAS_DB)("a generated page playoff names its rounds by the playoff's own names (fix round 1, M3)", () => {
+  it("the rail reads Qualifier 1 / Eliminator / Qualifier 2 / Final, and Qualifier 2's waiting sides read 'Loser of Qualifier 1' / 'Winner of Eliminator' on the hub and in the match centre", async () => {
+    const { auth } = await seedOrg("pro");
+    await sql`update organizations set default_locale = 'en' where id = ${auth.orgId}`;
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "M3 Page Playoff",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Playoffs",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      ["P1", "P2", "P3", "P4"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+
+    const rows = await sql<(StageRow & { ext_key: string | null })[]>`
+      select id, round_no, seq_in_round, lane, is_final, third_place, conditional,
+             home_slot_label, away_slot_label, ext_key
+      from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;
+    const byExt = new Map(rows.map((r) => [r.ext_key, r]));
+    // The premise, from the stored rows: the engine's four playoff matches, with
+    // Qualifier 1 and the Eliminator sharing round one and Qualifier 2 waiting
+    // on the loser of one and the winner of the other.
+    expect([...byExt.keys()].sort(), JSON.stringify(rows)).toEqual(["pp-elim", "pp-final", "pp-q1", "pp-q2"]);
+    const [q1, elim, q2, final] = ["pp-q1", "pp-elim", "pp-q2", "pp-final"].map((k) => byExt.get(k)!);
+    expect(elim!.round_no).toBe(q1!.round_no);
+    expect(q2!.home_slot_label).toEqual({ key: "slot.loser_match", params: { round: q1!.round_no, seq: q1!.seq_in_round } });
+    expect(q2!.away_slot_label).toEqual({ key: "slot.winner_match", params: { round: elim!.round_no, seq: elim!.seq_in_round } });
+
+    /** A match's round name by the engine's own role for its generator id —
+     *  what the rail must say for it. */
+    const roleName = (r: StageRow & { ext_key: string | null }) =>
+      roundRoleLabel(
+        ui,
+        roundRoleFor(
+          rows.map((x) => ({ round_no: x.round_no, lane: x.lane })),
+          {
+            round_no: r.round_no,
+            lane: r.lane,
+            is_final: r.is_final === true,
+            third_place: r.third_place === true,
+            conditional: r.conditional === true,
+          },
+          "page_playoff",
+          r.ext_key,
+        ),
+      );
+    const playoff = [q1!, elim!, q2!, final!];
+    expect(playoff.map(roleName)).toEqual(
+      (["bracket.round.qualifier1", "bracket.round.eliminator", "bracket.round.qualifier2", "bracket.round.final"] as MessageKey[]).map((k) =>
+        msgFor("en", k),
+      ),
+    );
+
+    // The hub: one rail round per playoff round, in playoff order, each named.
+    const [slugs] = await sql<{ org: string; competition: string }[]>`
+      select o.slug as org, c.slug as competition
+      from competitions c join organizations o on o.id = c.org_id where c.id = ${competition.id}`;
+    const doc = (await loadCompetitionHub(slugs!.org, slugs!.competition))!;
+    const view = doc.knockouts.find((v) => v.stageId === stage!.id);
+    expect(view, JSON.stringify(doc.knockouts)).toBeDefined();
+    expect(view!.rounds.map((r) => r.fixtureIds)).toEqual(playoff.map((r) => [r.id]));
+    expect(view!.rounds.map((r) => r.label)).toEqual(playoff.map(roleName));
+
+    // The waiting slots name those rounds. Each holds ONE match, so the round
+    // name stands alone (M2).
+    const { dict } = { dict: await getDictionary("en", "public") };
+    const hubNames = (id: string) => doc.matches.find((m) => m.fixtureId === id)!.header.sides.map((s) => s.name);
+    const q2Names = [
+      t(dict, "knockout.feederLoserOnly", { round: roleName(q1!) }),
+      t(dict, "knockout.feederWinnerOnly", { round: roleName(elim!) }),
+    ];
+    expect(q2Names).toEqual(["Loser of Qualifier 1", "Winner of Eliminator"]);
+    expect(hubNames(q2!.id)).toEqual(q2Names);
+    expect(hubNames(final!.id)).toEqual([
+      t(dict, "knockout.feederWinnerOnly", { round: roleName(q1!) }),
+      t(dict, "knockout.feederWinnerOnly", { round: roleName(q2!) }),
+    ]);
+
+    // The match centre says exactly what the hub card says.
+    expect(await sideNames(q2!.id)).toEqual(q2Names);
+    expect(await sideNames(final!.id)).toEqual(hubNames(final!.id));
   });
 });
