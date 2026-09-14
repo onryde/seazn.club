@@ -136,15 +136,18 @@ describe.skipIf(!HAS_DB)("scoring -> deferred discovery wiring (Task 6 review fi
     // sequence needed.
     await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
 
-    // invalidatePublicCache runs fire-and-forget off scoreEvent (`void
-    // invalidatePublicCache(...)`) — poll for the deferred registration the
-    // same way deferred.test.ts polls for the helper's own callback.
-    await vi.waitFor(() => expect(deferred).toHaveBeenCalledTimes(1));
+    // scoreEvent AWAITS invalidatePublicCache (P1): Next flushes a route
+    // handler's revalidation tags once, when the handler resolves, and drops
+    // any that arrive later. So the registration has already happened by the
+    // time scoreEvent resolves — asserted at once, never polled. This used to
+    // be a `vi.waitFor`, which recorded the fire-and-forget call (the defect)
+    // as the expected shape.
+    expect(deferred).toHaveBeenCalledTimes(1);
 
     // If the deferred(...) wrapper were ever dropped, `deferred` (fully
     // replaced here, not a passthrough spy) would never be called and the
-    // waitFor above times out and fails — that's the regression signal for
-    // "dropped". Nothing has actually run the discovery calls yet.
+    // assertion above fails — that's the regression signal for "dropped".
+    // Nothing has actually run the discovery calls yet.
     expect(capture.fns).toHaveLength(1);
     expect(order.log).toEqual([]);
 

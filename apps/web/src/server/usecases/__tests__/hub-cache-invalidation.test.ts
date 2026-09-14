@@ -29,6 +29,7 @@ const cacheDelPattern = vi.hoisted(() =>
   }),
 );
 const fireDivisionRevalidate = vi.hoisted(() => vi.fn());
+const fireScoreRevalidate = vi.hoisted(() => vi.fn());
 const publishDivisionUpdate = vi.hoisted(() => vi.fn(async () => {}));
 const withTenant = vi.hoisted(() => vi.fn());
 
@@ -43,6 +44,7 @@ vi.mock("@/lib/db", async (importOriginal) => ({
 vi.mock("@/server/public-site/revalidate", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/revalidate")>()),
   fireDivisionRevalidate,
+  fireScoreRevalidate,
 }));
 vi.mock("@/lib/realtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/realtime")>()),
@@ -79,8 +81,9 @@ describe("invalidatePublicCache — a scoring write", () => {
     expect(patterns()).toEqual(
       expect.arrayContaining([`pub:v1:fixture:${FIXTURE}`, `pub:v1:div:${DIVISION}:*`]),
     );
-    // And the ISR side is untouched by this change.
-    expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
+    // And the ISR side is untouched by this change (P1 renamed the helper a
+    // score write fires: `fireScoreRevalidate`, revalidate.ts).
+    expect(fireScoreRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
   });
 
   it("is NOT keyed by division — one hub document spans the whole competition", async () => {

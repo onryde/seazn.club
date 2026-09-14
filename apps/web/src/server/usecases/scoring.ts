@@ -18,7 +18,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import {
-  fireDivisionRevalidate,
+  fireScoreRevalidate,
   fireDiscoveryRevalidate,
   invalidateDiscoveryCache,
 } from "@/server/public-site/revalidate";
@@ -133,18 +133,30 @@ export async function scoreEvent(
   }
 
   if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
-  // After commit (doc 08 §4): realtime + public cache, both fire-and-forget.
-  // Discovery surfaces refresh on decided/void/start writes only — and only
-  // when the competition is discoverable (doc 15 §2, checked inside).
+  // After commit (doc 08 §4): realtime fire-and-forget, the public cache
+  // awaited. Discovery surfaces refresh on decided/void/start writes only — and
+  // only when the competition is discoverable (doc 15 §2, checked inside).
   const movesDiscovery =
     result.outcome !== null || input.type === "core.void" || input.type === "core.start";
   void publishFixtureUpdate(fixtureId, "event");
+  // P1 — AWAITED, never `void`. Next applies a route handler's revalidation
+  // tags in ONE flush the moment the handler resolves and silently drops any
+  // tag fired later. The voided call fired its tag after a DB lookup, so after
+  // every score the hub, the competition page and the division page kept
+  // serving the pre-score document until their 30s TTL ran out
+  // (`__tests__/score-revalidate-in-request.test.ts`). The Redis sweeps inside
+  // stay non-blocking. A failure is logged, not thrown: the score has already
+  // committed, and this must not report it as failed.
+  const scope = await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery).catch(
+    (err: unknown) => {
+      log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
+      return null;
+    },
+  );
   // Division-wide state_changed so multi-fixture listeners (slideshow) get
-  // one channel per division instead of one per fixture.
-  void sql<{ division_id: string }[]>`select division_id from fixtures where id = ${fixtureId}`
-    .then(([row]) => row && publishDivisionUpdate(row.division_id, "score"))
-    .catch(() => null);
-  void invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery);
+  // one channel per division instead of one per fixture — addressed from the
+  // lookup the invalidation just made rather than a second query.
+  if (scope) void publishDivisionUpdate(scope.divisionId, "score");
   return out;
 }
 
@@ -515,11 +527,17 @@ export async function finalizeFixture(
 // keeps the two paths from drifting. An import that skipped it left the public
 // pages, the public API and discovery serving pre-import content — on a
 // feature whose whole point is filling those pages (design doc §1/§2.1).
+//
+// P1 — every caller AWAITS this inside its request (`scoreEvent`,
+// `importEvents`): the tag call below reaches Next's per-request flush only if
+// it happens before the route handler resolves. Resolves to the fixture's
+// division and competition (null when the fixture no longer exists), so
+// `scoreEvent` addresses its realtime push without a second lookup.
 export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
-): Promise<void> {
+): Promise<{ divisionId: string; competitionId: string } | null> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
       { division_id: string; competition_id: string; discoverable: boolean }[]
@@ -531,24 +549,37 @@ export async function invalidatePublicCache(
       where f.id = ${fixtureId}`;
     return r ?? null;
   });
-  await cacheDelPattern(`pub:v1:fixture:${fixtureId}`);
-  if (row) {
-    await cacheDelPattern(`pub:v1:div:${row.division_id}:*`);
-    // W2 — the competition HUB document (usecases/public.ts's
-    // `pub:v1:hub:{competitionId}`) carries every division's live scores, so a
-    // write to any fixture in the competition makes it stale. Competition-
-    // keyed, not division-keyed: one document spans the whole competition.
-    // Its ISR twin drops on the `division:{id}` tag `fireDivisionRevalidate`
-    // fires below — `getPublicCompetitionHub` tags every division it read.
-    await cacheDelPattern(`pub:v1:hub:${row.competition_id}`);
-    fireDivisionRevalidate(row.division_id, row.competition_id);
-    // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
-    // fires only for discoverable competitions.
-    if (movesDiscovery && row.discoverable) {
-      deferred(async () => {
-        await invalidateDiscoveryCache();
-        fireDiscoveryRevalidate();
-      });
-    }
+  // The ISR tag FIRST, straight after the one awaited lookup. `fireScoreRevalidate`
+  // expires the division tag outright instead of marking it stale
+  // (revalidate.ts); `getPublicCompetitionHub` tags every division it read, so
+  // this also drops the hub page's ISR entry.
+  if (row) fireScoreRevalidate(row.division_id, row.competition_id);
+  // The Redis sweeps AFTER the tag, and not awaited: each is a SCAN over the
+  // whole keyspace (cache.ts), which is what fire-and-forget always protected.
+  // A sweep that finished before the tag would let a hub read in between
+  // rebuild from the still-cached division and put the stale document back.
+  void Promise.all([
+    cacheDelPattern(`pub:v1:fixture:${fixtureId}`),
+    ...(row
+      ? [
+          cacheDelPattern(`pub:v1:div:${row.division_id}:*`),
+          // W2 — the competition HUB document (usecases/public.ts's
+          // `pub:v1:hub:{competitionId}`) carries every division's live scores,
+          // so a write to any fixture in the competition makes it stale.
+          // Competition-keyed, not division-keyed: one document spans the whole
+          // competition.
+          cacheDelPattern(`pub:v1:hub:${row.competition_id}`),
+        ]
+      : []),
+  ]);
+  if (!row) return null;
+  // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
+  // fires only for discoverable competitions.
+  if (movesDiscovery && row.discoverable) {
+    deferred(async () => {
+      await invalidateDiscoveryCache();
+      fireDiscoveryRevalidate();
+    });
   }
+  return { divisionId: row.division_id, competitionId: row.competition_id };
 }

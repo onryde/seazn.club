@@ -25,6 +25,34 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
   void purgeCdn();
 }
 
+/** A SCORE write — `invalidatePublicCache` (usecases/scoring.ts) is the only
+ *  caller. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
+ *  `fireOrgRevalidate` below gives: 'max' serves one more stale read, and the
+ *  reads that follow a score are read-your-own-writes (the smoke hub champion
+ *  check reads once; a realtime push triggers one refresh). Every spectator
+ *  entry a score changes carries the division tag (`pub-div`, `pub-fixture`,
+ *  `pub-hub-v2`), and an expired tag beats a stale one on an entry carrying
+ *  both. The competition tag keeps SWR. Cost accepted: the first reader after
+ *  a score rebuilds instead of getting a stale answer at once.
+ *
+ *  ORDER IS LOAD-BEARING: competition 'max' first, division expiry second. A
+ *  flush groups its tags by profile in first-seen order and Next's tag
+ *  manifest is last-write-wins, so a 'max' for the same division fired later
+ *  in the same request (`completeStage`'s voided `fireStageRevalidate`, reached
+ *  from scoreEvent's auto-advance) joins the already-open 'max' group and can
+ *  no longer overwrite the expiry. */
+export function fireScoreRevalidate(divisionId: string, competitionId: string): void {
+  try {
+    revalidateTag(competitionTag(competitionId), "max");
+    revalidateTag(divisionTag(divisionId), { expire: 0 });
+  } catch {
+    // outside a Next request scope (tests, scripts) — nothing to invalidate
+  }
+  void broadcastRevalidate([divisionTag(divisionId)], "expire");
+  void broadcastRevalidate([competitionTag(competitionId)], "swr");
+  void purgeCdn();
+}
+
 /** Org chrome changes (name, logo, brand color) show on every page of the
  *  org's public tree — bust the whole org tag. `{ expire: 0 }`, NOT 'max':
  *  'max' is stale-while-revalidate, so the organiser's very next look at

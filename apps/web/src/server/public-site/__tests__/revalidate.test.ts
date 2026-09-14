@@ -29,6 +29,7 @@ import {
   fireOrgRevalidate,
   fireDiscoveryRevalidate,
   firePostRevalidate,
+  fireScoreRevalidate,
 } from "../revalidate";
 
 beforeEach(() => {
@@ -97,6 +98,46 @@ describe("CDN purge fires alongside peer broadcast (Task 7)", () => {
   it("fireDiscoveryRevalidate calls purgeCdn", () => {
     fireDiscoveryRevalidate();
     expect(purgeCdn).toHaveBeenCalledTimes(1);
+  });
+
+  it("fireScoreRevalidate calls purgeCdn", () => {
+    fireScoreRevalidate("d1", "c1");
+    expect(purgeCdn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// P1 (spectator surface): a SCORE is read-your-own-writes for its division.
+// Under "max" the first read after a score is still the pre-score document —
+// the smoke hub champion check reads exactly once, and a realtime-triggered
+// refresh reads once and then waits for a push that never comes after a
+// final. Same reasoning as org chrome above. The competition tag keeps SWR:
+// the one entry only it carries is on REVALIDATE_SLOW (public-site/data.ts).
+// `usecases/__tests__/score-revalidate-in-request.test.ts` drives this through
+// Next's real flush and tag manifest; this pins the call shape.
+describe("fireScoreRevalidate (a scoring write)", () => {
+  it("expires the division tag now and keeps stale-while-revalidate on the competition", () => {
+    fireScoreRevalidate("d1", "c1");
+    // Competition FIRST — the order is load-bearing (see fireScoreRevalidate;
+    // score-revalidate-in-request.test.ts proves why through Next's manifest).
+    expect(revalidateTag.mock.calls).toEqual([
+      ["competition:c1", "max"],
+      ["division:d1", { expire: 0 }],
+    ]);
+  });
+
+  it("broadcasts each tag to peers in its own mode", () => {
+    fireScoreRevalidate("d1", "c1");
+    expect(broadcastRevalidate).toHaveBeenCalledWith(["division:d1"], "expire");
+    expect(broadcastRevalidate).toHaveBeenCalledWith(["competition:c1"], "swr");
+    expect(broadcastRevalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("swallows revalidateTag throwing outside a request scope and still broadcasts", () => {
+    revalidateTag.mockImplementationOnce(() => {
+      throw new Error("static generation store missing");
+    });
+    expect(() => fireScoreRevalidate("d1", "c1")).not.toThrow();
+    expect(broadcastRevalidate).toHaveBeenCalledWith(["division:d1"], "expire");
   });
 });
 
