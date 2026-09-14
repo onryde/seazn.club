@@ -356,6 +356,29 @@ describe("feeder-slot phrases name the role BEFORE the round, in every locale (N
       expect(lead(dict, "knockout.feederWinnerOnly"), `${locale} winner opening`).toBe(lead(dict, "knockout.feederWinner"));
       expect(lead(dict, "knockout.feederLoserOnly"), `${locale} loser opening`).toBe(lead(dict, "knockout.feederLoser"));
     });
+
+    // N1d d1 (review-n1c m1) — "the winner's opening differs from the loser's"
+    // is just as true of a SWAPPED pair: "Perdant : {round}" on the winner key
+    // still differs from "Vainqueur : {round}" on the loser key, and a fr
+    // bracket would then tell spectators the semi's LOSER plays the final. So
+    // the role word itself is pinned, against the word each dictionary already
+    // uses for that role in an unrelated sentence: `matchCentre.winner`
+    // ("Winner:") and `knockout.pendingLoser` ("Loser of {a} v {b}"). Nothing
+    // typed in here: a locale that renames its winner renames it in both places.
+    it(`${locale}: the winner phrases open with the dictionary's own word for a winner, the loser phrases with its word for a loser`, () => {
+      const firstWord = (s: string) => /^\p{L}+/u.exec(s.trim())?.[0] ?? "";
+      const winnerWord = firstWord(dict["matchCentre.winner"]!);
+      const loserWord = firstWord(dict["knockout.pendingLoser"]!);
+      expect(winnerWord, `${locale} matchCentre.winner: ${dict["matchCentre.winner"]}`).not.toBe("");
+      expect(loserWord, `${locale} knockout.pendingLoser: ${dict["knockout.pendingLoser"]}`).not.toBe("");
+      expect(winnerWord, `${locale}: the two role words must differ to witness a swap`).not.toBe(loserWord);
+      for (const k of ["knockout.feederWinner", "knockout.feederWinnerOnly"] as const) {
+        expect(firstWord(lead(dict, k)), `${locale} ${k}: ${dict[k]}`).toBe(winnerWord);
+      }
+      for (const k of ["knockout.feederLoser", "knockout.feederLoserOnly"] as const) {
+        expect(firstWord(lead(dict, k)), `${locale} ${k}: ${dict[k]}`).toBe(loserWord);
+      }
+    });
   }
 
   it("nl gives the round its article, 'van de {round}', the way its knockout.next.* sentences say 'de {round}'", () => {
