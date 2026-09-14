@@ -39,7 +39,7 @@
 // to describe the product as it is. Built, then rejected, 2026-09-08.
 //
 // ---------------------------------------------------------------------------
-// What this file asserts NOW — three things, none of them a DLS paywall
+// What this file asserts NOW — four things, none of them a DLS paywall
 // ---------------------------------------------------------------------------
 // 1. THE PROMISE, POSITIVELY, OVER HTTP. `revise_no_target_community` sends
 //    `cricket.revise` with an EMPTY payload from a community-plan org and
@@ -81,6 +81,18 @@
 //    `gatedFeatureProbed` is null: a REPORTED retirement, never a silently
 //    weakened assertion and never an invented gate.
 //
+// 4. THE DEVICE LINK, REFUSED THEN BOUGHT (B07a T11). `scoring.device_links`
+//    is sold (V117__device_links.sql:55-56: community false, pro true), and a
+//    tap suite cannot hand a scorer a phone without it
+//    (`usecases/device-links.ts:128`). `proveDeviceLinkGate` mints on the
+//    probe's own fixture while the org is still on the free plan (a 402
+//    naming the key), provisions, then mints again (201 with a secret). Two
+//    cells, separate from point 3's on purpose: that cell names the FIRST
+//    provocable key (`officials.auto` while it is sold), and pointing it here
+//    instead would lose that coverage. Both retire, reported, when the live
+//    catalog stops paywalling the key; the second FAILS — never passes on a
+//    mint that was not sent — when the plan this run can buy does not grant it.
+//
 // ---------------------------------------------------------------------------
 // Why the three "not refused for payment" cells still prove the DOOR
 // ---------------------------------------------------------------------------
@@ -104,7 +116,12 @@
 // earlier cell happened to persist. The one deliberate exception is the
 // after-plan replay, which reuses the empty-payload cell's fixture: a 422
 // shape refusal is raised by the engine BEFORE anything is appended, so that
-// fixture's `expected_seq` is still 0.
+// fixture's `expected_seq` is still 0. The device-link cells (point 4) reuse
+// that fixture too, for the same reason read the other way: `createDeviceLink`
+// 422s a finalized or cancelled fixture, and one that has only ever drawn
+// shape refusals is still the `scheduled` row `/generate` inserted
+// (`usecases/stages.ts:1351`). A mint appends no event, so the replay's
+// `expected_seq: 0` survives it.
 //
 // ---------------------------------------------------------------------------
 // DI, same shape as `lib/seed.ts`
@@ -162,7 +179,15 @@ export type DlsGateCellName =
   | "revise_no_target_after_plan"
   /** The re-pointed paywall assertion (header point 3). Emitted only when the
    *  live matrix still gates one of `PROVOCABLE_GATED_FEATURES`. */
-  | "gated_feature_refusal_names_its_key";
+  | "gated_feature_refusal_names_its_key"
+  /** B07a T11 — `POST /fixtures/{id}/device-links` on the free plan, BEFORE
+   *  the plan flip: a 402 naming `scoring.device_links`. Emitted only while
+   *  the live catalog still paywalls the key (`provocableFeatureKeys`). */
+  | "device_link_refused_before_plan"
+  /** The same POST AFTER the flip: a 201 carrying the one-time secret.
+   *  Emitted with its refusal and never without it; when the provisioned plan
+   *  does not grant the key it is emitted FAILED, with nothing sent. */
+  | "device_link_minted_after_plan";
 
 /**
  * What a cell requires of its response. Three kinds, because "not a 402" is
@@ -181,11 +206,19 @@ export type DlsGateExpectation =
   /** The entitlement gate specifically did not block this call. Weaker than
    *  `engine_rejection` on purpose: these cells cannot predict which
    *  business-level status the fold returns. */
-  | { readonly kind: "not_payment_refused" };
+  | { readonly kind: "not_payment_refused" }
+  /** A mint went through: 201, and the envelope's `data.secret` is a
+   *  non-empty string (`createDeviceLink` returns it exactly once). The secret
+   *  itself is never copied into the verdict — it is a live scoring credential
+   *  for that fixture until local midnight, and the verdict lands in a report. */
+  | { readonly kind: "minted_with_secret" };
 
 export interface DlsGateCellOutcome {
   readonly cell: DlsGateCellName;
-  readonly status: number;
+  /** The HTTP status the cell's request drew, or `null` when the request was
+   *  deliberately NOT sent (`device_link_minted_after_plan` on a plan that does
+   *  not grant the key). A `null` cell is never ok. */
+  readonly status: number | null;
   readonly featureKey?: string;
   readonly ok: boolean;
   readonly detail: string;
@@ -241,6 +274,25 @@ export function classifyDlsGateCell(
       detail: ok
         ? `refused as expected: 402 PAYMENT_REQUIRED, feature_key "${expectation.featureKey}"`
         : `expected a 402 PAYMENT_REQUIRED refusal naming feature_key "${expectation.featureKey}"; got ${seen}`,
+    };
+  }
+
+  if (expectation.kind === "minted_with_secret") {
+    const data = result.json?.ok === true ? (result.json.data as { readonly secret?: unknown } | undefined) : undefined;
+    const secret = data?.secret;
+    const ok = result.status === 201 && typeof secret === "string" && secret.length > 0;
+    return {
+      cell,
+      status: result.status,
+      ...withKey,
+      ok,
+      detail: ok
+        ? "minted: 201 with a one-time device-link secret (deliberately not copied here) — provisioning cleared the refusal"
+        : result.status === 402
+          ? `still refused for payment after provisioning (${seen}) — the plan flip did not clear this gate`
+          : result.status === 201
+            ? "got a 201 with no device-link secret in it — a mint that hands the scorer nothing to use is not a mint"
+            : `expected a 201 carrying a one-time device-link secret; got ${seen}`,
     };
   }
 
@@ -378,12 +430,21 @@ export interface DlsGateProbeInput {
  */
 interface ProvocableGatedFeature {
   readonly featureKey: string;
-  readonly path: (ids: { readonly divisionId: string }) => string;
+  /** Every id a route here might need. The probe owns both, and neither is
+   *  `_tiny`'s: its own dls-on division, and that division's empty-payload
+   *  fixture (see `runDlsGateProbe` on why that one). */
+  readonly path: (ids: { readonly divisionId: string; readonly fixtureId: string }) => string;
   /** Must be schema-valid: the v1 route parses the body BEFORE the usecase
    *  runs, so a body that fails zod 400s ahead of the gate and the cell would
    *  report a paywall miss that never happened. */
   readonly body: unknown;
 }
+
+/** The key `createDeviceLink` gates on (`usecases/device-links.ts:128`).
+ *  Named, like every capability the plan choice asks for, because a request
+ *  has to say what it wants; whether the key is still SOLD is never named
+ *  anywhere — `provocableFeatureKeys` reads that. */
+const DEVICE_LINKS_FEATURE_KEY = "scoring.device_links";
 
 const PROVOCABLE_GATED_FEATURES: readonly ProvocableGatedFeature[] = [
   {
@@ -404,7 +465,122 @@ const PROVOCABLE_GATED_FEATURES: readonly ProvocableGatedFeature[] = [
     // `AutoAssignInput.rng_seed`.
     body: { policy: { roles: ["umpire"] } },
   },
+  {
+    featureKey: DEVICE_LINKS_FEATURE_KEY,
+    // B07a T11 — `createDeviceLink` (usecases/device-links.ts:121-132) runs
+    // `requireSessionEditor`, then `requireFeature(orgId,
+    // "scoring.device_links", competitionForFixture(id))`, BEFORE its
+    // transaction reads the fixture. The ROUTE runs three guards first
+    // (api/v1/fixtures/[id]/device-links/route.ts): a per-IP rate limit of 10
+    // mints a minute, `parseBody`, and `requireResourceAuth(fixture, write)` —
+    // which 404s a fixture that does not exist, so this entry needs a REAL
+    // fixture id and never reaches the gate without one. V117__device_links
+    // .sql:55-56 put the key on `pro` and not `community`; `paywalledOnFreePlan`
+    // checks that at call time rather than trusting this comment.
+    path: ({ fixtureId }) => `/api/v1/fixtures/${fixtureId}/device-links`,
+    // `CreateDeviceLink` is `{ label?: string | null }` — every field optional.
+    body: {},
+  },
 ];
+
+/**
+ * The keys in `PROVOCABLE_GATED_FEATURES` the LIVE catalog still puts behind a
+ * paywall for a free-plan org — `paywalledOnFreePlan` over each entry's own
+ * `entitlementRows`, in declaration order. Read, never typed: a key the
+ * product frees, or stops selling to anyone, drops out by itself, and every
+ * cell that hangs off it retires rather than reddening for describing the
+ * product correctly.
+ *
+ * Takes only the one read it needs, so `runDlsGateProbe` can hand it rows it
+ * already fetched for the plan choice instead of reading them twice.
+ */
+export async function provocableFeatureKeys(sql: Pick<PlanSql, "entitlementRows">): Promise<readonly string[]> {
+  const keys: string[] = [];
+  for (const feature of PROVOCABLE_GATED_FEATURES) {
+    if (paywalledOnFreePlan(await sql.entitlementRows(feature.featureKey))) {
+      keys.push(feature.featureKey);
+    }
+  }
+  return keys;
+}
+
+export interface DeviceLinkGateInput {
+  readonly base: string;
+  /** The org owner's session: `createDeviceLink` refuses anything but a
+   *  session editor (403) before it ever reaches the gate. */
+  readonly session: Session;
+  readonly transport: Pick<ProbeTransport, "raw">;
+  /** A REAL fixture the org owns, neither finalized nor cancelled. */
+  readonly ids: { readonly divisionId: string; readonly fixtureId: string };
+  /** Whether `provocableFeatureKeys` still lists `scoring.device_links`. False
+   *  retires BOTH cells: with no refusal to witness, a mint after the flip
+   *  says nothing about the flip. */
+  readonly paywalledOnFreePlan: boolean;
+  /** The plan flip. Runs exactly once, between the two POSTs, whether or not
+   *  the cells run. Resolves to the plan it provisioned and whether that plan
+   *  grants `scoring.device_links` — derived from the plan choice's
+   *  `unsatisfied`, never assumed from "some plan got provisioned". */
+  readonly provision: () => Promise<{ readonly plan: string; readonly grantsDeviceLinks: boolean }>;
+}
+
+export interface DeviceLinkGateProof {
+  /** The status the mint drew BEFORE the flip; `null` when it was not sent. */
+  readonly refusedStatus: number | null;
+  /** True only when a mint was actually SENT after the flip and came back
+   *  201 with a secret. */
+  readonly mintedAfterProvision: boolean;
+  /** `device_link_refused_before_plan` then `device_link_minted_after_plan`,
+   *  or neither. */
+  readonly cells: readonly DlsGateCellOutcome[];
+}
+
+/**
+ * B07a T11 — the device-link entitlement, proved in the only order that proves
+ * anything: mint while the org is still on the free plan (a 402 naming the
+ * key), provision, mint again (a 201 with a secret). `runDlsGateProbe` drives
+ * its plan flip THROUGH this function, so the order lives in one place and the
+ * unit tests exercise the same code a live run does.
+ *
+ * When the provisioned plan does not grant the key, the second mint is not
+ * sent and its cell FAILS, naming the plan. A refusal after the flip would
+ * only restate the catalog, and a cell that passed on a mint nobody sent would
+ * be the vacuous green this probe exists to prevent.
+ */
+export async function proveDeviceLinkGate(input: DeviceLinkGateInput): Promise<DeviceLinkGateProof> {
+  const { base, session, transport, ids } = input;
+  const feature = PROVOCABLE_GATED_FEATURES.find((f) => f.featureKey === DEVICE_LINKS_FEATURE_KEY);
+  if (feature === undefined) {
+    throw new Error(`proveDeviceLinkGate: PROVOCABLE_GATED_FEATURES has no "${DEVICE_LINKS_FEATURE_KEY}" entry`);
+  }
+  if (!input.paywalledOnFreePlan) {
+    await input.provision();
+    return { refusedStatus: null, mintedAfterProvision: false, cells: [] };
+  }
+  const mint = () => transport.raw(base, session, feature.path(ids), "POST", feature.body);
+
+  const before = await mint();
+  const refused = classifyDlsGateCell(
+    "device_link_refused_before_plan",
+    { kind: "payment_refusal", featureKey: feature.featureKey },
+    before,
+  );
+
+  const { plan, grantsDeviceLinks } = await input.provision();
+
+  const minted: DlsGateCellOutcome = grantsDeviceLinks
+    ? classifyDlsGateCell("device_link_minted_after_plan", { kind: "minted_with_secret" }, await mint())
+    : {
+        cell: "device_link_minted_after_plan",
+        status: null,
+        ok: false,
+        detail:
+          `not sent: plan "${plan}" — the best single plan for every capability this run wants — does not grant ` +
+          `${feature.featureKey}, so provisioning cannot have cleared the refusal and no scorer on this org can be ` +
+          "handed a device link",
+      };
+
+  return { refusedStatus: before.status, mintedAfterProvision: minted.ok, cells: [refused, minted] };
+}
 
 export interface DlsGateProbeResult {
   readonly orgId: string;
@@ -412,7 +588,8 @@ export interface DlsGateProbeResult {
    *  `provisionPlan` flipped the org onto — derived at call time, never a
    *  constant (see plan.ts's header comment on why a hardcoded key goes
    *  stale), and chosen to grant EVERY capability this probe asked for
-   *  (`cricket.dls`, required; `officials.auto` and `stats.player`, desired),
+   *  (`cricket.dls`, required; `officials.auto`, `stats.player`, `news.auto`
+   *  and `scoring.device_links`, desired),
    *  not `cricket.dls` alone (B03 review F1(a): picking a plan for one
    *  feature and then hoping it happens to grant another is exactly the bug
    *  this fixes). */
@@ -439,6 +616,18 @@ export interface DlsGateProbeResult {
    *  the run could recover. A run that finds this false must report the news
    *  step as having no subject rather than as passing on zero posts. */
   readonly newsAutoGranted: boolean;
+  /** B07a T11 — whether the chosen plan grants `scoring.device_links`, from
+   *  the same selection as `officialsAutoGranted` (derived from
+   *  `unsatisfiedCapabilities` below, never assumed). Minting a device link
+   *  refuses 402 without it (`usecases/device-links.ts:128`), so a run that
+   *  finds this false cannot hand any scorer a device, and must report its tap
+   *  steps as having no subject rather than as passing on zero taps. */
+  readonly deviceLinksGranted: boolean;
+  /** Whether the two device-link cells ran. False when the live catalog no
+   *  longer paywalls `scoring.device_links` for a free-plan org — the same
+   *  retirement rule as `gatedFeatureProbed`, and like it a REPORTED
+   *  retirement, never a pass. */
+  readonly deviceLinkGateProbed: boolean;
   /**
    * THE PROMISE, at the matrix (this file's header, point 2): whether
    * `plan_entitlements` still carries an explicit `bool_value = true` row for
@@ -477,12 +666,16 @@ export interface DlsGateProbeResult {
  *   3. the four free-scoring cells, against the org while it is still on the
  *      free plan — the state every claim about "scoring is free" is about
  *   4. read `plan_entitlements` for `cricket.dls` (required), `officials
- *      .auto` and `stats.player` (desired). This is where BOTH derivations
- *      come from: the plan choice, and which keys are still paywalled.
+ *      .auto`, `stats.player`, `news.auto` and `scoring.device_links`
+ *      (desired). This is where BOTH derivations come from: the plan choice,
+ *      and which keys are still paywalled (`provocableFeatureKeys`).
  *   5. the re-pointed paywall cell — STILL on the free plan, because that is
  *      the only state in which a paywall can refuse anything
- *   6. choose + provision the plan that grants the most of what was asked
- *   7. replay the empty-payload cell: a paid plan must not change a free
+ *   6. choose the plan that grants the most of what was asked (pure: every
+ *      row it needs is already read)
+ *   7. `proveDeviceLinkGate`: mint a device link (refused — still the free
+ *      plan), provision the chosen plan, mint again (201)
+ *   8. replay the empty-payload cell: a paid plan must not change a free
  *      answer
  */
 export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGateProbeResult> {
@@ -577,6 +770,12 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   // `community` on, and V396 flipped `community` back off, so the deltas alone
   // are three answers to one question.
   const newsRows = await sql.entitlementRows("news.auto");
+  // B07a T11 — `scoring.device_links` joins the SELECTION for the reason
+  // `news.auto` did: a tap suite cannot hand a scorer a device without it
+  // (`createDeviceLink`'s gate, usecases/device-links.ts:128), and a plan
+  // picked for the other four and hoped to include it is F1(a) again. One
+  // read, shared by the plan choice and the device-link paywall derivation.
+  const deviceLinkRows = await sql.entitlementRows(DEVICE_LINKS_FEATURE_KEY);
 
   // THE PROMISE, at the matrix — read, never assumed, and never a constant.
   const dlsFreeOnCommunityPlan = planGrants(dlsRows, FREE_PLAN_KEY);
@@ -591,29 +790,39 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     ["officials.auto", autoRows],
     ["stats.player", statsRows],
     ["news.auto", newsRows],
+    [DEVICE_LINKS_FEATURE_KEY, deviceLinkRows],
   ]);
-  let gatedFeature: ProvocableGatedFeature | undefined;
-  for (const candidate of PROVOCABLE_GATED_FEATURES) {
-    // Reuse a read this function already made; only pay for a fresh one if a
-    // future entry names a key the plan choice does not care about.
-    const rows = rowsByFeature.get(candidate.featureKey) ?? (await sql.entitlementRows(candidate.featureKey));
-    if (paywalledOnFreePlan(rows)) {
-      gatedFeature = candidate;
-      break;
-    }
-  }
+  // Reuse a read this function already made; only pay for a fresh one if a
+  // future entry names a key the plan choice does not care about.
+  const provocable = await provocableFeatureKeys({
+    entitlementRows: async (featureKey) => rowsByFeature.get(featureKey) ?? (await sql.entitlementRows(featureKey)),
+  });
+  // The FIRST provocable key in declaration order, so `officials.auto` stays
+  // the key this cell names while it is sold; the device-link cells below are
+  // separate rather than a replacement.
+  const gatedFeature = PROVOCABLE_GATED_FEATURES.find((candidate) => provocable.includes(candidate.featureKey));
   if (gatedFeature !== undefined) {
     cells.push(
       classifyDlsGateCell(
         "gated_feature_refusal_names_its_key",
         { kind: "payment_refusal", featureKey: gatedFeature.featureKey },
-        await t.raw(base, s, gatedFeature.path({ divisionId: dlsOn.divisionId }), "POST", gatedFeature.body),
+        await t.raw(
+          base,
+          s,
+          gatedFeature.path({ divisionId: dlsOn.divisionId, fixtureId: fixtureShapeRefusal }),
+          "POST",
+          gatedFeature.body,
+        ),
       ),
     );
   }
 
-  // ---- the plan flip ----
-  const candidatePlanKeys = [...new Set([...dlsRows, ...autoRows, ...statsRows, ...newsRows].map((r) => r.plan_key))];
+  // ---- the plan choice ----
+  // Pure over reads already made, so choosing here — before the device-link
+  // refusal below — changes nothing that refusal sees.
+  const candidatePlanKeys = [
+    ...new Set([...dlsRows, ...autoRows, ...statsRows, ...newsRows, ...deviceLinkRows].map((r) => r.plan_key)),
+  ];
   const candidates = await sql.planCandidateInfo(candidatePlanKeys);
   const { plan: provisionedPlan, unsatisfied: unsatisfiedCapabilities } = chooseGrantingPlanForCapabilities(
     [
@@ -621,10 +830,32 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
       { featureKey: "officials.auto", rows: autoRows },
       { featureKey: "stats.player", rows: statsRows },
       { featureKey: "news.auto", rows: newsRows },
+      { featureKey: DEVICE_LINKS_FEATURE_KEY, rows: deviceLinkRows },
     ],
     candidates,
   );
-  await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
+  const officialsAutoGranted = !unsatisfiedCapabilities.includes("officials.auto");
+  const statsPlayerGranted = !unsatisfiedCapabilities.includes("stats.player");
+  const newsAutoGranted = !unsatisfiedCapabilities.includes("news.auto");
+  const deviceLinksGranted = !unsatisfiedCapabilities.includes(DEVICE_LINKS_FEATURE_KEY);
+
+  // ---- the device-link refusal, the plan flip, the mint ----
+  // `proveDeviceLinkGate` owns the order (refuse, flip, mint) and runs the
+  // flip exactly once even when its cells retire. Both mints go to the
+  // empty-payload cell's fixture — see this file's header, "One fixture per
+  // cell", on why that fixture is still mintable.
+  const deviceLinkGate = await proveDeviceLinkGate({
+    base,
+    session: s,
+    transport: t,
+    ids: { divisionId: dlsOn.divisionId, fixtureId: fixtureShapeRefusal },
+    paywalledOnFreePlan: provocable.includes(DEVICE_LINKS_FEATURE_KEY),
+    provision: async () => {
+      await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
+      return { plan: provisionedPlan, grantsDeviceLinks: deviceLinksGranted };
+    },
+  });
+  cells.push(...deviceLinkGate.cells);
 
   // Same fixture, same body, as `revise_no_target_community` above — a 422
   // shape refusal is raised before anything is appended, so `expected_seq: 0`
@@ -634,19 +865,17 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     classifyDlsGateCell("revise_no_target_after_plan", ENGINE_SHAPE_REFUSAL, await send(fixtureShapeRefusal, "cricket.revise", {})),
   );
 
-  const officialsAutoGranted = !unsatisfiedCapabilities.includes("officials.auto");
-  const statsPlayerGranted = !unsatisfiedCapabilities.includes("stats.player");
-  const newsAutoGranted = !unsatisfiedCapabilities.includes("news.auto");
-
   return {
     orgId,
     provisionedPlan,
     officialsAutoGranted,
     statsPlayerGranted,
     newsAutoGranted,
+    deviceLinksGranted,
     unsatisfiedCapabilities,
     dlsFreeOnCommunityPlan,
     gatedFeatureProbed: gatedFeature?.featureKey ?? null,
+    deviceLinkGateProbed: deviceLinkGate.cells.length > 0,
     cells,
   };
 }

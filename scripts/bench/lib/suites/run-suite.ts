@@ -1954,6 +1954,9 @@ export async function runPackSuite(
     // (`usecases/divisions.ts:652-654`), and because drafting is a side effect
     // of FOLDING there is no later moment at which this run could recover.
     let newsAutoGranted = false;
+    // B07a T11 — whether the chosen plan grants `scoring.device_links`, from
+    // the same selection. Task 10's tap branch consumes this.
+    let deviceLinksGranted = false;
     if (input.sql !== undefined) {
       log.info(
         {},
@@ -2012,6 +2015,22 @@ export async function runPackSuite(
       }
       autoAssign = probe.officialsAutoGranted;
       newsAutoGranted = probe.newsAutoGranted;
+      deviceLinksGranted = probe.deviceLinksGranted;
+      // B07a T11 — the two device-link cells ride the generic loop above; what
+      // needs saying here is when they could not run, or could not pass.
+      if (!probe.deviceLinkGateProbed) {
+        warnings.push(
+          `${suiteKey}: scoring.device_links is not paywalled for a "${FREE_PLAN_KEY}" org on this catalog, so the ` +
+            "device_link_refused_before_plan / device_link_minted_after_plan cells were not emitted — there is no " +
+            "device-link paywall on this catalog for the probe to prove",
+        );
+      }
+      if (!deviceLinksGranted) {
+        warnings.push(
+          `${suiteKey}: plan "${probe.provisionedPlan}" does not grant scoring.device_links (deviceLinksGranted false) — ` +
+            "this org cannot mint a device link, so no scorer on this run can be handed one",
+        );
+      }
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
       // the best available candidate, never invents one) — reported here,
@@ -2029,6 +2048,8 @@ export async function runPackSuite(
           provisionedPlan: probe.provisionedPlan,
           officialsAutoGranted: probe.officialsAutoGranted,
           newsAutoGranted: probe.newsAutoGranted,
+          deviceLinksGranted,
+          deviceLinkGateProbed: probe.deviceLinkGateProbed,
           unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
           statsPlayerGranted,
           dlsFreeOnCommunityPlan: probe.dlsFreeOnCommunityPlan,
