@@ -32,10 +32,30 @@ const fireDivisionRevalidate = vi.hoisted(() => vi.fn());
 const fireScoreRevalidate = vi.hoisted(() => vi.fn());
 const publishDivisionUpdate = vi.hoisted(() => vi.fn(async () => {}));
 const withTenant = vi.hoisted(() => vi.fn());
+// The logger, replaced whole (a spy on the pino singleton keeps its call
+// history across tests). Nothing in `src` calls `log.child`.
+const logMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  fatal: vi.fn(),
+  trace: vi.fn(),
+}));
+vi.mock("@/server/logger", () => ({ log: logMock }));
 
+// Set to make every sweep REJECT. The rejection is a fresh `Promise.reject`
+// handed straight to production code, never the spy's own return value: a
+// `vi.fn` attaches handlers to any promise it returns (to record
+// `settledResults`), which marks a rejection HANDLED — a test built on
+// `mockRejectedValue` cannot see an unhandled rejection at all.
+const sweepFailure = vi.hoisted(() => ({ error: null as Error | null }));
 vi.mock("@/lib/cache", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/cache")>()),
-  cacheDelPattern,
+  cacheDelPattern: (pattern: string) => {
+    const recorded = cacheDelPattern(pattern);
+    return sweepFailure.error ? Promise.reject(sweepFailure.error) : recorded;
+  },
 }));
 vi.mock("@/lib/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/db")>()),
@@ -124,5 +144,47 @@ describe("afterScheduleWrite — a schedule write", () => {
     const fromScoring = patterns().filter((p) => p.startsWith("pub:v1:hub:"));
     expect(fromSchedule).toEqual(fromScoring);
     expect(fromSchedule).toEqual([`pub:v1:hub:${COMPETITION}`]);
+  });
+});
+
+// F4 (P1 round 2) — `cacheDelPattern` fails open inside its own try, but its
+// `client()` call sits OUTSIDE it (cache.ts), and ioredis's constructor throws
+// synchronously on a REDIS_URL it cannot parse (`new URL`: "redis://host:99999"
+// is `TypeError: Invalid URL`). Every call would then reject, and a voided
+// sweep with no handler is an unhandled rejection on every schedule write.
+describe("afterScheduleWrite — a Redis sweep that REJECTS", () => {
+  it("is logged per sweep and never left as an unhandled rejection", async () => {
+    const failure = new Error("simulated Redis failure");
+    sweepFailure.error = failure;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+      // Node reports an unhandled rejection once the microtask queue drains.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
+      for (const pattern of [`pub:v1:div:${DIVISION}:*`, `pub:v1:hub:${COMPETITION}`]) {
+        expect(logMock.error, pattern).toHaveBeenCalledWith(
+          { err: failure, pattern },
+          "schedule: a public Redis sweep failed (the write stands)",
+        );
+      }
+      // The write's other effects still happened.
+      expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
+      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
+    } finally {
+      sweepFailure.error = null;
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("a sweep that succeeds logs nothing (the quiet twin)", async () => {
+    afterScheduleWrite(DIVISION, COMPETITION, "schedule");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(patterns()).toEqual([`pub:v1:div:${DIVISION}:*`, `pub:v1:hub:${COMPETITION}`]);
+    expect(logMock.error).not.toHaveBeenCalled();
   });
 });

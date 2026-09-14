@@ -138,7 +138,6 @@ export async function scoreEvent(
   // only when the competition is discoverable (doc 15 §2, checked inside).
   const movesDiscovery =
     result.outcome !== null || input.type === "core.void" || input.type === "core.start";
-  void publishFixtureUpdate(fixtureId, "event");
   // P1 — AWAITED, never `void`. Next applies a route handler's revalidation
   // tags in ONE flush the moment the handler resolves and silently drops any
   // tag fired later. The voided call fired its tag after a DB lookup, so after
@@ -147,16 +146,25 @@ export async function scoreEvent(
   // (`__tests__/score-revalidate-in-request.test.ts`). The Redis sweeps inside
   // stay non-blocking. A failure is logged, not thrown: the score has already
   // committed, and this must not report it as failed.
-  const scope = await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery).catch(
-    (err: unknown) => {
-      log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
-      return null;
-    },
-  );
-  // Division-wide state_changed so multi-fixture listeners (slideshow) get
-  // one channel per division instead of one per fixture — addressed from the
-  // lookup the invalidation just made rather than a second query.
-  if (scope) void publishDivisionUpdate(scope.divisionId, "score");
+  //
+  // P1 round 2 (F2) — the realtime pushes go out only once every public Redis
+  // sweep has SETTLED, never before, and without holding this response. Both
+  // channels have public receivers that refetch a Redis-cached document on a
+  // push: `fixture:{id}` → the match centre and overlay (`pub:v1:fixture:{id}`),
+  // `division:{id}` → the hub (`pub:v1:hub:{competitionId}`). A refetch that
+  // beat the sweep read the old copy and stayed on it: a subscribed page does
+  // not poll. The division push is addressed from the invalidation's own
+  // lookup rather than a second query.
+  await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
+    void publishFixtureUpdate(fixtureId, "event");
+    if (scope) void publishDivisionUpdate(scope.divisionId, "score");
+  }).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
+    // It failed before any sweep started (the lookup, or the tag call), so
+    // there is nothing to wait for. The scorer's other devices read the
+    // ledger, not Redis, and still need their ping.
+    void publishFixtureUpdate(fixtureId, "event");
+  });
   return out;
 }
 
@@ -530,14 +538,18 @@ export async function finalizeFixture(
 //
 // P1 — every caller AWAITS this inside its request (`scoreEvent`,
 // `importEvents`): the tag call below reaches Next's per-request flush only if
-// it happens before the route handler resolves. Resolves to the fixture's
-// division and competition (null when the fixture no longer exists), so
-// `scoreEvent` addresses its realtime push without a second lookup.
+// it happens before the route handler resolves.
 export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
-): Promise<{ divisionId: string; competitionId: string } | null> {
+  /** Runs once, after EVERY public Redis sweep below has settled (resolved or
+   *  rejected), and is never awaited by this function — so it never holds the
+   *  caller's response. Handed the fixture's division and competition, or null
+   *  when the fixture no longer exists. `scoreEvent` sends its realtime pushes
+   *  here (P1 round 2, F2). Must not throw. */
+  afterSweeps?: (scope: { divisionId: string; competitionId: string } | null) => void,
+): Promise<void> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
       { division_id: string; competition_id: string; discoverable: boolean }[]
@@ -558,21 +570,34 @@ export async function invalidatePublicCache(
   // whole keyspace (cache.ts), which is what fire-and-forget always protected.
   // A sweep that finished before the tag would let a hub read in between
   // rebuild from the still-cached division and put the stale document back.
-  void Promise.all([
-    cacheDelPattern(`pub:v1:fixture:${fixtureId}`),
+  const patterns = [
+    `pub:v1:fixture:${fixtureId}`,
     ...(row
       ? [
-          cacheDelPattern(`pub:v1:div:${row.division_id}:*`),
+          `pub:v1:div:${row.division_id}:*`,
           // W2 — the competition HUB document (usecases/public.ts's
           // `pub:v1:hub:{competitionId}`) carries every division's live scores,
           // so a write to any fixture in the competition makes it stale.
           // Competition-keyed, not division-keyed: one document spans the whole
           // competition.
-          cacheDelPattern(`pub:v1:hub:${row.competition_id}`),
+          `pub:v1:hub:${row.competition_id}`,
         ]
       : []),
-  ]);
-  if (!row) return null;
+  ];
+  // F4 — each sweep settles on its own and never rejects. `cacheDelPattern`
+  // fails open inside its try, but its `client()` call sits outside it
+  // (cache.ts), and ioredis's constructor throws synchronously on a REDIS_URL
+  // it cannot parse — every call would then reject, unhandled.
+  const sweeps = patterns.map((pattern) =>
+    cacheDelPattern(pattern).catch((err: unknown) => {
+      log.error({ err, fixture: fixtureId, pattern }, "scoring: a public Redis sweep failed (the write stands)");
+    }),
+  );
+  // F2 — none of the sweeps can reject, so this settles only once the LAST of
+  // them has, whichever way each went.
+  const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
+  void Promise.all(sweeps).finally(() => afterSweeps?.(scope));
+  if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
   // fires only for discoverable competitions.
   if (movesDiscovery && row.discoverable) {
@@ -581,5 +606,4 @@ export async function invalidatePublicCache(
       fireDiscoveryRevalidate();
     });
   }
-  return { divisionId: row.division_id, competitionId: row.competition_id };
 }

@@ -100,14 +100,24 @@ export function afterScheduleWrite(
   reason: "schedule" | "publish" | "start",
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
-  void cacheDelPattern(`pub:v1:div:${divisionId}:*`);
+  sweepPublicKey(`pub:v1:div:${divisionId}:*`);
   // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
   // every fixture's kick-off time and venue, so a RESCHEDULE makes it stale
   // exactly as a score does. Scoring's own `invalidatePublicCache` drops the
   // same key; a hub whose matches go stale on a reschedule is precisely the
   // defect that costs a spectator the trip.
-  void cacheDelPattern(`pub:v1:hub:${competitionId}`);
+  sweepPublicKey(`pub:v1:hub:${competitionId}`);
   void publishDivisionUpdate(divisionId, reason);
+}
+
+/** A public Redis sweep, not awaited, that can never reject unhandled (P1
+ *  round 2, F4). `cacheDelPattern` fails open inside its own try, but its
+ *  `client()` call sits outside it (cache.ts), and ioredis's constructor throws
+ *  synchronously on a REDIS_URL it cannot parse — every call would reject. */
+function sweepPublicKey(pattern: string): void {
+  void cacheDelPattern(pattern).catch((err: unknown) => {
+    log.error({ err, pattern }, "schedule: a public Redis sweep failed (the write stands)");
+  });
 }
 
 // A fixture the auto pass / board may still move; everything else on the

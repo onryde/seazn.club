@@ -447,15 +447,23 @@ async function runStream(
         },
       });
     }
-    // Public caches — last, AWAITED, inside this guard. Not optional
-    // decoration: §2.1's read path IS the public cached one, so without this
-    // the career/standings pages this feature exists to fill keep serving
-    // pre-import content until a TTL happens to lapse. Awaited for the reason
-    // `scoreEvent` awaits it (P1, scoring.ts): Next applies a route handler's
-    // revalidation tags in one flush when the handler resolves and silently
-    // drops any fired later. Inside the try, a failed lookup is logged like
-    // every other post-commit side effect instead of rejecting a stream whose
-    // events already landed.
+  } catch (err) {
+    log.error(
+      { err, fixture: fixtureId },
+      "event-import: a post-commit side effect failed (the import itself stands)",
+    );
+  } finally {
+    // Public caches — ALWAYS, last, AWAITED. Not optional decoration: §2.1's
+    // read path IS the public cached one, so without this the career/standings
+    // pages this feature exists to fill keep serving pre-import content until a
+    // TTL happens to lapse. Awaited for the reason `scoreEvent` awaits it (P1,
+    // scoring.ts): Next applies a route handler's revalidation tags in one
+    // flush when the handler resolves and silently drops any fired later.
+    //
+    // In `finally`, not last inside the try (P1 round 2, F3): a hook above that
+    // throws must not skip it — the events have landed either way. Its own
+    // `.catch`, because a failed lookup must not reject a stream whose events
+    // already landed, and must not be reported as a hook failure.
     //
     // `movesDiscovery` is unconditionally true here, where `scoreEvent` has to
     // compute it: the dry run above already proved this stream DECIDES, and an
@@ -463,12 +471,12 @@ async function runStream(
     // it from. `publishFixtureUpdate`/`publishDivisionUpdate` are deliberately
     // NOT fired (out of scope): realtime addresses a pad watching a live
     // fixture, which is not what a backfill of finished results is.
-    await invalidatePublicCache(auth.orgId, fixtureId, true);
-  } catch (err) {
-    log.error(
-      { err, fixture: fixtureId },
-      "event-import: a post-commit side effect failed (the import itself stands)",
-    );
+    await invalidatePublicCache(auth.orgId, fixtureId, true).catch((err: unknown) => {
+      log.error(
+        { err, fixture: fixtureId },
+        "event-import: public cache invalidation failed (the import itself stands)",
+      );
+    });
   }
 
   return {

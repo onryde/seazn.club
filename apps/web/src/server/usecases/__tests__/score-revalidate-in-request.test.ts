@@ -35,11 +35,25 @@ vi.hoisted(() => {
 const probe = vi.hoisted(() => ({
   store: null as { pendingRevalidatedTags?: Array<{ tag: string }> } | null,
   sweeps: [] as Array<{ pattern: string; pendingAtCall: string[] }>,
-  gates: [] as Array<() => void>,
+  gates: [] as Array<{ pattern: string; resolve: () => void; reject: (err: unknown) => void }>,
+  fixturePushes: [] as Array<{ fixtureId: string; reason: string }>,
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
   failScoreTag: false,
+  failOnDecided: null as Error | null,
   slowImportLookupMs: 0,
 }));
+
+// The logger, replaced whole (a spy on the pino singleton keeps its call
+// history across tests). Nothing in `src` calls `log.child`.
+const logMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  fatal: vi.fn(),
+  trace: vi.fn(),
+}));
+vi.mock("@/server/logger", () => ({ log: logMock }));
 
 // The public Redis sweeps are recorded, with the tags already pending in the
 // request at the moment each sweep STARTED, and held open until the test
@@ -55,7 +69,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
         pattern,
         pendingAtCall: (probe.store?.pendingRevalidatedTags ?? []).map((t) => t.tag),
       });
-      return new Promise<void>((resolve) => probe.gates.push(resolve));
+      return new Promise<void>((resolve, reject) => probe.gates.push({ pattern, resolve, reject }));
     },
   };
 });
@@ -63,6 +77,13 @@ vi.mock("@/lib/realtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/realtime")>();
   return {
     ...actual,
+    publishFixtureUpdate: (
+      fixtureId: string,
+      reason: Parameters<typeof actual.publishFixtureUpdate>[1],
+    ) => {
+      probe.fixturePushes.push({ fixtureId, reason });
+      return actual.publishFixtureUpdate(fixtureId, reason);
+    },
     publishDivisionUpdate: (
       divisionId: string,
       reason: Parameters<typeof actual.publishDivisionUpdate>[1],
@@ -97,6 +118,11 @@ vi.mock("../scoring", async (importOriginal) => {
         await new Promise((resolve) => setTimeout(resolve, probe.slowImportLookupMs));
       }
       return actual.invalidatePublicCache(...args);
+    },
+    // The importer's FIRST post-commit hook, made to throw on request (F3).
+    onDecided: async (...args: Parameters<typeof actual.onDecided>) => {
+      if (probe.failOnDecided) throw probe.failOnDecided;
+      return actual.onDecided(...args);
     },
   };
 });
@@ -150,7 +176,11 @@ async function inRequest<T>(handler: () => Promise<T>): Promise<{ result: T; cal
   } as unknown as WorkStore;
   const requestStore = { type: "request", phase: "action" } as unknown as RequestStore;
   probe.store = workStore;
+  // Sweeps a PREVIOUS write left held (the rig's own `startDivision` runs
+  // `afterScheduleWrite`) are not this request's: let them finish.
+  for (const gate of probe.gates.splice(0)) gate.resolve();
   probe.sweeps.length = 0;
+  probe.fixturePushes.length = 0;
   probe.divisionPushes.length = 0;
   return workAsyncStorage.run(workStore, async () => {
     const result = await workUnitAsyncStorage.run(requestStore, handler);
@@ -189,11 +219,35 @@ async function competitionOf(divisionId: string): Promise<string> {
   return row!.competition_id;
 }
 
+/** Settle the held public sweeps — all of them, or only those whose pattern is
+ *  named — and hand back control only after a macrotask, so every microtask
+ *  the settlement queues (a push chained on it, Node's unhandled-rejection
+ *  report) has already run. */
+async function settleSweeps(
+  outcome: { resolve: true } | { reject: Error },
+  only?: string,
+): Promise<void> {
+  const settling = probe.gates.filter((g) => only === undefined || g.pattern === only);
+  probe.gates = probe.gates.filter((g) => !settling.includes(g));
+  for (const gate of settling) {
+    if ("reject" in outcome) gate.reject(outcome.reject);
+    else gate.resolve();
+  }
+  await sleep(20);
+}
+
+const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
+
+/** Every `log.error` message so far — for the quiet-twin checks. */
+const errorMessages = () => logMock.error.mock.calls.map((call) => call[1]);
+
 afterEach(() => {
-  for (const release of probe.gates.splice(0)) release();
+  for (const gate of probe.gates.splice(0)) gate.resolve();
   probe.store = null;
   probe.failScoreTag = false;
+  probe.failOnDecided = null;
   probe.slowImportLookupMs = 0;
+  for (const fn of Object.values(logMock)) fn.mockClear();
 });
 
 afterAll(async () => {
@@ -302,13 +356,68 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
         expect(sweep.pendingAtCall, `${write.type}: ${sweep.pattern}`).toContain(div);
       }
 
-      // The division realtime push is addressed from the invalidation's own
-      // lookup (one query where there were two) and has gone out, exactly
-      // once, by the time scoreEvent resolves.
-      expect(
-        probe.divisionPushes.filter((p) => p.reason === "score"),
-        write.type,
-      ).toEqual([{ divisionId, reason: "score" }]);
+      // F2 (P1 round 2) — scoreEvent has resolved while every sweep is still
+      // held open (`unblocked` above), and NO realtime push has gone out: a
+      // spectator page refetches on a push, and a refetch that beats the sweep
+      // reads the old Redis copy and stays on it (polling is off while
+      // subscribed). Both channels have public receivers: `fixture:{id}` feeds
+      // the match centre (`pub:v1:fixture:{id}`), `division:{id}` the hub
+      // (`pub:v1:hub:{competitionId}`).
+      expect(probe.gates.length, `${write.type}: sweeps still held`).toBe(3);
+      expect(probe.fixturePushes, `${write.type}: fixture push before the sweeps settled`).toEqual([]);
+      expect(probe.divisionPushes, `${write.type}: division push before the sweeps settled`).toEqual([]);
+
+      await settleSweeps({ resolve: true });
+      // Once they have: each push exactly once, the division one addressed
+      // from the invalidation's own lookup (one query where there were two).
+      expect(probe.fixturePushes, write.type).toEqual([{ fixtureId, reason: "event" }]);
+      expect(probe.divisionPushes, write.type).toEqual([{ divisionId, reason: "score" }]);
+      expect(errorMessages(), write.type).not.toContain(SWEEP_FAILED);
+    }
+  });
+
+  it("a public Redis sweep that REJECTS: the pushes wait for EVERY sweep, then go out; the failure is logged and nothing is left unhandled", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const competitionId = await competitionOf(divisionId);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await unblocked(
+        inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
+      );
+      expect(probe.gates.map((g) => g.pattern).sort()).toEqual(
+        [`pub:v1:div:${divisionId}:*`, `pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`].sort(),
+      );
+
+      // One sweep fails while the other two are still scanning. A push now
+      // would send a hub spectator to the hub key that is not gone yet.
+      const failure = new Error("simulated Redis failure");
+      await settleSweeps({ reject: failure }, `pub:v1:fixture:${fixtureId}`);
+      // F4 — checked first, the moment the sweep has failed: handled and logged.
+      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
+      expect(logMock.error).toHaveBeenCalledWith(
+        { err: failure, fixture: fixtureId, pattern: `pub:v1:fixture:${fixtureId}` },
+        SWEEP_FAILED,
+      );
+      expect(probe.fixturePushes, "fixture push before every sweep settled").toEqual([]);
+      expect(probe.divisionPushes, "division push before every sweep settled").toEqual([]);
+
+      await settleSweeps({ resolve: true });
+      // A failed sweep does not swallow the pushes.
+      expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
+      expect(probe.divisionPushes).toEqual([{ divisionId, reason: "score" }]);
+      expect(logMock.error).toHaveBeenCalledWith(
+        { err: failure, fixture: fixtureId, pattern: `pub:v1:fixture:${fixtureId}` },
+        SWEEP_FAILED,
+      );
+      expect(errorMessages().filter((m) => m === SWEEP_FAILED)).toHaveLength(1);
+      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
     }
   });
 
@@ -352,5 +461,77 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
     expect(n).toBe(1);
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: new Error("simulated invalidation failure"), fixture: fixtureId },
+      "scoring: public cache invalidation failed (the score stands)",
+    );
+    // It failed before any sweep started, so there is nothing to wait for:
+    // the scorer's other devices (which read the ledger, not Redis) still get
+    // their ping at once. No division push — the lookup is what addresses it.
+    expect(probe.gates).toEqual([]);
+    expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
+    expect(probe.divisionPushes).toEqual([]);
+  });
+
+  // F3 (P1 round 2). The invalidation used to run after the post-commit try
+  // unconditionally; round 1 moved it last INSIDE the try, so a throwing hook
+  // skipped it and the public pages stayed on pre-import content for their TTL.
+  it("importEvents: a post-commit hook that THROWS still lands the tags inside the request, and its error still reaches the importer's own catch", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    const competitionId = await competitionOf(divisionId);
+    const div = divisionTag(divisionId);
+    const comp = competitionTag(competitionId);
+    const hookFailure = new Error("simulated onDecided failure");
+
+    const cachedAt = await cachedJustBefore();
+    probe.slowImportLookupMs = 250;
+    probe.failOnDecided = hookFailure;
+    const { result, calls } = await unblocked(
+      inRequest(() =>
+        importEvents(auth, divisionId, {
+          import_id: "imp-p1-hook-throws",
+          streams: [{ fixture: { id: fixtureId }, events: decidingStream() }],
+        }),
+      ),
+    );
+
+    // The hook's error takes exactly the path it took before: logged by the
+    // post-commit catch, and the committed stream still reports `imported`.
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: hookFailure, fixture: fixtureId },
+      "event-import: a post-commit side effect failed (the import itself stands)",
+    );
+    expect(result.results[0]!.status).toBe("imported");
+
+    // And the invalidation ran anyway, in time for the flush.
+    expect(calls).toContainEqual({ tags: [div], durations: { expire: 0 } });
+    expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
+    expect(areTagsStale([comp], cachedAt)).toBe(true);
+    expect(probe.sweeps.map((s) => s.pattern)).toContain(`pub:v1:hub:${competitionId}`);
+  });
+
+  it("importEvents: a failed invalidation is logged by its OWN catch and the imported stream still reports imported", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
+    probe.failScoreTag = true;
+
+    const { result } = await unblocked(
+      inRequest(() =>
+        importEvents(auth, divisionId, {
+          import_id: "imp-p1-invalidation-throws",
+          streams: [{ fixture: { id: fixtureId }, events: decidingStream() }],
+        }),
+      ),
+    );
+    expect(result.results[0]!.status).toBe("imported");
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: new Error("simulated invalidation failure"), fixture: fixtureId },
+      "event-import: public cache invalidation failed (the import itself stands)",
+    );
+    // The hooks did not fail, so the post-commit catch has nothing to say.
+    expect(errorMessages()).not.toContain(
+      "event-import: a post-commit side effect failed (the import itself stands)",
+    );
   });
 });
