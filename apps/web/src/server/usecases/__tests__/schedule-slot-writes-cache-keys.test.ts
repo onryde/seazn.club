@@ -835,6 +835,36 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
     await expectDelThenPushes(rig.divisionId, rig.competitionId, []);
   }, 120_000);
 
+  // R10h (review-r10g m1): the reason an already-complete stage still
+  // publishes. `completeStageIfReady` returns `completed: true, events: []`
+  // for a stage that is already complete and writes nothing itself — but the
+  // call around it is not a no-op: the draw the freeze refused happens NOW.
+  // A "publish only when this call wrote something" guard would look safe
+  // against every other case here and leave this hub stale.
+  it("re-completing an already-complete stage after the freeze is lifted draws the knockout, and the hub key alone still goes in one DEL after commit (R10h)", async () => {
+    const rig = await groupsToKnockoutRig();
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await setDivisionLocks(rig.auth, rig.divisionId, { schedule_locked: true });
+    const frozen = await completeByRoute(rig.auth, rig.groupId);
+    expect(frozen.status, JSON.stringify(frozen.body.error)).toBe(200);
+    expect(frozen.body.data?.next_stage_fixtures, "the freeze refused the draw").toBeUndefined();
+    expect(await stageStatus(rig.groupId), "the stage is already complete before the second call").toBe("complete");
+    await setDivisionLocks(rig.auth, rig.divisionId, { schedule_locked: false });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const again = await completeByRoute(rig.auth, rig.groupId);
+    expect(again.status, JSON.stringify(again.body.error)).toBe(200);
+    expect(again.body.data?.completed, "an already-complete stage reports completed").toBe(true);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(created.length, "the second call drew the knockout the freeze had refused").toBeGreaterThan(0);
+    expect(again.body.data?.next_stage_fixtures).toBe(created.length);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
+  }, 120_000);
+
   // R10g (review-r10f m2) deliberately REVERSES R10f's "the last stage sends
   // nothing": the division's status changes on the hub.
   it("POST /stages/{id}/complete of the last stage: the division completes, nothing is drawn, and the hub key alone goes in one DEL after commit (R10g)", async () => {
