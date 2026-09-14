@@ -21,6 +21,7 @@ import {
   proveDeviceLinkGate,
   provocableFeatureKeys,
   runDlsGateProbe,
+  type DeviceLinkGateInput,
   type ProbeTransport,
 } from "../dls-gate.ts";
 
@@ -59,6 +60,9 @@ const CANDIDATES: Readonly<Record<string, { is_public: boolean; privilege: numbe
   // Synthetic, never claimed to be a real plan (plan.test.ts's `zzz_*`
   // convention): a PUBLIC plan broader and dearer than `pro`.
   zzz_scoring_plus: { is_public: true, privilege: 20 },
+  // Synthetic too: a PUBLIC plan that sells device links but fewer of the
+  // other capabilities than `pro` — what a count-based chooser trades away.
+  zzz_links_plus: { is_public: true, privilege: 30 },
 };
 
 interface Billing {
@@ -120,12 +124,25 @@ function refusal(featureKey: string): RawResult {
   };
 }
 
+interface ServerOptions {
+  /** Answer every revoke with this instead of the route's own 200/404. */
+  readonly revokeAnswer?: RawResult;
+}
+
+/** The links the fake minted and the ones a DELETE revoked, by id. */
+interface LinkLedger {
+  readonly minted: string[];
+  readonly revoked: string[];
+}
+
 function fakeServer(
   catalog: Catalog,
   billing: Billing,
   seededFixtures: readonly string[] = [],
-): { transport: ProbeTransport; calls: HttpCall[] } {
+  serverOpts: ServerOptions = {},
+): { transport: ProbeTransport; calls: HttpCall[]; links: LinkLedger } {
   const calls: HttpCall[] = [];
+  const links: LinkLedger = { minted: [], revoked: [] };
   const fixtures = new Set<string>(seededFixtures);
   const legsByStage = new Map<string, number>();
   let n = 0;
@@ -178,9 +195,26 @@ function fakeServer(
         }
         if (!grants(catalog, DEVICE_LINKS, billing.plan)) return refusal(DEVICE_LINKS);
         n += 1;
+        links.minted.push(`dl-row-${n}`);
         return {
           status: 201,
           json: { ok: true, data: { id: `dl-row-${n}`, fixture_id: mint[1], label: null, secret: `dl_secret${n}` } } as never,
+        };
+      }
+
+      // The revoke route (api/v1/fixtures/[id]/device-links/[linkId]/route.ts):
+      // DELETE, `revokeDeviceLink` 404s a link that is not on that fixture and
+      // returns the row, which v1 wraps as a 200 `{ ok: true, data }`.
+      const revoke = /^\/api\/v1\/fixtures\/([^/]+)\/device-links\/([^/]+)$/.exec(path);
+      if (revoke && method === "DELETE") {
+        if (serverOpts.revokeAnswer !== undefined) return serverOpts.revokeAnswer;
+        if (!links.minted.includes(revoke[2]!)) {
+          return { status: 404, json: { ok: false, error: { code: "NOT_FOUND", message: "device link not found" } } as never };
+        }
+        links.revoked.push(revoke[2]!);
+        return {
+          status: 200,
+          json: { ok: true, data: { id: revoke[2], fixture_id: revoke[1], revoked_at: "2026-09-14T12:00:00Z" } } as never,
         };
       }
 
@@ -204,27 +238,53 @@ function fakeServer(
       throw new Error(`fake server: unhandled raw ${method} ${path}`);
     },
   };
-  return { transport, calls };
+  return { transport, calls, links };
 }
 
 /** The brief's `fakeTransportRefusingThenAllowing()`: the live catalog, one
  *  known fixture, and an org on the free plan — so the mint route refuses
  *  until something moves `billing.plan`. */
-function fakeTransportRefusingThenAllowing(catalog: Catalog = LIVE_CATALOG) {
+function fakeTransportRefusingThenAllowing(catalog: Catalog = LIVE_CATALOG, serverOpts: ServerOptions = {}) {
   const billing: Billing = { plan: "community" };
   const fixtureId = "fx-seeded";
-  const { transport, calls } = fakeServer(catalog, billing, [fixtureId]);
-  return { transport, calls, billing, fixtureId };
+  const { transport, calls, links } = fakeServer(catalog, billing, [fixtureId], serverOpts);
+  return { transport, calls, links, billing, fixtureId };
 }
 
+/** The mint POSTs only — a revoke's path carries the link id after `/device-links`. */
 function deviceLinkCalls(calls: readonly HttpCall[]): HttpCall[] {
   return calls.filter((c) => /\/device-links$/.test(c.path));
+}
+
+function revokeCalls(calls: readonly HttpCall[]): HttpCall[] {
+  return calls.filter((c) => c.method === "DELETE" && /\/device-links\/[^/]+$/.test(c.path));
+}
+
+/** Answer the i-th mint POST with `answers[i]` when one is given; every other
+ *  call, and every mint with no scripted answer, goes to `inner`. */
+function scriptMints(inner: ProbeTransport, answers: readonly (RawResult | undefined)[]): ProbeTransport {
+  let mints = 0;
+  return {
+    ...inner,
+    raw: async (base, s, path, method, body) => {
+      if (method === "POST" && /\/device-links$/.test(path)) {
+        const answer = answers[mints];
+        mints += 1;
+        if (answer !== undefined) return answer;
+      }
+      return inner.raw(base, s, path, method, body);
+    },
+  };
+}
+
+function v1Error(status: number, code: string, extra: Record<string, unknown> = {}): RawResult {
+  return { status, json: { ok: false, error: { code, message: code.toLowerCase(), ...extra } } as never };
 }
 
 async function probe(catalog: Catalog) {
   const billing: Billing = { plan: "community" };
   const { sql, calls: sqlCalls } = fakeSql(catalog, billing);
-  const { transport, calls: httpCalls } = fakeServer(catalog, billing);
+  const { transport, calls: httpCalls, links } = fakeServer(catalog, billing);
   const result = await runDlsGateProbe({
     base: BASE,
     email: "delivered+bench-t11@resend.dev",
@@ -232,7 +292,33 @@ async function probe(catalog: Catalog) {
     sql,
     transport,
   });
-  return { result, billing, sql, sqlCalls, httpCalls };
+  return { result, billing, sql, sqlCalls, httpCalls, links };
+}
+
+/** `proveDeviceLinkGate`'s input on the seeded fixture, in the live shape unless
+ *  told otherwise: paywalled on the free plan, then `pro` provisioned (moving
+ *  `billing`) and granting the key. */
+function gateInput(
+  transport: ProbeTransport,
+  billing: Billing,
+  fixtureId: string,
+  over: Partial<Pick<DeviceLinkGateInput, "onFreePlan" | "publicPlansSelling">> & {
+    readonly onProvision?: () => void;
+  } = {},
+): DeviceLinkGateInput {
+  return {
+    base: BASE,
+    session: newSession(),
+    transport,
+    ids: { divisionId: "div-seeded", fixtureId },
+    onFreePlan: over.onFreePlan ?? "paywalled",
+    publicPlansSelling: over.publicPlansSelling ?? ["pro"],
+    provision: async () => {
+      over.onProvision?.();
+      billing.plan = "pro";
+      return { plan: "pro", grantsDeviceLinks: true };
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +361,8 @@ describe("proveDeviceLinkGate", () => {
       session: newSession(),
       transport,
       ids: { divisionId: "div-seeded", fixtureId },
-      paywalledOnFreePlan: true,
+      onFreePlan: "paywalled",
+      publicPlansSelling: ["pro"],
       provision: async () => {
         flips += 1;
         billing.plan = "pro";
@@ -305,7 +392,7 @@ describe("proveDeviceLinkGate", () => {
     expect(flips).toBe(1);
   });
 
-  it("a plan that does not sell device links: the mint is never sent, and the cell FAILS rather than passing on a skipped mint", async () => {
+  it("a plan that does not sell device links, and NO public plan does: the mint is never sent, and the cell FAILS rather than passing on a skipped mint", async () => {
     const catalog: Catalog = {
       ...LIVE_CATALOG,
       [DEVICE_LINKS]: [
@@ -320,7 +407,9 @@ describe("proveDeviceLinkGate", () => {
       session: newSession(),
       transport,
       ids: { divisionId: "div-seeded", fixtureId },
-      paywalledOnFreePlan: true,
+      onFreePlan: "paywalled",
+      // `enterprise` sells it, but is not public: no customer can buy it.
+      publicPlansSelling: [],
       provision: async () => {
         billing.plan = "pro";
         return { plan: "pro", grantsDeviceLinks: false };
@@ -337,9 +426,45 @@ describe("proveDeviceLinkGate", () => {
     expect(minted!.detail).toContain(DEVICE_LINKS);
     // Only the refusal went out.
     expect(deviceLinkCalls(calls)).toHaveLength(1);
+    // The discriminating fact (R55 m1): nobody sells it publicly, so this is
+    // a red and not a warning.
+    expect(result.mintSkipped).toEqual({ plan: "pro", publicPlansSelling: [] });
+    expect(result.warnings).toEqual([]);
   });
 
-  it("not paywalled on the free plan: nothing is sent, no cell is emitted, and the plan is still provisioned exactly once", async () => {
+  it("a plan that does not sell device links, but a PUBLIC plan does: the chooser traded them away — no minted cell, no red, and a warning naming the plan that sells them", async () => {
+    const catalog: Catalog = {
+      ...LIVE_CATALOG,
+      [DEVICE_LINKS]: [
+        { plan_key: "community", bool_value: false },
+        { plan_key: "pro", bool_value: false },
+        { plan_key: "zzz_links_plus", bool_value: true },
+      ],
+    };
+    const { transport, calls, billing, fixtureId } = fakeTransportRefusingThenAllowing(catalog);
+
+    const result = await proveDeviceLinkGate({
+      base: BASE,
+      session: newSession(),
+      transport,
+      ids: { divisionId: "div-seeded", fixtureId },
+      onFreePlan: "paywalled",
+      publicPlansSelling: ["zzz_links_plus"],
+      provision: async () => {
+        billing.plan = "pro";
+        return { plan: "pro", grantsDeviceLinks: false };
+      },
+    });
+
+    expect(result.mintSkipped).toEqual({ plan: "pro", publicPlansSelling: ["zzz_links_plus"] });
+    // The refusal before the flip still stands on its own.
+    expect(result.cells.map((c) => [c.cell, c.ok])).toEqual([["device_link_refused_before_plan", true]]);
+    expect(result.warnings.filter((w) => w.includes('"zzz_links_plus"'))).toHaveLength(1);
+    expect(result.mintedAfterProvision).toBe(false);
+    expect(deviceLinkCalls(calls)).toHaveLength(1);
+  });
+
+  it("unsold (no plan grants it, not even the free one): nothing is sent, no cell is emitted, and the plan is still provisioned exactly once", async () => {
     const { transport, calls, billing, fixtureId } = fakeTransportRefusingThenAllowing();
     let flips = 0;
 
@@ -348,7 +473,8 @@ describe("proveDeviceLinkGate", () => {
       session: newSession(),
       transport,
       ids: { divisionId: "div-seeded", fixtureId },
-      paywalledOnFreePlan: false,
+      onFreePlan: "unsold",
+      publicPlansSelling: [],
       provision: async () => {
         flips += 1;
         billing.plan = "pro";
@@ -361,6 +487,155 @@ describe("proveDeviceLinkGate", () => {
     expect(result.refusedStatus).toBeNull();
     expect(result.mintedAfterProvision).toBe(false);
     expect(deviceLinkCalls(calls)).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The refusal cell can FAIL — every pre-flip answer that is not the paywall
+// ---------------------------------------------------------------------------
+
+describe("proveDeviceLinkGate — the refusal cell FAILS on anything but a 402 naming scoring.device_links", () => {
+  it("a 404: the probe's fixture does not exist, so the route refused before the gate was ever reached", async () => {
+    const billing: Billing = { plan: "community" };
+    // Nothing seeded: the fake's own route order 404s ahead of its gate.
+    const { transport, calls } = fakeServer(LIVE_CATALOG, billing, []);
+
+    const result = await proveDeviceLinkGate(gateInput(transport, billing, "fx-never-seeded"));
+
+    const refused = result.cells[0]!;
+    expect(refused.cell).toBe("device_link_refused_before_plan");
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toContain("status 404");
+    expect(result.refusedStatus).toBe(404);
+    // It really was SENT, on the free plan — the 404 is an answer, not a skip.
+    expect(deviceLinkCalls(calls)[0]!.planAtCall).toBe("community");
+  });
+
+  const WRONG_REFUSALS: readonly { readonly name: string; readonly answer: RawResult }[] = [
+    { name: "a 402 naming a DIFFERENT feature key", answer: refusal("officials.auto") },
+    { name: "a 403 (a session that is not an editor)", answer: v1Error(403, "FORBIDDEN") },
+    { name: "a 429 (the mint route's rate limit, 10 a minute per IP)", answer: v1Error(429, "RATE_LIMITED") },
+  ];
+
+  it.each(WRONG_REFUSALS)("$name", async ({ answer }) => {
+    const { transport, billing, fixtureId } = fakeTransportRefusingThenAllowing();
+
+    const result = await proveDeviceLinkGate(gateInput(scriptMints(transport, [answer]), billing, fixtureId));
+
+    const refused = result.cells[0]!;
+    expect(refused.cell).toBe("device_link_refused_before_plan");
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toContain(`status ${answer.status}`);
+    expect(result.refusedStatus).toBe(answer.status);
+    // Only the refusal was wrong: the mint after the flip still went through.
+    expect(result.cells[1]).toMatchObject({ cell: "device_link_minted_after_plan", ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Device links FREE on the free plan — the mint is still the product witnessed
+// ---------------------------------------------------------------------------
+
+describe("proveDeviceLinkGate — free on the free plan: the mint is still sent, before the flip, and must succeed", () => {
+  const FREED: Catalog = { ...LIVE_CATALOG, [DEVICE_LINKS]: soldOnPro({ community: true }) };
+
+  it("mints on the free plan BEFORE provisioning, requires a 201 with a secret, and emits no refusal pair", async () => {
+    const { transport, calls, links, billing, fixtureId } = fakeTransportRefusingThenAllowing(FREED);
+    let flips = 0;
+
+    const result = await proveDeviceLinkGate(
+      gateInput(transport, billing, fixtureId, {
+        onFreePlan: "free",
+        publicPlansSelling: ["community", "pro"],
+        onProvision: () => {
+          flips += 1;
+        },
+      }),
+    );
+
+    expect(result.cells.map((c) => [c.cell, c.ok, c.status])).toEqual([["device_link_minted_on_free_plan", true, 201]]);
+    expect(deviceLinkCalls(calls).map((c) => c.planAtCall)).toEqual(["community"]);
+    expect(flips).toBe(1);
+    expect(result.refusedStatus).toBeNull();
+    expect(result.mintedAfterProvision).toBe(false);
+    // Nothing was provisioned before this mint, so its verdict must not say
+    // provisioning cleared anything.
+    expect(result.cells[0]!.detail).not.toContain("provisioning");
+    // And what it minted, it revoked.
+    expect(links.minted).toHaveLength(1);
+    expect(links.revoked).toEqual(links.minted);
+  });
+
+  it("FAILS when the product refuses a mint the catalog says is free", async () => {
+    // The probe is told the key is free; the server still gates it on community.
+    const { transport, calls, billing, fixtureId } = fakeTransportRefusingThenAllowing(LIVE_CATALOG);
+
+    const result = await proveDeviceLinkGate(
+      gateInput(transport, billing, fixtureId, { onFreePlan: "free", publicPlansSelling: ["pro"] }),
+    );
+
+    expect(result.cells).toHaveLength(1);
+    expect(result.cells[0]).toMatchObject({ cell: "device_link_minted_on_free_plan", ok: false, status: 402 });
+    expect(deviceLinkCalls(calls).map((c) => c.planAtCall)).toEqual(["community"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Every link the probe mints, it revokes — and a failed revoke only warns
+// ---------------------------------------------------------------------------
+
+describe("proveDeviceLinkGate — every link it mints, it revokes", () => {
+  it("revokes the link the 201 named, by DELETE on that link's own route, after the mint", async () => {
+    const { transport, calls, links, billing, fixtureId } = fakeTransportRefusingThenAllowing();
+
+    const result = await proveDeviceLinkGate(gateInput(transport, billing, fixtureId));
+
+    expect(result.cells.map((c) => [c.cell, c.ok])).toEqual([
+      ["device_link_refused_before_plan", true],
+      ["device_link_minted_after_plan", true],
+    ]);
+    // One link minted (the refusal created none), and exactly that one revoked.
+    expect(links.minted).toHaveLength(1);
+    expect(links.revoked).toEqual(links.minted);
+    const revokes = revokeCalls(calls);
+    expect(revokes.map((c) => c.path)).toEqual([`/api/v1/fixtures/${fixtureId}/device-links/${links.minted[0]}`]);
+    expect(calls.indexOf(revokes[0]!)).toBeGreaterThan(calls.indexOf(deviceLinkCalls(calls)[1]!));
+    expect(result.warnings).toEqual([]);
+  });
+
+  const FAILED_REVOKES: readonly { readonly name: string; readonly answer: RawResult }[] = [
+    { name: "a 404 (no such link on that fixture)", answer: v1Error(404, "NOT_FOUND") },
+    { name: "a 500", answer: v1Error(500, "INTERNAL") },
+  ];
+
+  it.each(FAILED_REVOKES)("a revoke answering $name is a WARNING — never a failed cell, never the secret", async ({ answer }) => {
+    const { transport, calls, links, billing, fixtureId } = fakeTransportRefusingThenAllowing(LIVE_CATALOG, {
+      revokeAnswer: answer,
+    });
+
+    const result = await proveDeviceLinkGate(gateInput(transport, billing, fixtureId));
+
+    expect(result.cells.map((c) => [c.cell, c.ok])).toEqual([
+      ["device_link_refused_before_plan", true],
+      ["device_link_minted_after_plan", true],
+    ]);
+    expect(revokeCalls(calls)).toHaveLength(1);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain(`status ${answer.status}`);
+    expect(result.warnings[0]).toContain(links.minted[0]!);
+    expect(result.warnings.join("\n")).not.toContain("dl_secret");
+  });
+
+  it("a 201 that names no link id cannot be revoked: a WARNING, no DELETE sent, and never the secret", async () => {
+    const { transport, calls, billing, fixtureId } = fakeTransportRefusingThenAllowing();
+    const noId: RawResult = { status: 201, json: { ok: true, data: { secret: "dl_secret_without_an_id" } } as never };
+
+    const result = await proveDeviceLinkGate(gateInput(scriptMints(transport, [undefined, noId]), billing, fixtureId));
+
+    expect(result.cells[1]).toMatchObject({ cell: "device_link_minted_after_plan", ok: true });
+    expect(revokeCalls(calls)).toHaveLength(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings.join("\n")).not.toContain("dl_secret_without_an_id");
   });
 });
 
@@ -396,7 +671,7 @@ describe("classifyDlsGateCell — minted_with_secret", () => {
 
 describe("runDlsGateProbe — the device-link cells", () => {
   it("live catalog: refused before the plan flip, minted after, on the probe's own shape-refusal fixture", async () => {
-    const { result, billing, sqlCalls, httpCalls } = await probe(LIVE_CATALOG);
+    const { result, billing, sqlCalls, httpCalls, links: ledger } = await probe(LIVE_CATALOG);
 
     expect(result.cells.map((c) => c.cell)).toEqual([
       "revise_no_target_community",
@@ -429,23 +704,34 @@ describe("runDlsGateProbe — the device-link cells", () => {
     // One read of the device-link rows, shared by the paywall derivation and
     // the plan choice.
     expect(sqlCalls.filter((c) => c === `entitlementRows(${DEVICE_LINKS})`)).toHaveLength(1);
+
+    // The link the probe minted does not outlive the probe.
+    expect(ledger.minted).toHaveLength(1);
+    expect(ledger.revoked).toEqual(ledger.minted);
+    expect(result.deviceLinkWarnings).toEqual([]);
   });
 
-  it("a catalog that frees device links on the free plan retires BOTH cells and says so — never a pass", async () => {
+  it("a catalog that frees device links on the free plan retires the paywall pair and says so — and still witnesses the mint, on the free plan", async () => {
     const catalog: Catalog = { ...LIVE_CATALOG, [DEVICE_LINKS]: soldOnPro({ community: true }) };
-    const { result, sql, httpCalls } = await probe(catalog);
+    const { result, sql, httpCalls, links } = await probe(catalog);
 
     expect(await provocableFeatureKeys(sql)).not.toContain(DEVICE_LINKS);
     const names = result.cells.map((c) => c.cell);
     expect(names).not.toContain("device_link_refused_before_plan");
     expect(names).not.toContain("device_link_minted_after_plan");
     expect(result.deviceLinkGateProbed).toBe(false);
-    expect(deviceLinkCalls(httpCalls)).toHaveLength(0);
+
+    // The mint is the product being witnessed either way: one POST, sent on
+    // the free plan, a 201, and revoked.
+    expect(result.cells.find((c) => c.cell === "device_link_minted_on_free_plan")).toMatchObject({ ok: true, status: 201 });
+    expect(deviceLinkCalls(httpCalls).map((c) => c.planAtCall)).toEqual(["community"]);
+    expect(links.minted).toHaveLength(1);
+    expect(links.revoked).toEqual(links.minted);
 
     // Retired, not broken: the chosen plan still grants the key, and every
     // other cell still runs.
     expect(result.deviceLinksGranted).toBe(true);
-    expect(result.cells).toHaveLength(6);
+    expect(result.cells).toHaveLength(7);
     expect(result.cells.every((c) => c.ok)).toBe(true);
   });
 
@@ -468,6 +754,39 @@ describe("runDlsGateProbe — the device-link cells", () => {
     const minted = byName.get("device_link_minted_after_plan");
     expect(minted, "reported, never dropped").toBeDefined();
     expect(minted!.ok).toBe(false);
+    expect(deviceLinkCalls(httpCalls)).toHaveLength(1);
+    // `enterprise` sells it but is not public, so nothing is downgraded to a
+    // warning: no customer can buy device links on this catalog.
+    expect(result.deviceLinkWarnings).toEqual([]);
+  });
+
+  it("a PUBLIC plan sells device links but the chooser traded them for other capabilities: the refusal still stands, no minted cell, no red, and a warning names the public seller", async () => {
+    // A public plan sells cricket.dls, officials.auto and device links; `pro`
+    // sells cricket.dls and the other three but not device links. The
+    // count-based chooser lands on `pro` (three desired capabilities to two).
+    const catalog: Catalog = {
+      "cricket.dls": [...soldOnPro({ community: true }), { plan_key: "zzz_links_plus", bool_value: true }],
+      "officials.auto": [...soldOnPro(), { plan_key: "zzz_links_plus", bool_value: true }],
+      "stats.player": soldOnPro(),
+      "news.auto": soldOnPro(),
+      [DEVICE_LINKS]: [
+        { plan_key: "community", bool_value: false },
+        { plan_key: "pro", bool_value: false },
+        { plan_key: "enterprise", bool_value: true },
+        { plan_key: "zzz_links_plus", bool_value: true },
+      ],
+    };
+    const { result, httpCalls } = await probe(catalog);
+
+    expect(result.provisionedPlan).toBe("pro");
+    expect(result.deviceLinksGranted).toBe(false);
+    const names = result.cells.map((c) => c.cell);
+    expect(names).toContain("device_link_refused_before_plan");
+    expect(names).not.toContain("device_link_minted_after_plan");
+    expect(result.cells.filter((c) => !c.ok).map((c) => c.cell)).toEqual([]);
+    // Named: the plan a customer can buy. Not named: the one they cannot.
+    expect(result.deviceLinkWarnings.filter((w) => w.includes('"zzz_links_plus"'))).toHaveLength(1);
+    expect(result.deviceLinkWarnings.join("\n")).not.toContain('"enterprise"');
     expect(deviceLinkCalls(httpCalls)).toHaveLength(1);
   });
 

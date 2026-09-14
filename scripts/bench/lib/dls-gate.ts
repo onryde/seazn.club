@@ -90,8 +90,16 @@
 //    cells, separate from point 3's on purpose: that cell names the FIRST
 //    provocable key (`officials.auto` while it is sold), and pointing it here
 //    instead would lose that coverage. Both retire, reported, when the live
-//    catalog stops paywalling the key; the second FAILS — never passes on a
-//    mint that was not sent — when the plan this run can buy does not grant it.
+//    catalog stops paywalling the key — but when the free plan now GRANTS it,
+//    the mint still runs before the flip and must 201
+//    (`device_link_minted_on_free_plan`): the mint is the product being
+//    witnessed either way. When the plan this run can buy does not grant the
+//    key, the second mint is not sent. Its cell FAILS when no public plan sells
+//    device links at all, and gives way to a warning naming the seller when
+//    one does: the single-plan choice traded them away, which is this bench's
+//    limit, not a product defect. Every link a mint creates is revoked at once
+//    through the product's own DELETE route; a revoke that fails is a warning,
+//    never a red.
 //
 // ---------------------------------------------------------------------------
 // Why the three "not refused for payment" cells still prove the DOOR
@@ -185,9 +193,14 @@ export type DlsGateCellName =
    *  the live catalog still paywalls the key (`provocableFeatureKeys`). */
   | "device_link_refused_before_plan"
   /** The same POST AFTER the flip: a 201 carrying the one-time secret.
-   *  Emitted with its refusal and never without it; when the provisioned plan
-   *  does not grant the key it is emitted FAILED, with nothing sent. */
-  | "device_link_minted_after_plan";
+   *  Emitted only after its refusal. When the provisioned plan does not grant
+   *  the key nothing is sent, and the cell is emitted FAILED if no public plan
+   *  sells the key — or not at all, with a warning, if one does. */
+  | "device_link_minted_after_plan"
+  /** The catalog GRANTS `scoring.device_links` on the free plan: one mint,
+   *  before the flip, which must 201 with a secret. Emitted instead of the
+   *  refusal pair, never beside it. */
+  | "device_link_minted_on_free_plan";
 
 /**
  * What a cell requires of its response. Three kinds, because "not a 402" is
@@ -281,15 +294,24 @@ export function classifyDlsGateCell(
     const data = result.json?.ok === true ? (result.json.data as { readonly secret?: unknown } | undefined) : undefined;
     const secret = data?.secret;
     const ok = result.status === 201 && typeof secret === "string" && secret.length > 0;
+    // Nothing is provisioned before the free-plan mint, so its verdict must
+    // not credit provisioning with anything.
+    const onFreePlan = cell === "device_link_minted_on_free_plan";
     return {
       cell,
       status: result.status,
       ...withKey,
       ok,
       detail: ok
-        ? "minted: 201 with a one-time device-link secret (deliberately not copied here) — provisioning cleared the refusal"
+        ? onFreePlan
+          ? "minted on the free plan: 201 with a one-time device-link secret (deliberately not copied here) — " +
+            "the catalog grants the key to an org that never paid, and the product agreed"
+          : "minted: 201 with a one-time device-link secret (deliberately not copied here) — provisioning cleared the refusal"
         : result.status === 402
-          ? `still refused for payment after provisioning (${seen}) — the plan flip did not clear this gate`
+          ? onFreePlan
+            ? `refused for payment on the free plan (${seen}), although the live catalog grants this key there — ` +
+              "the product and its own catalog disagree"
+            : `still refused for payment after provisioning (${seen}) — the plan flip did not clear this gate`
           : result.status === 201
             ? "got a 201 with no device-link secret in it — a mint that hands the scorer nothing to use is not a mint"
             : `expected a 201 carrying a one-time device-link secret; got ${seen}`,
@@ -512,26 +534,86 @@ export interface DeviceLinkGateInput {
   readonly transport: Pick<ProbeTransport, "raw">;
   /** A REAL fixture the org owns, neither finalized nor cancelled. */
   readonly ids: { readonly divisionId: string; readonly fixtureId: string };
-  /** Whether `provocableFeatureKeys` still lists `scoring.device_links`. False
-   *  retires BOTH cells: with no refusal to witness, a mint after the flip
-   *  says nothing about the flip. */
-  readonly paywalledOnFreePlan: boolean;
-  /** The plan flip. Runs exactly once, between the two POSTs, whether or not
-   *  the cells run. Resolves to the plan it provisioned and whether that plan
-   *  grants `scoring.device_links` — derived from the plan choice's
+  /** What the live catalog gives a free-plan org for `scoring.device_links`:
+   *  - `"paywalled"`: `provocableFeatureKeys` lists it. Refuse, flip, mint.
+   *  - `"free"`: the free plan grants it. One mint, before the flip, which
+   *    must succeed — the mint is the product being witnessed either way, and
+   *    only the refusal has nothing left to witness.
+   *  - `"unsold"`: no plan grants it, or the key has no rows. Nothing to refuse,
+   *    and no mint a correct product could be expected to answer, so nothing
+   *    is sent. */
+  readonly onFreePlan: "paywalled" | "free" | "unsold";
+  /** The PUBLIC plans whose catalog rows grant the key — derived from rows
+   *  the caller already read, never a new catalog read. Consulted only when the
+   *  provisioned plan does not grant the key, to tell "no customer can buy
+   *  device links" (a red) from "the single-plan choice traded them for other
+   *  capabilities" (a warning). */
+  readonly publicPlansSelling: readonly string[];
+  /** The plan flip. Runs exactly once, after the free-plan POST, whether or
+   *  not any cell runs. Resolves to the plan it provisioned and whether that
+   *  plan grants `scoring.device_links` — derived from the plan choice's
    *  `unsatisfied`, never assumed from "some plan got provisioned". */
   readonly provision: () => Promise<{ readonly plan: string; readonly grantsDeviceLinks: boolean }>;
 }
 
 export interface DeviceLinkGateProof {
-  /** The status the mint drew BEFORE the flip; `null` when it was not sent. */
+  /** The status the mint drew BEFORE the flip while the key was paywalled;
+   *  `null` when no refusal was due. */
   readonly refusedStatus: number | null;
   /** True only when a mint was actually SENT after the flip and came back
    *  201 with a secret. */
   readonly mintedAfterProvision: boolean;
-  /** `device_link_refused_before_plan` then `device_link_minted_after_plan`,
-   *  or neither. */
+  /** Set when the mint after the flip was NOT sent because the provisioned
+   *  plan does not grant the key; `null` otherwise. `publicPlansSelling` is the
+   *  verdict's deciding fact: empty emits `device_link_minted_after_plan`
+   *  FAILED; non-empty emits no minted cell and a warning naming those plans. */
+  readonly mintSkipped: { readonly plan: string; readonly publicPlansSelling: readonly string[] } | null;
+  /** `device_link_refused_before_plan`, then `device_link_minted_after_plan`
+   *  unless `mintSkipped` names a public seller; or
+   *  `device_link_minted_on_free_plan` alone; or nothing. */
   readonly cells: readonly DlsGateCellOutcome[];
+  /** What a run must say without reddening: a link it minted and could not
+   *  revoke, or a chooser that traded device links away. Never a secret. */
+  readonly warnings: readonly string[];
+}
+
+/**
+ * Revokes a link a mint just created, through the product's own route:
+ * `DELETE /api/v1/fixtures/{id}/device-links/{linkId}` (`revokeDeviceLink`,
+ * whose row v1 wraps as a 200). A 201 hands back a working scoring credential
+ * for the fixture until local midnight (`createDeviceLink`'s `endOfLocalDay`),
+ * and a probe has no business leaving one live.
+ *
+ * Returns a warning when the link could not be revoked, else `null`. A failed
+ * revoke is not a failed CELL: the cells ask about the paywall, and the mint
+ * already answered that. The warning carries the link id and the revoke's
+ * status and code — nothing from the mint's body but the id.
+ */
+async function revokeMintedDeviceLink(
+  transport: Pick<ProbeTransport, "raw">,
+  base: string,
+  session: Session,
+  mintPath: string,
+  minted: RawResult,
+): Promise<string | null> {
+  const data = minted.json?.ok === true ? (minted.json.data as { readonly id?: unknown } | undefined) : undefined;
+  const linkId = data?.id;
+  if (typeof linkId !== "string" || linkId.length === 0) {
+    return (
+      `a device link minted by POST ${mintPath} (201) named no link id, so the probe could not revoke it — it ` +
+      "stays a live scoring credential for that fixture until it expires at local midnight"
+    );
+  }
+  const revokePath = `${mintPath}/${linkId}`;
+  const revoked = await transport.raw(base, session, revokePath, "DELETE");
+  if (revoked.status === 200) return null;
+  const body = revoked.json as unknown as V1ErrorEnvelope;
+  const code = body?.ok === false ? body.error?.code : undefined;
+  return (
+    `revoking device link ${linkId} (DELETE ${revokePath}) answered status ${revoked.status}` +
+    (code ? `, code "${code}"` : "") +
+    ", not 200 — it stays a live scoring credential for that fixture until it expires at local midnight"
+  );
 }
 
 /**
@@ -542,9 +624,16 @@ export interface DeviceLinkGateProof {
  * unit tests exercise the same code a live run does.
  *
  * When the provisioned plan does not grant the key, the second mint is not
- * sent and its cell FAILS, naming the plan. A refusal after the flip would
- * only restate the catalog, and a cell that passed on a mint nobody sent would
- * be the vacuous green this probe exists to prevent.
+ * sent: a refusal after the flip would only restate the catalog, and a cell
+ * that passed on a mint nobody sent would be the vacuous green this probe
+ * exists to prevent. Whether that is a red depends on whether a customer could
+ * buy device links at all (`publicPlansSelling`).
+ *
+ * When the free plan grants the key, there is no refusal to prove, but the
+ * mint still is: one POST before the flip, which must 201.
+ *
+ * Every mint that creates a link (201) is revoked straight away, whatever its
+ * cell concludes.
  */
 export async function proveDeviceLinkGate(input: DeviceLinkGateInput): Promise<DeviceLinkGateProof> {
   const { base, session, transport, ids } = input;
@@ -552,11 +641,32 @@ export async function proveDeviceLinkGate(input: DeviceLinkGateInput): Promise<D
   if (feature === undefined) {
     throw new Error(`proveDeviceLinkGate: PROVOCABLE_GATED_FEATURES has no "${DEVICE_LINKS_FEATURE_KEY}" entry`);
   }
-  if (!input.paywalledOnFreePlan) {
+  const warnings: string[] = [];
+  if (input.onFreePlan === "unsold") {
     await input.provision();
-    return { refusedStatus: null, mintedAfterProvision: false, cells: [] };
+    return { refusedStatus: null, mintedAfterProvision: false, mintSkipped: null, cells: [], warnings };
   }
-  const mint = () => transport.raw(base, session, feature.path(ids), "POST", feature.body);
+  const mintPath = feature.path(ids);
+  // Every mint goes through here, so every link one creates is revoked —
+  // including a pre-flip mint that should have been refused and was not.
+  const mint = async (): Promise<RawResult> => {
+    const result = await transport.raw(base, session, mintPath, "POST", feature.body);
+    if (result.status === 201) {
+      const warning = await revokeMintedDeviceLink(transport, base, session, mintPath, result);
+      if (warning !== null) warnings.push(warning);
+    }
+    return result;
+  };
+
+  if (input.onFreePlan === "free") {
+    const mintedOnFreePlan = classifyDlsGateCell(
+      "device_link_minted_on_free_plan",
+      { kind: "minted_with_secret" },
+      await mint(),
+    );
+    await input.provision();
+    return { refusedStatus: null, mintedAfterProvision: false, mintSkipped: null, cells: [mintedOnFreePlan], warnings };
+  }
 
   const before = await mint();
   const refused = classifyDlsGateCell(
@@ -567,19 +677,38 @@ export async function proveDeviceLinkGate(input: DeviceLinkGateInput): Promise<D
 
   const { plan, grantsDeviceLinks } = await input.provision();
 
-  const minted: DlsGateCellOutcome = grantsDeviceLinks
-    ? classifyDlsGateCell("device_link_minted_after_plan", { kind: "minted_with_secret" }, await mint())
-    : {
-        cell: "device_link_minted_after_plan",
-        status: null,
-        ok: false,
-        detail:
-          `not sent: plan "${plan}" — the best single plan for every capability this run wants — does not grant ` +
-          `${feature.featureKey}, so provisioning cannot have cleared the refusal and no scorer on this org can be ` +
-          "handed a device link",
-      };
+  if (grantsDeviceLinks) {
+    const minted = classifyDlsGateCell("device_link_minted_after_plan", { kind: "minted_with_secret" }, await mint());
+    return {
+      refusedStatus: before.status,
+      mintedAfterProvision: minted.ok,
+      mintSkipped: null,
+      cells: [refused, minted],
+      warnings,
+    };
+  }
 
-  return { refusedStatus: before.status, mintedAfterProvision: minted.ok, cells: [refused, minted] };
+  const mintSkipped = { plan, publicPlansSelling: input.publicPlansSelling };
+  if (mintSkipped.publicPlansSelling.length > 0) {
+    warnings.push(
+      `plan "${plan}" — the best single plan for every capability this run wants — does not grant ` +
+        `${feature.featureKey}, but the public plan(s) ${mintSkipped.publicPlansSelling.map((p) => `"${p}"`).join(", ")} ` +
+        "sell it: the single-plan choice traded device links for other capabilities, which is this bench's limit " +
+        "and not a product defect, so device_link_minted_after_plan was not emitted " +
+        "(device_link_refused_before_plan still ran, before the flip)",
+    );
+    return { refusedStatus: before.status, mintedAfterProvision: false, mintSkipped, cells: [refused], warnings };
+  }
+  const minted: DlsGateCellOutcome = {
+    cell: "device_link_minted_after_plan",
+    status: null,
+    ok: false,
+    detail:
+      `not sent: plan "${plan}" — the best single plan for every capability this run wants — does not grant ` +
+      `${feature.featureKey}, and no public plan in the catalog sells it, so provisioning cannot have cleared the ` +
+      "refusal and no organiser can buy a device link to hand a scorer",
+  };
+  return { refusedStatus: before.status, mintedAfterProvision: false, mintSkipped, cells: [refused, minted], warnings };
 }
 
 export interface DlsGateProbeResult {
@@ -623,11 +752,17 @@ export interface DlsGateProbeResult {
    *  finds this false cannot hand any scorer a device, and must report its tap
    *  steps as having no subject rather than as passing on zero taps. */
   readonly deviceLinksGranted: boolean;
-  /** Whether the two device-link cells ran. False when the live catalog no
-   *  longer paywalls `scoring.device_links` for a free-plan org — the same
-   *  retirement rule as `gatedFeatureProbed`, and like it a REPORTED
-   *  retirement, never a pass. */
+  /** Whether the device-link PAYWALL was probed — `device_link_refused_before_plan`
+   *  ran. False when the live catalog no longer paywalls `scoring.device_links`
+   *  for a free-plan org: the same retirement rule as `gatedFeatureProbed`, and
+   *  like it a REPORTED retirement, never a pass. (A key the free plan grants
+   *  still gets its mint witnessed, as `device_link_minted_on_free_plan`.) */
   readonly deviceLinkGateProbed: boolean;
+  /** `DeviceLinkGateProof.warnings`, for the run to report: device links it
+   *  minted and could not revoke, and a single-plan choice that traded device
+   *  links away while a public plan sells them. Never reddens; never carries
+   *  a secret. */
+  readonly deviceLinkWarnings: readonly string[];
   /**
    * THE PROMISE, at the matrix (this file's header, point 2): whether
    * `plan_entitlements` still carries an explicit `bool_value = true` row for
@@ -674,7 +809,9 @@ export interface DlsGateProbeResult {
  *   6. choose the plan that grants the most of what was asked (pure: every
  *      row it needs is already read)
  *   7. `proveDeviceLinkGate`: mint a device link (refused — still the free
- *      plan), provision the chosen plan, mint again (201)
+ *      plan), provision the chosen plan, mint again (201), revoking every link
+ *      a mint creates; or, when the free plan grants device links, one mint
+ *      (201) before provisioning
  *   8. replay the empty-payload cell: a paid plan must not change a free
  *      answer
  */
@@ -838,6 +975,17 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
   const statsPlayerGranted = !unsatisfiedCapabilities.includes("stats.player");
   const newsAutoGranted = !unsatisfiedCapabilities.includes("news.auto");
   const deviceLinksGranted = !unsatisfiedCapabilities.includes(DEVICE_LINKS_FEATURE_KEY);
+  // What a free-plan org gets for device links, and which plans a customer
+  // could buy them on — both over rows already read (`candidates` covers every
+  // plan with a device-link row, because `candidatePlanKeys` includes them).
+  const deviceLinksOnFreePlan = provocable.includes(DEVICE_LINKS_FEATURE_KEY)
+    ? "paywalled"
+    : planGrants(deviceLinkRows, FREE_PLAN_KEY)
+      ? "free"
+      : "unsold";
+  const publicPlansSellingDeviceLinks = candidates
+    .filter((c) => c.is_public && planGrants(deviceLinkRows, c.plan_key))
+    .map((c) => c.plan_key);
 
   // ---- the device-link refusal, the plan flip, the mint ----
   // `proveDeviceLinkGate` owns the order (refuse, flip, mint) and runs the
@@ -849,7 +997,8 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     session: s,
     transport: t,
     ids: { divisionId: dlsOn.divisionId, fixtureId: fixtureShapeRefusal },
-    paywalledOnFreePlan: provocable.includes(DEVICE_LINKS_FEATURE_KEY),
+    onFreePlan: deviceLinksOnFreePlan,
+    publicPlansSelling: publicPlansSellingDeviceLinks,
     provision: async () => {
       await provisionPlan({ base, orgId, plan: provisionedPlan, ownerSession: s, sql, transport: t });
       return { plan: provisionedPlan, grantsDeviceLinks: deviceLinksGranted };
@@ -875,7 +1024,8 @@ export async function runDlsGateProbe(input: DlsGateProbeInput): Promise<DlsGate
     unsatisfiedCapabilities,
     dlsFreeOnCommunityPlan,
     gatedFeatureProbed: gatedFeature?.featureKey ?? null,
-    deviceLinkGateProbed: deviceLinkGate.cells.length > 0,
+    deviceLinkGateProbed: deviceLinkGate.cells.some((c) => c.cell === "device_link_refused_before_plan"),
+    deviceLinkWarnings: deviceLinkGate.warnings,
     cells,
   };
 }

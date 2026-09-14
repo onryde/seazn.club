@@ -394,6 +394,11 @@ function fakeServer(billing: FakeOrgBilling = freshOrgBilling()): {
         }
         return { status: 201, json: { ok: true, data: { id: "dl-1", secret: "dl_fake" } } } as never;
       }
+      // …and the probe revokes what it minted, by DELETE on the link's own
+      // route (api/v1/fixtures/[id]/device-links/[linkId]/route.ts).
+      if (method === "DELETE" && /^\/api\/v1\/fixtures\/[^/]+\/device-links\/[^/]+$/.test(path)) {
+        return { status: 200, json: { ok: true, data: { id: "dl-1", revoked_at: "2026-09-14T12:00:00Z" } } } as never;
+      }
 
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);

@@ -2031,6 +2031,12 @@ export async function runPackSuite(
             "this org cannot mint a device link, so no scorer on this run can be handed one",
         );
       }
+      // What the device-link proof must say without reddening: a link it
+      // minted and could not revoke, or a single-plan choice that traded device
+      // links away while a public plan sells them.
+      for (const warning of probe.deviceLinkWarnings) {
+        warnings.push(`${suiteKey}: ${warning}`);
+      }
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
       // the best available candidate, never invents one) — reported here,
