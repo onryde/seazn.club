@@ -846,3 +846,100 @@ Post-fix gates (controller, `spectw2` rebuilt at `168a3ca9e`, sequential, logs i
     keep full names and the truncation (surname parsing breaks "van der Berg", "Mei Lin Chen"), add a native `title`
     with the full text — the Draw exists only at ≥1024 where hover exists.
   - Brief for round 2: `t3/fix-round-2-brief.md`; dispatched after the round-1 task review so its findings ride along.
+
+Task review of round 1 + P1 (`ef425fded..168a3ca9e`, full text in scratchpad `t3/fix-round-review.md`): **Needs
+fixes** — 0 critical, 2 important, 3 minor. Both P1 deviations judged sound (the last-write-wins manifest reading was
+confirmed in Next's source); P1c not made worse. Controller rulings:
+- **F1 (important) → folded into D3.** The pending pair renders full-ink with a coloured initials crest; the
+  owner-approved mock shows a waiting slot MUTED with a "?" crest. D3 alone would have fixed the crest and left the
+  name reading as a real player. Every non-entrant side (pair, loser sentence, engine slot label) gets both.
+- **F2 (important, production-only) → fix.** The realtime push that makes a spectator refetch is sent before the
+  Redis hub-key sweep finishes; with Redis in front of the hub JSON the one refetch can read the stale copy, and
+  polling is off while subscribed. Ruling: a push whose receivers read Redis-cached public documents goes out only
+  after the sweeps settle, without blocking the scoring response. **Cannot be observed locally** (no `REDIS_URL`) —
+  unit-proven only; the cost if wrong is the P1 symptom returning in production only.
+- **F3 (minor) → fix; amends P1 ruling 2.** The import's invalidation moved inside its try, so a throwing post-commit
+  hook skips it. It runs whether or not the hooks throw (still awaited in the request); the error still propagates.
+  Closes the "P1 concern, open" above.
+- **F4 (minor) → fix.** The voided Redis sweeps get a logging `.catch`.
+- **F5 (owner question) → controller's product call, a change FROM the approved mock, shown on the sign-off sheet.**
+  Doubles entrants are already named "A / B" (`stages.ts:519`), so the pair copy "{a} / {b}" would print "Ana Lee /
+  Bo Kim / Cy Po / Di Wu". `knockout.pendingPair` becomes "{a} or {b}" (es "o", fr "ou", nl "of"). Cost if the owner
+  prefers the slash: a four-string revert.
+- **D4 → a check.** The reviewer found `title={side.name}` already on the Draw slot; round 2 confirms it carries the
+  displayed text for pair and loser sides.
+- Round 2 runs as two implementers in parallel on disjoint files (UI: brief `t3/fix-round-2-brief.md`; P1: brief
+  `t3/p1-round-2-brief.md`), then one task review over both, then the controller's gates and a 24-cell capture.
+  Landed: UI `28625c06f` `e8fbebb93` `0d584bd24`, P1 `584f59d7a`; task review running.
+
+### R10 driven in a browser, with PR #782 (realtime key) in view (2026-09-14)
+
+Owner: "check this as we changed the realtime key (#782) and make sure that updates are there without refresh".
+#782 (OPEN, `feat/overlay-end-of-over`) sends every `fixture:{id}` push twice (private + public), mints spectator
+tokens with an ES256 key (`SUPABASE_JWT_PRIVATE_KEY`, present in the local env), adds V403 (a Realtime policy binding a
+private `fixture:{id}` join to the token's claim), and makes the match centre fetch `no-store` and keep a 60s poll while
+subscribed. It does NOT touch `division:{id}` or `publishDivisionUpdate`. It merges into this branch with no textual
+conflict (`git merge-tree` at `8cec86158`).
+
+Measured on `spectw2` (built at `168a3ca9e`) by `t3/live-push.cjs` — an anonymous 390px browser, scores posted through
+the API, websocket frames and every hub response recorded:
+- **Hub Matches tab:** `division:{id}` join `ok`, push ~60–80ms after the score, card moved in ~460ms, no reload.
+- **Hub Knockout tab, a semi-final result: FROZEN.** Push arrived; the one refetch returned a document built before the
+  write (same `generatedAt` as a response 1.4s earlier, later one 50s old); nothing moved in 40s; polling is off while
+  subscribed. **A/B with the browser HTTP cache disabled over CDP: updated in 462ms, every response fresh.** Cause:
+  `fetchCompetitionHub` refetches without `cache: "no-store"` against `public, s-maxage=30, stale-while-revalidate=300`
+  — the exact defect #782 measured and fixed for the match centre only. The hook shipped on main in #760, so
+  **production hub spectators are affected today**. The Matches tab passing was cache timing, not correctness.
+- **Match centre on this branch:** private join replies `JwtSignatureError: Failed to validate JWT signature`; falls
+  back to its 15s poll (updated at ~6.5s). #782 is the fix; re-measure on a merged build.
+- First two runs were harness-invalid and are recorded so nobody re-derives them: `generic.score` alone never puts a
+  fixture in play (`core.start` does), so the hub had nothing live and never subscribed; and a locator on a card not in
+  the selected round waited 30s per read. A page `load` count stayed 0 in every run.
+
+Rulings (brief `t3/r10-hub-brief.md`): **H1** `no-store` on the hub refetch (CDN header unchanged); **H2** keep a 60s
+poll while subscribed; **H3** a push whose refetch returns a document older than the push's `at` retries at 1s then 3s;
+**H4** (the P1 round-2 implementer's latency concern) literal cache keys are deleted with `DEL`, only the division glob
+stays a SCAN, and pushes wait on the `DEL`s only. `live-score-data.ts` / `use-live-fixture.ts` are left to #782 to avoid a
+conflict. Owed after: a merged (#782 + this branch) build re-measured with the same script, hub AND match centre.
+
+Task review of round 2 (`8cec86158..584f59d7a`, `t3/fix-round-2-review.md`): UI commits approved; P1 **Needs fixes** —
+0 critical, 1 important, 5 minor. Contrast checked: muted name 5.21:1, "?" 4.80:1 (AA); the public site has one light
+palette, so the fixed outline colour is not a dark-theme gap. Controller rulings:
+- **I1 (important) → fix, folded into R10.** Pushes now wait on the Redis sweeps with no bound; ioredis sets no command
+  timeout, so a Redis that stops answering without dropping the connection sends NO push at all while every subscriber
+  has stopped polling. The pushes go out when the awaited deletes settle OR after 1500ms, whichever is first. H2's safety
+  poll is the second line; this is the first.
+- **M1 → already covered by H4** (pushes wait on the literal `DEL`s only, never on the `pub:v1:div:*` glob).
+- **M2 → product-owner call (mine, reversible): a bye is not "to be decided".** A bye's empty side keeps the placeholder
+  box but shows no "?" glyph; the "?" stays for pending sides only. Sent back to the round-2 UI implementer.
+- **M3 → fix inline, folded into R10.** `scoreEvent`'s post-commit hooks (`onDecided`/`refreshDiscipline`/`refreshNews`)
+  throwing skips the public invalidation and the pushes for a score that has already committed — the shape F3 fixed in
+  the importer. Same treatment: invalidation and pushes run regardless; the original error still propagates.
+- **M4 → out of wave.** The match centre's court card (`court-card.tsx:221`) still invents initials for a waiting side.
+- M2 landed `27941e5b4`: the tree marks a bye only by the slot label `bracket.slot.bye` on a forfeited fixture's empty
+  side (`stages.ts:1329`) and `hubSides` used to turn it into the name, so a new optional `HubMatch.byeSides` carries
+  it (OpenAPI regenerated, only that field). Bye → `data-crest="empty"`, no glyph; waiting → `data-crest="pending"`
+  "?". A hub document cached before the deploy lacks the field and shows "?" for up to its TTL — accepted, no key bump.
+  Unit 252/252; 9 mutants killed. The bye name keeps round 2's italic + muted (the owner may prefer plain) — on the sheet.
+
+R10 H1–H4 landed: `a61dc7fd6` (no-store, safety poll, push-vs-`generatedAt` retry), `b8da5ecc3` (literal keys `DEL`,
+pushes wait on those only), `8e3305384` + `5155e1057` (e2e: an anonymous Knockout tab shows a posted result within
+`HUB_POLL_MS + 5s`, no `load`). tsc 0; 22/23 mutants killed, the survivor (`finally`→`then` on a promise with its own
+`.catch`) equivalent. **Controller error recorded:** the R10 brief's verify line blanked `DATABASE_URL`, so the six
+DB-backed tests in `score-revalidate-in-request.test.ts` SKIPPED (58 passed, 6 pending) — they are owed against a DB.
+Behaviour sweep found two more cacheable live refetches (`fetchLiveFixture`, `fetchOverlayFixture`); #782 already adds
+`no-store` to both. Follow-up round dispatched: I1, M3, the bye e2e, **C1** (a refetch response never replaces a NEWER
+document — the implementer's own ordering concern: safety poll, H3 retries and a push refetch can overlap) and **C2**
+(DB-backed suites run against `spectw2`, pending 0, their mutants re-run). `schedule.ts` still SCANs the hub key and
+pushes before its sweep — not this round; the hub's H3 retry covers a schedule push.
+**Merged measurement — this branch at `5155e1057` + #782 at `96f39e086` (merge `47ba600d4`, scratch detached worktree,
+production build on :3391 against the spectw2 database), browser cache ON, same `t3/live-push.cjs`:**
+- Hub Matches tab: `division:{id}` join `ok`, push +72ms, card moved +468ms, no reload.
+- **Hub Knockout tab, a semi-final result: push +335ms, page moved +472ms, no reload** (frozen before H1–H4). Every hub
+  response freshly built (`generatedAt` within ~70ms of the response).
+- **Match centre: private `fixture:{id}` join `ok` with #782's ES256 token** (V403's policy is live on the Supabase
+  project), push +485ms, page moved in under a second instead of on its 15s poll, no reload.
+So with #782 merged, all three live surfaces update without refresh by push. The merged tree is not a branch; it was torn
+down after the measurement. Still owed on this branch alone: the post-fix pipeline's `live-push` after the follow-up
+round (I1, M3, C1), which covers the hub; the match centre's push path belongs to #782.
+- **M5 → covered by H2** (the hook header comment is rewritten with the poll change).
