@@ -95,9 +95,15 @@ export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
  *
  * Both public-cache writers send through here, so the two cannot drift: a score
  * write (`invalidatePublicCache`, usecases/scoring.ts) and a schedule write
- * (`afterScheduleWrite`, usecases/schedule.ts, R10c m1). `deleted` must not
- * reject: each caller attaches its logging `.catch` first (F4), because a
- * rejection chained here would be left unhandled. `send` must not throw.
+ * (`afterScheduleWrite`, usecases/schedule.ts, R10c m1). Each caller still
+ * attaches its own logging `.catch` first (F4), so a failed delete is logged
+ * with the keys it was for. `send` must not throw.
+ *
+ * A `deleted` that REJECTS still sends, and leaves nothing unhandled (R10d n1).
+ * `.then(once, once)` handles both outcomes. `.finally(once)` would pass the
+ * rejection on to a derived promise nobody holds, which is an unhandled
+ * rejection. A bare `cacheDel(key)` can reject: `client()` sits outside its try,
+ * and ioredis throws synchronously on a REDIS_URL it cannot parse.
  */
 export function sendAfterDeleteOrBound(deleted: Promise<unknown>, send: () => void): void {
   let sent = false;
@@ -108,7 +114,7 @@ export function sendAfterDeleteOrBound(deleted: Promise<unknown>, send: () => vo
     send();
   };
   const bound = setTimeout(once, PUSH_AFTER_DELETE_BOUND_MS);
-  void deleted.finally(once);
+  void deleted.then(once, once);
 }
 
 /** Delete keys matching a glob pattern (e.g. "ent:{org}:*"). No-op on error. */
