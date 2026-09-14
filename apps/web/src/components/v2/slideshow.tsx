@@ -4,7 +4,8 @@
 // is entitlement-split (doc 09 §4 pattern, same as live-score): Pro orgs
 // subscribe to `division:{id}` realtime broadcasts and refresh on push;
 // everyone else (and any subscription failure) falls back to 45 s polling.
-// Escape returns to the console.
+// Escape returns to `backHref`: the console on an organiser board, the public
+// division or competition page on the /present kiosk.
 //
 // Visual system: "courtside" broadcast package, same as the public pages —
 // the whole board is the dark court slab, themeable per org via the --ps-*

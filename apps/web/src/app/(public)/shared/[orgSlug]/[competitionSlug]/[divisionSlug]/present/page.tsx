@@ -23,7 +23,8 @@ export default async function PresentDivisionPage({
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) notFound();
   // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not English
-  // by construction (this builder is pure/no request scope).
+  // by construction: the builder has no request scope, and since N1c c3 it
+  // loads the org-locale dictionaries itself (async, no database).
   const slides = await buildPublicDivisionSlides({ ...data, orgLocale: data.org.default_locale });
   return (
     <Slideshow

@@ -160,8 +160,8 @@ export const KnockoutRound = z.object({
    *  playoff's Qualifier 1 and Eliminator both play round 1 — each takes its
    *  first match's `seq_in_round` as a third part: `main-1-1`, `main-1-2`.
    *  Every other bracket keeps the two-part key, so a consumer must not parse
-   *  a round number out of the key by position. Stable across polls, so a round a spectator picked survives the next
-   *  document. */
+   *  a round number out of the key by position. Stable across polls, so a
+   *  round a spectator picked survives the next document. */
   key: z.string(),
   /** The round's name, pre-resolved in the ORG's locale — the same string
    *  every match in the round already carries as `HubMatch.roundLabel`,
