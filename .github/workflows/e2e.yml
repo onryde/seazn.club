@@ -483,6 +483,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-e2e -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
           opened=""
           for _ in $(seq 1 15); do
@@ -560,6 +561,10 @@ jobs:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # Default pino level is info — every accepted score event + route
+          # floods the Actions log and buries the failure. warn keeps refusals
+          # and faults; silent would hide the only signal when a red is real.
+          LOG_LEVEL: warn
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -904,6 +909,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-e2e -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
           opened=""
           for _ in $(seq 1 15); do
@@ -921,6 +927,10 @@ jobs:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # Default pino level is info — every accepted score event + route
+          # floods the Actions log and buries the failure. warn keeps refusals
+          # and faults; silent would hide the only signal when a red is real.
+          LOG_LEVEL: warn
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1202,6 +1212,7 @@ jobs:
           set -euo pipefail
           docker run -d --name placement-e2e -p 50051:50051 \
             -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
             placement-service:ci
           opened=""
           for _ in $(seq 1 15); do
@@ -1219,6 +1230,10 @@ jobs:
           PLACEMENT_SERVICE_HOST: localhost:50051
           PLACEMENT_SERVICE_SECRET: ci-e2e-secret
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # Default pino level is info — every accepted score event + route
+          # floods the Actions log and buries the failure. warn keeps refusals
+          # and faults; silent would hide the only signal when a red is real.
+          LOG_LEVEL: warn
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

@@ -596,6 +596,29 @@ describe("e2e CI wiring", () => {
     }
   });
 
+  // Application log flood at the default info level buries the failure in
+  // Actions. warn (web pino) / WARNING (placement structlog) keep refusals
+  // and faults; silent/CRITICAL would hide the only signal on a real red.
+  it("quiets web and placement application logs on every e2e server and solver", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+
+    const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
+    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    for (const [, body] of startServers) {
+      expect(body, "LOG_LEVEL must be on the server process, not Playwright").toMatch(
+        /^\s+LOG_LEVEL:\s*warn\s*$/m,
+      );
+    }
+
+    const placementStarts = [
+      ...yml.matchAll(/- name: Start the placement service\n([\s\S]*?)(?=\n      - name: )/g),
+    ];
+    expect(placementStarts.length, "three e2e jobs each start placement").toBe(3);
+    for (const [, body] of placementStarts) {
+      expect(body).toContain("-e PLACEMENT_LOG_LEVEL=WARNING");
+    }
+  });
+
   // Run 33315548699 reported itself as testing 4c606a302 while three of its
   // eight jobs had actually checked out 203395b6a -- "P9.5 -- one
   // court-availability function (#638)", weeks old. The checkout pinned
