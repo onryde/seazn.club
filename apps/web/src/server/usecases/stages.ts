@@ -441,6 +441,12 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
       throw new HttpError(409, "stage has played fixtures and cannot be deleted");
     }
 
+    // R10e (found): the stage's fixtures go in their own statement, ahead of
+    // the stage row, so this write names the fixtures it removed. Left to the
+    // stage's ON DELETE CASCADE they went unnamed; the rows removed are the
+    // same either way (pools and snapshots still cascade from the stage).
+    const removed = await tx<{ id: string }[]>`
+      delete from fixtures where stage_id = ${stageId} returning id`;
     await tx`delete from stages where id = ${stageId}`;
 
     // Structural ledger + division watermark (same pattern as stage_seeded).
@@ -453,9 +459,18 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
               ${tx.json({ stageId, kind: stage.kind, name: stage.name, seq: stage.seq } as never)})`;
     await tx`update divisions set seq = ${last + 1} where id = ${stage.division_id}`;
 
-    return { divisionId: stage.division_id, competitionId: stage.competition_id };
+    return {
+      divisionId: stage.division_id,
+      competitionId: stage.competition_id,
+      fixtureIds: removed.map((row) => row.id),
+    };
   });
-  fireDivisionRevalidate(divisionId.divisionId, divisionId.competitionId);
+  // R10e (found): a stage delete takes its fixtures off the hub and out of any
+  // open match centre. `afterScheduleWrite` fires the division revalidate this
+  // call used to fire alone, then drops the hub key and the removed fixtures'
+  // keys in one DEL after the commit and pushes after it. Always sent: the
+  // stage itself is gone from the hub even when it held no fixture.
+  afterScheduleWrite(divisionId.divisionId, divisionId.competitionId, "schedule", divisionId.fixtureIds);
   return { deleted: true };
 }
 
@@ -3567,9 +3582,13 @@ export async function issueChallenge(
     join divisions d on d.id = s.division_id
     where s.id = ${stageId}`;
   await requireFeature(auth.orgId, "formats.advanced", ladderComp?.competition_id);
-  return withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; kind: string; config: Record<string, unknown> }[]>`
-      select division_id, kind, config from stages where id = ${stageId}`;
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<
+      { division_id: string; kind: string; config: Record<string, unknown>; competition_id: string }[]
+    >`
+      select s.division_id, s.kind, s.config, d.competition_id
+      from stages s join divisions d on d.id = s.division_id
+      where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.kind !== "ladder") throw new HttpError(422, "challenges only exist on ladder stages");
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
@@ -3616,8 +3635,17 @@ export async function issueChallenge(
               ${input.challenger_id}, ${input.opponent_id}, ${"ch-" + String(n + 1)}, 'scheduled')
       returning id`;
     if (stage.config.ladder_order === undefined) stage.config.ladder_order = order;
-    return { fixture_id: fixture!.id, ladder_order: order };
+    return {
+      out: { fixture_id: fixture!.id, ladder_order: order },
+      divisionId: stage.division_id,
+      competitionId: stage.competition_id,
+    };
   });
+  // R10e (found): a challenge puts a fixture on the division's board, so the
+  // hub drops in one DEL after the commit and the division push follows it.
+  // The fixture is new: no fixture key to drop, nobody watching its centre.
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  return write.out;
 }
 
 // ---------------------------------------------------------------------------
@@ -3644,9 +3672,11 @@ export async function addFixture(
     court_id?: string | null;
   },
 ): Promise<{ fixture_id: string }> {
-  return withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; kind: string; status: string }[]>`
-      select division_id, kind, status from stages where id = ${stageId}`;
+  const write = await withTenant(auth.orgId, async (tx) => {
+    const [stage] = await tx<{ division_id: string; kind: string; status: string; competition_id: string }[]>`
+      select s.division_id, s.kind, s.status, d.competition_id
+      from stages s join divisions d on d.id = s.division_id
+      where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.kind === "ladder") {
       throw new HttpError(422, "ladder matches are created with challenges, not ad-hoc fixtures");
@@ -3740,6 +3770,11 @@ export async function addFixture(
               'scheduled', ${input.scheduled_at ?? null},
               ${adhocVenueId}, ${input.court_id ?? null})
       returning id`;
-    return { fixture_id: fixture!.id };
+    return { out: { fixture_id: fixture!.id }, divisionId: stage.division_id, competitionId: stage.competition_id };
   });
+  // R10e (found): an ad-hoc fixture lands on the hub with its kick-off and
+  // court, so the hub drops in one DEL after the commit and the division push
+  // follows it. The fixture is new: no fixture key, no fixture push.
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  return write.out;
 }

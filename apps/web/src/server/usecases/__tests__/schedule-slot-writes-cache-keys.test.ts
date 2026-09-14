@@ -4,7 +4,9 @@
 // `schedule-fixture-cache-keys.test.ts` pins the five writers that already
 // called `afterScheduleWrite` (apply, move, publish, start, joint apply). These
 // cases pin the writers that did not: a rain-delay SHIFT, UNDO / REDO, RESTORE
-// to a save point, CLEAR, and stage GENERATE / REBUILD. Each is driven through
+// to a save point, CLEAR, and stage GENERATE / REBUILD, plus the writers found
+// beside them: CLEAR-ENTRANTS, an ad-hoc fixture, a ladder challenge and a
+// stage delete. Each is driven through
 // its real use-case against Postgres, and each must:
 //   - send ONE DEL of the hub key plus the keys of exactly the fixtures its own
 //     write changed (derived here from a before/after read of the fixtures
@@ -82,8 +84,16 @@ import { moveFixture, startDivision } from "../schedule";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import {
+  addFixture,
+  createStages,
+  deleteStage,
+  generateStageFixtures,
+  issueChallenge,
+  rebuildStageFixtures,
+} from "../stages";
 import { divisionRig, seedOrg } from "./_rig";
+import { seedOrg as seedOrgOnPlan } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -232,6 +242,29 @@ async function ungeneratedRig() {
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L1", config: {} });
   await quiesce();
   return { auth, divisionId: division.id, competitionId: competition.id, stageId: stage!.id };
+}
+
+/** A four-entrant ladder stage: no fixtures until a challenge creates one. A
+ *  Pro org: a challenge requires `formats.advanced`. */
+async function ladderRig() {
+  const { auth } = await seedOrgOnPlan("pro");
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Ladder Cup", visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "generic", variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  await createEntrants(auth, division.id, ["L1", "L2", "L3", "L4"].map((name, i) => ({
+    kind: "individual" as const, display_name: name, seed: i + 1, members: [],
+  })));
+  const [stage] = await createStages(auth, division.id, {
+    seq: 1, kind: "ladder" as never, name: "Club ladder", config: { challengeRange: 2 },
+  });
+  const entrants = await sql<{ id: string }[]>`
+    select id from entrants where division_id = ${division.id} order by seed`;
+  await quiesce();
+  return { auth, divisionId: division.id, competitionId: competition.id, stageId: stage!.id, ladder: entrants.map((e) => e.id) };
 }
 
 afterEach(async () => {
@@ -482,5 +515,95 @@ describe.skipIf(!HAS_DB)("stage generate and rebuild drop what they replaced, th
     expect(del.rest).toEqual([...after.keys()].sort().map(fixtureKey));
     await releaseDel();
     expect(probe.divisionPushes).toEqual([[divisionId, "start"]]);
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("an ad-hoc fixture, a ladder challenge and a stage delete publish too (found, R10e)", () => {
+  it("addFixture (found): the hub key alone in one DEL after commit, the division push, no push for the new id", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const competitionId = await competitionOf(rig.divisionId);
+    const entrants = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${rig.divisionId} order by seed nulls last, id`;
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const out = await addFixture(auth, rig.stages[0]!.stageId, {
+      home_entrant_id: entrants[0]!.id,
+      away_entrant_id: entrants[1]!.id,
+      scheduled_at: "2030-06-02T10:00:00.000Z",
+    });
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(created, "the ad-hoc fixture landed").toEqual([out.fixture_id]);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, deleted);
+    expect(probe.fixturePushes.map(([id]) => id), "no push to a fixture nobody can be watching").not.toContain(out.fixture_id);
+  }, 120_000);
+
+  it("addFixture refused (an entrant cannot play itself) writes nothing and sends nothing", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3 });
+    const [entrant] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${rig.divisionId} limit 1`;
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    await expect(addFixture(auth, rig.stages[0]!.stageId, {
+      home_entrant_id: entrant!.id, away_entrant_id: entrant!.id,
+    })).rejects.toThrow(/cannot play itself/);
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("issueChallenge (found): the hub key alone in one DEL after commit, the division push, no push for the new id", async () => {
+    const { auth, divisionId, competitionId, stageId, ladder } = await ladderRig();
+    const before = await board(divisionId);
+
+    probe.hold = true;
+    const out = await issueChallenge(auth, stageId, { challenger_id: ladder[2]!, opponent_id: ladder[0]! });
+    const { moved, deleted, created } = diff(before, await board(divisionId));
+    expect(created, "the challenge fixture landed").toEqual([out.fixture_id]);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await expectDelThenPushes(divisionId, competitionId, deleted);
+  }, 120_000);
+
+  it("issueChallenge refused (a downward challenge) writes nothing and sends nothing", async () => {
+    const { auth, divisionId, stageId, ladder } = await ladderRig();
+    const before = await board(divisionId);
+
+    await expect(issueChallenge(auth, stageId, { challenger_id: ladder[0]!, opponent_id: ladder[2]! }))
+      .rejects.toThrow(/challenge upward/);
+    expect(diff(before, await board(divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("deleteStage (found): the fixtures its delete removed ride the hub key's one DEL after commit; pushes wait for it", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3, start: false });
+    const competitionId = await competitionOf(rig.divisionId);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    await deleteStage(auth, rig.stages[0]!.stageId);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(deleted.length, "the stage took fixtures with it").toBeGreaterThan(0);
+    expect([moved, created]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, deleted);
+  }, 120_000);
+
+  it("deleteStage refused (not the last stage) writes nothing and sends nothing", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3, stages: 2, start: false });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    await expect(deleteStage(auth, rig.stages[0]!.stageId)).rejects.toThrow(/only the last stage/);
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
   }, 120_000);
 });
