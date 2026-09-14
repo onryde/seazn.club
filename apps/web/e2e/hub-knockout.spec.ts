@@ -37,6 +37,10 @@ import {
 //   D2 the final's empty slot names the undecided semi's pair ↔ "Winner of" gone from that slot only
 //   C2 the switch's y-centre equals the heading's / chips'    ↔ the ~70px band it sat in before
 //   C1 the last chip of a rail too long for one row is hit    ↔ one-row width asserted > the rail's
+//
+// Fix round 2 (D3, F5) extended D2's case:
+//   D3 the waiting side's crest is the "?" placeholder, no letters ↔ the filled side on the same card is not one
+//   F5 the pair reads "{a} or {b}"                             ↔ the decided semi's node carries no " or "
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -600,7 +604,9 @@ test.describe("competition hub: Knockout tab", () => {
     expect(feeder.header.sides.map((s) => s.entrantId).every((id) => id !== "")).toBe(true);
     expect(finalMatch.header.sides[0]!.entrantId).not.toBe("");
     expect(finalMatch.header.sides[1]!.entrantId).toBe("");
-    const pair = `${feeder.header.sides[0]!.name} / ${feeder.header.sides[1]!.name}`;
+    // `knockout.pendingPair`, en "{a} or {b}" (fix round 2, F5). Literal rather
+    // than read from the dictionary: a spec cannot import a JSON-backed module.
+    const pair = `${feeder.header.sides[0]!.name} or ${feeder.header.sides[1]!.name}`;
 
     await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout&view=draw"));
     const node = page.getByTestId(`mh-knockout-node-${finalId}`);
@@ -609,7 +615,7 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(node).toContainText(finalMatch.header.sides[0]!.name);
     await expect(node).not.toContainText("Winner of");
     // The decided semi's own node is two real names, no pair.
-    await expect(page.getByTestId(`mh-knockout-node-${decidedSemi.fixtureId}`)).not.toContainText(" / ");
+    await expect(page.getByTestId(`mh-knockout-node-${decidedSemi.fixtureId}`)).not.toContainText(" or ");
 
     await page.getByTestId("mh-knockout-view-rounds").click();
     await roundChip(page, view, final).click();
@@ -618,6 +624,20 @@ test.describe("competition hub: Knockout tab", () => {
     await expect(card).toBeVisible();
     await expect(card).toContainText(pair);
     await expect(card).not.toContainText("Winner of");
+
+    // D3 (fix round 2): the waiting side is not an entrant, so its crest is the
+    // neutral "?" placeholder with no letters in it — never initials computed
+    // from the pair, which read as one confirmed player.
+    const waitingCrest = card.getByTestId("mh-match-side-1").locator('[data-crest="pending"]');
+    await expect(waitingCrest).toHaveCount(1);
+    await expect(waitingCrest).toBeVisible();
+    await expect(waitingCrest).toHaveText("?");
+    expect(await waitingCrest.textContent()).not.toMatch(/\p{L}/u);
+    // The positive pair, same card: the filled home side keeps the entrant's own crest.
+    await expect(card.getByTestId("mh-match-side-0").locator('[data-crest="pending"]')).toHaveCount(0);
+    await expect(card.getByTestId("mh-match-side-0").locator('span[aria-hidden="true"]').first()).toHaveText(
+      /\p{L}/u,
+    );
   });
 
   test("C2 at 1280: the Rounds|Draw switch shares ONE row — with the heading for one division, with the division chips for two", async ({
