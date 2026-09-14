@@ -6,7 +6,8 @@
 // double-elim / stepladder / irregular shapes keep the column fallback.
 import Link from "next/link";
 import type { PublicFixture } from "@/server/public-site/data";
-import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import type { SlotLabelLookup } from "@/lib/slot-label";
+import type { PublicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import {
   doubleElimBracket,
@@ -46,15 +47,31 @@ interface Props {
    *  the NEXT one. Pass `msg` explicitly from a caller/test that genuinely
    *  wants the English default. */
   lookup: SlotLabelLookup;
+  /** R10d n4: an unfilled side's text, the public round namer's `slot`
+   *  (`publicRoundNamer`, server/public-site/feeder-slot-label.ts), the one
+   *  namer the hub, the match centre, the calendar and the schedule widget use.
+   *  A final waiting on a semi-final reads "Winner of Semi-finals, match 1",
+   *  never the organiser board's "Winner of R1·2". Compile-required for the
+   *  reason `lookup` is: an optional fallback would compile clean and quietly
+   *  print the board's text again. A side with no label at all keeps this
+   *  surface's own `bracket.tbd` (see `sideLabel`). */
+  slotText: PublicRoundNamer["slot"];
 }
 
 function sideLabel(
   entrantId: string | null,
   names: Record<string, string>,
+  stageId: string,
   slotLabel: SlotLabel | null,
   lookup: SlotLabelLookup,
+  slotText: PublicRoundNamer["slot"],
 ): string {
-  return entrantId ? (names[entrantId] ?? "?") : resolveSlotLabel(slotLabel, lookup, "bracket.tbd");
+  if (entrantId) return names[entrantId] ?? "?";
+  // A side with no label keeps this surface's own "to be decided"
+  // (`bracket.tbd`): the namer falls back to `schedule.tbd`, which is a
+  // different string in es, fr and nl. Every labelled side reads through the
+  // public namer, looked up in the side's own stage.
+  return slotLabel === null ? lookup("bracket.tbd") : slotText(stageId, slotLabel);
 }
 
 function FixtureCard({
@@ -63,17 +80,19 @@ function FixtureCard({
   entrantLogos,
   href,
   lookup,
+  slotText,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
   entrantLogos?: Record<string, string | null>;
   href: string;
   lookup: SlotLabelLookup;
+  slotText: PublicRoundNamer["slot"];
 }) {
   const winner = fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {
     const badge = id ? entrantLogos?.[id] : null;
-    const label = sideLabel(id, entrantNames, slotLabel, lookup);
+    const label = sideLabel(id, entrantNames, fixture.stage_id, slotLabel, lookup, slotText);
     return (
       <span className="flex min-w-0 items-center gap-1.5">
         {badge ? (
@@ -146,6 +165,7 @@ function TwoSided({
   entrantLogos,
   fixtureHref,
   lookup,
+  slotText,
 }: {
   layout: BracketLayout;
   fixtures: PublicFixture[];
@@ -153,6 +173,7 @@ function TwoSided({
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
   lookup: SlotLabelLookup;
+  slotText: PublicRoundNamer["slot"];
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const rowsPerSide = Math.max(
@@ -295,7 +316,7 @@ function TwoSided({
               className="absolute"
               style={{ left: colX(node), top: nodeTop(node), width: NODE_W }}
             >
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} />
             </div>
           );
         })}
@@ -315,6 +336,7 @@ function DoubleElim({
   entrantLogos,
   fixtureHref,
   lookup,
+  slotText,
 }: {
   layout: DoubleElimLayout;
   fixtures: PublicFixture[];
@@ -322,6 +344,7 @@ function DoubleElim({
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
   lookup: SlotLabelLookup;
+  slotText: PublicRoundNamer["slot"];
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
@@ -441,7 +464,7 @@ function DoubleElim({
               {node.lane === "GF" && (
                 <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? lookup("bracket.grandFinal") : lookup("bracket.reset")}</p>
               )}
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} />
             </div>
           );
         })}
@@ -450,7 +473,7 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText }: Props) {
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
@@ -463,6 +486,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
           lookup={lookup}
+          slotText={slotText}
         />
       );
     }
@@ -479,6 +503,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
           lookup={lookup}
+          slotText={slotText}
         />
       );
     }
@@ -495,6 +520,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           entrantLogos={entrantLogos}
           fixtureHref={fixtureHref}
           lookup={lookup}
+          slotText={slotText}
         />
       );
     }
@@ -556,6 +582,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
                     entrantLogos={entrantLogos}
                     href={fixtureHref(f.id)}
                     lookup={lookup}
+                    slotText={slotText}
                   />
                 ))}
             </div>
@@ -587,6 +614,7 @@ function PagePlayoff({
   entrantLogos,
   fixtureHref,
   lookup,
+  slotText,
 }: {
   layout: PagePlayoffLayout;
   fixtures: PublicFixture[];
@@ -594,6 +622,7 @@ function PagePlayoff({
   entrantLogos?: Record<string, string | null>;
   fixtureHref: (fixtureId: string) => string;
   lookup: SlotLabelLookup;
+  slotText: PublicRoundNamer["slot"];
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LABEL_H = 22;
@@ -629,7 +658,7 @@ function PagePlayoff({
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                 {roundRoleLabel(lookup, PP_ROLE[n.slot])}
               </p>
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} />
             </div>
           );
         })}

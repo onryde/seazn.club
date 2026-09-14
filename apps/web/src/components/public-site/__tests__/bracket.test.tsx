@@ -13,6 +13,19 @@ import { msgFor } from "@/lib/messages-i18n";
 // plain English default now passes it explicitly, msg() being exactly
 // what the removed default value used to be.
 import { msg } from "@/lib/messages";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import { getDictionary } from "@/lib/i18n";
+import { t } from "@/lib/i18n-runtime";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+
+// R10d n4: `slotText` is compile-required: an unfilled side's text, which
+// every real caller takes from the public round namer's `slot`. None of the
+// cases below that pass `boardText` carry a feeder label (`slot.winner_match`
+// / `slot.loser_match`), and for every other label the namer's text IS
+// `resolveSlotLabel(label, lookup, "schedule.tbd")` (feeder-slot-label.ts), so
+// they keep asserting what they did. The feeder sentence is pinned with the
+// REAL namer in the R10d n4 describe at the end of this file.
+const boardText = (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, msg, "schedule.tbd");
 
 const F = (
   id: string, round: number, seq: number,
@@ -47,7 +60,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain("<svg");
     expect(html).toContain('data-bracket="two-sided"');
@@ -63,7 +76,7 @@ describe("public Bracket", () => {
       F("f3", 3, 1, null, "d", null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
     expect(html).toContain("Rung 1");
@@ -72,7 +85,7 @@ describe("public Bracket", () => {
   it("falls back to columns when a knockout's shape isn't single-elim (partial data)", () => {
     const fixtures = [F("f1", 0, 1, "a", "b", null), F("f2", 0, 2, "c", "d", null), F("f3", 0, 3, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
   });
@@ -89,7 +102,7 @@ describe("public Bracket", () => {
       F("gf", 9, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain('data-bracket="double-elim"');
     expect(html).toContain("Winners bracket");
@@ -136,7 +149,7 @@ describe("public Bracket", () => {
       F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     // Confirms the TREE branch rendered, not the column fallback.
     expect(html).toContain('data-bracket="double-elim"');
@@ -167,7 +180,7 @@ describe("public Bracket", () => {
   it("keeps the column fallback for irregular double-elim shapes", () => {
     const fixtures = [F("f1", 1, 1, "a", "b", null), F("f2", 2, 1, "c", "d", null), F("f3", 2, 2, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).not.toContain('data-bracket="double-elim"');
   });
@@ -182,14 +195,14 @@ describe("public Bracket", () => {
     const html = renderToStaticMarkup(
       createElement(Bracket, {
         kind: "knockout", fixtures: fixtures as never, entrantNames: names,
-        entrantLogos: logos, fixtureHref: href, lookup: msg,
+        entrantLogos: logos, fixtureHref: href, lookup: msg, slotText: boardText,
       }),
     );
     expect(html).toContain('src="https://flags.example/a.png"');
     // b has no badge and d has no entry — exactly one img chip.
     expect(html.match(/<img/g)?.length).toBe(1);
     const without = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(without).not.toContain("<img");
   });
@@ -202,7 +215,7 @@ describe("public Bracket", () => {
       F("fin", 3, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain('data-bracket="page-playoff"');
     for (const cap of ["Qualifier 1", "Eliminator", "Qualifier 2", "Final"]) expect(html).toContain(cap);
@@ -233,7 +246,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null, "scheduled", { key: "slot.runner_up_group", params: { g: "B" } }, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     // Filled row: real entrant names, anchored as actual rendered text.
     expect(html).toMatch(/>Ants<\/span>/);
@@ -264,7 +277,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain('title="Ants"');
     expect(html).toContain('title="Dogs"');
@@ -293,6 +306,7 @@ describe("public Bracket", () => {
         entrantNames: names,
         fixtureHref: href,
         lookup: esLookup,
+        slotText: (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, esLookup, "schedule.tbd"),
       }),
     );
     expect(html).toMatch(/>Ganador del Grupo A</); // slot.winner_group, es
@@ -330,7 +344,7 @@ describe("public Bracket", () => {
       F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).not.toContain('data-bracket="double-elim"'); // confirms the fallback, not the tree
     expect(html).toContain("Quarter-finals"); // WB round 1 (4 games, 3 rounds out)
@@ -383,7 +397,7 @@ describe("public Bracket", () => {
       F("tp", 2, 2, null, null, null, "scheduled", null, null, null, false, true, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain('data-bracket="two-sided"'); // confirms the TREE branch, not the fallback
     // Each round name appears exactly TWICE — once above the L column, once
@@ -407,7 +421,7 @@ describe("public Bracket", () => {
       F("fin", 1, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
     expect(html).toContain('data-bracket="two-sided"');
     expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
@@ -434,7 +448,7 @@ describe("public Bracket", () => {
           F("f2", 0, 2, "b", "c", null, "in_play"),
           F("f3", 1, 1, "a", null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText,
       }),
     );
     expect(twoSided).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="two-sided"/);
@@ -450,7 +464,7 @@ describe("public Bracket", () => {
           F("lf", 6, 1, null, null, null),
           F("gf", 9, 1, null, null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText,
       }),
     );
     expect(doubleElim).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="double-elim"/);
@@ -464,7 +478,7 @@ describe("public Bracket", () => {
           F("q2", 2, 1, "b", null, null),
           F("fin", 3, 1, "a", null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText,
       }),
     );
     expect(pagePlayoff).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="page-playoff"/);
@@ -477,7 +491,7 @@ describe("public Bracket", () => {
           F("f2", 2, 1, null, "c", null),
           F("f3", 3, 1, null, "d", null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText,
       }),
     );
     expect(columns).not.toContain('data-bracket="two-sided"'); // confirms the fallback branch rendered
@@ -515,5 +529,62 @@ describe("public Bracket", () => {
     expect(rule).not.toMatch(/\bleft\s*:/);
     expect(rule).not.toMatch(/margin-left\s*:/);
     expect(rule).not.toMatch(/position\s*:\s*relative/);
+  });
+});
+
+// R10d n4 — the public bracket (the embed bracket widget and the division page)
+// was the last spectator surface that printed the organiser board's
+// "Winner of R1·2" for a side still waiting on a match. It now takes the text
+// from the public round namer, the one the hub, the match centre, the calendar
+// and the schedule widget use.
+describe("public Bracket — a waiting side names its feeder's ROUND (R10d n4)", () => {
+  const semisThenFinal = (away: SlotLabel | null) => [
+    F("s1", 1, 1, "a", "b", null),
+    F("s2", 1, 2, "c", "d", null),
+    F("fin", 2, 1, null, null, null, "scheduled", { key: "slot.winner_match", params: { round: 1, seq: 1 } }, away),
+  ];
+
+  it("a feeder label renders the REAL namer's round-named sentence, in the side's title and its text, never an R·code", async () => {
+    const fixtures = semisThenFinal({ key: "slot.loser_match", params: { round: 1, seq: 2 } });
+    const dict = await getDictionary("en", "public");
+    const namer = publicRoundNamer({ ui: msg, dict, fixtures: fixtures as never, stageKind: () => "knockout" });
+    const html = renderToStaticMarkup(
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: namer.slot }),
+    );
+    const semi = msg("bracket.round.semi");
+    const winner = t(dict, "knockout.feederWinner", { round: semi, seq: 1 });
+    const loser = t(dict, "knockout.feederLoser", { round: semi, seq: 2 });
+    expect(winner).toBe("Winner of Semi-finals, match 1");
+    expect(html).toContain(`title="${winner}"`);
+    expect(html).toContain(`>${winner}</span>`);
+    expect(html).toContain(`title="${loser}"`);
+    expect(html).not.toMatch(/R\d+·\d+/);
+  });
+
+  it("a side with NO label keeps this surface's own bracket.tbd and never asks the namer", () => {
+    const fixtures = semisThenFinal(null);
+    const frLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("fr", k, v);
+    const asked: Array<SlotLabel | null> = [];
+    const html = renderToStaticMarkup(
+      createElement(Bracket, {
+        kind: "knockout",
+        fixtures: fixtures as never,
+        entrantNames: names,
+        fixtureHref: href,
+        lookup: frLookup,
+        slotText: (_stageId: string, label: SlotLabel | null) => {
+          asked.push(label);
+          return "from the namer";
+        },
+      }),
+    );
+    expect(asked, "only the labelled side reads through the namer").toEqual([
+      { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+    ]);
+    expect(html).toContain('title="from the namer"');
+    // fr is one of the locales where the two differ: "À définir" vs "À déterminer".
+    expect(msgFor("fr", "bracket.tbd")).not.toBe(msgFor("fr", "schedule.tbd"));
+    expect(html).toContain(`title="${msgFor("fr", "bracket.tbd")}"`);
+    expect(html).not.toContain(msgFor("fr", "schedule.tbd"));
   });
 });

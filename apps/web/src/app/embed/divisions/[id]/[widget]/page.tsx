@@ -117,6 +117,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         entrantLogos={entrantLogos}
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
         lookup={lookup}
+        slotText={namer.slot}
       />
     ) : (
       <p className="p-2 text-sm text-zinc-500">No bracket stage in this division.</p>

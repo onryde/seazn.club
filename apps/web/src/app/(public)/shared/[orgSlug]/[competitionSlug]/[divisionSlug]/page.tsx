@@ -27,6 +27,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
 
@@ -112,6 +113,15 @@ export default async function DivisionHomePage({ params }: Props) {
     if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
     if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
   }
+  // R10d n4: the Bracket names a side still waiting on a match through the
+  // public round namer ("Winner of Semi-finals, match 1"), as the hub, the
+  // match centre and the embed widgets do.
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict,
+    fixtures,
+    stageKind: (stageId) => stageById.get(stageId)?.kind,
+  });
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -171,6 +181,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 entrantLogos={entrantLogos}
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
                 lookup={lookup}
+                slotText={namer.slot}
               />
             </section>
           );
