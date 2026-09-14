@@ -104,12 +104,26 @@ export function useLiveCompetition({
     };
   }, []);
 
-  // Also hands back the document it applied, so a push can compare it with
-  // the broadcast's `at`. Null when the fetch failed or the hook has unmounted.
+  // R10 C1: the document the page holds, read synchronously. Refetches overlap
+  // (the poll, a push's refetch, its H3 retries), and a response built before
+  // the one already applied must not put older scores back. A ref, not `doc`:
+  // a refetch's closure would read the `doc` of the render that started it.
+  const heldRef = useRef<CompetitionHubDocT>(initial);
+
+  // Hands back the document the page holds once this response is dealt with:
+  // the response itself, or the newer document that was kept instead of it.
+  // A push compares that with the broadcast's `at`. Null when the fetch failed
+  // or the hook has unmounted.
   const refresh = useCallback(async (): Promise<CompetitionHubDocT | null> => {
     try {
       const next = await fetchCompetitionHub(orgSlug, competitionSlug);
       if (!mountedRef.current) return null;
+      // R10 C1: drop a document built BEFORE the one held. Built at the same
+      // instant is applied. An unparseable `generatedAt` cannot prove it older,
+      // so it is applied too (the same reading H3 gives it).
+      const held = heldRef.current;
+      if (Date.parse(next.generatedAt) < Date.parse(held.generatedAt)) return held;
+      heldRef.current = next;
       setDoc(next);
       return next;
     } catch {

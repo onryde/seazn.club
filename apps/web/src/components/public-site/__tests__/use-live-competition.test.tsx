@@ -320,6 +320,86 @@ describe("useLiveCompetition", () => {
 
     spy.mockRestore();
   });
+
+  // R10 C1: a refetch response never replaces a NEWER document. Refetches
+  // overlap: the safety poll, a push's refetch and its H3 retries each fetch on
+  // their own clock. Whichever response lands LAST used to win, so a slow
+  // response built before a faster one put the older scores back on the page.
+  describe("a refetch never replaces a NEWER document (R10 C1)", () => {
+    const HELD_AT = "2026-09-05T12:00:00.000Z"; // docWith's own generatedAt
+    const OLDER_AT = "2026-09-05T12:00:10.000Z";
+    const NEWER_AT = "2026-09-05T12:00:20.000Z";
+    const BEFORE_HELD_AT = "2026-09-05T11:59:59.999Z";
+
+    const builtAt = (generatedAt: string, live: string): CompetitionHubDocT => ({
+      ...docWith({ live }),
+      generatedAt,
+    });
+
+    function deferred() {
+      let resolve!: (doc: CompetitionHubDocT) => void;
+      const promise = new Promise<CompetitionHubDocT>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    /** Two poll ticks whose fetches are both still in flight: they overlap. */
+    async function twoOverlappingRefetches() {
+      const first = deferred();
+      const second = deferred();
+      vi.mocked(fetchCompetitionHub)
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+        .mockReturnValue(new Promise<CompetitionHubDocT>(() => {}));
+      const hook = mount("o", "c", builtAt(HELD_AT, "1-0"), false);
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(fetchCompetitionHub, "two refetches in flight at once").toHaveBeenCalledTimes(2);
+      return { hook, first, second };
+    }
+
+    it("the OLDER response landing LAST is dropped: the page keeps the newer document", async () => {
+      const { hook, first, second } = await twoOverlappingRefetches();
+
+      second.resolve(builtAt(NEWER_AT, "3-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text()).toContain("3-0");
+
+      first.resolve(builtAt(OLDER_AT, "2-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text(), "an older response replaced the newer document").toContain("3-0");
+      expect(hook.text()).not.toContain("2-0");
+      expect(hook.current.doc.generatedAt).toBe(NEWER_AT);
+    });
+
+    it("positive pair: the NEWER response landing LAST is applied", async () => {
+      const { hook, first, second } = await twoOverlappingRefetches();
+
+      first.resolve(builtAt(OLDER_AT, "2-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text(), "a response newer than the held document was dropped").toContain("2-0");
+
+      second.resolve(builtAt(NEWER_AT, "3-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text()).toContain("3-0");
+      expect(hook.current.doc.generatedAt).toBe(NEWER_AT);
+    });
+
+    it("a document built at the SAME instant as the one held is applied; one built before the SERVER-RENDERED document is not", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(HELD_AT, "4-4"))
+        .mockResolvedValueOnce(builtAt(BEFORE_HELD_AT, "0-9"));
+      const hook = mount("o", "c", builtAt(HELD_AT, "1-0"), false);
+
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(hook.text(), "an equally new document was dropped").toContain("4-4");
+
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(hook.text(), "a document older than the page's own replaced it").toContain("4-4");
+      expect(hook.text()).not.toContain("0-9");
+    });
+  });
 });
 
 // The realtime branch had NO test at all: deleting the unsubscribe in the
