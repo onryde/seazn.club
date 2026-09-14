@@ -827,3 +827,22 @@ Committed, implementer → controller-checked counts; task review and post-fix g
   that completes a stage is covered by the score's own division expiry; console-driven stage writes are not.
 - **P1 concern, open:** in `event-import.ts` the invalidation now runs last inside its try, so an earlier throw
   skips it (reviewer judging against the old order).
+
+Post-fix gates (controller, `spectw2` rebuilt at `168a3ca9e`, sequential, logs in scratchpad `t3/`):
+- e2e `hub-knockout.spec.ts` whole file, twice: 11 expected / 0 unexpected / 0 flaky / 0 skipped, both runs.
+- Smoke (hub knockout suite, isolated): 12 passed incl. **"after the final is scored, `championFixtureId` equals
+  the final's id" — red before P1, green now**; the 1 fail is `cleanup … keeps the staff audit trail`, which fails
+  whenever the suite runs isolated (it needs the full run's audit rows).
+- Freshness, through the real producer and consumer: `diag-p1-ab` A fresh at score+1.0s (was stale to +31s), B
+  fresh on its first poll (score+0.0s); `diag-p1-c` competition page, division page and hub JSON all fresh at
+  score+0.1s (were all stale to +33.4s); `diag-refresh` fresh at t+0.0s (was +32.3s).
+- Capture: 23 cells (new: `pending-pair-cards-390`), all script checks OK incl. the new ones (no raw key, no card
+  caption, no clipped chip at lg, switch row, feeder pairs).
+- Controller's per-screen verdicts (in `t3/verdicts.json`): 21 pass, 1 note, 1 FAIL.
+  - **D3 (FAIL, `pending-pair-cards-390`):** a waiting pair's card side gets a coloured crest with initials computed
+    from the pair string — PN, YK, SA, MO — so it reads as one player. Suspected also for engine slot-label sides
+    ("Winner of R3·2" → "WR"); a Semi-finals cell is added to the capture to see it.
+  - **D4 (note, `tree-32-1024`):** the pair truncates in a 184px Draw node ("Zara Ahmed / Mateo Alva…"). Ruling:
+    keep full names and the truncation (surname parsing breaks "van der Berg", "Mei Lin Chen"), add a native `title`
+    with the full text — the Draw exists only at ≥1024 where hover exists.
+  - Brief for round 2: `t3/fix-round-2-brief.md`; dispatched after the round-1 task review so its findings ride along.
