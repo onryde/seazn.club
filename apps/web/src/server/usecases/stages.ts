@@ -66,7 +66,7 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
-import { validateSchedule, courtNamesById, courtVenueIds, divisionLockState } from "./schedule";
+import { afterScheduleWrite, validateSchedule, courtNamesById, courtVenueIds, divisionLockState } from "./schedule";
 // The division freeze (`divisions.schedule_locked`), said the same way here as
 // at every other refusing site. IMPORT the constants, never retype the
 // sentence: `lib/schedule-lock.ts`'s own comment makes the import graph the
@@ -1121,7 +1121,42 @@ async function fireStageRevalidate(orgId: string, stageId: string): Promise<void
   if (row) fireDivisionRevalidate(row.division_id, row.competition_id);
 }
 
+/** A generate's committed write (R10e): the wire outcome, plus the division
+ *  and competition its own transaction wrote into. */
+interface GenerateWrite {
+  outcome: GenerateOutcome;
+  divisionId: string;
+  competitionId: string;
+}
+
+/** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
+ *  New fixtures change the hub (their kick-offs and courts), so the hub key
+ *  drops in one DEL after the commit and the division push follows it
+ *  (`afterScheduleWrite`). A generate deletes nothing, so it names no fixture
+ *  key and sends no fixture push: every id it created is new, and nobody can
+ *  be watching a match centre for it. A generate that created nothing sends
+ *  nothing.
+ *
+ *  Callers that publish their own write use `generateStageFixturesUnpublished`
+ *  instead: `startDivision` (one publish naming every fixture of the division),
+ *  `rebuildStageFixtures` (one publish naming the fixtures it deleted), and
+ *  `completeStage`, which runs inside scoring's post-commit chain, whose
+ *  invalidation and pushes R10e does not change. */
 export async function generateStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
+  const write = await generateStageFixturesWrite(auth, stageId);
+  if (write.outcome.created > 0) {
+    afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  }
+  return write.outcome;
+}
+
+/** `generateStageFixtures` without its publish, for a caller that publishes
+ *  the whole write itself (see above). */
+export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
+  return (await generateStageFixturesWrite(auth, stageId)).outcome;
+}
+
+async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
   // A qualification stage must draw from the previous stage's final table
   // (config.qualified), never from the whole entrant list. If it isn't seeded
   // yet: seed it now when the previous stage is complete (stage added after
@@ -1177,7 +1212,8 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       return prev ? { seeded: false as const, prev } : null;
     });
     if (pre?.seeded) {
-      const outcome = await generateProgressionSetupFixtures(auth, stageId);
+      const write = await generateProgressionSetupFixtures(auth, stageId);
+      const outcome = write.outcome;
       void fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
         await captureServer({
@@ -1187,7 +1223,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
           properties: { stage_id: stageId, fixtures_created: outcome.created },
         });
       }
-      return outcome;
+      return write;
     }
     if (pre) {
       if (pre.prev.status !== "complete") {
@@ -1200,7 +1236,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       await seedNextStage(auth, pre.prev.id);
     }
   }
-  const outcome = await withTenant(auth.orgId, async (tx) => {
+  const write = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`
       select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
@@ -1558,8 +1594,15 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       await tx`update divisions set seq = ${last + 1}, edit_watermark = null
                where id = ${stage.division_id}`;
     }
-    return { created, existing: gen.length - created, fixtures };
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${stage.division_id}`;
+    return {
+      outcome: { created, existing: gen.length - created, fixtures },
+      divisionId: stage.division_id,
+      competitionId: division!.competition_id,
+    };
   });
+  const outcome = write.outcome;
   void fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
@@ -1570,7 +1613,7 @@ export async function generateStageFixtures(auth: AuthCtx, stageId: string): Pro
       properties: { stage_id: stageId, fixtures_created: outcome.created },
     });
   }
-  return outcome;
+  return write;
 }
 
 // ---------------------------------------------------------------------------
@@ -1734,8 +1777,16 @@ export interface RebuildOutcome extends GenerateOutcome {
 export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Promise<RebuildOutcome> {
   const removed = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<
-      { id: string; division_id: string; kind: string; progression: Record<string, unknown> | null }[]
-    >`select id, division_id, kind, progression from stages where id = ${stageId}`;
+      {
+        id: string;
+        division_id: string;
+        kind: string;
+        progression: Record<string, unknown> | null;
+        competition_id: string;
+      }[]
+    >`select s.id, s.division_id, s.kind, s.progression, d.competition_id
+      from stages s join divisions d on d.id = s.division_id
+      where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
       throw new HttpError(
@@ -1837,15 +1888,32 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
 
     const deleted = await tx<{ id: string }[]>`
       delete from fixtures where stage_id = ${stageId} returning id`;
-    return deleted.length;
+    return {
+      fixtureIds: deleted.map((row) => row.id),
+      divisionId: stage.division_id,
+      competitionId: stage.competition_id,
+    };
   });
 
-  const outcome = await generateStageFixtures(auth, stageId);
-  log.info(
-    { event: "stage_fixtures_rebuilt", stageId, removed, created: outcome.created },
-    "stage_fixtures_rebuilt",
-  );
-  return { ...outcome, removed };
+  // R10e (review-r10d m1): ONE publish for the rebuild, naming the fixtures its
+  // delete removed (their match centres refetch and find them gone) and never
+  // the ids the regenerate created. In `finally`, because the delete has
+  // already committed: a regenerate that throws must not leave the hub showing
+  // the deleted board.
+  let created = 0;
+  try {
+    const outcome = await generateStageFixturesUnpublished(auth, stageId);
+    created = outcome.created;
+    log.info(
+      { event: "stage_fixtures_rebuilt", stageId, removed: removed.fixtureIds.length, created: outcome.created },
+      "stage_fixtures_rebuilt",
+    );
+    return { ...outcome, removed: removed.fixtureIds.length };
+  } finally {
+    if (removed.fixtureIds.length > 0 || created > 0) {
+      afterScheduleWrite(removed.divisionId, removed.competitionId, "schedule", removed.fixtureIds);
+    }
+  }
 }
 
 interface CrossFeed {
@@ -1915,7 +1983,7 @@ function seedOfSlotId(id: string): number {
 // file, so createStages/replaceStages/templates.ts's instantiateTemplate
 // share ONE implementation instead of two.
 
-async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
+async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string): Promise<GenerateWrite> {
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`
       select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
@@ -2213,7 +2281,13 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       await tx`update divisions set seq = ${last + 1}, edit_watermark = null
                where id = ${stage.division_id}`;
     }
-    return { created, existing: gen.length - created, fixtures };
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${stage.division_id}`;
+    return {
+      outcome: { created, existing: gen.length - created, fixtures },
+      divisionId: stage.division_id,
+      competitionId: division!.competition_id,
+    };
   });
 }
 
@@ -2629,7 +2703,7 @@ export async function completeStage(auth: AuthCtx, stageId: string): Promise<Com
   // (`locked`) so the two can be told apart without parsing prose.
   let generated: number | undefined;
   try {
-    generated = (await generateStageFixtures(auth, qualified.stage_id)).created;
+    generated = (await generateStageFixturesUnpublished(auth, qualified.stage_id)).created;
   } catch (err) {
     const code = err instanceof HttpError ? err.code : undefined;
     const locked = code === SCHEDULE_LOCKED_CODE;

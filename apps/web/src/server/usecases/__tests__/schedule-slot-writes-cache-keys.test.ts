@@ -10,22 +10,24 @@
 //     write changed (derived here from a before/after read of the fixtures
 //     table, never from a list typed into the test);
 //   - send that DEL only after its transaction has committed (the `withTenant`
-//     recorder below counts open transactions at the moment of the DEL);
+//     recorder below marks the async context of every transaction callback, so
+//     a DEL sent from inside one is caught even while an unrelated, unawaited
+//     lookup such as `fireStageRevalidate` holds a transaction of its own);
 //   - send the division push once and the fixture pushes only after the DEL;
 //   - send nothing at all when the write changed nothing.
 //
 // `@/lib/cache` and `@/lib/realtime` are recording passthroughs (the R10d
 // probe): every public literal-key DEL is recorded and, when `probe.hold` is
 // set, held open until the test releases it. `@/lib/db` is a passthrough whose
-// `withTenant` counts the transactions still open. Real Postgres required;
-// skipped without DATABASE_URL.
+// `withTenant` runs each callback inside an AsyncLocalStorage mark. Real
+// Postgres required; skipped without DATABASE_URL.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const probe = vi.hoisted(() => ({
   hold: false,
-  openTx: 0,
+  inTx: new (process.getBuiltinModule("node:async_hooks").AsyncLocalStorage)<true>(),
   dels: [] as string[][],
-  openTxAtDel: [] as number[],
+  inTxAtDel: [] as boolean[],
   gates: [] as Array<() => void>,
   fixturePushes: [] as Array<[string, string]>,
   divisionPushes: [] as Array<[string, string]>,
@@ -38,7 +40,7 @@ vi.mock("@/lib/cache", async (importOriginal) => {
     cacheDel: (...keys: string[]) => {
       if (keys.length === 0 || !keys.every((key) => key.startsWith("pub:v1:"))) return actual.cacheDel(...keys);
       probe.dels.push(keys);
-      probe.openTxAtDel.push(probe.openTx);
+      probe.inTxAtDel.push(probe.inTx.getStore() === true);
       return probe.hold ? new Promise<void>((resolve) => probe.gates.push(resolve)) : Promise.resolve();
     },
   };
@@ -59,16 +61,10 @@ vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
   return {
     ...actual,
-    // The promise `withTenant` returns settles after COMMIT, so a DEL recorded
-    // while this count is above zero was sent from inside a transaction.
-    withTenant: async (orgId: string, fn: Parameters<typeof actual.withTenant>[1]) => {
-      probe.openTx++;
-      try {
-        return await actual.withTenant(orgId, fn);
-      } finally {
-        probe.openTx--;
-      }
-    },
+    // Code running inside a transaction callback (before its COMMIT) sees the
+    // mark; the caller's continuation after `await withTenant(...)` does not.
+    withTenant: (orgId: string, fn: Parameters<typeof actual.withTenant>[1]) =>
+      actual.withTenant(orgId, (tx) => probe.inTx.run(true, () => fn(tx))),
   };
 });
 
@@ -82,11 +78,11 @@ import {
   restoreCheckpoint,
   undoDivision,
 } from "../history";
-import { moveFixture } from "../schedule";
+import { moveFixture, startDivision } from "../schedule";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
 import { divisionRig, seedOrg } from "./_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -102,7 +98,7 @@ async function quiesce(): Promise<void> {
   for (const release of probe.gates.splice(0)) release();
   await sleep(20);
   probe.dels.length = 0;
-  probe.openTxAtDel.length = 0;
+  probe.inTxAtDel.length = 0;
   probe.fixturePushes.length = 0;
   probe.divisionPushes.length = 0;
 }
@@ -138,12 +134,12 @@ function diff(before: Board, after: Board): { moved: string[]; deleted: string[]
   return { moved: moved.sort(), deleted: deleted.sort(), created: created.sort() };
 }
 
-/** The one DEL, split into its first key and the rest (sorted), plus how many
- *  transactions were open when it was sent. */
-function theOneDel(): { first: string; rest: string[]; openTx: number } {
+/** The one DEL, split into its first key and the rest (sorted), plus whether
+ *  it was sent from inside a transaction callback. */
+function theOneDel(): { first: string; rest: string[]; inTx: boolean } {
   expect(probe.dels, "one DEL for every literal key").toHaveLength(1);
   const [first, ...rest] = probe.dels[0]!;
-  return { first: first!, rest: [...rest].sort(), openTx: probe.openTxAtDel[0]! };
+  return { first: first!, rest: [...rest].sort(), inTx: probe.inTxAtDel[0]! };
 }
 
 /** The shape every slot-moving write owes: one DEL (hub key + `ids`) sent
@@ -158,7 +154,7 @@ async function expectDelThenPushes(
   const del = theOneDel();
   expect(del.first).toBe(hubKey(competitionId));
   expect(del.rest).toEqual([...ids].sort().map(fixtureKey));
-  expect(del.openTx, "the DEL went out after the write committed").toBe(0);
+  expect(del.inTx, "the DEL went out after the write committed, not from inside its transaction").toBe(false);
   await sleep(20);
   expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
   expect(probe.divisionPushes, "division push before the DEL settled").toEqual([]);
@@ -218,6 +214,24 @@ async function groupRig() {
   const pools = await sql<{ id: string }[]>`select id from pools where stage_id = ${stage!.id} order by key`;
   await quiesce();
   return { auth, divisionId: division.id, competitionId: competition.id, poolA: pools[0]!.id };
+}
+
+/** A three-entrant league division whose stage has NO fixtures yet. */
+async function ungeneratedRig() {
+  const { auth } = await seedOrg();
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Draw Cup", visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "generic", variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  await createEntrants(auth, division.id, ["A", "B", "C"].map((name, i) => ({
+    kind: "individual" as const, display_name: name, seed: i + 1, members: [],
+  })));
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L1", config: {} });
+  await quiesce();
+  return { auth, divisionId: division.id, competitionId: competition.id, stageId: stage!.id };
 }
 
 afterEach(async () => {
@@ -403,5 +417,70 @@ describe.skipIf(!HAS_DB)("undo, redo, restore and clear drop the fixture documen
     expect([moved, created]).toEqual([[], []]);
 
     await expectDelThenPushes(divisionId, competitionId, deleted);
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("stage generate and rebuild drop what they replaced, then push the division (R10e)", () => {
+  it("generate: the hub key alone in one DEL after commit (no fixture was deleted), the division push, no fixture push", async () => {
+    const { auth, divisionId, competitionId, stageId } = await ungeneratedRig();
+    const before = await board(divisionId);
+
+    probe.hold = true;
+    const out = await generateStageFixtures(auth, stageId);
+    const { moved, deleted, created } = diff(before, await board(divisionId));
+    expect(out.created, "the generate landed").toBe(created.length);
+    expect(created.length).toBeGreaterThan(0);
+    expect(moved).toEqual([]);
+
+    await expectDelThenPushes(divisionId, competitionId, deleted);
+  }, 120_000);
+
+  it("generate that creates nothing (already generated) sends nothing", async () => {
+    const { auth, divisionId, stageId } = await ungeneratedRig();
+    await generateStageFixtures(auth, stageId);
+    await quiesce();
+    const before = await board(divisionId);
+
+    const out = await generateStageFixtures(auth, stageId);
+    expect(out.created).toBe(0);
+    expect(diff(before, await board(divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("rebuild: the fixtures it DELETED ride the hub key's one DEL after commit; no push for the ids it created", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3, start: false });
+    const competitionId = await competitionOf(rig.divisionId);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const out = await rebuildStageFixtures(auth, rig.stages[0]!.stageId);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(out.removed, "the rebuild deleted the old board").toBe(deleted.length);
+    expect(deleted.length).toBeGreaterThan(0);
+    expect(created.length, "and generated a new one").toBe(out.created);
+    expect(moved).toEqual([]);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, deleted);
+    for (const id of created) {
+      expect(probe.fixturePushes.map(([pushed]) => pushed), "no push to a fixture nobody can be watching").not.toContain(id);
+    }
+  }, 120_000);
+
+  it("startDivision that generates its first stage still sends ONE DEL: the generate inside it does not publish a second", async () => {
+    const { auth, divisionId, competitionId } = await ungeneratedRig();
+
+    probe.hold = true;
+    const out = await startDivision(auth, divisionId);
+    expect(out.started, "the start landed").toBe(true);
+    const after = await board(divisionId);
+    expect(after.size, "the start generated the stage").toBeGreaterThan(0);
+
+    const del = theOneDel();
+    expect(del.first).toBe(hubKey(competitionId));
+    expect(del.rest).toEqual([...after.keys()].sort().map(fixtureKey));
+    await releaseDel();
+    expect(probe.divisionPushes).toEqual([[divisionId, "start"]]);
   }, 120_000);
 });

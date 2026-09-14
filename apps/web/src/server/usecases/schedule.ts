@@ -80,7 +80,7 @@ import {
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { generateStageFixtures } from "./stages";
+import { generateStageFixturesUnpublished } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -3744,7 +3744,9 @@ export async function startDivision(
     if (pre.scheduleFrozen) {
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
-    const outcome = await generateStageFixtures(auth, pre.firstStage.id);
+    // R10e: unpublished — this start publishes ONE write below, naming every
+    // fixture of the division, the generated ones included.
+    const outcome = await generateStageFixturesUnpublished(auth, pre.firstStage.id);
     generated = outcome.created;
   }
 
