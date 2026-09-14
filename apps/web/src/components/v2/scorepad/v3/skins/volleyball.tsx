@@ -691,6 +691,7 @@ function buildHalf(
   const server = serving && serving.personId !== null ? serving.personId : undefined;
   return {
     who,
+    side,
     big: String(pointsOf(state, side)),
     tappable,
     ...(tappable

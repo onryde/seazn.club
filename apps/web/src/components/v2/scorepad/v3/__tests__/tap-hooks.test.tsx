@@ -13,6 +13,16 @@
 // `data-testid`) probe with no `="value"` anchor would pass whether or not
 // the attribute is really set (AGENTS.md, "Verification traps").
 //
+// Fix round 1 (review, task-8-review.md, R42.1): every hook assertion below
+// now pins IDENTITY — tag, or a distinguishing prop/visible text unique to
+// the real control — not mere STRING PRESENCE. A presence-only `toContain`
+// survives a mutant that moves the same testid onto a sibling element
+// (`pad-sheet-number` onto the decrease button, `cookie-accept` onto
+// Reject); the review's own reviewer-run mutants proved this (M1/M2/M3
+// SURVIVED against the pre-fix version of this file). See each `it`'s own
+// comment for what identity check it applies and which reviewer mutant it
+// now kills.
+//
 // Render technique per component, matching the convention already
 // established in this directory (see each site's own comment below): most
 // of these are plain `renderToStaticMarkup` — a one-shot server render is
@@ -25,10 +35,12 @@
 // exact component.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { initSquads, type SquadState } from "@seazn/engine/core";
 import { Scorebug } from "../scorebug";
 import { GuidedSheet, type GuidedSheetProps } from "../guided-sheet";
 import { DetailDock, type DockStore } from "../detail-dock";
-import type { DockSpec, GuidedSheetSpec, ScorebugSpec } from "../types";
+import { buildScorebug as buildCricketScorebug } from "../skins/cricket";
+import type { DockSpec, GuidedSheetSpec, PadHostView, ScorebugSpec } from "../types";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import type { LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { DeviceScorePad } from "@/components/v2/device-score-pad";
@@ -51,68 +63,131 @@ vi.mock("next/navigation", () => ({
 
 const identity = (key: string) => key;
 
-// --- Scorebug: data-side="home"/"away" on BOTH render branches (R37) -------
+// --- Scorebug: data-side="home"/"away", DRIVEN BY half.side (R41) ----------
 //
-// Home is deliberately the TAPPABLE (button) half and away the NON-tappable
-// (div) half — the same split phone-classes.test.tsx's own fixture uses, and
-// for the same reason (its comment at that file's spec, "Fix round 1 —
-// deliberately NOT tappable"): a spec with only one branch exercised could
-// only ever prove ONE of the two element types carries the attribute. Every
-// v3 skin builds `halves` as `[home, away]` in that literal order (badminton
-// .tsx:876, boardgame.tsx:365, carrom.tsx:300-309, generic.tsx:404,
-// tabletennis.tsx:721, tennis.tsx:624, volleyball.tsx:882 — verified by
-// reading every skin, not assumed), which is the ONLY place "which index is
-// which side" is decided; scorebug.tsx itself never sees a "home"/"away"
-// field on ScorebugHalf, so this test's real job is proving the chassis
-// honours render-ORDER, not a label on the data.
-describe("scorebug halves carry data-side, and the right NAME lands on the right side", () => {
-  const spec: ScorebugSpec = {
-    phase: "live",
-    context: "ctx",
-    halves: [
-      {
-        who: [{ name: "Meena Iyer" }],
-        big: "7",
-        tappable: true,
-        hintKey: "pad.hint.rally",
-        tapEvent: { type: "carrom.board", payload: {} },
-      },
-      { who: [{ name: "Ravi Shankar" }], big: "3" },
-    ],
-    strip: [],
-  } as ScorebugSpec; // extend from types.ts if ScorebugSpec grows — never loosen the type
-  const html = renderToStaticMarkup(<Scorebug spec={spec} t={identity as unknown as Parameters<typeof Scorebug>[0]["t"]} />);
+// Fix round 1 (Important 1, ruling R41): `data-side` used to come from the
+// half's RENDER-ORDER INDEX (`i === 0 ? "home" : "away"`), which mislabels
+// any skin whose two halves are not sides at all — cricket's are the
+// batting total and the overs count (see the cricket describe block below).
+// `ScorebugHalf.side` (types.ts) is now the ONLY source `scorebug.tsx`
+// reads; a half that sets none renders no `data-side` attribute.
+describe("scorebug halves carry data-side FROM half.side, never from render order or branch", () => {
+  function spec(homeTappable: boolean): ScorebugSpec {
+    const tapProps = {
+      tappable: true as const,
+      hintKey: "pad.hint.rally",
+      tapEvent: { type: "carrom.board", payload: {} },
+    };
+    return {
+      phase: "live",
+      context: "ctx",
+      halves: [
+        { who: [{ name: "Meena Iyer" }], side: "home", big: "7", ...(homeTappable ? tapProps : {}) },
+        { who: [{ name: "Ravi Shankar" }], side: "away", big: "3", ...(homeTappable ? {} : tapProps) },
+      ],
+      strip: [],
+    };
+  }
+
+  function render(homeTappable: boolean): string {
+    return renderToStaticMarkup(
+      <Scorebug spec={spec(homeTappable)} t={identity as unknown as Parameters<typeof Scorebug>[0]["t"]} />,
+    );
+  }
 
   // Anchored on the OPENING TAG itself (`<div|button ... data-side="X" ...>`),
   // captured group 1 is the element name — this is what actually tells button
   // apart from div, unlike slicing from mid-attribute (which lands INSIDE the
   // tag whose type it is trying to name).
-  const homeTag = html.match(/<(div|button)\b[^>]*\sdata-side="home"[^>]*>/);
-  const awayTag = html.match(/<(div|button)\b[^>]*\sdata-side="away"[^>]*>/);
-
-  it('both data-side attributes are present, anchored on ="', () => {
+  function assertSides(html: string, expectHomeTag: "button" | "div", expectAwayTag: "button" | "div") {
+    const homeTag = html.match(/<(div|button)\b[^>]*\sdata-side="home"[^>]*>/);
+    const awayTag = html.match(/<(div|button)\b[^>]*\sdata-side="away"[^>]*>/);
     expect(homeTag, 'no element with data-side="home" found').not.toBeNull();
     expect(awayTag, 'no element with data-side="away" found').not.toBeNull();
-  });
-
-  it('the tappable half is a real <button>, carrying data-side="home"', () => {
-    expect(homeTag![1]).toBe("button");
-  });
-
-  it('the non-tappable half is a plain <div>, carrying data-side="away"', () => {
-    expect(awayTag![1]).toBe("div");
-  });
-
-  it('the HOME name renders inside the data-side="home" half, never the away one', () => {
+    expect(homeTag![1], "the home half's own element type").toBe(expectHomeTag);
+    expect(awayTag![1], "the away half's own element type").toBe(expectAwayTag);
+    // Slicing from the home tag to the away tag (and from the away tag to the
+    // end) isolates each half's own subtree — proves the name sits INSIDE its
+    // own half's span, never merely somewhere else on the page.
     const homeChunk = html.slice(html.indexOf(homeTag![0]), html.indexOf(awayTag![0]));
+    const awayChunk = html.slice(html.indexOf(awayTag![0]));
     expect(homeChunk).toContain("Meena Iyer");
     expect(homeChunk).not.toContain("Ravi Shankar");
-  });
-
-  it('the AWAY name renders inside the data-side="away" half, never the home one', () => {
-    const awayChunk = html.slice(html.indexOf(awayTag![0]));
     expect(awayChunk).toContain("Ravi Shankar");
     expect(awayChunk).not.toContain("Meena Iyer");
+  }
+
+  it("home tappable (button), away non-tappable (div): data-side matches half.side", () => {
+    assertSides(render(true), "button", "div");
+  });
+
+  // Fix round 1 (Minor 1, M1 SURVIVED): the ORIGINAL fixture always made home
+  // the button and away the div, so a mapping keyed on BRANCH (button="home",
+  // div="away") passed every assertion above too. This second render reverses
+  // which half is tappable — home is now the DIV, away is now the BUTTON —
+  // so a branch-derived map would get BOTH tags backwards here. Only a map
+  // that reads `half.side` (never the branch or the index) passes both.
+  it("BRANCH REVERSED — home non-tappable (div), away tappable (button): data-side STILL matches half.side, not the branch (kills M1)", () => {
+    assertSides(render(false), "div", "button");
+  });
+});
+
+// --- Cricket: halves are READOUTS, not sides — no data-side at all ---------
+//
+// Fix round 1 (Important 1, ruling R41): cricket's own `buildScorebug`
+// (skins/cricket.tsx:1176) builds `halves: [{who: "Batting", …}, {who:
+// "Overs", …}]` — neither is a team's own side, so it sets no `side` field.
+// Driving the REAL builder (not a synthetic stand-in) through the REAL
+// `Scorebug` chassis proves the whole path emits no attribute end to end.
+const cricketT = (key: string, vars?: Record<string, string | number>) =>
+  vars ? `${key}(${JSON.stringify(vars)})` : key;
+
+function cricketSquads(): SquadState {
+  return initSquads({
+    home: { entrantId: "home-1", slots: [{ personId: "h1", slot: "starting", orderNo: 1 }] },
+    away: { entrantId: "away-1", slots: [{ personId: "a1", slot: "starting", orderNo: 1 }] },
+  });
+}
+
+function cricketView(battingSide: "home" | "away"): PadHostView {
+  return {
+    cfg: { ballsPerOver: 6, inningsPerSide: 1 as const, ballsPerInnings: 120, dls: { enabled: false }, superOver: false },
+    state: {
+      phase: "live" as const,
+      innings: [
+        {
+          battingSide,
+          runs: 42,
+          wickets: 2,
+          legalBalls: 30,
+          closed: false,
+          fine: { striker: "h1", nonStriker: null, currentBowler: "a1", freeHitPending: false },
+        },
+      ],
+      orders: { home: ["h1"], away: ["a1"] },
+    },
+    summary: {},
+    phase: "live",
+    band: 3,
+    entitlements: {},
+    personNames: { h1: "Home Batter", a1: "Away Bowler" },
+    squads: cricketSquads(),
+    events: [],
+    contextOverrides: {},
+  };
+}
+
+function cricketHtml(battingSide: "home" | "away"): string {
+  const spec = buildCricketScorebug(cricketView(battingSide), cricketT);
+  return renderToStaticMarkup(<Scorebug spec={spec} t={identity as unknown as Parameters<typeof Scorebug>[0]["t"]} />);
+}
+
+describe("cricket's real buildScorebug output carries no data-side — its halves are not sides", () => {
+  it('away side batting: no data-side="…" appears anywhere in the markup', () => {
+    expect(cricketHtml("away")).not.toMatch(/data-side="/);
+  });
+  it('home side batting: no data-side="…" appears anywhere in the markup either', () => {
+    expect(cricketHtml("home")).not.toMatch(/data-side="/);
   });
 });
 
@@ -135,12 +210,26 @@ describe("the guided sheet's number field and confirm control carry stable hooks
     />,
   );
 
-  it('names the number field, anchored on ="', () => {
-    expect(html).toContain('data-testid="pad-sheet-number"');
+  // Fix round 1 (Minor 2, M2 SURVIVED): a presence-only `toContain` passed
+  // when the reviewer moved this exact testid onto the sibling decrease
+  // `<button>`. Anchoring on the TAG (and its own `type="number"`) is what
+  // actually distinguishes the number field from the −/+ stepper buttons
+  // beside it (`guided-sheet.tsx`'s `renderNumberStep`).
+  it('the hook sits on the real <input type="number">, never the stepper buttons (kills M2)', () => {
+    const tag = html.match(/<(input|button)\b[^>]*data-testid="pad-sheet-number"[^>]*>/);
+    expect(tag, 'no element with data-testid="pad-sheet-number" found').not.toBeNull();
+    expect(tag![1], "must be the <input>, not a <button>").toBe("input");
+    expect(tag![0]).toContain('type="number"');
   });
 
-  it('names the confirm button, anchored on ="', () => {
-    expect(html).toContain('data-testid="pad-sheet-confirm"');
+  // The Confirm button's own visible content (the identity stub echoes the
+  // raw key) is what the −/+ buttons ("−"/"+") and Back/Cancel
+  // ("pad.sheet.back"/"pad.sheet.cancel") never show, so this rules out the
+  // hook landing on any sibling control, the same idea M2's fix applies.
+  it("the hook sits on the real Confirm button (its own text), never a sibling control", () => {
+    const tag = html.match(/<button\b[^>]*data-testid="pad-sheet-confirm"[^>]*>([\s\S]*?)<\/button>/);
+    expect(tag, 'no <button data-testid="pad-sheet-confirm"> found').not.toBeNull();
+    expect(tag![1]).toContain("scorepad.action.confirm");
   });
 });
 
@@ -162,8 +251,13 @@ describe("the detail dock's Send-now control carries a stable hook", () => {
     />,
   );
 
-  it('carries data-testid="pad-send-now", anchored on ="', () => {
-    expect(html).toContain('data-testid="pad-send-now"');
+  // The dismiss button's OWN `aria-label` (`pad.dock.dismiss`, "Send now" in
+  // en) is a distinguishing prop the chip buttons beside it never carry —
+  // rules out the hook landing on the "queen" chip instead.
+  it('the hook sits on the real dismiss button (aria-label="pad.dock.dismiss"), never a chip', () => {
+    const tag = html.match(/<button\b[^>]*data-testid="pad-send-now"[^>]*>/);
+    expect(tag, 'no <button data-testid="pad-send-now"> found').not.toBeNull();
+    expect(tag![0]).toContain('aria-label="pad.dock.dismiss"');
   });
 });
 
@@ -195,17 +289,27 @@ function consoleHtml(over: { status: string; outcome: unknown }): string {
   );
 }
 
+// FixtureConsole calls the real `useMsg()` hook (not a `t` prop), which falls
+// back to the REAL English catalog outside a `<DictProvider>` (dict-
+// provider.tsx's own doc) — so the rendered text is genuinely "Start match" /
+// "Finalize result" (`dictionaries/en/ui.json`), not a raw key. That real
+// text is the distinguishing prop that rules out the hook landing on a
+// sibling control (device-handover, ShareButton).
 describe("fixture console: Start match carries a stable hook", () => {
-  it('scheduled (not started): the Start match button carries data-testid="score-start-match"', () => {
+  it('the Start match button carries the hook AND its own visible text is "Start match"', () => {
     const html = consoleHtml({ status: "scheduled", outcome: null });
-    expect(html).toContain('data-testid="score-start-match"');
+    const tag = html.match(/<button\b[^>]*data-testid="score-start-match"[^>]*>([\s\S]*?)<\/button>/);
+    expect(tag, 'no <button data-testid="score-start-match"> found').not.toBeNull();
+    expect(tag![1]).toContain("Start match");
   });
 });
 
 describe("fixture console: Finalize carries a stable hook", () => {
-  it('decided: the Finalize button carries data-testid="score-finalize"', () => {
+  it('the Finalize button carries the hook AND its own visible text is "Finalize result"', () => {
     const html = consoleHtml({ status: "decided", outcome: { kind: "win", winner: "e-home" } });
-    expect(html).toContain('data-testid="score-finalize"');
+    const tag = html.match(/<button\b[^>]*data-testid="score-finalize"[^>]*>([\s\S]*?)<\/button>/);
+    expect(tag, 'no <button data-testid="score-finalize"> found').not.toBeNull();
+    expect(tag![1]).toContain("Finalize result");
   });
 });
 
@@ -213,7 +317,7 @@ describe("fixture console: Finalize carries a stable hook", () => {
 // component from fixture-console.tsx's own Start match button above, but
 // the SAME hook name — both are "the button that dispatches core.start") ---
 describe("device score pad: Start match carries a stable hook", () => {
-  it('scheduled (not started): the Start match button carries data-testid="score-start-match"', () => {
+  it('the Start match button carries the hook AND its own visible text is "Start match"', () => {
     const live: LiveState = { status: "scheduled", last_seq: 0, summary: null, state: {}, outcome: null };
     const html = renderToStaticMarkup(
       <DeviceScorePad
@@ -234,17 +338,26 @@ describe("device score pad: Start match carries a stable hook", () => {
         initialEvents={[]}
       />,
     );
-    expect(html).toContain('data-testid="score-start-match"');
+    const tag = html.match(/<button\b[^>]*data-testid="score-start-match"[^>]*>([\s\S]*?)<\/button>/);
+    expect(tag, 'no <button data-testid="score-start-match"> found').not.toBeNull();
+    expect(tag![1]).toContain("Start match");
   });
 });
 
-// --- DeviceLinkPanel: mint (the "Create device link" primary control) ------
-describe("device link panel: mint carries a stable hook", () => {
-  it('no active/minted link yet: the mint button carries data-testid="device-link-mint"', () => {
-    const html = renderToStaticMarkup(
-      <DeviceLinkPanel fixtureId="f1" scorerLabel="Umpire" viewerPlan="community" />,
-    );
-    expect(html).toContain('data-testid="device-link-mint"');
+// --- DeviceLinkPanel: mint, on BOTH branches that can show it ---------------
+//
+// Fix round 1 (Minor 4): the "New link" control (device-link-panel.tsx
+// ~:156, the `active && !minted` branch) and the "Create scoring link"
+// control (~:162, the `!minted && !active` branch) are two arms of the SAME
+// `minted ? … : active ? … : …` ternary — mutually exclusive by
+// construction, never both rendered at once — so both now carry
+// `device-link-mint` rather than leaving the rotate path unhooked.
+describe("device link panel: mint carries a stable hook on every branch that can show it", () => {
+  it('no active/minted link yet: the "Create scoring link" button carries the hook, with its own real text', () => {
+    const html = renderToStaticMarkup(<DeviceLinkPanel fixtureId="f1" scorerLabel="Umpire" viewerPlan="community" />);
+    const tag = html.match(/<button\b[^>]*data-testid="device-link-mint"[^>]*>([\s\S]*?)<\/button>/);
+    expect(tag, 'no <button data-testid="device-link-mint"> found').not.toBeNull();
+    expect(tag![1]).toContain("Create scoring link");
   });
 });
 
@@ -262,7 +375,18 @@ describe("device link panel: mint carries a stable hook", () => {
 // (no `await` in between), so no other test in this file ever runs with
 // these globals stubbed — vitest does not interleave `it` bodies.
 describe("cookie consent: Accept carries a stable hook", () => {
-  it('a first-time visitor on a real page (not /overlay/): the Accept button carries data-testid="cookie-accept"', () => {
+  // Fix round 1 (Minor 2, M3 SURVIVED): a presence-only check passed when the
+  // reviewer moved this testid onto the Reject button instead. `renderIsland`
+  // hands back the LIVE element tree (never a markup string), so the
+  // identity check here reads the handler's own SOURCE TEXT — Accept's
+  // closure is `() => decide("accepted")`, Reject's is `() => decide
+  // ("rejected")`, and `Function.prototype.toString()` returns exactly that
+  // source under vitest's esbuild transform (no minification). This is what
+  // "the element whose onClick decides accepted" (review's own fix wording)
+  // means concretely, without actually invoking the handler — invoking it
+  // would call the real `fetch("/api/consent", …)`, which has no server to
+  // answer in this environment.
+  it('a first-time visitor on a real page (not /overlay/): the Accept button carries the hook AND its own handler decides "accepted" (kills M3)', () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
     vi.stubGlobal("window", {
       addEventListener: () => {},
@@ -274,7 +398,10 @@ describe("cookie consent: Accept carries a stable hook", () => {
       const tree = island.tree();
       expect(tree.length, "the banner must actually be visible (post-effect), not the empty pre-effect tree").toBeGreaterThan(0);
       const accept = tree.find((el) => el.type === "button" && propsOf(el)["data-testid"] === "cookie-accept");
-      expect(accept, "no <button data-testid=\"cookie-accept\"> in the rendered tree").not.toBeUndefined();
+      expect(accept, 'no <button data-testid="cookie-accept"> in the rendered tree').not.toBeUndefined();
+      const onClickSrc = String((propsOf(accept!) as { onClick: () => void }).onClick);
+      expect(onClickSrc, "the hooked control's own handler must decide \"accepted\"").toContain("accepted");
+      expect(onClickSrc, "the hooked control's own handler must NOT decide \"rejected\"").not.toContain("rejected");
     } finally {
       vi.unstubAllGlobals();
     }

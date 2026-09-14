@@ -176,6 +176,19 @@ describe("buildScorebug — the halves", () => {
     expect(spec.halves[1].who.map((w) => w.name)).toEqual(["Ravi"]);
   });
 
+  // Task 8 fix round 1 (review Important 1, ruling R41): `data-side`
+  // (scorebug.tsx) now reads `ScorebugHalf.side` rather than render order, so
+  // a skin that ever built the tuple in the wrong order (or set the wrong
+  // literal) would silently mislabel the chassis's own e2e contract with no
+  // type error. Pinned against the SAME distinct names the test above
+  // already proves are home=Meena/away=Ravi, so a swapped `side` fails here
+  // rather than only downstream in an e2e locator.
+  it("marks each half with its OWN side — home's half is Meena's, away's is Ravi's", () => {
+    const spec = buildScorebug(view(), t);
+    expect(spec.halves[0].side).toBe("home");
+    expect(spec.halves[1].side).toBe("away");
+  });
+
   it("falls back to the side label rather than rendering an empty who line", () => {
     const spec = buildScorebug(view({ lineups: EMPTY }), t);
     expect(spec.halves.map((h) => h.who.map((w) => w.name))).toEqual([

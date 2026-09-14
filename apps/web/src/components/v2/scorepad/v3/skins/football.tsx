@@ -675,11 +675,13 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     halves: [
       {
         who: [{ name: t(SIDE_LABEL.home) }],
+        side: "home",
         big: String(state.goals?.home ?? 0),
         ...(pens ? { sub: `(${pens.home})` } : {}),
       },
       {
         who: [{ name: t(SIDE_LABEL.away) }],
+        side: "away",
         big: String(state.goals?.away ?? 0),
         ...(pens ? { sub: `(${pens.away})` } : {}),
       },

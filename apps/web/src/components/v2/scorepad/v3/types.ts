@@ -135,6 +135,22 @@ export interface TapEvent { type: string; payload: Record<string, unknown> }
 
 export interface ScorebugHalf {
   who: WhoLine[];
+  /**
+   * Task 8 fix round 1 (review Important 1, ruling R41) — REQUIRED for a
+   * skin whose two halves genuinely ARE the home/away sides (every
+   * `buildHalf(view, state, side, …)` skin: badminton, boardgame, carrom,
+   * football, generic, period-shared [hockey/icehockey], tabletennis,
+   * tennis, volleyball), and DELIBERATELY ABSENT for one that is not:
+   * cricket's two halves are the batting total and the overs count
+   * (`skins/cricket.tsx`'s own `halves:` literal), never a team's own side,
+   * so tagging them `home`/`away` would be a fabricated fact, wrong in the
+   * away innings specifically. `scorebug.tsx` renders `data-side` FROM THIS
+   * FIELD ONLY, never from the half's render-order index — an index-derived
+   * map cannot tell "index 0 happens to be home" apart from "index 0 is
+   * unconditionally the batting total, regardless of who is batting", and a
+   * v1 of this field made exactly that mistake.
+   */
+  side?: "home" | "away";
   big: string;                    // pre-formatted, tabular-nums rendering
   /**
    * R3.5 — an OPTIONAL second figure against `big`, for a decider running
