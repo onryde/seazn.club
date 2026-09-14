@@ -816,8 +816,11 @@ function resolveOpeners(
   order: readonly string[],
   named: { striker: string; nonStriker: string } | undefined,
 ): { striker: string; nonStriker: string; nextBatterIndex: number } {
-  const striker = named?.striker ?? (order[0] as string);
-  const nonStriker = named?.nonStriker ?? (order[1] as string);
+  const striker = named?.striker ?? order[0];
+  const nonStriker = named?.nonStriker ?? order[1];
+  if (striker === undefined || nonStriker === undefined) {
+    invalid("batting order must name at least two batters");
+  }
   if (striker === nonStriker) invalid("striker and non-striker must differ");
   if (!order.includes(striker)) invalid(`batter "${striker}" is not in the lineup`);
   if (!order.includes(nonStriker)) invalid(`batter "${nonStriker}" is not in the lineup`);
