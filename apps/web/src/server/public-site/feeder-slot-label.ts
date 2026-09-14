@@ -24,7 +24,9 @@
 //   - the match centre (`match-centre-load.ts`);
 //   - the division calendar feed (`[divisionSlug]/calendar.ics/route.ts`);
 //   - the embed widgets, schedule AND bracket (`embed/divisions/[id]/[widget]/page.tsx`);
-//   - the public division page's bracket (`[divisionSlug]/page.tsx`).
+//   - the public division page, its bracket AND its schedule tab (`[divisionSlug]/page.tsx`);
+//   - the public kiosk's fixtures and bracket slides (`server/slideshow-data.ts`,
+//     `buildPublicDivisionSlides`, behind both `/present` pages).
 //
 // Pure: no `server-only`, no database. The callers own the reads.
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
