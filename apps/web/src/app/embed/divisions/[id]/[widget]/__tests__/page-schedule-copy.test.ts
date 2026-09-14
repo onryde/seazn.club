@@ -62,10 +62,10 @@ const entrant = (id: string, name: string, seed: number): PublicEntrant => ({
   badge_url: null,
 });
 
-/** The payload's stage kind, plus `page_playoff`: a real generated stage kind
- *  (the embed page's own BRACKET_KINDS lists it, and `embed-data.ts` selects
- *  `ext_key` for it) that the payload's stage type does not name. */
-type StageKind = EmbedPayload["stages"][number]["kind"] | "page_playoff";
+/** The payload's own stage kind. Since N1e e4 it names every generated kind,
+ *  `page_playoff` included, so the page-playoff case below needs no cast: a
+ *  union that dropped it again fails `tsc` here. */
+type StageKind = EmbedPayload["stages"][number]["kind"];
 
 const payload = (locale: string, kind: StageKind, fixtures: PublicFixture[]): EmbedPayload => ({
   org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: locale },
@@ -96,7 +96,7 @@ const payload = (locale: string, kind: StageKind, fixtures: PublicFixture[]): Em
     entrant_count: 4,
   } as EmbedPayload["division"],
   stages: [
-    { id: "st", division_id: "d1", seq: 1, kind: kind as EmbedPayload["stages"][number]["kind"], name: "Finals", status: "active" },
+    { id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active" },
   ],
   pools: [],
   fixtures,

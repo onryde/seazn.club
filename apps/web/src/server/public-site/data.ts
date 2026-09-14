@@ -24,6 +24,8 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import type { z } from "zod";
+import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
@@ -321,7 +323,11 @@ export interface PublicStage {
   id: string;
   division_id: string;
   seq: number;
-  kind: "league" | "group" | "swiss" | "knockout" | "double_elim" | "stepladder";
+  /** Every stage kind a division can generate, from the API's own `StageKind`
+   *  enum (N1e e4). It was a hand-written list of six that missed
+   *  `page_playoff`, `americano` and `ladder`: the kind is a database string
+   *  with no parse, so runtime was right while every reader needed a cast. */
+  kind: z.infer<typeof StageKind>;
   name: string;
   status: string;
 }
