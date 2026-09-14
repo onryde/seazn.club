@@ -1183,6 +1183,43 @@ describe.skipIf(!HAS_DB)("a score that advances a name into the next fixture pub
     expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
   }, 120_000);
 
+  // The ids are the FILL's own result, not the bracket link: `fillSlot` only
+  // touches a slot that is still open, and reports the row it touched. Undoing
+  // a decision does not empty the slot it filled (a pre-existing gap, R10h
+  // report), so re-deciding the fixture runs a fill that touches nothing —
+  // and a fixture nothing was written into owes no DEL and no push.
+  it("re-deciding a fixture whose destination slot is already taken advances nobody: the DEL and the pushes are scoring's own again", async () => {
+    const rig = await bracketRig();
+    const semi = rig.fixtures.find((f) => playable(f) && f.winner_to !== null);
+    expect(semi, "the bracket has a playable fixture that feeds another").toBeDefined();
+    await start(rig, semi!.id);
+    await decide(rig, semi!.id, 1);
+    const filled = await lineups(rig.divisionId);
+    const [decider] = await sql<{ id: string; seq: number }[]>`
+      select id, seq from score_events where fixture_id = ${semi!.id} and type = 'generic.result'`;
+    await scoreEvent(rig.auth, semi!.id, {
+      expected_seq: decider!.seq, type: "core.void", payload: { event_id: decider!.id },
+    });
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+    expect(before.get(semi!.winner_to!), "undoing the result leaves the name it advanced in place")
+      .toBe(filled.get(semi!.winner_to!));
+
+    probe.hold = true;
+    await scoreEvent(rig.auth, semi!.id, {
+      expected_seq: decider!.seq + 1, type: "generic.result", payload: { p1Score: 0, p2Score: 2 },
+    });
+    expect(diff(before, await lineups(rig.divisionId)), "the slot was already taken, so this score named nobody")
+      .toEqual({ moved: [], deleted: [], created: [] });
+
+    expect(probe.dels, "no third key: the fill touched no row").toEqual([
+      [fixtureKey(semi!.id), hubKey(rig.competitionId)],
+    ]);
+    await releaseDel();
+    expect(probe.fixturePushes, "no second push: the fill touched no row").toEqual([[semi!.id, "event"]]);
+    expect(probe.divisionPushes).toEqual([[rig.divisionId, "score"]]);
+  }, 120_000);
+
   it("double elimination: the loser's drop is advanced too, so BOTH fixtures ride the one DEL and both are pushed after it", async () => {
     const rig = await bracketRig("double_elim");
     const first = rig.fixtures.find((f) => playable(f) && f.winner_to !== null && f.loser_to !== null);
