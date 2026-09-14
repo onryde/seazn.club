@@ -9,7 +9,10 @@
 // stage delete. R10f adds the organiser's manual stage COMPLETION that draws
 // the next stage, driven through its route (`POST /stages/{id}/complete`),
 // beside scoring's auto-advance, which must not publish that draw a second
-// time. Each is driven through
+// time. R10g adds the organiser's seed-proposal CONFIRM, which names entrants
+// into a templated bracket's placeholders (`POST /stages/{id}/seed-proposal/
+// confirm`); its "changed" fixtures are the ones whose entrants it filled.
+// Each is driven through
 // its real use-case against Postgres, and each must:
 //   - send ONE DEL of the hub key plus the keys of exactly the fixtures its own
 //     write changed (derived here from a before/after read of the fixtures
@@ -115,6 +118,7 @@ vi.mock("next/headers", () => ({
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { POST as completeStageRoute } from "@/app/api/v1/stages/[id]/complete/route";
+import { POST as confirmSeedProposalRoute } from "@/app/api/v1/stages/[id]/seed-proposal/confirm/route";
 import { sql } from "@/lib/db";
 import { shiftDivisionSchedule } from "../schedule-plus";
 import {
@@ -133,6 +137,7 @@ import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import {
   addFixture,
+  completeStage,
   createStages,
   deleteStage,
   generateStageFixtures,
@@ -699,8 +704,13 @@ async function completeByRoute(auth: AuthCtx, stageId: string): Promise<Complete
 /** Groups -> knockout with an `on_complete` progression: completing the groups
  *  seeds the knockout and draws its bracket. Four entrants, two pools of two
  *  (one fixture per pool). A started division on a Pro org whose owner is a
- *  real user, so the route authenticates a session. */
-async function groupsToKnockoutRig(opts: { autoProgress?: boolean } = {}) {
+ *  real user, so the route authenticates a session.
+ *
+ *  R10g: `timing: "setup"` is the templated shape instead. The knockout's
+ *  fixtures exist from the start as TBD placeholders, completing the groups
+ *  computes a DRAFT seed proposal, and the organiser's confirm names the
+ *  entrants into those placeholders. */
+async function groupsToKnockoutRig(opts: { autoProgress?: boolean; timing?: "setup" | "on_complete" } = {}) {
   const { auth } = await seedOrgOnPlan("pro");
   const competition = await createCompetition(auth, {
     ends_on: "2030-12-31", name: "Knockout Cup", visibility: "public", branding: {},
@@ -728,17 +738,19 @@ async function groupsToKnockoutRig(opts: { autoProgress?: boolean } = {}) {
           }],
         }],
         placement: "rank_order",
-        timing: "on_complete",
+        timing: opts.timing ?? "on_complete",
       },
     },
   ]);
   const groupId = stages.find((s) => s.kind === "group")!.id;
+  const koId = stages.find((s) => s.kind === "knockout")!.id;
   await generateStageFixtures(auth, groupId);
+  if (opts.timing === "setup") await generateStageFixtures(auth, koId);
   await startDivision(auth, division.id);
   const groupFixtures = (await sql<{ id: string }[]>`
     select id from fixtures where stage_id = ${groupId} order by id`).map((row) => row.id);
   await quiesce();
-  return { auth, divisionId: division.id, competitionId: competition.id, groupId, groupFixtures };
+  return { auth, divisionId: division.id, competitionId: competition.id, groupId, koId, groupFixtures };
 }
 
 /** Decide every group fixture through the engine's own `appendEvent`, which
@@ -865,5 +877,86 @@ describe.skipIf(!HAS_DB)("a restore or rebuild that fails part-way still publish
     expect([moved, created], "the regenerate rolled back: nothing new on the board").toEqual([[], []]);
 
     await expectDelThenPushes(rig.divisionId, competitionId, deleted);
+  }, 120_000);
+});
+
+/** Every fixture of the division, as `id -> who plays it` (both sides'
+ *  entrant), so `diff(...).moved` is exactly the fixtures a write named
+ *  entrants into. */
+async function lineups(divisionId: string): Promise<Board> {
+  const rows = await sql<{ id: string; home: string | null; away: string | null }[]>`
+    select id, home_entrant_id as home, away_entrant_id as away from fixtures where division_id = ${divisionId}`;
+  return new Map(rows.map((row) => [row.id, `${row.home ?? "-"}|${row.away ?? "-"}`]));
+}
+
+interface ConfirmReply {
+  status: number;
+  body: { ok: boolean; data?: { filled?: number }; error?: { code: string; message: string } };
+}
+
+/** `POST /api/v1/stages/{id}/seed-proposal/confirm`, as the progression
+ *  panel's Confirm button sends it. */
+async function confirmByRoute(auth: AuthCtx, stageId: string, proposalId: string): Promise<ConfirmReply> {
+  authState.userId = auth.userId!;
+  const res = await confirmSeedProposalRoute(
+    new Request(`https://test.local/api/v1/stages/${stageId}/seed-proposal/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ proposalId }),
+    }),
+    { params: Promise.resolve({ id: stageId }) },
+  );
+  return { status: res.status, body: (await res.json()) as ConfirmReply["body"] };
+}
+
+/** A templated groups -> knockout whose groups are decided and completed, so
+ *  the knockout holds a draft seed proposal and TBD placeholders. */
+async function proposalRig() {
+  const rig = await groupsToKnockoutRig({ timing: "setup" });
+  await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+  const done = await completeStage(rig.auth, rig.groupId);
+  expect(done.seed_proposal?.status, "the completion computed the knockout's draft proposal").toBe("draft");
+  const knockout = (await sql<{ id: string }[]>`
+    select id from fixtures where stage_id = ${rig.koId}`).map((row) => row.id);
+  expect(knockout.length, "the knockout's placeholders exist before the confirm").toBeGreaterThan(0);
+  await quiesce();
+  return { ...rig, proposalId: done.seed_proposal!.id, knockout };
+}
+
+describe.skipIf(!HAS_DB)("confirming a seed proposal publishes the names it filled into the bracket (R10g)", () => {
+  it("POST /stages/{id}/seed-proposal/confirm: the fixtures it filled, and ONLY those, ride the hub key's one DEL after commit; pushes wait for it", async () => {
+    const rig = await proposalRig();
+    const before = await lineups(rig.divisionId);
+    const slotsBefore = await board(rig.divisionId);
+
+    probe.hold = true;
+    const reply = await confirmByRoute(rig.auth, rig.koId, rig.proposalId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    const after = await lineups(rig.divisionId);
+    const { moved: filled, deleted, created } = diff(before, after);
+    expect([deleted, created]).toEqual([[], []]);
+    expect(filled.length, "the confirm named entrants into the bracket").toBeGreaterThan(0);
+    expect(filled.every((id) => rig.knockout.includes(id)), "only knockout fixtures were filled").toBe(true);
+    expect(
+      rig.knockout.filter((id) => after.get(id) === "-|-").length,
+      "a fixture fed by winners is still TBD, so a DEL naming the whole stage would differ",
+    ).toBeGreaterThan(0);
+    expect(diff(slotsBefore, await board(rig.divisionId)).moved, "a confirm names entrants; it moves no kick-off").toEqual([]);
+
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, filled);
+  }, 120_000);
+
+  it("a confirm that changes nothing (the proposal is already confirmed) is refused and sends nothing", async () => {
+    const rig = await proposalRig();
+    const first = await confirmByRoute(rig.auth, rig.koId, rig.proposalId);
+    expect(first.status, JSON.stringify(first.body.error)).toBe(200);
+    await quiesce();
+    const before = await lineups(rig.divisionId);
+
+    const again = await confirmByRoute(rig.auth, rig.koId, rig.proposalId);
+    expect(again.status).toBe(409);
+    expect(again.body.error?.code).toBe("SEEDING_ALREADY_CONFIRMED");
+    expect(diff(before, await lineups(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
   }, 120_000);
 });

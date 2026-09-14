@@ -2320,14 +2320,16 @@ export async function fillSlot(
   fixtureId: string,
   slot: number,
   entrantId: string,
-): Promise<void> {
-  if (slot === 1) {
-    await tx`update fixtures set home_entrant_id = ${entrantId}, home_slot_label = null
-             where id = ${fixtureId} and home_entrant_id is null`;
-  } else {
-    await tx`update fixtures set away_entrant_id = ${entrantId}, away_slot_label = null
-             where id = ${fixtureId} and away_entrant_id is null`;
-  }
+): Promise<string | null> {
+  // R10g: the id the update actually touched (null when the slot was already
+  // filled), so a caller that publishes names exactly what its own write
+  // filled, never a list re-read or re-derived after the fact.
+  const [row] = slot === 1
+    ? await tx<{ id: string }[]>`update fixtures set home_entrant_id = ${entrantId}, home_slot_label = null
+             where id = ${fixtureId} and home_entrant_id is null returning id`
+    : await tx<{ id: string }[]>`update fixtures set away_entrant_id = ${entrantId}, away_slot_label = null
+             where id = ${fixtureId} and away_entrant_id is null returning id`;
+  return row?.id ?? null;
 }
 
 // L3/#414 pass 3 — REAL_TABLE_KINDS are the kinds a carry-over may source
@@ -3451,10 +3453,14 @@ export async function confirmSeedProposal(
     }
 
     // Step 4 — single transaction: fill through fillSlot, mark confirmed.
+    const filledFixtureIds = new Set<string>();
     for (const [slot, entrantId] of expandedEntries) {
       const [fixtureId, side] = slot.split(":");
-      await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
+      const filledId = await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
+      if (filledId !== null) filledFixtureIds.add(filledId);
     }
+    const [division] = await tx<{ competition_id: string }[]>`
+      select competition_id from divisions where id = ${stage.division_id}`;
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
 
     const carryMode = (progression as { carry?: "none" | "points" | "full" }).carry ?? "none";
@@ -3507,7 +3513,13 @@ export async function confirmSeedProposal(
       ...f,
       court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
     }));
-    return { filled: expandedEntries.length, fixtures, divisionId: stage.division_id };
+    return {
+      filled: expandedEntries.length,
+      fixtures,
+      divisionId: stage.division_id,
+      competitionId: division!.competition_id,
+      filledFixtureIds: [...filledFixtureIds],
+    };
   });
 
   log.info(
@@ -3515,6 +3527,14 @@ export async function confirmSeedProposal(
     "stage_seeded",
   );
   void fireStageRevalidate(auth.orgId, stageId);
+  // R10g (review-r10f G1): the confirm names entrants into the bracket, and the
+  // hub and each filled fixture's match centre show those names. So after the
+  // commit, ONE `afterScheduleWrite` drops the hub key plus exactly the
+  // fixtures this write filled (from fillSlot's own `returning id`), pushes the
+  // division once that DEL settles, then pushes each filled fixture (capped,
+  // same contract as every schedule write). A refused confirm throws out of
+  // the transaction above and never reaches this line, so it sends nothing.
+  afterScheduleWrite(committed.divisionId, committed.competitionId, "schedule", committed.filledFixtureIds);
 
   // Step 5 — post-commit: re-run schedule validation so newly-real person
   // clashes surface as warnings, run not blocked (design's Fill algorithm;
