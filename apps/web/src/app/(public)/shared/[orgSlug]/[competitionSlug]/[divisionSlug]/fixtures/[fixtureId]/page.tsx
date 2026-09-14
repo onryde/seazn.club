@@ -26,7 +26,7 @@ import { PosterButton } from "@/components/public-site/poster-button";
 import { posterFileName } from "@/lib/poster-file-name";
 import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { fixtureSubheading } from "./fixture-subheading";
+import { MatchCentreSubheading } from "./subheading";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -311,29 +311,18 @@ export default async function FixturePage({ params }: Props) {
           />
           </div>
         </div>
-        {/* R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play
-            fixture with no scheduled time (the court card right below
-            already carries the LIVE chip); joining through `filter(Boolean)`
-            rather than string concatenation means that empty case doesn't
-            leave a stray leading " · " in front of the venue/court name, and
-            the whole line disappears rather than rendering blank when there
-            is neither a subheading nor a venue/court to show. */}
-        {(() => {
-          const subheadingParts = [
-            fixtureSubheading(
-              fixture.status,
-              fixture.scheduled_at,
-              t(dict, "matchCentre.status.timeTbd"),
-              t(dict, "matchCentre.status.timeNotRecorded"),
-              locale,
-            ),
-            fixture.venue_name,
-            fixture.court_name,
-          ].filter((part): part is string => Boolean(part));
-          return subheadingParts.length > 0 ? (
-            <p className="mb-4 text-sm text-ink-muted">{subheadingParts.join(" · ")}</p>
-          ) : null;
-        })()}
+        {/* M1 k2 — a client island, not a server-rendered `<p>`. This line was
+            composed here once per request from the fixture row, so after a
+            rain-delay reschedule the court card below showed the new kick-off
+            (its document refetched at 895 ms) and this still showed the old
+            one — one page, two times, until the reader reloaded (rule R10).
+            It now renders from the SAME live snapshot `<MatchCentre>` does,
+            published to `live-fixture-channel` rather than fetched a second
+            time, and off the same `startTimeText` output the court card's
+            "Starts …" sentence renders — one kick-off, one wording, one
+            timezone. `initial` is this request's own document, so first paint
+            is byte-identical to a server render. */}
+        <MatchCentreSubheading fixtureId={fixture.id} initial={initial} dict={dict} />
 
         {/* Stream overlay W1 (design §3.9) — the club's own broadcast, under
             the headline block and above the match centre. PLACEMENT ONLY:

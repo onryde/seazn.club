@@ -113,6 +113,40 @@ export const InfoView = z.object({ rows: z.array(z.object({ label: Msg, value: M
 
 export const MatchCentreDoc = z.object({
   fixtureId: z.string(), sportKey: z.string(), header: MatchCentreHeader,
+  /**
+   * M1 k2 — the three facts the fixture page's subheading line is made of
+   * ("20 Jul 2026, 14:30 · Riverside Sports Hall · Court 3"), carried on the
+   * LIVE document so that line can re-render from a poll or a push like every
+   * other part of the page (rule R10). Before this they were read once, on the
+   * server, off the fixture row: after a rain-delay reschedule the court card
+   * below showed the new kick-off and the line above it still showed the old
+   * one — one page, two times, until the reader reloaded.
+   *
+   * `startTime` is ALREADY FORMATTED, by the same `startTimeText`
+   * (`match-centre.ts`) that fills `matchCentre.status.startsAt`'s `{time}`
+   * param. That is the point: the subheading and the court card cannot read
+   * differently, because there is one formatter and one call per document. It
+   * also drags the venue timezone along — the page's own `toLocaleString` had
+   * no `timeZone` at all and printed the rendering SERVER's zone.
+   *
+   * `venueName`/`courtName` are the derived join-backed names (`venue_name`/
+   * `court_name`) — the same pair `header.metaLine` and the Info tab's venue
+   * row read, never the frozen `venue`/`court_label` columns.
+   *
+   * Here and not on `MatchCentreHeader`: these are FIXTURE facts, the company
+   * `fixtureId`/`sportKey` beside them keep, not scorebug state — and the
+   * header schema is reused whole by the competition hub's own card builder
+   * (`competition-hub.ts`'s `hubHeader`), which has neither a locale nor a
+   * venue timezone in hand and would have had to invent nulls for all three.
+   *
+   * OPTIONAL, not bare `.nullable()`: a document built before these fields
+   * existed (a cached ISR payload, a hand-built fixture) still parses — the
+   * same reason `SetsView.unit`/`columnLabels` are optional. Absent and null
+   * both mean "nothing to show"; the builder always emits an explicit value.
+   */
+  startTime: z.string().nullable().optional(),
+  venueName: z.string().nullable().optional(),
+  courtName: z.string().nullable().optional(),
   tabs: z.array(MatchCentreTabId).min(1),
   cricket: CricketView.nullable(), timeline: z.array(TimelineLine).nullable(), sets: SetsView.nullable(), info: InfoView,
   // Did the timeline's DERIVED pass run to completion? `buildTimeline` replays

@@ -51994,6 +51994,36 @@
                               ],
                               "additionalProperties": false
                             },
+                            "startTime": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "venueName": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "courtName": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "tabs": {
                               "minItems": 1,
                               "type": "array",
@@ -53481,6 +53511,7 @@
                         "metaLine": "example",
                         "updatedAt": "example"
                       },
+                      "startTime": "example",
                       "tabs": [
                         "summary"
                       ],

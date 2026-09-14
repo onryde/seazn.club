@@ -67,6 +67,19 @@ const matchBEnrichedPersonName = `Task15 Enriched Batter ${TAG}`;
 let matchBEnrichedPersonId = "";
 const matchBBowlerName = `Falcon 1 ${TAG}`; // falcons.order[0] — credited on the enriched dismissal
 
+// cricket — "upcoming" division (match C): never started, so the court card
+// says "Starts …" and the page's subheading says the same time. M1 k2's
+// rain-delay check reschedules it.
+let upcomingDivSlug = "";
+let matchC = "";
+/** Match C's seeded kick-off, and the rain-delayed one it is moved to. BOTH
+ *  the date and the minute change, so the two rendered strings cannot collide
+ *  in any timezone the venue might resolve to (a whole-hour offset preserves
+ *  minutes; a half-hour one shifts them, and neither can turn 3 Nov 09:05 into
+ *  5 Nov 16:47). */
+const MATCH_C_KICK_OFF = "2026-11-03T09:05:00.000Z";
+const MATCH_C_RAIN_DELAY = "2026-11-05T16:47:00.000Z";
+
 test.afterEach(closeOpenContexts);
 
 // ---------------------------------------------------------------------------
@@ -201,8 +214,35 @@ test("setup: a public competition with cricket live (match A) and finished (matc
   const bDone = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${matchB}/state`);
   expect(bDone.status, `match B state read -> ${bDone.status}`).toBe(200);
 
+  // === cricket "upcoming" division — match C: generated, never played ======
+  // M1 k2 needs a fixture whose court card is still saying "Starts …": every
+  // other fixture in this file is in play or decided, and neither of those
+  // renders a kick-off time to compare the page's subheading against. Its own
+  // division, rather than a second fixture in an existing one, so match A's
+  // and match B's seeded worlds (entrant counts, standings, generated fixture
+  // order) are untouched.
+  const upcomingDivId = await makeCricketDivision(request, compId, {
+    name: `Upcoming ${TAG}`,
+    ballsPerInnings: 48,
+    playersPerSide: 4,
+  });
+  upcomingDivSlug = await divisionSlug(request, upcomingDivId);
+  await makeTeams(request, upcomingDivId, [
+    { name: `Kites ${TAG}`, names: Array.from({ length: 4 }, (_, i) => `Kite ${i + 1} ${TAG}`) },
+    { name: `Owls ${TAG}`, names: Array.from({ length: 4 }, (_, i) => `Owl ${i + 1} ${TAG}`) },
+  ]);
+  const { fixtureIds: upcomingFixtures } = await createStageAndGenerate(request, upcomingDivId);
+  await apiJson(request, `/api/v1/divisions/${upcomingDivId}/start`, "POST");
+  matchC = upcomingFixtures[0]!;
+  // A generated fixture has no kick-off time of its own; without one the court
+  // card has no status line at all and there would be nothing to compare.
+  const scheduled = await apiJson(request, `/api/v1/fixtures/${matchC}`, "PATCH", {
+    scheduled_at: MATCH_C_KICK_OFF,
+  });
+  expect(scheduled.status, `match C schedule -> ${scheduled.status} ${JSON.stringify(scheduled.error)}`).toBe(200);
+
   expect(
-    orgSlug && compSlug && liveDivSlug && matchA && finishedDivSlug && matchB,
+    orgSlug && compSlug && liveDivSlug && matchA && finishedDivSlug && matchB && upcomingDivSlug && matchC,
     "setup produced every id this file needs",
   ).toBeTruthy();
 });
@@ -454,7 +494,106 @@ test("cricket match B (finished): result line, two top-performer cards, no live 
 });
 
 // ---------------------------------------------------------------------------
-// 5. screens — match B (finished), every tab at 320/768/1280 (task-15-review
+// 5. cricket match C (upcoming) — M1 k2: ONE kick-off time on the page, and
+//    it follows a rain-delay reschedule without a reload
+// ---------------------------------------------------------------------------
+
+test("cricket match C (upcoming): the subheading and the court card show the SAME kick-off, and both follow a reschedule with no reload", async ({
+  browser,
+  request,
+}) => {
+  // Two live waits (the court card's status line, then the subheading), each
+  // allowed `LIVE_UPDATE_BUDGET_MS`. Derived, never a literal: raising
+  // `POLL_MS` raises this with it, so a slower poll cannot trip the WALL CLOCK
+  // and report itself as whichever assertion happened to be in flight
+  // (AGENTS.md rule #20).
+  test.setTimeout(Math.max(90_000, 2 * LIVE_UPDATE_BUDGET_MS + 45_000));
+
+  const matchCPath = publicFixturePath(orgSlug, compSlug, upcomingDivSlug, matchC);
+  const anon = await anonPage(browser, { width: 1280, height: 900 });
+  await anon.goto(matchCPath, { waitUntil: "load" });
+  await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+
+  const subheading = anon.getByTestId("mc-subheading");
+  const statusLine = anon.getByTestId("mc-status-line");
+  await expect(subheading, "an upcoming fixture's page carries the kick-off line").toBeVisible();
+  await expect(statusLine, 'an upcoming fixture\'s court card says "Starts …"').toBeVisible();
+
+  // --- M1 k1, as a customer meets it --------------------------------------
+  // The live test found this card reading the LITERAL text "Starts {time}":
+  // the builder passed `{ when }` to a template that names `{time}`, and
+  // `t()` prints an unsupplied placeholder verbatim. A brace anywhere in
+  // either line is that defect, whatever the copy around it says.
+  const before = {
+    subheading: (await subheading.textContent())?.trim() ?? "",
+    status: (await statusLine.textContent())?.trim() ?? "",
+  };
+  expect(before.status, "no unresolved {placeholder} reaches the reader").not.toMatch(/\{\w+\}/);
+  expect(before.subheading, "no unresolved {placeholder} reaches the reader").not.toMatch(/\{\w+\}/);
+
+  // --- ONE kick-off, one wording ------------------------------------------
+  // The subheading is "<time> · <venue> · <court>", so its first segment is
+  // the time; the card's line is "Starts <time>". Character-for-character, or
+  // the page is showing one kick-off twice in two formats (and, before M1,
+  // two TIMEZONES — the page formatted with no `timeZone` at all).
+  const timeOf = (line: string) => line.split(" · ")[0]!.trim();
+  expect(
+    before.status,
+    `the card ("${before.status}") must carry the subheading's own time ("${timeOf(before.subheading)}")`,
+  ).toContain(timeOf(before.subheading));
+
+  // A marker that only survives if the page is never reloaded or navigated.
+  // Without it "both lines show the new time" would also pass on a full
+  // document reload, which is the one thing rule R10 forbids.
+  await anon.evaluate(() => {
+    (window as unknown as { __m1NoReload?: number }).__m1NoReload = 1;
+  });
+
+  // --- the rain delay ------------------------------------------------------
+  const moved = await apiJson(request, `/api/v1/fixtures/${matchC}`, "PATCH", {
+    scheduled_at: MATCH_C_RAIN_DELAY,
+  });
+  expect(moved.status, `reschedule -> ${moved.status} ${JSON.stringify(moved.error)}`).toBe(200);
+
+  // The card moves first (it is the surface that already polled); the
+  // subheading is the line M1 k2 added to the same document, so it must move
+  // on the SAME snapshot rather than on the next page load.
+  await expect
+    .poll(async () => (await statusLine.textContent())?.trim() ?? "", {
+      timeout: LIVE_UPDATE_BUDGET_MS,
+      message: "the court card must pick up the new kick-off from a poll/push",
+    })
+    .not.toBe(before.status);
+  await expect
+    .poll(async () => (await subheading.textContent())?.trim() ?? "", {
+      timeout: LIVE_UPDATE_BUDGET_MS,
+      message: "the subheading must pick up the new kick-off too — this is the k2 defect",
+    })
+    .not.toBe(before.subheading);
+
+  const after = {
+    subheading: (await subheading.textContent())?.trim() ?? "",
+    status: (await statusLine.textContent())?.trim() ?? "",
+  };
+  expect(after.status).not.toMatch(/\{\w+\}/);
+  expect(after.subheading).not.toMatch(/\{\w+\}/);
+  // Still ONE time after the move — a subheading that re-rendered from some
+  // second formatter would satisfy "it changed" and still disagree with the
+  // card.
+  expect(
+    after.status,
+    `after the reschedule the card ("${after.status}") must still carry the subheading's time ("${timeOf(after.subheading)}")`,
+  ).toContain(timeOf(after.subheading));
+
+  // …and none of it was a reload.
+  expect(
+    await anon.evaluate(() => (window as unknown as { __m1NoReload?: number }).__m1NoReload),
+    "the page must never have reloaded — rule R10 is an IN-PLACE update",
+  ).toBe(1);
+});
+
+// ---------------------------------------------------------------------------
+// 6. screens — match B (finished), every tab at 320/768/1280 (task-15-review
 //    I4: the brief's "live and final" pairing needs BOTH; match B only
 //    exists in this file's own seeded competition, so its screenshots live
 //    here rather than in spectator-public-2.spec.ts's own "screens" test)

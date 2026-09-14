@@ -24,12 +24,13 @@
 //   is only ever one panel rendered at a time, so one wrapper at the single
 //   call site gives the exact same DOM contract without touching every
 //   panel file individually.
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
 import { LiveScoreBody } from "../live-score";
 import { useLiveFixture } from "./use-live-fixture";
+import { clearLiveFixture, publishLiveFixture } from "./live-fixture-channel";
 import { CourtCard } from "./court-card";
 import { TabRail } from "./tab-rail";
 import { TAB_PANELS } from "./tab-panels";
@@ -56,6 +57,20 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
   const { data, transport } = useLiveFixture(fixtureId, initial, realtime);
   const subscribed = transport === "realtime";
   const doc = data.match_centre;
+
+  // M1 k2 — this component owns the page's ONE live transport, and the
+  // subheading line above it (`<MatchCentreSubheading>`, rendered by the page
+  // between the title and the stream link) has to move with a reschedule too.
+  // Rather than give that paragraph a second poll and a second realtime
+  // channel, the snapshot is published here and read there
+  // (`live-fixture-channel.ts`). In an EFFECT, never the render body: a
+  // render-phase store write would tear a subscriber rendering in the same
+  // pass. The cleanup clears the entry this component owns, so a client-side
+  // navigation between fixtures does not leave one document per visit behind.
+  useEffect(() => {
+    publishLiveFixture(fixtureId, data);
+  }, [fixtureId, data]);
+  useEffect(() => () => clearLiveFixture(fixtureId), [fixtureId]);
 
   // Hooks run unconditionally every render (Rules of Hooks) even though `doc`
   // can be absent or empty — see the `if (!doc || …) return <fallback/>`

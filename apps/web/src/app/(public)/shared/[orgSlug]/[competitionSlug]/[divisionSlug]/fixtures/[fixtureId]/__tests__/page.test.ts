@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import { startTimeText } from "@/server/public-site/match-centre";
 import publicEn from "@/dictionaries/en/public.json";
 import publicEs from "@/dictionaries/es/public.json";
 import publicFr from "@/dictionaries/fr/public.json";
@@ -88,7 +89,15 @@ const baseData = (
  */
 function docNaming(
   locale: string,
-  fixture: { home_entrant_id: unknown; away_entrant_id: unknown; home_slot_label: unknown; away_slot_label: unknown },
+  fixture: {
+    home_entrant_id: unknown;
+    away_entrant_id: unknown;
+    home_slot_label: unknown;
+    away_slot_label: unknown;
+    scheduled_at: unknown;
+    venue_name: unknown;
+    court_name: unknown;
+  },
 ): MatchCentreDocT {
   const doc = cricketDocFor("in_play");
   const inLocale = (key: Parameters<typeof msgFor>[1], vars?: Record<string, string | number>) =>
@@ -101,6 +110,14 @@ function docNaming(
   const [home, away] = doc.header.sides;
   return {
     ...doc,
+    // M1 k2 — `loadMatchCentre` carries the fixture's start time and its
+    // DERIVED venue/court names onto the document (that is what lets the
+    // page's subheading line move when a match is rescheduled), so this
+    // fixture carries them too — from the same row, through the same
+    // `startTimeText`, rather than as a second hand-typed idea of the format.
+    startTime: startTimeText((fixture.scheduled_at as string | null) ?? null, locale, "UTC"),
+    venueName: (fixture.venue_name as string | null) ?? null,
+    courtName: (fixture.court_name as string | null) ?? null,
     header: {
       ...doc.header,
       sides: [
@@ -262,16 +279,12 @@ describe("FixturePage generateMetadata — score + result in the title (Task 14)
 // P9 pass 3c-3: fixture.venue/court_label are frozen since pass 3a — this
 // page's default export (subheading text + SportsEvent JSON-LD) must render
 // venue_name/court_name (data.ts's derived, join-backed fields) instead.
-// No jsdom: walk the returned element tree, same convention as
-// officials-fixture-locale.test.tsx / server-component-page-test memory.
-function collectText(node: unknown): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(collectText).join("");
-  if (isValidElement(node)) {
-    return collectText((node.props as { children?: unknown }).children);
-  }
-  return "";
-}
+//
+// M1 k2 — the element-tree walk that used to live here (`collectText`) has no
+// caller left: the subheading is now a client island, and a tree walk only
+// goes one level into a component, so that test renders real HTML like the
+// `<MatchCentre>` describes below already do. `findScript` stays — the JSON-LD
+// tag IS on the page's own tree.
 
 function findScript(node: unknown): { props: Record<string, unknown> } | null {
   if (!isValidElement(node)) return null;
@@ -317,6 +330,15 @@ const render = async (
 };
 
 describe("FixturePage default export — derived court/venue name (P9 cutover)", () => {
+  // M1 k2 — real HTML, not `collectText`. The subheading is no longer a `<p>`
+  // the page composes: it is a client island fed from the LIVE document
+  // (`<MatchCentreSubheading>`), so that the line moves with a reschedule
+  // instead of freezing at page load, and `collectText` only walks one level
+  // into a component. The ASSERTION is unchanged in substance — the derived,
+  // join-backed names must reach the reader and the frozen columns must not —
+  // and it is now pinned to the line's own testid rather than to the whole
+  // page's text, so a venue name that reached some other element could not
+  // satisfy it.
   it("subheading shows venue_name/court_name, never the stale venue/court_label", async () => {
     const tree = await render({
       venue: "Stale Building",
@@ -324,11 +346,13 @@ describe("FixturePage default export — derived court/venue name (P9 cutover)",
       venue_name: "Riverside Sports Hall",
       court_name: "Court 3",
     });
-    const text = collectText(tree);
-    expect(text).toContain("Riverside Sports Hall");
-    expect(text).toContain("Court 3");
-    expect(text).not.toContain("Stale Building");
-    expect(text).not.toContain("Stale Court");
+    const html = renderToStaticMarkup(tree);
+    const line = /<p data-testid="mc-subheading"[^>]*>(.*?)<\/p>/.exec(html)?.[1] ?? "";
+    expect(line, "the subheading line is rendered at all").not.toBe("");
+    expect(line).toContain("Riverside Sports Hall");
+    expect(line).toContain("Court 3");
+    expect(html).not.toContain("Stale Building");
+    expect(html).not.toContain("Stale Court");
   });
 
   it("SportsEvent JSON-LD location is the derived venue_name, not the stale venue", async () => {
