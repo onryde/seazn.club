@@ -6,7 +6,10 @@
 // cases pin the writers that did not: a rain-delay SHIFT, UNDO / REDO, RESTORE
 // to a save point, CLEAR, and stage GENERATE / REBUILD, plus the writers found
 // beside them: CLEAR-ENTRANTS, an ad-hoc fixture, a ladder challenge and a
-// stage delete. Each is driven through
+// stage delete. R10f adds the organiser's manual stage COMPLETION that draws
+// the next stage, driven through its route (`POST /stages/{id}/complete`),
+// beside scoring's auto-advance, which must not publish that draw a second
+// time. Each is driven through
 // its real use-case against Postgres, and each must:
 //   - send ONE DEL of the hub key plus the keys of exactly the fixtures its own
 //     write changed (derived here from a before/after read of the fixtures
@@ -69,7 +72,27 @@ vi.mock("@/lib/db", async (importOriginal) => {
       actual.withTenant(orgId, (tx) => probe.inTx.run(true, () => fn(tx))),
   };
 });
+// R10f: the manual stage completion is driven through its real route handler
+// over a real session (`requireResourceAuth` unmocked), the pattern of
+// `divisions/[id]/fixtures/__tests__/route.test.ts`.
+const authState = vi.hoisted(() => ({ userId: "" }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    requireUser: async () => ({ id: authState.userId }),
+    getCurrentUser: async () => ({ id: authState.userId }),
+    getActiveOrgId: async () => null,
+  };
+});
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
+  headers: async () => new Headers(),
+}));
 
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { appendEvent } from "@/server/engine-db";
+import { POST as completeStageRoute } from "@/app/api/v1/stages/[id]/complete/route";
 import { sql } from "@/lib/db";
 import { shiftDivisionSchedule } from "../schedule-plus";
 import {
@@ -78,11 +101,13 @@ import {
   createCheckpoint,
   redoDivision,
   restoreCheckpoint,
+  setDivisionLocks,
   undoDivision,
 } from "../history";
 import { moveFixture, startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
+import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import {
   addFixture,
@@ -93,7 +118,7 @@ import {
   rebuildStageFixtures,
 } from "../stages";
 import { divisionRig, seedOrg } from "./_rig";
-import { seedOrg as seedOrgOnPlan } from "./_seed";
+import { GENERIC_CONFIG, seedOrg as seedOrgOnPlan } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -605,5 +630,151 @@ describe.skipIf(!HAS_DB)("an ad-hoc fixture, a ladder challenge and a stage dele
     await expect(deleteStage(auth, rig.stages[0]!.stageId)).rejects.toThrow(/only the last stage/);
     expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
     await expectNothingSent();
+  }, 120_000);
+});
+
+interface CompleteReply {
+  status: number;
+  body: {
+    ok: boolean;
+    data?: { completed?: boolean; next_stage_fixtures?: number; division_completed?: boolean };
+    error?: { code: string; message: string };
+  };
+}
+
+/** `POST /api/v1/stages/{id}/complete`, as the organiser's button sends it. */
+async function completeByRoute(auth: AuthCtx, stageId: string): Promise<CompleteReply> {
+  authState.userId = auth.userId!;
+  const res = await completeStageRoute(
+    new Request(`https://test.local/api/v1/stages/${stageId}/complete`, { method: "POST" }),
+    { params: Promise.resolve({ id: stageId }) },
+  );
+  return { status: res.status, body: (await res.json()) as CompleteReply["body"] };
+}
+
+/** Groups -> knockout with an `on_complete` progression: completing the groups
+ *  seeds the knockout and draws its bracket. Four entrants, two pools of two
+ *  (one fixture per pool). A started division on a Pro org whose owner is a
+ *  real user, so the route authenticates a session. */
+async function groupsToKnockoutRig(opts: { autoProgress?: boolean } = {}) {
+  const { auth } = await seedOrgOnPlan("pro");
+  const competition = await createCompetition(auth, {
+    ends_on: "2030-12-31", name: "Knockout Cup", visibility: "public", branding: {},
+  });
+  const division = await createDivision(auth, competition.id, {
+    name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG,
+  });
+  if (opts.autoProgress) await patchDivision(auth, division.id, { auto_progress: true });
+  await createEntrants(auth, division.id, ["A", "B", "C", "D"].map((name, i) => ({
+    kind: "individual" as const, display_name: name, seed: i + 1, members: [],
+  })));
+  const stages = await createStages(auth, division.id, [
+    { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+      progression: {
+        sources: [{
+          stage: "previous",
+          take: [{
+            kind: "picks",
+            picks: [{ pool: "A", rank: 1 }, { pool: "B", rank: 2 }, { pool: "B", rank: 1 }, { pool: "A", rank: 2 }],
+          }],
+        }],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    },
+  ]);
+  const groupId = stages.find((s) => s.kind === "group")!.id;
+  await generateStageFixtures(auth, groupId);
+  await startDivision(auth, division.id);
+  const groupFixtures = (await sql<{ id: string }[]>`
+    select id from fixtures where stage_id = ${groupId} order by id`).map((row) => row.id);
+  await quiesce();
+  return { auth, divisionId: division.id, competitionId: competition.id, groupId, groupFixtures };
+}
+
+/** Decide every group fixture through the engine's own `appendEvent`, which
+ *  runs no scoring hook: setup, not a write under test. */
+async function decideThroughEngine(orgId: string, fixtureIds: readonly string[]): Promise<void> {
+  for (const id of fixtureIds) {
+    await appendEvent(orgId, id, 0, { type: "core.start", payload: {} });
+    await appendEvent(orgId, id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+  }
+}
+
+describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it draws; scoring's auto-advance does not publish it twice (R10f)", () => {
+  it("POST /stages/{id}/complete that draws the knockout: the hub key alone in one DEL after commit, the division push, no fixture push", async () => {
+    const rig = await groupsToKnockoutRig();
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const reply = await completeByRoute(rig.auth, rig.groupId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(reply.body.data?.completed).toBe(true);
+    expect(created.length, "the completion drew the knockout").toBeGreaterThan(0);
+    expect(reply.body.data?.next_stage_fixtures).toBe(created.length);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
+  }, 120_000);
+
+  it("POST /stages/{id}/complete on a frozen division: the completion stands, no knockout is drawn, nothing is sent", async () => {
+    const rig = await groupsToKnockoutRig();
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await setDivisionLocks(rig.auth, rig.divisionId, { schedule_locked: true });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    const reply = await completeByRoute(rig.auth, rig.groupId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    expect(reply.body.data?.completed).toBe(true);
+    expect(reply.body.data?.next_stage_fixtures, "the freeze refused the draw").toBeUndefined();
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("POST /stages/{id}/complete of the last stage: the division completes, nothing is drawn, nothing is sent", async () => {
+    const { auth } = await seedOrgOnPlan("pro");
+    const rig = await divisionRig(auth, { entrants: 2 });
+    await decideThroughEngine(auth.orgId, rig.fixtureIds);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    const reply = await completeByRoute(auth, rig.stages[0]!.stageId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    expect(reply.body.data?.division_completed).toBe(true);
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
+  it("auto-advance through scoring: the deciding score draws the knockout and sends scoring's own one DEL and pushes, nothing more", async () => {
+    const rig = await groupsToKnockoutRig({ autoProgress: true });
+    const [first, last] = rig.groupFixtures;
+    await scoreEvent(rig.auth, first!, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(rig.auth, first!, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    await scoreEvent(rig.auth, last!, { expected_seq: 0, type: "core.start", payload: {} });
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    await scoreEvent(rig.auth, last!, { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(created.length, "the deciding score auto-advanced into the knockout").toBeGreaterThan(0);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await sleep(40);
+    expect(probe.dels, "scoring's DEL of its fixture and the hub key, once; no second hub DEL for the draw").toEqual([
+      [fixtureKey(last!), hubKey(rig.competitionId)],
+    ]);
+    expect(probe.divisionPushes, "scoring's division push, once; no schedule push for the draw").toEqual([
+      [rig.divisionId, "score"],
+    ]);
+    expect(probe.fixturePushes).toEqual([[last!, "event"]]);
   }, 120_000);
 });
