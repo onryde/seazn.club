@@ -67,7 +67,10 @@ const entrant = (id: string, name: string, seed: number): PublicEntrant => ({
  *  union that dropped it again fails `tsc` here. */
 type StageKind = EmbedPayload["stages"][number]["kind"];
 
-const payload = (locale: string, kind: StageKind, fixtures: PublicFixture[]): EmbedPayload => ({
+type Stage = EmbedPayload["stages"][number];
+const oneStage = (kind: StageKind): Stage[] => [{ id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active" }];
+
+const payload = (locale: string, stages: Stage[], fixtures: PublicFixture[]): EmbedPayload => ({
   org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: locale },
   competition: {
     id: "c1",
@@ -95,9 +98,7 @@ const payload = (locale: string, kind: StageKind, fixtures: PublicFixture[]): Em
     sport_name: null,
     entrant_count: 4,
   } as EmbedPayload["division"],
-  stages: [
-    { id: "st", division_id: "d1", seq: 1, kind, name: "Finals", status: "active" },
-  ],
+  stages,
   pools: [],
   fixtures,
   standings: [],
@@ -108,12 +109,15 @@ const payload = (locale: string, kind: StageKind, fixtures: PublicFixture[]): Em
 
 interface ScheduleProps {
   roundLabels: Record<string, string>;
+  stageOrder: Record<string, number>;
   copy: { timeTbd: string; allEntrants: string };
 }
 
-/** The page's `Schedule`, its props, and its initial markup. */
-async function scheduleOf(locale: string, kind: StageKind, fixtures: PublicFixture[]) {
-  embedDivisionData.mockResolvedValue({ ok: true, data: payload(locale, kind, fixtures) });
+/** The page's `Schedule`, its props, and its initial markup. `stages` is one
+ *  stage of `kind` (id "st"), or the stages given. */
+async function scheduleOf(locale: string, stages: StageKind | Stage[], fixtures: PublicFixture[]) {
+  const list = typeof stages === "string" ? oneStage(stages) : stages;
+  embedDivisionData.mockResolvedValue({ ok: true, data: payload(locale, list, fixtures) });
   const root = (await EmbedWidgetPage({
     params: Promise.resolve({ id: "d1", widget: "schedule" }),
   })) as ReactElement<{ children: ReactElement<ScheduleProps> }>;
@@ -222,5 +226,34 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
     const probes = english.filter((text) => !spanishAll.has(text));
     expect(probes.length, "some English value must differ from es to witness a leak").toBeGreaterThanOrEqual(4);
     expect(probes.filter((text) => html.some((h) => shows(h, text)))).toEqual([]);
+  });
+
+  // N1e e1 (review-n1d I1): round_no restarts in every stage, so walking the
+  // fixtures by round_no alone interleaved a league with the knockout it feeds.
+  it("en league (seq 1) then knockout (seq 2), nothing timed (round view): every league round, then Semi-finals, then Final (N1e e1)", async () => {
+    const stages: Stage[] = [
+      { id: "ko", division_id: "d1", seq: 2, kind: "knockout", name: "Knockout", status: "active" },
+      { id: "lg", division_id: "d1", seq: 1, kind: "league", name: "League", status: "complete" },
+    ];
+    const league = [1, 2, 3].flatMap((round) => [
+      F({ id: `lg-${round}-1`, stage_id: "lg", round_no: round, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+      F({ id: `lg-${round}-2`, stage_id: "lg", round_no: round, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
+    ]);
+    const ko = knockout(null, null).map((f) => ({ ...f, id: `ko-${f.id}`, stage_id: "ko" }));
+    // Handed in the order that interleaved them: by round_no across stages.
+    const fixtures = [...ko, ...league].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+
+    const { props, html } = await scheduleOf("en", stages, fixtures);
+    const ui = await getDictionary("en", "ui");
+    // Each stage's rounds, named from the dictionary for its kind.
+    const namesFor: Record<string, string[]> = {
+      league: [1, 2, 3].map((n) => t(ui, "bracket.round.plain", { n })),
+      knockout: [t(ui, "bracket.round.semi"), t(ui, "bracket.round.final")],
+    };
+    const expected = [...stages].sort((a, b) => a.seq - b.seq).flatMap((stage) => namesFor[stage.kind]!);
+
+    expect(props.stageOrder).toEqual({ ko: 2, lg: 1 });
+    const headings = [...html.matchAll(/<h3[^>]*>([^<]+)</g)].map((m) => m[1]);
+    expect(headings).toEqual(expected.map(esc));
   });
 });

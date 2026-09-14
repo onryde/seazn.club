@@ -46,6 +46,10 @@ interface Props {
    *  heads by it, so a page playoff's Qualifier 1 and Eliminator, which share
    *  a round_no, are two groups. Built server-side by the caller. */
   roundLabels: Record<string, string>;
+  /** N1e e1 — each stage's `seq`, keyed by stage id. `round_no` restarts in
+   *  every stage, so the round view orders its groups by stage first. A stage
+   *  missing here sorts after every stage that is present. */
+  stageOrder: Record<string, number>;
   /** N1d d5 — phrases this client component cannot resolve itself, in the
    *  org's locale, built server-side by the caller. */
   copy: ScheduleCopy;
@@ -170,7 +174,7 @@ function ScorebugRow({
   );
 }
 
-export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels, roundLabels, copy }: Props) {
+export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels, roundLabels, stageOrder, copy }: Props) {
   const [entrant, setEntrant] = useState<string>("");
   // Day view first (fixtures by date) — matches how a spectator reads a
   // timetable on the day. Round view stays a click away for bracket-style flow.
@@ -183,14 +187,27 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
   const mode = anyScheduled ? view : "round";
 
-  // Round view (N1d d5): one group per round NAME, not per round_no, in play
-  // order: groups are opened walking the fixtures by (round_no, seq_in_round),
-  // so each lands at its earliest match whatever order the caller passed.
-  const inPlayOrder = [...shown].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+  // Round view (N1d d5, N1e e1): one group per round NAME within a stage, in
+  // play order. Groups are opened walking the fixtures by the stage's seq, then
+  // (round_no, seq_in_round), so each lands at its stage's place and its
+  // earliest match whatever order the caller passed. `round_no` restarts in
+  // every stage: without the stage first, a league's rounds interleaved with
+  // the knockout it feeds, and two stages' "Round 1" merged into one group.
+  const stageRank = (f: PublicFixture) => stageOrder[f.stage_id] ?? Number.POSITIVE_INFINITY;
+  const inPlayOrder = [...shown].sort(
+    (a, b) => stageRank(a) - stageRank(b) || a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
+  );
   const groups = new Map<string, PublicFixture[]>();
+  const roundNames = new Map<string, string>();
   for (const f of mode === "day" ? shown : inPlayOrder) {
-    const key =
-      mode === "day" ? (dayKey(f.scheduled_at, tz) ?? UNSCHEDULED) : (roundLabels[f.id] ?? String(f.round_no));
+    let key: string;
+    if (mode === "day") {
+      key = dayKey(f.scheduled_at, tz) ?? UNSCHEDULED;
+    } else {
+      const name = roundLabels[f.id] ?? String(f.round_no);
+      key = JSON.stringify([f.stage_id, name]);
+      roundNames.set(key, name);
+    }
     const list = groups.get(key) ?? [];
     list.push(f);
     groups.set(key, list);
@@ -206,7 +223,7 @@ export function Schedule({ fixtures, entrantNames, divisionPath, tz, slotLabels,
       : [...groups.entries()];
 
   const groupLabel = (key: string): string => {
-    if (mode === "round") return key;
+    if (mode === "round") return roundNames.get(key) ?? key;
     if (key === UNSCHEDULED) return copy.timeTbd;
     return new Date(`${key}T12:00`).toLocaleDateString("en-GB", {
       weekday: "long",

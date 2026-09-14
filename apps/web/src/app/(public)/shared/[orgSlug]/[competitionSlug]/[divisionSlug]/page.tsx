@@ -133,6 +133,9 @@ export default async function DivisionHomePage({ params }: Props) {
     timeTbd: t(dict, "matchCentre.status.timeTbd"),
     allEntrants: t(dict, "division.filter.allEntrants"),
   };
+  // N1e e1: round_no restarts in every stage, so the round view orders its
+  // groups by each stage's seq first, as the embed schedule widget does.
+  const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -394,6 +397,7 @@ export default async function DivisionHomePage({ params }: Props) {
             tz={tz}
             slotLabels={slotLabels}
             roundLabels={roundLabels}
+            stageOrder={stageOrder}
             copy={scheduleCopy}
           />,
           standingsPanel,

@@ -199,4 +199,25 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
       allEntrants: t(pub, "division.filter.allEntrants"),
     });
   });
+
+  // N1e e1 (review-n1d I1) — the schedule tab's round view orders its groups by
+  // stage first; the page hands its Schedule each stage's `seq`, as the embed
+  // schedule widget does.
+  it("hands its Schedule every stage's seq, keyed by stage id (N1e e1)", async () => {
+    const data = divisionData();
+    const stages = [
+      { id: "ko", division_id: "d1", seq: 2, kind: "knockout", name: "Knockout", status: "active" },
+      { id: "lg", division_id: "d1", seq: 1, kind: "league", name: "League", status: "complete" },
+    ];
+    getPublicDivision.mockResolvedValue({ ...data, stages });
+
+    const root = await DivisionHomePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+    });
+    const schedules = findElements(root, Schedule);
+    expect(schedules, "the page builds one Schedule").toHaveLength(1);
+    const { stageOrder } = schedules[0]!.props as { stageOrder: Record<string, number> };
+    expect(stageOrder).toEqual(Object.fromEntries(stages.map((s) => [s.id, s.seq])));
+  });
 });
+

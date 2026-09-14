@@ -114,6 +114,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
     timeTbd: t(dict, "matchCentre.status.timeTbd"),
     allEntrants: t(dict, "division.filter.allEntrants"),
   };
+  // N1e e1: round_no restarts in every stage, so the round view orders its
+  // groups by each stage's seq first.
+  const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
 
   let body: React.ReactNode;
   if (widget === "schedule") {
@@ -125,6 +128,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         tz={tz}
         slotLabels={slotLabels}
         roundLabels={roundLabels}
+        stageOrder={stageOrder}
         copy={scheduleCopy}
       />
     );
