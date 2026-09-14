@@ -53,8 +53,8 @@ export interface MatchPosterSide {
   /** Tile paint — the side's own colour, else one derived from its name. */
   bg: string;
   ink: string;
-  /** Absolute badge URL, or null: satori fetches this, and a relative path
-   *  would throw and take the WHOLE image down rather than one tile. */
+  /** The badge as a `data:` URI — bytes this app fetched itself — or null for
+   *  the monogram tile. Never a URL: see `drawableImage` below. */
   badgeUrl: string | null;
   score: string | null;
   sub: string | null;
@@ -73,6 +73,7 @@ export interface MatchPosterModel {
   theme: OgTheme;
   variant: MatchPosterVariant;
   orgName: string;
+  /** The org logo as a `data:` URI, or null for the initials tile. */
   logo: string | null;
   competitionName: string;
   chip: string;
@@ -88,7 +89,19 @@ export interface MatchPosterModel {
 export interface MatchPosterInput {
   branding: unknown[];
   orgName: string;
+  /**
+   * The org logo ALREADY RESOLVED to bytes by `posterImageDataUrl`, or null.
+   * Not `org.logo`: that is a URL, and satori would fetch it (see
+   * `drawableImage`). A URL handed here is dropped, not drawn.
+   */
   logo: string | null;
+  /**
+   * Each side's badge, in header order, resolved the same way. Separate from
+   * `header.sides[i].badgeUrl` on purpose — the header's value is the
+   * organiser-typed URL, this is what came back from fetching it, and keeping
+   * them apart is what makes "the model never holds a URL" checkable.
+   */
+  badges: [string | null, string | null];
   competitionName: string;
   divisionName: string;
   /** The stage's own name ("League", "Quarter-final") — the board's hero line
@@ -175,8 +188,20 @@ function paintPair(home: SideT, away: SideT): [{ bg: string; ink: string }, { bg
   return [h, a];
 }
 
-function absoluteBadge(url: string | null): string | null {
-  return url !== null && /^https?:\/\//i.test(url) ? url : null;
+/**
+ * The ONLY thing this layout will put in an `<img src>`: bytes, already
+ * fetched and re-encoded by `server/og/poster-image.ts`.
+ *
+ * satori does not merely read a `src` — it FETCHES it, server-side, from
+ * inside our own network, and both surfaces that draw this are public routes
+ * whose badge and logo URLs are organiser-typed free text. Refusing anything
+ * that is not a `data:` URI here means the guard holds even for a caller that
+ * forgets the fetcher: a raw URL renders the monogram tile, never a request.
+ * (It also keeps the original reason this function existed — a relative path
+ * throws inside satori and takes the WHOLE image down, not one tile.)
+ */
+function drawableImage(src: string | null): string | null {
+  return src !== null && src.startsWith("data:image/") ? src : null;
 }
 
 export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
@@ -207,7 +232,7 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
       name: side.name,
       bg: paint.bg,
       ink: paint.ink,
-      badgeUrl: absoluteBadge(side.badgeUrl),
+      badgeUrl: drawableImage(input.badges[i]),
       // An upcoming match has no score to print even if a stale summary left
       // one behind; the board's upcoming tile is the crest and nothing else.
       score: variant === "upcoming" ? null : header.scoreLines[i],
@@ -278,7 +303,7 @@ export function matchPosterModel(input: MatchPosterInput): MatchPosterModel {
     theme: ogTheme(...input.branding),
     variant,
     orgName: input.orgName,
-    logo: input.logo,
+    logo: drawableImage(input.logo),
     competitionName: input.competitionName,
     chip,
     chipLive: variant === "live",

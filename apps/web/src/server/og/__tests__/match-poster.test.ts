@@ -1,11 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { matchPosterModel, type MatchPosterInput } from "@/server/og/match-poster";
+import { MatchPoster, matchPosterModel, type MatchPosterInput } from "@/server/og/match-poster";
 import { monogramInk, autoColour } from "@/components/ui/entity-logo";
 import type { MatchCentreDocT, SideT } from "@/server/public-site/match-centre-schema";
 
 // The PURE half of the match poster (mirrors og/model.test and post-card.test):
 // which variant, which paint, which slots fill. A satori tree cannot be
 // inspected from a route, so everything worth asserting is decided here.
+
+/** What an image resolved by `server/og/poster-image.ts` looks like: bytes,
+ *  never a URL. */
+const DATA_PREFIX = "data:image/png;base64,";
+
+/**
+ * Every `src` satori would be handed. There is no DOM here (`environment:
+ * "node"`), so this walks the element tree by hand — and INVOKES the
+ * function-typed elements with their real props, because `<Tile />` is where
+ * the badge lives and an unrendered component element carries no children.
+ */
+function srcsIn(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(srcsIn);
+  if (node === null || typeof node !== "object") return [];
+  const el = node as { type?: unknown; props?: Record<string, unknown> };
+  const props = el.props ?? {};
+  if (typeof el.type === "function") {
+    return srcsIn((el.type as (p: Record<string, unknown>) => unknown)(props));
+  }
+  const here = typeof props.src === "string" ? [props.src] : [];
+  return [...here, ...srcsIn(props.children)];
+}
 
 const side = (over: Partial<SideT> = {}): SideT => ({
   entrantId: "e1",
@@ -78,6 +100,7 @@ const input = (over: Partial<MatchPosterInput> = {}): MatchPosterInput => ({
   branding: [null, null],
   orgName: "Southend Cricket Club",
   logo: null,
+  badges: [null, null],
   competitionName: "Southend Premier League 2026",
   divisionName: "Men's T8",
   stageName: "Round 1",
@@ -225,21 +248,57 @@ describe("matchPosterModel — the tile paint, which is the whole of Option A", 
     expect([m.sides[0].bg, m.sides[1].bg]).toEqual(["#2563eb", "#2563eb"]);
   });
 
-  it("a badge is carried only when satori can actually fetch it", () => {
+  it("a badge is carried only as bytes the poster fetcher already resolved", () => {
+    const m = matchPosterModel(
+      input({ badges: [`${DATA_PREFIX}AAAA`, null] }),
+    );
+    expect(m.sides[0].badgeUrl).toBe(`${DATA_PREFIX}AAAA`);
+    // No badge is the monogram tile, which is the fallback for every refusal.
+    expect(m.sides[1].badgeUrl).toBeNull();
+  });
+
+  it("a REMOTE badge URL never reaches the model, whatever the loader hands it", () => {
+    // satori fetches whatever `src` it is given, server-side, on a public
+    // route. `server/og/poster-image.ts` is the only thing allowed to make
+    // that request, so the model refuses anything that is not already bytes —
+    // a caller that forgets the fetcher renders monograms, not an SSRF.
     const m = matchPosterModel(
       input({
+        badges: ["https://projectref.supabase.co/storage/v1/object/public/assets/a.png", "/uploads/b.png"],
+        // The organiser-typed URL on the header is not a source of `src`
+        // either: the loader resolves it, and only the resolution is drawn.
         header: header({
           sides: [
             side({ badgeUrl: "https://cdn.example.com/a.png" }),
-            // A relative path would throw inside satori and take the WHOLE
-            // image down — the tile falls back to paint instead.
-            side({ badgeUrl: "/uploads/b.png" }),
+            side({ badgeUrl: "https://cdn.example.com/b.png" }),
           ],
         }),
       }),
     );
-    expect(m.sides[0].badgeUrl).toBe("https://cdn.example.com/a.png");
-    expect(m.sides[1].badgeUrl).toBeNull();
+    expect([m.sides[0].badgeUrl, m.sides[1].badgeUrl]).toEqual([null, null]);
+  });
+
+  it("a REMOTE org logo never reaches the model either", () => {
+    expect(matchPosterModel(input({ logo: "https://cdn.example.com/logo.png" })).logo).toBeNull();
+    expect(matchPosterModel(input({ logo: `${DATA_PREFIX}BBBB` })).logo).toBe(`${DATA_PREFIX}BBBB`);
+  });
+
+  it("no `src` ANYWHERE in the drawn tree is a remote URL, at either size", () => {
+    // Model-level assertions only cover the two slots that exist today. This
+    // walks what satori would actually be handed, so a third image added to
+    // this layout later cannot quietly reopen the outbound request.
+    const m = matchPosterModel(
+      input({
+        logo: "https://cdn.example.com/logo.png",
+        badges: ["https://cdn.example.com/a.png", `${DATA_PREFIX}CCCC`],
+      }),
+    );
+    for (const size of ["og", "poster"] as const) {
+      const srcs = srcsIn(MatchPoster({ model: m, size }));
+      // Anti-vacuous: one badge DID resolve, so the walk must find something.
+      expect(srcs.length).toBeGreaterThan(0);
+      expect(srcs.filter((src) => !src.startsWith("data:image/"))).toEqual([]);
+    }
   });
 });
 

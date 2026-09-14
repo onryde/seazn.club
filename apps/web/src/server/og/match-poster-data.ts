@@ -18,6 +18,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { servingSide } from "@/lib/public-site";
 import { matchPosterModel, type MatchPosterModel } from "./match-poster";
+import { posterImageDataUrl } from "./poster-image";
 import type { MatchCentreDocT, MsgT } from "@/server/public-site/match-centre-schema";
 
 /**
@@ -79,10 +80,24 @@ export async function loadMatchPosterModel(
   const [pub, ui] = await Promise.all([getDictionary(locale, "public"), getDictionary(locale, "ui")]);
   const say = (m: MsgT | null): string | null => (m === null ? null : t(pub, m.key, m.params));
 
+  // Every remote image the two match surfaces draw is fetched HERE, through
+  // the one guarded fetcher, and reaches satori as bytes. Left as URLs, satori
+  // would make these requests itself — server-side, on a public route, to
+  // whatever host an organiser typed into `badge_url` / `logo_url`. In
+  // parallel because each is independently bounded by its own timeout, so
+  // three of them cost one; `posterImageDataUrl` never rejects, so no failure
+  // here can take the image down.
+  const [logo, homeBadge, awayBadge] = await Promise.all([
+    posterImageDataUrl(org.logo),
+    posterImageDataUrl(header.sides[0].badgeUrl),
+    posterImageDataUrl(header.sides[1].badgeUrl),
+  ]);
+
   return matchPosterModel({
     branding: [competition.branding, org.branding],
     orgName: org.name,
-    logo: org.logo,
+    logo,
+    badges: [homeBadge, awayBadge],
     competitionName: competition.name,
     divisionName: division.name,
     stageName: stageRow?.name ?? null,
