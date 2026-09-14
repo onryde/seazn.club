@@ -29,12 +29,29 @@ import {
   writeTvHintDismissed,
 } from "./kiosk-tv-hint-logic";
 
+/** The legacy half of `MediaQueryList`: iOS Safari 13 and older have only this. */
+interface LegacyMediaQueryList {
+  addListener?: (listener: () => void) => void;
+  removeListener?: (listener: () => void) => void;
+}
+
 /** Subscribe to the viewport crossing the query's width, which a resize or a
- *  rotation does. Exported for its own test: a static render never subscribes. */
+ *  rotation does. Exported for its own test: a static render never subscribes.
+ *  An old Safari has no `addEventListener` on the list, only `addListener`; a
+ *  browser with neither gets no subscription, and the banner keeps the width it
+ *  read first. It must never throw: it runs in an effect, and a throw there
+ *  takes the whole kiosk to the error screen. */
 export function subscribeToNarrowViewport(onChange: () => void): () => void {
-  const query = window.matchMedia(KIOSK_TV_HINT_QUERY);
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
+  const query = window.matchMedia(KIOSK_TV_HINT_QUERY) as MediaQueryList & LegacyMediaQueryList;
+  if (typeof query.addEventListener === "function") {
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }
+  if (typeof query.addListener === "function") {
+    query.addListener(onChange);
+    return () => query.removeListener?.(onChange);
+  }
+  return () => undefined;
 }
 
 /** Another tab's ✕ arrives as a `storage` event. This tab's own ✕ also sets

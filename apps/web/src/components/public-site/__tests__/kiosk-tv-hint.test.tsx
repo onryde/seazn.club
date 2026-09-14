@@ -326,3 +326,46 @@ describe("<KioskTvHint>: its controls", () => {
     expect(removed).toEqual(added);
   });
 });
+
+// N1e e8 (review-n1d G3) — iOS Safari 13 and older give a MediaQueryList with
+// no `addEventListener`, only the legacy `addListener`/`removeListener`. The
+// subscription runs in a passive effect, so a throw there took the whole kiosk
+// to the error screen.
+describe("subscribeToNarrowViewport: an old Safari's MediaQueryList (N1e e8)", () => {
+  function stubLegacyMatchMedia(api: "legacy" | "none") {
+    const added: (() => void)[] = [];
+    const removed: (() => void)[] = [];
+    const list: Record<string, unknown> = { media: KIOSK_TV_HINT_QUERY, matches: true };
+    if (api === "legacy") {
+      list.addListener = (fn: () => void) => void added.push(fn);
+      list.removeListener = (fn: () => void) => void removed.push(fn);
+    }
+    const matchMedia = vi.fn(() => list);
+    vi.stubGlobal("window", { matchMedia });
+    return { list, matchMedia, added, removed };
+  }
+
+  it("no addEventListener: subscribes through addListener, and lets go of the same listener through removeListener", () => {
+    const { list, added, removed } = stubLegacyMatchMedia("legacy");
+    expect("addEventListener" in list, "the premise: an old Safari list").toBe(false);
+    const onChange = vi.fn();
+
+    let off: () => void = () => undefined;
+    expect(() => {
+      off = subscribeToNarrowViewport(onChange);
+    }).not.toThrow();
+    expect(added).toEqual([onChange]);
+    added[0]!();
+    expect(onChange).toHaveBeenCalledTimes(1);
+
+    expect(() => off()).not.toThrow();
+    expect(removed).toEqual([onChange]);
+  });
+
+  it("neither API: no subscription and no throw (the banner keeps the width it read first)", () => {
+    const { matchMedia } = stubLegacyMatchMedia("none");
+    const off = subscribeToNarrowViewport(vi.fn());
+    expect(matchMedia).toHaveBeenCalledWith(KIOSK_TV_HINT_QUERY);
+    expect(() => off()).not.toThrow();
+  });
+});
