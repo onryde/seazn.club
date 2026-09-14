@@ -23,12 +23,14 @@ import sharp from "sharp";
  * URL. It goes through here anyway, because the fallback is live code and a
  * future writer for it would otherwise reopen this silently.
  *
- * What it does instead. Only the host this app serves its OWN uploads from is
- * fetched at all, over https, with a hard timeout and a byte cap; the bytes are
- * re-encoded here and handed to satori as a `data:` URI. Anything else — a
- * different host, a redirect, a wrong content type, a slow or oversized or
- * corrupt body — returns null, and the tile falls back to the monogram that
- * already renders for a side with no badge. Never a throw, never a 500.
+ * What it does instead. Only the origin this app serves its OWN uploads from
+ * is fetched at all — host AND port — over https, under one budget that covers
+ * the decode as well as the request, with a byte cap and a pixel cap; the bytes
+ * are re-encoded here and handed to satori as a `data:` URI. Anything else — a
+ * different origin, a redirect, a wrong content type, bytes that turn out not
+ * to BE that type, a slow or oversized or corrupt body — returns null, and the
+ * tile falls back to the monogram that already renders for a side with no
+ * badge. Never a throw, never a 500.
  *
  * `match-poster.tsx` then refuses anything that is not a `data:` URI, so the
  * guard cannot be reopened by a caller that forgets this module.
