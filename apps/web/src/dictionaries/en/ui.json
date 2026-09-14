@@ -5113,5 +5113,6 @@
   "stream.credits.perMatch": "{price} per match",
   "stream.credits.popular": "Most clubs",
   "stream.credits.footnote": "Sandbox prices until launch.",
-  "stream.credits.soon": "Coming soon"
+  "stream.credits.soon": "Coming soon",
+  "og.matchCentre": "Match centre"
 }

@@ -3020,6 +3020,7 @@ export type DictionaryKey =
   | "officials.total"
   | "officials.unavailableOn"
   | "officials.unavailableSuffix"
+  | "og.matchCentre"
   | "onboarding.subtitle"
   | "onboarding.welcome"
   | "org.competitionsBy"

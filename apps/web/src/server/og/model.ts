@@ -159,7 +159,9 @@ export function fixtureCardModel(input: FixtureInput): FixtureCardModel {
     // entrant nor a slot label was known, the same "nothing at all" case
     // resolveSlotLabel(null, …) covers everywhere else.
     home: youthHide ? input.divisionName : (input.homeName ?? resolveSlotLabel(null, lookup, "schedule.tbd")),
-    away: youthHide ? "Match centre" : (input.awayName ?? resolveSlotLabel(null, lookup, "schedule.tbd")),
+    // The youth card's away half names the match centre — a dictionary
+    // string in the caller's locale, never hardcoded English (N1c c4).
+    away: youthHide ? lookup("og.matchCentre") : (input.awayName ?? resolveSlotLabel(null, lookup, "schedule.tbd")),
     headline: youthHide ? null : input.headline,
     status,
   };

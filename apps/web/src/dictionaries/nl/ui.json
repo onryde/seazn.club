@@ -5113,5 +5113,6 @@
   "stream.credits.perMatch": "{price} per wedstrijd",
   "stream.credits.popular": "Meeste clubs",
   "stream.credits.footnote": "Testprijzen tot de lancering.",
-  "stream.credits.soon": "Binnenkort"
+  "stream.credits.soon": "Binnenkort",
+  "og.matchCentre": "Wedstrijdcentrum"
 }

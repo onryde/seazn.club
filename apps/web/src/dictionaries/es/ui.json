@@ -5113,5 +5113,6 @@
   "stream.credits.perMatch": "{price} por partido",
   "stream.credits.popular": "La mayoría de clubes",
   "stream.credits.footnote": "Precios de prueba hasta el lanzamiento.",
-  "stream.credits.soon": "Muy pronto"
+  "stream.credits.soon": "Muy pronto",
+  "og.matchCentre": "Centro de partido"
 }

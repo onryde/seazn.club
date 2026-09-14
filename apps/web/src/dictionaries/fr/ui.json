@@ -5113,5 +5113,6 @@
   "stream.credits.perMatch": "{price} par match",
   "stream.credits.popular": "Le plus choisi",
   "stream.credits.footnote": "Tarifs de test jusqu'au lancement.",
-  "stream.credits.soon": "Bientôt disponible"
+  "stream.credits.soon": "Bientôt disponible",
+  "og.matchCentre": "Centre de match"
 }

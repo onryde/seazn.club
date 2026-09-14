@@ -117,4 +117,17 @@ describe("fixtureCardModel youth rule", () => {
     expect(defaulted.home).toBe("TBD"); // en schedule.tbd — unchanged behaviour
     expect(defaulted.away).toBe("TBD");
   });
+
+  // N1c c4 — a youth card's hidden away side printed a hardcoded English
+  // "Match centre" whatever the org's language. It comes from the dictionary
+  // through the caller's `lookup`, like the TBD fallback above.
+  it("youth individuals: the hidden away side reads og.matchCentre in the caller's locale (es), not English", () => {
+    const esLookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("es", k, v);
+    const m = fixtureCardModel({ ...base, youth: true, entrantKind: "individual", lookup: esLookup });
+    expect(msgFor("es", "og.matchCentre"), "the premise: es differs from en").not.toBe(msgFor("en", "og.matchCentre"));
+    expect(m.away).toBe(msgFor("es", "og.matchCentre"));
+
+    const defaulted = fixtureCardModel({ ...base, youth: true, entrantKind: "individual" });
+    expect(defaulted.away).toBe(msgFor("en", "og.matchCentre"));
+  });
 });
