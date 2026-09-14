@@ -645,6 +645,26 @@ describe.skipIf(!HAS_DB)("an ad-hoc fixture, a ladder challenge and a stage dele
     await expectDelThenPushes(rig.divisionId, competitionId, deleted);
   }, 120_000);
 
+  it("deleteStage of a stage with NO fixtures (R10f): the hub key alone in one DEL after commit, the division push; the other stage's fixtures are not named", async () => {
+    const { auth } = await seedOrg();
+    const rig = await divisionRig(auth, { entrants: 3, start: false });
+    const [empty] = await createStages(auth, rig.divisionId, { seq: 2, kind: "league", name: "L2", config: {} });
+    const competitionId = await competitionOf(rig.divisionId);
+    await quiesce();
+    const before = await board(rig.divisionId);
+    expect(rig.fixtureIds.length, "the first stage has fixtures to keep").toBeGreaterThan(0);
+    expect(before.size, "and only the first stage has fixtures").toBe(rig.fixtureIds.length);
+
+    probe.hold = true;
+    await deleteStage(auth, empty!.id);
+    expect(diff(before, await board(rig.divisionId)), "the empty stage took no fixture with it")
+      .toEqual({ moved: [], deleted: [], created: [] });
+    const [left] = await sql<{ n: number }[]>`select count(*)::int as n from stages where id = ${empty!.id}`;
+    expect(left!.n, "the stage itself is gone").toBe(0);
+
+    await expectDelThenPushes(rig.divisionId, competitionId, []);
+  }, 120_000);
+
   it("deleteStage refused (not the last stage) writes nothing and sends nothing", async () => {
     const { auth } = await seedOrg();
     const rig = await divisionRig(auth, { entrants: 3, stages: 2, start: false });
