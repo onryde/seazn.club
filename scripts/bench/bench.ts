@@ -150,20 +150,6 @@ async function gitSha(): Promise<string> {
 }
 
 /**
- * `sql` is REQUIRED here (never defaulted inside this function), mirroring
- * `runPreflight(base, probes)`'s own "the DI param is mandatory, the CALLER
- * decides real-vs-fake" idiom rather than `runTinySuite`'s OWN "optional,
- * defaults to real" one for `transport` — `main()` below is the ONE
- * production caller and it always constructs the real thing
- * (`createRealPlanSql`), so a live `_tiny` run always drives B03 T7's
- * plan-provisioning + DLS-gate probe; `lib/__tests__/bench-cli.test.ts`
- * proves this specific forwarding line exists by injecting a fake `sql` (and
- * a fake `transport`) and asserting `runTinySuite` actually receives them —
- * removing either the `sql:` or the `transport:` forward below reds that
- * test, independent of `lib/__tests__/tiny-suite-plan.test.ts`'s own
- * coverage of what `runTinySuite` DOES once it has one.
- */
-/**
  * B07a T7 fix round 1 (I1) — the ONE line that turns a resolved registry row
  * into a call to its own `run`, forwarding the row's OWN `play` declaration.
  * Before this existed, `runSuite` called `definition.run({...})` directly and
@@ -187,6 +173,20 @@ export function invokeSuiteDefinition(
   return definition.run(input, definition.play);
 }
 
+/**
+ * `sql` is REQUIRED here (never defaulted inside this function), mirroring
+ * `runPreflight(base, probes)`'s own "the DI param is mandatory, the CALLER
+ * decides real-vs-fake" idiom rather than `runTinySuite`'s OWN "optional,
+ * defaults to real" one for `transport` — `main()` below is the ONE
+ * production caller and it always constructs the real thing
+ * (`createRealPlanSql`), so a live `_tiny` run always drives B03 T7's
+ * plan-provisioning + DLS-gate probe; `lib/__tests__/bench-cli.test.ts`
+ * proves this specific forwarding line exists by injecting a fake `sql` (and
+ * a fake `transport`) and asserting `runTinySuite` actually receives them —
+ * removing either the `sql:` or the `transport:` forward below reds that
+ * test, independent of `lib/__tests__/tiny-suite-plan.test.ts`'s own
+ * coverage of what `runTinySuite` DOES once it has one.
+ */
 export async function runSuite(
   key: string,
   config: BenchConfig,
@@ -235,7 +235,30 @@ export async function runSuite(
      * green. Nothing joined them. */
     ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
     ...(transport === undefined ? {} : { transport }),
-    ...(probeTransport === undefined ? {} : { probeTransport }),
+    // B07a T7 fix round 2 — a live run never supplies `probeTransport`
+    // either (`main()` below calls `runSuite` with neither), so reusing it
+    // for `PackSuiteInput`'s other test-only transport seams
+    // (`simTransport`/`importTransport`/`startTransport`/`advanceTransport`/
+    // `oracleTransport` — all declared `ProbeTransport`-shaped, per their own
+    // doc comments in `run-suite.ts`) changes nothing in production. A test
+    // that supplies ONE fake covering every one of these interfaces (as
+    // `tiny-suite-simulate.test.ts`'s own `fakeServer()`/`playInput()`
+    // already does for tests that call `runPackSuite` directly) needs this
+    // forward to drive a REAL pack through `runSuite` itself — without it,
+    // steps ahead of a division's own play-mode dispatch (division-start,
+    // discipline/suspension oracle reads) fall through to their OWN real,
+    // network-hitting defaults and abort the run before the dispatch this
+    // is testing is ever reached.
+    ...(probeTransport === undefined
+      ? {}
+      : {
+          probeTransport,
+          simTransport: probeTransport,
+          importTransport: probeTransport,
+          startTransport: probeTransport,
+          advanceTransport: probeTransport,
+          oracleTransport: probeTransport,
+        }),
   });
 }
 

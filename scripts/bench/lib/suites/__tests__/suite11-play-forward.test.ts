@@ -15,6 +15,21 @@
 // live dispatch inside `runPackSuite` the way the `_tiny` tests prove for
 // `runTinySuite`. Recorded as a scope gap in the fix-round-1 report, not
 // claimed as full coverage.
+//
+// B07a T7 fix round 2 — I1(b)/(c): the round-1 tests above proved
+// `runSuite11` itself forwards `play`, but nothing drove `bench.ts`'s own
+// `runSuite` or the REAL registry row's `run: runSuite11` binding — both
+// M1 (`bench.ts:209`'s forwarding line reverted) and M3 (the row's `run`
+// replaced by a wrapper that drops `play`) survived a mutation re-review
+// unnoticed. The second describe block below closes that: it mocks
+// `../registry.ts` (keeping the row's REAL `run` binding, injecting only
+// `play`) ALONGSIDE the `run-suite.ts` mock above, then drives the REAL
+// exported `runSuite("suite11", ...)` from `bench.ts` and asserts the
+// options that reach the (still-mocked) `runPackSuite` carry the injected
+// `play`. `run-suite.ts` staying mocked here is why this test proves the
+// FORWARDING chain (`runSuite` -> the seam -> the row's real `run` ->
+// `runPackSuite`'s options) rather than a live dispatch — see this file's
+// own header for why no live suite11 dispatch test exists.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 
@@ -28,7 +43,30 @@ vi.mock("../run-suite.ts", () => ({
   }),
 }));
 
+// Mocks ONLY `lookupSuite`, injecting `play` onto the REAL `suite11` row
+// returned by `importOriginal()` — the spread (`{ ...real, play: {...} }`)
+// keeps that row's own `run: runSuite11` binding untouched, so it is the
+// REAL forwarding code that runs when `bench.ts`'s `runSuite("suite11", ...)`
+// resolves it (not a test-built fixture). `importOriginal()` resolves
+// `registry.ts`'s own imports (`tiny.ts`/`suite11.ts`) through the SAME
+// module registry as the `run-suite.ts` mock above, so the real
+// `runSuite11`/`runTinySuite` bindings it returns both route into the
+// mocked `runPackSuite` too — exactly what this file needs.
+vi.mock("../registry.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../registry.ts")>();
+  return {
+    ...actual,
+    lookupSuite: (key: string) => {
+      const real = actual.lookupSuite(key);
+      if (real === undefined) return real;
+      if (key === "suite11") return { ...real, play: { "d-worlds": "tap" as const } };
+      return real;
+    },
+  };
+});
+
 const { runSuite11, SUITE11_PACK_PATH } = await import("../suite11.ts");
+const { parseCliArgs, runSuite } = await import("../../../bench.ts");
 
 const silent = pino({ level: "silent" });
 
@@ -64,5 +102,30 @@ describe("runSuite11 forwards its `play` parameter into runPackSuite's options (
 
     expect(seen.called).toBe(1);
     expect(seen.opts).not.toHaveProperty("play");
+  });
+});
+
+describe("bench.ts's REAL runSuite drives the REAL `suite11` registry row (B07a T7 fix round 2, I1(b)/(c))", () => {
+  beforeEach(() => {
+    seen.called = 0;
+    seen.opts = undefined;
+  });
+
+  it("the row's own `play` (injected by the registry mock above) reaches runPackSuite's options", async () => {
+    // No `--suite` needed — `runSuite`'s `key` argument is independent of
+    // `config.suites`. `sql` is a bare stub: `runPackSuite` itself is
+    // mocked, so nothing ever reads it for real.
+    const config = parseCliArgs(["--base", "http://bench.example", "--wipe"]);
+    const stubSql = {} as Parameters<typeof runSuite>[3];
+
+    const report = await runSuite("suite11", config, "fix-round-2-i1bc-suite11", stubSql);
+
+    expect(report).toEqual({ key: "suite11", gate: "green", steps: [] });
+    expect(seen.called).toBe(1);
+    expect(seen.opts).toMatchObject({
+      suiteKey: "suite11",
+      packPath: SUITE11_PACK_PATH,
+      play: { "d-worlds": "tap" },
+    });
   });
 });

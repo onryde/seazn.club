@@ -17,7 +17,7 @@
 // `conflictAt` knob on `raw()` so one test can prove a refusal actually
 // reaches `report.errors`/`report.gate`, not just `simulate.ts`'s own unit
 // suite (which already covers the fold logic exhaustively).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,16 +26,22 @@ import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
-// B07a T7 — the play-mode tests drive `runPackSuite` DIRECTLY rather than
-// `runTinySuite`, because the declaration lives on the runner's own options
-// and `runTinySuite` builds those itself (see this file's own T7 block).
+// B07a T7 — most of the play-mode tests below drive `runPackSuite` DIRECTLY
+// rather than `runTinySuite`, so a declaration can be handed straight to the
+// runner's own options without needing a real registry row. (Fix round 1
+// gave `runTinySuite` its own `play` parameter — see the "fix round 1"
+// describe block further down, which drives `runTinySuite` itself.)
 import { runPackSuite } from "../suites/run-suite.ts";
 import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
 // B07a T7 fix round 1 (I1) — the seam `bench.ts`'s own `runSuite` calls to
 // forward a registry row's `play` into its `.run()`. Imported here (rather
 // than mutating `SUITE_REGISTRY`, which the ruling forbids in a test) so a
 // hand-built `SuiteDefinition` can drive the SAME line production uses.
-import { invokeSuiteDefinition } from "../../bench.ts";
+//
+// B07a T7 fix round 2 (I1(b)/(c)) — `runSuite`/`parseCliArgs` drive the REAL
+// exported entry point (not the extracted `invokeSuiteDefinition` helper
+// alone), against the REAL registry row (see the `vi.mock` below).
+import { invokeSuiteDefinition, parseCliArgs, runSuite } from "../../bench.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -55,6 +61,33 @@ import {
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 import { OracleResult } from "../report.ts";
+
+// B07a T7 fix round 2 (I1(b)/(c)) — mocks ONLY `registry.ts`'s `lookupSuite`,
+// injecting a `play` declaration onto the REAL `_tiny` row returned by
+// `importOriginal()`, while leaving that row's own `run` binding
+// (`registry.ts`'s `run: runTinySuite`) completely untouched — the spread
+// (`{ ...real, play: {...} }`) is what lets the REAL row's REAL binding
+// execute when `bench.ts`'s `runSuite("_tiny", ...)` resolves it, rather
+// than a test-built fixture (exactly the gap the round-1 re-review found:
+// round 1's own seam test handed `invokeSuiteDefinition` a row it built
+// itself, so `registry.ts`'s actual `run: runTinySuite` binding never ran).
+// `suiteKeys()`/`SUITE_REGISTRY` and every other row pass through
+// `...actual` unchanged. Nothing else in this file imports `registry.ts`
+// (directly or transitively — `run-suite.ts`/`tiny.ts`/`suite11.ts` do not
+// import it, only `bench.ts` does), so this mock cannot contaminate any
+// other test in this file.
+vi.mock("../suites/registry.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../suites/registry.ts")>();
+  return {
+    ...actual,
+    lookupSuite: (key: string) => {
+      const real = actual.lookupSuite(key);
+      if (real === undefined) return real;
+      if (key === "_tiny") return { ...real, play: { "d-tiny": "tap" as const } };
+      return real;
+    },
+  };
+});
 
 const silent = pino({ level: "silent" });
 
@@ -2713,9 +2746,11 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
 // so every test below is a differential against the positional answer rather
 // than a check that some call happened.
 //
-// These drive `runPackSuite` directly. `runTinySuite` builds the runner's
-// options itself (`suiteKey`/`packPath` literals), so it is the one entry
-// point that cannot carry a declaration.
+// These drive `runPackSuite` directly, so a `play` map can be handed
+// straight to the runner's own options without needing a real registry row.
+// (Fix round 1 gave `runTinySuite`/`runSuite11` their own `play` parameter,
+// forwarded into these SAME options — see the "fix round 1" describe block
+// below for the tests that drive THAT path instead.)
 // ---------------------------------------------------------------------------
 
 /** Every `POST /divisions/{id}/events/import` call. */
@@ -2994,11 +3029,20 @@ describe("an unplanned `play` key reds the gate instead of silently falling back
     expect(report.gate).toBe("red");
     const errorText = (report.errors ?? []).join("\n");
     expect(errorText).toContain('play declares division "d-tinyy"');
-    // "lists the planned refs" — every real division ref from the pack
-    // appears in the error text, not just a bare "not planned" refusal.
-    for (const ref of ["d-tiny", "d-badminton", "d-registration", "d-tiebreak"]) {
-      expect(errorText).toContain(ref);
-    }
+    // "lists the planned refs" — EXACT match on the message's own list, not
+    // a bare `toContain` per ref: "d-tiny" is itself a substring of this
+    // test's own bad key "d-tinyy" (from the assertion just above), so a
+    // plain `errorText.toContain("d-tiny")` would pass even if the
+    // "planned divisions:" list dropped "d-tiny" entirely — it could never
+    // fail. Split the message's own list and compare it exactly instead.
+    const plannedRefsText = errorText.split("planned divisions: ")[1];
+    expect(plannedRefsText).toBeDefined();
+    expect((plannedRefsText ?? "").split(", ")).toEqual([
+      "d-tiny",
+      "d-badminton",
+      "d-registration",
+      "d-tiebreak",
+    ]);
     // The typo never touched `d-tiny`'s OWN play — it still single-POSTs
     // positionally, proving the guard doesn't fail the run's data, only its
     // gate.
@@ -3011,15 +3055,63 @@ describe("an unplanned `play` key reds the gate instead of silently falling back
   // every run that declares `play` at all — and nothing above would catch
   // it, since the misspelled-key test only proves an unplanned key gets
   // flagged, never that a PLANNED one does not.
-  it("a correctly-named play key never trips the unplanned-division guard", async () => {
+  //
+  // TWO keys, one at index 0 (`d-tiny`) and one NOT (`d-badminton`, index
+  // 1) — re-review round 1 finding, M7: a positive pair that only ever
+  // declares the FIRST planned division cannot tell a correct guard from
+  // one that (wrongly) accepts only `plan.divisions[0]`, because "first
+  // division" and "planned division" give the same answer at index 0. Both
+  // keys here are declared at their OWN positional default (`api` for index
+  // 0, `import` for index 1), so the write path is unchanged either way —
+  // this test is about the GUARD, not the dispatch.
+  it("a correctly-named play key never trips the unplanned-division guard, at index 0 or later", async () => {
     const { transport, sql } = fakeServer();
 
     const report = await runPackSuite(playInput(transport, sql), {
       suiteKey: "_tiny",
       packPath: TINY_PACK_PATH,
-      play: { "d-tiny": "import" as PlayMode },
+      play: { "d-tiny": "api" as PlayMode, "d-badminton": "import" as PlayMode },
     });
 
     expect((report.errors ?? []).join("\n")).not.toContain("play declares division");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 fix round 2 — I1(b)/(c): round 1's own seam test proved
+// `invokeSuiteDefinition` forwards `definition.play`, but drove it with a
+// `SuiteDefinition` the TEST built — never `bench.ts`'s own exported
+// `runSuite`, and never the REAL registry row's `run` binding. Reverting
+// `bench.ts`'s call to the seam (M1), or replacing either registry row's
+// `run` with a wrapper that drops the second argument (M2/M3), stayed green.
+// This block drives the REAL `runSuite` against the REAL row (mocked ABOVE
+// to carry an injected `play`, but with the row's own `run` untouched), so
+// all three links — `runSuite` -> the seam -> the row's real binding -> the
+// dispatch — are exercised in one call.
+// ---------------------------------------------------------------------------
+describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7 fix round 2, I1(b)/(c))", () => {
+  it("a play declaration injected onto the real row reaches the real dispatch: tap refusal, zero writes", async () => {
+    const { transport, sql, calls } = fakeServer();
+
+    // No `--suite` needed: `runSuite`'s `key` argument is independent of
+    // `config.suites` (that list only gates the CLI's own `--suite` flag
+    // validation). `transport` doubles as `probeTransport` — the SAME fake
+    // `fakeServer()` returns already answers every route the DLS-gate probe,
+    // division-start, and (per the bench.ts fix above) every other granular
+    // test-only transport seam need; it is one comprehensive fake, not five
+    // different ones.
+    const config = parseCliArgs(["--base", "http://bench.example", "--wipe"]);
+    const report = await runSuite("_tiny", config, "fix-round-2-i1bc", sql, transport, transport);
+
+    expect(report.gate).toBe("red");
+    expect((report.errors ?? []).join("\n")).toContain(
+      "tap mode requires the scorer driver (Task 10)",
+    );
+    // The negative half: nothing was written for `d-tiny` on either write
+    // path. A silent fall-back (M1/M2/M3, each of which drops the `play`
+    // forward somewhere on this path) would single-POST `d-tiny` instead —
+    // it is index 0, so its positional default is `"api"`.
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
   });
 });
