@@ -237,7 +237,7 @@ describe("<KioskTvHint>: when it shows", () => {
     { width: 1023, show: true },
     { width: 1024, show: false },
     { width: 1280, show: false },
-  ])("width $width -> shown: $show (the query is $KIOSK_TV_HINT_QUERY)", ({ width, show }) => {
+  ])("width $width -> shown: $show, from the browser's answer to the kiosk's media query", ({ width, show }) => {
     const { matchMedia } = stubBrowser({ width });
     store.browser = true;
     expect(renderToStaticMarkup(hint()) !== "").toBe(show);
