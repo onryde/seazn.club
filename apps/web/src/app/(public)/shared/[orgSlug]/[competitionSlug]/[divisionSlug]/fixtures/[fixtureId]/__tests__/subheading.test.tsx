@@ -30,6 +30,7 @@ import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import {
   clearLiveFixture,
   publishLiveFixture,
+  useLiveFixtureSnapshot,
 } from "@/components/public-site/match-centre/live-fixture-channel";
 import { MatchCentre } from "@/components/public-site/match-centre/match-centre";
 import enPublic from "@/dictionaries/en/public.json";
@@ -106,6 +107,21 @@ function payload(over: Partial<PublicFixture> = {}): LiveFixtureData {
 
 const KICK_OFF = payload();
 const RESCHEDULED = payload({ scheduled_at: "2026-07-20T16:45:00.000Z" });
+
+/** The smallest possible channel subscriber, whose RENDER COUNT is the thing
+ *  under observation. The subheading's own output cannot witness a spurious
+ *  wake-up — it re-reads the same snapshot and draws the same sentence — so a
+ *  test that asserts on its text is green whether the channel's notifications
+ *  are keyed or broadcast to everything mounted. This one is not. */
+function countingSubscriber(fixtureId: string) {
+  const renders = { count: 0 };
+  const Probe = ({ id }: { id: string }) => {
+    renders.count += 1;
+    return useLiveFixtureSnapshot(id) === null ? "no snapshot" : "live snapshot";
+  };
+  const island = renderIsland(Probe, { id: fixtureId });
+  return { renders, island };
+}
 
 beforeEach(() => {
   // The channel is module state shared by every test in this file.
@@ -184,9 +200,20 @@ describe("MatchCentreSubheading — it moves when the fixture does", () => {
     expect(textOf(island.tree())).toContain("14:30");
   });
 
-  it("falls back to its own document once the publisher has gone", () => {
+  it("falls back to its own document once the publisher has gone, with no re-render of its own", () => {
     // `MatchCentre` clears its entry on unmount, so a client-side navigation
     // does not leave one document per visited fixture behind.
+    //
+    // M2 n3 — NO `rerender()` here, and that is the entire point of the case.
+    // This test used to call one between the clear and the assertion, which
+    // proved the ENTRY was gone and nothing about the subscriber being told:
+    // `clearLiveFixture` deleted the snapshot and never ran the listener set,
+    // so a still-mounted subscriber went on showing a removed document until
+    // some unrelated render happened to call `getSnapshot`. Nothing was wrong
+    // on the page today (`<MatchCentre>` and this island are siblings and
+    // unmount together) — the test simply could not see the asymmetry with
+    // `publishLiveFixture`, which does notify. Now the ONLY thing between the
+    // two assertions is the clear.
     const island = renderIsland(MatchCentreSubheading, {
       fixtureId: FIXTURE_ID,
       initial: KICK_OFF,
@@ -194,9 +221,44 @@ describe("MatchCentreSubheading — it moves when the fixture does", () => {
     });
     publishLiveFixture(FIXTURE_ID, RESCHEDULED);
     expect(textOf(island.tree())).toContain("17:45");
+
     clearLiveFixture(FIXTURE_ID);
-    island.rerender({ fixtureId: FIXTURE_ID, initial: KICK_OFF, dict });
+
     expect(textOf(island.tree())).toContain("14:30");
+    expect(textOf(island.tree()), "the removed snapshot is still on screen").not.toContain("17:45");
+  });
+
+  it("the clear's notification is KEYED, and a clear with nothing to remove is not one", () => {
+    // Asserted on a RENDER COUNT, not on rendered text, and that is forced:
+    // the subheading's own output is invariant under a spurious wake-up (it
+    // re-reads the same snapshot and draws the same line), so a text
+    // assertion here passes whether the notification is keyed or broadcast to
+    // every subscriber on the page. Written that way first, it did not kill
+    // either mutant.
+    const { renders } = countingSubscriber(FIXTURE_ID);
+    publishLiveFixture(FIXTURE_ID, RESCHEDULED);
+    publishLiveFixture("someone-else", KICK_OFF);
+    const woken = renders.count;
+    expect(woken, "the publish for this fixture did not reach its subscriber").toBeGreaterThan(1);
+
+    // A REAL removal for another fixture — `someone-else` has a snapshot, so
+    // this clear does notify; it must notify only that fixture's listeners.
+    clearLiveFixture("someone-else");
+    expect(renders.count, "another fixture's clear woke this subscriber").toBe(woken);
+
+    // A clear with nothing to remove is not a change either.
+    clearLiveFixture("nothing-was-ever-published-here");
+    expect(renders.count, "a clear that removed nothing woke this subscriber").toBe(woken);
+
+    // …and its OWN clear still does wake it, or the guard above would be
+    // satisfied by a `clearLiveFixture` that notifies nobody at all.
+    clearLiveFixture(FIXTURE_ID);
+    expect(renders.count, "this fixture's own clear did not wake its subscriber").toBeGreaterThan(woken);
+    const gone = renders.count;
+
+    // Clearing it a second time removes nothing, so it is not a change.
+    clearLiveFixture(FIXTURE_ID);
+    expect(renders.count, "a second clear of an already-empty entry woke this subscriber").toBe(gone);
   });
 });
 

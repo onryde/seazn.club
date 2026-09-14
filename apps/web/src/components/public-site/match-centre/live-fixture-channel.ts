@@ -46,9 +46,23 @@ export function publishLiveFixture(fixtureId: string, data: LiveFixtureData): vo
 /** Drop a fixture's snapshot. The PUBLISHER calls this on unmount: it owns the
  *  entry, and a subscriber unmounting first must not delete a document the
  *  publisher is still updating. Without it, every fixture visited in one
- *  client-side session would be retained for the life of the tab. */
+ *  client-side session would be retained for the life of the tab.
+ *
+ *  A REMOVAL IS A CHANGE, and it is announced like one — symmetrically with
+ *  `publishLiveFixture` above. Deleting in silence left a still-mounted
+ *  subscriber rendering a snapshot that no longer exists until some unrelated
+ *  re-render happened to call `getSnapshot` again. Nothing on the fixture page
+ *  could see it (`MatchCentre` and `MatchCentreSubheading` are siblings in one
+ *  tree and unmount together), which is exactly why it is worth closing now:
+ *  the next consumer of this channel is the one that would find out. */
 export function clearLiveFixture(fixtureId: string): void {
-  snapshots.delete(fixtureId);
+  // Only when something was actually removed — a clear for a fixture nothing
+  // has published is not a change, and waking every subscriber for it would
+  // make the tests' own `beforeEach` a store event. `Map.delete` reports it.
+  if (!snapshots.delete(fixtureId)) return;
+  // Keyed like the publish above: one match centre unmounting must not
+  // re-render every other subscriber on the page.
+  for (const notify of [...(listeners.get(fixtureId) ?? [])]) notify();
 }
 
 /**
