@@ -30,9 +30,16 @@ export const HUB_POLL_MS = 15_000;
 export const HUB_IDLE_POLL_MS = 60_000;
 
 /** R10 H3: when a push's refetch returns a document built BEFORE the push,
- *  refetch again after 1s, then again 3s after that. Two retries at most; the
- *  safety-net poll (H2) covers anything later. */
-export const HUB_PUSH_RETRY_MS = [1_000, 3_000] as const;
+ *  refetch again after 1s, then 3s after that, then 17s after that. Three
+ *  retries at most; the safety-net poll (H2) covers anything later.
+ *
+ *  R10c m2: the last delay outlives the hub's Redis TTL (`HUB_TTL_SECONDS`,
+ *  15s, usecases/public.ts) plus a build's worth of margin. A cache-aside
+ *  rebuild that read the database before the write, and finished after its
+ *  DEL, puts the pre-write document back for that long, and both earlier
+ *  retries land inside it. A literal: public.ts is server-only and this is a
+ *  client module. `hub-push-retry-ttl.test.ts` pins it above the TTL. */
+export const HUB_PUSH_RETRY_MS = [1_000, 3_000, 17_000] as const;
 
 /** Rapid pushes collapse into one refetch. */
 const PUSH_DEBOUNCE_MS = 250;

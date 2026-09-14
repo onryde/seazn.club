@@ -642,11 +642,16 @@ describe("useLiveCompetition realtime", () => {
       return { hook, channel: rt.channels[0]! };
     }
 
-    it("the retry delays are the ruling's: 1s, then 3s", () => {
-      expect(HUB_PUSH_RETRY_MS).toEqual([1_000, 3_000]);
+    // R10c m2: the third delay outlives the hub's Redis TTL. A cache-aside
+    // rebuild that read the DB before the write, and finished after its DEL,
+    // puts the pre-write document back for HUB_TTL_SECONDS (15s), which both of
+    // the first two retries land inside. `hub-push-retry-ttl.test.ts` pins the
+    // last delay above the TTL itself.
+    it("the retry delays are the rulings': 1s, then 3s, then 17s", () => {
+      expect(HUB_PUSH_RETRY_MS).toEqual([1_000, 3_000, 17_000]);
     });
 
-    it("an older document refetches after 1s, then 3s after that, then STOPS: two retries at most", async () => {
+    it("an older document refetches after 1s, 3s after that, 17s after that, then STOPS: three retries at most", async () => {
       vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
       const { channel } = await subscribedHub();
 
@@ -661,9 +666,52 @@ describe("useLiveCompetition realtime", () => {
       expect(fetches(), "retried again before 3s had passed").toBe(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(fetches(), "no second retry 3s after the first").toBe(3);
+      await vi.advanceTimersByTimeAsync(16_999); // t=21_249
+      expect(fetches(), "retried a third time before 17s had passed").toBe(3);
+      await vi.advanceTimersByTimeAsync(1); // t=21_250
+      expect(fetches(), "no third retry 17s after the second").toBe(4);
+
+      await toJustBeforeSafetyPoll(21_250);
+      expect(fetches(), "a fourth retry").toBe(4);
+    });
+
+    it("a document STILL older at +4.25s is retried at +21.25s, and the newer document it gets is what the page shows", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(AFTER_PUSH, "2-0"))
+        .mockResolvedValue(builtAt(AFTER_PUSH, "9-9"));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT)); // t=0
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches(), "the refetch and both earlier retries").toBe(3);
+      expect(hook.text()).not.toContain("2-0");
+
+      await vi.advanceTimersByTimeAsync(17_000); // t=21_250
+      expect(fetches(), "the third retry").toBe(4);
+      expect(hook.text(), "the third retry's newer document was not applied").toContain("2-0");
+
+      await toJustBeforeSafetyPoll(21_250);
+      expect(fetches(), "retried after a document as new as the push").toBe(4);
+      expect(hook.text()).toContain("2-0");
+    });
+
+    it("a document that satisfies the push at the SECOND retry ends the sequence: the 17s retry never fires", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValue(builtAt(AFTER_PUSH, "2-0"));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches()).toBe(3);
+      expect(hook.text()).toContain("2-0");
 
       await toJustBeforeSafetyPoll(4_250);
-      expect(fetches(), "a third retry").toBe(3);
+      expect(fetches(), "retried after the second retry's document satisfied the push").toBe(3);
     });
 
     it("the retry's NEWER document is what the page shows, and it ends the sequence", async () => {
@@ -726,8 +774,21 @@ describe("useLiveCompetition realtime", () => {
       expect(fetches()).toBe(1);
 
       hook.unmount();
-      await vi.advanceTimersByTimeAsync(HUB_PUSH_RETRY_MS[0] + HUB_PUSH_RETRY_MS[1] + 1_000);
+      await vi.advanceTimersByTimeAsync(HUB_PUSH_RETRY_MS.reduce((sum, delay) => sum + delay, 0) + 1_000);
       expect(fetches(), "a retry fired after unmount").toBe(1);
+    });
+
+    it("unmount cancels the pending THIRD retry", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches(), "the refetch and both earlier retries").toBe(3);
+
+      hook.unmount();
+      await vi.advanceTimersByTimeAsync(17_000 + 1_000);
+      expect(fetches(), "the third retry fired after unmount").toBe(3);
     });
 
     it("unmount inside the debounce window fetches nothing", async () => {
@@ -760,9 +821,11 @@ describe("useLiveCompetition realtime", () => {
       expect(fetches(), "the newer push's first retry").toBe(3);
       await vi.advanceTimersByTimeAsync(3_000); // t=5000
       expect(fetches(), "the newer push's second retry").toBe(4);
+      await vi.advanceTimersByTimeAsync(17_000); // t=22000
+      expect(fetches(), "the newer push's third retry").toBe(5);
 
-      await toJustBeforeSafetyPoll(5_000);
-      expect(fetches()).toBe(4);
+      await toJustBeforeSafetyPoll(22_000);
+      expect(fetches()).toBe(5);
     });
 
     it("a newer push while the previous refetch is IN FLIGHT: that response, older when it lands, schedules no retry", async () => {
