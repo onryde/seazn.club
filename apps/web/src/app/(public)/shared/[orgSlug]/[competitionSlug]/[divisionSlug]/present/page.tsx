@@ -7,6 +7,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPublicDivision } from "@/server/public-site/data";
 import { buildPublicDivisionSlides } from "@/server/slideshow-data";
+import { slideshowLabels } from "@/server/slideshow-labels";
 import { Slideshow } from "@/components/v2/slideshow";
 import { publicThemeStyle } from "@/lib/public-theme";
 
@@ -30,6 +31,8 @@ export default async function PresentDivisionPage({
       slides={slides}
       backHref={`/shared/${orgSlug}/${competitionSlug}/${divisionSlug}`}
       themeStyle={publicThemeStyle(data.competition.branding)}
+      // R10e u1: the board's own strings in the same locale as its slides.
+      labels={slideshowLabels(data.org.default_locale)}
     />
   );
 }

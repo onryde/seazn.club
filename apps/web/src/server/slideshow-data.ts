@@ -52,18 +52,13 @@ export interface BracketSlideFixture {
   seq_in_round: number;
   home: string | null;
   away: string | null;
-  /** D4b (P6) — {key, params} i18n pattern ref, a defensive fallback: BOTH
-   *  server builders (buildDivisionSlides, buildPublicDivisionSlides) now
-   *  resolve a locale-aware `home`/`away` string for an unfilled slot before
-   *  a bracket slide ever reaches the client (`resolveSlotLabel` never
-   *  returns null), so this pair matters only for the client `<Slideshow>`
-   *  component's OWN fallback (`f.home ?? resolveSlotLabel(f.home_slot_label,
-   *  msg, …)`) — which genuinely has no locale/`<DictProvider>` anywhere in
-   *  ITS rendering tree (slideshow.tsx imports the client-safe English
-   *  `msg()` directly) and stays on it for that reason. That fallback is
-   *  unreachable from a resolved slot in practice; it is not dead code, only
-   *  no longer the common path (fix round 3, Important 4 — buildDivisionSlides
-   *  did not used to resolve locale-aware labels at all; see below). */
+  /** D4b (P6) — {key, params} i18n pattern ref. BOTH server builders
+   *  (buildDivisionSlides, buildPublicDivisionSlides) resolve a locale-aware
+   *  `home`/`away` string for an unfilled slot before a bracket slide reaches
+   *  the client (`resolveSlotLabel` never returns null), so a side is null only
+   *  on an entrant-name miss, where the client <Slideshow> shows its own
+   *  `labels.tbd` (R10e u1: the component no longer reads this pair). Kept on
+   *  the wire. */
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
   line: string | null;
@@ -293,16 +288,12 @@ export async function buildDivisionSlides(
         division: divisionName,
         title: stage.name,
         stageKind: stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff",
-        // Fix round 3 (Important 4): home/away are now fully resolved HERE
-        // (never left null for an unfilled slot with a real label), mirroring
-        // buildPublicDivisionSlides' fix round 1 finding #2 — so the client
-        // <Slideshow>'s own `f.home ?? resolveSlotLabel(f.home_slot_label,
-        // msg, …)` fallback (client-safe English, no DictProvider in that
-        // tree) is unreachable from a resolved label, same as the public
-        // path. The raw *_slot_label fields stay on the wire for that
-        // fallback's benefit (an org whose bracket predates this fix, or any
-        // caller this session didn't re-verify) — never removed, just no
-        // longer the common path.
+        // Fix round 3 (Important 4): home/away are fully resolved HERE (never
+        // left null for an unfilled slot with a real label), mirroring
+        // buildPublicDivisionSlides' fix round 1 finding #2. The client
+        // <Slideshow> falls back to its own `labels.tbd` only on an
+        // entrant-name miss (R10e u1). The raw *_slot_label fields stay on the
+        // wire.
         fixtures: stageFixtures.map((f) => ({
           id: f.id,
           round_no: f.round_no,
@@ -499,15 +490,11 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
         division: data.division.name,
         title: stage.name,
         stageKind: stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff",
-        // P6 fix round 1, finding #2: home/away are fully resolved HERE
-        // (never left null for an unfilled slot with a real label) so the
-        // shared client <Slideshow> — which has no locale/<DictProvider>
-        // plumbing anywhere in its tree and stays on the client-safe
-        // English msg() for that reason — never has to guess at this org's
-        // locale. Its own `f.home ?? resolveSlotLabel(f.home_slot_label,
-        // msg, …)` fallback is now unreachable from this (public) builder;
-        // it stays live for buildDivisionSlides's org-authed slides above,
-        // which are a DIFFERENT, out-of-scope surface (not a "visitor").
+        // P6 fix round 1, finding #2: home/away are fully resolved HERE, in
+        // the org's locale (never left null for an unfilled slot with a real
+        // label). The client <Slideshow> falls back to its own `labels.tbd`,
+        // which the present page resolves in that same locale (R10e u1), only
+        // on an entrant-name miss.
         //
         // N1c c3: a labelled side goes through the round namer; a side with NO
         // label keeps the bracket's own "to be decided" (`bracket.tbd`), which

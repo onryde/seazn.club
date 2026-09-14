@@ -12,6 +12,8 @@ import { hasFeature } from "@/lib/entitlements";
 import { publicThemeStyleChain } from "@/lib/public-theme";
 import { resolveSponsors } from "@/server/usecases/sponsors";
 import { Slideshow } from "@/components/v2/slideshow";
+import { slideshowLabels } from "@/server/slideshow-labels";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 
 export default async function CompetitionSlideshowPage({
   params,
@@ -61,6 +63,10 @@ export default async function CompetitionSlideshowPage({
       logo={chrome.logo}
       // v10: resolver rows (competition scope first), blob shim fallback.
       sponsors={await resolveSponsors(auth.orgId, id)}
+      // R10e u1 moved the board's strings into `labels`; the organiser board
+      // keeps the English it always showed (which locale it should speak is
+      // not settled by that round).
+      labels={slideshowLabels(DEFAULT_LOCALE)}
     />
   );
 }

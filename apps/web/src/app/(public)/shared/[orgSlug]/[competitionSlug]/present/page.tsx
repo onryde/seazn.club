@@ -6,6 +6,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
 import { buildPublicDivisionSlides, type Slide } from "@/server/slideshow-data";
+import { slideshowLabels } from "@/server/slideshow-labels";
 import { Slideshow } from "@/components/v2/slideshow";
 import { publicThemeStyle } from "@/lib/public-theme";
 
@@ -34,6 +35,9 @@ export default async function PresentCompetitionPage({
       slides={slides}
       backHref={`/shared/${orgSlug}/${competitionSlug}`}
       themeStyle={publicThemeStyle(shell.competition.branding)}
+      // R10e u1: the board's own strings in the org's locale, the same one
+      // every division deck above is built in.
+      labels={slideshowLabels(shell.org.default_locale)}
     />
   );
 }
