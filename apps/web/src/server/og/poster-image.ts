@@ -41,9 +41,6 @@ export const POSTER_IMAGE_TIMEOUT_MS = 1500;
  *  reading rather than buffer whatever the sender feels like sending. */
 export const POSTER_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
-/** A 2 MB file can still decode to a gigapixel canvas. Cap the decode too. */
-export const POSTER_IMAGE_MAX_PIXELS = 25_000_000;
-
 /**
  * The largest edge kept. The poster draws a badge at 260px and a logo at 96px
  * (`SCALE` in match-poster.tsx), so 1024 is already four times oversampled —
@@ -51,6 +48,24 @@ export const POSTER_IMAGE_MAX_PIXELS = 25_000_000;
  * images are never enlarged, so an ordinary crest passes through untouched.
  */
 export const POSTER_IMAGE_MAX_EDGE = 1024;
+
+/**
+ * A 2 MB file can still decode to a gigapixel canvas — a flat-colour 5000²
+ * PNG is ~500 KB on the wire and 100 MB once it is RGBA in memory, and three
+ * images are decoded in parallel per render on an unauthenticated public
+ * route. So the byte cap is not the ceiling that matters; this is.
+ *
+ * Derived from what these surfaces actually draw, not chosen: nothing here
+ * keeps more than `POSTER_IMAGE_MAX_EDGE` on the longest edge, and past twice
+ * that edge no pixel of the input survives the downscale. 2048² is therefore
+ * the last input size that is picture rather than allocation — ~17 MB RGBA
+ * each, ~50 MB for a render's three, against 100/300 MB before.
+ *
+ * sharp checks this from the image HEADER (it throws "Input image exceeds
+ * pixel limit" at `.metadata()` below), so an oversized canvas is refused
+ * before anything is allocated for it.
+ */
+export const POSTER_IMAGE_MAX_PIXELS = (2 * POSTER_IMAGE_MAX_EDGE) ** 2;
 
 /**
  * What we will draw. `image/svg+xml` is deliberately NOT here even though the

@@ -3,6 +3,8 @@ import sharp from "sharp";
 import { publicStorageUrl } from "@/lib/storage-url";
 import {
   POSTER_IMAGE_MAX_BYTES,
+  POSTER_IMAGE_MAX_EDGE,
+  POSTER_IMAGE_MAX_PIXELS,
   POSTER_IMAGE_TIMEOUT_MS,
   allowedPosterImageUrl,
   posterImageDataUrl,
@@ -297,6 +299,40 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
       }),
     );
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
+  });
+
+  // The three below are about the DECODED canvas, which the byte cap cannot
+  // see: a flat-colour 2100² PNG is ~90 KB on the wire and ~17 MB once it is
+  // RGBA in memory, and three of these are decoded in parallel per render on
+  // an unauthenticated public route.
+  //
+  // The sizes here are deliberately LITERAL. Derived from the constant they
+  // would move with it, and the whole point is that raising the cap must red.
+  it("pins the cap at the largest input that can still carry detail into the drawn picture", () => {
+    // The fetcher keeps at most POSTER_IMAGE_MAX_EDGE (1024) on the longest
+    // edge, and the largest of these surfaces DRAWS a badge at 260px
+    // (`SCALE.poster.badge`), a logo at 96px, a card crest at 52–64px. Past
+    // twice the kept edge no pixel of the input survives the downscale, so
+    // 2048² is the last input size that is not pure allocation.
+    expect(POSTER_IMAGE_MAX_EDGE).toBe(1024);
+    expect(POSTER_IMAGE_MAX_PIXELS).toBe(2048 * 2048);
+  });
+
+  it("refuses a canvas larger than that, however small the file is", async () => {
+    const huge = await png(2100); // 4.41 Mpx, past the cap
+    expect(huge.byteLength).toBeLessThan(POSTER_IMAGE_MAX_BYTES); // not the byte cap
+    spyFetch(async () => imageResponse(huge, "image/png"));
+    expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
+  });
+
+  it("still draws one just inside it, downscaled to the edge we keep", async () => {
+    // The anti-vacuous half: a cap low enough to refuse everything would pass
+    // the test above and quietly delete badges from every share image.
+    spyFetch(async () => imageResponse(await png(2000), "image/png")); // 4.0 Mpx
+    const out = await posterImageDataUrl(uploadedBadge());
+    expect(out?.startsWith("data:image/png;base64,")).toBe(true);
+    const drawn = await sharp(Buffer.from(out!.slice("data:image/png;base64,".length), "base64")).metadata();
+    expect(drawn.width).toBe(POSTER_IMAGE_MAX_EDGE);
   });
 
   it("returns null rather than throwing when the bytes are not really an image", async () => {
