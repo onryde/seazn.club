@@ -4,8 +4,9 @@ import { notFound } from "next/navigation";
 import { getPublicDivision } from "@/server/public-site/data";
 import { buildIcs, type IcsEvent } from "@/lib/public-site";
 import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export async function GET(
   req: Request,
@@ -39,13 +40,25 @@ export async function GET(
     k: Parameters<typeof msgFor>[1],
     v?: Record<string, string | number>,
   ) => msgFor(orgLocale, k, v);
+  // N1 fix round 1, M8: a side still waiting on a match names that match's
+  // round as the public hub's rail does ("Winner of Semi-finals, match 1"),
+  // through the same namer the hub and the match centre use; any other label
+  // keeps the board's text (`resolveSlotLabel`, inside the namer).
+  const stageKind = new Map(data.stages.map((s) => [s.id, s.kind]));
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict: await getDictionary(orgLocale, "public"),
+    fixtures: data.fixtures,
+    stageKind: (stageId) => stageKind.get(stageId),
+  });
   const nameOrLabel = (
     id: string | null,
     label: (typeof data.fixtures)[number]["home_slot_label"],
+    stageId: string,
   ): string =>
     id
       ? (entrantNames[id] ?? lookup("calendar.unknownEntrant"))
-      : resolveSlotLabel(label, lookup, "schedule.tbd");
+      : namer.slot(stageId, label);
 
   // A fixture that exists but has no time is the whole point of day-one
   // fixtures: it is anchored to the competition's last day as an all-day
@@ -82,7 +95,7 @@ export async function GET(
       const description = `${data.competition.name} · https://seazn.club/shared/${data.org.slug}/${data.competition.slug}/${data.division.slug}/fixtures/${f.id}`;
       const common = {
         uid: f.id,
-        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label)} — ${data.division.name}`,
+        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label, f.stage_id)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label, f.stage_id)} — ${data.division.name}`,
         // P9 cutover: venue_name/court_name are DERIVED (fixtures.venue_id/
         // court_id via data.ts's withCourtVenueNames) -- venue/court_label
         // are frozen, no writer touches them any more.

@@ -15,8 +15,9 @@ import { Schedule } from "@/components/public-site/schedule";
 import { Bracket } from "@/components/public-site/bracket";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
 
@@ -84,10 +85,21 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const orgLocale = toLocale(org.default_locale);
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
+  // N1 fix round 1, M8: a side still waiting on a match names that match's
+  // round as the public hub's rail does ("Winner of Semi-finals, match 1"),
+  // through the same namer the hub, the match centre and the calendar use; any
+  // other label keeps the board's text (`resolveSlotLabel`, inside the namer).
+  const stageKind = new Map(stages.map((s) => [s.id, s.kind]));
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict: await getDictionary(orgLocale, "public"),
+    fixtures,
+    stageKind: (stageId) => stageKind.get(stageId),
+  });
   const slotLabels: Record<string, string> = {};
   for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
   }
 
   let body: React.ReactNode;

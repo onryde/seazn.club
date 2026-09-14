@@ -532,3 +532,55 @@ describe("GET .../calendar.ics — entrant name fallback localization (F5 task 7
     expect(text).not.toMatch(/^X-WR-CALNAME:Entrant\b/m);
   });
 });
+
+// N1 fix round 1, M8 — a subscribed calendar is a public surface too: a final
+// waiting on two semi-finals must read "Winner of Semi-finals, match 1", the
+// round the public hub's rail names, never the organiser board's "Winner of
+// R1·1". The words come from the same `publicRoundNamer` the hub and the match
+// centre use, over the division's own fixtures and stages.
+describe("GET .../calendar.ics — a waiting side names its feeder's ROUND (N1 fix round 1, M8)", () => {
+  /** An ICS text value as a reader sees it: lines unfolded (RFC 5545 §3.1)
+   *  and TEXT escapes undone (§3.3.11) — `, ` is written `\\, `. */
+  const summaries = (text: string) =>
+    text
+      .replace(/\r\n[ \t]/g, "")
+      .split("\r\n")
+      .filter((line) => line.startsWith("SUMMARY:"))
+      .map((line) => line.slice("SUMMARY:".length).replace(/\\([\;,])/g, "$1"));
+
+  it("a knockout final waiting on both semi-finals reads 'Winner of Semi-finals, match N' on each side, in the org's locale", async () => {
+    const { getDictionary } = await import("@/lib/i18n");
+    const { t } = await import("@/lib/i18n-runtime");
+    const { msgFor } = await import("@/lib/messages-i18n");
+    const knockout = [
+      F({ id: "semi-1", stage_id: "ko", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+      F({ id: "semi-2", stage_id: "ko", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
+      F({
+        id: "final",
+        stage_id: "ko",
+        round_no: 2,
+        seq_in_round: 1,
+        home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+        away_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 2 } },
+      }),
+    ];
+    const entrants = ["e1", "e2", "e3", "e4"].map((id, i) => E({ id, display_name: `Side ${i + 1}`, seed: i + 1 }));
+    getPublicDivision.mockResolvedValue({
+      ...baseData("en", knockout, {}, entrants),
+      stages: [{ id: "ko", division_id: "d1", seq: 1, kind: "knockout", name: "Knockout", status: "active" }],
+    });
+
+    const { status, text } = await get();
+
+    expect(status).toBe(200);
+    const dict = await getDictionary("en", "public");
+    const semi = msgFor("en", "bracket.round.semi");
+    const expected = `${t(dict, "knockout.feederWinner", { round: semi, seq: 1 })} vs ${t(dict, "knockout.feederWinner", { round: semi, seq: 2 })} — Open`;
+    expect(expected).toBe("Winner of Semi-finals, match 1 vs Winner of Semi-finals, match 2 — Open");
+    const lines = summaries(text);
+    expect(lines, text).toContain(expected);
+    // The filled semi-finals keep their entrants.
+    expect(lines).toContain("Side 1 vs Side 2 — Open");
+    expect(lines.join(" | ")).not.toMatch(/R\d+·\d+/);
+  });
+});
