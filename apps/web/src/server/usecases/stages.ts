@@ -1155,10 +1155,9 @@ interface GenerateWrite {
  *  Callers that publish their own write use `generateStageFixturesUnpublished`
  *  instead: `startDivision` (one publish naming every fixture of the division),
  *  `rebuildStageFixtures` (one publish naming the fixtures it deleted), and
- *  `completeStage` when scoring's auto-advance calls it with
- *  `{ publish: false }`, because scoring's post-commit `finally` publishes.
- *  Every other completion draws through this publishing generate (R10f; the
- *  default since R10g). */
+ *  `completeStage` (R10g: it publishes the whole completion, the draw
+ *  included, once in its own `finally`, unless scoring's auto-advance opts
+ *  out because scoring's post-commit `finally` publishes). */
 export async function generateStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
   const write = await generateStageFixturesWrite(auth, stageId);
   if (write.outcome.created > 0) {
@@ -2558,12 +2557,13 @@ export interface CompleteStageResult extends CompleteResult {
  *    mechanism) keeps its existing auto-seed-then-generate behaviour,
  *    idempotent — an already-seeded stage is not re-seeded.
  *
- * `publish` (R10f; on by default since R10g): the fixtures this completion
- * draws reach the live hub after commit. A caller that publishes the whole
- * write itself opts out with `{ publish: false }`, and today only scoring's
- * auto-advance does (see the generate call below). On by default because a
- * redundant publish costs one hub refetch, while a missed one leaves every
- * subscribed hub stale with every test still green.
+ * `publish` (R10f; on by default since R10g): once the stage is complete,
+ * the call publishes the hub key ONCE after everything it did, the next
+ * stage's draw included, however it ends (the `finally` below). A caller that
+ * publishes the whole write itself opts out with `{ publish: false }`, and
+ * today only scoring's auto-advance does. On by default because a redundant
+ * publish costs one hub refetch, while a missed one leaves every subscribed
+ * hub stale with every test still green.
  */
 export async function completeStage(
   auth: AuthCtx,
@@ -2571,14 +2571,44 @@ export async function completeStage(
   opts: { publish?: boolean } = {},
 ): Promise<CompleteStageResult> {
   const current = await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; seq: number }[]>`
-      select division_id, seq from stages where id = ${stageId}`;
+    const [stage] = await tx<{ division_id: string; seq: number; competition_id: string }[]>`
+      select s.division_id, s.seq, d.competition_id
+      from stages s join divisions d on d.id = s.division_id
+      where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
     return stage;
   });
   const result = await completeStageIfReady(auth.orgId, stageId);
   if (!result.completed) return result;
 
+  // R10g (review-r10f m2): from here the stage is complete (its completion
+  // committed), and the hub shows stage and division status (its standings
+  // tables order by stage status). So every way out of this call publishes
+  // the hub key once, after all of it: a draw, a seed proposal, the division
+  // completing, nothing drawn at all (the last stage, or a freeze refusing
+  // the draw), or a later step throwing after the completion stood. The one
+  // publish covers the draw too (its fixture ids are all new, so no fixture
+  // key is owed), which is why the next stage is drawn unpublished. A refused
+  // completion (not ready, or a 404 / engine error before the commit) has
+  // already returned or thrown above, and sends nothing.
+  try {
+    return await progressCompletedStage(auth, stageId, current, result);
+  } finally {
+    if (opts.publish ?? true) {
+      afterScheduleWrite(current.division_id, current.competition_id, "schedule", []);
+    }
+  }
+}
+
+/** What a complete stage does next (see `completeStage`): seed and draw the
+ *  next stage, compute its seed proposal, or complete the division. It
+ *  publishes nothing itself. */
+async function progressCompletedStage(
+  auth: AuthCtx,
+  stageId: string,
+  current: { division_id: string; seq: number },
+  result: CompleteResult,
+): Promise<CompleteStageResult> {
   const next = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<{ id: string; progression: Record<string, unknown> | null }[]>`
       select id, progression from stages
@@ -2732,23 +2762,19 @@ export async function completeStage(
   // it. So the record NAMES the error, and flags the freeze case specifically
   // (`locked`) so the two can be told apart without parsing prose.
   //
-  // R10f (review-r10e m1), default flipped by R10g (review-r10f m1): WHO
-  // PUBLISHES THE DRAW. Every caller that does not opt out (the organiser's
-  // button, `POST /stages/{id}/complete`, and any future caller) draws
-  // through the publishing generate: one DEL of the hub key after the draw
-  // commits, then the division push, and nothing when it drew nothing or was
-  // refused. The knockout's ids are all new, so no fixture key or fixture
-  // push is owed. Scoring's auto-advance passes `{ publish: false }`: it runs
-  // inside a decided fixture's post-commit hooks (`onDecided`). Reached from
-  // `scoreEvent`, that write's `finally` already drops the same hub key and
-  // pushes the division once the hooks are done, so a second publish would
-  // cost every deciding score a second hub refetch. Reached from the batch
-  // importer (`event-import.ts`), its `finally` DELs the hub key but sends
-  // no push, by design (a backfill of finished results, not a live pad).
-  const generate = (opts.publish ?? true) ? generateStageFixtures : generateStageFixturesUnpublished;
+  // WHO PUBLISHES THE DRAW (R10f, R10g): `completeStage` does, once, in its
+  // `finally` after this returns, unless its caller opted out. So the draw
+  // goes through the unpublished generate: publishing here as well would
+  // cost the hub a second refetch. Scoring's auto-advance opts out
+  // (`{ publish: false }`) because it runs inside a decided fixture's
+  // post-commit hooks (`onDecided`). Reached from `scoreEvent`, that write's
+  // `finally` already drops the same hub key and pushes the division once
+  // the hooks are done. Reached from the batch importer (`event-import.ts`),
+  // its `finally` DELs the hub key but sends no push, by design (a backfill
+  // of finished results, not a live pad).
   let generated: number | undefined;
   try {
-    generated = (await generate(auth, qualified.stage_id)).created;
+    generated = (await generateStageFixturesUnpublished(auth, qualified.stage_id)).created;
   } catch (err) {
     const code = err instanceof HttpError ? err.code : undefined;
     const locked = code === SCHEDULE_LOCKED_CODE;

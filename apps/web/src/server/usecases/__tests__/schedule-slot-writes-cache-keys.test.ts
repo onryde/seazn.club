@@ -12,6 +12,8 @@
 // time. R10g adds the organiser's seed-proposal CONFIRM, which names entrants
 // into a templated bracket's placeholders (`POST /stages/{id}/seed-proposal/
 // confirm`); its "changed" fixtures are the ones whose entrants it filled.
+// R10g also makes every stage COMPLETION that commits publish the hub key
+// (stage and division status show on the hub), drawn or not.
 // Each is driven through
 // its real use-case against Postgres, and each must:
 //   - send ONE DEL of the hub key plus the keys of exactly the fixtures its own
@@ -686,9 +688,19 @@ interface CompleteReply {
   status: number;
   body: {
     ok: boolean;
-    data?: { completed?: boolean; next_stage_fixtures?: number; division_completed?: boolean };
+    data?: {
+      completed?: boolean;
+      next_stage_fixtures?: number;
+      division_completed?: boolean;
+      seed_proposal?: { id: string; status: string };
+    };
     error?: { code: string; message: string };
   };
+}
+
+async function stageStatus(stageId: string): Promise<string> {
+  const [row] = await sql<{ status: string }[]>`select status from stages where id = ${stageId}`;
+  return row!.status;
 }
 
 /** `POST /api/v1/stages/{id}/complete`, as the organiser's button sends it. */
@@ -798,33 +810,86 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
     await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
   }, 120_000);
 
-  it("POST /stages/{id}/complete on a frozen division: the completion stands, no knockout is drawn, nothing is sent", async () => {
+  // R10g (review-r10f m2) REVERSES R10f's expectation here: the freeze refuses
+  // only the DRAW. The stage's own completion commits (a freeze does not bind
+  // the lifecycle transition, see `completeStage`), and the hub shows stage
+  // status, so the hub key goes out.
+  it("POST /stages/{id}/complete on a frozen division: the completion commits, no knockout is drawn, and the hub key alone goes in one DEL after commit (R10g)", async () => {
     const rig = await groupsToKnockoutRig();
     await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
     await setDivisionLocks(rig.auth, rig.divisionId, { schedule_locked: true });
     await quiesce();
     const before = await board(rig.divisionId);
 
+    probe.hold = true;
     const reply = await completeByRoute(rig.auth, rig.groupId);
     expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
     expect(reply.body.data?.completed).toBe(true);
     expect(reply.body.data?.next_stage_fixtures, "the freeze refused the draw").toBeUndefined();
+    expect(await stageStatus(rig.groupId), "the completion itself committed").toBe("complete");
     expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
-    await expectNothingSent();
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, []);
   }, 120_000);
 
-  it("POST /stages/{id}/complete of the last stage: the division completes, nothing is drawn, nothing is sent", async () => {
+  // R10g (review-r10f m2) deliberately REVERSES R10f's "the last stage sends
+  // nothing": the division's status changes on the hub.
+  it("POST /stages/{id}/complete of the last stage: the division completes, nothing is drawn, and the hub key alone goes in one DEL after commit (R10g)", async () => {
     const { auth } = await seedOrgOnPlan("pro");
     const rig = await divisionRig(auth, { entrants: 2 });
+    const competitionId = await competitionOf(rig.divisionId);
     await decideThroughEngine(auth.orgId, rig.fixtureIds);
     await quiesce();
     const before = await board(rig.divisionId);
 
+    probe.hold = true;
     const reply = await completeByRoute(auth, rig.stages[0]!.stageId);
     expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
     expect(reply.body.data?.division_completed).toBe(true);
     expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectDelThenPushes(rig.divisionId, competitionId, []);
+  }, 120_000);
+
+  it("POST /stages/{id}/complete that computes a seed proposal (the templated setup path, R10g): the stage completes, nothing is drawn, and the hub key alone goes in one DEL after commit", async () => {
+    const rig = await groupsToKnockoutRig({ timing: "setup" });
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const reply = await completeByRoute(rig.auth, rig.groupId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    expect(reply.body.data?.completed).toBe(true);
+    expect(reply.body.data?.seed_proposal?.status, "the completion computed the knockout's draft proposal").toBe("draft");
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, []);
+  }, 120_000);
+
+  it("POST /stages/{id}/complete of a stage that is not finished (R10g): refused, nothing committed, nothing sent", async () => {
+    const rig = await groupsToKnockoutRig();
+    const before = await board(rig.divisionId);
+
+    const reply = await completeByRoute(rig.auth, rig.groupId);
+    expect(reply.status, JSON.stringify(reply.body.error)).toBe(200);
+    expect(reply.body.data?.completed, "the group fixtures are undecided").toBe(false);
+    expect(await stageStatus(rig.groupId)).not.toBe("complete");
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
     await expectNothingSent();
+  }, 120_000);
+
+  it("a completion that commits and then fails seeding the next stage (R10g): the error propagates, the stage stays complete, and the hub key alone still goes in one DEL after commit", async () => {
+    const rig = await groupsToKnockoutRig();
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    probe.failAtLock = 2;
+    await expect(completeStage(rig.auth, rig.groupId), "the seeding step's own error reaches the caller")
+      .rejects.toBe(probe.injected);
+    expect(probe.locks, "the completion took the first lock and committed; seeding the knockout took the second").toBe(2);
+    expect(await stageStatus(rig.groupId), "the completion committed before seeding failed").toBe("complete");
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, []);
   }, 120_000);
 
   it("auto-advance through scoring: the deciding score draws the knockout and sends scoring's own one DEL and pushes, nothing more", async () => {
