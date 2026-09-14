@@ -188,6 +188,7 @@ const WALKTHROUGH_SPECS: string[] = [
   "scorepad-v3-tabletennis-match.spec.ts",
   "scorepad-v3-tennis-mtb.spec.ts",
   "scorepad-v3-volleyball-match.spec.ts",
+  "scorepad-v3-cricket-icc-picks.spec.ts",
 
   // The organiser desks.
   "competition-desk-organiser.spec.ts",
@@ -526,6 +527,73 @@ describe("e2e CI wiring", () => {
       serverStep,
       "`Start server` declares its own STRIPE_WEBHOOK_SECRET — a step-level env key wins over whatever the forwarder wrote to $GITHUB_ENV for THIS step, so the server would boot verifying against the wrong secret",
     ).not.toContain("STRIPE_WEBHOOK_SECRET");
+  });
+
+  // Overlay #782: Actions strips job-env vars whose NAME contains
+  // PRIVATE_KEY, so the mint key lives as SUPABASE_JWT_SIGNING_KEY_B64.
+  // The value is a CI-only dummy (kid e2e-ci-dummy-es256) — enough to mint
+  // ES256 against stub.supabase.co, never a real JWKS. The previous inlined
+  // JWK was rotated out. Job env alone is not the whole story: Start server
+  // and Playwright each declare their own env: block, and a missing key on
+  // those steps is how a rename to PRIVATE_KEY would go dark again.
+  it("keeps a dummy ES256 signing JWK on every e2e job, Start server, and Playwright step", () => {
+    const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
+
+    const assigned = yml.match(/^\s*SUPABASE_JWT_[A-Z0-9_]+:/gm) ?? [];
+    expect(
+      assigned.some((line) => /PRIVATE_KEY/.test(line)),
+      "an assignment named *PRIVATE_KEY* is stripped by Actions and never reaches the job",
+    ).toBe(false);
+
+    const signing = [...yml.matchAll(/^\s+SUPABASE_JWT_SIGNING_KEY_B64: (.+)$/gm)].map(
+      (m) => m[1]!.trim(),
+    );
+    const literals = signing.filter((v) => !v.startsWith("${{"));
+    const passthroughs = signing.filter((v) =>
+      v.includes("env.SUPABASE_JWT_SIGNING_KEY_B64"),
+    );
+    expect(literals.length, "one dummy JWK per e2e job").toBe(3);
+    expect(
+      passthroughs.length,
+      "Start server + Playwright, three jobs — the processes that mint / drive mint",
+    ).toBe(6);
+    expect(new Set(literals).size, "all three jobs must share the same dummy").toBe(1);
+
+    const jwk = JSON.parse(Buffer.from(literals[0]!, "base64").toString("utf8")) as {
+      kty?: string;
+      crv?: string;
+      alg?: string;
+      kid?: string;
+      d?: string;
+      use?: string;
+    };
+    expect(jwk).toMatchObject({
+      kty: "EC",
+      crv: "P-256",
+      alg: "ES256",
+      kid: "e2e-ci-dummy-es256",
+      use: "sig",
+    });
+    expect(typeof jwk.d, "private JWK — mint needs d").toBe("string");
+
+    // Public-x prefix of the previous inlined JWK (kid e2e-ci-es256).
+    expect(yml, "previous inlined signing JWK must not return").not.toContain(
+      "Ka1hMRlRLQkZtY05a",
+    );
+
+    const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
+    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    for (const [, body] of startServers) {
+      expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
+    }
+
+    const playwrightSteps = [
+      ...yml.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g),
+    ];
+    expect(playwrightSteps.length, "three Playwright run steps").toBe(3);
+    for (const [, body] of playwrightSteps) {
+      expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
+    }
   });
 
   // Run 33315548699 reported itself as testing 4c606a302 while three of its

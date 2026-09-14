@@ -1670,7 +1670,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test("cricket v3 (R2c/C2): Retire is one flow, offering only the two batters at the crease", async ({ page }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(Math.max(60_000, 30_000 + HOLD_MS + 8_000));
   const fx = await seedRosteredFixture(page.request, {
     label: `V3 Cricket Retire ${TAG}`,
     sportKey: "cricket",
@@ -1725,6 +1725,29 @@ test("cricket v3 (R2c/C2): Retire is one flow, offering only the two batters at 
   await expect(sheet.getByRole("button", { name: "Hurt", exact: true })).toBeVisible({ timeout: 10_000 });
   await expect(sheet.getByRole("button", { name: "Out", exact: true })).toBeVisible();
   await expect(sheet.getByRole("button", { name: "Other", exact: true })).toBeVisible();
+
+  // Incoming batter is required (Law 25.1), same step as a wicket. Bench is
+  // the only eligible name — the crease pair must not be offered again.
+  const bench = fx.personIds[`V3 RT Bench ${TAG}`]!;
+  await sheet.getByRole("button", { name: "Hurt", exact: true }).click();
+  await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+  await expect(sheet.locator(`[data-candidate-id="${bench}"]`)).toBeVisible();
+  await expect(sheet.locator(`[data-candidate-id="${striker}"]`)).toHaveCount(0);
+  await expect(sheet.locator(`[data-candidate-id="${nonStriker}"]`)).toHaveCount(0);
+  await sheet.locator(`[data-candidate-id="${bench}"]`).click();
+  await sendHeldNow(page);
+  await expect
+    .poll(
+      async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.retire").length,
+      { timeout: 20_000 },
+    )
+    .toBe(1);
+  const retire = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.retire")!;
+  expect(retire.payload.person).toBe(striker);
+  expect(retire.payload.reason).toBe("hurt");
+  expect(retire.payload.incoming, "the incoming step must reach cricket.retire, not fall back to omitted auto").toBe(
+    bench,
+  );
 });
 
 test("cricket v3 (R2c/C3): a side with no reviews left cannot be picked, but an umpire review is never capped", async ({
