@@ -364,7 +364,7 @@
   "knockout.view.rounds": "Rondes",
   "knockout.view.draw": "Schema",
   "knockout.drawLabel": "Knock-outschema",
-  "knockout.pendingPair": "{a} / {b}",
+  "knockout.pendingPair": "{a} of {b}",
   "knockout.pendingLoser": "Verliezer van {a} tegen {b}",
   "leaders.title": "Topspelers",
   "leaders.empty": "Nog geen statistieken",

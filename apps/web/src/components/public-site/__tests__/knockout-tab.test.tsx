@@ -43,7 +43,8 @@ vi.mock("../use-tab-param", async (importOriginal) => ({
   useSearchParam: (name: string) => (name === "view" ? url.view : null),
 }));
 
-import { MatchCard } from "../matches-hub/match-card";
+import { initials } from "@/components/ui/entity-logo";
+import { MatchCard, type MatchCardProps } from "../matches-hub/match-card";
 import { MatchesTab } from "../matches-hub/matches-tab";
 import {
   KnockoutTab,
@@ -175,6 +176,22 @@ const plateView = (over: Partial<KnockoutViewT> = {}) =>
 const MULTI = hubDoc({
   matches: [...MID_MATCHES, ...PLATE_MATCHES],
   knockouts: [knockoutView("cup", "premier", ROUNDS), plateView()],
+});
+
+/**
+ * DOUBLES, a 4-draw (review F5). A pair entrant is NAMED "A / B"
+ * (`stages.ts`, `members.join(" / ")`), so a slot waiting on two of them under
+ * the old "{a} / {b}" copy read "Ana Lee / Bo Kim / Cy Po / Di Wu", with
+ * nothing to say where one team ends. d1 is unplayed; d2 is decided, its winner
+ * already in the final's away slot.
+ */
+const DOUBLES = hubDoc({
+  matches: [
+    ko("d1", "upcoming", SF, [S("Ana Lee / Bo Kim"), S("Cy Po / Di Wu")]),
+    ko("d2", "completed", SF, [S("Eve Ng / Fay Ho"), S("Gil Ma / Hu Li")], 0),
+    ko("df", "upcoming", F, [tbd("Winner of SF 1"), S("Eve Ng / Fay Ho")]),
+  ],
+  knockouts: [knockoutView("cup", "premier", [koRound("main-1", SF, ["d1", "d2"]), koRound("main-2", F, ["df"])])],
 });
 
 // ------------------------------------------------------------ helpers
@@ -485,7 +502,7 @@ describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
     expect(pendingSide(view, "q3", 1, mx)).toBeNull();
   });
 
-  it("THIRD PLACE is fed by the semi-finals' LOSERS: one undecided semi reads 'Loser of Eli v Hal' there and 'Eli / Hal' in the final", () => {
+  it("THIRD PLACE is fed by the semi-finals' LOSERS: one undecided semi reads 'Loser of Eli v Hal' there and 'Eli or Hal' in the final", () => {
     // LATER: s1 decided (Dev beat Ana), s2 not started (Eli v Hal). Ana is in
     // the bronze match and Dev in the final; the other slot of each waits on s2.
     const view = LATER.knockouts[0]!;
@@ -555,10 +572,10 @@ describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
   it("the Draw: a node waiting on a live or unplayed pair names the pair in the empty slot's muted style; a slot whose feeder is not ready keeps its sentence", () => {
     url.view = "draw";
     const h = render(MID);
-    expect(nodeOf(h, "s1")).toMatch(/<span class="[^"]*italic[^"]*" title="Cara \/ Dev">Cara \/ Dev<\/span>/);
+    expect(nodeOf(h, "s1")).toMatch(/<span class="[^"]*italic[^"]*" title="Cara or Dev">Cara or Dev<\/span>/);
     expect(nodeOf(h, "s1")).not.toContain("Winner of QF 2");
     expect(nodeOf(h, "s1")).toContain(">Ana<");
-    expect(nodeOf(h, "s2")).toContain(">Gus / Hal<");
+    expect(nodeOf(h, "s2")).toContain(">Gus or Hal<");
     expect(nodeOf(h, "s2")).toContain(">Winner of QF 3<");
     expect(nodeOf(h, "f1")).toContain(">Winner of SF 1<");
     expect(nodeOf(h, "f1")).toContain(">Winner of SF 2<");
@@ -567,10 +584,23 @@ describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
   it("the Draw's bronze node reads the loser sentence while the final above it reads the pair — one semi, two slots", () => {
     url.view = "draw";
     const h = render(LATER);
-    expect(nodeOf(h, "f1")).toContain(">Eli / Hal<");
+    expect(nodeOf(h, "f1")).toContain(">Eli or Hal<");
     expect(nodeOf(h, "t1")).toContain(">Loser of Eli v Hal<");
-    expect(nodeOf(h, "t1")).not.toContain("Eli / Hal");
+    expect(nodeOf(h, "t1")).not.toContain("Eli or Hal");
     expect(nodeOf(h, "t1")).not.toContain("Loser of SF 2");
+    // D4: the node's 184px column truncates a long pair, so every name carries
+    // its DISPLAYED text as its title — the pair and the loser sentence, never
+    // the engine's slot label behind them, and never the other side's name.
+    const titled = (node: string) =>
+      [...node.matchAll(/ title="([^"]*)">([^<]*)<\/span>/g)].map((x) => [x[1], x[2]]);
+    expect(titled(nodeOf(h, "f1"))).toEqual([
+      ["Dev", "Dev"],
+      ["Eli or Hal", "Eli or Hal"],
+    ]);
+    expect(titled(nodeOf(h, "t1"))).toEqual([
+      ["Ana", "Ana"],
+      ["Loser of Eli v Hal", "Loser of Eli v Hal"],
+    ]);
   });
 
   it("the copy is the dictionary's — Spanish renders both sentences in Spanish", () => {
@@ -581,6 +611,18 @@ describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
     expect(nodeOf(h, "f1")).toContain(`>${esc(fill("knockout.pendingPair"))}<`);
     expect(nodeOf(h, "t1")).toContain(`>${esc(fill("knockout.pendingLoser"))}<`);
     expect(fill("knockout.pendingLoser")).not.toBe("Loser of Eli v Hal");
+    // The pair's separator is a WORD now (F5), so it is a locale's to choose —
+    // and Spanish's is not English's.
+    expect(fill("knockout.pendingPair")).not.toBe("Eli or Hal");
+  });
+
+  it("F5: a slot waiting on two DOUBLES entrants reads 'Ana Lee / Bo Kim or Cy Po / Di Wu' — each entrant's own name already carries ' / ', so the pair's separator is a word", () => {
+    url.view = "draw";
+    const h = render(DOUBLES);
+    expect(nodeOf(h, "df")).toContain(">Ana Lee / Bo Kim or Cy Po / Di Wu<");
+    expect(nodeOf(h, "df")).toContain(">Eve Ng / Fay Ho<");
+    expect(nodeOf(h, "df")).not.toContain("Winner of SF 1");
+    expect(nodeOf(h, "df")).not.toContain("Ana Lee / Bo Kim / Cy Po / Di Wu");
   });
 });
 
@@ -1208,7 +1250,7 @@ describe("KnockoutTab — taps and polls", () => {
   it("D2 in the Rounds list: the final's card is handed the pair, the bronze card its loser sentence — the tree's own derivation", () => {
     const island = mount(LATER);
     tap(island.tree(), `mh-knockout-round-${VIEW}-main-3`);
-    expect(cardSides(island.tree(), "f1")).toEqual(["Dev", "Eli / Hal"]);
+    expect(cardSides(island.tree(), "f1")).toEqual(["Dev", "Eli or Hal"]);
     tap(island.tree(), `mh-knockout-round-${VIEW}-third-place`);
     expect(cardSides(island.tree(), "t1")).toEqual(["Ana", "Loser of Eli v Hal"]);
   });
@@ -1220,6 +1262,82 @@ describe("KnockoutTab — taps and polls", () => {
     tap(island.tree(), `mh-knockout-round-${VIEW}-main-2`);
     expect(cardSides(island.tree(), "s1")).toEqual(["Ana", "Winner of QF 2"]);
     expect(cardSides(island.tree(), "s2")).toEqual(["Winner of QF 3", "Winner of QF 4"]);
+  });
+
+  // ── D3 through the REAL producer and consumer (fix round 2) ────────────────
+  // `walk` never calls `MatchCard`, so the card a Rounds list HANDED is rendered
+  // here by the real component: `withPendingSides` renames the side, `MatchCard`
+  // decides its crest. A fixture on both ends would prove only the fixture.
+  const cardHtml = (tree: ReactElement[], fixtureId: string) => {
+    const card = tree.find((x) => x.type === MatchCard && (propsOf(x).match as HubMatchT).fixtureId === fixtureId);
+    expect(card, `card ${fixtureId}`).toBeDefined();
+    return renderToStaticMarkup(<MatchCard {...(propsOf(card!) as unknown as MatchCardProps)} />);
+  };
+  /** One side row of a rendered card, up to the next row or the card's footer. */
+  const sideOf = (h: string, i: 0 | 1) => {
+    const at = h.indexOf(`data-testid="mh-match-side-${i}"`);
+    expect(at, `side ${i}`).toBeGreaterThan(-1);
+    const ends = [h.indexOf(`data-testid="mh-match-side-`, at + 1), h.indexOf(`class="mt-2 flex`, at + 1)].filter(
+      (x) => x > -1,
+    );
+    return h.slice(at, Math.min(...ends));
+  };
+  /** The placeholder crest: aria-hidden, marked, and nothing in it but "?". */
+  const PENDING = /<span aria-hidden="true" data-crest="pending" class="[^"]*">\?<\/span>/;
+
+  it("D3 on the Knockout cards: the pair, the loser sentence and the engine's slot label each wear the '?' placeholder; the real entrant beside each keeps its initials", () => {
+    const later = mount(LATER);
+    tap(later.tree(), `mh-knockout-round-${VIEW}-main-3`);
+    const final = cardHtml(later.tree(), "f1");
+    expect(sideOf(final, 1)).toContain(">Eli or Hal</span>"); // the premise: the pair was handed
+    expect(sideOf(final, 1)).toMatch(PENDING);
+    expect(sideOf(final, 1)).not.toContain(`>${initials("Eli or Hal")}<`);
+    expect(sideOf(final, 0)).not.toContain("data-crest");
+    expect(sideOf(final, 0)).toContain(`>${initials("Dev")}<`);
+
+    tap(later.tree(), `mh-knockout-round-${VIEW}-third-place`);
+    const bronze = cardHtml(later.tree(), "t1");
+    expect(sideOf(bronze, 1)).toContain(">Loser of Eli v Hal</span>");
+    expect(sideOf(bronze, 1)).toMatch(PENDING);
+    expect(sideOf(bronze, 1)).not.toContain(`>${initials("Loser of Eli v Hal")}<`);
+    expect(sideOf(bronze, 0)).not.toContain("data-crest");
+    expect(sideOf(bronze, 0)).toContain(`>${initials("Ana")}<`);
+
+    // MID opens on the quarter-finals (q4 is live), where q3's away slot is
+    // still the engine's own sentence — round 0 has no feeder to pair.
+    const mid = mount(MID);
+    const q3 = cardHtml(mid.tree(), "q3");
+    expect(sideOf(q3, 1)).toContain(">Winner of R1 6</span>");
+    expect(sideOf(q3, 1)).toMatch(PENDING);
+    expect(sideOf(q3, 1)).not.toContain(`>${initials("Winner of R1 6")}<`);
+    expect(sideOf(q3, 0)).not.toContain("data-crest");
+    expect(sideOf(q3, 0)).toContain(`>${initials("Eli")}<`);
+  });
+
+  it("D3 on the MATCHES tab too — the same MatchCard, so a pending bracket slot there wears the placeholder and a real entrant does not", () => {
+    const h = renderToStaticMarkup(
+      <MatchesTab doc={LATER} dict={dict} locale="en" now={NOW} initialFilter="upcoming" />,
+    );
+    const at = h.indexOf(`data-testid="mh-match-f1"`);
+    expect(at, "the final's card is on the Matches tab").toBeGreaterThan(-1);
+    const final = h.slice(at, h.indexOf("</a>", at));
+    // The Matches tab does not rename: the engine's sentence, as the builder wrote it.
+    expect(sideOf(final, 1)).toContain(">Winner of SF 2</span>");
+    expect(sideOf(final, 1)).toMatch(PENDING);
+    expect(sideOf(final, 1)).not.toContain(`>${initials("Winner of SF 2")}<`);
+    expect(sideOf(final, 0)).not.toContain("data-crest");
+    expect(sideOf(final, 0)).toContain(`>${initials("Dev")}<`);
+  });
+
+  it("F5 in the Rounds list: the doubles pair is handed whole with a word between the teams, and its crest is the placeholder", () => {
+    const island = mount(DOUBLES);
+    tap(island.tree(), `mh-knockout-round-${VIEW}-main-2`);
+    expect(cardSides(island.tree(), "df")).toEqual(["Ana Lee / Bo Kim or Cy Po / Di Wu", "Eve Ng / Fay Ho"]);
+    const h = cardHtml(island.tree(), "df");
+    expect(sideOf(h, 0)).toMatch(PENDING);
+    expect(sideOf(h, 0)).not.toContain(`>${initials("Ana Lee / Bo Kim or Cy Po / Di Wu")}<`);
+    expect(sideOf(h, 1)).not.toContain("data-crest");
+    expect(sideOf(h, 1)).toContain(`>${initials("Eve Ng / Fay Ho")}<`);
   });
 
   it("a chosen round that a later poll no longer carries falls back to the default — never a rail with nothing pressed", () => {

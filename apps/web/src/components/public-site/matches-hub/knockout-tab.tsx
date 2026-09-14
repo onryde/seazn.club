@@ -225,7 +225,7 @@ export type PendingSideKey = "knockout.pendingPair" | "knockout.pendingLoser";
  * connectors already draw: bracket round k+1's fixture j is fed on side s by
  * round k's fixture 2j+s, as its WINNER. The third-place fixture is fed on
  * side s by the semi-finals' fixture s, as its LOSER — so it reads "Loser of
- * {a} v {b}": "{a} / {b}" there would be the same words as the final's slot
+ * {a} v {b}": "{a} or {b}" there would be the same words as the final's slot
  * waiting on the same semi, with nothing to say one gets the winner and the
  * other the loser. Both relationships checked against two real hub documents
  * in the fix-round report.
@@ -280,7 +280,8 @@ export function pendingSide(
  * a side's name is shown — the Draw's node and the Rounds list's card — so the
  * two can never disagree. The SAME object when neither side changes. The side
  * keeps `entrantId === ""`, so every reader that asks "is anyone here yet"
- * (the node's muted style, `nextLine`) still gets the true answer.
+ * (the node's muted style, `MatchCard`'s placeholder crest, `nextLine`) still
+ * gets the true answer.
  */
 function withPendingSides(
   view: KnockoutViewT,

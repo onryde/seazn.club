@@ -364,7 +364,7 @@
   "knockout.view.rounds": "Rondas",
   "knockout.view.draw": "Cuadro",
   "knockout.drawLabel": "Cuadro eliminatorio",
-  "knockout.pendingPair": "{a} / {b}",
+  "knockout.pendingPair": "{a} o {b}",
   "knockout.pendingLoser": "Perdedor de {a} contra {b}",
   "leaders.title": "Líderes",
   "leaders.empty": "Aún no hay estadísticas",
