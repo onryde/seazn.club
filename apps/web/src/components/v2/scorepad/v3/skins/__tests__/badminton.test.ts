@@ -422,6 +422,21 @@ describe("scorebug", () => {
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): P3 in the reviewer's mutant table swapped this skin's `side`
+  // literals and survived the whole 2255-test v3 scope, because nothing
+  // asserted `side` against a value the fixture itself produced. Derived
+  // from THIS fixture's own home/away point split (2-0, the test above),
+  // never a typed index table — a swap flips which half `big` "2" lands on.
+  it("marks each half with its OWN side — home's half carries HOME's points (kills a side swap)", () => {
+    const v = view({ events: stream(summary(21, 15), rally("H"), rally("H")) });
+    const spec = buildScorebug(v, t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("2");
+    expect(away?.big).toBe("0");
+  });
+
   it("words the endgame BWF has words for — setting at 20-all, golden point at 29-all", () => {
     const setting = view({ events: stream(...Array.from({ length: 40 }, (_, i) => rally(i % 2 === 0 ? "H" : "A"))) });
     expect(buildScorebug(setting, t).context).toContain("pad.badminton.context.setting");

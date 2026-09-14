@@ -359,6 +359,20 @@ describe("buildScorebug() — the half never shows a player, only the side", () 
     expect(spec.halves[1]!.big).toBe("1");
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): closes the parity gap the reviewer's P-series showed — a `side`
+  // swap here would otherwise survive the whole v3 scope. Derived from this
+  // fixture's own open-set split (2-1, the test above), never a typed index
+  // table.
+  it("marks each half with its OWN side — home's half carries HOME's open-set points (kills a side swap)", () => {
+    const v = view({ events: stream(rally("H"), rally("H"), rally("A")) });
+    const spec = buildScorebug(v, t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("2");
+    expect(away?.big).toBe("1");
+  });
+
   it("halves are tappable only live and at band 3 — swept both band and phase", () => {
     expect(buildScorebug(view({ band: 2 }), t).halves[0]!.tappable).toBe(false);
     expect(buildScorebug(view({ band: 3 }), t).halves[0]!.tappable).toBe(true);

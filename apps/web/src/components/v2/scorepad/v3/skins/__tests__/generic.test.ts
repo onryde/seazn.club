@@ -213,6 +213,20 @@ describe("buildScorebug — the halves", () => {
     expect(spec.halves.map((h) => h.big)).toEqual(["3", "1"]);
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): P4 in the reviewer's mutant table swapped THIS skin's `side`
+  // literals — generic is Task 9's tap driver — and survived the whole
+  // 2255-test v3 scope. Derived from the fixture's own running tally
+  // (3-1, the test above), never a typed index table.
+  it("marks each half with its OWN side — home's half carries HOME's running tally (kills a side swap)", () => {
+    const v = view({ events: stream(point("H"), point("H", 2), point("A")) });
+    const spec = buildScorebug(v, t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("3");
+    expect(away?.big).toBe("1");
+  });
+
   it("shows the engine's own W/L letters once a win_loss fixture is decided", () => {
     const v = view({ cfg: WIN_LOSS_CFG, events: stream(start(), winner("A")) });
     expect(buildScorebug(v, t).halves.map((h) => h.big)).toEqual(["L", "W"]);

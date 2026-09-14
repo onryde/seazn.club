@@ -136,11 +136,13 @@ export interface TapEvent { type: string; payload: Record<string, unknown> }
 export interface ScorebugHalf {
   who: WhoLine[];
   /**
-   * Task 8 fix round 1 (review Important 1, ruling R41) — REQUIRED for a
-   * skin whose two halves genuinely ARE the home/away sides (every
-   * `buildHalf(view, state, side, …)` skin: badminton, boardgame, carrom,
-   * football, generic, period-shared [hockey/icehockey], tabletennis,
-   * tennis, volleyball), and DELIBERATELY ABSENT for one that is not:
+   * Task 8 fix round 1 (review Important 1, ruling R41; doc list corrected
+   * in fix round 2, review re-review round 1 nit N3) — REQUIRED for a skin
+   * whose two halves genuinely ARE the home/away sides: six via the shared
+   * `buildHalf(view, state, side, …)` builder (badminton, boardgame,
+   * generic, tabletennis, tennis, volleyball) and three via their own
+   * inline `halves:` literal (carrom, football, period-shared
+   * [hockey/icehockey]) — and DELIBERATELY ABSENT for one that is not:
    * cricket's two halves are the batting total and the overs count
    * (`skins/cricket.tsx`'s own `halves:` literal), never a team's own side,
    * so tagging them `home`/`away` would be a fabricated fact, wrong in the
@@ -1451,6 +1453,26 @@ export function assertScorebugSpec(spec: ScorebugSpec): string[] {
     if (h.tappable && !h.tapEvent) out.push(`halves[${i}]: tappable requires tapEvent`);
     if (!h.who.length) out.push(`halves[${i}]: who must be non-empty`);
   });
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43) — the half of ScorebugHalf.side's contract every skin's own
+  // fixtures can prove: either NO half carries it (cricket's readouts,
+  // which are never a team's own side) or EVERY half carries it, and no two
+  // halves ever carry the SAME value (a half's side is a distinct fact
+  // about that half, so two "home"s or two "away"s is never a valid spec,
+  // whatever produced it). This does not itself prove a skin picked the
+  // RIGHT value for the RIGHT half — that is `data-side`'s one reader,
+  // scorebug.tsx, plus each skin's own per-side fixture test — only that the
+  // field's SHAPE is never left half-set or duplicated.
+  const sides = spec.halves.map((h) => h.side);
+  const sideCount = sides.filter((s) => s !== undefined).length;
+  if (sideCount > 0 && sideCount < spec.halves.length) {
+    out.push("halves: side must be set on every half or none — found it on some but not all");
+  } else if (sideCount === spec.halves.length && sideCount > 0) {
+    const distinct = new Set(sides);
+    if (distinct.size !== sides.length) {
+      out.push(`halves: side values must all differ — found ${JSON.stringify(sides)}`);
+    }
+  }
   // R8/#676 — the half of StripItem.reserve's contract a single spec can see.
   // The other half (the SAME slot reserves the SAME width in both states) needs
   // two specs and is asserted in the skins' own suites.

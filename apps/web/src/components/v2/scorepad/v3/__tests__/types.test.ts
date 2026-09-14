@@ -32,6 +32,40 @@ describe("assertScorebugSpec", () => {
     });
     expect(v).toEqual(["halves[0]: who must be non-empty"]);
   });
+
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43) — the SHAPE half of ScorebugHalf.side's contract, holding across
+  // every skin including cricket.
+  it("accepts a spec where NEITHER half carries side — cricket's shape", () => {
+    expect(assertScorebugSpec({ context: "c", phase: "live", halves: [half(), half()], strip: [] })).toEqual([]);
+  });
+  it("accepts a spec where BOTH halves carry side, and the values differ — every other skin's shape", () => {
+    const v = assertScorebugSpec({
+      context: "c",
+      phase: "live",
+      halves: [half({ side: "home" }), half({ side: "away" })],
+      strip: [],
+    });
+    expect(v).toEqual([]);
+  });
+  it("rejects side set on only ONE half — kills a mutant that drops it from a single producer", () => {
+    const v = assertScorebugSpec({
+      context: "c",
+      phase: "live",
+      halves: [half({ side: "home" }), half()],
+      strip: [],
+    });
+    expect(v).toEqual(["halves: side must be set on every half or none — found it on some but not all"]);
+  });
+  it("rejects BOTH halves carrying the SAME side — kills a mutant that sets \"home\" on both", () => {
+    const v = assertScorebugSpec({
+      context: "c",
+      phase: "live",
+      halves: [half({ side: "home" }), half({ side: "home" })],
+      strip: [],
+    });
+    expect(v).toEqual([`halves: side values must all differ — found ${JSON.stringify(["home", "home"])}`]);
+  });
 });
 
 // G4 (controller ruling 2026-08-16, docs/superpowers/plans/2026-08-16-

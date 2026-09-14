@@ -552,6 +552,18 @@ describe("buildScorebug", () => {
     expect(spec.halves[1]!.big).toBe("6");
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): P3 in the reviewer's mutant table inverted THIS skin's `side`
+  // literal and survived the whole v3 scope. Derived from the fixture's own
+  // tiebreak split (8-6, the test above), never a typed index table.
+  it("marks each half with its OWN side — home's half carries HOME's tiebreak points (kills a side swap)", () => {
+    const spec = buildScorebug(view({ state: state({ points: { kind: "tiebreak", home: 8, away: 6 } }) }), t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("8");
+    expect(away?.big).toBe("6");
+  });
+
   it("halves are tappable at band 3 while live, and carry a real tapEvent + hintKey", () => {
     const spec = buildScorebug(view({ band: 3, phase: "live" }), t);
     for (const half of spec.halves) {
