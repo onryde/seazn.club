@@ -14,10 +14,18 @@
 // button in the caller's own tree, exactly where the Matches tab had it.
 import type { ReactNode } from "react";
 
-// One DOM, branched. The rail scrolls horizontally at every width and bleeds
-// to the phone edge below `md` so a chip is never half-cut by the page gutter
-// — the negative margin cancels the public page's own side padding.
-export const HUB_RAIL_CLASS = "flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4";
+// One DOM, branched. Below `lg` the rail scrolls horizontally — a swipe rail —
+// and bleeds to the phone edge below `md` so a chip is never half-cut by the
+// page gutter; the negative margin cancels the public page's own side padding.
+//
+// From `lg` it WRAPS (Knockout fix round, C1). A mouse has no way to scroll a
+// rail sideways, and at 1280 a double-elimination round rail cut its last
+// chip mid-word with nothing to reach it by. `overflow-x-auto` stays: a rail
+// that wraps never overflows, so it scrolls nothing, and the scroll-into-view
+// effect in `knockout-tab.tsx` finds every chip already inside the rail and
+// leaves `scrollLeft` at 0. The rail keeps `tabIndex={0}`, its role and its
+// name at every width — tabindex cannot vary by media query (AGENTS.md 23).
+export const HUB_RAIL_CLASS = "flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4 lg:flex-wrap";
 
 // `min-h-11` is the 44px tap target (AGENTS.md). NOTE the divergence from
 // `PublicTabRail`, which splits the button (hit area) from an inner span (the
