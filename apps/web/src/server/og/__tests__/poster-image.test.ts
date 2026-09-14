@@ -214,17 +214,28 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
     }
   });
 
+  // The next two carry a VALID image body and a valid content type on purpose.
+  // A redirect with an empty body is refused by the content-type gate as well,
+  // so a test written that way passes with the status check deleted — two
+  // guards covering for each other, and neither of them actually tested.
   it("refuses a redirect rather than following it to a second, unchecked host", async () => {
-    const spy = spyFetch(
-      async () =>
-        new Response(null, { status: 302, headers: { location: "https://evil.example/a.png" } }),
+    const spy = spyFetch(async () =>
+      new Response(new Uint8Array(await png()), {
+        status: 302,
+        headers: { "content-type": "image/png", location: "https://evil.example/a.png" },
+      }),
     );
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses an error response", async () => {
-    spyFetch(async () => new Response("nope", { status: 404, headers: { "content-type": "image/png" } }));
+  it("refuses an error response even when it carries a perfectly good image", async () => {
+    spyFetch(async () =>
+      new Response(new Uint8Array(await png()), {
+        status: 404,
+        headers: { "content-type": "image/png" },
+      }),
+    );
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
   });
 
