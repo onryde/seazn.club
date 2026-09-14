@@ -49,6 +49,31 @@ export const HUB_DICT_PREFIXES = [
 ] as const;
 
 /**
+ * EXACT keys the hub's client subtree reads outside the prefixes above.
+ *
+ * The called-off status sentences (Knockout fix round, P2). `MatchCard` prints
+ * `header.statusLine`, and `hubHeader` (`competition-hub.ts`) sets it only for
+ * a called-off fixture: `matchCentre.status.<status>` for a member of
+ * `STATUS_LINE_KEYS`, `matchCentre.status.other` for anything else. So these
+ * six, and not the `matchCentre.` prefix — that is the match centre's whole
+ * vocabulary, and would put most of it back on the page this slice exists to
+ * keep small. Missing, a forfeited final printed `matchCentre.status.forfeited`
+ * on the public Matches and Knockout tabs.
+ *
+ * Restated rather than imported: this module is read by client code, and
+ * `competition-hub.ts` is server-only. `hub-dict.test.tsx` derives the same
+ * list from `STATUS_LINE_KEYS` and fails on drift.
+ */
+export const HUB_DICT_KEYS = [
+  "matchCentre.status.abandoned",
+  "matchCentre.status.cancelled",
+  "matchCentre.status.forfeited",
+  "matchCentre.status.postponed",
+  "matchCentre.status.walkover",
+  "matchCentre.status.other",
+] as const;
+
+/**
  * Keys that match a prefix above but are rendered by a SERVER component this
  * page passes in as a slot, so they must not cross the boundary.
  *
@@ -72,7 +97,10 @@ export const SERVER_ONLY_KEYS = [
 export function hubDict(dict: Dict): Dict {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(dict)) {
-    if (!HUB_DICT_PREFIXES.some((p) => key.startsWith(p))) continue;
+    const read =
+      HUB_DICT_PREFIXES.some((p) => key.startsWith(p)) ||
+      (HUB_DICT_KEYS as readonly string[]).includes(key);
+    if (!read) continue;
     if ((SERVER_ONLY_KEYS as readonly string[]).includes(key)) continue;
     out[key] = dict[key];
   }
