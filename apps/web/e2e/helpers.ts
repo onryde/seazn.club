@@ -165,7 +165,24 @@ export async function overflowingIn(
       const root = document.querySelector<HTMLElement>(rootSel);
       if (!root) return { clipped: [absent], scrollable: [], truncatedByDesign: [] };
       const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>(childSel))];
-      const over = suspects.filter((el) => el.scrollWidth - el.clientWidth > 1);
+      // Hide `visibility: hidden` descendants before measuring. Overlay name
+      // probes (and anything like them) are in-flow for scrollWidth even when
+      // they do not paint — Chromium reports the full-name probe as a clip of
+      // `.ovl-team-name` (run 34834966169). A box whose only overhang is
+      // hidden measurement chrome is not a visible clip.
+      const visibleOverhang = (el: HTMLElement) => {
+        const hidden = Array.from(el.querySelectorAll<HTMLElement>("*")).filter(
+          (c) => getComputedStyle(c).visibility === "hidden",
+        );
+        const prev = hidden.map((c) => c.style.display);
+        for (const c of hidden) c.style.display = "none";
+        const overhang = el.scrollWidth - el.clientWidth;
+        hidden.forEach((c, i) => {
+          c.style.display = prev[i]!;
+        });
+        return overhang;
+      };
+      const over = suspects.filter((el) => visibleOverhang(el) > 1);
       const describe = (el: HTMLElement) =>
         `${el.tagName.toLowerCase()} ${el.scrollWidth}px content in ${el.clientWidth}px` +
         `${el.hasAttribute("tabindex") ? ` tabindex=${el.getAttribute("tabindex")}` : ""}`;

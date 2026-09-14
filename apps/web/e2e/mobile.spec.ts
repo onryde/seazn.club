@@ -214,7 +214,18 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     await expect(detailsToggle).toBeHidden();
     await expect(scoringHeading).toBeVisible();
     await expect(activityToggle).toBeHidden();
-    for (const el of await page.locator('[data-role="phone-disclosure-toggle"]').all()) await expect(el).toBeHidden();
+    // Phone-only disclosures stay `md:hidden` (spec §3.10). Lineup/roster
+    // opted into `desktopCollapsible` (PR #782) so their toggle is visible
+    // at tablet too — asserting every toggle hidden reddened cricket v3 pad
+    // at 768/834 (run 34834966169). `/(^|\s)md:hidden(\s|$)/` so this does
+    // not match inside `max-md:hidden`.
+    for (const el of await page.locator('[data-role="phone-disclosure-toggle"]').all()) {
+      const phoneOnly = await el.evaluate((node) =>
+        /(^|\s)md:hidden(\s|$)/.test((node as HTMLElement).className),
+      );
+      if (phoneOnly) await expect(el).toBeHidden();
+      else await expect(el).toBeVisible();
+    }
   }
   await expectNoHorizontalScroll(page);
 }

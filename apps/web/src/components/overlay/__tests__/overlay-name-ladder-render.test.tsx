@@ -113,7 +113,8 @@ describe("the bar renders §1's ladder", () => {
     const css = readFileSync(join(HERE, "../../../app/globals.css"), "utf8");
     const rule = css.slice(css.indexOf(".ovl-team-name-probe"));
     const body = rule.slice(rule.indexOf("{"), rule.indexOf("}"));
-    expect(body).toContain("position: absolute");
+    expect(body).toContain("position: fixed");
+    expect(body).not.toContain("position: absolute");
     expect(body).toContain("visibility: hidden");
     // `display: none` would give them no box at all and `getBoundingClientRect`
     // would read 0 for every rung — the ladder would always pick the first.

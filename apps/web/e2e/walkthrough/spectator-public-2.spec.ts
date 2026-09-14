@@ -355,7 +355,14 @@ test("setup: a public competition with a live cricket division, football, tennis
   namesFixture = namesFixtures[0]!;
   const nsides = await fixtureSides(request, namesFixture);
   await mustPost(request, namesFixture, "core.start", {});
-  for (let i = 0; i < 3; i++) await mustPost(request, namesFixture, "tennis.point", { by: nsides.home });
+  // Four points win the opening game. `buildTimeline` deliberately suppresses
+  // `tennis.point` rows (volume); the Timeline tab's SideBadge only mounts on
+  // lines with a `sideIndex`, which for tennis means a derived game-held /
+  // game-broken rung. Three points leave the match at 40–0 with only
+  // `core.start` on the timeline — no chip, and the badge width gate goes
+  // dark while Sets (already painted) stays green. That was CI run
+  // 34834966169, not a click-before-commit race alone.
+  for (let i = 0; i < 4; i++) await mustPost(request, namesFixture, "tennis.point", { by: nsides.home });
 
   expect(
     orgSlug &&
@@ -962,19 +969,27 @@ test("badge chips hold the WIDEST abbreviation the ladder produces, at 320 and 1
     //
     // This ASSERTS the Timeline tab rather than skipping when it is absent.
     // The tab's presence is not a fact discovered about someone else's data —
-    // this test seeds its own division and posts the three `tennis.point`
-    // events that make `extraTabs` push `timeline`. A `continue` here would be
-    // a guard over a fact the test itself establishes, and it sits on the ONLY
-    // browser-side measurement of `SideBadge` in the repository: `mobile.spec`
-    // reaches the match centre only through a cricket fixture, and cricket
-    // renders neither the Sets nor the Timeline tab. Lose this and the chip
-    // has no width gate at all, with everything still green.
+    // this test seeds its own division and posts four `tennis.point` events so
+    // a derived game rung (with a side) lands on the timeline. A `continue`
+    // here would be a guard over a fact the test itself establishes, and it
+    // sits on the ONLY browser-side measurement of `SideBadge` in the
+    // repository: `mobile.spec` reaches the match centre only through a
+    // cricket fixture, and cricket renders neither the Sets nor the Timeline
+    // tab. Lose this and the chip has no width gate at all, with everything
+    // still green.
     await expect(
       anon.getByTestId("mc-tab-timeline"),
       "the seeded tennis fixture must expose a Timeline tab — this test's own events produce it",
     ).toHaveCount(1);
     await anon.getByTestId("mc-tab-timeline").click();
     const timelineBadges = anon.getByTestId(/^mc-side-badge-\d+$/);
+    // MatchCentre mounts one panel at a time. Counting immediately after
+    // click races the commit and reported 0 chips on CI (run 34834966169)
+    // while Sets (already painted) stayed green.
+    await expect(
+      timelineBadges.first(),
+      "the timeline rendered at least one entrant chip",
+    ).toBeVisible();
     const count = await timelineBadges.count();
     expect(count, "the timeline rendered at least one entrant chip").toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
