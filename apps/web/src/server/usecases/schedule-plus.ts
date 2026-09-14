@@ -12,7 +12,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import { divisionLockState } from "./schedule";
+import { afterScheduleWrite, divisionLockState } from "./schedule";
 
 const MS_PER_MIN = 60_000;
 
@@ -37,11 +37,11 @@ export async function shiftDivisionSchedule(
   auth: AuthCtx,
   input: ShiftInput,
 ): Promise<{ shifted: number; skipped: { locked: number; decided: number }; seq: number }> {
-  return withTenant(auth.orgId, async (tx) => {
-    const divisionId = input.division_id;
+  const divisionId = input.division_id;
+  const write = await withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-    const [division] = await tx<{ seq: number }[]>`
-      select seq from divisions where id = ${divisionId}`;
+    const [division] = await tx<{ seq: number; competition_id: string }[]>`
+      select seq, competition_id from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     // A bulk shift moves EVERY unlocked fixture on the board and then nulls
     // `edit_watermark` — which is worse on a frozen division than the writes
@@ -86,11 +86,15 @@ export async function shiftDivisionSchedule(
       input.scope,
       input.delta_minutes,
     );
+    // R10e: the ids this write CHANGED, from its own UPDATEs.
+    const fixtureIds: string[] = [];
     for (const m of moves) {
-      await tx`update fixtures set scheduled_at = ${m.to.at} where id = ${m.fixture}`;
+      const [row] = await tx<{ id: string }[]>`
+        update fixtures set scheduled_at = ${m.to.at} where id = ${m.fixture} returning id`;
+      if (row) fixtureIds.push(row.id);
     }
     if (moves.length === 0) {
-      return { shifted: 0, skipped, seq: division.seq };
+      return { out: { shifted: 0, skipped, seq: division.seq }, competitionId: division.competition_id, fixtureIds };
     }
     const seq = await appendDivisionEvent(tx, divisionId, "schedule_shifted", {
       delta_minutes: input.delta_minutes,
@@ -99,8 +103,17 @@ export async function shiftDivisionSchedule(
     });
     await tx`update divisions set seq = ${seq}, edit_watermark = null
              where id = ${divisionId}`;
-    return { shifted: moves.length, skipped, seq };
+    return { out: { shifted: moves.length, skipped, seq }, competitionId: division.competition_id, fixtureIds };
   });
+  // R10e (review-r10d m1): a rain-delay shift moves every unlocked kick-off, so
+  // the hub key and each moved fixture's `pub:v1:fixture:{id}` drop in one DEL
+  // AFTER the commit, and the division and fixture pushes follow that DEL
+  // (`afterScheduleWrite`, with its 50-fixture push cap). A shift that moved
+  // nothing sends nothing.
+  if (write.fixtureIds.length > 0) {
+    afterScheduleWrite(divisionId, write.competitionId, "schedule", write.fixtureIds);
+  }
+  return write.out;
 }
 
 /** GET /api/v1/divisions/{id}/schedule/report — min/max wait per entrant
