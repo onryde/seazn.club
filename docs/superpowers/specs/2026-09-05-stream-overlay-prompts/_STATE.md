@@ -12,14 +12,45 @@ production and test code under `apps/web`, and `db/` is no longer untouched —
 exists yet", or names #752 as an OPEN pull request describes the tree before
 2026-09-10 and is marked where it survives as a prior record.
 
-Last updated: **2026-09-14**, by the R1 plan session (branch `docs/streaming-r1-plan`):
-**R1's plan is WRITTEN — `../../plans/2026-09-13-streaming-r1.md` — and execution has NOT
-started; it waits on the owner's "start".** Fourteen owner rulings from 2026-09-14 (embedded
-checkout, a daily sweep in the workflow repo, domain-driven with a robust Fly client, an
-explicit machine lifecycle, the house rules in `RULES.md`) are in `_INDEX.md` "2026-09-14 —
-R1's plan WRITTEN", with the recommendations still unruled. Owed by the owner before the
-relevant steps: the Fly API token, the Sentry DSN, and the daily workflow in
-`onryde/seazn.club.workflow`. R2's plan is still not writable until PR-R1 merges.
+Last updated: **2026-09-14 (later)**, by the R1 plan session:
+**R1 is READY TO START in a new session. Nothing is built yet.** The plan is
+`../../plans/2026-09-13-streaming-r1.md`, amended the same day to capture every fact the relay
+produces. Every recommendation the plan carried is now ruled; see `_INDEX.md`'s three 2026-09-14
+sections: "R1's plan WRITTEN", "where the relay runs, and in what language", and "capture all
+data".
+
+**To start R1, in a fresh session:**
+
+1. Read, in order: this file's block; `_INDEX.md`'s three 2026-09-14 sections;
+   `docs/superpowers/RULES.md` (both owner checklists); `_RULES.md` beside this file; then the plan.
+2. Execute the plan with `superpowers:subagent-driven-development`: `model: opus` on every dispatch,
+   a reviewer after every lane, and the orchestrator re-running the gate at each lane boundary.
+3. **Task 0 first**, alone:
+   - cut `.claude/worktrees/relay` (branch `feat/stream-relay`) from current `main`;
+   - stand up env label `rly` with the `seazn-local-env` skill;
+   - re-pin every line reference — `main` moved past the plan's pin (#782, #784);
+   - take the baseline;
+   - put the two open data decisions (personal data in telemetry, telemetry retention) to the
+     owner before Task 1 writes the migration.
+
+**Already in place:** the Cloudflare token and account, Stripe sandbox keys, `AUTH_SECRET`, and
+`RELAY_KEK` (both `.env.local` files, generated 2026-09-14).
+
+**Owed by the owner, each before the step that needs it:**
+- the Fly API token (Task 5A's live test);
+- the Sentry DSN (Task 17);
+- the daily relay-sweep workflow in `onryde/seazn.club.workflow`;
+- `RELAY_KEK` as a Fly secret on staging and production;
+- optionally, an unlisted YouTube key;
+- cleared GitHub Actions billing — every job on `main` failed unstarted on 2026-09-14, and PR-R1's
+  `ci.yml` needs it.
+
+**Merge path:** a PR (not a direct push), with `ci.yml` green, e2e dispatched against the PR, a
+review, and the owner's per-screen sign-off. R2's plan follows PR-R1's merge; R3 lives in the
+capture repo.
+
+Earlier the same day, by the R1 plan session (branch `docs/streaming-r1-plan`): R1's plan was
+written, with fourteen owner rulings recorded in `_INDEX.md` "2026-09-14 — R1's plan WRITTEN".
 
 Prior record — last updated **2026-09-12**, by the R0 bench wave (branch `docs/streaming-r0-memo`):
 **R0 is CLOSED — its memo is `R0-memo.md` beside this file, and the Cloudflare

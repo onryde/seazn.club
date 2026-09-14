@@ -2898,3 +2898,52 @@ callback-driven, so no request handler waits out a machine boot.
 `R2-compositor.md` still describes the pre-R0 compositor (headed Chromium capturing the composite).
 R2's plan is written from `R0-memo.md` — B2, the `#ff00ff` chroma key, `performance-4x`, SIGINT
 stop — with a TypeScript supervisor per the ruling above, once PR-R1 merges.
+
+## 2026-09-14 (later) — capture all data; the four open recommendations accepted; ready to start
+
+### Owner rulings, 2026-09-14
+
+1. **The four recommendations left open above are ACCEPTED** (*"all good"*):
+   - **The lifecycle's scope.** Four session columns — `runner_state`, `runner_name`,
+     `runner_stop_requested_at`, `end_reason` — plus `RunnerProvider` growing `stop` / `observe` /
+     `list`, and the end-reason chip on the Phone tab.
+   - **Customer verification's GRANTED state.** R1 stays dark. Staff grants `streaming.overlay` +
+     `streaming.relay` to one fresh org through the real `/admin/orgs/[id]` overrides editor; every
+     step after the grant runs as the customer. The GA purchase path is owed to the GA-flip wave.
+   - **Expiry never waits for the daily tick.** The expiry policy runs on every session read,
+     heartbeat and admission; the machine carries its own deadline; the daily sweep is retention
+     plus an orphan backstop.
+   - **The verify destination.** A second Cloudflare live input is the sink; one YouTube run is
+     optional on an owner-supplied unlisted key.
+2. **Capture every fact the relay produces; schema growth is pre-approved** (*"no issues in expanding
+   the database, make sure that we capture all data as possible"*). The plan adds an append-only
+   event history written in the same transaction as each state change, a heartbeat time series, a
+   log of every Cloudflare and Fly API call, richer per-session facts, storage snapshots, and
+   purchase links (plan amended to 10,099 lines, still 22 tasks; its `## Data captured` section
+   is the inventory — every table, what writes it, what it never contains). The new tables are
+   `fixture_stream_events` (append-only by trigger), `fixture_stream_samples`,
+   `stream_provider_calls` and `stream_storage_snapshots`, plus 22 fact columns on the session
+   and a purchase link on the credits ledger, all in the one unmerged migration, with RLS enabled
+   and forced on every relay table. Until retention is ruled, `SAMPLE_RETENTION_DAYS = null`
+   keeps every sample. The session row stays the one authority for current state. An allowlist
+   sanitiser keeps every stream key, passphrase, token and credential-bearing URL out of all of it,
+   proven by seeding a known secret through each write path and scanning every row.
+3. **`RELAY_KEK` exists locally.** Generated 2026-09-14: 32 bytes as 64 hex characters, the same
+   value in the root `.env.local` and `apps/web/.env.local`. Both files are git-ignored, and the
+   value was never printed. Staging and production still need it set as a Fly secret by the owner.
+
+### Owner decisions the data-capture ruling surfaces (NOT ruled — ask at R1 Task 0)
+
+- **Personal data in telemetry.** Recommended: store no raw IP addresses or device identifiers, only
+  user ids the system already holds.
+- **Retention of telemetry rows** (not videos, which stay on the 3-day sweep). Recommended: keep
+  events and provider calls indefinitely; delete raw heartbeat samples after 90 days, keeping a
+  per-session aggregate. Alternative, closer to "capture everything": keep all samples, at the
+  storage cost the plan estimates.
+
+### Fact for whoever opens PR-R1
+
+On 2026-09-14 every GitHub Actions job on `main` — E2E, Stg, Build guard — failed without starting,
+annotated *"recent account payments have failed or your spending limit needs to be increased"*.
+`ci.yml` on a pull request draws on the same account, so PR-R1's checks cannot run until the Actions
+billing is cleared.

@@ -95,10 +95,16 @@ Each row of `R0-CORRECTIONS-FOR-R1.md` lands either as a task requirement WITH a
 6. **`INGEST_TIMEOUT_SECONDS = 180`** — owner: *"3 mins after phone goes away"*. C8 stays: `holdWindowSeconds = 183` for RTMPS only, SRT `null`.
 7. **Sentry — enable it.** The DSN is NOT yet supplied: Task 17 Step 3 stays conditional on the DSN; `_INDEX.md` records "DSN owed by owner".
 8. **Checkout is EMBEDDED, like the others.** Owner: *"checkout should be inbuilt as other"*. Task 8 copies `lib/credit-packs.ts` / `app/api/billing/credit-pack-checkout/route.ts` (`ui_mode: "embedded_page"`, `return_url`, the route returns `{ client_secret }`); Task 14 copies `components/buy-credits.tsx` (`Modal` + `EmbeddedCheckoutProvider`/`EmbeddedCheckout`); Task 15's e2e fills the card inside Stripe's embedded iframe with `event-pass.spec.ts`'s own frame selectors. Every "hosted" sentence is gone from this plan.
+9. **Lifecycle scope — ACCEPTED** (owner *"all good"*, 2026-09-14, second ruling set): `runner_state`, `runner_name`, `runner_stop_requested_at`, `end_reason`; `RunnerProvider`'s `stop`/`observe`/`list`; the end-reason chip on the Phone tab. No longer scope creep.
+10. **Customer verification's GRANTED state — RULED:** R1 stays dark; staff grants both keys to a fresh org via the real `/admin/orgs/[id]` overrides editor; the GA purchase path is owed to the GA-flip wave. The DENIED state is a second fresh org.
+11. **Recommendation B — RULED:** expiry never waits for the daily tick (the lazy path, the inline retry, the `RELAY_DEADLINE_AT` hard stop; the cron keeps retention, backstop, orphans).
+12. **The verify destination — RULED:** a second Cloudflare live input as the sink; a YouTube pass is optional on an owner-supplied unlisted key (owed; never committed or echoed).
+13. **Data capture — RULED:** *"no issues in expanding the database, make sure that we capture all data as possible"*. Every fact the relay produces is captured (§"Data captured"); schema growth is PRE-APPROVED. Two sub-questions are recorded there as OWNER DECISIONS, not decided: PII (IPs/device ids) and telemetry retention.
+14. **`RELAY_KEK` is PRESENT** in both `.env.local` files (64 hex). It is no longer owed: Task 0 CONFIRMS it (a length check, never an echo); every later "add RELAY_KEK" note is retired.
 
-## Recommendation B — no money or safety rule may wait for a daily tick (the plan-writer's, NOT an owner ruling)
+## Recommendation B — no money or safety rule may wait for a daily tick (RULED, owner "all good" 2026-09-14 — ruling 11)
 
-At one tick a day, the rules Task 12 first owned (warming timeout, stale-heartbeat crash, max-duration end, the ONE runner retry) become up to 24 h late: an orphan Fly Machine bills all day, a stuck session holds its C3 reserve all day, and a retry after the match is useless. So the plan restructures — the owner ruled the cadence, this is how the plan honours it without the cost:
+At one tick a day, the rules Task 12 first owned (warming timeout, stale-heartbeat crash, max-duration end, the ONE runner retry) become up to 24 h late: an orphan Fly Machine bills all day, a stuck session holds its C3 reserve all day, and a retry after the match is useless. So the plan restructures — the owner ruled the cadence AND accepted this structure:
 - **One pure policy** (`domain/expiry.ts`, Task 2B): `evaluate(session, now) → transition | none`.
 - **It runs lazily** on every session read (`currentSession`), every heartbeat, every Phone-tab poll and at admission (`createSession` — the C3 reserve excludes sessions the policy has already expired), inside the row lock (Task 10).
 - **Machine-side hard stop:** the runner's guest env carries `RELAY_DEADLINE_AT` (ISO, = created + `MAX_DURATION_MINUTES`) and the R2 supervisor exits at that instant on its own; C7's `auto_destroy` then removes the Machine. Pinned in Task 5 (the env is asserted in `runner-fly.test.ts`; the supervisor's honouring of it is R2's acceptance and is recorded as such).
@@ -114,8 +120,8 @@ The orchestrator is adding the owner's three groups verbatim to `docs/superpower
 
 Separate from the seeded e2e (Task 15 stays automation). A REAL browser against the `rly` production build, a FRESH signup, a fresh org, **no SQL seed, no `setBoolEntitlementOverrideSql`, no admin route used by the tester as a shortcut** — the one staff action below is the real beta-customer journey, not a shortcut, and it is named. Owner rulings folded in:
 - **(3) RULED, owner "Ok":** in R1 `ffmpeg` (a test pattern pushed to the session's RTMPS or SRT URL) stands in for the customer's capture app — R1 has no capture app (R3).
-- **(2) Owner "Ok" to the options; RECOMMENDATION (the orchestrator's, adopted here):** every customer-verify run uses a SECOND Cloudflare live input as the destination sink — repeatable, needs no owner key, creates no public stream; clean up by deleting videos before inputs, as R0 did (C2). One real YouTube run at wave close is OPTIONAL and happens only if the owner supplies an unlisted stream key (owed; never committed, echoed or logged).
-- **(1) NOT RULED — owner asked "what's best?"; carried as the orchestrator's recommendation, marked OWNER DECISION PENDING.** Fact, verified in the tree: `streaming.relay` and `streaming.overlay` are granted by NO plan (`V402__streaming_entitlements.sql` inserts `false` for all five plans; dark rollout, design §5.1/§10.4); the GA flip to pro / event_pass_l / enterprise is a later migration with pricing copy and `ENTITLEMENT_DOMAINS`. During R1 no customer can acquire the key by buying anything. A real staff path exists: the per-org overrides editor on `/admin/orgs/[id]` (`apps/web/src/app/admin/orgs/[id]/page.tsx`, backed by `app/api/admin/orgs/[id]/entitlement-override/route.ts`). **Recommendation: R1 stays dark. The GRANTED state = a fresh signup/org, then staff grants `streaming.overlay` + `streaming.relay` to that ONE org through the REAL `/admin/orgs/[id]` editor** — the actual beta-customer journey; every step after the grant runs as the customer with no shortcut. **The DENIED state = a second fresh org with no grant, which must see the correct `UpgradeGate`, not a broken panel.** Owner value: no paying Pro customer can buy match credits for a relay whose composed mode and real Machines are unproven; the grant is reversible per org (remove the override); every customer-facing step after access is still verified for real. Cost: the purchase-to-access step is deferred and named under "What R1 does NOT prove".
+- **(2) RULED (owner "all good", ruling 12):** every customer-verify run uses a SECOND Cloudflare live input as the destination sink — repeatable, needs no owner key, creates no public stream; clean up by deleting videos before inputs, as R0 did (C2). One real YouTube run at wave close is OPTIONAL and happens only if the owner supplies an unlisted stream key (owed; never committed, echoed or logged).
+- **(1) RULED (owner "all good", ruling 10) — the recommendation below is now the instruction.** Fact, verified in the tree: `streaming.relay` and `streaming.overlay` are granted by NO plan (`V402__streaming_entitlements.sql` inserts `false` for all five plans; dark rollout, design §5.1/§10.4); the GA flip to pro / event_pass_l / enterprise is a later migration with pricing copy and `ENTITLEMENT_DOMAINS`. During R1 no customer can acquire the key by buying anything. A real staff path exists: the per-org overrides editor on `/admin/orgs/[id]` (`apps/web/src/app/admin/orgs/[id]/page.tsx`, backed by `app/api/admin/orgs/[id]/entitlement-override/route.ts`). **Recommendation: R1 stays dark. The GRANTED state = a fresh signup/org, then staff grants `streaming.overlay` + `streaming.relay` to that ONE org through the REAL `/admin/orgs/[id]` editor** — the actual beta-customer journey; every step after the grant runs as the customer with no shortcut. **The DENIED state = a second fresh org with no grant, which must see the correct `UpgradeGate`, not a broken panel.** Owner value: no paying Pro customer can buy match credits for a relay whose composed mode and real Machines are unproven; the grant is reversible per org (remove the override); every customer-facing step after access is still verified for real. Cost: the purchase-to-access step is deferred and named under "What R1 does NOT prove".
 
 **The golden path, end to end, once (real Cloudflare — `RELAY_DRIVERS=live` on the `rly` server with the Cloudflare token already in `.env.local`; real Fly is NOT exercised: composed is off and `FLY_API_TOKEN` is owed, so the live driver set constructs the Fly runner LAZILY, Task 5):**
 1. Sign up fresh (new email), create a fresh org, a competition, a division, a fixture — as a customer.
@@ -141,10 +147,10 @@ Separate from the seeded e2e (Task 15 stays automation). A REAL browser against 
 | Cloudflare recording DELETED (3-day retention) | Task 12 through `retentionPlan` | videos before inputs; a 409 defers a day; the OWNER accepted the 3-day promise (2026-09-12); no undo — flagged |
 | Cloudflare live input DELETED | Task 12 | only after its videos are gone and the session has been terminal ≥ 3 days |
 | Fly Machine destroyed (force) | Tasks 10/12 through the lifecycle table | only from `stopping`/`exited` after grace, `lost`, or an orphan; `auto_destroy` is the normal path; idempotent |
-| The migration (four tables) | Task 1 | greenfield, no backfill; RLS forced with zero policies; a migration is reversible only by a new migration — explicit owner sign-off on the DDL happened on 2026-09-14 (rulings 1, 5) |
+| The migration (eight tables) | Task 1 | greenfield, no backfill; RLS forced with zero policies; a migration is reversible only by a new migration — explicit owner sign-off on the DDL happened on 2026-09-14 (rulings 1, 5) |
 | An org's entitlement override (the beta grant) | `/admin/orgs/[id]` (existing) | reversible per org; staff-only |
 
-Scope creep found while planning, marked for the owner's call: (a) `org_stream_targets.watch_url` and `runner_retries` (ruled 5, accepted); (b) the four lifecycle columns `runner_state`, `runner_name`, `runner_stop_requested_at`, `end_reason` (this revision — needed by the owner's own lifecycle instruction; **owner call**); (c) `RunnerProvider.list/stop/observe` beyond design §7.1's `{ create, destroy }` (needed by the lifecycle and the orphan sweep; **owner call**); (d) the embedded-checkout `Modal` in the panel (ruled 8); (e) the ended-state `end_reason` chip and its copy (a customer-facing string the lifecycle makes true; **owner call** — smallest change that says why a stream ended). Nothing else grew: no region picker, no composed UI, no WHEP, no LL-HLS, no phone app.
+Scope growth, each now RULED: (a) `org_stream_targets.watch_url` and `runner_retries` (ruling 5); (b) the four lifecycle columns `runner_state`, `runner_name`, `runner_stop_requested_at`, `end_reason` (ruling 9); (c) `RunnerProvider.list/stop/observe` beyond design §7.1's `{ create, destroy }` (ruling 9); (d) the embedded-checkout `Modal` in the panel (ruling 8); (e) the ended-state `end_reason` chip and its copy (ruling 9); (f) the data-capture tables and the richer session facts (ruling 13, schema growth pre-approved). **Possible future scope, flagged and NOT built:** an admin telemetry view over the captured tables (`/admin/...`) — no UI beyond the end-reason chip ships in R1. Nothing else grew: no region picker, no composed UI, no WHEP, no LL-HLS, no phone app.
 
 ### TEST-CASE DESIGN — the write-path diffs and the added cases
 
@@ -161,6 +167,25 @@ Every new write path is diffed against its nearest analogue for a missed guard, 
 | retention deletes (Task 12) | `sweepRegistrations`' lapse branch | idempotent re-run → yes (absent = success); videos before inputs → yes (C2); advisory lock per session → yes |
 
 Cases added by this pass (each is an `it` in the named file): boundary 0/1/max — `debit(1)`→0, `debit(0)` throws, `credit` at the pack sizes (Task 2B); `headroom == max_duration` admits (Task 2A); `slot` −1/0/1 (Task 1); the 24 h window at 24 h−1 s and 24 h (Task 2B); the grace at T−1/T (Task 2B); empty/null — empty ledger (Task 7), null view (Task 13), no videos/no inputs (Task 2B), `exitInfoFrom([])` (Task 5A), `fromFlyState(null)` (Task 5); malformed — a non-JSON Fly body, a Machine without `id` (Task 5A), a QR payload missing either half (Task 13), a heartbeat with an unknown `state` (Task 11), a non-rtmp target URL (Task 9); concurrent/race — two consumers (Task 7), the partial-index race (Task 10), a concurrent sweep (Task 12), double-tap "Go live" in the customer verify; a guard defeated per guard — the mutant tables in every task; expected values from the source of truth — the enums' `.options`, `config.ts`, the migration file, `RUNNER_TABLE`, `FLY_STATE_MAP`; money mutated specifically — m1–m5 with killers.
+
+## Data captured (owner ruling 13, 2026-09-14: "capture all data as possible"; schema growth pre-approved)
+
+The session row (`fixture_stream_sessions`) stays the ONE authority for current state. Everything below is HISTORY and TELEMETRY beside it — written in the same transaction as the state it records where a state changes, so the history can never disagree with the row. Every new table is RLS-enabled and FORCED with ZERO client grants (design §6.1; `V366` shape), reached only through the non-tenant client, and every payload passes the ALLOWLIST sanitiser (`server/relay/sanitise.ts`, Task 2) — a denylist would miss the next secret.
+
+| Table | What writes it | Row per | Never contains |
+|---|---|---|---|
+| `fixture_stream_events` (append-only, per SESSION) | Task 10 `apply` (`eventRowsOf` — every session/runner state change and domain event, in the row lock's transaction; the caller's `action` row when an actor is given); Task 10 `recordEffect` (effect results: ok/failed, latency, HTTP status/code, attempt); Task 10 `reconcileSession`/`currentSession` (observed external changes: ingest/output status words, Fly state + exit info via the `observed` trigger); Task 10 `heartbeat` (`samples_capped`, once); Task 12 (the sweep's `orphan_destroy`; its backstop expiries arrive through `apply`). Purchases, grants and refunds are NOT events — they are ledger rows with the Stripe link (item 6), the one authority for money | domain event · state transition (session AND runner, from/to) · observed external change · effect result · client/sweep action | stream keys, SRT passphrases, tokens, credential-bearing URLs (the sanitiser allowlists fields; a URL field is stored cut at its `?`) |
+| `fixture_stream_samples` (time series) | Task 10 `heartbeat` (every beat, through Task 11's route) and Task 10 `currentSession` (every organiser poll's ingest observation) | heartbeat / poll, capped per session (`SAMPLES_PER_SESSION_CAP`); raw rows subject to the retention OWNER DECISION, the per-session `sample_summary` is kept regardless (Task 12) | secrets (typed columns only + a sanitised raw jsonb) |
+| `stream_provider_calls` | the recorder port (Task 3) written by the Cloudflare adapter (Task 4) and the Fly client (Task 5A) — every call, every attempt | API call attempt | URLs with ids or keys (a PATH TEMPLATE like `/live_inputs/{uid}/outputs`), tokens, bodies |
+| `stream_storage_snapshots` | Task 12 (each sweep run) and Task 10 `createSession` (each admission check) | sweep run / admission | — |
+| `fixture_stream_sessions` (richer facts, ruling 13 item 4) | Task 10 (timestamps, protocol, uid, region, guest, attempts, machine/recording seconds, admission numbers, ledger link); Task 12 (video uids seen) | (the one row) | keys (still `*_enc` only via `secret-columns.ts`) |
+| `org_stream_credits` (purchase link, item 6) | Task 8's webhook branch via Task 7 `recordPurchase` | (the ledger row) | card data (Stripe ids only) |
+
+**Guards, each with a test and a defeating case (named in the tasks):** redaction — `telemetry.test.ts` "a known secret pushed through EVERY writer is absent from EVERY row of EVERY relay table" (+ `sanitise.test.ts` "no allowed key names a credential") (mutant: bypass the sanitiser → red); atomicity — `stream-sessions.test.ts` "a failing event insert rolls the state change back" (mutant: write the event after commit → red); parity — `session.test.ts` / `runner.test.ts` "every legal cell emits exactly one state-change event" derived from the exported tables; cost — `samples.test.ts` "the per-session cap holds at cap and cap+1", plus the index plan in Task 1; RLS — `migration-shape.test.ts` names all EIGHT relay tables.
+
+**Two OWNER DECISIONS recorded here, not decided (the owner said "capture everything"; these are the two places that has a cost the owner may not have priced):**
+- **PII.** Recommendation: store NO raw IP addresses or device identifiers — only user ids already in the system (`actor_user_id`), the org id and the session id. The Machine's `fly-request-id` and Cloudflare's `cf-ray` are provider ids, not PII, and are kept. UNRULED.
+- **Telemetry retention.** Recommendation: keep `fixture_stream_events` and `stream_provider_calls` indefinitely (they are small — one row per transition/call, ~200 rows per 3 h session), and delete RAW `fixture_stream_samples` after 90 days in the daily sweep, keeping a per-session aggregate snapshot (min/avg/max fps and bitrate, stall count, sample count) on the session facts. Alternative the owner asked for by default — KEEP ALL samples: at a 5 s cadence a 3 h session writes ≈ 2,160 sample rows (≈ 0.5 KB each with the raw jsonb ⇒ ≈ 1 MB per session); 1,000 sessions/month ⇒ ≈ 1 GB/month, ≈ 12 GB/year, indexed — modest on Supabase Pro but not free, and never queried after the sign-off period. Until ruled, the sweep DELETES NOTHING (`SAMPLE_RETENTION_DAYS = null`, one constant); the aggregate snapshot is written regardless. UNRULED.
 
 ## Fly machine lifecycle (owner 2026-09-14: "make sure that fly machine lifecycle is well defined")
 
@@ -246,8 +271,11 @@ stateDiagram-v2
 
 | File | Create / Modify | Responsibility |
 |---|---|---|
-| `db/migration/deltas/V<next>__stream_sessions.sql` | Create (Task 1) | `org_stream_targets`, `fixture_stream_sessions` (+ partial unique index), `fixture_stream_inputs`, `org_stream_credits`; RLS enabled+forced, zero client policies |
-| `apps/web/src/server/relay/__tests__/migration-shape.test.ts` | Create (Task 1) | the constraints are REAL: slot −1 refused, second slot-0 refused, double active session refused, `delta <> 0`, `balance_after >= 0`, `stripe_event_id` unique |
+| `db/migration/deltas/V<next>__stream_sessions.sql` | Create (Task 1) | EIGHT tables: `org_stream_targets`, `fixture_stream_sessions` (+ partial unique index, the lifecycle columns, the ruling-13 facts), `fixture_stream_inputs`, `org_stream_credits` (+ the purchase link); `fixture_stream_events` (append-only by trigger), `fixture_stream_samples`, `stream_provider_calls`, `stream_storage_snapshots`; RLS enabled+forced on all eight, zero client policies |
+| `apps/web/src/server/relay/__tests__/migration-shape.test.ts` | Create (Task 1) | the constraints are REAL: slot −1 refused, second slot-0 refused, double active session refused, `delta <> 0`, `balance_after >= 0`, `stripe_event_id` unique; events append-only + unique seq; provider-call path is a template; snapshot arithmetic; purchase link CHECKs; exports `STREAM_TABLES` / `MIGRATION` (derived from the file) |
+| `apps/web/src/server/relay/sanitise.ts` | Create (Task 2) | PURE allowlist sanitiser (`ALLOWED_KEYS`, `sanitise`, `pathTemplate`) — the one gate before any capture table |
+| `apps/web/src/server/relay/telemetry.ts` | Create (Task 2) | the ONLY writer of the capture tables: `recordEvent(tx, …)` (seq under the caller's lock), `recordSample` (capped), `recordProviderCall` (templated path), `recordStorageSnapshot` |
+| `apps/web/src/server/relay/__tests__/{sanitise,telemetry,rls-static}.test.ts` | Create (Task 2) | allowlist + `pathTemplate` (pure); the redaction scan over every table, the seq, the cap, session-less calls (DB); every `create table` has enable + force and no policy (static) |
 | `apps/web/src/server/relay/config.ts` | Create (Task 2) | ONE authority for every relay constant (`INGEST_TIMEOUT_SECONDS`, `HOLD_SLACK_SECONDS`, `DELETE_RECORDING_AFTER_DAYS`, `RECORDING_RETENTION_DAYS`, `RUNNER_DEFAULT_GUEST`, `RUNNER_DEFAULT_REGION`, `MAX_DURATION_MINUTES`, `TOKEN_GRACE_MINUTES`, `WARMING_TIMEOUT_MINUTES`, `STALE_HEARTBEAT_SECONDS`, `CREDIT_REUSE_HOURS`, `SRT_LATENCY_MS`, `QR_PREFERRED_DEFAULT`, `relayDriverMode()`) |
 | `apps/web/src/server/relay/crypto.ts` | Create (Task 2) | `seal(plain): Buffer` / `open(enc): string` — AES-256-GCM envelope, per-row DEK wrapped by `RELAY_KEK` |
 | `apps/web/src/server/relay/__tests__/crypto.test.ts` | Create (Task 2) | round-trip; tampered ciphertext throws; two seals of one plaintext differ |
@@ -261,8 +289,8 @@ stateDiagram-v2
 | `apps/web/src/server/relay/domain/credits.ts` | Create (Task 2B) | PURE value object: `Balance`, `debit`, `credit`, `withinReuseWindow`, `headroomAfterReservations` (C3) |
 | `apps/web/src/server/relay/domain/retention.ts` | Create (Task 2B) | PURE `retentionPlan(videos, inputs, now) → { deleteVideos, deleteInputs, deferInputs }` (C1/C2) |
 | `apps/web/src/server/relay/domain/__tests__/{expiry,credits,retention}.test.ts` | Create (Task 2B) | threshold rows both sides; debit refuses negative (FS10 in memory); reservations differential; inputs never before their videos |
-| `apps/web/src/server/relay/ports.ts` | Create (Task 3) | `IngestProvider`, `RunnerProvider` (`create`, `destroy`, `list`) and every type that crosses them; no provider vocabulary |
-| `apps/web/src/server/relay/fakes.ts` | Create (Task 3) | `FakeIngest` (scripted OR clock-derived), `FakeRunner` (with `list`) |
+| `apps/web/src/server/relay/ports.ts` | Create (Task 3) | `IngestProvider`, `RunnerProvider` (`create`, `stop`, `observe`, `destroy`, `list`), `ProviderCallRecorder` (+ `NOOP_RECORDER`) and every type that crosses them; no provider vocabulary |
+| `apps/web/src/server/relay/fakes.ts` | Create (Task 3) | `FakeIngest` (scripted OR clock-derived), `FakeRunner` (with `list`), `FakeRecorder`; every fake method records through the injected recorder |
 | `apps/web/src/server/relay/__tests__/fakes.test.ts` | Create (Task 3) | the fake honours the port contract (shape of `inputStatus`, videos-before-inputs bookkeeping, 409-once script) |
 | `apps/web/src/server/relay/ingest-cf.ts` | Create (Task 4) | Cloudflare Stream adapter over `fetch` |
 | `apps/web/src/server/relay/__tests__/ingest-cf.test.ts` | Create (Task 4) | create body (C1, C4, C8), per-input GET (C5), no `webRTC` stored (C10), static greps (C4, C11, C12, C13) |
@@ -271,7 +299,7 @@ stateDiagram-v2
 | `apps/web/src/server/relay/__tests__/fly-client.live.test.ts` | Create (Task 5A) | opt-in (`FLY_API_TOKEN` + `RELAY_LIVE_FLY=1`): create + destroy one small Machine in org `seazn-club`; skips loudly otherwise |
 | `apps/web/src/server/relay/runner-fly.ts` | Create (Task 5) | Fly Machines adapter over `fly-client.ts`: `cpuClass` mapping, C7 values, `RELAY_DEADLINE_AT` in the guest env (the hard stop), `list` by metadata |
 | `apps/web/src/server/relay/__tests__/runner-fly.test.ts` | Create (Task 5) | create body (C7 + deadline env + name + metadata), `cpuClass` mapping, idempotent destroy, `list` |
-| `apps/web/src/server/relay/drivers.ts` | Create (Task 5) | `relayDrivers()` — `RELAY_DRIVERS=fake\|live` selection, one process-wide instance |
+| `apps/web/src/server/relay/drivers.ts` | Create (Task 5) | `relayDrivers()` — `RELAY_DRIVERS=fake\|live` selection, one process-wide instance; `dbRecorder` bound to BOTH adapters in BOTH modes (the one place the recorder meets `sql`) |
 | `apps/web/src/server/relay/tokens.ts` | Create (Task 6) | `mintRelayToken`, `verifyRelayToken` over `AUTH_SECRET` |
 | `apps/web/src/server/relay/__tests__/tokens.test.ts` | Create (Task 6) | valid; tampered/expired/wrong-sid/wrong-scope → 401; `SUPABASE_JWT_SECRET`-signed → 401 with its `AUTH_SECRET` positive pair |
 | `apps/web/src/server/usecases/stream-credits.ts` | Create (Task 7) | `creditBalance`, `consumeForSession`, `recordPurchase`, `grantCredits`, `refundCredits`, `NoCreditsError` |
@@ -289,15 +317,15 @@ stateDiagram-v2
 | `apps/web/src/server/api-v1/key-scopes.ts` | Modify (Task 9) | five `NEVER_KEY_ROUTES` entries |
 | `apps/web/src/server/usecases/stream-targets.ts` | Create (Task 9) | `listStreamTargets`, `createStreamTarget` (seals `rtmp_enc`) |
 | `apps/web/src/app/api/v1/orgs/[id]/stream-targets/route.ts` | Create (Task 9) | GET / POST |
-| `apps/web/src/server/usecases/stream-sessions.ts` | Create (Task 10) | the APPLICATION layer: load under lock → `decide`/`evaluate` → persist → effects through the ports: `createSession`, `provisionSession`, `currentSession`, `stopSession`, `heartbeat`, `sessionFactsForJob`, `applyExpiry` (lazy), `storageHeadroomMinutes`, `fillReplayUrl` |
-| `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` | Create (Task 10) | every transition through the real `decide`; empty case first; M3 slot-0 and the non-zero-slot differential; dual-credential `qr`; C3 differential incl. an expired-but-unread session; C9; 410 on terminal; **lazy expiry with NO sweep call** (timeout, inline retry, wall clock) |
+| `apps/web/src/server/usecases/stream-sessions.ts` | Create (Task 10) | the APPLICATION layer: load under lock → `decide`/`evaluate` → persist + facts + event rows (ONE transaction) → effects through the ports, each effect's result a row (`recordEffect`): `createSession`, `provisionSession`, `currentSession` (poll → sample + observed event), `stopSession` (actor), `heartbeat` (sample, capped), `sessionFactsForJob`, `applyExpiry` (lazy), `storageHeadroomMinutes`, `fillReplayUrl` |
+| `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` | Create (Task 10) | every transition through the real `decide`; empty case first; M3 slot-0 and the non-zero-slot differential; dual-credential `qr`; C3 differential incl. an expired-but-unread session; C9; 410 on terminal; **lazy expiry with NO sweep call** (timeout, inline retry, wall clock); **data captured**: atomicity, the ordered ledger, the facts, samples + snapshots, composed facts |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/route.ts` | Create (Task 11) | POST → 201 |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/current/route.ts` | Create (Task 11) | GET → projection or `null` |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/[sid]/stop/route.ts` | Create (Task 11) | POST |
 | `apps/web/src/app/api/internal/relay/sessions/[sid]/route.ts` | Create (Task 11) | GET, job token |
 | `apps/web/src/app/api/internal/relay/sessions/[sid]/heartbeat/route.ts` | Create (Task 11) | POST, job token → `{ desiredState }` |
-| `apps/web/src/server/usecases/relay-sweep.ts` | Create (Task 12) | the DAILY sweep: retention through `retentionPlan` (videos before inputs), a backstop `applyExpiry` over unread non-terminal sessions, orphan-Machine destruction (`runner.list` vs non-terminal sessions), the headroom warning; advisory lock per session |
-| `apps/web/src/server/usecases/__tests__/relay-sweep.test.ts` | Create (Task 12) | retention 409-once (next DAY); the backstop fires the same rule the lazy path fires; an orphan Machine is destroyed, a live session's is not; advisory lock no-op |
+| `apps/web/src/server/usecases/relay-sweep.ts` | Create (Task 12) | the DAILY sweep: retention through `retentionPlan` (videos before inputs), a backstop `reconcileSession` over unread non-terminal sessions, orphan-Machine destruction (`runner.list` vs non-terminal sessions), the headroom warning; advisory lock per session; ruling 13: video facts, per-session `sample_summary` once, raw-sample retention behind `SAMPLE_RETENTION_DAYS` (null = keep all), one storage snapshot per run |
+| `apps/web/src/server/usecases/__tests__/relay-sweep.test.ts` | Create (Task 12) | retention 409-once (next DAY); the backstop fires the same rule the lazy path fires; an orphan Machine is destroyed, a live session's is not; advisory lock no-op; one snapshot per run; summary once + retention null/1 day; video facts, listed ONCE |
 | `apps/web/src/app/api/cron/relay-sweep/route.ts` | Create (Task 12) | 503 unset, THEN 401 mismatch, then the usecase |
 | `apps/web/src/lib/__tests__/relay-sweep-workflow.test.ts` | Create (Task 12) | no `relay-sweep.yml` here; the route still demands the secret |
 | `docs/contracts/capture-qr.v1.json` + `docs/contracts/fixtures/capture-qr.v1/*.json` | Create (Task 13) | the v1 contract (JSON Schema) and four fixtures authored against §7.6 |
@@ -310,13 +338,13 @@ stateDiagram-v2
 | `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (Task 14) | ONE line: `streamOpen` initialised from `?stream=open&fixture=<id>` (owner ruling 4) |
 | `apps/web/src/components/v2/desk/__tests__/run-sheet-row-stream-gate.test.tsx` | Modify (Task 14) | the initialiser opens the panel for THIS fixture's id and not for another's |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, `apps/web/src/lib/i18n-keys.ts` | Modify (Task 14) | `stream.phone.*`, `stream.fail.*`, `stream.error.*`, `stream.health.*`, `stream.target.*` |
-| `apps/web/e2e/relay-kit.ts` | Create (Task 15) | the rig: org + user + Pro group, both overrides, a hockey fixture, credits by SQL, thaw |
+| `apps/web/e2e/relay-kit.ts` | Create (Task 15) | the rig: org + user + Pro group, both overrides, a hockey fixture, credits by SQL, thaw; `eventsSql(sid)` (the `fixture_stream_events` rows of a session — the walkthrough reads the `stop` action row with the signed-in user id) |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts` | Create (Task 15) | the organiser's walkthrough at 320/768/1280; the Stripe sandbox purchase inside the EMBEDDED iframe (skips loudly) |
 | `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | Modify (Task 15) | `WALKTHROUGH_SPECS` gains `stream-relay.spec.ts` |
 | `scripts/smoke.ts` | Modify (Task 16) | `streamRelaySuite` |
 | `apps/web/e2e/visual/manifest.json`, `manifest.ts`, `seeds.ts` | Modify (Task 17) | `stream-phone` seed kind; Phone-tab rows at 320 / 768 / 1280 / 320 @ 125 % |
 | `fly.toml` | Modify (Task 17, only once the owner supplies the DSN) | `NEXT_PUBLIC_SENTRY_DSN` uncommented |
-| `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md` | Modify (Task 17) | wave row, migration number AS LANDED, M3 invariant, FS10 outcome, RP9, driver env, lookup-key NAMES, mutant killer table, the cross-repo cron item |
+| `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md` | Modify (Task 17) | wave row, migration number AS LANDED, M3 invariant, FS10 outcome, RP9, driver env, lookup-key NAMES, mutant killer table, the cross-repo cron item, the data inventory + the two OWNER DECISIONS (Step 4b) |
 
 ## Lanes and parallelism
 
@@ -344,6 +372,7 @@ Reviewer after every lane (never skipped); the P3 grep in every review; the wave
 **Interfaces:**
 - Consumes: `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh` (`up | env | status | rebuild | down`, per label); `~/.claude/skills/seazn-local-env/SKILL.md` §"What `up` does NOT do"; the P-table in `R0-CORRECTIONS-FOR-R1.md`.
 - Produces: a running `rly` database + prod server; `baseline-web.json`; the pin table every later brief cites; the migration tail as SEEN. (§12.4 Vault is CLOSED by owner ruling 2 — nothing to read.)
+- **`RELAY_KEK` is present (ruling 14) — CONFIRM, never echo:** `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -c '^RELAY_KEK=[0-9a-f]\{64\}$' .env.local apps/web/.env.local` → `1` for each file (a length check on the pattern; the value never reaches the transcript). A `0` is a STOP: the owner said it is there.
 - **Prerequisite owed by the owner — `FLY_API_TOKEN`** (owner note 2026-09-14): it arrives later, in `apps/web/.env.local`, before anything uses the Fly API. It is NEVER echoed, logged or committed (the repo's secret scan runs before each commit; the Write tool never writes it into a tracked file). Every Fly unit and fake-HTTP test (Tasks 5A, 5) runs WITHOUT it; only `fly-client.live.test.ts` and a `RELAY_DRIVERS=live` server need it, and the live test skips loudly until it lands. Task 0 records "FLY_API_TOKEN: owed" in `_STATE.md`; nothing in lanes A–E blocks on it.
 
 **Pattern (§9a):** One authority per fact — the baseline is ONE JSON file cited by path; every symbol below is cited by NAME with its line as a snapshot.
@@ -422,9 +451,10 @@ Reviewer after every lane (never skipped); the P3 grep in every review; the wave
 
 **Interfaces:**
 - Consumes: `organizations(id)`, `fixtures(id)` (the design's DDL says `orgs(id)` — the table here is `organizations`; corrected, recorded in `_INDEX.md`); the RLS shape of `V366__rls_billing_org_tables.sql` (enable + force; this wave adds NO policy — zero client policies, §6.1); `seedOrg` and `startedDivisionWithFixture` from `server/usecases/__tests__/_rig.ts`.
-- Produces: the four tables every later task reads through the NON-tenant client (`sql` / `sql.begin`, never inside `withTenant` — with FORCEd RLS and no policy, `app_user` sees nothing, exactly as `ai_credit_ledger` is reached, V366's own reasoning).
+- Produces: the EIGHT tables every later task reads through the NON-tenant client (`sql` / `sql.begin`, never inside `withTenant` — with FORCEd RLS and no policy, `app_user` sees nothing, exactly as `ai_credit_ledger` is reached, V366's own reasoning): the four state tables (`org_stream_targets`, `fixture_stream_sessions`, `fixture_stream_inputs`, `org_stream_credits`) and the four capture tables of ruling 13 (`fixture_stream_events`, `fixture_stream_samples`, `stream_provider_calls`, `stream_storage_snapshots` — plan §"Data captured").
 
-**Pattern (§9a):** Deny by default (RLS enabled, zero client policies — V366); Money is ledger rows (`org_stream_credits` on `ai_credit_ledger`'s shape); State machines over booleans (`state` + `desired_state` enums, no `is_live`).
+**Pattern (§9a):** Deny by default (RLS enabled, zero client policies — V366); Money is ledger rows (`org_stream_credits` on `ai_credit_ledger`'s shape); State machines over booleans (`state` + `desired_state` enums, no `is_live`); History is append-only rows (`fixture_stream_events` refuses UPDATE and direct DELETE by trigger — a bug cannot rewrite what happened).
+**Data captured (ruling 13):** this task is where every capture table and every richer session fact is born; the writers arrive in Tasks 2 (`telemetry.ts`), 3–5 (recorder port and adapters), 7/8 (purchase link), 10 (events in the row-lock transaction), 11 (samples), 12 (snapshots). The two OWNER DECISIONS (PII, retention) change no DDL here: `actor_user_id` is a user id already in the system, and retention is a sweep constant.
 **Checklist rows satisfied:** "Empty-set case must be checked explicitly" (a ledger with no rows sums to 0 — Task 7's first test, on this table); "Boundary row can subtract a mutant kill" (the `check (slot >= 0)` test tries `-1` AND accepts `0` and `1`); "Negative assertion needs its positive pair" (every refused insert has an accepted twin in the same test).
 
 - [ ] **Step 1: Resolve the number when this task STARTS.**
@@ -440,14 +470,24 @@ Reviewer after every lane (never skipped); the P3 grep in every review; the wave
 // the twin would fail with "relation does not exist" first.
 //
 // Real Postgres required; skipped without DATABASE_URL like every suite in
-// server/usecases/__tests__. The four tables are reached through the plain
+// server/usecases/__tests__. The eight tables are reached through the plain
 // `sql` client — RLS is FORCEd with zero policies, so `withTenant` (app_user)
 // would see nothing, which is the point of §6.1 and of V366.
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// Derived from the migration, never typed: the one file matching *__stream_sessions.sql.
+export const MIGRATION = readFileSync(
+  join(process.cwd(), "..", "..", "db/migration/deltas",
+    readdirSync(join(process.cwd(), "..", "..", "db/migration/deltas")).find((f) => f.endsWith("__stream_sessions.sql"))!),
+  "utf8",
+);
+export const STREAM_TABLES = [...MIGRATION.matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
 
 async function rig() {
   const { auth } = await seedOrg();
@@ -468,17 +508,20 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all four tables, with zero policies", async () => {
+  it("RLS is enabled AND forced on all EIGHT tables, with zero policies", async () => {
+    // The list is read from the migration file itself (`create table (\w+)`), so a
+    // ninth table added later is guarded the day it lands, not the day someone
+    // remembers this test. STREAM_TABLES is exported for enc-boundary.test.ts and
+    // sanitise.test.ts (Task 2), which scan the same set.
     const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
       select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
              (select count(*) from pg_policy p where p.polrelid = c.oid)::int as policies
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where n.nspname = current_schema()
-        and c.relname in ('org_stream_targets','fixture_stream_sessions','fixture_stream_inputs','org_stream_credits')
+        and c.relname = any(${STREAM_TABLES})
       order by c.relname`;
-    expect(rows.map((r) => r.relname)).toEqual([
-      "fixture_stream_inputs", "fixture_stream_sessions", "org_stream_credits", "org_stream_targets",
-    ]);
+    expect(STREAM_TABLES.length).toBe(8);
+    expect(rows.map((r) => r.relname)).toEqual([...STREAM_TABLES].sort());
     for (const r of rows) {
       expect(r.rls, r.relname).toBe(true);
       expect(r.forced, r.relname).toBe(true);
@@ -558,12 +601,69 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     await expect(sql`update fixture_stream_sessions set end_reason = 'crashed' where id = ${sid}`).rejects.toMatchObject({ code: "23514" });
     await sql`update fixture_stream_sessions set end_reason = 'max_duration' where id = ${sid}`;
   });
+
+  // ---- ruling 13: the capture tables -------------------------------------
+
+  it("fixture_stream_events is append-only: UPDATE and direct DELETE are refused; (session_id, seq) is unique; the fixture cascade still works", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const insert = (seq: number) => sql`
+      insert into fixture_stream_events (session_id, org_id, seq, source, kind, type, from_state, to_state)
+      values (${sid}, ${r.orgId}, ${seq}, 'domain', 'state', 'admitted', 'requested', 'provisioning')`;
+    await insert(1);
+    await expect(insert(1)).rejects.toMatchObject({ code: "23505" });
+    await insert(2);
+    await expect(sql`update fixture_stream_events set to_state = 'live' where session_id = ${sid}`).rejects.toMatchObject({ code: "23001" });
+    await expect(sql`delete from fixture_stream_events where session_id = ${sid}`).rejects.toMatchObject({ code: "23001" });
+    await expect(sql`insert into fixture_stream_events (session_id, org_id, seq, source, kind, type) values (${sid}, ${r.orgId}, 3, 'ufo', 'state', 'x')`).rejects.toMatchObject({ code: "23514" });
+    // The positive pair: history goes with its fixture (the FK cascade is not a direct delete).
+    await sql`delete from fixtures where id = ${r.fixtureId}`;
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid}`;
+    expect(n).toBe(0);
+  });
+
+  it("stream_provider_calls: a path with a query string, a raw uuid or a raw machine/input id is refused (a template, never a URL); attempt 0 and a negative latency are refused; the twin lands", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const ok = sql`insert into stream_provider_calls (session_id, provider, operation, subject_id, method, path_template, status, latency_ms, attempt, request_id)
+                  values (${sid}, 'cloudflare', 'createLiveInput', 'in-uid-1', 'POST', '/accounts/{id}/stream/live_inputs', 200, 143, 1, 'cf-ray-shape')`;
+    await ok;
+    await expect(sql`insert into stream_provider_calls (session_id, provider, operation, method, path_template, latency_ms)
+                     values (${sid}, 'fly', 'x', 'GET', '/apps/{id}/machines/3d8d9e4b1234ab', 1)`).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`insert into stream_provider_calls (session_id, provider, operation, method, path_template, latency_ms)
+                     values (${sid}, 'cloudflare', 'x', 'GET', '/stream/live_inputs?key=abc', 1)`).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`insert into stream_provider_calls (session_id, provider, operation, method, path_template, latency_ms)
+                     values (${sid}, 'fly', 'x', 'GET', ${"/apps/relay/machines/" + sid}, 1)`).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`insert into stream_provider_calls (session_id, provider, operation, method, path_template, latency_ms, attempt)
+                     values (${sid}, 'fly', 'x', 'GET', '/apps/{app}/machines/{id}', 1, 0)`).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`insert into stream_provider_calls (session_id, provider, operation, method, path_template, latency_ms)
+                     values (${sid}, 'fly', 'x', 'GET', '/apps/{app}/machines/{id}', -1)`).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("fixture_stream_samples and stream_storage_snapshots: the enums hold; a snapshot's headroom is used-vs-limit arithmetic the CHECK enforces", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    await sql`insert into fixture_stream_samples (session_id, source, ingest_state, bitrate_kbps, fps) values (${sid}, 'heartbeat', 'connected', 4500, 29.97)`;
+    await expect(sql`insert into fixture_stream_samples (session_id, source) values (${sid}, 'guess')`).rejects.toMatchObject({ code: "23514" });
+    await sql`insert into stream_storage_snapshots (source, session_id, used_minutes, limit_minutes, reserved_minutes, headroom_minutes)
+              values ('admission', ${sid}, 900, 1000, 40, 60)`;
+    await expect(sql`insert into stream_storage_snapshots (source, used_minutes, limit_minutes, reserved_minutes, headroom_minutes)
+                     values ('sweep', 900, 1000, 40, 99)`).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("org_stream_credits purchase link: a negative amount_minor and a 2-letter currency are refused; the full Stripe link lands (item 6)", async () => {
+    const r = await rig();
+    await expect(sql`insert into org_stream_credits (org_id, delta, reason, balance_after, amount_minor) values (${r.orgId}, 5, 'purchase', 5, -1)`).rejects.toMatchObject({ code: "23514" });
+    await expect(sql`insert into org_stream_credits (org_id, delta, reason, balance_after, currency) values (${r.orgId}, 5, 'purchase', 5, 'gb')`).rejects.toMatchObject({ code: "23514" });
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, stripe_event_id, stripe_checkout_session_id, stripe_payment_intent_id, pack_key, amount_minor, currency)
+              values (${r.orgId}, 5, 'purchase', 5, ${"evt_link_" + r.orgId}, ${"cs_test_" + r.orgId}, ${"pi_" + r.orgId}, 'seazn_stream_pack_5', 4900, 'gbp')`;
+  });
 });
 ```
 
 - [ ] **Step 3: Run it — expect red on a missing relation.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-red.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-red.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"`
-  Expected: `7 7 0` (or `7 6 0` — the RLS test's `toEqual([...])` fails on an empty list, the others on `relation "org_stream_targets" does not exist`). `numPendingTests: 7` means `DATABASE_URL` was not inline — fix the command, not the test.
+  Expected: `11 11 0` (the RLS test fails on `STREAM_TABLES` being empty before the file exists — `find(...)!` throws — and the others on `relation "org_stream_targets" does not exist`). `numPendingTests: 11` means `DATABASE_URL` was not inline — fix the command, not the test.
 
 - [ ] **Step 4: Write the migration.** Create `db/migration/deltas/V<next>__stream_sessions.sql` (header prose to the V393 bar — every claim measured, the re-pin written in):
 
@@ -574,7 +674,9 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
 -- <date>: `ls db/migration/deltas | sort -V | tail -1` → V<tail>, all-refs scan
 -- → V<tail>, both re-confirmed immediately before writing this file).
 --
--- Four tables. RLS is ENABLED and FORCED on every one and NO policy is created:
+-- Eight tables — four of STATE, four of CAPTURE (owner ruling 13, 2026-09-14:
+-- "capture all data as possible"; schema growth pre-approved). RLS is ENABLED
+-- and FORCED on every one and NO policy is created:
 -- these rows are reached only through the app's non-tenant client (the exact
 -- shape V366 gave org_credit_allocation), and the organiser sees a projection
 -- through /api/v1/fixtures/{id}/stream-sessions/current — never a row. A
@@ -655,6 +757,28 @@ create table fixture_stream_sessions (
   runner_stop_requested_at timestamptz null,
   -- How a COMPLETED session ended (a failed one carries fail_reason instead).
   end_reason           text null check (end_reason in ('stopped','max_duration')),
+  -- Session FACTS (ruling 13, item 4). Set once by the usecase that learns them;
+  -- the history of HOW they changed is fixture_stream_events. Every one is a
+  -- fact the relay already holds in memory at some point and used to drop.
+  provisioned_at       timestamptz null,       -- inputs created, QR issuable
+  first_ingest_at      timestamptz null,       -- first 'connected' observation
+  live_at              timestamptz null,       -- state -> live
+  stop_requested_at    timestamptz null,       -- the ORGANISER's stop (runner_stop_requested_at is the Machine's grace clock)
+  ingest_protocol      text null check (ingest_protocol in ('srt','rtmps')),
+  destination_kind     text null,              -- copied from org_stream_targets.kind at admission (the target row may be edited later)
+  ingest_input_uid     text null,              -- Cloudflare live input uid of slot 0 (non-secret; the keys stay *_enc on the input row)
+  video_uids           text[] not null default '{}',   -- every recording uid Cloudflare produced for the input
+  machine_region       text null,
+  guest_cpus           smallint null,
+  guest_memory_mb      integer null,
+  guest_cpu_class      text null check (guest_cpu_class is null or guest_cpu_class in ('shared','dedicated')),   -- the PORT's vocabulary (RunnerSpec.guest.cpuClass); Fly's cpu_kind spelling stays in runner-fly.ts
+  runner_attempts      smallint not null default 0 check (runner_attempts >= 0),  -- create calls made (runner_retries counts the RETRIES; attempts = retries + 1 once any create ran)
+  machine_seconds      integer not null default 0 check (machine_seconds >= 0),   -- wall seconds the Machine existed (created -> destroyed), summed over attempts
+  recording_seconds    integer not null default 0 check (recording_seconds >= 0), -- Cloudflare's own duration of the recordings, summed
+  storage_minutes_at_admission integer null,   -- the number the admission check saw
+  reserved_minutes     integer null,            -- what this session reserved (C3)
+  credit_ledger_id     uuid null,               -- the consume row (FK added after org_stream_credits below); the Stripe ids live on THAT row's purchase ancestor — one authority per fact
+  sample_summary       jsonb null,              -- per-session aggregate written at the end (min/avg/max fps + bitrate, stall count, sample count) — survives sample retention (§"Data captured")
   created_by           uuid not null,
   created_at           timestamptz not null default now()
 );
@@ -689,27 +813,157 @@ create table org_stream_credits (
   -- the CHECK makes a consume that would overdraw fail in the transaction,
   -- so guard placement is enforced by the schema, not by a test.
   balance_after   integer not null check (balance_after >= 0),
+  -- Purchase link (ruling 13, item 6): which checkout, which payment, which
+  -- pack, how much — on the purchase row only; consume rows leave them null.
+  stripe_checkout_session_id text null,
+  stripe_payment_intent_id   text null,
+  pack_key        text null,
+  amount_minor    integer null check (amount_minor is null or amount_minor >= 0),
+  currency        text null check (currency is null or currency ~ '^[a-z]{3}$'),
   note            text null,
   created_by      uuid null,
   created_at      timestamptz not null default now()
 );
 create index on org_stream_credits (org_id, created_at);
+create index on org_stream_credits (stripe_checkout_session_id) where stripe_checkout_session_id is not null;
+alter table fixture_stream_sessions
+  add constraint fixture_stream_sessions_credit_ledger_fk
+  foreign key (credit_ledger_id) references org_stream_credits(id);
 
-alter table org_stream_targets      enable row level security;
-alter table org_stream_targets      force  row level security;
-alter table fixture_stream_sessions enable row level security;
-alter table fixture_stream_sessions force  row level security;
-alter table fixture_stream_inputs   enable row level security;
-alter table fixture_stream_inputs   force  row level security;
-alter table org_stream_credits      enable row level security;
-alter table org_stream_credits      force  row level security;
+-- ---------------------------------------------------------------------------
+-- CAPTURE (ruling 13). Written beside the state, never instead of it.
+-- ---------------------------------------------------------------------------
+
+-- Every domain event, every state transition (session AND runner), every
+-- observed external change, every effect result, every admin/webhook/client
+-- action — one row each, in the SAME transaction as the state it records
+-- (stream-sessions.ts `apply`), so this table can never disagree with the
+-- session row. payload is ALLOWLIST-sanitised (server/relay/sanitise.ts)
+-- before it is written; telemetry.test.ts pushes a known secret through every
+-- writer and scans every row of every table here for it.
+create table fixture_stream_events (
+  id                  bigint generated always as identity primary key,
+  session_id          uuid not null references fixture_stream_sessions(id) on delete cascade,
+  org_id              uuid not null references organizations(id) on delete cascade,
+  seq                 integer not null check (seq >= 1),   -- per session, assigned under the row lock
+  occurred_at         timestamptz not null default now(),
+  source              text not null check (source in ('domain','runner','ingest','output','sweep','webhook','admin','client')),
+  kind                text not null check (kind in ('event','transition','runner_transition','observed','effect','action')),
+  type                text not null,          -- the event / trigger / effect / action name, as the domain spells it
+  from_state          text null,
+  to_state            text null,
+  result              text null check (result is null or result in ('ok','failed')),
+  http_status         smallint null,
+  latency_ms          integer null check (latency_ms is null or latency_ms >= 0),
+  attempt             smallint null,
+  provider_request_id text null,              -- fly-request-id / cf-ray: provider ids, not PII
+  actor_user_id       uuid null,              -- a user id already in the system; NEVER an IP or device id (OWNER DECISION pending, §"Data captured")
+  payload             jsonb not null default '{}'::jsonb,
+  unique (session_id, seq)
+);
+create index on fixture_stream_events (session_id, occurred_at);
+create index on fixture_stream_events (org_id, occurred_at);
+-- Append-only. A direct UPDATE or DELETE raises; the FK cascade from a deleted
+-- fixture is the one delete allowed (it runs inside the RI trigger, depth > 1).
+create function fixture_stream_events_immutable() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'DELETE' and pg_trigger_depth() > 1 then return old; end if;
+  raise exception 'fixture_stream_events is append-only' using errcode = '23001';
+end $$;
+create trigger fixture_stream_events_immutable
+  before update or delete on fixture_stream_events
+  for each row execute function fixture_stream_events_immutable();
+
+-- One row per heartbeat and per organiser poll: what the ingest, the output
+-- and the runner looked like at that instant. Typed where the shape is known
+-- (§7.6's heartbeat), raw jsonb for the rest — sanitised like payload above.
+-- Capped per session in the writer (config.ts SAMPLES_PER_SESSION_CAP), never
+-- here: a CHECK cannot count. Retention is an OWNER DECISION (§"Data
+-- captured"); until ruled, nothing is deleted.
+create table fixture_stream_samples (
+  id                bigint generated always as identity primary key,
+  session_id        uuid not null references fixture_stream_sessions(id) on delete cascade,
+  sampled_at        timestamptz not null default now(),
+  source            text not null check (source in ('heartbeat','poll')),
+  ingest_state      text null,                -- Cloudflare's live input status word, verbatim
+  bitrate_kbps      integer null,
+  fps               real null,
+  dropped_frames    integer null,
+  duplicated_frames integer null,
+  output_state      text null,                -- the destination output's status word, verbatim
+  runner_cpu_pct    real null,
+  runner_mem_mb     integer null,
+  encoder_speed     real null,                -- ffmpeg's speed= (1.0 = real time)
+  raw               jsonb not null default '{}'::jsonb
+);
+create index on fixture_stream_samples (session_id, sampled_at);
+
+-- Every outbound provider call, every attempt: Cloudflare (Task 4), Fly
+-- (Task 5A), Stripe (Task 8's checkout create). path_template carries `{uid}`
+-- placeholders, never an id, never a query string — the two CHECKs below are
+-- the floor under the recorder's own redaction.
+create table stream_provider_calls (
+  id                  bigint generated always as identity primary key,
+  session_id          uuid null references fixture_stream_sessions(id) on delete set null,
+  provider            text not null check (provider in ('cloudflare','fly','stripe')),
+  operation           text not null,          -- the adapter method name (createLiveInput, createMachine, ...)
+  subject_id          text null,              -- the input uid / machine id the call was ABOUT (a provider id, joinable to fixture_stream_sessions.ingest_input_uid / machine_id)
+  method              text not null check (method in ('GET','POST','PUT','PATCH','DELETE')),
+  path_template       text not null check (path_template not like '%?%' and path_template !~ '[0-9a-f]{8}-[0-9a-f]{4}-' and path_template !~ '/[0-9a-f]{12,}(/|$)'),
+  status              smallint null,          -- null = no response (timeout / network)
+  latency_ms          integer not null check (latency_ms >= 0),
+  attempt             smallint not null default 1 check (attempt >= 1),
+  retry_reason        text null,              -- 'status_429' | 'status_5xx' | 'timeout' | 'network' | null
+  retry_after_seconds integer null,
+  request_id          text null,              -- fly-request-id / cf-ray / stripe request-id
+  error_code          text null,              -- the provider's own error code, never its message body
+  called_at           timestamptz not null default now()
+);
+create index on stream_provider_calls (session_id, called_at);
+create index on stream_provider_calls (provider, called_at);
+
+-- What the storage picture looked like each time anyone measured it: every
+-- daily sweep run and every admission check (C3's reservation arithmetic).
+create table stream_storage_snapshots (
+  id               bigint generated always as identity primary key,
+  taken_at         timestamptz not null default now(),
+  source           text not null check (source in ('sweep','admission')),
+  session_id       uuid null references fixture_stream_sessions(id) on delete set null,   -- admission only
+  used_minutes     integer not null check (used_minutes >= 0),
+  limit_minutes    integer not null check (limit_minutes >= 0),
+  reserved_minutes integer not null check (reserved_minutes >= 0),
+  headroom_minutes integer not null check (headroom_minutes = limit_minutes - used_minutes - reserved_minutes),
+  videos_deleted   integer not null default 0 check (videos_deleted >= 0),
+  inputs_deleted   integer not null default 0 check (inputs_deleted >= 0),
+  deferred         integer not null default 0 check (deferred >= 0)   -- kept because still inside CLOUDFLARE_RETENTION_RANGE.min / referenced by a live session
+);
+create index on stream_storage_snapshots (taken_at);
+
+alter table org_stream_targets        enable row level security;
+alter table org_stream_targets        force  row level security;
+alter table fixture_stream_sessions   enable row level security;
+alter table fixture_stream_sessions   force  row level security;
+alter table fixture_stream_inputs     enable row level security;
+alter table fixture_stream_inputs     force  row level security;
+alter table org_stream_credits        enable row level security;
+alter table org_stream_credits        force  row level security;
+alter table fixture_stream_events     enable row level security;
+alter table fixture_stream_events     force  row level security;
+alter table fixture_stream_samples    enable row level security;
+alter table fixture_stream_samples    force  row level security;
+alter table stream_provider_calls     enable row level security;
+alter table stream_provider_calls     force  row level security;
+alter table stream_storage_snapshots  enable row level security;
+alter table stream_storage_snapshots  force  row level security;
 ```
+
+  The `pg_trigger_depth() > 1` clause is a HYPOTHESIS about how the RI cascade fires (the RI action is itself a trigger, so the row trigger it causes runs at depth 2); the shape test's "fixture cascade still works" case is what decides it. If it reds, replace the clause with `current_setting('seazn.cascade', true) = '1'` set by the one deleting usecase — never by dropping the guard.
 
 - [ ] **Step 5: Apply it to `rly` and run the shape test — expect green.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && DATABASE_URL=<rly url> DATABASE_SSL=disable npm run db:apply > /private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-apply.log 2>&1; echo "EXIT=$?"; tail -3 /private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-apply.log`
-  (`db:apply` WITHOUT `DATABASE_URL` migrates the DEV database — the inline URL is not optional.) Then re-run Step 3's command → `7 0 0`. Then the header guard and the RLS guard: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/lib/__tests__/migration-header-truth.test.ts --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-header.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-header.json');console.log(r.numTotalTests,r.numFailedTests)"` → `numFailedTests 0` (the first line names the file's own number), and `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && DATABASE_URL=<rly url> node --experimental-strip-types scripts/check-rls.ts` → the four new tables are NOT named as unguarded.
+  (`db:apply` WITHOUT `DATABASE_URL` migrates the DEV database — the inline URL is not optional.) Then re-run Step 3's command → `11 0 0`. Then the header guard and the RLS guard: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/lib/__tests__/migration-header-truth.test.ts --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-header.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t1-header.json');console.log(r.numTotalTests,r.numFailedTests)"` → `numFailedTests 0` (the first line names the file's own number), and `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && DATABASE_URL=<rly url> node --experimental-strip-types scripts/check-rls.ts` → none of the eight new tables is named as unguarded.
 
-- [ ] **Step 6: Report for commit.** Message to the orchestrator: the number taken, both tails as seen, `6 0 0`, the RLS guard line. The orchestrator commits `db/migration/deltas/V<next>__stream_sessions.sql` and the test as `feat(streaming): R1 migration — sessions, inputs, targets, credits (RLS, zero policies)`.
+- [ ] **Step 6: Report for commit.** Message to the orchestrator: the number taken, both tails as seen, `11 0 0`, the RLS guard line, whether the `pg_trigger_depth` hypothesis held. The orchestrator commits `db/migration/deltas/V<next>__stream_sessions.sql` and the test as `feat(streaming): R1 migration — sessions, inputs, targets, credits + events, samples, provider calls, storage snapshots (RLS, zero policies)`.
 
 ---
 
@@ -721,13 +975,21 @@ alter table org_stream_credits      force  row level security;
 - Create: `apps/web/src/server/relay/secret-columns.ts` (the ONLY SQL that names a `*_enc` column)
 - Create (Test): `apps/web/src/server/relay/__tests__/crypto.test.ts`
 - Create (Test): `apps/web/src/server/relay/__tests__/enc-boundary.test.ts`
+- Create: `apps/web/src/server/relay/sanitise.ts` (PURE allowlist sanitiser — the only way a payload reaches a capture table)
+- Create: `apps/web/src/server/relay/telemetry.ts` (`recordEvent`, `recordSample`, `recordProviderCall`, `recordStorageSnapshot` — the only SQL that writes a capture table)
+- Create (Test): `apps/web/src/server/relay/__tests__/sanitise.test.ts` (pure)
+- Create (Test): `apps/web/src/server/relay/__tests__/telemetry.test.ts` (DB; the redaction scan and the sample cap)
+- Create (Test): `apps/web/src/server/relay/__tests__/rls-static.test.ts` (no DB; every `create table` in the migration has enable + force and no policy)
 
 **Interfaces:**
-- Consumes: env `RELAY_KEK` (64 hex chars = 32 bytes; a Fly secret in prod; for `rly` and CI: any `openssl rand -hex 32` value in `.env.local`/the job env); the migration's column names.
+- Consumes: env `RELAY_KEK` (64 hex chars = 32 bytes; a Fly secret in prod; PRESENT in both `.env.local` files — ruling 14, confirmed at Task 0, never echoed; CI: the job env); the migration's column names (Task 1's `STREAM_TABLES` export).
 - Produces:
   - `config.ts`: `INGEST_TIMEOUT_SECONDS = 180`, `HOLD_SLACK_SECONDS = 3`, `DELETE_RECORDING_AFTER_DAYS = 30`, `CLOUDFLARE_RETENTION_RANGE = { min: 30, max: 1096 }`, `RECORDING_RETENTION_DAYS = 3`, `RUNNER_DEFAULT_GUEST = { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" }`, `RUNNER_DEFAULT_REGION = "lhr"`, `MAX_DURATION_MINUTES = 300`, `TOKEN_GRACE_MINUTES = 30`, `WARMING_TIMEOUT_MINUTES = 10`, `STALE_HEARTBEAT_SECONDS = 90`, `CREDIT_REUSE_HOURS = 24`, `SRT_LATENCY_MS = 2000`, `QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt"`, `MAX_OUTPUTS_PER_INPUT = 5`, `relayDriverMode(): "fake" | "live"`
   - `crypto.ts`: `seal(plain: string): Buffer`, `open(enc: Uint8Array): string`
   - `secret-columns.ts`: `storeInputCredentials(tx, inputRowId, creds: { srt: {url, passphrase}, rtmps: {url, streamKey} }, inputId)`, `readInputBySlot(tx, sessionId, slot)` → `{ id, slot, ingestInputId, srt: { url, streamId, passphrase }, rtmps: { url, streamKey } } | null` (decrypted at read, never persisted), `storeTargetSecret(tx, targetRowId, rtmp: { url, streamKey })`, `readTargetSecret(tx, targetId)` → `{ url, streamKey }`
+  - `config.ts` (ruling 13): `SAMPLES_PER_SESSION_CAP = 8000` (5 h at one heartbeat AND one poll per 5 s = 7,200; the cap is the ceiling above that, not a budget), `SAMPLE_RETENTION_DAYS: number | null = null` (OWNER DECISION pending — `null` = keep all; the recommendation is 90), `EVENT_PAYLOAD_MAX_STRING = 200`
+  - `sanitise.ts`: `ALLOWED_KEYS: ReadonlySet<string>`, `sanitise(input: unknown): Record<string, unknown>` (allowlisted keys only, recursive to depth 4, every string cut at its first `?` and at `EVENT_PAYLOAD_MAX_STRING`, arrays capped at 50), `pathTemplate(url: string, ids: readonly string[]): string` (origin dropped, query dropped, each id → `{id}`, any residual uuid → `{uuid}`)
+  - `telemetry.ts`: `recordEvent(tx: Tx, e: EventInput): Promise<number>` (the seq; MUST be called inside the caller's row-lock transaction — it takes `Tx`, never `Sql`), `recordSample(exec, s: SampleInput): Promise<"written" | "capped">`, `recordProviderCall(exec, c: ProviderCallInput): Promise<void>`, `recordStorageSnapshot(exec, s: StorageSnapshotInput): Promise<void>`; the `EventInput`/`SampleInput`/`ProviderCallInput`/`StorageSnapshotInput` types (camelCase mirrors of the columns; `payload`/`raw` typed `unknown` and sanitised INSIDE — a caller cannot pre-sanitise and cannot skip it)
 
 **Pattern (§9a):** One authority per fact (`config.ts` — no relay number typed anywhere else); Deny by default (the boundary test fails on any `*_enc` outside `server/relay/**`).
 **Checklist rows satisfied:** "Negative assertion needs its positive pair" (tampered throws AND the untampered twin opens); "Derive expected values from the engine's own declarations" (the boundary list is read from the migration, never typed).
@@ -843,6 +1105,20 @@ export const SRT_LATENCY_MS = 2000;
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
+
+/** Ruling 13 (capture everything) has one cost line: fixture_stream_samples.
+ *  5 h (MAX_DURATION_MINUTES) at one heartbeat AND one poll every 5 s is 7,200
+ *  rows; the cap sits above that so a legitimate session never hits it, and a
+ *  runaway client (a poll loop at 100 ms) cannot write 180,000. The writer
+ *  returns "capped" and the usecase records ONE `samples_capped` event. */
+export const SAMPLES_PER_SESSION_CAP = 8000;
+/** OWNER DECISION pending (plan §"Data captured"): `null` = the sweep deletes
+ *  no sample, ever. The recommendation on the table is 90; the aggregate
+ *  `sample_summary` on the session row is written regardless. */
+export const SAMPLE_RETENTION_DAYS: number | null = null;
+/** Longest string a sanitised payload keeps; longer values are cut, so a
+ *  pasted body or a stack trace cannot become a row. */
+export const EVENT_PAYLOAD_MAX_STRING = 200;
 
 /** `RELAY_DRIVERS=fake|live`. Unset is `fake`: a process that has not been
  *  told it may spend money does not. A production deploy sets `live`. */
@@ -1077,11 +1353,408 @@ export async function readTargetSecret(tx: Tx, targetId: string): Promise<{ url:
 }
 ```
 
-- [ ] **Step 9: Run both relay tests — expect `crypto 5 0`, `enc-boundary 3 0`.**
-  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/server/relay --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t2.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t2.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status)"`
-  Expected: 14 total (6 migration-shape pending without `DATABASE_URL` — this command deliberately omits it; re-run WITH it for `14 0 0`), 0 failed. Then the mutant r3 by hand: add `// ingest_srt_key_enc` to `server/usecases/fixtures.ts`, re-run → `enc-boundary` red naming the file; revert with `/usr/bin/git checkout -- apps/web/src/server/usecases/fixtures.ts` (from the worktree root; the file has no other change of yours). Record the killer.
+- [ ] **Step 8a: Write the failing sanitiser test.** Create `apps/web/src/server/relay/__tests__/sanitise.test.ts`:
 
-- [ ] **Step 10: Report for commit.** `feat(streaming): relay config, AES-256-GCM envelope and the *_enc boundary`.
+```ts
+// The sanitiser is an ALLOWLIST: a key it has not heard of does not survive,
+// whatever its value. A denylist ("drop anything called password") misses the
+// next secret; this misses nothing it was not told to keep. Pure — no DB.
+import { describe, expect, it } from "vitest";
+import { EVENT_PAYLOAD_MAX_STRING } from "../config";
+import { ALLOWED_KEYS, pathTemplate, sanitise } from "../sanitise";
+
+const SECRET = "sekrit-9f3a1c";
+
+describe("sanitise — allowlist", () => {
+  it("keeps an allowed key and drops an unknown one, whatever it holds", () => {
+    expect(sanitise({ state: "live", passphrase: SECRET, streamKey: SECRET, token: SECRET })).toEqual({ state: "live" });
+  });
+  it("recurses into nested objects and arrays, with the same list", () => {
+    const out = sanitise({ exit: { exitCode: 0, oomKilled: false, env: { RELAY_KEK: SECRET } }, outputs: [{ uid: "o1", streamKey: SECRET }] });
+    expect(out).toEqual({ exit: { exitCode: 0, oomKilled: false }, outputs: [{ uid: "o1" }] });
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+  });
+  it("cuts every string at its first `?` — a URL keeps its path, never its query", () => {
+    expect(sanitise({ url: `https://live.cloudflare.com/x/y?passphrase=${SECRET}&streamid=abc` })).toEqual({ url: "https://live.cloudflare.com/x/y" });
+    expect(sanitise({ reason: `q?${SECRET}` })).toEqual({ reason: "q" });
+  });
+  it("caps a string at EVENT_PAYLOAD_MAX_STRING and an array at 50 (a stack trace cannot become a row)", () => {
+    const long = "x".repeat(EVENT_PAYLOAD_MAX_STRING + 1);
+    expect((sanitise({ reason: long }).reason as string).length).toBe(EVENT_PAYLOAD_MAX_STRING);
+    expect((sanitise({ outputs: Array.from({ length: 60 }, () => ({ uid: "o" })) }).outputs as unknown[]).length).toBe(50);
+  });
+  it("stops at depth 4 and returns {} for a non-object (null, a string, a number)", () => {
+    const deep = { exit: { exit: { exit: { exit: { exit: { exitCode: 1 } } } } } };
+    expect(JSON.stringify(sanitise(deep))).not.toContain("exitCode");
+    expect(sanitise(null)).toEqual({});
+    expect(sanitise(SECRET)).toEqual({});
+    expect(sanitise(42)).toEqual({});
+  });
+  it("the allowlist holds no key that names a credential (the list is the guard; this pins it)", () => {
+    for (const k of ALLOWED_KEYS) expect(k).not.toMatch(/key|secret|pass|token|auth|cookie|env/i);
+  });
+});
+
+describe("pathTemplate — a template, never a URL", () => {
+  it("drops origin and query, replaces each given id with {id}, any residual uuid with {uuid}, any residual long-hex segment (a Fly machine id, a Cloudflare uid) with {id}", () => {
+    const sid = "6f1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    expect(pathTemplate(`https://api.machines.dev/v1/apps/relay/machines/abc123?x=${SECRET}`, ["abc123"])).toBe("/v1/apps/relay/machines/{id}");
+    expect(pathTemplate(`/accounts/acct9/stream/live_inputs/in77/outputs`, ["acct9", "in77"])).toBe("/accounts/{id}/stream/live_inputs/{id}/outputs");
+    expect(pathTemplate(`/x/${sid}/y`, [])).toBe("/x/{uuid}/y");
+    expect(pathTemplate(`/v1/apps/relay/machines/3d8d9e4b1234ab/stop`, [])).toBe("/v1/apps/relay/machines/{id}/stop");
+    expect(pathTemplate(`/stream/live_inputs/0123456789abcdef0123456789abcdef`, [])).toBe("/stream/live_inputs/{id}");
+    // A short word that happens to be hex is NOT an id (the empty/short case): "cafe" stays.
+    expect(pathTemplate(`/apps/cafe/machines`, [])).toBe("/apps/cafe/machines");
+  });
+  it("an empty id never matches (the empty case: '' would replace every position)", () => {
+    expect(pathTemplate("/a/b", [""])).toBe("/a/b");
+  });
+});
+```
+
+- [ ] **Step 8b: Run — expect a collection failure naming `../sanitise`.** Same command shape as Step 2 with `sanitise.test.ts`.
+
+- [ ] **Step 8c: Write `sanitise.ts`.**
+
+```ts
+// server/relay/sanitise.ts — PURE (no sql, no fetch, no Date). The one gate a
+// payload passes before a capture table. ALLOWLIST: add a key here when a new
+// fact is worth keeping; nothing else survives. sanitise.test.ts pins that no
+// allowed key names a credential.
+import { EVENT_PAYLOAD_MAX_STRING } from "./config";
+
+const MAX_DEPTH = 4;
+const MAX_ARRAY = 50;
+
+export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  // domain
+  "state", "from", "to", "trigger", "effect", "event", "reason", "endReason", "failReason", "desiredState",
+  "mode", "slot", "attempt", "attempts", "retries", "expiry", "deadlineAt", "at", "seconds", "minutes",
+  // runner / Fly (config.env VALUES are never here — only ids and states)
+  "runnerState", "observed", "machineId", "machineName", "region", "cpus", "memoryMb", "cpuKind", "instanceId",
+  "exit", "exitCode", "oomKilled", "requestedStop", "signal", "timeoutSeconds", "flyState", "eventType", "status",
+  // ingest / output / storage (uids are not secrets; keys and passphrases never appear under these names)
+  "uid", "inputUid", "videoUid", "outputUid", "ingestState", "outputState", "protocol", "connected", "live",
+  "bitrateKbps", "fps", "droppedFrames", "duplicatedFrames", "cpuPct", "memMb", "encoderSpeed",
+  "usedMinutes", "limitMinutes", "reservedMinutes", "headroomMinutes", "deleted", "deferred", "count",
+  // effects / http
+  "ok", "result", "httpStatus", "latencyMs", "retryAfterSeconds", "requestId", "errorCode", "operation", "provider", "method", "pathTemplate",
+  // money (amounts and ids, never card data)
+  "delta", "balanceAfter", "packKey", "credits", "amountMinor", "currency", "checkoutSessionId", "paymentIntentId", "ledgerId",
+  // client / admin actions
+  "action", "actorUserId", "orgId", "sessionId", "fixtureId", "targetId", "destinationKind", "url", "watchUrl",
+  // nesting containers
+  "outputs", "inputs", "samples", "summary",
+]);
+
+function cutString(s: string): string {
+  const q = s.indexOf("?");
+  const noQuery = q === -1 ? s : s.slice(0, q);
+  return noQuery.length > EVENT_PAYLOAD_MAX_STRING ? noQuery.slice(0, EVENT_PAYLOAD_MAX_STRING) : noQuery;
+}
+
+function walk(v: unknown, depth: number): unknown {
+  if (depth > MAX_DEPTH) return undefined;
+  if (v === null || v === undefined) return v;
+  if (typeof v === "string") return cutString(v);
+  if (typeof v === "number" || typeof v === "boolean") return v;
+  if (Array.isArray(v)) return v.slice(0, MAX_ARRAY).map((x) => walk(x, depth + 1)).filter((x) => x !== undefined);
+  if (typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (!ALLOWED_KEYS.has(k)) continue;
+      const w = walk(val, depth + 1);
+      if (w !== undefined) out[k] = w;
+    }
+    return out;
+  }
+  return undefined; // functions, symbols, bigints: not data
+}
+
+/** Allowlisted keys only; strings cut at `?` and at EVENT_PAYLOAD_MAX_STRING;
+ *  depth ≤ 4; arrays ≤ 50. A non-object input is the empty payload. */
+export function sanitise(input: unknown): Record<string, unknown> {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return {};
+  return walk(input, 0) as Record<string, unknown>;
+}
+
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const LONG_HEX_SEGMENT = /\/[0-9a-f]{12,}(?=\/|$)/gi;   // Fly machine ids (14 hex), Cloudflare uids (32 hex)
+
+/** `https://host/v1/apps/relay/machines/abc?x=1` + ["abc"] → `/v1/apps/relay/machines/{id}`.
+ *  Origin dropped, query dropped, each non-empty id → `{id}`, any residual uuid
+ *  → `{uuid}`, any residual ≥12-hex path segment → `{id}`. The DDL CHECK on
+ *  stream_provider_calls.path_template is the floor under this function. */
+export function pathTemplate(url: string, ids: readonly string[]): string {
+  let path = url.replace(/^[a-z]+:\/\/[^/]+/i, "");
+  const q = path.indexOf("?");
+  if (q !== -1) path = path.slice(0, q);
+  for (const id of ids) {
+    if (!id) continue;
+    path = path.split(`/${id}/`).join("/{id}/");
+    if (path.endsWith(`/${id}`)) path = path.slice(0, -id.length) + "{id}";
+  }
+  return path.replace(UUID, "{uuid}").replace(LONG_HEX_SEGMENT, "/{id}");
+}
+```
+
+- [ ] **Step 8d: Run — expect `sanitise 8 0`.** Same command shape as Step 2.
+
+- [ ] **Step 8e: Write the failing telemetry + RLS-static tests.** Create `apps/web/src/server/relay/__tests__/telemetry.test.ts`:
+
+```ts
+// The four writers, the redaction scan, the sample cap. Real Postgres. Every
+// write path here is the one production uses (telemetry.ts is the only SQL
+// that names a capture table — enc-boundary.test.ts's sibling claim below).
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { sql } from "@/lib/db";
+import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { SAMPLES_PER_SESSION_CAP } from "../config";
+import { recordEvent, recordProviderCall, recordSample, recordStorageSnapshot } from "../telemetry";
+import { STREAM_TABLES } from "./migration-shape.test";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+async function session() {
+  const { auth } = await seedOrg();
+  const { fixtureId } = await startedDivisionWithFixture(auth);
+  const [t] = await sql<{ id: string }[]>`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${auth.orgId}, 'youtube', 'x', ${Buffer.from("e")}) returning id`;
+  const [s] = await sql<{ id: string }[]>`insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by) values (${fixtureId}, ${auth.orgId}, 'passthrough', 'requested', ${t!.id}, ${auth.userId!}) returning id`;
+  return { orgId: auth.orgId, sid: s!.id, userId: auth.userId! };
+}
+
+describe.skipIf(!HAS_DB)("telemetry — the writers", () => {
+  it("recordEvent assigns seq 1, 2, 3 per session under the caller's transaction and returns it", async () => {
+    const { orgId, sid, userId } = await session();
+    const seqs = await sql.begin(async (tx) => [
+      await recordEvent(tx, { sessionId: sid, orgId, source: "domain", kind: "transition", type: "admit", from: "requested", to: "provisioning" }),
+      await recordEvent(tx, { sessionId: sid, orgId, source: "runner", kind: "effect", type: "create_machine", result: "ok", httpStatus: 200, latencyMs: 412, attempt: 1, providerRequestId: "fly-req-1" }),
+      await recordEvent(tx, { sessionId: sid, orgId, source: "client", kind: "action", type: "stop", actorUserId: userId }),
+    ]);
+    expect(seqs).toEqual([1, 2, 3]);
+    const rows = await sql<{ seq: number; type: string }[]>`select seq, type from fixture_stream_events where session_id = ${sid} order by seq`;
+    expect(rows.map((r) => r.type)).toEqual(["admit", "create_machine", "stop"]);
+  });
+
+  it("a known secret pushed through EVERY writer is absent from EVERY row of EVERY relay table (the redaction scan)", async () => {
+    const { orgId, sid } = await session();
+    const SECRET = "sekrit-" + randomUUID().replace(/-/g, "");
+    const dirty = { passphrase: SECRET, url: `srt://live.cloudflare.com:778?passphrase=${SECRET}&streamid=s`, exit: { env: { RELAY_KEK: SECRET } }, reason: `ok?${SECRET}` };
+    await sql.begin(async (tx) => {
+      await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "connected", payload: dirty });
+    });
+    await recordSample(sql, { sessionId: sid, source: "heartbeat", ingestState: "connected", raw: dirty });
+    await recordProviderCall(sql, { sessionId: sid, provider: "cloudflare", operation: "createLiveInput", method: "POST",
+      url: `https://api.cloudflare.com/client/v4/accounts/acc1/stream/live_inputs?key=${SECRET}`, ids: ["acc1"], status: 200, latencyMs: 90, attempt: 1, requestId: "cf-ray-1" });
+    await recordStorageSnapshot(sql, { source: "admission", sessionId: sid, usedMinutes: 1, limitMinutes: 10, reservedMinutes: 2, headroomMinutes: 7 });
+    for (const table of STREAM_TABLES) {
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} t where t::text like ${"%" + SECRET + "%"}`;
+      expect(n, table).toBe(0);
+    }
+    // The positive pair: the non-secret facts DID land.
+    const [call] = await sql<{ path_template: string }[]>`select path_template from stream_provider_calls where session_id = ${sid}`;
+    expect(call!.path_template).toBe("/client/v4/accounts/{id}/stream/live_inputs");
+    const [ev] = await sql<{ payload: { url?: string } }[]>`select payload from fixture_stream_events where session_id = ${sid}`;
+    expect(ev!.payload.url).toBe("srt://live.cloudflare.com:778");
+  });
+
+  it("recordSample writes up to SAMPLES_PER_SESSION_CAP and returns 'capped' at cap + 1 without a row", async () => {
+    const { sid } = await session();
+    // Seed cap - 1 rows directly (the writer is O(1) per call; 8,000 calls is a slow test for no extra proof).
+    await sql`insert into fixture_stream_samples (session_id, source) select ${sid}, 'poll' from generate_series(1, ${SAMPLES_PER_SESSION_CAP - 1})`;
+    expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" })).toBe("written");
+    expect(await recordSample(sql, { sessionId: sid, source: "heartbeat" })).toBe("capped");
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sid}`;
+    expect(n).toBe(SAMPLES_PER_SESSION_CAP);
+  });
+
+  it("recordProviderCall without a session (a sweep's list call) lands with session_id null", async () => {
+    await recordProviderCall(sql, { provider: "fly", operation: "listMachines", method: "GET", url: "https://api.machines.dev/v1/apps/relay/machines", ids: [], status: 200, latencyMs: 30, attempt: 1 });
+    const [row] = await sql<{ session_id: string | null }[]>`select session_id from stream_provider_calls where operation = 'listMachines' order by id desc limit 1`;
+    expect(row!.session_id).toBeNull();
+  });
+});
+```
+
+Create `apps/web/src/server/relay/__tests__/rls-static.test.ts`:
+
+```ts
+// No DB: the migration FILE says enable + force for every table it creates and
+// creates no policy. migration-shape.test.ts proves the same against a live
+// schema; this one runs in every process, so a ninth table without its two
+// alter lines reds the unit gate before anything is applied anywhere.
+import { describe, expect, it } from "vitest";
+import { MIGRATION, STREAM_TABLES } from "./migration-shape.test";
+
+describe("__stream_sessions.sql — RLS is static text, not a runtime hope", () => {
+  it("every created table has `enable row level security` AND `force row level security`", () => {
+    expect(STREAM_TABLES.length).toBeGreaterThanOrEqual(8);
+    for (const t of STREAM_TABLES) {
+      expect(MIGRATION, t).toMatch(new RegExp(`alter table ${t}\\s+enable\\s+row level security;`));
+      expect(MIGRATION, t).toMatch(new RegExp(`alter table ${t}\\s+force\\s+row level security;`));
+    }
+  });
+  it("creates no policy and no grant to app_user", () => {
+    expect(MIGRATION).not.toMatch(/create policy/i);
+    expect(MIGRATION).not.toMatch(/grant .* to app_user/i);
+  });
+});
+```
+
+(`MIGRATION` joins `STREAM_TABLES` as an export of `migration-shape.test.ts`.) Add a fourth claim to `enc-boundary.test.ts`: "the only files under `src/` that name `fixture_stream_events`, `fixture_stream_samples`, `stream_provider_calls` or `stream_storage_snapshots` in SQL are `server/relay/telemetry.ts`, `server/relay/relay-sweep.ts` (retention DELETE and the summary UPDATE, Task 12) and `__tests__/**`" — same scan shape as the `*_enc` claim.
+
+- [ ] **Step 8f: Run — expect `telemetry` red on collection (`../telemetry` missing), `rls-static 2 0`, `enc-boundary` 4th claim red.**
+
+- [ ] **Step 8g: Write `telemetry.ts`.**
+
+```ts
+// server/relay/telemetry.ts — the only SQL that WRITES a capture table
+// (enc-boundary.test.ts claim 4). Every payload passes sanitise() HERE, so a
+// caller cannot skip it. recordEvent takes a Tx on purpose: an event is part of
+// the state change that caused it, and stream-sessions.ts calls it inside the
+// row-lock transaction — a failure here rolls the state back (atomicity test,
+// Task 10).
+import type { Sql, Tx } from "@/lib/db";
+import { SAMPLES_PER_SESSION_CAP } from "./config";
+import { pathTemplate, sanitise } from "./sanitise";
+
+type Exec = Sql | Tx;
+
+export type EventSource = "domain" | "runner" | "ingest" | "output" | "sweep" | "webhook" | "admin" | "client";
+export type EventKind = "event" | "transition" | "runner_transition" | "observed" | "effect" | "action";
+
+export interface EventInput {
+  sessionId: string;
+  orgId: string;
+  source: EventSource;
+  kind: EventKind;
+  type: string;
+  from?: string | null;
+  to?: string | null;
+  result?: "ok" | "failed" | null;
+  httpStatus?: number | null;
+  latencyMs?: number | null;
+  attempt?: number | null;
+  providerRequestId?: string | null;
+  actorUserId?: string | null;
+  payload?: unknown;
+  occurredAt?: Date;
+}
+
+/** Appends one row and returns its seq. The seq is `max + 1` under the
+ *  caller's row lock on fixture_stream_sessions — two writers on one session
+ *  cannot race because they cannot both hold the lock. */
+export async function recordEvent(tx: Tx, e: EventInput): Promise<number> {
+  const [row] = await tx<{ seq: number }[]>`
+    insert into fixture_stream_events
+      (session_id, org_id, seq, occurred_at, source, kind, type, from_state, to_state, result,
+       http_status, latency_ms, attempt, provider_request_id, actor_user_id, payload)
+    select ${e.sessionId}, ${e.orgId}, coalesce(max(seq), 0) + 1, ${e.occurredAt ?? new Date()},
+           ${e.source}, ${e.kind}, ${e.type}, ${e.from ?? null}, ${e.to ?? null}, ${e.result ?? null},
+           ${e.httpStatus ?? null}, ${e.latencyMs ?? null}, ${e.attempt ?? null}, ${e.providerRequestId ?? null},
+           ${e.actorUserId ?? null}, ${tx.json(sanitise(e.payload))}
+      from fixture_stream_events where session_id = ${e.sessionId}
+    returning seq`;
+  return row!.seq;
+}
+
+export interface SampleInput {
+  sessionId: string;
+  source: "heartbeat" | "poll";
+  ingestState?: string | null;
+  bitrateKbps?: number | null;
+  fps?: number | null;
+  droppedFrames?: number | null;
+  duplicatedFrames?: number | null;
+  outputState?: string | null;
+  runnerCpuPct?: number | null;
+  runnerMemMb?: number | null;
+  encoderSpeed?: number | null;
+  raw?: unknown;
+  sampledAt?: Date;
+}
+
+/** One row per beat/poll, capped per session. The cap is checked in the same
+ *  statement as the insert (`where (select count(*) …) < cap`), so two
+ *  concurrent beats at the boundary cannot both land. */
+export async function recordSample(exec: Exec, s: SampleInput): Promise<"written" | "capped"> {
+  const rows = await exec<{ id: number }[]>`
+    insert into fixture_stream_samples
+      (session_id, sampled_at, source, ingest_state, bitrate_kbps, fps, dropped_frames, duplicated_frames,
+       output_state, runner_cpu_pct, runner_mem_mb, encoder_speed, raw)
+    select ${s.sessionId}, ${s.sampledAt ?? new Date()}, ${s.source}, ${s.ingestState ?? null}, ${s.bitrateKbps ?? null},
+           ${s.fps ?? null}, ${s.droppedFrames ?? null}, ${s.duplicatedFrames ?? null}, ${s.outputState ?? null},
+           ${s.runnerCpuPct ?? null}, ${s.runnerMemMb ?? null}, ${s.encoderSpeed ?? null}, ${exec.json(sanitise(s.raw))}
+     where (select count(*) from fixture_stream_samples where session_id = ${s.sessionId}) < ${SAMPLES_PER_SESSION_CAP}
+    returning id`;
+  return rows.length === 1 ? "written" : "capped";
+}
+
+export interface ProviderCallInput {
+  sessionId?: string | null;
+  provider: "cloudflare" | "fly" | "stripe";
+  operation: string;
+  /** The input uid / machine id the call was about — a provider id, never a secret. */
+  subjectId?: string | null;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** The URL as called; reduced to a template here — the raw URL never reaches SQL. */
+  url: string;
+  /** Every id the adapter interpolated into the URL, so each becomes `{id}`. */
+  ids: readonly string[];
+  status?: number | null;
+  latencyMs: number;
+  attempt: number;
+  retryReason?: string | null;
+  retryAfterSeconds?: number | null;
+  requestId?: string | null;
+  errorCode?: string | null;
+  calledAt?: Date;
+}
+
+export async function recordProviderCall(exec: Exec, c: ProviderCallInput): Promise<void> {
+  await exec`
+    insert into stream_provider_calls
+      (session_id, provider, operation, subject_id, method, path_template, status, latency_ms, attempt,
+       retry_reason, retry_after_seconds, request_id, error_code, called_at)
+    values (${c.sessionId ?? null}, ${c.provider}, ${c.operation}, ${c.subjectId ?? null}, ${c.method}, ${pathTemplate(c.url, c.ids)},
+            ${c.status ?? null}, ${Math.max(0, Math.round(c.latencyMs))}, ${Math.max(1, c.attempt)},
+            ${c.retryReason ?? null}, ${c.retryAfterSeconds ?? null}, ${c.requestId ?? null}, ${c.errorCode ?? null},
+            ${c.calledAt ?? new Date()})`;
+}
+
+export interface StorageSnapshotInput {
+  source: "sweep" | "admission";
+  sessionId?: string | null;
+  usedMinutes: number;
+  limitMinutes: number;
+  reservedMinutes: number;
+  headroomMinutes: number;
+  videosDeleted?: number;
+  inputsDeleted?: number;
+  deferred?: number;
+  takenAt?: Date;
+}
+
+export async function recordStorageSnapshot(exec: Exec, s: StorageSnapshotInput): Promise<void> {
+  await exec`
+    insert into stream_storage_snapshots
+      (taken_at, source, session_id, used_minutes, limit_minutes, reserved_minutes, headroom_minutes,
+       videos_deleted, inputs_deleted, deferred)
+    values (${s.takenAt ?? new Date()}, ${s.source}, ${s.sessionId ?? null}, ${s.usedMinutes}, ${s.limitMinutes},
+            ${s.reservedMinutes}, ${s.headroomMinutes}, ${s.videosDeleted ?? 0}, ${s.inputsDeleted ?? 0}, ${s.deferred ?? 0})`;
+}
+```
+
+  `exec.json` / `tx.json`: postgres.js exposes `sql.json` on the root client and on a transaction's `sql` (the `Tx` type in `@/lib/db` — confirm at Task 0's re-pin that `Tx` is the transaction `sql`, not a narrower wrapper; if it is narrower, import `sql` from `@/lib/db` for `.json` only — the WRITE still goes through `exec`).
+
+- [ ] **Step 8h: Run — expect `telemetry 4 0` (with `DATABASE_URL` inline), `enc-boundary 4 0`.** Then the mutants by hand, each reverted with `/usr/bin/git checkout -- <file>`: (a) in `telemetry.ts` `recordEvent` replace `sanitise(e.payload)` with `e.payload` → the redaction scan reds on `fixture_stream_events` (the killer); (b) in `recordSample` delete the `where (select count(*) …) < cap` clause → the cap test reds at cap + 1; (c) in `recordProviderCall` replace `pathTemplate(c.url, c.ids)` with `c.url` → the scan reds AND the DDL CHECK refuses the `?` (two floors, mutated one at a time — comment out the CHECK's `not like '%?%'` in a scratch copy of the DDL and confirm the scan alone still reds, so neither guard is decoration); (d) in `sanitise.ts` add `"passphrase"` to `ALLOWED_KEYS` → `sanitise.test.ts` "no key names a credential" reds. Record all four killers.
+
+- [ ] **Step 9: Run both relay tests — expect `crypto 5 0`, `enc-boundary 4 0`, `sanitise 8 0`, `rls-static 2 0`, `telemetry 4 0` (DB).**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/server/relay --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t2.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t2.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status)"`
+  Expected: 34 total (11 migration-shape + 4 telemetry pending without `DATABASE_URL` — this command deliberately omits it; re-run WITH it for `34 0 0`), 0 failed. Then the mutant r3 by hand: add `// ingest_srt_key_enc` to `server/usecases/fixtures.ts`, re-run → `enc-boundary` red naming the file; revert with `/usr/bin/git checkout -- apps/web/src/server/usecases/fixtures.ts` (from the worktree root; the file has no other change of yours). Record the killer.
+
+- [ ] **Step 10: Report for commit.** `feat(streaming): relay config, AES-256-GCM envelope, the *_enc boundary, the capture sanitiser and telemetry writers`.
 
 ---
 
@@ -1130,6 +1803,12 @@ export type Effect =
   | { type: "retry_runner" }                        // the application issues the next create_started
   | { type: "complete_now" } | { type: "fill_replay" };
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
+/** Ruling 13: the event-table shape of a decision, computed HERE (pure) so the
+ *  application layer only persists. One `transition` row per session state
+ *  change, one `runner_transition` row per RunnerChanged, one `event` row per
+ *  other DomainEvent — the parity tests walk both tables against this. */
+export interface EventRow { source: "domain" | "runner"; kind: "transition" | "runner_transition" | "event"; type: string; from: string | null; to: string | null; payload: Record<string, unknown> }
+export function eventRowsOf(before: Session, d: Decision, command: Command): EventRow[];
 export class InvalidTransition extends Error { readonly from: SessionState; readonly command: Command["type"] }
 export function decide(session: Session, command: Command, now: Date): Decision;   // throws InvalidTransition on an illegal edge; a benign repeat (stop on ending) returns identity with no events
 export function isActive(state: SessionState): boolean; export function isTerminal(state: SessionState): boolean;
@@ -1343,6 +2022,50 @@ export type Effect =
 
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
 
+// ---- ruling 13: the capture shape of a decision (pure; Task 10 persists it verbatim)
+export interface EventRow {
+  source: "domain" | "runner";
+  kind: "transition" | "runner_transition" | "event";
+  type: string;
+  from: string | null;
+  to: string | null;
+  payload: Record<string, unknown>;
+}
+
+/** Exactly one `transition` row when the session state changed (type = the
+ *  command that changed it), exactly one `runner_transition` per RunnerChanged
+ *  (type = the trigger), and one `event` row per remaining DomainEvent. A
+ *  decision that changed nothing yields []. The payload carries the command's
+ *  own data (expiry kind, trigger payload) — allowlisted again in telemetry.ts. */
+export function eventRowsOf(before: Session, d: Decision, command: Command): EventRow[] {
+  const rows: EventRow[] = [];
+  if (d.next.state !== before.state) {
+    rows.push({
+      source: "domain", kind: "transition", type: command.type, from: before.state, to: d.next.state,
+      payload: {
+        ...(command.type === "expire" ? { expiry: command.expiry.kind } : {}),
+        ...(d.next.failReason ? { failReason: d.next.failReason } : {}),
+        ...(d.next.endReason && d.next.endReason !== before.endReason ? { endReason: d.next.endReason } : {}),
+      },
+    });
+  }
+  for (const e of d.events) {
+    if (e.type === "RunnerChanged") {
+      rows.push({ source: "runner", kind: "runner_transition", type: e.trigger, from: e.from, to: e.to,
+        payload: { attempt: d.next.runner.attempt, machineId: d.next.runner.machineId, machineName: d.next.runner.name, ...(command.type === "runner" && command.trigger.type === "observed" ? { observed: command.trigger.state, exit: command.trigger.exit ?? null } : {}) } });
+    } else if (e.type === "RunnerRetried") {
+      rows.push({ source: "runner", kind: "event", type: e.type, from: null, to: null, payload: { attempt: e.attempt } });
+    } else if (e.type === "SessionEnding") {
+      rows.push({ source: "domain", kind: "event", type: e.type, from: null, to: null, payload: { endReason: e.endReason } });
+    } else if (e.type === "SessionEnded") {
+      rows.push({ source: "domain", kind: "event", type: e.type, from: null, to: null, payload: { reason: e.reason } });
+    } else {
+      rows.push({ source: "domain", kind: "event", type: e.type, from: null, to: null, payload: {} });
+    }
+  }
+  return rows;
+}
+
 export class InvalidTransition extends Error {
   constructor(readonly from: SessionState, readonly command: Command["type"]) {
     super(`stream session: ${command} is not legal from ${from}`);
@@ -1458,6 +2181,55 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
 }
 ```
   (Task 2A's `domain/runner.ts` is TYPES + a `stepRunner` stub that throws `InvalidRunnerTransition` for every input, so every composed-mode edge above is an illegal-edge test until Task 2C lands the table. `expire` cases compile only once Task 2B's `Expiry` exists; write `domain/expiry.ts`'s TYPE first if the compiler complains — Task 2B fills its body. The `session.test.ts` above does not exercise `expire`; Task 2B's `expiry.test.ts` does.)
+
+- [ ] **Step 3a: The session parity sweep (ruling 13).** Append to `session.test.ts` — every (state × passthrough command) cell, derived from the exported lists, never typed:
+
+```ts
+import { eventRowsOf } from "../session";
+
+const PASSTHROUGH_COMMANDS: Command[] = [
+  { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" },
+  { type: "target_rejected" }, { type: "stop" }, { type: "complete" },
+];
+const ALL_STATES: SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
+
+describe("eventRowsOf — parity with the session table (every state × every passthrough command)", () => {
+  it("every legal cell that changes state yields EXACTLY ONE transition row with from/to = the cell; a legal no-op yields none; an illegal cell throws before any row exists", () => {
+    let legal = 0, changed = 0, illegal = 0;
+    for (const state of ALL_STATES) {
+      for (const c of PASSTHROUGH_COMMANDS) {
+        const before = S({ state });
+        let d;
+        try { d = decide(before, c, T0); } catch (e) { expect(e).toBeInstanceOf(InvalidTransition); illegal++; continue; }
+        legal++;
+        const rows = eventRowsOf(before, d, c);
+        const transitions = rows.filter((r) => r.kind === "transition");
+        if (d.next.state !== state) {
+          changed++;
+          expect(transitions, `${state} × ${c.type}`).toHaveLength(1);
+          expect(transitions[0]).toMatchObject({ source: "domain", type: c.type, from: state, to: d.next.state });
+        } else {
+          expect(transitions, `${state} × ${c.type}`).toHaveLength(0);
+        }
+        // Every DomainEvent that is not a state change is an `event` row, one each; nothing is dropped.
+        expect(rows.filter((r) => r.kind === "event")).toHaveLength(d.events.filter((e) => !["RunnerChanged"].includes(e.type)).length);
+        expect(rows.some((r) => r.kind === "runner_transition")).toBe(false);   // passthrough never touches the runner
+      }
+    }
+    // The sweep is not vacuous: the table has legal cells, changed cells and illegal cells.
+    expect(legal).toBeGreaterThan(0); expect(changed).toBeGreaterThan(0); expect(illegal).toBeGreaterThan(0);
+    expect(legal + illegal).toBe(ALL_STATES.length * PASSTHROUGH_COMMANDS.length);
+  });
+  it("a terminal-state payload carries WHY: failReason on failed, endReason on ending (the chip and the inventory read these)", () => {
+    const f = decide(S({ state: "warming" }), { type: "credit_refused" }, T0);
+    expect(eventRowsOf(S({ state: "warming" }), f, { type: "credit_refused" })[0]!.payload).toEqual({ failReason: "no_credits" });
+    const e = decide(S({ state: "live" }), { type: "stop" }, T0);
+    expect(eventRowsOf(S({ state: "live" }), e, { type: "stop" })[0]!.payload).toEqual({ endReason: "stopped" });
+  });
+});
+```
+
+  (Task 2C's runner parity sweep does the composed half from `RUNNER_TABLE`.) Mutant: in `eventRowsOf` drop the `if (d.next.state !== before.state)` guard (always push) → the no-op cells red; make it push two rows → red on `toHaveLength(1)`. Record both killers.
 
 - [ ] **Step 4: Write the purity guard.** Create `apps/web/src/server/relay/domain/__tests__/domain-purity.test.ts`:
 
@@ -2356,7 +3128,7 @@ export interface IngestCredentials {
 export interface IngestStatus { state: IngestState; protocol: IngestProtocol | null; enteredAt: string | null; lastSeenAt: string | null }
 export type OutputState = "ok" | "rejected" | "unknown";
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
-export interface IngestVideo { videoId: string; inputId: string | null; createdAt: string; inProgress: boolean }
+export interface IngestVideo { videoId: string; inputId: string | null; createdAt: string; inProgress: boolean; durationSeconds: number | null }   // durationSeconds: Cloudflare's `duration` (−1 while in progress → null); ruling 13's recording_seconds
 export type DeleteVideoResult = "deleted" | "in_progress" | "absent";
 export interface IngestCapabilities {
   timeoutSeconds: number;
@@ -2393,9 +3165,24 @@ export interface RunnerProvider {
   destroy(runnerId: string): Promise<void>;          // force; idempotent: an absent runner is success
   list(): Promise<RunnerListing[]>;                  // every runner the provider still holds for this app, with the session it was created for — the daily orphan sweep's source
 }
+/** Ruling 13: every provider call, every attempt, is a row (stream_provider_calls).
+ *  Adapters RECORD through this port and never touch SQL; telemetry.ts's
+ *  recordProviderCall is bound behind it in drivers.ts, FakeRecorder in tests.
+ *  Best-effort by contract: a recorder that throws never fails the call it
+ *  records (the adapter catches and logs ONCE per process) — telemetry must
+ *  not take a broadcast down. `url` is the URL as called; the recorder templates
+ *  it (sanitise.ts pathTemplate) — the adapter passes the ids it interpolated. */
+export interface ProviderCallRecord {
+  provider: "cloudflare" | "fly" | "stripe"; operation: string; subjectId?: string | null; sessionId?: string | null;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; url: string; ids: readonly string[];
+  status: number | null; latencyMs: number; attempt: number;
+  retryReason?: string | null; retryAfterSeconds?: number | null; requestId?: string | null; errorCode?: string | null;
+}
+export interface ProviderCallRecorder { record(c: ProviderCallRecord): void | Promise<void> }
+export const NOOP_RECORDER: ProviderCallRecorder;   // the default when nothing is injected — a unit test that does not care
 ```
 
-  - `fakes.ts`: `class FakeIngest implements IngestProvider` with `constructor(opts?: { clock?: () => number; connectAfterMs?: number })`, plus test controls `setState(inputId, state)`, `outputsFor(inputId): IngestTarget[]`, `deletedInputs: string[]`, `deletedVideos: string[]`, `addVideo(v: IngestVideo)`, `scriptDeleteVideo(videoId, results: DeleteVideoResult[])`, `storage: StorageUsage` (mutable); `class FakeRunner implements RunnerProvider` with `created: RunnerSpec[]`, `stops: { runnerId: string; signal: string; timeoutSeconds: number }[]`, `destroyed: string[]`, `list()` (created minus destroyed, each with its `sessionId`), `observe()` (the scripted observation — default `running` after create, `destroyed` after destroy), `setObserved(runnerId, state, exit?)`, `failNextCreate(retryable)`, and `addOrphan(runnerId, sessionId | null)` for the sweep test.
+  - `fakes.ts`: `class FakeRecorder implements ProviderCallRecorder` with `calls: ProviderCallRecord[]` and `failNext()` (the "recorder throws, call still succeeds" case); `class FakeIngest implements IngestProvider` with `constructor(opts?: { clock?: () => number; connectAfterMs?: number; recorder?: ProviderCallRecorder })` — EVERY method records one call (`provider: "cloudflare"`, the operation name, a `url` shaped like the real adapter's path with the input id interpolated, `status: 200`, `latencyMs: 0`, `attempt: 1`), so an e2e on the fakes still writes `stream_provider_calls` rows and the seam is proven end to end (AGENTS.md class 1); plus test controls `setState(inputId, state)`, `outputsFor(inputId): IngestTarget[]`, `deletedInputs: string[]`, `deletedVideos: string[]`, `addVideo(v: IngestVideo)`, `scriptDeleteVideo(videoId, results: DeleteVideoResult[])`, `storage: StorageUsage` (mutable); `class FakeRunner implements RunnerProvider` with `constructor(opts?: { recorder?: ProviderCallRecorder })` (every method records, `provider: "fly"`, `subjectId` = the runnerId, `sessionId` on `create`), `created: RunnerSpec[]`, `stops: { runnerId: string; signal: string; timeoutSeconds: number }[]`, `destroyed: string[]`, `list()` (created minus destroyed, each with its `sessionId`), `observe()` (the scripted observation — default `running` after create, `destroyed` after destroy), `setObserved(runnerId, state, exit?)`, `failNextCreate(retryable)`, and `addOrphan(runnerId, sessionId | null)` for the sweep test.
 
 **Deviation from the prompt (scope 3), recorded:** the prompt's `IngestProvider` lists `storageHeadroom`; C3 makes headroom a COMPUTATION over raw usage plus the database's reservations, so the port exposes `storageUsage()` and the arithmetic is `domain/credits.ts`'s `headroomAfterReservations` (Task 2B), applied by the usecase (Task 10). The prompt's `RunnerProvider { create, status, delete }` is replaced by design §7.1's written port `{ create, destroy }` (E6) plus `list` (recommendation B's orphan sweep needs it) — the heartbeat is the status channel, `destroy` must be idempotent (C7), and `create` must be idempotent per session (Task 5A).
 
@@ -2607,15 +3394,28 @@ export class FakeIngest implements IngestProvider {
   private readonly clock: () => number;
   private readonly connectAfterMs: number;
 
-  constructor(opts: { clock?: () => number; connectAfterMs?: number } = {}) {
+  private readonly rec: ProviderCallRecorder;
+
+  constructor(opts: { clock?: () => number; connectAfterMs?: number; recorder?: ProviderCallRecorder } = {}) {
     this.clock = opts.clock ?? (() => Date.now());
     this.connectAfterMs =
       opts.connectAfterMs ?? Number(process.env.FAKE_INGEST_CONNECT_AFTER_MS ?? FAKE_CONNECT_AFTER_MS_DEFAULT);
+    this.rec = opts.recorder ?? NOOP_RECORDER;
+  }
+
+  /** Ruling 13: the fake records like the adapter, so the seam to
+   *  stream_provider_calls is exercised in every fake-driver run. Best-effort
+   *  (the port's contract): a throwing recorder never fails the call. */
+  private record(operation: string, method: ProviderCallRecord["method"], path: string, ids: string[], subjectId: string | null, sessionId: string | null = null): void {
+    void Promise.resolve()
+      .then(() => this.rec.record({ provider: "cloudflare", operation, subjectId, sessionId, method, url: `https://api.cloudflare.com/client/v4/accounts/fake/stream${path}`, ids: ["fake", ...ids], status: 200, latencyMs: 0, attempt: 1 }))
+      .catch(() => undefined);
   }
 
   async createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials> {
     const createdAt = this.clock();
     const inputId = `fake-in-${createdAt}-${randomBytes(4).toString("hex")}`;
+    this.record("createLiveInput", "POST", "/live_inputs", [], inputId, spec.sessionId);
     this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false });
     const streamId = `${spec.sessionId}-${spec.slot}`;
     const passphrase = randomBytes(12).toString("hex");
@@ -2704,6 +3504,16 @@ function createdAtFromId(inputId: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+export class FakeRecorder implements ProviderCallRecorder {
+  readonly calls: ProviderCallRecord[] = [];
+  private failNextCall = false;
+  failNext(): void { this.failNextCall = true; }
+  record(c: ProviderCallRecord): void {
+    if (this.failNextCall) { this.failNextCall = false; throw new Error("fake recorder failed"); }
+    this.calls.push(c);
+  }
+}
+
 export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
   readonly stops: { runnerId: string; signal: string; timeoutSeconds: number }[] = [];
@@ -2712,9 +3522,19 @@ export class FakeRunner implements RunnerProvider {
   private readonly observed = new Map<string, RunnerObservation>();
   private nextCreateFailure: { retryable: boolean } | null = null;
   private n = 0;
+  private readonly rec: ProviderCallRecorder;
+
+  constructor(opts: { recorder?: ProviderCallRecorder } = {}) { this.rec = opts.recorder ?? NOOP_RECORDER; }
+
+  private record(operation: string, method: ProviderCallRecord["method"], path: string, subjectId: string | null, sessionId: string | null = null, status = 200): void {
+    void Promise.resolve()
+      .then(() => this.rec.record({ provider: "fly", operation, subjectId, sessionId, method, url: `https://api.machines.dev/v1/apps/fake-relay${path}`, ids: ["fake-relay", ...(subjectId ? [subjectId] : [])], status, latencyMs: 0, attempt: 1 }))
+      .catch(() => undefined);
+  }
 
   async create(spec: RunnerSpec): Promise<RunnerHandle> {
     this.created.push({ ...spec, guest: { ...spec.guest } });
+    this.record("createMachine", "POST", "/machines", null, spec.sessionId, this.nextCreateFailure ? 500 : 200);
     if (this.nextCreateFailure) {
       const f = this.nextCreateFailure;
       this.nextCreateFailure = null;
@@ -2731,10 +3551,12 @@ export class FakeRunner implements RunnerProvider {
    *  on the NEXT observe (both R0 soaks auto-destroyed on exit 0). */
   async stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void> {
     this.stops.push({ runnerId, ...opts });
+    this.record("stopMachine", "POST", `/machines/${runnerId}/stop`, runnerId);
     if (this.alive.has(runnerId)) this.observed.set(runnerId, { state: "stopped", exit: { exitCode: 0, oomKilled: false, requestedStop: true } });
   }
 
   async observe(runnerId: string): Promise<RunnerObservation> {
+    this.record("getMachine", "GET", `/machines/${runnerId}`, runnerId);
     const o = this.observed.get(runnerId);
     if (!o || !this.alive.has(runnerId)) return { state: "destroyed", exit: o?.exit ?? null };
     if (o.state === "stopped" && o.exit?.requestedStop) {
@@ -2748,11 +3570,13 @@ export class FakeRunner implements RunnerProvider {
 
   async destroy(runnerId: string): Promise<void> {
     this.destroyed.push(runnerId); // absent is success (C7)
+    this.record("destroyMachine", "DELETE", `/machines/${runnerId}`, runnerId);
     this.alive.delete(runnerId);
     this.observed.set(runnerId, { state: "destroyed", exit: this.observed.get(runnerId)?.exit ?? null });
   }
 
   async list(): Promise<RunnerListing[]> {
+    this.record("listMachines", "GET", "/machines", null);
     return [...this.alive].map(([runnerId, sessionId]) => ({ runnerId, sessionId, state: "running" as const }));
   }
 
@@ -2770,9 +3594,35 @@ export class FakeRunner implements RunnerProvider {
 }
 ```
 
-- [ ] **Step 5: Run — expect `11 0`.** Same command as Step 2. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"` → `EXIT=0`. (`ports.ts` imports `ObservedRunnerState` and `ExitInfo` as TYPES from `./domain/runner` — the port speaks the domain's vocabulary, never Fly's.)
+  `fakes.ts` imports `NOOP_RECORDER` and the types `ProviderCallRecord`, `ProviderCallRecorder` from `./ports`. `FakeIngest`'s other methods record the same way — `inputStatus` (`GET`, `/live_inputs/${inputId}`), `addOutput` (`POST`, `/live_inputs/${inputId}/outputs`), `outputState` (`GET`, same path), `deleteInput` (`DELETE`, `/live_inputs/${inputId}`), `storageUsage` (`GET`, `/storage-usage`), `listVideos` (`GET`, `/videos`), `deleteVideo` (`DELETE`, `/videos/${videoId}`) — one `this.record(...)` line as the first statement of each, `subjectId` the input/video id. `ports.ts` exports `NOOP_RECORDER = { record() {} }`.
 
-- [ ] **Step 6: Report for commit.** `feat(streaming): relay ports and in-repo fakes (FakeIngest, FakeRunner with list)`.
+  Add to `fakes.test.ts` (ruling 13, the recorder seam):
+
+```ts
+  it("every fake call is recorded through the injected recorder with a raw URL the recorder templates, and a throwing recorder never fails the call", async () => {
+    const rec = new FakeRecorder();
+    const ingest = new FakeIngest({ clock: () => 0, recorder: rec });
+    const runner = new FakeRunner({ recorder: rec });
+    const creds = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    await ingest.inputStatus(creds.inputId);
+    const h = await runner.create({ sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
+    await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
+    await new Promise((r) => setImmediate(r));   // the record is a microtask behind the call
+    expect(rec.calls.map((c) => [c.provider, c.operation, c.method])).toEqual([
+      ["cloudflare", "createLiveInput", "POST"], ["cloudflare", "inputStatus", "GET"], ["fly", "createMachine", "POST"], ["fly", "stopMachine", "POST"],
+    ]);
+    expect(rec.calls[1]!.url).toContain(creds.inputId);           // raw here — the recorder (telemetry.ts) templates it
+    expect(rec.calls[1]!.ids).toContain(creds.inputId);           // and is told what to template
+    expect(rec.calls[2]!.sessionId).toBe("s1");
+    expect(rec.calls[3]!.subjectId).toBe(h.runnerId);
+    rec.failNext();
+    await expect(ingest.inputStatus(creds.inputId)).resolves.toBeTruthy();   // the call survives its recorder
+  });
+```
+
+- [ ] **Step 5: Run — expect `12 0`.** Same command as Step 2. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"` → `EXIT=0`. (`ports.ts` imports `ObservedRunnerState` and `ExitInfo` as TYPES from `./domain/runner` — the port speaks the domain's vocabulary, never Fly's.) Mutant (recorder seam): delete the `this.record(...)` line from `FakeIngest.inputStatus` → the recorder test red on the second tuple. Record the killer.
+
+- [ ] **Step 6: Report for commit.** `feat(streaming): relay ports and in-repo fakes (FakeIngest, FakeRunner with list, the provider-call recorder port)`.
 
 ---
 
@@ -2784,7 +3634,8 @@ export class FakeRunner implements RunnerProvider {
 
 **Interfaces:**
 - Consumes: `ports.ts`, `config.ts`; env `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_STREAM_TOKEN` (account-owned — C12: never verified through `/user/tokens/verify`).
-- Produces: `class CloudflareIngest implements IngestProvider` with `constructor(opts?: { fetchImpl?: typeof fetch; accountId?: string; token?: string })`; `export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts"`.
+- Produces: `class CloudflareIngest implements IngestProvider` with `constructor(opts?: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder })`; `export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts"`.
+- **Ruling 13 — every call recorded:** `call()` times each request and hands the recorder `{ provider: "cloudflare", operation, subjectId, method, url: <the URL as fetched>, ids: [accountId, ...the ids the caller interpolated], status, latencyMs, attempt: 1, requestId: res.headers.get("cf-ray"), errorCode: json.errors?.[0]?.code }` — on a thrown fetch, `status: null`, `errorCode: "network"`. The account id is in `ids`, so it templates to `{id}`; the token is a header and never in the record. The recorder call is `void`-ed and caught (the port's best-effort contract).
 
 **Pattern (§9a):** Ports and adapters (this is the adapter; the port never learns Cloudflare's JSON); One authority per fact (every number from `config.ts`).
 **Checklist rows satisfied:** "Pin the VALUE a control seeds at" (the create body's three recording fields are asserted against the constants AND the constant against Cloudflare's range — a mutant `deleteRecordingAfterDays: 7` fails the range check even if someone edits the constant); "Negative assertion needs its positive pair" (each static "absent" grep is paired with a "present" grep for what MUST be there).
@@ -3008,7 +3859,10 @@ export class CloudflareIngest implements IngestProvider {
   private readonly base: string;
   private readonly token: string;
 
-  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string } = {}) {
+  private readonly accountId: string;
+  private readonly rec: ProviderCallRecorder;
+
+  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder } = {}) {
     const accountId = opts.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID;
     const token = opts.token ?? process.env.CLOUDFLARE_STREAM_TOKEN;
     if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is not set (RELAY_DRIVERS=live needs it)");
@@ -3016,15 +3870,37 @@ export class CloudflareIngest implements IngestProvider {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.base = `${CLOUDFLARE_STREAM_BASE}/${accountId}/stream`;
     this.token = token;
+    this.accountId = accountId;
+    this.rec = opts.recorder ?? NOOP_RECORDER;
   }
 
-  private async call<T>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<{ status: number; json: CfEnvelope<T> }> {
-    const res = await this.fetchImpl(`${this.base}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+  /** One request, one record (ruling 13). `meta.ids` are the ids the caller
+   *  put in `path`, so the recorder can template them; the account id is
+   *  always one of them. The record never fails the call. */
+  private async call<T>(
+    method: "GET" | "POST" | "PUT" | "DELETE", path: string, body: unknown,
+    meta: { operation: string; ids: string[]; subjectId?: string | null; sessionId?: string | null },
+  ): Promise<{ status: number; json: CfEnvelope<T> }> {
+    const url = `${this.base}${path}`;
+    const started = Date.now();
+    const record = (status: number | null, requestId: string | null, errorCode: string | null) =>
+      void Promise.resolve()
+        .then(() => this.rec.record({ provider: "cloudflare", operation: meta.operation, subjectId: meta.subjectId ?? null, sessionId: meta.sessionId ?? null,
+          method, url, ids: [this.accountId, ...meta.ids], status, latencyMs: Date.now() - started, attempt: 1, requestId, errorCode }))
+        .catch(() => undefined);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        method,
+        headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (e) {
+      record(null, null, "network");
+      throw e;
+    }
     const json = (await res.json().catch(() => ({ success: false }))) as CfEnvelope<T>;
+    record(res.status, res.headers.get("cf-ray"), json.errors?.[0] ? String(json.errors[0].code) : null);
     return { status: res.status, json };
   }
 
@@ -3045,7 +3921,7 @@ export class CloudflareIngest implements IngestProvider {
         timeoutSeconds: INGEST_TIMEOUT_SECONDS,
         deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
       },
-    });
+    }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId });
     if (!r.json.success || !r.json.result) CloudflareIngest.fail("create live input", r);
     const { uid, rtmps, srt } = r.json.result;
     return {
@@ -3119,7 +3995,31 @@ export class CloudflareIngest implements IngestProvider {
 }
 ```
 
-- [ ] **Step 4: Run — expect `11 0`.** Then the two mutants by hand, each reverted with the Write tool after: (m-C1) set `deleteRecordingAfterDays: 7` in the create body → the first test red on the body AND (if you also edit the constant to 7) on the range; (m-C4) add `await this.call("PUT", \`/live_inputs/${inputId}\`, { recording: { mode: "off" } })` inside `deleteInput` → the static test red. Record both killers.
+  Every other `this.call(...)` in the class passes its `meta` the same way: `inputStatus` → `{ operation: "inputStatus", ids: [inputId], subjectId: inputId }`, `addOutput` / `outputState` → `ids: [inputId]`, `deleteInput` → `ids: [inputId]`, `storageUsage` → `ids: []`, `listVideos` → `ids: []`, `deleteVideo` → `ids: [videoId], subjectId: videoId`. (`ingest-cf.ts` imports `NOOP_RECORDER` and `ProviderCallRecorder` from `./ports`; the test's `recorder()` helper keeps its name — it is the FETCH recorder, unrelated to the port.)
+
+  Add to `ingest-cf.test.ts` (ruling 13):
+
+```ts
+  it("records every call through the ProviderCallRecorder: raw URL + the ids to template, cf-ray as requestId, the CF error code on a failure, and a thrown fetch as status null", async () => {
+    const rec = new FakeRecorder();
+    const { fetchImpl } = recorder((c) => c.url.endsWith("/live_inputs") ? { status: 200, body: okCreate } : { status: 400, body: { success: false, errors: [{ code: 10005, message: "not found" }] } });
+    const cf = new CloudflareIngest({ fetchImpl, accountId: "acc1", token: "tok-secret", recorder: rec });
+    const creds = await cf.createLiveInput({ sessionId: "s1", slot: 0 });
+    await cf.inputStatus("in-missing").catch(() => undefined);
+    const dead = new CloudflareIngest({ fetchImpl: vi.fn(async () => { throw new Error("ECONNRESET"); }), accountId: "acc1", token: "tok-secret", recorder: rec });
+    await dead.storageUsage().catch(() => undefined);
+    await new Promise((r) => setImmediate(r));
+    expect(rec.calls.map((c) => [c.operation, c.status, c.errorCode])).toEqual([["createLiveInput", 200, null], ["inputStatus", 400, "10005"], ["storageUsage", null, "network"]]);
+    expect(rec.calls[0]!.sessionId).toBe("s1");
+    expect(rec.calls[1]!.ids).toEqual(["acc1", "in-missing"]);
+    for (const c of rec.calls) { expect(c.url).toContain("acc1"); expect(JSON.stringify(c)).not.toContain("tok-secret"); }
+    expect(creds.inputId).toBeTruthy();
+  });
+```
+
+  (`okCreate` is the create fixture the first test already uses; `FakeRecorder` from `../fakes`.)
+
+- [ ] **Step 4: Run — expect `12 0`.** Then the three mutants by hand, each reverted with the Write tool after: (m-C1) set `deleteRecordingAfterDays: 7` in the create body → the first test red on the body AND (if you also edit the constant to 7) on the range; (m-C4) add `await this.call("PUT", \`/live_inputs/${inputId}\`, { recording: { mode: "off" } }, …)` inside `deleteInput` → the static test red; (m-record) delete the `record(null, null, "network")` line in the catch → the recorder test red on the third tuple. Record the three killers.
 
 - [ ] **Step 5: Report for commit.** `feat(streaming): Cloudflare Stream ingest adapter (per-input status, recording automatic, retention 30 + sweep)`.
 
@@ -3445,7 +4345,12 @@ export interface FlyClientOptions {
   clock?: () => number; sleep?: (ms: number) => Promise<void>; random?: () => number;
   requestTimeoutMs?: number; deadlineMs?: number; maxAttempts?: number; baseBackoffMs?: number; maxBackoffMs?: number;
   secrets?: readonly string[];
+  /** Ruling 13: one stream_provider_calls row per ATTEMPT (telemetry.ts behind it in prod; FakeRecorder in tests). */
+  recorder?: ProviderCallRecorder;
 }
+
+/** What `once` needs to record an attempt: the method's name, the machine it is about, the ids in the path. */
+interface CallMeta { operation: string; subjectId?: string | null; sessionId?: string | null; ids: readonly string[] }
 
 export function redact(text: string, secrets: readonly string[]): string {
   let out = text;
@@ -3473,30 +4378,56 @@ export class FlyClient {
 
   private red(s: string): string { return redact(s, [this.o.token, ...this.o.secrets]); }
 
+  /** Ruling 13: one record per attempt, best-effort (never fails the call).
+   *  `url` is the URL as fetched; `ids` = [app, ...meta.ids] so the recorder's
+   *  pathTemplate turns every id into `{id}` (and a residual machine id into
+   *  `{id}` by its long-hex rule). retryReason is what the retry loop will act
+   *  on — `status_429`, `status_5xx`, `timeout`, `network` — or null. */
+  private record(meta: CallMeta, method: string, url: string, r: { status: number | null; latencyMs: number; attempt: number; requestId: string | null; retryAfterSeconds: number | null; errorCode: string | null; retryable: boolean }): void {
+    const retryReason = !r.retryable ? null : r.errorCode === "timeout" || r.errorCode === "network" ? r.errorCode : r.status === 429 ? "status_429" : r.status !== null && r.status >= 500 ? "status_5xx" : null;
+    void Promise.resolve()
+      .then(() => (this.o.recorder ?? NOOP_RECORDER).record({
+        provider: "fly", operation: meta.operation, subjectId: meta.subjectId ?? null, sessionId: meta.sessionId ?? null,
+        method: method as ProviderCallRecord["method"], url, ids: [this.o.app, ...meta.ids],
+        status: r.status, latencyMs: r.latencyMs, attempt: r.attempt, retryReason, retryAfterSeconds: r.retryAfterSeconds, requestId: r.requestId, errorCode: r.errorCode,
+      }))
+      .catch(() => undefined);
+  }
+
   /** ONE attempt. Returns the parsed body or throws a FlyApiError classified for the retry loop. */
-  private async once<T>(method: string, path: string, body: unknown, schema: z.ZodType<T> | null, attempts: number): Promise<{ status: number; data: T | null; requestId: string | null }> {
+  private async once<T>(method: string, path: string, body: unknown, schema: z.ZodType<T> | null, attempts: number, meta: CallMeta): Promise<{ status: number; data: T | null; requestId: string | null }> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.o.requestTimeoutMs);
+    const url = `${FLY_MACHINES_BASE}/apps/${encodeURIComponent(this.o.app)}${path}`;
+    const started = this.o.clock();
     let res: Response;
     try {
-      res = await this.o.fetchImpl(`${FLY_MACHINES_BASE}/apps/${encodeURIComponent(this.o.app)}${path}`, {
+      res = await this.o.fetchImpl(url, {
         method, signal: ac.signal,
         headers: { authorization: `Bearer ${this.o.token}`, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (e) {
       const isAbort = (e as { name?: string })?.name === "AbortError";
-      throw new FlyApiError(`fly ${method} ${path}: ${isAbort ? "timeout" : "network error"}`, isAbort ? "timeout" : "network", null, true, null, attempts);
+      const code = isAbort ? "timeout" : "network";
+      this.record(meta, method, url, { status: null, latencyMs: this.o.clock() - started, attempt: attempts, requestId: null, retryAfterSeconds: null, errorCode: code, retryable: true });
+      throw new FlyApiError(`fly ${method} ${path}: ${isAbort ? "timeout" : "network error"}`, code, null, true, null, attempts);
     } finally {
       clearTimeout(timer);
     }
     const requestId = res.headers.get("fly-request-id");
+    const retryAfterHeader = res.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterHeader !== null && /^\d+$/.test(retryAfterHeader) ? Number(retryAfterHeader) : null;
     const text = await res.text();
+    const latencyMs = this.o.clock() - started;
     if (!res.ok) {
       const parsed = text ? ErrorBody.safeParse(safeJson(text)) : null;
       const detail = parsed?.success ? (parsed.data.error ?? "") : text.slice(0, 200);
-      throw new FlyApiError(`fly ${method} ${path}: HTTP ${res.status} ${this.red(detail)}`, "http", res.status, isRetryable(res.status, "http"), requestId, attempts);
+      const retryable = isRetryable(res.status, "http");
+      this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds, errorCode: `http_${res.status}`, retryable });
+      throw new FlyApiError(`fly ${method} ${path}: HTTP ${res.status} ${this.red(detail)}`, "http", res.status, retryable, requestId, attempts, retryAfterSeconds);
     }
+    this.record(meta, method, url, { status: res.status, latencyMs, attempt: attempts, requestId, retryAfterSeconds: null, errorCode: null, retryable: false });
     if (!schema) return { status: res.status, data: null, requestId };
     const parsed = schema.safeParse(safeJson(text));
     if (!parsed.success) throw new FlyApiError(`fly ${method} ${path}: malformed response (${this.red(parsed.error.issues[0]?.message ?? "unparseable")})`, "malformed", res.status, false, requestId, attempts);
@@ -3643,7 +4574,36 @@ function withAttempts(err: FlyApiError, attempts: number): FlyApiError {
 ```
   **One wrinkle the test will surface (and that is the point of writing the test first):** `retryAfterMs` cannot read the header off the error message — carry the header on the error. Amend `FlyApiError` with an optional seventh field `retryAfterSeconds: number | null`, set it in `once` from `res.headers.get("retry-after")`, and read it in `withRetry` (`err.retryAfterSeconds !== null ? err.retryAfterSeconds * 1000 : null`). Delete the regex helper. The "429 waits EXACTLY Retry-After" test is what proves the amendment.
 
-- [ ] **Step 4: Run — expect `18 0`** (15 with the env-redaction `it` + the three lifecycle-endpoint `it`s). Same command as Step 2. Then the six mutants by hand, each reverted with the Write tool: (no-retry) `return op()` without the loop → "503 then 200" red; (retry-400) add 400 to `isRetryable` → "400 is NOT retried" red; (no-retry-after) always compute backoff → "429 waits EXACTLY" red (`[250]` not `[3000]`); (no-lookup) delete `onAmbiguous` → "TIMES OUT is looked up" red (`["POST","POST"]`); (no-redaction) `red = (s) => s` → "redaction" red; (destroy-404) drop the `404 → return` → "destroy … 404 → resolved" red. Record the six killers.
+  **Every public method passes its `CallMeta` to `once`** (through `withRetry`'s `op` closure, so the attempt counter reaches it): `createMachine` → `{ operation: "createMachine", ids: [], sessionId: input.config.metadata[SESSION_METADATA_KEY] ?? null }` (the lookup it performs on an ambiguous failure records as `listMachines`); `getMachine`/`destroyMachine`/`waitMachine`/`stopMachine`/`signalMachine`/`machineEvents` → `{ operation: "<name>", ids: [id], subjectId: id }`; `listMachines` → `{ operation: "listMachines", ids: [] }`. `fly-client.ts` imports `NOOP_RECORDER` and the types `ProviderCallRecord`, `ProviderCallRecorder` from `./ports`. The `retryAfterSeconds` header read moves INTO `once` (the Step 3 wrinkle) and is carried on both the error and the record.
+
+  Add to `fly-client.test.ts` (ruling 13):
+
+```ts
+  it("records one row per ATTEMPT: 429 (Retry-After 3) then 200 → two records, attempt 1 status 429 retryReason status_429 retryAfterSeconds 3, attempt 2 status 200; a timeout records status null / timeout; the token is in no record", async () => {
+    const rec = new FakeRecorder();
+    const fetchImpl = script([
+      { status: 429, headers: { "retry-after": "3", "fly-request-id": "req-1" }, body: { error: "rate limited" } },
+      { status: 200, headers: { "fly-request-id": "req-2" }, body: machine("m1", "started") },
+    ]);
+    const c = new FlyClient({ token: "tok-secret", app: "relay", fetchImpl, clock, sleep, random: () => 0.5, recorder: rec });
+    await c.getMachine("m1");
+    await new Promise((r) => setImmediate(r));
+    expect(rec.calls.map((r) => [r.operation, r.attempt, r.status, r.retryReason, r.retryAfterSeconds, r.requestId])).toEqual([
+      ["getMachine", 1, 429, "status_429", 3, "req-1"], ["getMachine", 2, 200, null, null, "req-2"],
+    ]);
+    expect(rec.calls[0]!.ids).toEqual(["relay", "m1"]);
+    expect(rec.calls[0]!.subjectId).toBe("m1");
+    for (const r of rec.calls) expect(JSON.stringify(r)).not.toContain("tok-secret");
+    const t = new FlyClient({ token: "tok-secret", app: "relay", fetchImpl: hanging(), clock, sleep, requestTimeoutMs: 50, maxAttempts: 1, recorder: rec });
+    await expect(t.getMachine("m2")).rejects.toMatchObject({ code: "timeout" });
+    await new Promise((r) => setImmediate(r));
+    expect(rec.calls.at(-1)).toMatchObject({ operation: "getMachine", status: null, errorCode: "timeout", retryReason: "timeout", attempt: 1 });
+  });
+```
+
+  (`script`, `machine`, `clock`, `sleep`, `hanging` are the helpers the first tests in this file already define — reuse, never a second copy; `FakeRecorder` from `../fakes`.)
+
+- [ ] **Step 4: Run — expect `19 0`** (15 with the env-redaction `it` + the three lifecycle-endpoint `it`s + the recorder `it`). Same command as Step 2. Then the seven mutants by hand, each reverted with the Write tool: (no-retry) `return op()` without the loop → "503 then 200" red; (retry-400) add 400 to `isRetryable` → "400 is NOT retried" red; (no-retry-after) always compute backoff → "429 waits EXACTLY" red (`[250]` not `[3000]`); (no-lookup) delete `onAmbiguous` → "TIMES OUT is looked up" red (`["POST","POST"]`); (no-redaction) `red = (s) => s` → "redaction" red; (destroy-404) drop the `404 → return` → "destroy … 404 → resolved" red; (record-success-only) delete the `this.record(...)` in the `!res.ok` branch → the recorder test red (one record, not two). Record the seven killers.
 
 - [ ] **Step 5: The opt-in live test.** Create `apps/web/src/server/relay/__tests__/fly-client.live.test.ts`:
 
@@ -3753,7 +4713,7 @@ describe.skipIf(!ENABLED)("FlyClient — live lifecycle (org seazn-club, lhr)", 
 
 **Interfaces:**
 - Consumes: `ports.ts`, `config.ts`, `fakes.ts`, `ingest-cf.ts`, `fly-client.ts` (Task 5A); env `FLY_API_TOKEN`, `FLY_RELAY_APP` (default `seazn-relay`), `RELAY_IMAGE` (the `seazn-relay:<sha>` R2 builds — REQUIRED in live mode, so a live server without an image fails at boot of the driver, not mid-match).
-- Produces: `class FlyRunner implements RunnerProvider` (`create`, `stop`, `observe`, `destroy`, `list`) with `constructor(opts?: { client?: FlyClient; token?: string; app?: string; image?: string })`; `export function cpuKindFor(cpuClass: "shared" | "dedicated"): "shared" | "performance"`; `export const FLY_STATE_MAP: Record<string, ObservedRunnerState>` and `export function fromFlyState(state: string | null | undefined): ObservedRunnerState` — the plan's "Fly state → observed input" table as code, `unknown` for anything unlisted; `export const SESSION_METADATA_KEY = "seazn_session"`; the Machine NAME is the domain's `machineNameFor(sessionId, attempt)` (Task 2C), imported, never a second spelling; `drivers.ts`: `relayDrivers(): { ingest: IngestProvider; runner: RunnerProvider }` (one process-wide instance), `setRelayDriversForTest(d | null)`.
+- Produces: `class FlyRunner implements RunnerProvider` (`create`, `stop`, `observe`, `destroy`, `list`) with `constructor(opts?: { client?: FlyClient; token?: string; app?: string; image?: string; recorder?: ProviderCallRecorder })` (the recorder is handed to the `FlyClient` it constructs; a caller-supplied `client` already carries its own); `export function cpuKindFor(cpuClass: "shared" | "dedicated"): "shared" | "performance"`; `export const FLY_STATE_MAP: Record<string, ObservedRunnerState>` and `export function fromFlyState(state: string | null | undefined): ObservedRunnerState` — the plan's "Fly state → observed input" table as code, `unknown` for anything unlisted; `export const SESSION_METADATA_KEY = "seazn_session"`; the Machine NAME is the domain's `machineNameFor(sessionId, attempt)` (Task 2C), imported, never a second spelling; `drivers.ts`: `relayDrivers(): { ingest: IngestProvider; runner: RunnerProvider }` (one process-wide instance), `setRelayDriversForTest(d | null)`.
 - **The hard stop (recommendation B), pinned:** the guest env carries `RELAY_DEADLINE_AT = spec.deadlineAt.toISOString()` beside `SESSION_ID`, `JOB_TOKEN`, `APP_URL`. The R2 supervisor MUST exit (code 0 after a flush) at that instant on its own; C7's `auto_destroy: true` then removes the Machine with no call from this side. R1 asserts the env; R2's acceptance asserts the exit (recorded in `_INDEX.md` as owed to R2, Task 17).
 
 **Pattern (§9a):** Ports and adapters (`cpuClass` is translated HERE, the one place Fly's `cpu_kind` spelling appears — design §7.1; the client's `Machine` never crosses the port); Registry over branching (`drivers.ts` is a two-entry lookup on `relayDriverMode()`).
@@ -4074,16 +5034,30 @@ export class FlyRunner implements RunnerProvider {
 // server/relay/drivers.ts — RELAY_DRIVERS=fake|live picks the adapters once
 // per process (a two-entry registry, §9a). Unset is fake: a process that was
 // not told it may spend money does not. Tests inject their own pair.
+import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { relayDriverMode } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
 import { CloudflareIngest } from "./ingest-cf";
-import type { IngestProvider, RunnerProvider } from "./ports";
+import type { IngestProvider, ProviderCallRecorder, RunnerProvider } from "./ports";
 import { FlyRunner } from "./runner-fly";
+import { recordProviderCall } from "./telemetry";
 
 export interface RelayDrivers { ingest: IngestProvider; runner: RunnerProvider }
 
 let instance: RelayDrivers | null = null;
 let override: RelayDrivers | null = null;
+
+/** Ruling 13: the production recorder — every adapter call (fake OR live)
+ *  becomes a stream_provider_calls row through telemetry.ts. Best-effort: a
+ *  failing insert is logged once per process and never fails the call. */
+let warned = false;
+export const dbRecorder: ProviderCallRecorder = {
+  record: (c) =>
+    recordProviderCall(sql, c).catch((e: unknown) => {
+      if (!warned) { warned = true; log.warn({ err: e }, "stream_provider_calls insert failed; telemetry degraded"); }
+    }),
+};
 
 /** The Fly runner is constructed on FIRST USE: a live server without
  *  FLY_API_TOKEN (owed by the owner, 2026-09-14) still serves passthrough
@@ -4091,7 +5065,7 @@ let override: RelayDrivers | null = null;
  *  is never called; when it is, a missing token fails THAT call, not the boot. */
 function lazyRunner(): RunnerProvider {
   let real: FlyRunner | null = null;
-  const get = () => (real ??= new FlyRunner());
+  const get = () => (real ??= new FlyRunner({ recorder: dbRecorder }));
   return {
     create: (spec) => get().create(spec),
     stop: (id, opts) => get().stop(id, opts),
@@ -4106,8 +5080,8 @@ export function relayDrivers(): RelayDrivers {
   if (instance) return instance;
   instance =
     relayDriverMode() === "live"
-      ? { ingest: new CloudflareIngest(), runner: lazyRunner() }
-      : { ingest: new FakeIngest(), runner: new FakeRunner() };
+      ? { ingest: new CloudflareIngest({ recorder: dbRecorder }), runner: lazyRunner() }
+      : { ingest: new FakeIngest({ recorder: dbRecorder }), runner: new FakeRunner({ recorder: dbRecorder }) };
   return instance;
 }
 
@@ -4118,7 +5092,9 @@ export function setRelayDriversForTest(d: RelayDrivers | null): void {
 }
 ```
 
-- [ ] **Step 5: Run — expect `12 0`; tsc `EXIT=0`.** Mutants by hand, each reverted: (C7) change `restart: { policy: "no" }` to `"always"` → the first test red; (B) drop `RELAY_DEADLINE_AT` from the env → the first test red; (idempotency) drop `metadata` from the body → the first test red AND the "idempotent per session" test red (the lookup filter is empty); (lifecycle) map `launch_failed` to `pending`, or make `fromFlyState` default to `running` → the parity test red; (stop) send `SIGKILL` → the stop test red. Record the five killers.
+  (`@/server/logger`'s `log` is the repo's pino instance — re-pin its export name at Task 0; `drivers.ts` is the ONE place the recorder meets `sql`, so `domain-purity.test.ts`'s file list is untouched.) Add to `runner-fly.test.ts`: "the process drivers hand `dbRecorder` to both adapters in BOTH modes" — with `RELAY_DRIVERS=fake`, `setRelayDriversForTest(null)`, call `relayDrivers().ingest.createLiveInput({ sessionId: "s1", slot: 0 })` with `recordProviderCall` mocked via `vi.mock("../telemetry")` → the mock was called once with `provider: "cloudflare"`. (Without this `it`, the binding is an inert seam: the fakes would record into `NOOP_RECORDER` forever and every `stream_provider_calls` count in the e2e would be zero.)
+
+- [ ] **Step 5: Run — expect `13 0`; tsc `EXIT=0`.** Mutants by hand, each reverted: (recorder-binding) drop `{ recorder: dbRecorder }` from the fake branch → the drivers test red; (C7) change `restart: { policy: "no" }` to `"always"` → the first test red; (B) drop `RELAY_DEADLINE_AT` from the env → the first test red; (idempotency) drop `metadata` from the body → the first test red AND the "idempotent per session" test red (the lookup filter is empty); (lifecycle) map `launch_failed` to `pending`, or make `fromFlyState` default to `running` → the parity test red; (stop) send `SIGKILL` → the stop test red. Record the six killers.
 
 - [ ] **Step 6: Report for commit.** `feat(streaming): Fly runner adapter over the client (deadline env, session metadata) and RELAY_DRIVERS selection`.
 
@@ -4284,7 +5260,7 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 }
 ```
 
-- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → `49 0 0` (6 + 5 + 3 + 9 + 11 + 7 + 8). Then the P3 grep from the Global Constraints → empty.
+- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → `0` failed, `0` pending, and the total equal to the SUM of the counts each relay task's run step states (Task 1 `11`, Task 2 `5 + 4 + 8 + 2 + 4`, Task 3 `12`, Task 4 `12`, Task 5A `19`, Task 5 `13`, Task 6 `8`, plus the domain suites of 2A/2B/2C whose sweep counts are read from their own JSON) — paste the per-file lines, never a bare total. Then the P3 grep from the Global Constraints → empty.
 
 - [ ] **Step 5: Lane A review.** Dispatch `reviewer` (`model: opus`) on the lane's diff with the six mutant killers recorded (r3, m-C1, m-C4, m-C7, r4 ×5 branches, r9). Report for commit: `feat(streaming): relay job/page tokens on AUTH_SECRET`.
 
@@ -4532,17 +5508,28 @@ export async function consumeForSession(
   return { consumed: true, balance: balanceAfter };
 }
 
+/** Ruling 13 item 6: the purchase row carries its Stripe link — which checkout,
+ *  which payment, which pack, how much, in what currency. Ids and amounts only;
+ *  never card data (Stripe holds that). */
+export interface PurchaseLink {
+  checkoutSessionId: string | null; paymentIntentId: string | null; packKey: string | null;
+  amountMinor: number | null; currency: string | null;
+}
+
 export async function recordPurchase(args: {
-  orgId: string; delta: number; stripeEventId: string; note?: string;
+  orgId: string; delta: number; stripeEventId: string; note?: string; link?: PurchaseLink;
 }): Promise<{ id: string; applied: boolean; balance: number }> {
   if (!Number.isInteger(args.delta) || args.delta <= 0) throw new HttpError(422, "purchase delta must be a positive integer");
+  const link = args.link ?? { checkoutSessionId: null, paymentIntentId: null, packKey: null, amountMinor: null, currency: null };
   return sql.begin(async (tx) => {
     await lockOrg(tx, args.orgId);
     const balance = await creditBalance(tx, args.orgId);
     const { balanceAfter } = credit(balance, args.delta);
     const [inserted] = await tx<{ id: string }[]>`
-      insert into org_stream_credits (org_id, delta, reason, stripe_event_id, balance_after, note)
-      values (${args.orgId}, ${args.delta}, 'purchase', ${args.stripeEventId}, ${balanceAfter}, ${args.note ?? null})
+      insert into org_stream_credits (org_id, delta, reason, stripe_event_id, balance_after, note,
+                                      stripe_checkout_session_id, stripe_payment_intent_id, pack_key, amount_minor, currency)
+      values (${args.orgId}, ${args.delta}, 'purchase', ${args.stripeEventId}, ${balanceAfter}, ${args.note ?? null},
+              ${link.checkoutSessionId}, ${link.paymentIntentId}, ${link.packKey}, ${link.amountMinor}, ${link.currency?.toLowerCase() ?? null})
       on conflict (stripe_event_id) do nothing
       returning id`;
     if (inserted) return { id: inserted.id, applied: true, balance: balanceAfter };
@@ -4578,7 +5565,26 @@ export async function refundCredits(args: { orgId: string; delta: number; sessio
 }
 ```
 
-- [ ] **Step 4: Run — expect `6 0 0`.** Then the three money mutants by hand, each reverted with the Write tool: (m2) delete the `await lockOrg(tx, args.orgId)` line in `consumeForSession` → the race test red (`blocked` 0 and/or two consumes); (m3) change `on conflict (stripe_event_id) do nothing` to a plain insert → the replay test red with `23505` (and, if the unique index were dropped instead, with balance 10); (m5) delete the `withinReuseWindow` return → the 24 h test red (its PURE twin is Task 2B's `credits.test.ts`, which a mutant in the SQL wiring cannot reach — that is why both exist). Record the three killers.
+  **Ruling 13 additions to this file, beyond the code above:** (a) `consumeForSession` returns `{ consumed: boolean; balance: number; ledgerId: string | null }` — the consume row's id (`returning id` on its insert; `null` when the 24 h reuse rule skipped the insert) — so Task 10 can set `fixture_stream_sessions.credit_ledger_id`; (b) add to `stream-credits.test.ts`:
+
+```ts
+  it("recordPurchase stores the Stripe link on the purchase row (checkout, payment intent, pack, amount, currency lower-cased); a consume row carries none; a replay keeps the FIRST link", async () => {
+    const r = await rig();
+    const link = { checkoutSessionId: "cs_test_1", paymentIntentId: "pi_1", packKey: "seazn_stream_pack_5", amountMinor: 4900, currency: "GBP" };
+    const first = await recordPurchase({ orgId: r.orgId, delta: 5, stripeEventId: "evt_link_1", link });
+    await recordPurchase({ orgId: r.orgId, delta: 5, stripeEventId: "evt_link_1", link: { ...link, amountMinor: 1 } });   // replay: no-op, the row is unchanged
+    const [row] = await sql<{ stripe_checkout_session_id: string; stripe_payment_intent_id: string; pack_key: string; amount_minor: number; currency: string }[]>`
+      select stripe_checkout_session_id, stripe_payment_intent_id, pack_key, amount_minor, currency from org_stream_credits where id = ${first.id}`;
+    expect(row).toEqual({ stripe_checkout_session_id: "cs_test_1", stripe_payment_intent_id: "pi_1", pack_key: "seazn_stream_pack_5", amount_minor: 4900, currency: "gbp" });
+    const sid = await r.session(r.fixtureIds[0]!);
+    const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
+    expect(c.ledgerId).toBeTruthy();
+    const [consume] = await sql<{ pack_key: string | null; amount_minor: number | null }[]>`select pack_key, amount_minor from org_stream_credits where id = ${c.ledgerId}`;
+    expect(consume).toEqual({ pack_key: null, amount_minor: null });
+  });
+```
+
+- [ ] **Step 4: Run — expect `7 0 0`.** Then the three money mutants by hand, each reverted with the Write tool: (m2) delete the `await lockOrg(tx, args.orgId)` line in `consumeForSession` → the race test red (`blocked` 0 and/or two consumes); (m3) change `on conflict (stripe_event_id) do nothing` to a plain insert → the replay test red with `23505` (and, if the unique index were dropped instead, with balance 10); (m5) delete the `withinReuseWindow` return → the 24 h test red (its PURE twin is Task 2B's `credits.test.ts`, which a mutant in the SQL wiring cannot reach — that is why both exist). Record the three killers.
 
 - [ ] **Step 5: Report for commit.** `feat(streaming): stream credits ledger — balance, consume under lock, purchase idempotent by Stripe id, grant/refund`.
 
@@ -5054,7 +6060,15 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
               return fallback;
             })();
       if (credits) {
-        const { applied, balance } = await recordPurchase({ orgId, delta: credits, stripeEventId: session.id });
+        // Ruling 13 item 6: the purchase link rides on the ledger row — ids and amounts, never card data.
+        const link = {
+          checkoutSessionId: session.id,
+          paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : (session.payment_intent?.id ?? null),
+          packKey: streamPack(Number(session.metadata?.pack))?.lookupKey ?? null,
+          amountMinor: session.amount_total ?? null,
+          currency: session.currency ?? null,
+        };
+        const { applied, balance } = await recordPurchase({ orgId, delta: credits, stripeEventId: session.id, link });
         log.info({ orgId, sessionId: session.id, credits, applied, balance }, "billing: stream credits purchase");
         if (session.customer) await linkStripeCustomer(orgId, session.customer as string);
         await pinBillingCurrency(orgId, session.currency);
@@ -5065,7 +6079,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
     return;
   }
 ```
-  and add the two imports at the top of the file, beside the `@/lib/credits` import: `import { streamPack } from "@/lib/stream-credit-packs";` and `import { recordPurchase } from "@/server/usecases/stream-credits";`. Touch NOTHING else in this file (the donor branch stays byte-identical — the `ai_credit_ledger` suites must keep their count).
+  and add the two imports at the top of the file, beside the `@/lib/credits` import: `import { streamPack } from "@/lib/stream-credit-packs";` and `import { recordPurchase } from "@/server/usecases/stream-credits";`. Touch NOTHING else in this file (the donor branch stays byte-identical — the `ai_credit_ledger` suites must keep their count). `stream-credits-webhook.test.ts` gains one assertion in its "writes one row" case: the row's `stripe_checkout_session_id` = the event's `session.id`, `pack_key` = the pack's lookup key, `amount_minor`/`currency` = the fixture's `amount_total`/`currency` (the fixture event MUST carry them — add them to the fixture, and the replay case asserts the link is unchanged). `streamPack(n)` exposes `lookupKey` (Task 8's catalogue already names them; if the field is named differently there, use that name — one authority).
 
 - [ ] **Step 11: Run — expect webhook `2 0`, relay-checkout `6 0`, and the ai-credits donor suites unchanged.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits src/lib/__tests__/relay-checkout.test.ts src/lib/__tests__/credits src/server/usecases/__tests__/billing-events --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneB.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/laneB.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.assertionResults.length,t.status)"`
@@ -6013,14 +7027,48 @@ function logDecision(before: Session, dec: Decision, now: Date): void {
   }
 }
 
+/** Ruling 13 item 4: the facts a transition just made true, written beside
+ *  the state in the same transaction. Each is `coalesce`d so a repeat never
+ *  moves a timestamp. machine_seconds is computed from the events table —
+ *  the last `booting` runner_transition's occurred_at to NOW on `destroyed`. */
+async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command, now: Date): Promise<void> {
+  if (before.state !== "live" && next.state === "live") {
+    await tx`update fixture_stream_sessions set live_at = coalesce(live_at, ${now}) where id = ${next.id}`;
+  }
+  if (cmd.type === "stop") {
+    await tx`update fixture_stream_sessions set stop_requested_at = coalesce(stop_requested_at, ${now}) where id = ${next.id}`;
+  }
+  if (before.runner.state !== "creating" && next.runner.state === "creating") {
+    await tx`update fixture_stream_sessions
+                set runner_attempts = runner_attempts + 1, machine_region = ${RUNNER_DEFAULT_REGION},
+                    guest_cpus = ${RUNNER_DEFAULT_GUEST.cpus}, guest_memory_mb = ${RUNNER_DEFAULT_GUEST.memoryMb}, guest_cpu_class = ${RUNNER_DEFAULT_GUEST.cpuClass}
+              where id = ${next.id}`;
+  }
+  if (before.runner.state !== "destroyed" && next.runner.state === "destroyed") {
+    const [boot] = await tx<{ occurred_at: string }[]>`
+      select occurred_at from fixture_stream_events
+       where session_id = ${next.id} and kind = 'runner_transition' and to_state = 'booting' order by seq desc limit 1`;
+    if (boot) {
+      const seconds = Math.max(0, Math.round((now.getTime() - new Date(boot.occurred_at).getTime()) / 1000));
+      await tx`update fixture_stream_sessions set machine_seconds = machine_seconds + ${seconds} where id = ${next.id}`;
+    }
+  }
+}
+
+/** Who asked (ruling 13; PII decision: a user id already in the system, never an IP). */
+export interface Actor { userId: string | null; source: "client" | "admin" }
+
 // ---------------------------------------------------------------------------
 // apply — THE seam. Effects that need the transaction run inside it
-// (consume_credit); effects that need a port run after commit.
+// (consume_credit); effects that need a port run after commit. The HISTORY
+// rows (ruling 13) land in the same transaction as the state: a failure
+// writing them rolls the state change back (the atomicity test).
 // ---------------------------------------------------------------------------
 export async function apply(
   sessionId: string,
   command: Command | ((s: Session) => Command),
   deps: SessionDeps,
+  actor?: Actor,
 ): Promise<Session | null> {
   const now = deps.now();
   const outcome = (await sql.begin(async (tx) => {
@@ -6029,20 +7077,54 @@ export async function apply(
     const before = toSession(row);
     const cmd = typeof command === "function" ? command(before) : command;
     let dec = decide(before, cmd, now);
+    let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
       try {
-        await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId }, now);
+        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId }, now);
+        if (c.ledgerId) await tx`update fixture_stream_sessions set credit_ledger_id = ${c.ledgerId} where id = ${sessionId}`;
       } catch (e) {
         if (!(e instanceof NoCreditsError)) throw e;
-        dec = decide(before, { type: "credit_refused" }, now);   // same transaction, the refusal is the state
+        applied = { type: "credit_refused" };
+        dec = decide(before, applied, now);   // same transaction, the refusal is the state
       }
     }
     await persist(tx, dec.next);
+    await persistFacts(tx, before, dec.next, applied, now);
+    if (actor) {
+      await recordEvent(tx, { sessionId, orgId: before.orgId, source: actor.source, kind: "action", type: cmd.type, actorUserId: actor.userId, occurredAt: now, payload: { state: before.state } });
+    }
+    for (const r of eventRowsOf(before, dec, applied)) {
+      await recordEvent(tx, { sessionId, orgId: before.orgId, source: r.source, kind: r.kind, type: r.type, from: r.from, to: r.to, payload: r.payload, occurredAt: now });
+    }
     logDecision(before, dec, now);
     return { session: dec.next, effects: dec.effects.filter((e) => e.type !== "consume_credit") };
   })) as { session: Session; effects: Effect[] } | null;
   if (!outcome) return null;
   return runEffects(outcome.session, outcome.effects, deps);
+}
+
+/** Ruling 13: every port effect's OUTCOME is a row — ok/failed, latency, the
+ *  provider's status/code when it threw one — written under a short row lock
+ *  after the effect (effects run post-commit by design; their result is a
+ *  fact about the world, not about the row). Never throws past the effect's
+ *  own error. */
+async function recordEffect<T>(s: Session, type: string, source: "ingest" | "runner" | "output" | "domain", fn: () => Promise<T>, payload: Record<string, unknown> = {}): Promise<T> {
+  const started = Date.now();
+  const write = (result: "ok" | "failed", extra: Record<string, unknown>) =>
+    sql.begin(async (tx) => {
+      await lockRow(tx, s.id);
+      await recordEvent(tx, { sessionId: s.id, orgId: s.orgId, source, kind: "effect", type, result, latencyMs: Date.now() - started,
+        httpStatus: typeof extra.httpStatus === "number" ? extra.httpStatus : null, attempt: s.runner.attempt || null, payload: { ...payload, ...extra } });
+    });
+  try {
+    const out = await fn();
+    await write("ok", {});
+    return out;
+  } catch (err) {
+    const e = err as { status?: number; code?: string; requestId?: string };
+    await write("failed", { httpStatus: e.status ?? null, errorCode: e.code ?? null, requestId: e.requestId ?? null });
+    throw err;
+  }
 }
 
 /** The lazy expiry path (recommendation B). */
@@ -6077,7 +7159,7 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           const input = await readFirstInput(tx, current.id);
           return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, (await readRow(current.id))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
-        if (inputId) await deps.drivers.ingest.addOutput(inputId, target);   // C9: exactly one, passthrough only
+        if (inputId) await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target), { inputUid: inputId });   // C9: exactly one, passthrough only
         break;
       }
       case "runner":
@@ -6094,7 +7176,7 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
         current = (await apply(current.id, { type: "complete" }, deps)) ?? current;
         break;
       case "fill_replay":
-        await fillReplayUrl(current.id);
+        await recordEffect(current, "fill_replay", "domain", () => fillReplayUrl(current.id));
         break;
       case "consume_credit":
         break; // ran inside apply's transaction
@@ -6111,7 +7193,7 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
       return s;   // apply already persisted `creating` + name + attempt in its transaction (invariant 4)
     case "create_machine": {
       try {
-        const handle = await createRunner(s, deps);
+        const handle = await recordEffect(s, "create_machine", "runner", () => createRunner(s, deps), { attempt: s.runner.attempt, machineName: s.runner.name });
         return (await apply(s.id, { type: "runner", trigger: { type: "create_ok", machineId: handle.runnerId } }, deps)) ?? s;
       } catch (err) {
         const retryable = (err as { retryable?: boolean }).retryable === true;
@@ -6119,11 +7201,14 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
         return (await apply(s.id, { type: "runner", trigger: { type: "create_failed", retryable } }, deps)) ?? s;
       }
     }
-    case "stop_machine":
-      if (s.runner.machineId) await deps.drivers.runner.stop(s.runner.machineId, { signal: e.signal, timeoutSeconds: e.timeoutSeconds });   // SIGINT (R0 :279); idempotent
+    case "stop_machine": {
+      const id = s.runner.machineId;
+      if (id) await recordEffect(s, "stop_machine", "runner", () => deps.drivers.runner.stop(id, { signal: e.signal, timeoutSeconds: e.timeoutSeconds }), { machineId: id, signal: e.signal, timeoutSeconds: e.timeoutSeconds });   // SIGINT (R0 :279); idempotent
       return s;
+    }
     case "force_destroy": {
-      if (s.runner.machineId) await deps.drivers.runner.destroy(s.runner.machineId);                  // 404 = success (C7)
+      const id = s.runner.machineId;
+      if (id) await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(id), { machineId: id });   // 404 = success (C7)
       return (await apply(s.id, { type: "runner", trigger: { type: "destroy_ok" } }, deps)) ?? s;
     }
   }
@@ -6194,16 +7279,23 @@ export async function createSession(
 
   const sessionId = await (sql.begin(async (tx) => {
     const headroom = await storageHeadroomMinutes(tx, usage, deps.now());
+    const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
+      reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
       overlay, relay, balance, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: await activeSessionIdFor(fixtureId),
     });
-    if (!verdict.ok) refuse(verdict, headroom);
+    if (!verdict.ok) {
+      await recordStorageSnapshot(sql, { ...snapshot, sessionId: null });   // the ROOT client: this transaction is about to roll back with the refusal, the measurement must not (ruling 13)
+      refuse(verdict, headroom);
+    }
     let sid: string;
     try {
       const [s] = await tx<{ id: string }[]>`
-        insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, theme_id, max_duration_minutes, created_by)
-        values (${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId}, ${body.themeId ?? null}, ${MAX_DURATION_MINUTES}, ${auth.userId ?? orgId})
+        insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, theme_id, max_duration_minutes, created_by,
+                                             storage_minutes_at_admission, reserved_minutes, destination_kind)
+        values (${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId}, ${body.themeId ?? null}, ${MAX_DURATION_MINUTES}, ${auth.userId ?? orgId},
+                ${usage.totalStorageMinutes}, ${MAX_DURATION_MINUTES}, (select kind from org_stream_targets where id = ${body.targetId}))
         returning id`;
       sid = s!.id;
     } catch (err) {
@@ -6214,6 +7306,9 @@ export async function createSession(
       throw err;
     }
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
+    await recordStorageSnapshot(tx, { ...snapshot, sessionId: sid });
+    await recordEvent(tx, { sessionId: sid, orgId, source: "client", kind: "action", type: "create", actorUserId: auth.userId ?? null, occurredAt: deps.now(),
+      payload: { mode: body.mode, targetId: body.targetId, headroomMinutes: headroom, credits: balance } });
     return sid;
   }) as Promise<string>);
 
@@ -6225,15 +7320,16 @@ async function provisionSession(sessionId: string, deps: SessionDeps): Promise<v
   const provisioning = (await apply(sessionId, { type: "provision" }, deps))!;
   let creds;
   try {
-    creds = await deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 });
+    creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
   } catch (err) {
     log.error({ sid: sessionId, err }, "stream session: ingest create failed");
-    await sql`delete from fixture_stream_sessions where id = ${sessionId}`;   // no §6.4 reason fits; no dead row (E5's logic)
+    await sql`delete from fixture_stream_sessions where id = ${sessionId}`;   // no §6.4 reason fits; no dead row (E5's logic) — the events cascade with it (the ONE delete the append-only trigger allows)
     throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
   }
   await sql.begin(async (tx) => {
     const [inp] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and slot = 0`;
     await storeInputCredentials(tx, inp!.id, creds.inputId, creds);
+    await tx`update fixture_stream_sessions set provisioned_at = coalesce(provisioned_at, ${deps.now()}), ingest_input_uid = ${creds.inputId} where id = ${sessionId}`;   // ruling 13 facts: when, and which input (the uid is not a secret; the keys stayed *_enc)
   });
   if (provisioning.mode === "composed") {
     // The lifecycle's first edge: none → creating (intent persisted) → create_machine → create_ok | create_failed.
@@ -6267,8 +7363,24 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     const inputId = input?.ingestInputId ?? null;
     if (inputId) {
       const status = await deps.drivers.ingest.inputStatus(inputId);
+      const output = await deps.drivers.ingest.outputState(inputId);
       ingestState = { state: status.state, protocol: status.protocol };
-      if ((await deps.drivers.ingest.outputState(inputId)) === "rejected") await apply(row.id, { type: "target_rejected" }, deps);
+      // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed.
+      const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
+        select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
+      await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: status.state, outputState: output, sampledAt: deps.now(), raw: status });
+      if (!prev || prev.ingest_state !== status.state || prev.output_state !== output) {
+        const sid = row.id, orgId = row.org_id;
+        await sql.begin(async (tx) => {
+          await lockRow(tx, sid);
+          await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: status.state, occurredAt: deps.now(),
+            payload: { protocol: status.protocol, outputState: output, connected: status.state === "connected" } });
+        });
+      }
+      if (status.state === "connected") {
+        await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
+      }
+      if (output === "rejected") await apply(row.id, { type: "target_rejected" }, deps);
       else if (row.state === "warming" && status.state === "connected") await apply(row.id, { type: "ingest_connected" }, deps);
       row = (await latestRow(fixtureId))!;
     }
@@ -6308,7 +7420,7 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
   const row = await readRow(sessionId);
   if (!row || row.fixture_id !== fixtureId || row.org_id !== auth.orgId) throw new HttpError(404, "session not found");
   if (isTerminal(row.state)) throw new HttpError(409, "session is not running", "not_active");
-  await apply(sessionId, { type: "stop" }, deps);   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed
+  await apply(sessionId, { type: "stop" }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }
 
@@ -6327,6 +7439,14 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   if (isTerminal(before.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
   // The beat is recorded FIRST (a late beat that arrived is not a stale one), then the policy runs.
   await sql`update fixture_stream_sessions set last_heartbeat = ${sql.json(body as Record<string, unknown>)}, heartbeat_at = ${deps.now()}, egress_bytes = ${body.egressBytes ?? 0} where id = ${sessionId}`;
+  // Ruling 13: every beat is a SAMPLE — typed columns from the fields RelayHeartbeat (Task 9) declares, the whole body in `raw` (sanitised). Capped per session; the cap is reported ONCE as an event.
+  const wrote = await recordSample(sql, { sessionId, source: "heartbeat", sampledAt: deps.now(), ingestState: body.state ?? null,
+    fps: body.fps ?? null, bitrateKbps: body.bitrateKbps ?? null, droppedFrames: body.droppedFrames ?? null, encoderSpeed: body.encoderSpeed ?? null,
+    runnerCpuPct: body.cpuPct ?? null, runnerMemMb: body.memMb ?? null, raw: body });
+  if (wrote === "capped") {
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'samples_capped'`;
+    if (n === 0) await sql.begin(async (tx) => { await lockRow(tx, sessionId); await recordEvent(tx, { sessionId, orgId: before.org_id, source: "runner", kind: "event", type: "samples_capped", occurredAt: deps.now(), payload: { count: SAMPLES_PER_SESSION_CAP } }); });
+  }
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
   if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing") && body.state === "playing") {
@@ -6362,9 +7482,114 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Run — expect `25 0 0`** (18 in the first describe incl. the six lifecycle cases, 7 in the lazy-expiry one — read the JSON's count).
+  **Imports this file gains for ruling 13:** `eventRowsOf` from `@/server/relay/domain/session`; `recordEvent`, `recordSample`, `recordStorageSnapshot` from `@/server/relay/telemetry`; `SAMPLES_PER_SESSION_CAP`, `RUNNER_DEFAULT_GUEST`, `RUNNER_DEFAULT_REGION` from `@/server/relay/config`. `RelayHeartbeat` (Task 9) declares `state`, `fps`, `bitrateKbps`, `egressBytes` and — added by this task, all optional — `droppedFrames`, `encoderSpeed`, `cpuPct`, `memMb` (the R2 supervisor sends what it has; a field it does not send is null in the sample). Nothing else in `apps/web/src` calls `recordEvent` (the self-review grep pins it): the event ledger has ONE writer of session history, this file, plus the sweep's own rows.
+
+  **Step 3a: Add the ruling-13 cases to `stream-sessions.test.ts`** (a third `describe`, DB):
+
+```ts
+import * as telemetry from "@/server/relay/telemetry";
+
+describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state, never instead of it", () => {
+  it("ATOMICITY: a failing event insert rolls the state change back — the row is unchanged and no event row exists", async () => {
+    const r = await rig();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const before = await r.row(sessionId);
+    const spy = vi.spyOn(telemetry, "recordEvent").mockRejectedValueOnce(new Error("telemetry down"));
+    await expect(stopSession(r.auth, r.fixtureId, sessionId, r.deps)).rejects.toThrow("telemetry down");
+    spy.mockRestore();
+    expect(await r.row(sessionId)).toEqual(before);                                   // state, desired_state untouched
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'stop'`;
+    expect(n).toBe(0);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);                        // the positive pair: it works once telemetry does
+    expect((await r.row(sessionId)).state).toBe("completed");
+  });
+
+  it("the golden passthrough path leaves a complete, ordered ledger: seq 1..n with no gap; the five transitions once each in order; action rows carry the caller; effect rows say ok", async () => {
+    const r = await rig();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);                  // connected → live
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    const rows = await sql<{ seq: number; kind: string; type: string; from_state: string | null; to_state: string | null; result: string | null; actor_user_id: string | null; source: string }[]>`
+      select seq, kind, type, from_state, to_state, result, actor_user_id, source from fixture_stream_events where session_id = ${sessionId} order by seq`;
+    expect(rows.map((x) => x.seq)).toEqual(rows.map((_, i) => i + 1));
+    expect(rows.filter((x) => x.kind === "transition").map((x) => `${x.from_state}>${x.to_state}`)).toEqual([
+      "requested>provisioning", "provisioning>warming", "warming>live", "live>ending", "ending>completed",
+    ]);
+    expect(rows.filter((x) => x.kind === "action").map((x) => [x.type, x.actor_user_id, x.source])).toEqual([["create", r.auth.userId, "client"], ["stop", r.auth.userId, "client"]]);
+    expect(rows.filter((x) => x.kind === "effect").map((x) => [x.type, x.result])).toEqual([["create_live_input", "ok"], ["add_output", "ok"], ["fill_replay", "ok"]]);
+    expect(rows.filter((x) => x.kind === "observed").map((x) => [x.type, x.to_state])).toEqual([["ingest_status", "connected"]]);
+    expect(rows.some((x) => x.kind === "runner_transition")).toBe(false);
+  });
+
+  it("the session FACTS are set once and never moved: provisioned_at, first_ingest_at, live_at, stop_requested_at, ingest_input_uid, ingest_protocol, destination_kind, credit_ledger_id = the consume row, storage_minutes_at_admission, reserved_minutes", async () => {
+    const r = await rig();
+    r.ingest.storage = { totalStorageMinutes: 120, totalStorageMinutesLimit: 1000, videoCount: 3 };
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);
+    const liveAt = r.deps.now();
+    r.tick(60_000); await currentSession(r.auth, r.fixtureId, r.deps);                // a second poll must not move live_at / first_ingest_at
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    const [f] = await sql<Record<string, unknown>[]>`
+      select provisioned_at, first_ingest_at, live_at, stop_requested_at, ingest_input_uid, ingest_protocol, destination_kind, credit_ledger_id,
+             storage_minutes_at_admission, reserved_minutes from fixture_stream_sessions where id = ${sessionId}`;
+    expect(f!.provisioned_at).toBeTruthy();
+    expect(new Date(f!.live_at as string).getTime()).toBe(liveAt.getTime());
+    expect(new Date(f!.first_ingest_at as string).getTime()).toBe(liveAt.getTime());
+    expect(f!.stop_requested_at).toBeTruthy();
+    expect(f!.ingest_input_uid).toMatch(/^fake-in-/);
+    expect(f!.ingest_protocol).toBe("srt");                                             // the fake reports srt on connect (fakes.test.ts pins it)
+    expect(f!.destination_kind).toBe("youtube");
+    expect(f!.storage_minutes_at_admission).toBe(120);
+    expect(f!.reserved_minutes).toBe(MAX_DURATION_MINUTES);
+    const [ledger] = await sql<{ reason: string; session_id: string }[]>`select reason, session_id from org_stream_credits where id = ${f!.credit_ledger_id as string}`;
+    expect(ledger).toEqual({ reason: "consume", session_id: sessionId });
+  });
+
+  it("SAMPLES and SNAPSHOTS: each heartbeat and each poll is a sample; an unchanged poll adds a sample but no observed event; admission writes a snapshot with the session, a refusal writes one without", async () => {
+    const r = await rig();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps); await currentSession(r.auth, r.fixtureId, r.deps);   // two disconnected polls
+    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);                                        // connected
+    const token = await mintRelayToken({ sid: sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) });
+    await heartbeat(sessionId, token, { state: "playing", fps: 30, bitrateKbps: 4500, egressBytes: 1 }, r.deps);
+    const samples = await sql<{ source: string; ingest_state: string | null; fps: number | null }[]>`select source, ingest_state, fps from fixture_stream_samples where session_id = ${sessionId} order by id`;
+    expect(samples).toEqual([{ source: "poll", ingest_state: "disconnected", fps: null }, { source: "poll", ingest_state: "disconnected", fps: null }, { source: "poll", ingest_state: "connected", fps: null }, { source: "heartbeat", ingest_state: "playing", fps: 30 }]);
+    const observed = await sql<{ to_state: string }[]>`select to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'observed' order by seq`;
+    expect(observed.map((o) => o.to_state)).toEqual(["disconnected", "connected"]);     // the first poll and the change; the repeat wrote none
+    const snaps = await sql<{ source: string; session_id: string | null; headroom_minutes: number }[]>`select source, session_id, headroom_minutes from stream_storage_snapshots order by id desc limit 1`;
+    expect(snaps[0]).toMatchObject({ source: "admission", session_id: sessionId });
+    const broke = await rig({ credits: 0 });
+    await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402 });
+    const [refused] = await sql<{ source: string; session_id: string | null }[]>`select source, session_id from stream_storage_snapshots order by id desc limit 1`;
+    expect(refused).toEqual({ source: "admission", session_id: null });
+  });
+
+  it("COMPOSED facts: runner_attempts, guest, region at create; machine_seconds = booting→destroyed on the fake clock; effect rows create_machine / stop_machine ok; every runner_transition row names its trigger", async () => {
+    const r = await rig();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const token = await mintRelayToken({ sid: sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) });
+    await heartbeat(sessionId, token, { state: "playing", egressBytes: 0 }, r.deps);      // booting → playing → live
+    r.tick(120_000);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);                            // SIGINT → observed stopped → destroyed → completed
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    const [f] = await sql<{ runner_attempts: number; guest_cpus: number; guest_memory_mb: number; guest_cpu_class: string; machine_region: string; machine_seconds: number }[]>`
+      select runner_attempts, guest_cpus, guest_memory_mb, guest_cpu_class, machine_region, machine_seconds from fixture_stream_sessions where id = ${sessionId}`;
+    expect(f).toEqual({ runner_attempts: 1, guest_cpus: RUNNER_DEFAULT_GUEST.cpus, guest_memory_mb: RUNNER_DEFAULT_GUEST.memoryMb, guest_cpu_class: RUNNER_DEFAULT_GUEST.cpuClass, machine_region: RUNNER_DEFAULT_REGION, machine_seconds: 120 });
+    const effects = await sql<{ type: string; result: string }[]>`select type, result from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' order by seq`;
+    expect(effects.map((e) => `${e.type}:${e.result}`)).toEqual(["create_live_input:ok", "create_machine:ok", "stop_machine:ok", "fill_replay:ok"]);
+    const rt = await sql<{ type: string; from_state: string; to_state: string }[]>`select type, from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
+    expect(rt.map((x) => `${x.from_state}-${x.type}->${x.to_state}`)).toEqual([
+      "none-create_started->creating", "creating-create_ok->booting", "booting-callback_playing->playing", "playing-session_stop->stopping", "stopping-observed->exited", "exited-observed->destroyed",
+    ]);
+  });
+});
+```
+
+  (`vi` joins the vitest import; `MAX_DURATION_MINUTES`, `RUNNER_DEFAULT_GUEST`, `RUNNER_DEFAULT_REGION` from `@/server/relay/config`; `mintRelayToken` from `@/server/relay/tokens`; `heartbeat` from `../stream-sessions`. The composed sequence's exact runner rows depend on how the fake's `observe` reports after `stop` — `stopped` then `destroyed` on successive looks, `fakes.ts` — so if the executor's run shows `stopping-callback_stopped->exited` because the heartbeat reported `stopped` first, that is the fake's other legal path: pin whichever the test DRIVES, never loosen to `toContain`.)
+
+- [ ] **Step 4: Run — expect `30 0 0`** (18 in the first describe incl. the six lifecycle cases, 7 in the lazy-expiry one, 5 in the data-captured one — read the JSON's count).
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable RELAY_KEK=<64 hex> AUTH_SECRET=<from .env.local> npx vitest run src/server/usecases/__tests__/stream-sessions.test.ts --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t10.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t10.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status!=='passed')console.log(a.fullName,(a.failureMessages[0]||'').slice(0,300))"`
-  (`RELAY_KEK` must be in `apps/web/.env.local` for the server too — add `RELAY_KEK=<openssl rand -hex 32>` there at this step and record in `_STATE.md`.) Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. Record the thirteen killers.
+  (`RELAY_KEK` is PRESENT in both `.env.local` files — ruling 14; Task 0 confirmed it. Never echo it.) Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. Record the thirteen killers.
 
 - [ ] **Step 5: Report for commit.** `feat(streaming): relay application layer — apply/decide, lazy expiry with inline retry, create gates through admit, replay fill`.
 
@@ -6584,7 +7809,9 @@ export async function POST(req: Request, { params }: Ctx) {
 }
 ```
 
-- [ ] **Step 5: Run — expect `2 0 0`.**
+  **Ruling 13 through the routes (one `it` in `relay-internal-routes.test.ts`):** "a heartbeat through the ROUTE writes one `fixture_stream_samples` row with the posted fps" — the route parses `RelayHeartbeat`, the usecase writes the sample; a green usecase test cannot see a route that drops a field (AGENTS.md class 1). The v1 stop route is covered by Task 15's e2e reading `fixture_stream_events` for the `stop` action row with the signed-in user's id (Task 15 Step 1's `relay-kit` gains `eventsSql(sid)`).
+
+- [ ] **Step 5: Run — expect `3 0 0`.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable RELAY_KEK=<64 hex> AUTH_SECRET=<from .env.local> npx vitest run src/server/usecases/__tests__/relay-internal-routes.test.ts --reporter=json --outputFile=/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t11.json > /dev/null 2>&1; node -e "const r=require('/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/a923b0db-2e33-4068-9bb3-9d69a79038c7/scratchpad/r1/t11.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"`
 
 - [ ] **Step 6: The three route guards, now green.**
@@ -6604,7 +7831,8 @@ export async function POST(req: Request, { params }: Ctx) {
 
 **Interfaces:**
 - Consumes: Task 10's `SessionDeps`, `reconcileSession` (expiry + one Machine observation — the backstop for stuck `stopping`, `exited` past grace, and `lost`), `storageHeadroomMinutes`, `ACTIVE_STATES`, `TERMINAL_STATES`; Task 2B's `retentionPlan`; the ports' `listVideos` / `deleteVideo` / `deleteInput` / `storageUsage` and `runner.list` / `runner.destroy`; `config.ts`'s `MAX_DURATION_MINUTES`; the cron pair idiom (`app/api/cron/registrations/route.ts`).
-- Produces: `export interface SweepResult { backstop: { visited: number; warmingTimedOut: number; retried: number; crashed: number; wallClockEnded: number; skippedLocked: number }; orphansDestroyed: number; videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number; headroomMinutes: number }`; `export async function sweepStreamSessions(deps: SessionDeps): Promise<SweepResult>`; `POST /api/cron/relay-sweep` → `SweepResult` (503 unset, THEN 401 mismatch).
+- Produces: `export interface SweepResult { backstop: { visited: number; warmingTimedOut: number; retried: number; crashed: number; wallClockEnded: number; skippedLocked: number }; orphansDestroyed: number; videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number; headroomMinutes: number; videosSeen: number; summariesWritten: number; samplesDeleted: number }`; `export async function sweepStreamSessions(deps: SessionDeps, opts?: { sampleRetentionDays?: number | null }): Promise<SweepResult>` (default `SAMPLE_RETENTION_DAYS` from `config.ts` — `null` until the owner rules); `POST /api/cron/relay-sweep` → `SweepResult` (503 unset, THEN 401 mismatch).
+- **Ruling 13 in the sweep:** (5) every listed video lands on its session's `video_uids` / `recording_seconds` (by `ingest_input_uid`); (6) every ended session without a `sample_summary` gets one (min/avg/max fps and bitrate, stall count = samples with `ingest_state` not `connected`/`playing`, sample count) — written ONCE; (7) raw-sample retention behind the constant, deleting ONLY samples of sessions that already carry their summary; (8) ONE `stream_storage_snapshots` row per run with the deletion counts. The sweep's own actions on a session (an orphan destroyed, a backstop expiry) are events with `source: "sweep"` — the backstop's rows come through `reconcileSession` → `apply` (kind `transition`), and the orphan destroy writes an `effect` row through `recordEffect`'s sibling here.
 
 **What the sweep is now (owner ruling 3 + recommendation B):** it runs ONCE A DAY, so nothing that costs money or safety waits for it. Every timeout, the retry and the wall clock fire lazily in Task 10; the sweep is (1) a BACKSTOP that runs the same `applyExpiry` over non-terminal sessions nobody has read — proving nothing new, closing the "session nobody polls" gap; (2) ORPHAN destruction — every Machine the runner still lists whose session is missing or terminal is destroyed (`auto_destroy` should already have taken it; this is the belt to that brace); (3) RETENTION through the pure `retentionPlan` — videos older than 3 days, then inputs, a 409/10046 retried the NEXT DAY (C1/C2); (4) the headroom warning (C3, §6.5).
 
@@ -6810,8 +8038,9 @@ import "server-only";
 //      reported and retried tomorrow.
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { MAX_DURATION_MINUTES } from "@/server/relay/config";
+import { MAX_DURATION_MINUTES, SAMPLE_RETENTION_DAYS } from "@/server/relay/config";
 import { retentionPlan, type RetainedInput, type RetainedVideo } from "@/server/relay/domain/retention";
+import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { ACTIVE_STATES, TERMINAL_STATES, type SessionDeps, reconcileSession, storageHeadroomMinutes } from "./stream-sessions";
 
 export interface SweepResult {
@@ -6819,13 +8048,16 @@ export interface SweepResult {
   orphansDestroyed: number;
   videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number;
   headroomMinutes: number;
+  videosSeen: number; summariesWritten: number; samplesDeleted: number;   // ruling 13
 }
 
-export async function sweepStreamSessions(deps: SessionDeps): Promise<SweepResult> {
+export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleRetentionDays?: number | null } = {}): Promise<SweepResult> {
   const now = deps.now();
+  const sampleRetentionDays = opts.sampleRetentionDays === undefined ? SAMPLE_RETENTION_DAYS : opts.sampleRetentionDays;
   const out: SweepResult = {
     backstop: { visited: 0, warmingTimedOut: 0, retried: 0, crashed: 0, wallClockEnded: 0, skippedLocked: 0 },
     orphansDestroyed: 0, videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, headroomMinutes: 0,
+    videosSeen: 0, summariesWritten: 0, samplesDeleted: 0,
   };
 
   // 1. backstop
@@ -6856,8 +8088,16 @@ export async function sweepStreamSessions(deps: SessionDeps): Promise<SweepResul
       const row = m.sessionId ? byId.get(m.sessionId) : undefined;
       const orphan = !row || (TERMINAL_STATES as readonly string[]).includes(row.state) || row.machine_id !== m.runnerId;
       if (!orphan) continue;
+      const started = Date.now();
       await deps.drivers.runner.destroy(m.runnerId);
       out.orphansDestroyed++;
+      if (row) {   // ruling 13: the sweep's action on a session is a row (no session → nothing to attach it to; the provider-call row still records the DELETE)
+        await sql.begin(async (tx) => {
+          await tx`select id from fixture_stream_sessions where id = ${row.id} for update`;
+          await recordEvent(tx, { sessionId: row.id, orgId: (await tx<{ org_id: string }[]>`select org_id from fixture_stream_sessions where id = ${row.id}`)[0]!.org_id,
+            source: "sweep", kind: "effect", type: "orphan_destroy", result: "ok", latencyMs: Date.now() - started, occurredAt: now, payload: { machineId: m.runnerId, reason: `session ${row.state}` } });
+        });
+      }
       log.warn({ machineId: m.runnerId, sid: m.sessionId, reason: row ? `session ${row.state}` : "no session" }, "relay sweep: orphan Machine destroyed");
     }
   }
@@ -6870,7 +8110,8 @@ export async function sweepStreamSessions(deps: SessionDeps): Promise<SweepResul
   }
 
   // 4. retention — the domain plans, the sweep executes, videos before inputs (C2)
-  const videos: RetainedVideo[] = (await deps.drivers.ingest.listVideos({ createdBefore: now })).map((v) => ({
+  const listed = await deps.drivers.ingest.listVideos({ createdBefore: now });   // ONE list per run: retention AND the video facts (step 5) read it
+  const videos: RetainedVideo[] = listed.map((v) => ({
     videoId: v.videoId, inputId: v.inputId, createdAt: new Date(v.createdAt), inProgress: v.inProgress,
   }));
   const inputs: RetainedInput[] = (await sql<{ id: string; ingest_input_id: string; state: string; ended_at: string | null }[]>`
@@ -6893,12 +8134,111 @@ export async function sweepStreamSessions(deps: SessionDeps): Promise<SweepResul
   }
   out.inputsDeferred = plan.deferInputs.length;
 
+  // 5. video facts (ruling 13 item 4): which recordings each session produced, and how long they are
+  const byInput = new Map<string, { uids: string[]; seconds: number }>();
+  for (const v of listed) {
+    if (!v.inputId) continue;
+    const g = byInput.get(v.inputId) ?? { uids: [], seconds: 0 };
+    g.uids.push(v.videoId);
+    g.seconds += Math.max(0, Math.round(v.durationSeconds ?? 0));
+    byInput.set(v.inputId, g);
+  }
+  for (const [inputId, g] of byInput) {
+    await sql`update fixture_stream_sessions
+                 set video_uids = (select array_agg(distinct u order by u) from unnest(video_uids || ${sql.array(g.uids)}::text[]) u),
+                     recording_seconds = ${g.seconds}
+               where ingest_input_uid = ${inputId}`;
+    out.videosSeen += g.uids.length;
+  }
+
+  // 6. per-session sample summaries — ONCE per ended session (survives sample retention; OWNER DECISION on retention pending)
+  const summarised = await sql<{ id: string }[]>`
+    update fixture_stream_sessions s
+       set sample_summary = agg.summary
+      from (select session_id,
+                   jsonb_build_object('count', count(*), 'fpsMin', min(fps), 'fpsAvg', avg(fps), 'fpsMax', max(fps),
+                                      'bitrateMin', min(bitrate_kbps), 'bitrateAvg', avg(bitrate_kbps), 'bitrateMax', max(bitrate_kbps),
+                                      'stalls', count(*) filter (where ingest_state is not null and ingest_state not in ('connected','playing'))) as summary
+              from fixture_stream_samples group by session_id) agg
+     where agg.session_id = s.id and s.sample_summary is null and s.ended_at is not null and s.state in ${sql([...TERMINAL_STATES])}
+     returning s.id`;
+  out.summariesWritten = summarised.length;
+
+  // 7. raw-sample retention — behind the constant; deletes ONLY where the summary already exists
+  if (sampleRetentionDays !== null) {
+    const cutoff = new Date(now.getTime() - sampleRetentionDays * 86_400_000);
+    const deleted = await sql<{ id: number }[]>`
+      delete from fixture_stream_samples p using fixture_stream_sessions s
+       where s.id = p.session_id and s.sample_summary is not null and s.ended_at < ${cutoff}
+       returning p.id`;
+    out.samplesDeleted = deleted.length;
+  }
+
+  // 8. one storage snapshot per run
+  await recordStorageSnapshot(sql, {
+    source: "sweep", takenAt: now, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
+    reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - out.headroomMinutes, headroomMinutes: out.headroomMinutes,
+    videosDeleted: out.videosDeleted, inputsDeleted: out.inputsDeleted, deferred: out.videosDeferred + out.inputsDeferred,
+  });
+
   log.info({ ...out }, "relay sweep");
   return out;
 }
 ```
 
-- [ ] **Step 4: Run — expect `8 0 0`.** Same command shape as Task 10 Step 4 with `relay-sweep.test.ts`. Then the mutants by hand, each reverted: (backstop) delete the `reconcileSession` call → "BACKSTOP: warming … 11 min" red; (reconcile) replace it with `applyExpiry` → the stuck-stopping case red; (orphan) drop the `TERMINAL_STATES` clause → the orphan test red at `orphansDestroyed 2`; (orphan-safety) drop the `!orphan` `continue` → the live Machine destroyed → red; (C2) run `deleteInputs` before `deleteVideos` AND drop `retentionPlan`'s defer → the retention test red at `deletedInputs toEqual([])`. Record the four killers.
+  (`recording_seconds` is SET, not added: the listing is the whole truth each run, so a re-run is idempotent — the test below asserts it. Cloudflare's `duration` is `-1` while a recording is in progress; Task 4's adapter maps that to `null`, and the fake's `addVideo` takes the field verbatim.)
+
+  Add to `relay-sweep.test.ts` (ruling 13):
+
+```ts
+  it("ONE storage snapshot per run, carrying the run's deletion counts and the same headroom the result reports", async () => {
+    const r = await rig();
+    r.ingest.addVideo({ videoId: "old-1", inputId: null, createdAt: new Date(Date.now() - (RECORDING_RETENTION_DAYS + 1) * 86_400_000).toISOString(), inProgress: false, durationSeconds: 100 });
+    const res = await sweepStreamSessions(r.deps);
+    const snaps = await sql<{ source: string; headroom_minutes: number; videos_deleted: number; deferred: number }[]>`select source, headroom_minutes, videos_deleted, deferred from stream_storage_snapshots where source = 'sweep' order by id desc limit 2`;
+    expect(snaps[0]).toEqual({ source: "sweep", headroom_minutes: res.headroomMinutes, videos_deleted: 1, deferred: 0 });
+    expect(snaps.length === 1 || snaps[1]!.videos_deleted !== 1 || snaps[1]!.headroom_minutes !== res.headroomMinutes).toBe(true);   // the previous run's row is a different row (not a rewrite)
+  });
+
+  it("summary ONCE, retention behind the constant: null deletes nothing; 1 day deletes the raw samples of a session ended 2 days ago and keeps its summary; a session without a summary keeps its samples", async () => {
+    const r = await rig();
+    const token = await mintRelayToken({ sid: r.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) });
+    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);
+    for (const fps of [30, 24, 30]) await heartbeat(r.sessionId, token, { state: "playing", fps, bitrateKbps: 4000, egressBytes: 0 }, r.deps);
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await sql`update fixture_stream_sessions set ended_at = now() - interval '2 days' where id = ${r.sessionId}`;
+    const first = await sweepStreamSessions(r.deps, { sampleRetentionDays: null });
+    expect(first.summariesWritten).toBe(1); expect(first.samplesDeleted).toBe(0);
+    const [s] = await sql<{ sample_summary: { count: number; fpsMin: number; fpsMax: number; stalls: number } }[]>`select sample_summary from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(s!.sample_summary).toMatchObject({ count: 4, fpsMin: 24, fpsMax: 30, stalls: 0 });   // 3 beats + 1 poll
+    const again = await sweepStreamSessions(r.deps, { sampleRetentionDays: null });
+    expect(again.summariesWritten).toBe(0);                                                        // once
+    const pruned = await sweepStreamSessions(r.deps, { sampleRetentionDays: 1 });
+    expect(pruned.samplesDeleted).toBe(4);
+    const [after] = await sql<{ sample_summary: unknown; n: number }[]>`select sample_summary, (select count(*)::int from fixture_stream_samples where session_id = ${r.sessionId}) as n from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(after!.sample_summary).toBeTruthy(); expect(after!.n).toBe(0);
+  });
+
+  it("video facts: listed recordings land on the session by input uid — video_uids (distinct, ordered) and recording_seconds — and the sweep lists videos ONCE", async () => {
+    const r = await rig();
+    const [{ ingest_input_uid }] = await sql<{ ingest_input_uid: string }[]>`select ingest_input_uid from fixture_stream_sessions where id = ${r.sessionId}`;
+    r.ingest.addVideo({ videoId: "v-b", inputId: ingest_input_uid, createdAt: new Date().toISOString(), inProgress: false, durationSeconds: 61 });
+    r.ingest.addVideo({ videoId: "v-a", inputId: ingest_input_uid, createdAt: new Date().toISOString(), inProgress: false, durationSeconds: 30 });
+    const listSpy = vi.spyOn(r.ingest, "listVideos");
+    const res = await sweepStreamSessions(r.deps);
+    expect(listSpy).toHaveBeenCalledTimes(1);
+    expect(res.videosSeen).toBe(2);
+    const [f] = await sql<{ video_uids: string[]; recording_seconds: number }[]>`select video_uids, recording_seconds from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(f).toEqual({ video_uids: ["v-a", "v-b"], recording_seconds: 91 });
+    await sweepStreamSessions(r.deps);                                                              // idempotent: no duplicate uid, same seconds
+    const [g] = await sql<{ video_uids: string[]; recording_seconds: number }[]>`select video_uids, recording_seconds from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(g).toEqual(f);
+  });
+```
+
+  (`vi` joins the vitest import; `currentSession`, `stopSession`, `mintRelayToken` imported as in Task 10's test; `rig` exposes `fixtureId`. The "lists ONCE" assertion pins that retention and the video facts share one `listVideos` call — a second list per run doubles a paid API call every day.)
+
+- [ ] **Step 4: Run — expect `11 0 0`.** Same command shape as Task 10 Step 4 with `relay-sweep.test.ts`. Then the mutants by hand, each reverted: (backstop) delete the `reconcileSession` call → "BACKSTOP: warming … 11 min" red; (reconcile) replace it with `applyExpiry` → the stuck-stopping case red; (orphan) drop the `TERMINAL_STATES` clause → the orphan test red at `orphansDestroyed 2`; (orphan-safety) drop the `!orphan` `continue` → the live Machine destroyed → red; (C2) run `deleteInputs` before `deleteVideos` AND drop `retentionPlan`'s defer → the retention test red at `deletedInputs toEqual([])`; (retention-default) `sampleRetentionDays ?? 0` instead of the `null` guard → "null deletes nothing" red; (summary-twice) drop `s.sample_summary is null` → "once" red at `summariesWritten 0`; (delete-unsummarised) drop `s.sample_summary is not null` from the delete → add a second ended session with no samples run… simpler: the "keeps its samples" clause of the retention test red. Record the seven killers.
 
 - [ ] **Step 5: Write the cron route and the workflow-absence test.**
 
@@ -8038,7 +9378,7 @@ describe("the checkout return reopens the panel (owner ruling 4, 2026-09-14)", (
 
 **Interfaces:**
 - Consumes: `apiJson`, `seedRosteredFixture`, `setBoolEntitlementOverrideSql`, `expectNoHorizontalScroll`, `TAG` (`./helpers`); `signInAs` (`./overlay-kit`); `postgres` (the e2e's own DB client, the overlay-kit shape); `stripe` SDK (sandbox); the `walkthrough` project (`playwright.config.ts` `WALKTHROUGH` regex — the file is selected by PATH); the server under test started with `RELAY_DRIVERS=fake` (and `FAKE_INGEST_CONNECT_AFTER_MS` unset → 3 s).
-- Produces: `RelayRig`, `seedRelayOrg(page, opts)`, `grantCreditsSql(orgId, n)`, `creditSumSql(orgId)`, `thawRelayOrg(orgId)`; the spec.
+- Produces: `RelayRig`, `seedRelayOrg(page, opts)`, `grantCreditsSql(orgId, n)`, `creditSumSql(orgId)`, `eventsSql(sid)` (→ `{ seq, kind, type, actor_user_id }[]` ordered by seq — ruling 13: the walkthrough asserts the `stop` action row carries the signed-in user's id and that the five transitions are present in order, the same shape Task 10's ledger test pins), `thawRelayOrg(orgId)`; the spec.
 
 **Stripe sandbox — the ONE approach (prompt watch 6):** the sandbox webhook cannot reach a local server. The spec makes a REAL sandbox purchase in the browser (the EMBEDDED Checkout inside the Phone tab's modal, card 4242, filled through Stripe's iframe with `event-pass.spec.ts`'s own `fillCardFields` selectors — copied, pinned to its line at Task 0), then REPLAYS the completed session through `POST /api/webhooks/stripe` as a `checkout.session.completed` event signed with the SAME `STRIPE_WEBHOOK_SECRET` the server holds (`stripe.webhooks.generateTestHeaderString` — the idiom `settings-sponsor-monetize.spec.ts` and `e2e.yml` already rely on: CI mints a fresh `STRIPE_WEBHOOK_SECRET` into `$GITHUB_ENV` before the server boots, so runner and server verify against one secret). Why this and not staging: staging has no `rly` fake drivers and no seeded org of ours, and a staging run proves the deploy, not the branch. The money moves for real in the sandbox; only the delivery hop is replayed, and the replay is signature-verified by the real route. **The run SKIPS LOUDLY** (`test.skip(reason)` prints it) when `STRIPE_SANDBOX_E2E`, `STRIPE_SECRET_KEY` (an `sk_test_`) or `STRIPE_WEBHOOK_SECRET` is unset — never a fake success. P6: after the purchase the spec drives `POST /api/cron/billing-events` (the stuck-event RETRY) and asserts the balance is UNCHANGED — the replay is a no-op by `stripe_event_id`.
 
@@ -8654,12 +9994,14 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
   - **Stripe lookup-key NAMES**: `seazn_stream_pack_1`, `seazn_stream_pack_5`, `seazn_stream_pack_20` (never values); the sandbox product name; `scripts/stripe-stream-packs.ts` is the one-off.
   - **Cross-repo item for the owner (P1)**: `relay-sweep.yml` in `onryde/seazn.club.workflow` — DAILY (owner 2026-09-14), both legs, `PROD_SWEEP_ENABLED`, POST `/api/cron/relay-sweep` with `x-cron-secret`; until it lands the sweep is smoke-driven only. Nothing time-critical depends on it (recommendation B — lazy expiry, inline retry, Machine-side hard stop).
   - **Owner rulings 2026-09-14, verbatim-short**: 1 FS10 keep (*"all good"*); 2 Vault no — envelope final; 3 sweep daily (*"just run every day is fine"*); 4 the one `streamOpen` line allowed; 5 `watch_url` + `runner_retries` accepted; 6 `INGEST_TIMEOUT_SECONDS = 180` (*"3 mins after phone goes away"*), hold 183 RTMPS / SRT null; 7 Sentry enabled, DSN owed; 8 checkout embedded (*"checkout should be inbuilt as other"*).
-  - **Recommendation B (the plan-writer's, adopted in the build, NOT an owner ruling)**: money/safety rules never wait for the daily tick — `domain/expiry.ts` evaluated lazily on every read/heartbeat/poll/admission; inline retry; `RELAY_DEADLINE_AT` hard stop; the cron keeps retention + backstop + orphans.
+  - **Recommendation B — RULED (ruling 11)**: money/safety rules never wait for the daily tick — `domain/expiry.ts` evaluated lazily on every read/heartbeat/poll/admission; inline retry; `RELAY_DEADLINE_AT` hard stop; the cron keeps retention + backstop + orphans.
+  - **Second ruling set 2026-09-14 (owner "all good")**: 9 lifecycle scope accepted; 10 granted state = the real `/admin/orgs/[id]` grant on a fresh org, GA purchase path owed to the GA-flip wave; 11 recommendation B; 12 the second-input sink, YouTube optional on an owner key; 13 capture all data, schema growth pre-approved; 14 `RELAY_KEK` present.
+  - **Data captured — the inventory** (Step 4b below): every table, its writer, its row count on the `rly` run, and what it never contains; the two owner decisions (PII, telemetry retention) with the recommendation and the alternative's cost; "admin telemetry view" flagged as possible future scope, NOT built.
   - **Owed to R2 from the hard stop**: the supervisor MUST exit at `RELAY_DEADLINE_AT` on its own (R1 asserts the env is sent; R2's soak asserts the exit).
   - **Deviations from `R1-relay-core.md`**: the domain layer (`server/relay/domain/**`, owner instruction 2026-09-14) — `decide`/`evaluate`/`retentionPlan`/`credits` are where the prompt's scope 5, 7 and 8 rules now LIVE, the usecases wire them; `fly-client.ts` as its own unit under `runner-fly.ts` (owner instruction); `storageUsage()` for `storageHeadroom` (C3); `RunnerProvider { create, destroy, list }` for `{ create, status, delete }` (§7.1 E6, C7, B); lookup keys in code not env; the sweep owns retention/backstop/orphans only (daily); `stream-tab-phone` for `stream-phone-tab` (P13); no workflow file (P1); no producer mint (P2); `POLL_MS` false premise → `STREAM_POLL_MS`; the e2e `stream-health` asserts the INGEST-STATE copy, not fps (composed is disabled this wave; fps chips are unit-covered).
   - **Fly API facts verified 2026-09-14** (sources in Task 5A and §"Fly machine lifecycle"): create is 200 not 201; `name` unique per app; `metadata.{key}` list filter; wait states incl. `settled`; `DELETE ?force=true`; `POST /stop { signal, timeout }` (SIGINT default); `POST /signal`; `GET /events` with an UNTYPED `request`; the state vocabulary (persistent/transient/terminal); rate limits 1 req/s/action/machine (burst 3), Get Machine 5/10; 429 status, `Retry-After`, the request-id header and the exit event's field names NOT documented — **what the live lifecycle test saw** (paste the `LIVE summary`): states, exit events' shape and codes for exit 0 / exit 1, both auto-destroys, force-destroy of a running Machine, name reuse after destroy, request-id header, any 429 headers.
   - **The Fly machine lifecycle**: the plan's table is the authority (`domain/runner.ts` `RUNNER_TABLE`); invariants 1–5 and their tests named; `MACHINE_MINUTES_BOUND` as computed; the four lifecycle columns added (`runner_state`, `runner_name`, `runner_stop_requested_at`, `end_reason` — scope creep marked for the owner in §"House rules"); `FLY_API_TOKEN` owed; the daily workflow lives ONLY in `onryde/seazn.club.workflow`.
-  - **Customer verify (house rules 2026-09-14)**: the lane-D and wave-close runs' per-screen verdicts; the entitlement-acquisition recommendation (OWNER DECISION PENDING); the second-input sink recommendation; ffmpeg as the ruled stand-in; the optional YouTube pass — ran or not.
+  - **Customer verify (house rules 2026-09-14)**: the lane-D and wave-close runs' per-screen verdicts; the granted state through the real `/admin/orgs/[id]` grant (ruling 10); the second-input sink (ruling 12); ffmpeg as the ruled stand-in; the optional YouTube pass — ran or not.
   - **False premises found** (watch list 1–6 with the answer each): 1 synchronous on the webhook; 2 `requireBillingOwner` + orgId equality; 3 closed by C5; 4 no `POLL_MS`; 5 holds (`e2e/helpers.ts`); 6 replay through the route, one approach.
   - **Design gaps closed** (Task 10): 503 `ingest_unavailable` deletes the `requested` row; the sweep's session-actor `AuthCtx` for the replay fill.
   - **Numbers measured**: the QR `symbol.version` and byte length (Task 13); the Task 0 baseline and the final counts; the seven mobile stats lines; the visual report summary.
@@ -8701,6 +10043,14 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | lifecycle wiring: skip `stop_machine`; drop the `creating` reconcile; create before persist; replace `reconcileSession` with `applyExpiry` | `stream-sessions.test.ts` lifecycle cases (Task 10); `relay-sweep.test.ts` stuck-stopping (Task 12) |
 | adapter: `launch_failed` → `pending`; `fromFlyState` defaults to `running`; SIGKILL instead of SIGINT | `runner-fly.test.ts` (Task 5) |
 | client: stop 404 as an error; events parsed strictly (a missing `exit_event` throws) | `fly-client.test.ts` lifecycle endpoints (Task 5A) |
+| capture — redaction: bypass `sanitise()` in `recordEvent`; allow `passphrase` in `ALLOWED_KEYS`; raw URL instead of `pathTemplate` | `telemetry.test.ts` "a known secret … absent from EVERY row"; `sanitise.test.ts` "no key names a credential"; the DDL CHECK (Task 2 Step 8h) |
+| capture — atomicity: write the event after commit (move `recordEvent` out of `apply`'s transaction) | `stream-sessions.test.ts` "ATOMICITY: a failing event insert rolls the state change back" (Task 10) |
+| capture — parity: drop the `RunnerChanged` event; push a transition row on a no-op; two rows per change | `domain/__tests__/runner.test.ts` + `session.test.ts` `eventRowsOf` sweeps (Tasks 2A, 2C) |
+| capture — cost: delete the `< cap` clause in `recordSample`; `sampleRetentionDays ?? 0`; summary written twice; delete unsummarised samples | `telemetry.test.ts` "cap + 1"; `relay-sweep.test.ts` "summary ONCE, retention behind the constant" (Task 12) |
+| capture — RLS static: a ninth `create table` without `enable`/`force`; a `create policy` | `rls-static.test.ts` (no DB) + `migration-shape.test.ts` (Task 1/2) |
+| capture — the seams: drop `{ recorder: dbRecorder }` in `drivers.ts`; delete a fake's `this.record(...)`; record only on success in `once`/`call` | `runner-fly.test.ts` drivers `it`; `fakes.test.ts`; `fly-client.test.ts` + `ingest-cf.test.ts` recorder `it`s (Tasks 3, 4, 5A, 5) |
+
+- [ ] **Step 4b: `_INDEX.md` — the data inventory (ruling 13).** A table under the wave record, filled from the `rly` database AFTER Step 6's customer-verify run (`select count(*) from <table>` each, and per-session counts for the golden-path session), verbatim headings: `Table | Written by | Rows on the rly run | Golden session's rows | Never contains | Retention`. Eight rows (the four state tables and the four capture tables) plus `fixture_stream_sessions` facts listed by column name. Then the two OWNER DECISIONS verbatim from §"Data captured" (PII; telemetry retention with the "keep all" estimate — ≈ 1 MB per 3 h session at 5 s cadence, ≈ 1 GB / 1,000 sessions), each marked UNRULED with the plan's recommendation, and the line: *"Possible future scope, not built: an admin telemetry view over these tables (`/admin/...`). R1 ships no UI beyond the end-reason chip."* The counts are read from the database, never typed — paste the SQL and its output.
 
 - [ ] **Step 6: VERIFY AS CUSTOMER — the wave-close run (house rules 2026-09-14).** Repeat Task 14 Step 8's golden path and break list on the FINAL rebased build (`RELAY_DRIVERS=live`, real Cloudflare, the second-input sink), including the denied-state org, at 320 / 768 / 1280; plus the OPTIONAL real-YouTube pass ONLY if the owner has supplied an unlisted stream key (owed; never committed, echoed or logged). Record per-screen verdicts and what was actually seen in `_INDEX.md` under "Customer verify, wave close". Real Fly is not exercised (composed off; token owed) — say so in the record.
 
@@ -8716,12 +10066,14 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 
 | Scope | Task(s) |
 |---|---|
-| 1 migrations (no entitlement migration; `__stream_sessions.sql` stem; four tables; RLS zero policies; M3 inputs table with `check (slot >= 0)`) | Task 1 (+ `watch_url`, `runner_retries` — decision 5) |
+| 1 migrations (no entitlement migration; `__stream_sessions.sql` stem; the prompt's four tables + ruling 13's four capture tables; RLS zero policies on all eight; M3 inputs table with `check (slot >= 0)`) | Task 1 (+ `watch_url`, `runner_retries` — decision 5) |
 | 2 crypto + `enc-boundary.test.ts` enumerating from the migration | Task 2 (+ Task 9's `__tests__` exemption) |
 | — the pure domain (owner instruction 2026-09-14): session aggregate, expiry, credits, retention | Tasks 2A, 2B (consumed by 7, 10, 12) |
 | — the Fly machine lifecycle (owner 2026-09-14): states, the Fly mapping, the swept transition table, the stop sequence, failure reasons, invariants 1–5, the mermaid diagram | §"Fly machine lifecycle"; Tasks 2C (table), 3 (port), 5A (endpoints), 5 (mapping), 10 (wiring), 12 (backstop), 17 (live recordings, "does NOT prove") |
 | — house rules 2026-09-14: VERIFY-AS-CUSTOMER runs, PRODUCT-OWNER LENS irreversibles, TEST-CASE DESIGN write-path diffs | §"House rules"; Task 14 Step 8; Task 17 Steps 6–7 |
 | — region non-goal; Fly token owed; workflow only in the other repo | §Non-goals; Task 0 prerequisites; Task 5A gate; Task 12 |
+| — data capture (owner ruling 13, 2026-09-14): four capture tables + richer facts + the purchase link; the five guards each with a test and a defeating case; the two OWNER DECISIONS (PII, retention) recorded not decided; admin view flagged as future scope | §"Data captured"; Tasks 1 (DDL), 2 (`sanitise.ts`, `telemetry.ts`, redaction/cap/RLS-static tests), 2A/2C (`eventRowsOf` parity), 3–5 (the recorder port and the adapters), 7/8 (the link), 10 (in-transaction events, facts, effect results, samples), 11 (route seam), 12 (snapshots, summaries, retention constant), 17 Step 4b (the inventory) |
+| — rulings 9–14 (second set 2026-09-14): lifecycle scope, granted state via the real admin editor, recommendation B, the second-input sink, capture everything, `RELAY_KEK` present | §"Owner rulings" 9–14; §"House rules" (1)/(2); Task 0 (`RELAY_KEK` presence check, never echoed); Task 17 Step 4 |
 | 3 ports, drivers, fakes, `RELAY_DRIVERS` | Tasks 3, 4, 5A (the Fly client), 5 |
 | 4 tokens on `AUTH_SECRET`, 401 / 410, G1 witness; producer mint | Task 6; Task 10 (410); P2 non-goal |
 | 5 credits usecases (`creditBalance`, `consumeForSession`, `recordPurchase`, grant/refund) | Task 7 |
@@ -8742,6 +10094,6 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 
 Corrections C1–C14 and pins P1–P22: the ledger at the top maps each; re-checked against the tasks — every row has a task or a non-goal. Two rows the prompt's acceptance names that this plan places differently, both recorded as deviations: the e2e's `stream-health` fps assertion (C6 + composed disabled → the ingest-state copy) and `storageHeadroom` on the port (C3 → `storageUsage()` + the usecase). `_THEMES.md` §8a/§8b: every row of both sheets is in Task 14's "Sheet values" block.
 
-**2. Placeholder scan.** Run over this file before handoff: `grep -n -a -E "TBD|TODO|similar to Task|add appropriate|handle edge cases|stream-phone-tab|V40[3-9]__" docs/superpowers/plans/2026-09-13-streaming-r1.md` → the ONLY permitted hits are inside the ledger/self-review text that names the forbidden strings themselves and the two `<paste …>` markers (the checksum in Task 13 Step 2 and the Sentry DSN in Task 17 Step 3), which are values an executor pastes from a command's output, not work left undone. `<next>` / `<tail>` / `<rly url>` are execution-time values the plan is REQUIRED not to pin. No concrete `V40x` number appears as an instruction; `V402__streaming_entitlements.sql` appears only as the Task 0 snapshot and as a landed file.
+**2. Placeholder scan.** Run over this file before handoff: `grep -n -a -E "TBD|TODO|similar to Task|add appropriate|handle edge cases|stream-phone-tab|V40[3-9]__" docs/superpowers/plans/2026-09-13-streaming-r1.md` → the ONLY permitted hits are inside the ledger/self-review text that names the forbidden strings themselves and the two `<paste …>` markers (the checksum in Task 13 Step 2 and the Sentry DSN in Task 17 Step 3), which are values an executor pastes from a command's output, not work left undone. `<next>` / `<tail>` / `<rly url>` / `<64 hex>` are execution-time values the plan is REQUIRED not to pin (and `RELAY_KEK`'s value is never printed anywhere — Task 0 counts a pattern match). No concrete `V40x` number appears as an instruction; `V402__streaming_entitlements.sql` appears only as the Task 0 snapshot and as a landed file. Two more greps the executor runs on the TREE at Task 17 Step 1 (ruling 13's guards as text): `grep -rn -a "recordEvent(sql" apps/web/src` → empty (an event is never written outside a transaction — `recordEvent` takes `Tx`); `grep -rln -a -E "insert into (fixture_stream_events|fixture_stream_samples|stream_provider_calls|stream_storage_snapshots)" apps/web/src | grep -v __tests__` → exactly `apps/web/src/server/relay/telemetry.ts` (enc-boundary claim 4 pins the same).
 
-**3. Type and name consistency across tasks (checked by reading each Interfaces block against its consumers).** The lifecycle's names — `RunnerState`, `Runner`, `RUNNER_NONE`, `ObservedRunnerState`, `ExitInfo`, `RunnerTrigger`, `RunnerEffect`, `SessionSignal`, `RUNNER_TABLE`, `stepRunner`, `machineNameFor(sessionId, attempt)`, `failReasonFromExit`, `MACHINE_MINUTES_BOUND` (Task 2A types, Task 2C table) — are what `session.ts`'s `runner()` case, `ports.ts` (`RunnerObservation`, `RunnerSpec.attempt`), `fakes.ts`, `runner-fly.ts` (`FLY_STATE_MAP`, `fromFlyState`), `fly-client.ts` (`exitInfoFrom` returns `ExitInfo`'s shape) and `stream-sessions.ts` (`reconcileSession`, `runRunnerEffect`) use; `Session.runner`/`Session.endReason` are persisted by Task 10's `persist` into the four lifecycle columns Task 1 adds; `Expiry`'s five kinds (Task 2B) are exactly the cases `decide`'s `expire` switches over; `StreamFailReason`/`StreamEndReason` (Task 9) equal `FailReason`/`Session["endReason"]` (Task 2A) and the two copy maps (Task 13) are total over them. The domain's names — `Session`, `Command`, `Effect`, `DomainEvent`, `Decision`, `decide`, `admit`, `InvalidTransition`, `ACTIVE_STATES`/`TERMINAL_STATES`/`isTerminal` (Task 2A); `Expiry`, `evaluate`, `deadlineOf`, `DEFAULT_LIMITS` (Task 2B); `debit`/`credit`/`withinReuseWindow`/`headroomAfterReservations`/`InsufficientCredits` (Task 2B); `retentionPlan`/`RetainedVideo`/`RetainedInput` (Task 2B) — are the names Tasks 7, 10 and 12 import; `Command` carries `expire: { expiry: Expiry }` and `Effect` carries `replace_runner { oldMachineId }`, `destroy_runner { machineId }`, `complete_now`, `fill_replay`, `add_output`, `consume_credit`, which is exactly the set `runEffects` (Task 10) switches over. `RunnerSpec` gained `deadlineAt: Date` (Task 3) — Task 5's adapter sends it as `RELAY_DEADLINE_AT`, Task 10's `createRunner` computes it with `deadlineOf`, and both fakes tests pass it. `RunnerProvider.list()` → `RunnerListing[]` (Task 3) is what Task 5 implements over `FlyClient.listMachines` and Task 12's orphan pass reads. `FlyClient` / `FlyApiError` / `FLY_MACHINES_BASE` / `isRetryable` / `redact` (Task 5A) are what Task 5 imports; Task 5's test builds URLs from `FLY_MACHINES_BASE` + `/apps/...`. `IngestProvider.storageUsage()` (Task 3) is what Task 10's `createSession` and Task 12's sweep call — never `storageHeadroom`; the arithmetic is `headroomAfterReservations`. `readFirstInput` / `readInputBySlot` / `storeInputCredentials` / `readTargetSecret` / `insertStreamTarget` (Tasks 2, 9) are the names Tasks 9, 10 use; `storeTargetSecret` exists only until Task 9 replaces it. `mintRelayToken` / `verifyRelayToken` / `relayTokenExpiry` (Task 6) are the names Tasks 10, 11 use. `consumeForSession(tx, args, now?)` returns `{ consumed, balance }` (Task 7) and Task 10's `apply` calls it as the `consume_credit` effect inside the transaction. `apply` / `applyExpiry` / `storageHeadroomMinutes(exec, usage, now)` / `SessionDeps { drivers, now, appUrl }` / `defaultDeps(appUrl)` (Task 10) are what Tasks 11, 12 use. `createRelayCheckout({ …, returnUrl })` / `buildRelayCheckoutParams({ …, returnUrl })` / the route's `{ client_secret }` (Task 8) match `fetchRelayCheckoutClientSecret` (Task 8) which Task 14's container calls and Task 15 exercises through the modal. `StreamSessionCurrent`'s fields (Task 9) are exactly what Task 10 builds and Tasks 13, 14 read (`ingest`, `health`, `qr`, `balance`, `replayUrl`, `target`, `fixtureDecided`). `CaptureQrV1` (Task 9) is the type Task 10 builds, Task 13 checksums, Task 14 encodes. `PhoneTabBodyProps` (Task 14) matches the props Task 14's own test passes. `STREAM_CREDIT_PACKS` (Task 8) is the table Tasks 8 and 14 read. Testids in Task 14's list (incl. `stream-checkout-modal`) are the ones Task 15 and Task 17's manifest rows await; `stream-tab-phone` (P13) is the shipped id and appears unchanged. One deliberate rename recorded in the ledger: `slot` is read off the row by `readFirstInput`, so the literal `0` appears only in the INSERT (Task 10) and in tests.
+**3. Type and name consistency across tasks (checked by reading each Interfaces block against its consumers).** The lifecycle's names — `RunnerState`, `Runner`, `RUNNER_NONE`, `ObservedRunnerState`, `ExitInfo`, `RunnerTrigger`, `RunnerEffect`, `SessionSignal`, `RUNNER_TABLE`, `stepRunner`, `machineNameFor(sessionId, attempt)`, `failReasonFromExit`, `MACHINE_MINUTES_BOUND` (Task 2A types, Task 2C table) — are what `session.ts`'s `runner()` case, `ports.ts` (`RunnerObservation`, `RunnerSpec.attempt`), `fakes.ts`, `runner-fly.ts` (`FLY_STATE_MAP`, `fromFlyState`), `fly-client.ts` (`exitInfoFrom` returns `ExitInfo`'s shape) and `stream-sessions.ts` (`reconcileSession`, `runRunnerEffect`) use; `Session.runner`/`Session.endReason` are persisted by Task 10's `persist` into the four lifecycle columns Task 1 adds; `Expiry`'s five kinds (Task 2B) are exactly the cases `decide`'s `expire` switches over; `StreamFailReason`/`StreamEndReason` (Task 9) equal `FailReason`/`Session["endReason"]` (Task 2A) and the two copy maps (Task 13) are total over them. The domain's names — `Session`, `Command`, `Effect`, `DomainEvent`, `Decision`, `decide`, `admit`, `InvalidTransition`, `ACTIVE_STATES`/`TERMINAL_STATES`/`isTerminal` (Task 2A); `Expiry`, `evaluate`, `deadlineOf`, `DEFAULT_LIMITS` (Task 2B); `debit`/`credit`/`withinReuseWindow`/`headroomAfterReservations`/`InsufficientCredits` (Task 2B); `retentionPlan`/`RetainedVideo`/`RetainedInput` (Task 2B) — are the names Tasks 7, 10 and 12 import; `Command` carries `expire: { expiry: Expiry }` and `Effect` carries `replace_runner { oldMachineId }`, `destroy_runner { machineId }`, `complete_now`, `fill_replay`, `add_output`, `consume_credit`, which is exactly the set `runEffects` (Task 10) switches over. `RunnerSpec` gained `deadlineAt: Date` (Task 3) — Task 5's adapter sends it as `RELAY_DEADLINE_AT`, Task 10's `createRunner` computes it with `deadlineOf`, and both fakes tests pass it. `RunnerProvider.list()` → `RunnerListing[]` (Task 3) is what Task 5 implements over `FlyClient.listMachines` and Task 12's orphan pass reads. `FlyClient` / `FlyApiError` / `FLY_MACHINES_BASE` / `isRetryable` / `redact` (Task 5A) are what Task 5 imports; Task 5's test builds URLs from `FLY_MACHINES_BASE` + `/apps/...`. `IngestProvider.storageUsage()` (Task 3) is what Task 10's `createSession` and Task 12's sweep call — never `storageHeadroom`; the arithmetic is `headroomAfterReservations`. `readFirstInput` / `readInputBySlot` / `storeInputCredentials` / `readTargetSecret` / `insertStreamTarget` (Tasks 2, 9) are the names Tasks 9, 10 use; `storeTargetSecret` exists only until Task 9 replaces it. `mintRelayToken` / `verifyRelayToken` / `relayTokenExpiry` (Task 6) are the names Tasks 10, 11 use. `consumeForSession(tx, args, now?)` returns `{ consumed, balance, ledgerId }` (Task 7) and Task 10's `apply` calls it as the `consume_credit` effect inside the transaction, writing `ledgerId` to `credit_ledger_id`. The capture names — `EventRow` / `eventRowsOf(before, decision, command)` (Task 2A) → `recordEvent(tx, EventInput)` / `recordSample` / `recordProviderCall` / `recordStorageSnapshot` and their `*Input` types (Task 2) → `apply`, `recordEffect`, `persistFacts`, `Actor` (Task 10) and the sweep's steps 5–8 (Task 12); `ProviderCallRecord` / `ProviderCallRecorder` / `NOOP_RECORDER` (Task 3) → `FakeRecorder` (Task 3), `CloudflareIngest({ recorder })` (Task 4), `FlyClientOptions.recorder` + `CallMeta` (Task 5A), `FlyRunner({ recorder })` + `dbRecorder` (Task 5); `STREAM_TABLES` / `MIGRATION` (Task 1's test) → `telemetry.test.ts`'s scan and `rls-static.test.ts`; `IngestVideo.durationSeconds` (Task 3) → Task 4's `listVideos` mapping, the fake's `addVideo`, Task 12's `recording_seconds`; `PurchaseLink` (Task 7) → Task 8's webhook branch; `RelayHeartbeat`'s four optional fields (Task 9) → Task 10's `heartbeat` sample; `SAMPLES_PER_SESSION_CAP` / `SAMPLE_RETENTION_DAYS` / `EVENT_PAYLOAD_MAX_STRING` (Task 2) → Tasks 10, 12, and the sanitiser — one authority each. `apply` / `applyExpiry` / `storageHeadroomMinutes(exec, usage, now)` / `SessionDeps { drivers, now, appUrl }` / `defaultDeps(appUrl)` (Task 10) are what Tasks 11, 12 use. `createRelayCheckout({ …, returnUrl })` / `buildRelayCheckoutParams({ …, returnUrl })` / the route's `{ client_secret }` (Task 8) match `fetchRelayCheckoutClientSecret` (Task 8) which Task 14's container calls and Task 15 exercises through the modal. `StreamSessionCurrent`'s fields (Task 9) are exactly what Task 10 builds and Tasks 13, 14 read (`ingest`, `health`, `qr`, `balance`, `replayUrl`, `target`, `fixtureDecided`). `CaptureQrV1` (Task 9) is the type Task 10 builds, Task 13 checksums, Task 14 encodes. `PhoneTabBodyProps` (Task 14) matches the props Task 14's own test passes. `STREAM_CREDIT_PACKS` (Task 8) is the table Tasks 8 and 14 read. Testids in Task 14's list (incl. `stream-checkout-modal`) are the ones Task 15 and Task 17's manifest rows await; `stream-tab-phone` (P13) is the shipped id and appears unchanged. One deliberate rename recorded in the ledger: `slot` is read off the row by `readFirstInput`, so the literal `0` appears only in the INSERT (Task 10) and in tests.
