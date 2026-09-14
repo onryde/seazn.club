@@ -310,3 +310,30 @@ describe("the round label reads the same whether the builder or the card supplie
     });
   }
 });
+
+// N1 fix round 1, M1 — a feeder slot's sentence reads naturally in es/fr/nl.
+//
+// `{round}` is a capitalised round name ("Cuartos de final", "Quarts de
+// finale", "Kwartfinales") that wants an article mid-sentence, so "Ganador de
+// Cuartos de final, partido 2" reads as a machine wrote it. Each locale already
+// has a convention for placing `{round}` in the Knockout tab's own
+// `knockout.next.*` sentences: es and fr put the round FIRST, with a colon, and
+// never need the article; nl writes "de {round}". The feeder phrases follow the
+// same conventions, and the convention is read out of each locale's own
+// dictionary rather than assumed here.
+describe("feeder-slot phrases follow each locale's own {round} convention (N1 fix round 1, M1)", () => {
+  const FEEDER = ["knockout.feederWinner", "knockout.feederLoser"] as const;
+
+  for (const [locale, dict] of Object.entries({ es, fr }) as [string, Record<string, string>][]) {
+    it(`${locale} puts the round first, the way its knockout.next.* sentences already do`, () => {
+      expect(dict["knockout.next.advances"]!.startsWith("{round}"), dict["knockout.next.advances"]).toBe(true);
+      for (const k of FEEDER) expect(dict[k]!.startsWith("{round}"), `${k}: ${dict[k]}`).toBe(true);
+    });
+  }
+
+  it("nl gives the round its article, 'van de {round}', the way its knockout.next.* sentences say 'de {round}'", () => {
+    const dict = nl as Record<string, string>;
+    expect(dict["knockout.next.advances"]).toContain("de {round}");
+    for (const k of FEEDER) expect(dict[k], k).toContain("van de {round}");
+  });
+});
