@@ -10,7 +10,8 @@ import "server-only";
 // Two caches sit in front of it, and they are different things: `unstable_cache`
 // (below) is Next's tag-based ISR layer for the PAGE, invalidated by
 // `revalidateTag`; `pub:v1:hub:{competitionId}` (usecases/public.ts) is the
-// Redis layer for the API, invalidated by `cacheDelPattern`. Both keys drop on
+// Redis layer for the API, invalidated by one direct DEL of that literal key
+// (`cacheDel`, no keyspace SCAN) from both writers. Both keys drop on
 // a scoring write AND on a schedule write — see `invalidatePublicCache`
 // (usecases/scoring.ts) and `afterScheduleWrite` (usecases/schedule.ts). A hub
 // whose matches go stale on a reschedule is the defect this file exists to
