@@ -194,15 +194,28 @@ import type {
   SimulationReport,
   SolverResult,
   SuiteReport,
+  TapPlayReport,
 } from "../report.ts";
 import { computeEventsPerSecond, simulateDivisionStreams, type SimulateResult } from "../simulate.ts";
+import { defaultLedgerTransport } from "../ledger.ts";
+import {
+  adapterForSport,
+  browserTapPlayer,
+  consoleFixturePath,
+  playTapRounds,
+  tapBoardRowsOf,
+  type TapBoardRow,
+  type TapFixtureJob,
+  type TapPlayer,
+  type TapPlayerFactory,
+} from "../tap-play.ts";
 import { buildImportId, importDivisionStreams, type ImportFinding } from "../import.ts";
 // B07a T7 — `types.ts` carries only `import type` statements, so this is a
 // TYPE-ONLY module at runtime and importing its one function here adds no
 // runtime edge back into `tiny.ts`/`registry.ts` (the cycle that file's own
 // header exists to avoid). `strip-types-loadable.test.ts` spawns a real
 // import of every shipped module, which is what keeps that claim honest.
-import { playModeFor, type PlayDeclaration, type PlayMode } from "./types.ts";
+import { playModeFor, type PlayDeclaration } from "./types.ts";
 import {
   advanceStageSeeding,
   compareFinalRanks,
@@ -284,28 +297,6 @@ import {
 export interface RunPackSuiteOptions extends PlayDeclaration {
   readonly suiteKey: string;
   readonly packPath: string;
-}
-
-/**
- * B07a T7 — narrow a declared play mode to one this runner can actually
- * drive, refusing `"tap"` until its driver lands (Tasks 9 and 10).
- *
- * A THROW rather than a skip or a fall-back, and that is the whole point. The
- * failure this repo ships most often is a seam that is declared, typed and
- * unit-green while nothing ever drives it (AGENTS.md failure class 1) — and a
- * `"tap"` that quietly fell through to `"api"` would be indistinguishable, in
- * every report and every test, from a dispatch that was never reached at all.
- * A refusal that names itself can only come from this function running.
- *
- * The narrowed return type is load-bearing too: it makes every call site's
- * branch exhaustive over the two playable modes, so Task 10 cannot add the tap
- * driver here and leave a call site silently unhandled.
- */
-export function requirePlayableMode(mode: PlayMode): "api" | "import" {
-  if (mode === "tap") {
-    throw new Error("tap mode requires the scorer driver (Task 10)");
-  }
-  return mode;
 }
 
 /** The `--keep` idempotence marker's key inside `competitions.branding`
@@ -846,6 +837,12 @@ export interface PackSuiteInput {
     resolvedEntry: "registration-api" | "registration-ui",
     ctx: RegistrationDriverContext,
   ) => Promise<RegistrationDriverSet>;
+  /** B07a T10 (R45) — builds the player every `tap` division is played by.
+   *  Defaults to `browserTapPlayer` (a real Chromium signed in as the run's
+   *  organiser) — same "optional, defaults to the real thing" convention as
+   *  `registrationDrivers` above. A live run never passes it; a test that
+   *  does never reaches a real browser. */
+  tapPlayer?: TapPlayerFactory;
   /** Resolves the SERVER-ASSIGNED org slug that every public URL is addressed
    *  by. Defaults to `sql.getOrgSlug` — same "optional, defaults to the real
    *  thing" convention as `transport`/`sql` above.
@@ -1789,6 +1786,12 @@ export async function runPackSuite(
    *  `importSimulation` above run, since neither fold can succeed against an
    *  unstarted division. */
   let divisionStart: DivisionStartReport[] | undefined;
+  /** B07a T10 — the tap player (created on the first tapped division, closed
+   *  after the run whatever happened) and `report.tapPlay`, set only when at
+   *  least one tapped match was actually handed to the player. A holder rather
+   *  than two `let`s: both are written inside a closure, which control-flow
+   *  narrowing cannot see. */
+  const tapState: { player?: TapPlayer; report?: TapPlayReport } = {};
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -3300,6 +3303,218 @@ export async function runPackSuite(
     // fixtures nobody has seeded yet. Each later stage's streams are played by
     // the advance step below, which dispatches on the SAME mode — a division
     // plays every one of its stages the one way it declared (ruling R23).
+    // -----------------------------------------------------------------
+    // B07a T10 — play one division's streams by TAPPING the real pad: the
+    // organiser taps the device hand-over and mints a link, a scorer on a
+    // phone-sized page plays the match through it, and the organiser signs it
+    // off. Called by BOTH dispatch sites below (the first-stage fold and the
+    // advance step), because a division plays every stage the one way it
+    // declared (ruling R23).
+    //
+    // Judged on what the PRODUCT says afterwards, never on the driver's word:
+    // every tapped fixture must read `finalized` on a fresh board read — a
+    // separate oracle, because the per-match oracle's `SETTLED_STATUSES`
+    // accepts `decided` for every other path and has to keep doing so.
+    const playDivisionByTaps = async (
+      division: SeedPlanDivision,
+      streams: readonly Pack["streams"][number][],
+    ): Promise<void> => {
+      const keys = streams.map((st) => st.fixtureExtKey);
+      // R55 — never a silent skip, and never counted in `tapPlay`: a plan
+      // without device links means no scorer can be handed anything.
+      if (!deviceLinksGranted) {
+        const message =
+          `${suiteKey}: WARNING — division "${division.ref}" declares play "tap", but this run's plan does not grant ` +
+          `scoring.device_links (deviceLinksGranted false), so no scorer can be handed a device link — tap fixtures ` +
+          `NOT played: ${keys.join(", ")} (not counted in tapPlay)`;
+        warnings.push(message);
+        log.warn({ division: division.ref, fixtures: keys, unsatisfiedCapability: "scoring.device_links" }, message);
+        return;
+      }
+      const notPlayed = `fixtures not played: ${keys.join(", ")}`;
+      const divisionId = seeded.divisionIdByRef.get(division.ref);
+      const packDivision = pack.divisions.find((d) => d.ref === division.ref);
+      if (divisionId === undefined || packDivision === undefined) {
+        errors.push(`tap: division "${division.ref}" has no resolved divisionId — cannot open its console (${notPlayed})`);
+        return;
+      }
+      // R45 — the cap is the division's REAL court count: the courts the
+      // scheduling layer resolved and PUT to the product for this division
+      // (`EncodedConstraints.courtIds`), never a typed number.
+      const courtCount = constraintsByRef.get(division.ref)?.courtIds.length ?? 0;
+      if (courtCount < 1) {
+        errors.push(
+          `tap: division "${division.ref}" has no courts in its schedule constraints — tapped matches run at most one ` +
+            `per court at once, and there is no court count to derive that cap from (${notPlayed})`,
+        );
+        return;
+      }
+      const adapter = adapterForSport(packDivision.sportKey);
+      if (adapter === undefined) {
+        errors.push(`tap: no tap adapter exists for sport "${packDivision.sportKey}" (division "${division.ref}"; ${notPlayed})`);
+        return;
+      }
+      let cfg: unknown;
+      let orgSlug: string;
+      let competitionSlug: unknown;
+      let divisionSlug: unknown;
+      let board: readonly TapBoardRow[];
+      try {
+        const resolved = resolveDivisionCfg(
+          bootRegistry().get(packDivision.sportKey, packDivision.moduleVersion),
+          packDivision,
+        );
+        if (!resolved.ok) throw new Error(`its cfg could not be resolved (${resolved.reason})`);
+        cfg = resolved.cfg;
+        // Every console URL segment is the SERVER's value — see
+        // `resolveOrgSlug`'s own doc for what a pack slug does here.
+        const resolveOrgSlug =
+          input.resolveOrgSlug ??
+          (async (id: string) => {
+            if (input.sql === undefined) throw new Error("no PlanSql seam to read the server-assigned org slug from");
+            return input.sql.getOrgSlug(id);
+          });
+        orgSlug = await resolveOrgSlug(orgId);
+        competitionSlug = (await t.request<{ slug?: unknown }>(base, s, `/api/v1/competitions/${seeded.competitionId}`))?.slug;
+        divisionSlug = (await t.request<{ slug?: unknown }>(base, s, `/api/v1/divisions/${divisionId}`))?.slug;
+        board = tapBoardRowsOf(await fetchDivisionFixtures(base, s, divisionId, input.oracleTransport));
+      } catch (err) {
+        errors.push(
+          `tap: division "${division.ref}" could not be prepared for tap play — ` +
+            `${err instanceof Error ? err.message : String(err)} (${notPlayed})`,
+        );
+        return;
+      }
+      if (typeof competitionSlug !== "string" || typeof divisionSlug !== "string") {
+        errors.push(`tap: the competition or division read carried no slug — cannot address "${division.ref}"'s console (${notPlayed})`);
+        return;
+      }
+
+      const refIdByKey = new Map<string, string>([...seeded.entrantIdByRef, ...seeded.personIdByRef]);
+      const jobsByRound = new Map<number, TapFixtureJob[]>();
+      for (const st of streams) {
+        const fixtureId = seeded.fixtureIdByKey.get(fixtureKey(division.ref, st.fixtureExtKey));
+        const row = fixtureId === undefined ? undefined : board.find((r) => r.id === fixtureId);
+        if (fixtureId === undefined || row === undefined || row.fixtureNo === null) {
+          errors.push(
+            `tap: ${division.ref}/${st.fixtureExtKey} is not on the division's board with a fixture_no — its console ` +
+              "cannot be addressed, so it was not played",
+          );
+          continue;
+        }
+        // The round comes off the REAL board, same reasoning as the api
+        // branch's dependency waves. A board row with no round sorts last.
+        const round = row.roundNo ?? Number.MAX_SAFE_INTEGER;
+        const jobs = jobsByRound.get(round) ?? [];
+        jobs.push({
+          divisionRef: division.ref,
+          fixtureExtKey: st.fixtureExtKey,
+          fixtureId,
+          consolePath: consoleFixturePath({ orgSlug, competitionSlug, divisionSlug, fixtureNo: row.fixtureNo }),
+          stream: st,
+          adapter,
+          cfg,
+          refIdByKey,
+        });
+        jobsByRound.set(round, jobs);
+      }
+      if (jobsByRound.size === 0) return;
+
+      let player: TapPlayer;
+      try {
+        player =
+          tapState.player ??
+          (tapState.player = await (input.tapPlayer ?? browserTapPlayer)({
+            base,
+            session: s,
+            email,
+            ledger: defaultLedgerTransport,
+          }));
+      } catch (err) {
+        errors.push(`tap: the tap player could not start — ${err instanceof Error ? err.message : String(err)} (${notPlayed})`);
+        return;
+      }
+
+      const rounds = [...jobsByRound.entries()].sort((a, b) => a[0] - b[0]).map(([, jobs]) => jobs);
+      log.info(
+        { division: division.ref, fixtures: keys.length, rounds: rounds.length, courts: courtCount },
+        `${suiteKey}: playing a division's streams by tapping the real pad (B07a T10)`,
+      );
+      const blockStart = performance.now();
+      const played = await playTapRounds(rounds, courtCount, async (job) => {
+        try {
+          return { job, result: await player.playFixture(job) };
+        } catch (err) {
+          // `playFixture` promises never to reject; this keeps that promise
+          // for it rather than letting one match abort a round.
+          const detail = err instanceof Error ? err.message : String(err);
+          return {
+            job,
+            result: { fixtureId: job.fixtureId, taps: 0, wallMs: 0, findings: [`player: unexpected failure — ${detail}`], observations: [] },
+          };
+        }
+      });
+      const blockMs = Math.round(performance.now() - blockStart);
+
+      // Driver findings RED the gate; observations are reported, never gated.
+      for (const { job, result } of played) {
+        for (const finding of result.findings) errors.push(`tap: ${division.ref}/${job.fixtureExtKey}: ${finding}`);
+        for (const observation of result.observations) {
+          log.info({ division: division.ref, fixture: job.fixtureExtKey, observation }, "tap_observation");
+        }
+        log.info(
+          {
+            division: division.ref,
+            fixture: job.fixtureExtKey,
+            taps: result.taps,
+            wallMs: result.wallMs,
+            findings: result.findings.length,
+            observations: result.observations.length,
+          },
+          "tap_fixture_played",
+        );
+      }
+
+      // The sign-off check: a FRESH board read, after every match of this
+      // block was played.
+      let after: readonly TapBoardRow[] = [];
+      try {
+        after = tapBoardRowsOf(await fetchDivisionFixtures(base, s, divisionId, input.oracleTransport));
+      } catch (err) {
+        errors.push(
+          `tap: could not re-read "${division.ref}"'s board to check its tapped fixtures were finalized — ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      for (const { job } of played) {
+        const status = after.find((r) => r.id === job.fixtureId)?.status ?? "(absent)";
+        const passed = status === "finalized";
+        oracles.push({
+          name: `tap: ${division.ref}/${job.fixtureExtKey} finalized`,
+          passed,
+          detail: passed
+            ? "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+            : `the product reads "${status}" after the organiser's sign-off, not "finalized"`,
+        });
+        log.info(oracleLogFields("tap_fixture_finalized", passed ? "pass" : "fail"), "oracle_checked");
+        if (!passed) {
+          errors.push(
+            `tap: ${division.ref}/${job.fixtureExtKey} reads "${status}" after the organiser's sign-off — a tapped ` +
+              `fixture must be finalized, not merely decided (the per-match oracle's SETTLED_STATUSES accepts ` +
+              `"decided"; this check does not)`,
+          );
+        }
+      }
+
+      const prev = tapState.report;
+      tapState.report = {
+        matches: (prev?.matches ?? 0) + played.length,
+        taps: (prev?.taps ?? 0) + played.reduce((n, p) => n + p.result.taps, 0),
+        wallMs: (prev?.wallMs ?? 0) + blockMs,
+        observations: (prev?.observations ?? 0) + played.reduce((n, p) => n + p.result.observations.length, 0),
+      };
+    };
+
     if (input.sql !== undefined) {
       // A stream whose division the PLAN does not carry is invisible to a loop
       // over `plan.divisions`, so it is NAMED here rather than silently
@@ -3400,11 +3615,14 @@ export async function runPackSuite(
         );
         if (divisionStreams.length === 0) continue;
 
-        // THE DISPATCH. `tap` throws rather than falling back to a write path
-        // (see `requirePlayableMode`); its driver arrives in Tasks 9 and 10.
-        const mode = requirePlayableMode(playModeFor(opts, division.ref, divisionIndex));
+        // THE DISPATCH, exhaustive over all three modes. `tap` is played by
+        // tapping the real pad (B07a T10) and never falls back to either write
+        // path: a tapped division that cannot be played says so, loudly.
+        const mode = playModeFor(opts, division.ref, divisionIndex);
 
-        if (mode === "api") {
+        if (mode === "tap") {
+          await playDivisionByTaps(division, divisionStreams);
+        } else if (mode === "api") {
           // B06b — fold in DEPENDENCY WAVES, not one flat `Promise.all`. A
           // bracket fixture's entrants are written by its feeders' decisions,
           // so posting round 2 concurrently with round 1 refuses every later
@@ -3733,10 +3951,10 @@ export async function runPackSuite(
               // mode its first stage did; leaving this hard-wired would have
               // made `play` a half-connected seam that a pack could set and
               // then watch be ignored for every stage past the first.
-              const advanceMode = requirePlayableMode(
-                playModeFor(opts, division.ref, divisionIndex),
-              );
-              if (advanceMode === "import") {
+              const advanceMode = playModeFor(opts, division.ref, divisionIndex);
+              if (advanceMode === "tap") {
+                await playDivisionByTaps(division, targetStageStreams);
+              } else if (advanceMode === "import") {
                 const divisionId = seeded.divisionIdByRef.get(division.ref);
                 if (divisionId === undefined) {
                   // Never silent — same discipline as the first-stage fold's
@@ -5329,6 +5547,16 @@ export async function runPackSuite(
     errors.push(err instanceof Error ? err.message : String(err));
   }
 
+  // B07a T10 — the tap player owns a real browser: closed after the run
+  // whatever happened above, so a thrown step never leaves Chromium running.
+  if (tapState.player !== undefined) {
+    try {
+      await tapState.player.close();
+    } catch (err) {
+      warnings.push(`${suiteKey}: closing the tap player failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Warnings are REPORTED, never gated on. Stage 0 names what it does not
   // derive offline; that is a fact the report has to carry, and a gate that
   // read it would red `_tiny` on every run for saying something true.
@@ -5389,5 +5617,9 @@ export async function runPackSuite(
     ...(newsSummary === undefined ? {} : { news: newsSummary }),
     ...(simulation === undefined ? {} : { simulation }),
     ...(importSimulation === undefined ? {} : { importSimulation }),
+    // B07a T10 — report-only. Absent unless a tapped match was actually handed
+    // to the player; a division skipped for want of device links is a warning,
+    // never a `matches: 0`.
+    ...(tapState.report === undefined ? {} : { tapPlay: tapState.report }),
   };
 }

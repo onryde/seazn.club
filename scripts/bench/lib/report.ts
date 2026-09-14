@@ -265,6 +265,19 @@ export const ImportSimulationReport = z.object({
 });
 export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
 
+/** B07a T10 — the divisions played by TAPPING the real pad. Report-only,
+ *  never gated on: tap counts and wall time describe the run; whether each
+ *  tapped fixture was finalized, and every driver finding, gate through
+ *  `errors` instead. `observations` counts the driver's non-defect notes
+ *  (logged verbatim as `tap_observation`). */
+export const TapPlayReport = z.object({
+  matches: z.number().int(),
+  taps: z.number().int(),
+  wallMs: z.number(),
+  observations: z.number().int(),
+});
+export type TapPlayReport = z.infer<typeof TapPlayReport>;
+
 /** B05 T2.5 (D9) — one `ScheduleConflict` row `runDivisionStartLayer` read
  *  off a 422 body. Same three fields `schedule.ts`'s own `WireConflict`
  *  reads and no others (`details.kind` ONLY, never `code`/`detail` — see
@@ -721,6 +734,10 @@ export const SuiteReport = z.object({
    *  (D4's OTHER write path). Same gating as `simulation` above; absent when
    *  no division besides division A declares streams. */
   importSimulation: ImportSimulationReport.optional(),
+  /** B07a T10 — absent unless at least one tapped match was handed to the
+   *  tap player (a tap division skipped for want of device links is a
+   *  warning, never `matches: 0`). */
+  tapPlay: TapPlayReport.optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -985,6 +1002,14 @@ function renderSuitesSection(report: BenchReport): string {
     // drafting on, so the product drafted nothing for it to report.
     if (suite.news !== undefined) {
       lines.push(`- News: ${suite.news.published}/${suite.news.drafted} drafted posts published`);
+    }
+    // B07a T10 — report-only; the finalized check and driver findings gate
+    // through errors, never through these numbers.
+    if (suite.tapPlay !== undefined) {
+      lines.push(
+        `- Tap play: ${suite.tapPlay.matches} matches, ${suite.tapPlay.taps} taps, ${suite.tapPlay.wallMs}ms wall, ` +
+          `${suite.tapPlay.observations} driver observations (report-only)`,
+      );
     }
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");

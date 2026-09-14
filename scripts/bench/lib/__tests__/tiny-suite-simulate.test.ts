@@ -2958,11 +2958,11 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     expect(secondTinyImportIdx).toBeGreaterThan(proposalIdx);
   });
 
-  it("refuses a tap division LOUDLY, proving the dispatch is reached and not merely declared", async () => {
-    // The proof device. `tap` has no writer until Task 10, and the failure
-    // this repo ships most often is a seam that is declared, typed and
-    // unit-green while nothing ever drives it. A refusal that names itself in
-    // `report.errors` can only come from the dispatch actually running.
+  it("reaches the tap branch LOUDLY (no device links: a named warning), proving the dispatch is reached and not merely declared", async () => {
+    // The proof device. The failure this repo ships most often is a seam that
+    // is declared, typed and unit-green while nothing ever drives it. Since
+    // B07a T10 a tap division is PLAYED; on this device-link-less catalog the
+    // tap branch's own named warning can only come from that branch running.
     const { transport, sql, calls } = fakeServer();
 
     const report = await runPackSuite(playInput(transport, sql), {
@@ -2971,10 +2971,13 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
       play: { "d-tiny": "tap" as PlayMode },
     });
 
-    expect(report.gate).toBe("red");
-    expect((report.errors ?? []).join("\n")).toContain(
-      "tap mode requires the scorer driver (Task 10)",
-    );
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
     // The other half, and the half that makes this a REACHED assertion rather
     // than a thrown-from-somewhere one: nothing was written for that division
     // by either write path. A silent fall-back to `api` or `import` would be
@@ -3009,10 +3012,13 @@ describe("a registry row's `play` reaches the dispatch (B07a T7 fix round 1, I1)
       "d-tiny": "tap" as PlayMode,
     });
 
-    expect(report.gate).toBe("red");
-    expect((report.errors ?? []).join("\n")).toContain(
-      "tap mode requires the scorer driver (Task 10)",
-    );
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
     expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
     expect(packEventPostCalls(calls)).toHaveLength(0);
   });
@@ -3042,10 +3048,13 @@ describe("a registry row's `play` reaches the dispatch (B07a T7 fix round 1, I1)
 
     const report = await invokeSuiteDefinition(definition, playInput(transport, sql));
 
-    expect(report.gate).toBe("red");
-    expect((report.errors ?? []).join("\n")).toContain(
-      "tap mode requires the scorer driver (Task 10)",
-    );
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
     expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
     expect(packEventPostCalls(calls)).toHaveLength(0);
   });
@@ -3149,7 +3158,7 @@ describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7
     }
   });
 
-  it("a play declaration injected onto the real row reaches the real dispatch: tap refusal, zero writes", async () => {
+  it("a play declaration injected onto the real row reaches the real dispatch: tap-branch warning, zero writes", async () => {
     const { transport, sql, calls } = fakeServer();
 
     // Opt-in (R34(c)): unset, `lookupSuite("_tiny")` returns the row
@@ -3186,10 +3195,13 @@ describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7
     ]);
     const report = await runSuite("_tiny", config, "fix-round-3-i1bc", sql, transport);
 
-    expect(report.gate).toBe("red");
-    expect((report.errors ?? []).join("\n")).toContain(
-      "tap mode requires the scorer driver (Task 10)",
-    );
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
     // The negative half: nothing was written for `d-tiny` on either write
     // path. A silent fall-back (M1/M2/M3, each of which drops the `play`
     // forward somewhere on this path) would single-POST `d-tiny` instead —

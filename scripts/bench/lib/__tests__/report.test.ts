@@ -429,6 +429,40 @@ describe("B06a T7 — news", () => {
   });
 });
 
+describe("B07a T10 — tap play", () => {
+  it("renders matches, taps, wall time and observations, marked report-only", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          tapPlay: { matches: 4, taps: 17, wallMs: 5230, observations: 2 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Tap play:"));
+    expect(line).toContain("4 matches, 17 taps, 5230ms wall, 2 driver observations (report-only)");
+  });
+
+  it("omits the line for a run that tapped nothing", () => {
+    const base = fullReport();
+    const { tapPlay: _dropped, ...suiteWithoutTaps } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutTaps] });
+    expect(md.split("\n").some((l) => l.includes("Tap play:"))).toBe(false);
+  });
+
+  it("the report schema carries tapPlay through, and refuses a fractional tap count", () => {
+    const base = fullReport();
+    const suite = base.suites[0] as BenchReportType["suites"][number];
+    const withTaps = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 5, wallMs: 12.5, observations: 0 } }] };
+    const parsed = BenchReport.parse(withTaps);
+    expect(parsed.suites[0]?.tapPlay).toEqual({ matches: 1, taps: 5, wallMs: 12.5, observations: 0 });
+    const fractional = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 1.5, wallMs: 1, observations: 0 } }] };
+    expect(BenchReport.safeParse(fractional).success).toBe(false);
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(
