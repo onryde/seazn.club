@@ -23,6 +23,9 @@ import { KIOSK_TV_HINT_STORAGE_KEY } from "../src/components/public-site/kiosk-t
 //   hidden after ✕ and a reload        <-> back after the stored key is cleared
 //   division kiosk links ?division=    <-> competition kiosk links the bare hub
 //   ✕ in the message's row, top right  <-> the buttons on the row below it (N1e e2)
+//   phone view -> hub opens on this    <-> All on the same hub lists the other
+//     division's chip, other division       division's matches (N1e e3)
+//     absent
 //
 // Labels are never matched by text: the seeded org's locale is whatever the
 // e2e session's org carries. Controls are found by test id, and their
@@ -31,9 +34,9 @@ import { KIOSK_TV_HINT_STORAGE_KEY } from "../src/components/public-site/kiosk-t
 /** One API round trip against a local production build, with headroom. */
 const API_CALL_MS = 1_500;
 const FLOOR_MS = 60_000;
-/** Active org slug; competition create; division create + read; entrants;
- *  stage create + generate. */
-const SEED_CALLS = 1 + 1 + 2 + 1 + 2;
+/** Active org slug; competition create; then, for each of two divisions,
+ *  division create + read, entrants, stage create + generate. */
+const SEED_CALLS = 1 + 1 + 2 * (2 + 1 + 2);
 const SEED_BUDGET_MS = FLOOR_MS + SEED_CALLS * API_CALL_MS;
 
 const PHONE = { width: 390, height: 844 };
@@ -46,6 +49,25 @@ async function activeOrgSlug(request: APIRequestContext) {
   const org = orgs.data?.find((o) => o.id === active) ?? orgs.data?.[0];
   if (!org) throw new Error("no org for the e2e session");
   return org.slug;
+}
+
+/** A league division with four entrants and its generated fixtures. */
+async function seedLeagueDivision(request: APIRequestContext, competitionId: string, name: string) {
+  const created = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+    name,
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(created.status, JSON.stringify(created.error)).toBe(201);
+  const division = await apiJson<{ id: string; slug: string }>(request, `/api/v1/divisions/${created.data!.id}`);
+  expect(division.status).toBe(200);
+
+  const entrants = await addEntrantsViaApi(request, division.data!.id, ["North", "South", "East", "West"]);
+  expect(entrants.ids).toHaveLength(4);
+  const league = await createStageAndGenerate(request, division.data!.id);
+  expect(league.fixtureIds.length).toBeGreaterThan(0);
+  return { slug: division.data!.slug, fixtureIds: league.fixtureIds };
 }
 
 async function seedKiosk(request: APIRequestContext) {
@@ -61,23 +83,26 @@ async function seedKiosk(request: APIRequestContext) {
   // and a private competition 404s off /shared/*.
   expect(comp.data!.visibility).toBe("public");
 
-  const created = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
-    name: "Open",
-    sport_key: "generic",
-    variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-  });
-  expect(created.status, JSON.stringify(created.error)).toBe(201);
-  const division = await apiJson<{ id: string; slug: string }>(request, `/api/v1/divisions/${created.data!.id}`);
-  expect(division.status).toBe(200);
+  // Two divisions with fixtures: the hub's Matches tab shows its division
+  // chips only when there is more than one to choose between, and the phone
+  // view link's filter can only be seen applied on that rail (N1e e3).
+  const open = await seedLeagueDivision(request, comp.data!.id, "Open");
+  const second = await seedLeagueDivision(request, comp.data!.id, "Second");
 
-  const entrants = await addEntrantsViaApi(request, division.data!.id, ["North", "South", "East", "West"]);
-  expect(entrants.ids).toHaveLength(4);
-  const league = await createStageAndGenerate(request, division.data!.id);
-  expect(league.fixtureIds.length).toBeGreaterThan(0);
-
-  return { orgSlug, compSlug: comp.data!.slug, divisionSlug: division.data!.slug };
+  return {
+    orgSlug,
+    compSlug: comp.data!.slug,
+    divisionSlug: open.slug,
+    fixtureIds: open.fixtureIds,
+    otherDivisionSlug: second.slug,
+    otherFixtureIds: second.fixtureIds,
+  };
 }
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Any one of these fixtures' hub match cards. */
+const anyMatchCard = (page: Page, fixtureIds: readonly string[]) =>
+  page.locator(fixtureIds.map((id) => `[data-testid="mh-match-${id}"]`).join(", ")).first();
 
 const banner = (page: Page) => page.getByTestId("kiosk-tv-hint");
 
@@ -109,7 +134,7 @@ async function expectTappable(control: Locator, what: string) {
 }
 
 test.describe("public /present kiosk — the 'made for a TV' hint (N1d d6)", () => {
-  let seeded: { orgSlug: string; compSlug: string; divisionSlug: string };
+  let seeded: Awaited<ReturnType<typeof seedKiosk>>;
   const divisionKiosk = () => `/shared/${seeded.orgSlug}/${seeded.compSlug}/${seeded.divisionSlug}/present`;
   const competitionKiosk = () => `/shared/${seeded.orgSlug}/${seeded.compSlug}/present`;
 
@@ -151,6 +176,38 @@ test.describe("public /present kiosk — the 'made for a TV' hint (N1d d6)", () 
     await expectTappable(phoneView, "Open phone view");
     await expectTappable(fullScreen, "Full screen");
     await expectTappable(dismiss, "dismiss");
+  });
+
+  // N1e e3 (review-n1d m1): the href alone does not prove the filter survives
+  // the trip. The banner's link is a client navigation, the hub reads
+  // `?division=` from the browser, and its Matches tab seeds its chip once at
+  // mount. So follow the link, open Matches, and read the chip and the list.
+  test("390, division kiosk: Open phone view lands on the hub with ?division=, and the hub applies it on the Matches tab", async ({ page }) => {
+    await page.setViewportSize(PHONE);
+    await openMounted(page, divisionKiosk());
+    await expect(banner(page)).toBeVisible();
+
+    await banner(page).getByTestId("kiosk-tv-hint-phone-view").click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/shared/${escapeRegExp(seeded.orgSlug)}/${escapeRegExp(seeded.compSlug)}\\?division=${escapeRegExp(seeded.divisionSlug)}$`,
+      ),
+    );
+    await expect(page.getByTestId("mh-root")).toBeVisible();
+
+    await page.getByTestId("mh-tab-matches").click();
+    await expect(page.getByTestId("mh-tab-panel-matches")).toBeVisible();
+    await expect(page.getByTestId(`mh-division-${seeded.divisionSlug}`)).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId(`mh-division-${seeded.otherDivisionSlug}`)).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByTestId("mh-division-all")).toHaveAttribute("aria-pressed", "false");
+    await expect(anyMatchCard(page, seeded.fixtureIds)).toBeVisible();
+    for (const id of seeded.otherFixtureIds) await expect(page.getByTestId(`mh-match-${id}`)).toHaveCount(0);
+
+    // The positive pair: the other division's matches ARE on this hub, so
+    // their absence above was the filter, not an empty list.
+    await page.getByTestId("mh-division-all").click();
+    await expect(page.getByTestId("mh-division-all")).toHaveAttribute("aria-pressed", "true");
+    await expect(anyMatchCard(page, seeded.otherFixtureIds)).toBeVisible();
   });
 
   test("390, competition kiosk: the phone view links the competition's hub with no division filter", async ({ page }) => {
