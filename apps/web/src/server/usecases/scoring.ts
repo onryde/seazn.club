@@ -6,7 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
+import { cacheGet, cacheSet, cacheDel, cacheDelPattern } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
@@ -147,13 +147,18 @@ export async function scoreEvent(
   // stay non-blocking. A failure is logged, not thrown: the score has already
   // committed, and this must not report it as failed.
   //
-  // P1 round 2 (F2) — the realtime pushes go out only once every public Redis
-  // sweep has SETTLED, never before, and without holding this response. Both
-  // channels have public receivers that refetch a Redis-cached document on a
-  // push: `fixture:{id}` → the match centre and overlay (`pub:v1:fixture:{id}`),
-  // `division:{id}` → the hub (`pub:v1:hub:{competitionId}`). A refetch that
-  // beat the sweep read the old copy and stayed on it: a subscribed page does
-  // not poll. The division push is addressed from the invalidation's own
+  // P1 round 2 (F2) — the realtime pushes go out only once the public Redis
+  // copies they send a spectator back to have been DELETED (the delete
+  // settled, whichever way it went), never before, and without holding this
+  // response. Both channels have public receivers that refetch a Redis-cached
+  // document on a push: `fixture:{id}` → the match centre and overlay
+  // (`pub:v1:fixture:{id}`), `division:{id}` → the hub
+  // (`pub:v1:hub:{competitionId}`). A refetch that beat the delete read the old
+  // copy, and a subscribed page only polls as a slow safety net.
+  //
+  // R10 H4: both of those keys are literal, so the pushes wait on one direct
+  // DEL, not on a full-keyspace SCAN; the division's glob sweep is not waited
+  // on at all. The division push is addressed from the invalidation's own
   // lookup rather than a second query.
   await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
     void publishFixtureUpdate(fixtureId, "event");
@@ -543,12 +548,13 @@ export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
-  /** Runs once, after EVERY public Redis sweep below has settled (resolved or
-   *  rejected), and is never awaited by this function — so it never holds the
-   *  caller's response. Handed the fixture's division and competition, or null
-   *  when the fixture no longer exists. `scoreEvent` sends its realtime pushes
-   *  here (P1 round 2, F2). Must not throw. */
-  afterSweeps?: (scope: { divisionId: string; competitionId: string } | null) => void,
+  /** Runs once, after the literal-key DEL below has settled (resolved or
+   *  rejected), and is never awaited by this function, so it never holds the
+   *  caller's response. It does NOT wait for the division glob's SCAN (R10 H4).
+   *  Handed the fixture's division and competition, or null when the fixture no
+   *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
+   *  F2). Must not throw. */
+  afterDeletes?: (scope: { divisionId: string; competitionId: string } | null) => void,
 ): Promise<void> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
@@ -566,37 +572,42 @@ export async function invalidatePublicCache(
   // (revalidate.ts); `getPublicCompetitionHub` tags every division it read, so
   // this also drops the hub page's ISR entry.
   if (row) fireScoreRevalidate(row.division_id, row.competition_id);
-  // The Redis sweeps AFTER the tag, and not awaited: each is a SCAN over the
-  // whole keyspace (cache.ts), which is what fire-and-forget always protected.
-  // A sweep that finished before the tag would let a hub read in between
-  // rebuild from the still-cached division and put the stale document back.
-  const patterns = [
-    `pub:v1:fixture:${fixtureId}`,
-    ...(row
-      ? [
-          `pub:v1:div:${row.division_id}:*`,
-          // W2 — the competition HUB document (usecases/public.ts's
-          // `pub:v1:hub:{competitionId}`) carries every division's live scores,
-          // so a write to any fixture in the competition makes it stale.
-          // Competition-keyed, not division-keyed: one document spans the whole
-          // competition.
-          `pub:v1:hub:${row.competition_id}`,
-        ]
-      : []),
-  ];
-  // F4 — each sweep settles on its own and never rejects. `cacheDelPattern`
-  // fails open inside its try, but its `client()` call sits outside it
-  // (cache.ts), and ioredis's constructor throws synchronously on a REDIS_URL
-  // it cannot parse — every call would then reject, unhandled.
-  const sweeps = patterns.map((pattern) =>
-    cacheDelPattern(pattern).catch((err: unknown) => {
+  // The Redis deletes AFTER the tag, and not awaited. A delete that finished
+  // before the tag would let a hub read in between rebuild from the
+  // still-cached division and put the stale document back.
+  //
+  // R10 H4: two doors. The LITERAL keys, whose names are known, go out in ONE
+  // direct DEL (`cacheDel`):
+  //   - the fixture's own document;
+  //   - W2's competition HUB document (usecases/public.ts's
+  //     `pub:v1:hub:{competitionId}`). It carries every division's live
+  //     scores, so a write to any fixture in the competition makes it stale.
+  //     It is competition-keyed, not division-keyed, because one document
+  //     spans the whole competition.
+  // Only the division's glob still needs a SCAN over the whole keyspace
+  // (cache.ts), and no push depends on it. The hub rebuilds through
+  // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
+  // `pub:v1:div:{id}:*` backs only the public schedule, standings and entrants
+  // endpoints.
+  const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+  const keys = row ? [fixtureKey, `pub:v1:hub:${row.competition_id}`] : [fixtureKey];
+  // F4: neither call is ever left to reject unhandled. Both helpers fail open
+  // inside their try, but `client()` sits outside it (cache.ts). ioredis's
+  // constructor throws synchronously on a REDIS_URL it cannot parse, so every
+  // call would then reject.
+  const deleted = cacheDel(...keys).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId, keys }, "scoring: a public Redis delete failed (the write stands)");
+  });
+  if (row) {
+    const pattern = `pub:v1:div:${row.division_id}:*`;
+    void cacheDelPattern(pattern).catch((err: unknown) => {
       log.error({ err, fixture: fixtureId, pattern }, "scoring: a public Redis sweep failed (the write stands)");
-    }),
-  );
-  // F2 — none of the sweeps can reject, so this settles only once the LAST of
-  // them has, whichever way each went.
+    });
+  }
+  // F2: the catch above means this cannot reject, so it settles exactly when
+  // the DEL has, whichever way that went. It does not wait for the SCAN.
   const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
-  void Promise.all(sweeps).finally(() => afterSweeps?.(scope));
+  void deleted.finally(() => afterDeletes?.(scope));
   if (!row) return;
   // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
   // fires only for discoverable competitions.

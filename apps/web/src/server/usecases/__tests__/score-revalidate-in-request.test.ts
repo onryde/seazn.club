@@ -34,8 +34,15 @@ vi.hoisted(() => {
 
 const probe = vi.hoisted(() => ({
   store: null as { pendingRevalidatedTags?: Array<{ tag: string }> } | null,
-  sweeps: [] as Array<{ pattern: string; pendingAtCall: string[] }>,
-  gates: [] as Array<{ pattern: string; resolve: () => void; reject: (err: unknown) => void }>,
+  // One entry per public Redis CALL: a literal-key DEL carries every key it was
+  // handed, a SCAN sweep carries its one pattern (R10 H4).
+  sweeps: [] as Array<{ kind: "del" | "scan"; targets: string[]; pendingAtCall: string[] }>,
+  gates: [] as Array<{
+    kind: "del" | "scan";
+    targets: string[];
+    resolve: () => void;
+    reject: (err: unknown) => void;
+  }>,
   fixturePushes: [] as Array<{ fixtureId: string; reason: string }>,
   divisionPushes: [] as Array<{ divisionId: string; reason: string }>,
   failScoreTag: false,
@@ -55,22 +62,29 @@ const logMock = vi.hoisted(() => ({
 }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
-// The public Redis sweeps are recorded, with the tags already pending in the
-// request at the moment each sweep STARTED, and held open until the test
-// releases them. A use-case that waits on a sweep therefore never resolves,
-// and `unblocked` below reports that as a failure instead of a hang.
+// The public Redis calls are recorded, with the tags already pending in the
+// request at the moment each one STARTED, and held open until the test
+// releases them. That covers every literal-key DEL (`cacheDel`) and every SCAN
+// sweep (`cacheDelPattern`). A use-case that waits on one therefore never
+// resolves, and `unblocked` below reports that as a failure instead of a hang.
 vi.mock("@/lib/cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cache")>();
+  const hold = (kind: "del" | "scan", targets: string[]) => {
+    probe.sweeps.push({
+      kind,
+      targets,
+      pendingAtCall: (probe.store?.pendingRevalidatedTags ?? []).map((t) => t.tag),
+    });
+    return new Promise<void>((resolve, reject) => probe.gates.push({ kind, targets, resolve, reject }));
+  };
   return {
     ...actual,
-    cacheDelPattern: (pattern: string) => {
-      if (!pattern.startsWith("pub:v1:")) return actual.cacheDelPattern(pattern);
-      probe.sweeps.push({
-        pattern,
-        pendingAtCall: (probe.store?.pendingRevalidatedTags ?? []).map((t) => t.tag),
-      });
-      return new Promise<void>((resolve, reject) => probe.gates.push({ pattern, resolve, reject }));
-    },
+    cacheDelPattern: (pattern: string) =>
+      pattern.startsWith("pub:v1:") ? hold("scan", [pattern]) : actual.cacheDelPattern(pattern),
+    cacheDel: (...keys: string[]) =>
+      keys.length > 0 && keys.every((key) => key.startsWith("pub:v1:"))
+        ? hold("del", keys)
+        : actual.cacheDel(...keys),
   };
 });
 vi.mock("@/lib/realtime", async (importOriginal) => {
@@ -219,15 +233,15 @@ async function competitionOf(divisionId: string): Promise<string> {
   return row!.competition_id;
 }
 
-/** Settle the held public sweeps — all of them, or only those whose pattern is
- *  named — and hand back control only after a macrotask, so every microtask
- *  the settlement queues (a push chained on it, Node's unhandled-rejection
- *  report) has already run. */
+/** Settle the held public Redis calls: all of them, or only one kind (`"del"`
+ *  for the literal-key DEL, `"scan"` for the glob sweep). Control comes back
+ *  only after a macrotask, so every microtask the settlement queues (a push
+ *  chained on it, Node's unhandled-rejection report) has already run. */
 async function settleSweeps(
   outcome: { resolve: true } | { reject: Error },
-  only?: string,
+  only?: "del" | "scan",
 ): Promise<void> {
-  const settling = probe.gates.filter((g) => only === undefined || g.pattern === only);
+  const settling = probe.gates.filter((g) => only === undefined || g.kind === only);
   probe.gates = probe.gates.filter((g) => !settling.includes(g));
   for (const gate of settling) {
     if ("reject" in outcome) gate.reject(outcome.reject);
@@ -237,6 +251,11 @@ async function settleSweeps(
 }
 
 const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
+const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
+
+/** Every target the recorded public Redis calls of one kind were handed. */
+const targetsOf = (kind: "del" | "scan") =>
+  probe.sweeps.filter((sweep) => sweep.kind === kind).flatMap((sweep) => sweep.targets);
 
 /** Every `log.error` message so far — for the quiet-twin checks. */
 const errorMessages = () => logMock.error.mock.calls.map((call) => call[1]);
@@ -343,43 +362,59 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       expect(areTagsExpired([comp], cachedAt), write.type).toBe(false);
       expect(areTagsStale([comp], cachedAt), write.type).toBe(true);
 
-      // The Redis sweeps still run, and each one started only AFTER the tag
-      // was pending — a sweep first lets a hub rebuild re-cache the stale doc.
-      expect(probe.sweeps.map((s) => s.pattern), write.type).toEqual(
-        expect.arrayContaining([
-          `pub:v1:fixture:${fixtureId}`,
-          `pub:v1:div:${divisionId}:*`,
-          `pub:v1:hub:${competitionId}`,
-        ]),
+      // The public Redis deletes still run, and each one started only AFTER
+      // the tag was pending: a delete first lets a hub rebuild re-cache the
+      // stale doc. R10 H4: the two LITERAL keys go out in one direct DEL, and
+      // only the division glob is a SCAN.
+      expect(targetsOf("del"), write.type).toEqual(
+        expect.arrayContaining([`pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
       );
+      expect(targetsOf("scan"), write.type).toEqual(expect.arrayContaining([`pub:v1:div:${divisionId}:*`]));
+      expect(
+        targetsOf("scan").filter((pattern) => !pattern.endsWith("*")),
+        `${write.type}: a literal key sent through a SCAN`,
+      ).toEqual([]);
       for (const sweep of probe.sweeps) {
-        expect(sweep.pendingAtCall, `${write.type}: ${sweep.pattern}`).toContain(div);
+        expect(sweep.pendingAtCall, `${write.type}: ${sweep.kind} ${sweep.targets.join(" ")}`).toContain(div);
       }
 
-      // F2 (P1 round 2) — scoreEvent has resolved while every sweep is still
-      // held open (`unblocked` above), and NO realtime push has gone out: a
-      // spectator page refetches on a push, and a refetch that beats the sweep
-      // reads the old Redis copy and stays on it (polling is off while
-      // subscribed). Both channels have public receivers: `fixture:{id}` feeds
-      // the match centre (`pub:v1:fixture:{id}`), `division:{id}` the hub
-      // (`pub:v1:hub:{competitionId}`).
-      expect(probe.gates.length, `${write.type}: sweeps still held`).toBe(3);
-      expect(probe.fixturePushes, `${write.type}: fixture push before the sweeps settled`).toEqual([]);
-      expect(probe.divisionPushes, `${write.type}: division push before the sweeps settled`).toEqual([]);
+      // F2 (P1 round 2): scoreEvent has resolved while the DEL and the SCAN
+      // are both still held (`unblocked` above), and NO realtime push has gone
+      // out. A spectator page refetches on a push, and a refetch that beats the
+      // delete reads the old Redis copy. Both channels have public receivers:
+      // `fixture:{id}` feeds the match centre (`pub:v1:fixture:{id}`), and
+      // `division:{id}` feeds the hub (`pub:v1:hub:{competitionId}`).
+      expect(probe.gates.map((g) => g.kind).sort(), `${write.type}: DEL and SCAN still held`).toEqual([
+        "del",
+        "scan",
+      ]);
+      expect(probe.fixturePushes, `${write.type}: fixture push before the DEL settled`).toEqual([]);
+      expect(probe.divisionPushes, `${write.type}: division push before the DEL settled`).toEqual([]);
 
-      await settleSweeps({ resolve: true });
-      // Once they have: each push exactly once, the division one addressed
-      // from the invalidation's own lookup (one query where there were two).
+      // R10 H4: the pushes wait on the DEL alone. It settles while the SCAN is
+      // still walking the keyspace, and both pushes go out now, each exactly
+      // once. The division push is addressed from the invalidation's own lookup
+      // (one query where there were two).
+      await settleSweeps({ resolve: true }, "del");
+      expect(probe.gates.map((g) => g.kind), `${write.type}: the SCAN is still held`).toEqual(["scan"]);
       expect(probe.fixturePushes, write.type).toEqual([{ fixtureId, reason: "event" }]);
       expect(probe.divisionPushes, write.type).toEqual([{ divisionId, reason: "score" }]);
+
+      await settleSweeps({ resolve: true }, "scan");
+      expect(probe.fixturePushes, `${write.type}: pushed again once the SCAN settled`).toHaveLength(1);
+      expect(probe.divisionPushes, `${write.type}: pushed again once the SCAN settled`).toHaveLength(1);
       expect(errorMessages(), write.type).not.toContain(SWEEP_FAILED);
+      expect(errorMessages(), write.type).not.toContain(DELETE_FAILED);
     }
   });
 
-  it("a public Redis sweep that REJECTS: the pushes wait for EVERY sweep, then go out; the failure is logged and nothing is left unhandled", async () => {
+  it("a public Redis SCAN and DEL that both REJECT: the pushes wait for the DEL alone and still go out; both failures are logged and nothing is left unhandled", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
     const competitionId = await competitionOf(divisionId);
+    const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+    const hubKey = `pub:v1:hub:${competitionId}`;
+    const divisionGlob = `pub:v1:div:${divisionId}:*`;
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason);
@@ -389,33 +424,37 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       await unblocked(
         inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
       );
-      expect(probe.gates.map((g) => g.pattern).sort()).toEqual(
-        [`pub:v1:div:${divisionId}:*`, `pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`].sort(),
-      );
+      expect(probe.gates.map((g) => g.kind).sort()).toEqual(["del", "scan"]);
+      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey].sort());
+      expect(targetsOf("scan")).toEqual([divisionGlob]);
 
-      // One sweep fails while the other two are still scanning. A push now
-      // would send a hub spectator to the hub key that is not gone yet.
+      // The SCAN fails first, while the DEL is still in flight.
       const failure = new Error("simulated Redis failure");
-      await settleSweeps({ reject: failure }, `pub:v1:fixture:${fixtureId}`);
-      // F4 — checked first, the moment the sweep has failed: handled and logged.
-      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
+      await settleSweeps({ reject: failure }, "scan");
+      // F4: checked first, the moment the SCAN has failed. Handled, and logged.
+      expect(unhandled, "a voided SCAN rejected with no handler").toEqual([]);
       expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: fixtureId, pattern: `pub:v1:fixture:${fixtureId}` },
+        { err: failure, fixture: fixtureId, pattern: divisionGlob },
         SWEEP_FAILED,
       );
-      expect(probe.fixturePushes, "fixture push before every sweep settled").toEqual([]);
-      expect(probe.divisionPushes, "division push before every sweep settled").toEqual([]);
+      // And it releases nothing: a push now would send a hub spectator to the
+      // hub key, which is not gone yet.
+      expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
+      expect(probe.divisionPushes, "division push before the DEL settled").toEqual([]);
 
-      await settleSweeps({ resolve: true });
-      // A failed sweep does not swallow the pushes.
+      // Then the DEL fails too.
+      await settleSweeps({ reject: failure }, "del");
+      expect(unhandled, "a DEL rejected with no handler").toEqual([]);
+      expect(logMock.error).toHaveBeenCalledWith(
+        { err: failure, fixture: fixtureId, keys: expect.arrayContaining([fixtureKey, hubKey]) },
+        DELETE_FAILED,
+      );
+      // A failed DEL does not swallow the pushes.
       expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
       expect(probe.divisionPushes).toEqual([{ divisionId, reason: "score" }]);
-      expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: fixtureId, pattern: `pub:v1:fixture:${fixtureId}` },
-        SWEEP_FAILED,
-      );
       expect(errorMessages().filter((m) => m === SWEEP_FAILED)).toHaveLength(1);
-      expect(unhandled, "a voided sweep rejected with no handler").toEqual([]);
+      expect(errorMessages().filter((m) => m === DELETE_FAILED)).toHaveLength(1);
+      expect(unhandled, "a voided rejection with no handler").toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
@@ -445,7 +484,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(areTagsExpired([comp], cachedAt)).toBe(false);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     for (const sweep of probe.sweeps) {
-      expect(sweep.pendingAtCall, sweep.pattern).toContain(div);
+      expect(sweep.pendingAtCall, `${sweep.kind} ${sweep.targets.join(" ")}`).toContain(div);
     }
   });
 
@@ -508,7 +547,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(calls).toContainEqual({ tags: [div], durations: { expire: 0 } });
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
-    expect(probe.sweeps.map((s) => s.pattern)).toContain(`pub:v1:hub:${competitionId}`);
+    expect(targetsOf("del")).toContain(`pub:v1:hub:${competitionId}`);
   });
 
   it("importEvents: a failed invalidation is logged by its OWN catch and the imported stream still reports imported", async () => {

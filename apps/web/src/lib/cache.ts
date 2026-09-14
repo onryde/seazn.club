@@ -59,6 +59,23 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
   }
 }
 
+/**
+ * Delete keys by their full names with ONE direct DEL, and no SCAN. When the
+ * names are already known, `cacheDelPattern` below walks the whole keyspace to
+ * find them. No-op on error, and when handed no keys (a bare DEL is an arity
+ * error).
+ */
+export async function cacheDel(...keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const c = client();
+  if (!c) return;
+  try {
+    await c.del(...keys);
+  } catch {
+    /* fail open */
+  }
+}
+
 /** Delete keys matching a glob pattern (e.g. "ent:{org}:*"). No-op on error. */
 export async function cacheDelPattern(pattern: string): Promise<void> {
   const c = client();
