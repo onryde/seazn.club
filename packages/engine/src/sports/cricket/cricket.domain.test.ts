@@ -32,6 +32,15 @@ function lineup(prefix: string): LineupPair["home"] {
 const lineups: LineupPair = { home: lineup("H"), away: lineup("A") };
 const fold = (cfg: CricketCfg, events: EventEnvelope[]) =>
   foldMatch(cricket, cfg, lineups, events);
+/** Live write path — the pad's next ball is refused unless this is green. */
+const foldStrict = (cfg: CricketCfg, events: EventEnvelope[]) =>
+  foldMatch(cricket, cfg, lineups, events, { strictFromSeq: 0 });
+const openFineStrict = (events: EventEnvelope[], cfg: CricketCfg = short) => {
+  const state = foldStrict(cfg, events);
+  const innings = state.innings[0];
+  if (innings === undefined || innings.fine === null) throw new Error("no fine innings");
+  return { state, innings, fine: innings.fine };
+};
 
 // 10 overs a side, one bowler quota wide enough for the hand-written streams.
 const short: CricketCfg = cricket.configSchema.parse({
@@ -272,6 +281,142 @@ describe("cricket W4: the incoming batter can be named", () => {
       })
       .build();
     expect(() => fold(short, reused)).toThrowError(engineError("INVALID_EVENT"));
+  });
+
+  it("marks the replacement as unfacedIncoming until they face a ball", () => {
+    const events = new Ledger()
+      .ball({
+        striker: "H-1",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        wicket: { kind: "bowled", out: "H-1", bowlerCredited: true, incoming: "H-3" },
+      })
+      .build();
+    const { fine } = openFineStrict(events);
+    expect(fine.striker).toBe("H-3");
+    expect(fine.unfacedIncoming).toBe("H-3");
+  });
+
+  it("the next ball may replace an incoming batter who has not faced yet — same window as a new-over bowler", () => {
+    const events = new Ledger()
+      .ball({
+        striker: "H-1",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        wicket: { kind: "bowled", out: "H-1", bowlerCredited: true, incoming: "H-3" },
+      })
+      .ball({
+        striker: "H-7",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        runs: { bat: 0 },
+      })
+      .build();
+    const { fine } = openFineStrict(events);
+    expect(fine.striker).toBe("H-7");
+    expect(fine.nonStriker).toBe("H-2");
+    expect(fine.unfacedIncoming).toBeUndefined();
+  });
+
+  it("refuses to replace the incoming batter once they have faced a ball", () => {
+    const events = new Ledger()
+      .ball({
+        striker: "H-1",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        wicket: { kind: "bowled", out: "H-1", bowlerCredited: true, incoming: "H-3" },
+      })
+      .ball({
+        striker: "H-3",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        runs: { bat: 0 },
+      })
+      .ball({
+        striker: "H-7",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        runs: { bat: 0 },
+      })
+      .build();
+    expect(() => foldStrict(short, events)).toThrowError(engineError("INVALID_EVENT"));
+  });
+
+  it("refuses to replace the surviving partner who has not faced", () => {
+    const events = new Ledger()
+      .ball({
+        striker: "H-1",
+        nonStriker: "H-2",
+        bowler: "A-11",
+        wicket: { kind: "bowled", out: "H-1", bowlerCredited: true, incoming: "H-3" },
+      })
+      .ball({
+        striker: "H-3",
+        nonStriker: "H-7",
+        bowler: "A-11",
+        runs: { bat: 0 },
+      })
+      .build();
+    expect(() => foldStrict(short, events)).toThrowError(engineError("INVALID_EVENT"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Opening pair is the captain's choice (Law 25.1), not lineup order[0]/[1].
+// createInnings used to hardcode those two; a first ball naming anyone else
+// was refused as "striker/non-striker do not match the ledger".
+// ---------------------------------------------------------------------------
+
+describe("cricket: named opening pair on the first ball", () => {
+  it("folds a first ball whose openers are not lineup order[0]/[1]", () => {
+    const events = new Ledger()
+      .ball({ striker: "H-3", nonStriker: "H-5", bowler: "A-11" })
+      .build();
+    const { fine } = openFine(events);
+    expect(fine.striker).toBe("H-3");
+    expect(fine.nonStriker).toBe("H-5");
+    // The unused prefix of the order stays available for auto-walk.
+    expect(fine.nextBatterIndex).toBe(0);
+  });
+
+  it("default openers (order[0]/[1]) still leave the cursor at index 2", () => {
+    const events = new Ledger()
+      .ball({ striker: "H-1", nonStriker: "H-2", bowler: "A-11" })
+      .build();
+    const { fine } = openFine(events);
+    expect(fine.striker).toBe("H-1");
+    expect(fine.nonStriker).toBe("H-2");
+    expect(fine.nextBatterIndex).toBe(2);
+  });
+
+  it("auto next-batter after a custom-opener wicket still walks a leftover including order[0]", () => {
+    const events = new Ledger()
+      .ball({
+        striker: "H-3",
+        nonStriker: "H-5",
+        bowler: "A-11",
+        wicket: { kind: "bowled", out: "H-3", bowlerCredited: true },
+      })
+      .build();
+    const { fine } = openFine(events);
+    expect(fine.striker).toBe("H-1");
+    expect(fine.nonStriker).toBe("H-5");
+    expect(fine.dismissed).toEqual(["H-3"]);
+  });
+
+  it("refuses a first ball whose openers are the same person or not in the lineup", () => {
+    expect(() =>
+      fold(
+        short,
+        new Ledger().ball({ striker: "H-1", nonStriker: "H-1", bowler: "A-11" }).build(),
+      ),
+    ).toThrowError(engineError("INVALID_EVENT"));
+    expect(() =>
+      fold(
+        short,
+        new Ledger().ball({ striker: "H-1", nonStriker: "A-4", bowler: "A-11" }).build(),
+      ),
+    ).toThrowError(engineError("INVALID_EVENT"));
   });
 });
 

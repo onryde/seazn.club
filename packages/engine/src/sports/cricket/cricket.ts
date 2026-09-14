@@ -469,6 +469,11 @@ export interface FineInnings {
   // (which is what the frozen golden corpus compares).
   fielding?: Record<string, FieldingCredit> | undefined;
   retiredNotOut?: string[] | undefined;
+  /** Person who just walked in and has not faced a ball (not a wide). The
+   *  next ball may name a different eligible batter at that crease end —
+   *  the same window as `currentBowler === null` for a new over. Surviving
+   *  partners who have 0 balls are NOT this; only the replacement. */
+  unfacedIncoming?: string | undefined;
 }
 
 export interface InningsState {
@@ -792,8 +797,39 @@ function freshFine(): FineInnings {
   };
 }
 
+/** First unused slot in `order` after the named openers. Default openers
+ *  (order[0]/[1]) still yield 2 — the pre-named-opener cursor — so existing
+ *  streams that never name a pair keep their auto-walk. Custom openers
+ *  (Law 25.1) yield the earliest leftover, which may be 0. */
+function nextBatterIndexAfterOpeners(
+  order: readonly string[],
+  striker: string,
+  nonStriker: string,
+): number {
+  for (let i = 0; i < order.length; i++) {
+    if (order[i] !== striker && order[i] !== nonStriker) return i;
+  }
+  return order.length;
+}
+
+function resolveOpeners(
+  order: readonly string[],
+  named: { striker: string; nonStriker: string } | undefined,
+): { striker: string; nonStriker: string; nextBatterIndex: number } {
+  const striker = named?.striker ?? (order[0] as string);
+  const nonStriker = named?.nonStriker ?? (order[1] as string);
+  if (striker === nonStriker) invalid("striker and non-striker must differ");
+  if (!order.includes(striker)) invalid(`batter "${striker}" is not in the lineup`);
+  if (!order.includes(nonStriker)) invalid(`batter "${nonStriker}" is not in the lineup`);
+  return { striker, nonStriker, nextBatterIndex: nextBatterIndexAfterOpeners(order, striker, nonStriker) };
+}
+
 // Creates the next innings (on the first scoring event for it).
-function createInnings(state: CricketState, fidelity: "fine" | "coarse"): CricketState {
+function createInnings(
+  state: CricketState,
+  fidelity: "fine" | "coarse",
+  openers?: { striker: string; nonStriker: string },
+): CricketState {
   const index = state.innings.length;
   if (index >= maxInningsCount(state.cfg)) invalid("all innings already recorded");
   const battingSide = battingSideAt(state, index);
@@ -803,12 +839,13 @@ function createInnings(state: CricketState, fidelity: "fine" | "coarse"): Cricke
     if (order.length < 2) {
       invalid(`batting order for "${state.entrants[battingSide]}" needs at least 2 players`);
     }
+    const pair = resolveOpeners(order, openers);
     fine = {
       ...freshFine(),
-      // spec §2.3 — openers from lineup order.
-      striker: order[0] as string,
-      nonStriker: order[1] as string,
-      nextBatterIndex: 2,
+      // spec §2.3 — openers from the first ball when named, else lineup order.
+      striker: pair.striker,
+      nonStriker: pair.nonStriker,
+      nextBatterIndex: pair.nextBatterIndex,
     };
   }
   const innings: InningsState = {
@@ -1255,6 +1292,45 @@ interface DeliveryCtx {
   strictFold: boolean;
 }
 
+function leftoverBatterIndex(order: readonly string[], unavailable: ReadonlySet<string>): number {
+  for (let i = 0; i < order.length; i++) {
+    if (!unavailable.has(order[i] as string)) return i;
+  }
+  return order.length;
+}
+
+/** One crease end may change iff its occupant is the unfaced incoming batter. */
+function adoptUnfacedIncoming(
+  fine: FineInnings,
+  payload: CricketBallEv,
+  battingOrder: readonly string[],
+): { nextBatterIndex: number; unfacedIncoming: string } | null {
+  const unfaced = fine.unfacedIncoming;
+  if (unfaced === undefined) return null;
+  const { striker: nextStriker, nonStriker: nextNon } = payload;
+  if (nextStriker === nextNon) return null;
+  const strikerChanged = nextStriker !== fine.striker;
+  const nonChanged = nextNon !== fine.nonStriker;
+  if (strikerChanged === nonChanged) return null;
+  const occupant = strikerChanged ? fine.striker : fine.nonStriker;
+  if (occupant !== unfaced) return null;
+  const nextPerson = strikerChanged ? nextStriker : nextNon;
+  const other = strikerChanged ? nextNon : nextStriker;
+  if (!eligibleIncomingBatters(battingOrder, fine.dismissed, [other]).includes(nextPerson)) {
+    return null;
+  }
+  const unavailable = new Set<string>([
+    ...fine.dismissed,
+    ...(fine.retiredNotOut ?? []),
+    nextPerson,
+    other,
+  ]);
+  return {
+    nextBatterIndex: leftoverBatterIndex(battingOrder, unavailable),
+    unfacedIncoming: nextPerson,
+  };
+}
+
 function applyDelivery(
   innings: InningsState,
   payload: CricketBallEv,
@@ -1315,6 +1391,8 @@ function applyDelivery(
   // Batters at the crease.
   let striker = fine.striker;
   let nonStriker = fine.nonStriker;
+  let nextBatterIndex = fine.nextBatterIndex;
+  let unfacedIncoming = fine.unfacedIncoming;
   if (ctx.strictOrder) {
     if (payload.striker !== striker || payload.nonStriker !== nonStriker) {
       // STRICT ONLY (§3.3 seam). Who is on strike is a projection of where the
@@ -1323,11 +1401,20 @@ function applyDelivery(
       // pair out of step with every delivery card already in the ledger. On
       // replay the LEDGER wins: the card names who faced the ball, and that is
       // the recorded fact; the fold's expectation is the derivation.
-      if (ctx.strictFold) {
+      //
+      // Exception: the incoming batter after a wicket/retire has not faced
+      // yet. The next ball may name a different eligible person at that end
+      // only — same window as a new-over bowler (`currentBowler === null`).
+      const adopted = adoptUnfacedIncoming(fine, payload, ctx.battingOrder);
+      if (adopted === null && ctx.strictFold) {
         invalid("striker/non-striker do not match the ledger", {
           expected: { striker, nonStriker },
           got: { striker: payload.striker, nonStriker: payload.nonStriker },
         });
+      }
+      if (adopted !== null) {
+        nextBatterIndex = adopted.nextBatterIndex;
+        unfacedIncoming = adopted.unfacedIncoming;
       }
       striker = payload.striker;
       nonStriker = payload.nonStriker;
@@ -1390,6 +1477,9 @@ function applyDelivery(
     extras?.kind === "wide"
       ? fine.batterBalls
       : { ...fine.batterBalls, [facing]: (fine.batterBalls[facing] ?? 0) + 1 };
+  if (extras?.kind !== "wide" && unfacedIncoming !== undefined && facing === unfacedIncoming) {
+    unfacedIncoming = undefined;
+  }
   const bowlerCharged =
     batRuns + (extras !== undefined && (extras.kind === "wide" || extras.kind === "noball") ? extras.runs : 0);
   const bowlerRuns = {
@@ -1434,7 +1524,6 @@ function applyDelivery(
   if (payload.wicket !== undefined && wickets < ctx.allOut) {
     const outPerson = payload.wicket.out;
     let replacement: string | null = null;
-    let nextBatterIndex = fine.nextBatterIndex;
     let retiredNotOut = fine.retiredNotOut;
     if (ctx.strictOrder) {
       // spec §2.3 — dismissal → next batter by order, unless the ball names
@@ -1453,6 +1542,7 @@ function applyDelivery(
     }
     if (striker === outPerson) striker = replacement;
     else if (nonStriker === outPerson) nonStriker = replacement;
+    unfacedIncoming = replacement ?? undefined;
     return finishDelivery(innings, payload, {
       ...fine,
       striker,
@@ -1467,6 +1557,7 @@ function applyDelivery(
       currentBowler,
       fielding,
       retiredNotOut,
+      unfacedIncoming,
     }, { legal, batRuns, extraRuns, wickets, whiteBall: ctx.whiteBall, bpo });
   }
 
@@ -1474,6 +1565,7 @@ function applyDelivery(
     ...fine,
     striker,
     nonStriker,
+    nextBatterIndex,
     dismissed,
     batterRuns,
     batterBalls,
@@ -1482,6 +1574,7 @@ function applyDelivery(
     bowlerWickets,
     currentBowler,
     fielding,
+    unfacedIncoming,
   }, { legal, batRuns, extraRuns, wickets, whiteBall: ctx.whiteBall, bpo });
 }
 
@@ -1958,6 +2051,7 @@ function applyRetire(state: CricketState, payload: z.infer<typeof CricketRetire>
   let nonStriker = fine.nonStriker;
   let nextBatterIndex = fine.nextBatterIndex;
   let retiredNotOut: string[] | undefined = retiredList.length === 0 ? undefined : retiredList;
+  let unfacedIncoming: string | undefined = undefined;
 
   if (wickets < allOutWickets(state, innings.battingSide)) {
     const resolved = resolveIncoming(payload.incoming, {
@@ -1971,6 +2065,7 @@ function applyRetire(state: CricketState, payload: z.infer<typeof CricketRetire>
     retiredNotOut = resolved.retiredNotOut.length === 0 ? undefined : resolved.retiredNotOut;
     if (striker === person) striker = resolved.person;
     else nonStriker = resolved.person;
+    unfacedIncoming = resolved.person;
   } else if (striker === person) {
     striker = null;
   } else {
@@ -1980,7 +2075,7 @@ function applyRetire(state: CricketState, payload: z.infer<typeof CricketRetire>
   const updated: InningsState = {
     ...innings,
     wickets,
-    fine: { ...fine, striker, nonStriker, nextBatterIndex, dismissed, retiredNotOut },
+    fine: { ...fine, striker, nonStriker, nextBatterIndex, dismissed, retiredNotOut, unfacedIncoming },
   };
   return autoClose(replaceInnings(state, index, updated));
 }
@@ -2088,6 +2183,46 @@ export type OverBowlerFacts = {
  * divisor otherwise. A null/absent `fine` means the innings has not opened:
  * nobody has bowled, so nobody is yet ineligible.
  */
+/**
+ * Who the Laws still allow to walk in (Law 25.1 / 25.4): anyone in the
+ * batting order who is not already dismissed and not currently at the
+ * crease. Retired-not-out batters stay in the order and are therefore
+ * included — they may resume; a dismissed batter may not.
+ *
+ * EXPORTED for the pad's wicket/retire incoming step (same posture as
+ * `eligibleBowlers`). The auto default ("next in order") is
+ * `suggestedIncomingBatter`; this list is the captain's full choice.
+ */
+export function eligibleIncomingBatters(
+  battingOrder: readonly string[],
+  dismissed: readonly string[],
+  atCrease: readonly (string | null)[],
+): string[] {
+  const crease = new Set(atCrease.filter((p): p is string => typeof p === "string" && p !== ""));
+  const out = new Set(dismissed);
+  return battingOrder.filter((person) => !out.has(person) && !crease.has(person));
+}
+
+/**
+ * Who the fold would walk in if `incoming` is omitted — next unused name
+ * in batting order, else a retired-not-out batter resuming (Law 25.4.2).
+ * Null when nobody is left (all out). The pad puts this name first in the
+ * incoming picker so one tap keeps today's auto.
+ */
+export function suggestedIncomingBatter(
+  battingOrder: readonly string[],
+  dismissed: readonly string[],
+  retiredNotOut: readonly string[],
+  atCrease: readonly (string | null)[],
+  nextBatterIndex: number,
+): string | null {
+  const crease = atCrease.filter((p): p is string => typeof p === "string" && p !== "");
+  const unavailable = new Set<string>([...dismissed, ...retiredNotOut, ...crease]);
+  const byOrder = nextBatterFrom(battingOrder, nextBatterIndex, unavailable);
+  if (byOrder !== null) return byOrder.person;
+  return retiredNotOut.find((person) => !crease.includes(person) && !dismissed.includes(person)) ?? null;
+}
+
 export function eligibleBowlers(
   order: readonly string[],
   fine: OverBowlerFacts | null | undefined,
@@ -3527,7 +3662,10 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
           invalid("this innings is recorded at summary fidelity — ball events are not allowed");
         }
         if (open === null) {
-          next = createInnings(next, "fine");
+          next = createInnings(next, "fine", {
+            striker: payload.striker,
+            nonStriker: payload.nonStriker,
+          });
           // See applySummary above: the assertion is the narrowing, and
           // no-unnecessary-type-assertion's autofix breaks tsc without it.
           // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion

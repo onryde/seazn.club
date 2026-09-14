@@ -67,12 +67,13 @@ async function openLiveConsole(page: Page, fx: RosteredFixture): Promise<void> {
  *  actually worked, so it could never fail for the right reason), while an
  *  unanchored substring match would let "Striker" also match "Non-striker: …".
  *
- *  Only `bowler`, and only at an over boundary, is ever safe to pass here —
- *  striker/non-striker are `readOnly` (a plain `<span>`, no `<button>` at
- *  all, `ContextSlot.readOnly`) because the engine's strict fold refuses any
- *  override for them on the live submit path. Calling this for either still
- *  hangs (zero buttons match), which is the correct, loud failure rather
- *  than a silent no-op. */
+ *  Opening pair/bowler chips are buttons BEFORE the first ball (no innings
+ *  yet) and the bowler chip is a button at an over boundary. After a wicket
+ *  the incoming batter's crease chip is a button until they face. Mid-over
+ *  (and once a batter has faced), striker/non-striker are `readOnly` (a
+ *  plain `<span>`, no `<button>`). Calling this for a locked chip hangs
+ *  (zero buttons match), which is the correct, loud failure rather than a
+ *  silent no-op. */
 async function setContextPerson(page: Page, chipLabel: string, personName: string): Promise<void> {
   const strip = pad(page).locator('[data-role="context-strip"]');
   await strip.getByRole("button", { name: new RegExp(`^${chipLabel}(:|$)`) }).click();
@@ -170,13 +171,8 @@ test(
     // the variant under test does not also happen to match the chassis's own
     // 6-ball fallback (ballsPerOverOf, v3/skins/cricket.tsx).
     //
-    // THREE home batters, not two: cricket.ts's `createInnings` forces ball
-    // 1's opening pair to be lineup order[0]/order[1] EXACTLY (§2.3,
-    // "openers from lineup order") — any other pair 422s ("striker/
-    // non-striker do not match the ledger"), so this test's own context-strip
-    // proof cannot safely target striker/non-striker at all; it targets the
-    // BOWLER instead (see the comment at the over-boundary change below for
-    // why that slot, specifically, is where the engine leaves room for one).
+    // THREE home batters, not two: the incoming-batter step after the catch
+    // needs a third name (lineup[2]) or the sheet has nobody to offer.
     // Three batters also means the wicket below leaves two not-out and the
     // innings stays live (scoring-vocab-labels.spec.ts's own "a two-man
     // order would close the innings" reasoning, reused here for the same
@@ -200,15 +196,10 @@ test(
 
     await openLiveConsole(page, fx);
 
-    // buildContext (v3/skins/cricket.tsx) requires `currentInnings() !==
-    // null` — and `cricket.ts`'s `case "cricket.ball"` only creates that
-    // innings lazily, INSIDE the fold of the FIRST ball itself. So the
-    // context strip does not exist yet at this point: ball 1 is
-    // unconditionally the lineup's own default opener pair/bowler, with no
-    // UI able to override it even in principle (consistent with — and
-    // arguably why nobody hit — the "openers from lineup order" rule above).
-    // Score the whole first over on defaults; the context-strip proof lands
-    // at the over-2 boundary below, once a strip actually exists to tap.
+    // buildContext now renders the opening strip BEFORE ball 1 so a scorer
+    // can change the opening pair and opening bowler. This test still scores
+    // over 1 on lineup defaults; the opening-pick proof is a dedicated test
+    // below. The strip's presence here is not under test.
     let delivered = 0;
     for (const runs of ["1", "0", "2", "0", "4"]) {
       await pad(page).getByRole("button", { name: runs, exact: true }).click();
@@ -273,6 +264,11 @@ test(
     const sheet = pad(page).locator('[data-role="v3-sheet"]');
     await sheet.getByRole("button", { name: "Caught", exact: true }).click();
     await sheet.getByRole("button", { name: `V3 Bowler ${TAG}`, exact: true }).click();
+    // Incoming batter is required (Law 25.1). Next-in-order is first in the
+    // list — `V3 Incoming` is batting-order[2]. Confirm the default so this
+    // test still ends on a completed wicket rather than stalling on the new
+    // step. A non-default pick is asserted in the opening-pair test below.
+    await sheet.getByRole("button", { name: `V3 Incoming ${TAG}`, exact: true }).click();
 
     await expect
       .poll(
@@ -291,19 +287,122 @@ test(
     expect(withWicket.payload.bowler, "the CHANGED bowler, not the rejected default, must reach the payload").toBe(
       fielder,
     );
+    const incomingBatter = fx.personIds[`V3 Incoming ${TAG}`]!;
     const wicket = withWicket.payload.wicket as {
       kind: string;
       out: string;
       fielder?: string;
+      incoming?: string;
       bowlerCredited: boolean;
     };
     expect(wicket.kind).toBe("caught");
     expect(wicket.fielder, "credited to a REAL fielding-side member").toBe(bowler);
     expect(wicket.bowlerCredited, "caught is in BOWLER_CREDITED_KINDS").toBe(true);
+    expect(wicket.incoming, "the incoming step must reach the payload, not fall back to an omitted auto").toBe(
+      incomingBatter,
+    );
     // Whoever was on strike when the catch was taken — rotates with odd
     // runs, so membership, not identity (same relaxation scorepad-v2.spec.ts's
     // own wicket assertion uses, and for the same reason).
     expect([striker, nonStriker]).toContain(wicket.out);
+  },
+);
+
+test(
+  "cricket v3: opening pair and opening bowler can be picked off the lineup before ball 1, and a wicket can name a non-next incoming batter",
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const fx = await seedRosteredFixture(page.request, {
+      label: `V3 Cricket Openers ${TAG}`,
+      sportKey: "cricket",
+      variantKey: "t20",
+      home: [
+        { fullName: `V3 OP One ${TAG}` },
+        { fullName: `V3 OP Two ${TAG}` },
+        { fullName: `V3 OP Three ${TAG}` },
+        { fullName: `V3 OP Four ${TAG}` },
+      ],
+      away: [{ fullName: `V3 OP BowlA ${TAG}` }, { fullName: `V3 OP BowlB ${TAG}` }],
+    });
+    const one = fx.personIds[`V3 OP One ${TAG}`]!;
+    const two = fx.personIds[`V3 OP Two ${TAG}`]!;
+    const three = fx.personIds[`V3 OP Three ${TAG}`]!;
+    const four = fx.personIds[`V3 OP Four ${TAG}`]!;
+    const bowlA = fx.personIds[`V3 OP BowlA ${TAG}`]!;
+    const bowlB = fx.personIds[`V3 OP BowlB ${TAG}`]!;
+
+    await openLiveConsole(page, fx);
+
+    const strip = pad(page).locator('[data-role="context-strip"]');
+    await expect(strip, "the opening strip must exist before ball 1").toBeVisible({ timeout: 10_000 });
+    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toBeVisible();
+    await expect(strip.getByRole("button", { name: /^Non-striker(:|$)/ })).toBeVisible();
+    await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
+
+    // Defaults are lineup[0]/[1] and first eligible bowler. Override all three.
+    await setContextPerson(page, "Striker", `V3 OP Three ${TAG}`);
+    await setContextPerson(page, "Non-striker", `V3 OP Four ${TAG}`);
+    await setContextPerson(page, "Bowler", `V3 OP BowlB ${TAG}`);
+
+    // Dot ball — an odd run would rotate strike, and Bowled then dismisses
+    // the NEW striker rather than the named opener this test is pinning.
+    await pad(page).getByRole("button", { name: "0", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(1);
+    const first = (await ledger(page.request, fx.fixtureId)).find((e) => e.type === "cricket.ball")!;
+    expect(first.payload.striker, "named opener, not lineup[0]").toBe(three);
+    expect(first.payload.nonStriker, "named opener, not lineup[1]").toBe(four);
+    expect(first.payload.bowler, "named opening bowler, not bowlingOrder[0]").toBe(bowlB);
+    expect(first.payload.striker).not.toBe(one);
+    expect(first.payload.nonStriker).not.toBe(two);
+    expect(first.payload.bowler).not.toBe(bowlA);
+
+    // Mid-over the crease is locked — tapping Striker must not find a button.
+    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toHaveCount(0);
+
+    await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
+    const sheet = pad(page).locator('[data-role="v3-sheet"]');
+    await sheet.getByRole("button", { name: "Bowled", exact: true }).click();
+    await expect(sheet.getByText("Who walks in?")).toBeVisible({ timeout: 10_000 });
+    // Next-in-order would be One (index 0 leftover). Pick Two instead.
+    await sheet.getByRole("button", { name: `V3 OP Two ${TAG}`, exact: true }).click();
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(2);
+    const withWicket = (await ledger(page.request, fx.fixtureId)).find(
+      (e) => e.type === "cricket.ball" && (e.payload as { wicket?: unknown }).wicket,
+    )!;
+    const wicket = withWicket.payload.wicket as { incoming?: string; out: string };
+    expect(wicket.out).toBe(three);
+    expect(wicket.incoming, "captain's choice, not auto next-in-order (One)").toBe(two);
+    expect(wicket.incoming).not.toBe(one);
+
+    // After the wicket the incoming batter has not faced — that crease end
+    // reopens, the same window as a new-over bowler. The surviving partner
+    // stays locked. Changing the incoming name here is what the owner
+    // could not do: the bowler chip would open at an over boundary, the
+    // bat chip would not.
+    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toBeVisible();
+    await expect(strip.getByRole("button", { name: /^Non-striker(:|$)/ })).toHaveCount(0);
+    await setContextPerson(page, "Striker", `V3 OP One ${TAG}`);
+    await pad(page).getByRole("button", { name: "0", exact: true }).click();
+    await expect
+      .poll(
+        async () => (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball").length,
+        { timeout: 20_000 },
+      )
+      .toBe(3);
+    const afterSwap = (await ledger(page.request, fx.fixtureId)).filter((e) => e.type === "cricket.ball")[2]!;
+    expect(afterSwap.payload.striker, "the strip pick, not the sheet's incoming").toBe(one);
+    expect(afterSwap.payload.nonStriker, "surviving partner stays").toBe(four);
+    expect(afterSwap.payload.striker).not.toBe(two);
   },
 );
 
@@ -1483,11 +1582,14 @@ test(
     await postEvent(page.request, fx.fixtureId, "cricket.innings.close", { reason: "other" });
 
     await openConsoleAlreadyLive(page, fx);
-    // Due, not terminal (only 1 of 2 required innings closed) — buildContext
-    // returns null (no strip for an innings that does not exist yet) and the
-    // ball tiles stay fully enabled; tapping one is what the engine's own
-    // implicit-open (`createInnings` from `cricket.ball`) is for.
-    await expect(pad(page).locator('[data-role="context-strip"]')).not.toBeVisible();
+    // Due, not terminal (only 1 of 2 required innings closed) — the opening
+    // strip is shown so the scorer can name innings 2's pair/bowler before
+    // the first ball. Ball tiles stay enabled; tapping one is still what
+    // the engine's implicit-open (`createInnings` from `cricket.ball`) is for.
+    const strip = pad(page).locator('[data-role="context-strip"]');
+    await expect(strip, "innings 2's opening strip must exist before its first ball").toBeVisible();
+    await expect(strip.getByRole("button", { name: /^Striker(:|$)/ })).toBeVisible();
+    await expect(strip.getByRole("button", { name: /^Bowler(:|$)/ })).toBeVisible();
     const run1 = pad(page).locator('[data-tile-id="run1"]');
     await expect(run1).toBeEnabled();
     await run1.click();

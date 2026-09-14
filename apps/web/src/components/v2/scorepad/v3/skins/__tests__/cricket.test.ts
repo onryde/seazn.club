@@ -39,6 +39,7 @@ import {
   resolvePhase,
   runRate,
   variantCode,
+  bowlerIsReadOnly,
 } from "../cricket";
 import type { InningsFidelity, TFn } from "../cricket";
 import { filterTilesByBand, tileEventType } from "../../pad-host";
@@ -1361,8 +1362,15 @@ describe("buildContext", () => {
   it("is null before the match goes live", () => {
     expect(buildContext(view({ state: state({ phase: "pre", innings: [] }) }))).toBeNull();
   });
-  it("is null with no innings open yet", () => {
-    expect(buildContext(view({ state: state({ innings: [] }) }))).toBeNull();
+  it("shows the opening strip with no innings open yet — pair and bowler are editable", () => {
+    const spec = buildContext(view({ state: state({ innings: [] }) }))!;
+    expect(spec).not.toBeNull();
+    expect(spec.slots.map((s) => s.id)).toEqual(["striker", "nonStriker", "bowler"]);
+    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBeUndefined();
+    expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBeUndefined();
+    expect(spec.slots.find((s) => s.id === "bowler")!.readOnly).toBeUndefined();
+    expect(spec.slots.find((s) => s.id === "striker")!.candidates).toEqual(["h1", "h2", "h3"]);
+    expect(spec.slots.find((s) => s.id === "bowler")!.candidates).toEqual(["a1", "a2", "a3"]);
   });
   it("three required person slots, personId from the fold — and R8's mode statement LAST, behind them", () => {
     const spec = buildContext(view())!;
@@ -1691,6 +1699,21 @@ describe("G5 — context overrides supersede the fold", () => {
     expect(withOverride.striker).not.toBe(withoutOverride.striker);
     expect(withOverride.striker).toBe("h3");
   });
+
+  it("overriding only the opening striker keeps the default non-striker — it must not fall back to leftover order[0]", () => {
+    const s = state({ innings: [] });
+    const p = resolvePeople(s, { striker: "h3" });
+    expect(p.striker).toBe("h3");
+    expect(p.nonStriker, "Two stays at the other end; One is not silently promoted").toBe("h2");
+    expect(p.nonStriker).not.toBe("h1");
+  });
+
+  it("overriding the opening striker to the default non-striker swaps the pair", () => {
+    const s = state({ innings: [] });
+    const p = resolvePeople(s, { striker: "h2" });
+    expect(p.striker).toBe("h2");
+    expect(p.nonStriker).toBe("h1");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1721,6 +1744,75 @@ describe("buildContext — striker/non-striker are read-only (blocker 2)", () =>
     expect(people.every((s) => s.required)).toBe(true);
   });
 });
+
+// After a wicket the incoming batter has not faced yet — same window as a
+// new-over bowler (`currentBowler === null`). The strip used to lock any
+// named crease occupant, so the scorer could change the bowler at an over
+// boundary but could not change who walked in. Unlock only the unfaced
+// incoming end; the surviving partner stays locked even at 0 balls.
+describe("buildContext — incoming batter stays editable until they face", () => {
+  const afterWicket = (fine: Record<string, unknown> = {}) =>
+    innings({
+      wickets: 1,
+      fine: {
+        striker: "h3",
+        nonStriker: "h2",
+        currentBowler: "a1",
+        dismissed: ["h1"],
+        unfacedIncoming: "h3",
+        ...fine,
+      },
+    });
+
+  it("unlocks the incoming crease end so the next ball can name a different eligible batter", () => {
+    const spec = buildContext(view({ state: state({ innings: [afterWicket()] }) }))!;
+    const striker = spec.slots.find((s) => s.id === "striker")!;
+    expect(striker.readOnly).toBeUndefined();
+    expect(striker.candidates).toContain("h3");
+  });
+
+  it("keeps the surviving partner locked — 0 balls is not the same window", () => {
+    const spec = buildContext(view({ state: state({ innings: [afterWicket()] }) }))!;
+    expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
+  });
+
+  it("offers only ICC-legal incoming names at the unlocked end, including the current occupant", () => {
+    const spec = buildContext(
+      view({
+        state: state({
+          innings: [afterWicket()],
+          orders: { home: ["h1", "h2", "h3", "h4"], away: ["a1", "a2", "a3"] },
+        }),
+        personNames: {
+          h1: "Home One",
+          h2: "Home Two",
+          h3: "Home Three",
+          h4: "Home Four",
+          a1: "Away One",
+          a2: "Away Two",
+          a3: "Away Three",
+        },
+      }),
+    )!;
+    const striker = spec.slots.find((s) => s.id === "striker")!;
+    expect(striker.candidates).toEqual(["h3", "h4"]);
+    expect(striker.candidates).not.toContain("h1");
+    expect(striker.candidates).not.toContain("h2");
+  });
+
+  it("locks both ends again once the incoming batter is no longer marked unfaced", () => {
+    const spec = buildContext(
+      view({
+        state: state({
+          innings: [afterWicket({ unfacedIncoming: undefined, currentBowler: "a1" })],
+        }),
+      }),
+    )!;
+    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
+    expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // Defect 3 (R2 review finding, docs/superpowers/plans/2026-08-16-scorepad-
@@ -1759,6 +1851,11 @@ describe("buildContext — bowler read-only tracks the fold's own over boundary 
     const spec = buildContext(v)!;
     expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBe(true);
     expect(spec.slots.find((s) => s.id === "nonStriker")!.readOnly).toBe(true);
+  });
+
+  it("no innings yet: opening bowler is editable — undefined !== null used to lock this window", () => {
+    expect(bowlerIsReadOnly(null)).toBe(false);
+    expect(buildContext(view({ state: state({ innings: [] }) }))!.slots.find((s) => s.id === "bowler")!.readOnly).toBeUndefined();
   });
 });
 
@@ -2348,8 +2445,14 @@ describe("buildTiles / buildContext / basePayload — closed innings, ANOTHER du
     expect(over.labelText).toBe(t("pad.cricket.action.endOfOver", { over: 1 }));
   });
 
-  it("buildContext returns null — same as before ANY innings exists (no fold-backed state to show/edit yet, matching how innings 1 shows no strip before its own first ball)", () => {
-    expect(buildContext(view({ state: closedFirstInningsDue() }), t)).toBeNull();
+  it("buildContext shows the NEXT innings' opening pair — same strip as before ANY innings exists, not the closed innings' locked crease", () => {
+    const spec = buildContext(view({ state: closedFirstInningsDue() }), t)!;
+    expect(spec).not.toBeNull();
+    expect(spec.slots.find((s) => s.id === "striker")!.readOnly).toBeUndefined();
+    expect(spec.slots.find((s) => s.id === "striker")!.personId).toBe("a1");
+    expect(spec.slots.find((s) => s.id === "nonStriker")!.personId).toBe("a2");
+    expect(spec.slots.find((s) => s.id === "bowler")!.personId).toBe("h1");
+    expect(spec.slots.find((s) => s.id === "striker")!.candidates).toEqual(["a1", "a2", "a3"]);
   });
 
   it("the follow-on order is honoured, not plain alternation: 2 innings recorded + followOnEnforced -> the SAME side bats again", () => {
@@ -2408,16 +2511,30 @@ describe("buildSheets — wicket flow (D-15)", () => {
   function wicketSpec() {
     return buildSheets(view(), t).wicket;
   }
+  function pickIncoming(
+    spec: GuidedSheetSpec,
+    advance: ReturnType<typeof answerStep>,
+  ): ReturnType<typeof answerStep> {
+    if (advance.done) return advance;
+    const step = currentStep(spec, advance.state);
+    if (step?.id !== "incoming") return advance;
+    const first = step.kind === "person" ? (step.candidates?.[0] ?? "h3") : "h3";
+    return answerStep(spec, advance.state, first);
+  }
 
-  it("bowled skips BOTH who-out and fielder — straight from kind to a built event", () => {
+  it("bowled skips BOTH who-out and fielder — then asks incoming", () => {
     const spec = wicketSpec();
     const s = initialSheetState();
     expect(currentStep(spec, s)!.id).toBe("kind");
-    const outcome = answerStep(spec, s, "bowled");
+    const afterKind = answerStep(spec, s, "bowled");
+    expect(afterKind.done).toBe(false);
+    if (afterKind.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterKind.state)!.id).toBe("incoming");
+    const outcome = pickIncoming(spec, afterKind);
     expect(outcome.done).toBe(true);
     if (!outcome.done) throw new Error("expected done");
     expect(outcome.event.payload).toMatchObject({
-      wicket: { kind: "bowled", out: "h1", bowlerCredited: true },
+      wicket: { kind: "bowled", out: "h1", bowlerCredited: true, incoming: "h3" },
     });
     expect((outcome.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
   });
@@ -2429,10 +2546,11 @@ describe("buildSheets — wicket flow (D-15)", () => {
     expect(afterKind.done).toBe(false);
     if (afterKind.done) throw new Error("expected not done");
     expect(currentStep(spec, afterKind.state)!.id).toBe("fielder");
-    const final = answerStep(spec, afterKind.state, "a2");
+    const afterFielder = answerStep(spec, afterKind.state, "a2");
+    const final = pickIncoming(spec, afterFielder);
     expect(final.done).toBe(true);
     if (!final.done) throw new Error("expected done");
-    expect(final.event.payload).toMatchObject({ wicket: { kind: "caught", out: "h1", fielder: "a2", bowlerCredited: true } });
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "caught", out: "h1", fielder: "a2", bowlerCredited: true, incoming: "h3" } });
   });
 
   it("runout asks BOTH who-out and fielder, in order", () => {
@@ -2446,19 +2564,21 @@ describe("buildSheets — wicket flow (D-15)", () => {
     expect(afterOut.done).toBe(false);
     if (afterOut.done) throw new Error("expected not done");
     expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
-    const final = answerStep(spec, afterOut.state, "a3");
+    const afterFielder = answerStep(spec, afterOut.state, "a3");
+    const final = pickIncoming(spec, afterFielder);
     expect(final.done).toBe(true);
     if (!final.done) throw new Error("expected done");
-    expect(final.event.payload).toMatchObject({ wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false } });
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" } });
   });
 
   it("stumped skips who-out but asks for fielder, and bowlerCredited is true", () => {
     const spec = wicketSpec();
     const afterKind = answerStep(spec, initialSheetState(), "stumped");
     if (afterKind.done) throw new Error("expected not done");
-    const final = answerStep(spec, afterKind.state, "a1");
+    const afterFielder = answerStep(spec, afterKind.state, "a1");
+    const final = pickIncoming(spec, afterFielder);
     if (!final.done) throw new Error("expected done");
-    expect(final.event.payload).toMatchObject({ wicket: { kind: "stumped", out: "h1", fielder: "a1", bowlerCredited: true } });
+    expect(final.event.payload).toMatchObject({ wicket: { kind: "stumped", out: "h1", fielder: "a1", bowlerCredited: true, incoming: "h3" } });
   });
 
   it("back from fielder returns to kind for a non-runout dismissal — skips over the gated-off who-out step, never gets stuck on it", () => {
@@ -2507,6 +2627,33 @@ describe("buildSheets — wicket flow (D-15)", () => {
     if (fielder.kind !== "person") throw new Error("expected a person step");
     expect(fielder.candidates).toBeUndefined();
     expect(fielder.pool).toBe("onfield");
+  });
+
+  it("incoming is the batting order minus the crease, next-in-order first", () => {
+    const spec = wicketSpec();
+    const incoming = spec.steps.find((s) => s.id === "incoming")!;
+    if (incoming.kind !== "person") throw new Error("expected a person step");
+    expect(incoming.candidates).toEqual(["h3"]);
+    expect(incoming.candidates).not.toContain("h1");
+    expect(incoming.candidates).not.toContain("h2");
+  });
+
+  it("picking a non-next incoming names them on the payload — mutation target if buildPayload dropped incoming", () => {
+    const spec = wicketSpec();
+    const v = view({
+      state: state({
+        orders: { home: ["h1", "h2", "h3", "h4"], away: ["a1", "a2", "a3"] },
+        innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", nextBatterIndex: 2, dismissed: [] } })],
+      }),
+    });
+    const named = buildSheets(v, t).wicket;
+    const incoming = named.steps.find((s) => s.id === "incoming");
+    expect(incoming && incoming.kind === "person" ? incoming.candidates : []).toEqual(["h3", "h4"]);
+    const afterKind = answerStep(named, initialSheetState(), "bowled");
+    if (afterKind.done) throw new Error("expected not done");
+    const done = answerStep(named, afterKind.state, "h4");
+    if (!done.done) throw new Error("expected done");
+    expect((done.event.payload as { wicket: { incoming?: string } }).wicket.incoming).toBe("h4");
   });
 });
 
@@ -2575,16 +2722,21 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
     const afterOut = answerStep(spec, afterKind.state, "h2"); // non-striker run out
     if (afterOut.done) throw new Error("expected not done");
     expect(currentStep(spec, afterOut.state)!.id).toBe("fielder");
-    const runoutFinal = answerStep(spec, afterOut.state, "a3");
+    const afterFielder = answerStep(spec, afterOut.state, "a3");
+    if (afterFielder.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterFielder.state)!.id).toBe("incoming");
+    const runoutFinal = answerStep(spec, afterFielder.state, "h3");
     if (!runoutFinal.done) throw new Error("expected done");
     expect(runoutFinal.event.payload).toMatchObject({
-      wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false },
+      wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
     });
 
-    const obstructedFinal = answerStep(spec, initialSheetState(), "obstructed");
-    if (!obstructedFinal.done) throw new Error("expected done"); // no `when`-gated step applies to obstructed
+    const afterObstructed = answerStep(spec, initialSheetState(), "obstructed");
+    if (afterObstructed.done) throw new Error("expected not done");
+    const obstructedFinal = answerStep(spec, afterObstructed.state, "h3");
+    if (!obstructedFinal.done) throw new Error("expected done");
     expect(obstructedFinal.event.payload).toMatchObject({
-      wicket: { kind: "obstructed", out: "h1", bowlerCredited: false },
+      wicket: { kind: "obstructed", out: "h1", bowlerCredited: false, incoming: "h3" },
     });
     expect((obstructedFinal.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
   });
@@ -3038,6 +3190,17 @@ describe("buildSheets / buildTiles — R2c: Retire is a tile-driven guided sheet
   it("builds a payload the engine accepts, and never hardcodes reason:'other'", () => {
     const spec = buildSheets(view({ state: atCrease() }), t).retire!;
     expect(spec.buildPayload({ person: "h2", reason: "hurt" })).toEqual({ person: "h2", reason: "hurt" });
+    expect(spec.buildPayload({ person: "h2", reason: "hurt", incoming: "h3" })).toEqual({
+      person: "h2",
+      reason: "hurt",
+      incoming: "h3",
+    });
+  });
+
+  it("asks who walks in last, ICC-legal names only, next-in-order first", () => {
+    const incoming = buildSheets(view({ state: atCrease() }), t).retire!.steps.find((s) => s.id === "incoming")!;
+    expect(incoming.kind).toBe("person");
+    expect((incoming as { candidates?: readonly string[] }).candidates).toEqual(["h3"]);
   });
 });
 

@@ -21,6 +21,8 @@ export {
   // R2c — two rules the v3 pad must mirror rather than fork, so it can refuse
   // an illegal pick BEFORE the tap instead of surfacing a generic 422 after it.
   eligibleBowlers,
+  eligibleIncomingBatters,
+  suggestedIncomingBatter,
   reviewsRemaining,
   // R3.5 — the pad must not re-derive "which innings is being played". Same
   // posture as nextBattingSide/eligibleBowlers/reviewsRemaining above: a

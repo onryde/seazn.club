@@ -16,6 +16,8 @@ import {
   CricketWicket,
   nextBattingSide,
   eligibleBowlers,
+  eligibleIncomingBatters,
+  suggestedIncomingBatter,
   reviewsRemaining,
   activeInnings,
   soBattingSideAt,
@@ -210,9 +212,36 @@ describe("cricket golden: ball-by-ball mini match (fine fidelity)", () => {
     expect(() => bad({ ballInOver: 2 })).toThrowError(
       expect.objectContaining({ code: "INVALID_EVENT" }),
     );
-    expect(() => bad({ striker: "H-3" })).toThrowError(
-      expect.objectContaining({ code: "INVALID_EVENT" }),
-    );
+    // Mid-over striker swap (after the innings has opened with H-1/H-2) is
+    // still refused. Naming H-3 on ball 1 is now a legal opening pair
+    // (Law 25.1), so the mismatch check lives on the SECOND delivery.
+    expect(() =>
+      fold(mini, [
+        ...start,
+        makeEnvelope(1, {
+          type: "cricket.ball",
+          payload: {
+            over: 0,
+            ballInOver: 1,
+            striker: "H-1",
+            nonStriker: "H-2",
+            bowler: "A-11",
+            runs: { bat: 0 },
+          },
+        }),
+        makeEnvelope(2, {
+          type: "cricket.ball",
+          payload: {
+            over: 0,
+            ballInOver: 2,
+            striker: "H-3",
+            nonStriker: "H-2",
+            bowler: "A-11",
+            runs: { bat: 0 },
+          },
+        }),
+      ]),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
     expect(() =>
       bad({ runs: { bat: 1, extras: { kind: "wide", runs: 1 } } }),
     ).toThrowError(expect.objectContaining({ code: "INVALID_EVENT" }));
@@ -1667,6 +1696,30 @@ describe("eligibleBowlers (R2c — exported for the pad's bowler chip)", () => {
   it("can empty the eleven completely — every bowler spent is a real state the pad must handle", () => {
     const spent = Object.fromEntries(order.map((id) => [id, 24]));
     expect(eligibleBowlers(order, { prevOverBowler: null, bowlerBalls: spent }, 4, 6)).toEqual([]);
+  });
+});
+
+describe("eligibleIncomingBatters / suggestedIncomingBatter (exported for the pad's incoming step)", () => {
+  const order = lineup("home").slots.map((sl) => sl.personId);
+  const [h1, h2, h3, h4] = order as [string, string, string, string];
+
+  it("drops the crease pair and anyone already out, keeps the rest of the order including later names", () => {
+    expect(eligibleIncomingBatters(order, [h1], [h2, h3])).toEqual(order.filter((id) => id !== h1 && id !== h2 && id !== h3));
+  });
+
+  it("keeps a retired-not-out batter — they are still in the order and not dismissed", () => {
+    expect(eligibleIncomingBatters(order, [], [h1, h2])).toContain(h3);
+    expect(eligibleIncomingBatters(order, [], [h1, h2])).toContain(h4);
+  });
+
+  it("suggestedIncomingBatter is the next unused order name, not merely eligible[0] after a promotion", () => {
+    // Openers h1/h2, cursor at 2; h4 was promoted earlier so auto still wants h3.
+    expect(suggestedIncomingBatter(order, [], [], [h1, h2], 2)).toBe(h3);
+  });
+
+  it("suggestedIncomingBatter falls back to a retired-not-out batter once the unused order is exhausted", () => {
+    const restOut = order.filter((id) => id !== h1 && id !== h2 && id !== h3);
+    expect(suggestedIncomingBatter(order, restOut, [h3], [h1, h2], order.length)).toBe(h3);
   });
 });
 
