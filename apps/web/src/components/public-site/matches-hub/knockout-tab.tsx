@@ -218,8 +218,9 @@ export type PendingSideKey = "knockout.pendingPair" | "knockout.pendingLoser";
 /**
  * What an EMPTY slot of a drawable bracket reads while the match that feeds
  * it is still to be decided: the two entrants who could fill it (fix round,
- * D2 — the owner-approved mock). Null leaves the slot the engine's own
- * sentence ("Winner of R3·1").
+ * D2 — the owner-approved mock). Null leaves the slot the document's own
+ * sentence, which names the feeder's round as the rail does ("Winner of
+ * Quarter-finals, match 1" — `feeder-slot-label.ts`, fix round N1).
  *
  * THE FEEDER is `generateSingleElim`'s wiring, and the relationship the tree's
  * connectors already draw: bracket round k+1's fixture j is fed on side s by
