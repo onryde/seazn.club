@@ -761,11 +761,33 @@ Remaining shots, looked at after the compaction:
 Open fix list (one fix round, then rebuild, recapture ALL cells, look at every one, publish the contact sheet
 with verdicts for owner sign-off; then a final whole-branch review):
 - **P1 (important, pre-existing, reds the smoke champion check)** — the hub JSON serves the old result for
-  ~30s after a score. Lead, unverified: `server/public-site/revalidate.ts` `fireDivisionRevalidate` calls
-  `revalidateTag(tag, "max")` (stale-while-revalidate profile) where `orgTag` uses `{ expire: 0 }`; the hub's
-  `unstable_cache` and the inner `getPublicDivision` cache both hang off `division:{id}`. Read Next's
-  `revalidateTag` docs in `node_modules/next/dist/docs` before changing; prove with the capture/diag script
-  (`t3/diag-refresh.cjs`) that a score shows on the next hub read.
+  ~30s after a score. The pre-compaction lead ("`"max"` is the cause") was HALF right. Root cause, PROVEN by a
+  read-only investigation (evidence and Next 16.2.9 source lines in scratchpad `t3/p1-rootcause.md`):
+  - `usecases/scoring.ts:147` runs `void invalidatePublicCache(...)`. That function awaits a select and three
+    Redis sweeps, THEN calls `fireDivisionRevalidate`. By then Next has already flushed the request's pending
+    revalidations (`app-route/module.js:494`); a later `revalidateTag` is dropped silently — no throw, 0 cache
+    calls (reproduced by running Next's own flush in node). Reads at +1/+3/+5s stale; fresh when the ENTRY aged
+    out (31.4s after its first read, 18.3s after the score). `event-import.ts:472` has the same `void`.
+  - Killed: "max" ignored by `unstable_cache` (an in-request "max" gave one stale read at +0.3s, fresh at +1.5s —
+    SWR as documented); a tag mismatch (the fired tags do cover the hub's match data); a route/Redis layer locally
+    (no `x-nextjs-cache`, `generatedAt` moves per read, `REDIS_URL` unset).
+  - Same timeline on the competition page, the division page and the hub JSON (all fresh together at +33.4s).
+    The competition page re-reads the hub JSON (15s live / 60s idle poll, none while realtime is subscribed);
+    the division page has no live path (grep, not run) — reload only.
+  - From the code, not run: in prod the late Redis delete does land, the next hub read rebuilds through the
+    unrevalidated division cache and re-caches that stale doc for 15s (worst case ~45s); a multi-machine peer
+    broadcast gets SWR while the writing machine drops the tag.
+  - **Rulings (controller, 2026-09-14):** ship BOTH parts. Part 1 — await the invalidation, fire the tag right after
+    the select, keep the Redis sweeps non-blocking and after the tag. Part 2 — a score-only `fireScoreRevalidate`:
+    division tag `{ expire: 0 }`, competition tag `"max"`. Part 1 alone leaves one stale read per score, which
+    measurably keeps the smoke check red and would leave a realtime-triggered refresh on the old result;
+    `{ expire: 0 }` has precedent in `fireOrgRevalidate`. Cost accepted: the next reader after a score rebuilds.
+    The 25 other `fireDivisionRevalidate` callers keep "max" this round. New DB-backed test through Next's real
+    flush; `scoring-deferred.test.ts` currently polls `vi.waitFor` for the late call — it froze the defect
+    (class 4) and must assert the invalidation is done when `scoreEvent` resolves. Brief: `t3/p1-fix-brief.md`.
+  - **P1b (open, NOT this round, unproven):** the competition shell is `unstable_cache`d on the org tag only, so
+    `divisions[].status` and the live-now list may still lag up to 30s after a match starts or ends. Measure it
+    with the post-fix diag before deciding.
 - **P2 (pre-existing)** — `lib/hub-dict.ts` `HUB_DICT_PREFIXES` lacks the `matchCentre.status.*` keys the hub
   `MatchCard` prints, so a forfeited match shows the raw key on Matches and Knockout. Add exactly those keys
   (not the whole `matchCentre.` prefix — the slice exists to keep the page small) and keep `hub-dict.test.tsx` honest.
