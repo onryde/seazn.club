@@ -1011,6 +1011,12 @@ export function FixtureConsole({
                 aside={msg("console.phone.lineup")}
                 showLabel={msg("lineup.phone.show")}
                 hideLabel={msg("lineup.phone.hide")}
+                // Once the match has started the lineup is locked
+                // (`canEdit` below) and worth folding away on desktop too —
+                // every sport shares this console, so the fold is universal
+                // rather than a per-sport gate (2026-09-14).
+                desktopCollapsible
+                startOpen={!started}
               >
                 <LineupEditor
                   fixtureId={fixture.id}
@@ -1058,6 +1064,8 @@ export function FixtureConsole({
                 summary={entrantDisplayName(s)}
                 showLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
                 hideLabel={msg("lineup.availabilityTitle", { name: entrantDisplayName(s) })}
+                desktopCollapsible
+                startOpen={!started}
               >
                 <AvailabilityRoster
                   side={{ ...s, name: entrantDisplayName(s) }}

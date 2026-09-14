@@ -9,12 +9,24 @@ export interface PhoneDisclosureProps {
   showLabel: string;
   hideLabel: string;
   children: ReactNode;
+  /** Initial `open` state (default true — the original always-open-at-desktop
+   *  behavior). Callers that also pass `desktopCollapsible` use this to start
+   *  folded, e.g. `!started` for a section worth full width only pre-match. */
+  startOpen?: boolean;
+  /** Default false, phone-only per the design doc below. When true the toggle
+   *  row also renders at `md` and up (no `md:hidden`) and the body is gated
+   *  purely by `open` at every width — a desktop-collapsible variant for
+   *  sections that should fold once some event fires (2026-09-14, fixture
+   *  console lineup/roster: collapse once the match starts, every sport). */
+  desktopCollapsible?: boolean;
 }
 
-/** Phone-only disclosure (spec 2026-09-02-scorepad-v3-phone-composition §3.10).
- *  Below `md` the body is hidden until the row is tapped; at `md` and up the
- *  row is not rendered (`md:hidden`) and the body carries no hiding class, so
- *  desktop is a plain wrapper around what it always rendered.
+/** Phone-only disclosure by default (spec
+ *  2026-09-02-scorepad-v3-phone-composition §3.10). Below `md` the body is
+ *  hidden until the row is tapped; at `md` and up the row is not rendered
+ *  (`md:hidden`) and the body carries no hiding class, so desktop is a plain
+ *  wrapper around what it always rendered — UNLESS `desktopCollapsible` is
+ *  set, in which case the toggle and the fold both apply at every width.
  *
  *  Width (fix round 2, item 1): the wrapper is a `grid` item with no width
  *  constraint of its own, so its default `min-width: auto` resolves to
@@ -36,8 +48,16 @@ export interface PhoneDisclosureProps {
  *  `h-full` to `lineup-editor.tsx` itself — it is shared with the
  *  registration surfaces and must not inherit this plan's layout
  *  assumptions. */
-export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children }: PhoneDisclosureProps) {
-  const [open, setOpen] = useState(false);
+export function PhoneDisclosure({
+  summary,
+  aside,
+  showLabel,
+  hideLabel,
+  children,
+  startOpen = true,
+  desktopCollapsible = false,
+}: PhoneDisclosureProps) {
+  const [open, setOpen] = useState(desktopCollapsible ? startOpen : false);
   // Review fix: the activity toggle already carries `aria-controls`; this
   // one did not. `PhoneDisclosure` is mounted several times on one page
   // (once per lineup/availability side in `fixture-console.tsx`), so the
@@ -54,7 +74,7 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
         aria-label={open ? hideLabel : showLabel}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+        className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400${desktopCollapsible ? "" : " md:hidden"}`}
       >
         <span className="min-w-0 truncate text-sm font-semibold text-slate-900">{summary}</span>
         <span className="flex shrink-0 items-center gap-2 text-xs text-slate-600">
@@ -62,7 +82,10 @@ export function PhoneDisclosure({ summary, aside, showLabel, hideLabel, children
           <span aria-hidden="true">{open ? "▴" : "▾"}</span>
         </span>
       </button>
-      <div className={open ? "grid h-full" : "grid h-full max-md:hidden"} id={bodyId}>
+      <div
+        className={open ? "grid h-full" : desktopCollapsible ? "grid h-full hidden" : "grid h-full max-md:hidden"}
+        id={bodyId}
+      >
         {children}
       </div>
     </div>

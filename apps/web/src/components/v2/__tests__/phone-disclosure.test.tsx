@@ -37,3 +37,42 @@ describe("PhoneDisclosure", () => {
     expect(controls).toBe(bodyId);
   });
 });
+
+describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup once the match starts, every sport)", () => {
+  it("startOpen=false renders the toggle WITHOUT md:hidden and the body folded at every width", () => {
+    const closedHtml = renderToStaticMarkup(
+      <PhoneDisclosure
+        summary="Home Lions"
+        showLabel="Show lineup"
+        hideLabel="Hide lineup"
+        desktopCollapsible
+        startOpen={false}
+      >
+        <p data-role="body">the editor</p>
+      </PhoneDisclosure>,
+    );
+    // Same word-boundary trap as the phone-only case above: assert the class
+    // attribute does NOT end in `md:hidden` rather than merely NOT containing
+    // it, so `max-md:hidden` (still present on nothing here, but a future
+    // regression) cannot satisfy a loose check.
+    expect(closedHtml).toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*"/);
+    expect(closedHtml).not.toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*\smd:hidden"/);
+    expect(closedHtml).toMatch(/<div class="grid h-full hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+  });
+
+  it("startOpen=true (pre-match) renders the body open at every width", () => {
+    const openHtml = renderToStaticMarkup(
+      <PhoneDisclosure
+        summary="Home Lions"
+        showLabel="Show lineup"
+        hideLabel="Hide lineup"
+        desktopCollapsible
+        startOpen
+      >
+        <p data-role="body">the editor</p>
+      </PhoneDisclosure>,
+    );
+    expect(openHtml).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-expanded="true"/);
+    expect(openHtml).toMatch(/<div class="grid h-full" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+  });
+});
