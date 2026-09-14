@@ -77,19 +77,40 @@ function sameIdentityField(a: string | null | undefined, b: string | null | unde
  * Three outcomes, matching the S10 acceptance criteria exactly:
  *  - no slot at all → indeterminate. NEVER renegotiate on a guess — that is
  *    the duplicate bug this ruling exists to prevent.
- *  - slot's type/payload/recorded_by/device_link_id all match ours →
- *    already-applied. Our own retried request landed; drop it.
- *  - slot is foreign (any of those four differ) → renegotiate, but only if
- *    a currentSeq is actually available; otherwise indeterminate too.
+ *  - slot's type/payload/recorded_by/device_link_id all match ours, AND
+ *    `event.attempts > 0` → already-applied. Our own RETRIED request
+ *    landed; drop it.
+ *  - anything else (a foreign slot, OR a content-matching slot on an
+ *    event's FIRST attempt) → renegotiate, but only if a currentSeq is
+ *    actually available; otherwise indeterminate too.
+ *
+ * Task 10 fix round 3 (B07a, ruling R65/R67) — the `event.attempts > 0` gate
+ * is the fix itself. Before it, a content-match ALONE meant "already
+ * applied", which is unsound: two DIFFERENT, legitimately identical events
+ * from the same device (e.g. a scorer awarding the same entrant the same
+ * single point twice in a row) are indistinguishable from a genuine retry by
+ * content alone, and the second one landed on a 409 was being silently and
+ * permanently dropped — proven live-mechanism by
+ * `__tests__/pipeline.test.ts`'s "F2/R63" describe block. `attempts` (already
+ * persisted on every `PendingEvent`, incremented only by `recordAttempt` on a
+ * network-error or indeterminate 409 — see `sendOne` below) is exactly "this
+ * SAME queued event was sent before with an UNKNOWN outcome", so gating on it
+ * says "already-applied" only for an event's own recognized retry, never for
+ * a fresh send that merely happens to look like something already on the
+ * ledger. A fresh send whose content collides with an existing row now
+ * renegotiates at the current seq (or stays indeterminate with no currentSeq)
+ * — the SAME fallback an outright-foreign slot already used, so this changes
+ * no other branch's behaviour.
  */
 export function resolveConflict(
-  event: Pick<PendingEvent, "type" | "payload">,
+  event: Pick<PendingEvent, "type" | "payload" | "attempts">,
   slot: LedgerSlotEvent | null,
   identity: OwnIdentity,
   currentSeq: number | null,
 ): ConflictResolution {
   if (slot === null) return { kind: "indeterminate" };
   const isOurs =
+    event.attempts > 0 &&
     slot.type === event.type &&
     deepEqual(slot.payload, event.payload) &&
     sameIdentityField(slot.recorded_by, identity.recordedBy) &&
