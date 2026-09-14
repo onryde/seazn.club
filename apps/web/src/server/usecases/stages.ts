@@ -1155,9 +1155,10 @@ interface GenerateWrite {
  *  Callers that publish their own write use `generateStageFixturesUnpublished`
  *  instead: `startDivision` (one publish naming every fixture of the division),
  *  `rebuildStageFixtures` (one publish naming the fixtures it deleted), and
- *  `completeStage` when scoring's auto-advance calls it, because scoring's
- *  post-commit `finally` publishes. The organiser's completion route draws
- *  through this publishing generate (R10f). */
+ *  `completeStage` when scoring's auto-advance calls it with
+ *  `{ publish: false }`, because scoring's post-commit `finally` publishes.
+ *  Every other completion draws through this publishing generate (R10f; the
+ *  default since R10g). */
 export async function generateStageFixtures(auth: AuthCtx, stageId: string): Promise<GenerateOutcome> {
   const write = await generateStageFixturesWrite(auth, stageId);
   if (write.outcome.created > 0) {
@@ -2557,10 +2558,12 @@ export interface CompleteStageResult extends CompleteResult {
  *    mechanism) keeps its existing auto-seed-then-generate behaviour,
  *    idempotent — an already-seeded stage is not re-seeded.
  *
- * `publish` (R10f): the organiser's route passes true, so the fixtures this
- * completion draws reach the live hub after commit. Scoring's auto-advance
- * leaves it off, because its own post-commit `finally` publishes (see the
- * generate call below).
+ * `publish` (R10f; on by default since R10g): the fixtures this completion
+ * draws reach the live hub after commit. A caller that publishes the whole
+ * write itself opts out with `{ publish: false }`, and today only scoring's
+ * auto-advance does (see the generate call below). On by default because a
+ * redundant publish costs one hub refetch, while a missed one leaves every
+ * subscribed hub stale with every test still green.
  */
 export async function completeStage(
   auth: AuthCtx,
@@ -2729,16 +2732,20 @@ export async function completeStage(
   // it. So the record NAMES the error, and flags the freeze case specifically
   // (`locked`) so the two can be told apart without parsing prose.
   //
-  // R10f (review-r10e m1): WHO PUBLISHES THE DRAW. The organiser's button
-  // (`POST /stages/{id}/complete`, `publish: true`) draws through the
-  // publishing generate: one DEL of the hub key after the draw commits, then
-  // the division push, and nothing when it drew nothing or was refused. The
-  // knockout's ids are all new, so no fixture key or fixture push is owed.
-  // Scoring's auto-advance calls this from inside `scoreEvent`'s post-commit
-  // hooks, whose `finally` already drops the same hub key and pushes the
-  // division once the hooks are done, so it leaves `publish` off: a second
-  // publish there would cost every deciding score a second hub refetch.
-  const generate = opts.publish ? generateStageFixtures : generateStageFixturesUnpublished;
+  // R10f (review-r10e m1), default flipped by R10g (review-r10f m1): WHO
+  // PUBLISHES THE DRAW. Every caller that does not opt out (the organiser's
+  // button, `POST /stages/{id}/complete`, and any future caller) draws
+  // through the publishing generate: one DEL of the hub key after the draw
+  // commits, then the division push, and nothing when it drew nothing or was
+  // refused. The knockout's ids are all new, so no fixture key or fixture
+  // push is owed. Scoring's auto-advance passes `{ publish: false }`: it runs
+  // inside a decided fixture's post-commit hooks (`onDecided`). Reached from
+  // `scoreEvent`, that write's `finally` already drops the same hub key and
+  // pushes the division once the hooks are done, so a second publish would
+  // cost every deciding score a second hub refetch. Reached from the batch
+  // importer (`event-import.ts`), its `finally` DELs the hub key but sends
+  // no push, by design (a backfill of finished results, not a live pad).
+  const generate = (opts.publish ?? true) ? generateStageFixtures : generateStageFixturesUnpublished;
   let generated: number | undefined;
   try {
     generated = (await generate(auth, qualified.stage_id)).created;

@@ -781,6 +781,23 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
     await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
   }, 120_000);
 
+  it("completeStage called with NO options (R10g): publishing is the default, so the draw's hub key goes in one DEL after commit, then the division push", async () => {
+    const rig = await groupsToKnockoutRig();
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const result = await completeStage(rig.auth, rig.groupId);
+    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
+    expect(result.completed).toBe(true);
+    expect(created.length, "the completion drew the knockout").toBeGreaterThan(0);
+    expect(result.next_stage_fixtures).toBe(created.length);
+    expect([moved, deleted]).toEqual([[], []]);
+
+    await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
+  }, 120_000);
+
   it("POST /stages/{id}/complete on a frozen division: the completion stands, no knockout is drawn, nothing is sent", async () => {
     const rig = await groupsToKnockoutRig();
     await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);

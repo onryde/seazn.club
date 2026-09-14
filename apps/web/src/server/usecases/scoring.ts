@@ -525,7 +525,7 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
   if (!ready) return;
   const { completeStage } = await import("./stages");
   try {
-    await completeStage(auth, stageId);
+    await completeStage(auth, stageId, { publish: false });
     await withTenant(auth.orgId, async (tx) => {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
