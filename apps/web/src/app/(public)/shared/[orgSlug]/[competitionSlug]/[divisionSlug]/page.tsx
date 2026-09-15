@@ -198,6 +198,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
                 lookup={lookup}
                 slotText={namer.slot}
+                copy={scheduleCopy}
               />
             </section>
           );

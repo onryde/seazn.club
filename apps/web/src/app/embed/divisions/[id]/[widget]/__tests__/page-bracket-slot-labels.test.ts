@@ -21,6 +21,7 @@ vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn(async () => undefi
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
+import { LOCALES } from "@/lib/i18n-constants";
 import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
 import type { EmbedPayload } from "@/server/embed-data";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -165,4 +166,60 @@ describe("embed bracket widget — a waiting side names its feeder's ROUND (R10d
     expect(html).not.toContain(scheduleTbd);
     expect(html).not.toMatch(/R\d+·\d+/);
   });
+});
+
+// B1 — the bracket widget printed literal English "Live" (in play) and "TBD"
+// (no result, no time) in its card footers whatever the org's locale. The page
+// now hands its Bracket the same org-locale `copy` the schedule widget gets.
+// Expected words are read from the dictionary keys, never from the page.
+describe("embed bracket widget — its card footers are in the org's locale (B1)", () => {
+  /** How many times `text` renders as a whole text node. */
+  const count = (html: string, text: string) => html.split(`>${attr(text)}<`).length - 1;
+  /** Each card's footer text (its markup, tags stripped), keyed by the card's href. */
+  const footersOf = (html: string): Record<string, string> =>
+    Object.fromEntries(
+      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => {
+        const card = m[2]!;
+        const at = card.lastIndexOf('<div class="mt-1.5');
+        expect(at, `the footer of ${m[1]}`).toBeGreaterThan(-1);
+        return [m[1]!, card.slice(at).replace(/<[^>]+>/g, "")];
+      }),
+    );
+
+  it.each(LOCALES)(
+    "%s org: the in-play semi-final reads the dictionary's live word, the timeless final its TBD word, and no English word is left",
+    async (locale) => {
+      embedDivisionData.mockResolvedValue({
+        ok: true,
+        data: payload(locale, [
+          F({ id: "semi-1", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "in_play" }),
+          F({ id: "semi-2", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
+          F({
+            id: "final",
+            round_no: 2,
+            seq_in_round: 1,
+            home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+            away_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 2 } },
+            scheduled_at: null,
+          }),
+        ]),
+      });
+
+      const html = await bracketMarkup();
+
+      const live = t(await getDictionary(locale, "public"), "matchesHub.live");
+      const tbd = msgFor(locale, "schedule.tbd");
+      const footers = footersOf(html);
+      const at = (id: string) => footers[`/shared/test-org/test-comp/open/fixtures/${id}`];
+      expect({ live: at("semi-1"), timeless: at("final") }).toEqual({ live: attr(live), timeless: attr(tbd) });
+      expect(at("semi-2"), "the dated semi-final renders a footer").toBeTruthy();
+      expect([attr(live), attr(tbd)], "the dated semi-final reads neither word").not.toContain(at("semi-2"));
+
+      // The negative pair: en's word, wherever this locale's differs, is absent.
+      const enLive = t(await getDictionary("en", "public"), "matchesHub.live");
+      const enTbd = msgFor("en", "schedule.tbd");
+      const leaks = [enLive, enTbd].filter((word) => word !== live && word !== tbd);
+      expect(leaks.filter((word) => count(html, word) > 0)).toEqual([]);
+    },
+  );
 });

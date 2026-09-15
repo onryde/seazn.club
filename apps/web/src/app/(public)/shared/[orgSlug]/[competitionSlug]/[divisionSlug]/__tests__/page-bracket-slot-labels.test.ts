@@ -22,6 +22,7 @@ vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => 
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { msgFor } from "@/lib/messages-i18n";
+import { LOCALES } from "@/lib/i18n-constants";
 import { Bracket } from "@/components/public-site/bracket";
 import { Schedule } from "@/components/public-site/schedule";
 import type { PublicFixture, PublicEntrant } from "@/server/public-site/data";
@@ -228,5 +229,67 @@ describe("public division page — its Bracket names a waiting side's feeder ROU
     // N1f f2: the names head the round groups two stages would otherwise share.
     expect(stageNames).toEqual(Object.fromEntries(stages.map((s) => [s.id, s.name])));
   });
+});
+
+// B1 — the page's Bracket printed literal English "Live" (in play) and "TBD"
+// (no result, no time) in its card footers whatever the org's locale. The page
+// now hands its Bracket the same org-locale `copy` it hands its Schedule.
+// Expected words are read from the dictionary keys, never from the page.
+describe("public division page — its Bracket's card footers are in the org's locale (B1)", () => {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  /** How many times `text` renders as a whole text node. */
+  const count = (html: string, text: string) => html.split(`>${esc(text)}<`).length - 1;
+  /** Each card's footer text (its markup, tags stripped), keyed by the card's href. */
+  const footersOf = (html: string): Record<string, string> =>
+    Object.fromEntries(
+      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => {
+        const card = m[2]!;
+        const at = card.lastIndexOf('<div class="mt-1.5');
+        expect(at, `the footer of ${m[1]}`).toBeGreaterThan(-1);
+        return [m[1]!, card.slice(at).replace(/<[^>]+>/g, "")];
+      }),
+    );
+
+  it.each(LOCALES)(
+    "%s org: the in-play semi-final reads the dictionary's live word, the timeless final its TBD word, and no English word is left",
+    async (locale) => {
+      const data = divisionData();
+      const fixtures = [
+        F({ id: "semi-1", round_no: 1, seq_in_round: 1, home_entrant_id: "e1", away_entrant_id: "e2", status: "in_play" }),
+        F({ id: "semi-2", round_no: 1, seq_in_round: 2, home_entrant_id: "e3", away_entrant_id: "e4" }),
+        F({
+          id: "final",
+          round_no: 2,
+          seq_in_round: 1,
+          home_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 1 } },
+          away_slot_label: { key: "slot.winner_match", params: { round: 1, seq: 2 } },
+          scheduled_at: null,
+        }),
+      ];
+      getPublicDivision.mockResolvedValue({ ...data, org: { ...data.org, default_locale: locale }, fixtures });
+
+      const root = await DivisionHomePage({
+        params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+      });
+      const brackets = findElements(root, Bracket);
+      expect(brackets, "the page builds one Bracket for its one knockout stage").toHaveLength(1);
+      const html = renderToStaticMarkup(brackets[0]!);
+
+      const live = t(await getDictionary(locale, "public"), "matchesHub.live");
+      const tbd = msgFor(locale, "schedule.tbd");
+      const footers = footersOf(html);
+      const at = (id: string) => footers[`/shared/test-org/test-comp/open/fixtures/${id}`];
+      expect({ live: at("semi-1"), timeless: at("final") }).toEqual({ live: esc(live), timeless: esc(tbd) });
+      expect(at("semi-2"), "the dated semi-final renders a footer").toBeTruthy();
+      expect([esc(live), esc(tbd)], "the dated semi-final reads neither word").not.toContain(at("semi-2"));
+
+      // The negative pair: en's word, wherever this locale's differs, is absent.
+      const enLive = t(await getDictionary("en", "public"), "matchesHub.live");
+      const enTbd = msgFor("en", "schedule.tbd");
+      const leaks = [enLive, enTbd].filter((word) => word !== live && word !== tbd);
+      expect(leaks.filter((word) => count(html, word) > 0)).toEqual([]);
+    },
+  );
 });
 
