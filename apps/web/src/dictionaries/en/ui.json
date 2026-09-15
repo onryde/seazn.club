@@ -5132,5 +5132,18 @@
   "stream.credits.perMatch": "{price} per match",
   "stream.credits.popular": "Most clubs",
   "stream.credits.footnote": "Sandbox prices until launch.",
-  "stream.credits.soon": "Coming soon"
+  "stream.credits.soon": "Coming soon",
+  "externalPlay.playOnLichess": "Play on Lichess",
+  "externalPlay.waitingForLink": "Your Lichess play link arrives about 15 minutes before kick-off ({when}).",
+  "externalPlay.soon": "soon",
+  "externalPlay.needsOrganiser": "This online game needs the organiser to confirm a result.",
+  "externalPlay.queue.title": "Online play — needs result",
+  "externalPlay.queue.help": "These Lichess fixtures did not finish cleanly. Settle them here.",
+  "externalPlay.queue.match": "Match {no}",
+  "externalPlay.queue.matchUnknown": "Match",
+  "externalPlay.resolve.homeForfeit": "Home forfeits",
+  "externalPlay.resolve.awayForfeit": "Away forfeits",
+  "externalPlay.resolve.draw": "Draw",
+  "externalPlay.resolve.noResult": "No result",
+  "externalPlay.resolve.failed": "Could not save the result. Try again."
 }

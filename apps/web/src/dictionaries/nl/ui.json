@@ -5132,5 +5132,18 @@
   "stream.credits.perMatch": "{price} per wedstrijd",
   "stream.credits.popular": "Meeste clubs",
   "stream.credits.footnote": "Testprijzen tot de lancering.",
-  "stream.credits.soon": "Binnenkort"
+  "stream.credits.soon": "Binnenkort",
+  "externalPlay.playOnLichess": "Speel op Lichess",
+  "externalPlay.waitingForLink": "Je Lichess-link komt ongeveer 15 minuten voor de start ({when}).",
+  "externalPlay.soon": "binnenkort",
+  "externalPlay.needsOrganiser": "Deze online partij heeft een bevestiging van de organisator nodig.",
+  "externalPlay.queue.title": "Online spelen — uitslag nodig",
+  "externalPlay.queue.help": "Deze Lichess-partijen eindigden niet netjes. Regel ze hier.",
+  "externalPlay.queue.match": "Wedstrijd {no}",
+  "externalPlay.queue.matchUnknown": "Wedstrijd",
+  "externalPlay.resolve.homeForfeit": "Thuis geeft op",
+  "externalPlay.resolve.awayForfeit": "Uit geeft op",
+  "externalPlay.resolve.draw": "Remise",
+  "externalPlay.resolve.noResult": "Geen uitslag",
+  "externalPlay.resolve.failed": "Uitslag opslaan mislukt. Probeer opnieuw."
 }

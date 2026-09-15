@@ -23,6 +23,7 @@ import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/m
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
+import { ExternalPlayCta } from "@/components/public-site/external-play-cta";
 import { fixtureSubheading } from "./fixture-subheading";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
@@ -338,6 +339,24 @@ export default async function FixturePage({ params }: Props) {
             </p>
           ) : null;
         })()}
+
+        {data.externalPlay ? (
+          <ExternalPlayCta
+            externalPlay={data.externalPlay}
+            scheduledLabel={
+              fixture.scheduled_at
+                ? new Date(fixture.scheduled_at).toLocaleString(locale, {
+                    weekday: "short",
+                    day: "numeric",
+                    month: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : null
+            }
+            msg={(key, vars) => t(ui, key, vars)}
+          />
+        ) : null}
 
         {/* Task 14 — the match centre replaces the old bare scorebug
             (`<LiveScore>`, retired). `<MatchCentre>` drives its own live

@@ -5132,5 +5132,18 @@
   "stream.credits.perMatch": "{price} por partido",
   "stream.credits.popular": "La mayoría de clubes",
   "stream.credits.footnote": "Precios de prueba hasta el lanzamiento.",
-  "stream.credits.soon": "Muy pronto"
+  "stream.credits.soon": "Muy pronto",
+  "externalPlay.playOnLichess": "Jugar en Lichess",
+  "externalPlay.waitingForLink": "Tu enlace de Lichess llega unos 15 minutos antes del inicio ({when}).",
+  "externalPlay.soon": "pronto",
+  "externalPlay.needsOrganiser": "Esta partida en línea necesita que el organizador confirme el resultado.",
+  "externalPlay.queue.title": "Juego en línea — falta resultado",
+  "externalPlay.queue.help": "Estas partidas de Lichess no terminaron bien. Resuélvelas aquí.",
+  "externalPlay.queue.match": "Partido {no}",
+  "externalPlay.queue.matchUnknown": "Partido",
+  "externalPlay.resolve.homeForfeit": "Local abandona",
+  "externalPlay.resolve.awayForfeit": "Visitante abandona",
+  "externalPlay.resolve.draw": "Tablas",
+  "externalPlay.resolve.noResult": "Sin resultado",
+  "externalPlay.resolve.failed": "No se pudo guardar el resultado. Inténtalo de nuevo."
 }

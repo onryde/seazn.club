@@ -27,6 +27,8 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
+import { loadPublicExternalPlay } from "@/server/usecases/external-play-read";
+import type { PublicExternalPlay } from "@/server/external-play/public-view";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -771,6 +773,8 @@ export async function getPublicFixture(
    *  not substitute `division.name` (a different noun on air). Null when the
    *  stage row is missing. */
   stageName: string | null;
+  /** Online Lichess play bridge (chess external-play 2026-09-15), or null. */
+  externalPlay: PublicExternalPlay | null;
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
@@ -851,6 +855,7 @@ export async function getPublicFixture(
         // an audience in neither.
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
+        externalPlay: await loadPublicExternalPlay(fixtureId),
       };
     },
     ["pub-fixture", fixtureId],
