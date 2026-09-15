@@ -14,7 +14,11 @@
 // render while closed) and the interactive hook-harness's one-level-deep
 // expansion. Pure extraction sidesteps needing to open it at all.
 import { describe, expect, it } from "vitest";
-import { currentQualifiedFromStages } from "../division-settings";
+import {
+  currentQualifiedFromStages,
+  currentStandingsCarryFromStages,
+  structureDraftsForApply,
+} from "../division-settings";
 
 describe("currentQualifiedFromStages — pre-fills Top-N-advance from progression, not qualification", () => {
   it("reads rankRange(1,6) as 6 — the topN replacement", () => {
@@ -211,5 +215,50 @@ describe("currentQualifiedFromStages — topNPerGroup / bestNth (groups_ko, A3 f
         },
       ]),
     ).toBe(8);
+  });
+});
+
+describe("F6 — standings carry on settings applyStructure path", () => {
+  const knobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+
+  it("structureDraftsForApply with points sets carry on the progression stage", () => {
+    const drafts = structureDraftsForApply("league_ko", knobs, "points");
+    expect(drafts[1]!.progression).toMatchObject({ carry: "points", timing: "setup" });
+  });
+
+  it("structureDraftsForApply with none omits carry", () => {
+    const drafts = structureDraftsForApply("league_ko", knobs, "none");
+    expect(drafts[1]!.progression).not.toHaveProperty("carry");
+  });
+
+  it("currentStandingsCarryFromStages reads stored carry from the first progression stage", () => {
+    expect(
+      currentStandingsCarryFromStages([
+        { progression: null },
+        {
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+            placement: "rank_order",
+            timing: "setup",
+            carry: "full",
+          },
+        },
+      ]),
+    ).toBe("full");
+  });
+
+  it("currentStandingsCarryFromStages defaults to none when carry is absent", () => {
+    expect(
+      currentStandingsCarryFromStages([
+        { progression: null },
+        {
+          progression: {
+            sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+            placement: "rank_order",
+            timing: "setup",
+          },
+        },
+      ]),
+    ).toBe("none");
   });
 });
