@@ -116,12 +116,41 @@ async function railCopy(locale: string) {
 // `truncate` only AFTER `font-display text-sm font-semibold`, and passed
 // `className="truncate w-full …"` (review-n1f m1).
 
-/** Utilities that make a status word disappear instead of wrapping. */
+/**
+ * Utilities that stop a status word wrapping, or cut it off. Picked from the
+ * CSS Tailwind 4.3.1 emits for each (N1h h3, review-n1g m2).
+ *
+ * IN:
+ * - `truncate` (overflow hidden + ellipsis + nowrap), `text-ellipsis`,
+ *   `text-clip`, `overflow-{hidden,clip,x-hidden,x-clip}`, `line-clamp-<n>`:
+ *   they cut the text off at the box.
+ * - `whitespace-nowrap`, `text-nowrap` (`text-wrap: nowrap`) and
+ *   `whitespace-pre` (spaces preserved AND no wrapping): no soft wrap at all.
+ *   `break-words` acts only where wrapping is allowed, so the whole run must
+ *   fit.
+ * - Any variant of these (`clips` strips it: `sm:`, `*:`, `[&>span]:`),
+ *   because it holds in SOME state.
+ *
+ * OUT, because the text still wraps:
+ * - `whitespace-normal`.
+ * - `whitespace-pre-line`: it keeps newlines but wraps. The rail's words are
+ *   dictionary strings with no newline, and a newline could only add a break.
+ * - `whitespace-pre-wrap`: preserved spaces hang at a break, so a word still
+ *   needs only its own width.
+ * - `whitespace-break-spaces`: it wraps, but `typographyOf` refuses to price
+ *   it.
+ * - `text-wrap`, `text-balance`, `text-pretty`.
+ * - Break utilities that only add break opportunities (`break-all`,
+ *   `wrap-anywhere`, `break-words`, `wrap-break-word`), change CJK only
+ *   (`break-keep`), or leave wrapping at a space intact (`break-normal`,
+ *   `wrap-normal`).
+ */
 const CLIPPING = new Set([
   "truncate",
   "text-ellipsis",
   "text-clip",
   "whitespace-nowrap",
+  "whitespace-pre",
   "text-nowrap",
   "overflow-hidden",
   "overflow-clip",
@@ -262,8 +291,8 @@ function typographyOf(chain: Span[], spans: Span[], where: string): Typography {
         apply = () => (trackingEm = em);
       } else if (base === "uppercase") apply = () => (uppercase = true);
       else if (base === "normal-case") apply = () => (uppercase = false);
-      else if (base === "truncate" || base === "whitespace-nowrap" || base === "text-nowrap") apply = () => (nowrap = true);
-      else if (/^(font-(mono|serif)$|lowercase$|capitalize$|tracking-\[|text-\[)/.test(base)) {
+      else if (base === "truncate" || base === "whitespace-nowrap" || base === "text-nowrap" || base === "whitespace-pre") apply = () => (nowrap = true);
+      else if (/^(font-(mono|serif)$|lowercase$|capitalize$|tracking-\[|text-\[|whitespace-break-spaces$)/.test(base)) {
         throw new Error(`${where}: "${token}" is typography this test cannot price yet`);
       }
       if (!apply) continue;
@@ -469,6 +498,37 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     expect(clipped("font-display max-sm:truncate text-sm")).toEqual(["max-sm:truncate"]);
     expect(clipped("whitespace-nowrap font-display")).toEqual(["whitespace-nowrap"]);
     expect(clipped("line-clamp-none font-display break-words")).toEqual([]);
+    // N1h h3 (review-n1g m2): `white-space: pre` cannot wrap at all, and
+    // `overflow-wrap: break-word` acts only where wrapping is allowed, so
+    // `break-words` cannot rescue it. Any variant holds in SOME state, so it
+    // counts too: a width (`sm:`), a child selector (`*:`), an arbitrary one.
+    expect(clipped("font-display whitespace-pre break-words")).toEqual(["whitespace-pre"]);
+    expect(clipped("whitespace-pre font-display")).toEqual(["whitespace-pre"]);
+    expect(clipped("font-display sm:whitespace-nowrap")).toEqual(["sm:whitespace-nowrap"]);
+    expect(clipped("font-display *:truncate")).toEqual(["*:truncate"]);
+    expect(clipped("font-display md:*:whitespace-nowrap")).toEqual(["md:*:whitespace-nowrap"]);
+    expect(clipped("font-display [&_span]:whitespace-pre")).toEqual(["[&_span]:whitespace-pre"]);
+    // A `>` inside a class list (`[&>span]:`) ends the tag for this parser, so
+    // it cannot read the list and REFUSES rather than passing it.
+    expect(() => clipped("font-display [&>span]:whitespace-pre")).toThrow(/non-literal className/);
+    // Every other white-space / text-wrap / break utility still WRAPS, so it
+    // is not a clip (`whitespace-break-spaces` wraps too, but this suite
+    // cannot price it: see `typographyOf`).
+    for (const wraps of [
+      "whitespace-normal",
+      "whitespace-pre-line",
+      "whitespace-pre-wrap",
+      "whitespace-break-spaces",
+      "text-wrap",
+      "text-balance",
+      "text-pretty",
+      "break-all",
+      "break-keep",
+      "wrap-anywhere",
+      "wrap-break-word",
+    ]) {
+      expect({ wraps, clipped: clipped(`font-display ${wraps}`) }).toEqual({ wraps, clipped: [] });
+    }
   });
 
   it("fits every word the rail cell renders, in every locale, in the face and box it paints in (N1f f1, N1g g4)", async () => {
@@ -615,6 +675,14 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     });
     expect(() => typed("flex gap-1 text-[11px] max-sm:text-[13px]")).toThrow(/behind a variant/);
     expect(() => typed("flex gap-1 text-[11px] tracking-[0.2em]")).toThrow(/cannot price/);
+    // N1h h3 (review-n1g m2): `whitespace-pre` cannot wrap, so the whole run
+    // is measured; `whitespace-pre-line` wraps. `whitespace-break-spaces`
+    // wraps too, but its spaces do not hang: a word keeps the width of the
+    // space after it, which the per-word min-content measure leaves out (an
+    // UNDER-estimate), so it is refused rather than guessed.
+    expect(typed("flex gap-1 text-[11px] whitespace-pre")[0].nowrap).toBe(true);
+    expect(typed("flex gap-1 text-[11px] whitespace-pre-line")[0].nowrap).toBe(false);
+    expect(() => typed("flex gap-1 text-[11px] whitespace-break-spaces")).toThrow(/cannot price/);
   });
 
   it("files every face under the weight it IS, so a weight cannot be measured in another's file (N1g g3)", () => {
