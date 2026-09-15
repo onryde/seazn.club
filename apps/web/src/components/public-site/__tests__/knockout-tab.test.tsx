@@ -1696,4 +1696,16 @@ describe("revealScrollLeft — the arithmetic behind scrolling the pressed chip 
   it("m6: a least boundary EXACTLY at the scroll end is a resting place, not a clamp, so it is kept", () => {
     expect(revealScrollLeft(at320(164), { left: 180, width: 140 }, [16, 180, 330])).toBe(164);
   });
+
+  it("m6 from an already-scrolled rail (review N2f m3): the 32-draw at 320 swiped to 100, then Semi-finals pressed, still rests on Quarter-finals' start (311), because the scroll end is judged from where the rail already is", () => {
+    // The 32-draw arm's geometry seen from scrollLeft 100: every viewport start
+    // is its content start less 100. Clear of the gutter needs 222 more, and the
+    // least boundary at or after that is the Semi-finals' own start, 372 away:
+    // 100 + 372 = 472, past the end (422), so the gutter boundary 211 is taken
+    // and the rail rests at 311. Judged from 0 (372 <= 422) the branch would not
+    // fire, and 472 would clamp to the end with Quarter-finals cut.
+    expect(
+      revealScrollLeft({ ...at320(422), scrollLeft: 100 }, { left: 388, width: 138 }, [-84, 79, 227, 388, 534]),
+    ).toBe(311);
+  });
 });
