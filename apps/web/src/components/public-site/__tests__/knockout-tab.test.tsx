@@ -22,6 +22,7 @@
 //    the server snapshot (null) by both environments, so the browser SOURCE is
 //    stubbed below — and only the source: the mode rule stays real.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import en from "@/dictionaries/en/public.json";
@@ -623,6 +624,115 @@ describe("KnockoutTab — a slot still waiting on its feeder (D2)", () => {
     expect(nodeOf(h, "df")).toContain(">Eve Ng / Fay Ho<");
     expect(nodeOf(h, "df")).not.toContain("Winner of SF 1");
     expect(nodeOf(h, "df")).not.toContain("Ana Lee / Bo Kim / Cy Po / Di Wu");
+  });
+});
+
+describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
+  // Three surfaces draw a match, and until this ruling only the Draw had no
+  // crest: the Rounds cards carry one (`MatchCard`, via `EntityLogo`) and so
+  // does the division page's bracket (`bracket.tsx`), which is going to
+  // redirect here. The owner picked option (b): a crest ONLY where the side
+  // has a real badge, and NOTHING otherwise — no placeholder tile, no "?". A
+  // tree node is narrow, so a grey tile on 32 individual players costs every
+  // name ~20px and says nothing, while a team draw — where the logo is the
+  // point — gets it. The Rounds cards keep all three crest states.
+  //
+  // The chip is the division bracket's, read out of its SOURCE, so the two
+  // trees cannot drift apart without this suite saying so.
+  //
+  // A class scan, not a measurement: vitest is `environment: "node"`, so these
+  // pin what the markup ASKS for. That the name really ellipsizes beside the
+  // chip is a browser's to show.
+  const BRACKET_CHIP = readFileSync(new URL("../bracket.tsx", import.meta.url), "utf8").match(
+    /<img src=\{badge\} alt="" className="([^"]+)" \/>/,
+  )?.[1];
+  const ANA_BADGE = "https://cdn.example.test/crests/ana.png";
+  const LONG = "Oliver Whitcombe-Harrington of the North Harbour Racquets Club";
+  const LONG_BADGE = "https://cdn.example.test/crests/whitcombe.png";
+  const badged = (name: string, badgeUrl: string): Side => ({ ...S(name), badgeUrl });
+  const CRESTS = hubDoc({
+    matches: [
+      ko("q1", "completed", QF, [badged("Ana", ANA_BADGE), S("Ben")], 0),
+      ko("q2", "upcoming", QF, [badged(LONG, LONG_BADGE), S("Dev")]),
+      // s1's away slot waits on q2, whose sides are both known, so the tab
+      // renames it to the pair sentence — and there is still nobody in it.
+      ko("s1", "upcoming", SF, [badged("Ana", ANA_BADGE), tbd("Winner of QF 2")]),
+    ],
+    knockouts: [
+      knockoutView("cup", "premier", [koRound("main-1", QF, ["q1", "q2"]), koRound("main-2", SF, ["s1"])]),
+    ],
+  });
+  const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  /** One Draw node's two side rows, in order. */
+  const rowsOf = (h: string, id: string): [string, string] => {
+    const at = h.indexOf(`data-testid="mh-knockout-node-${id}"`);
+    expect(at, `node ${id}`).toBeGreaterThan(-1);
+    const node = h.slice(at, h.indexOf("</a>", at));
+    const rows = node
+      .split(`<span class="flex h-[22px]`)
+      .slice(1)
+      .map((row) => `<span class="flex h-[22px]${row}`);
+    expect(rows, `node ${id} has two side rows`).toHaveLength(2);
+    return rows as [string, string];
+  };
+  /** A row whose FIRST child is its name span: nothing is drawn in front of the name. */
+  const nameFirst = (name: string) =>
+    new RegExp(`^<span class="flex h-\\[22px\\][^"]*"><span class="[^"]*" title="${reEsc(name)}">${reEsc(name)}</span>`);
+
+  it("the premise: the division bracket's chip is found in its source, and it is the 14px box that fits a 22px row", () => {
+    expect(BRACKET_CHIP, "bracket.tsx's crest <img>").toBeDefined();
+    expect(BRACKET_CHIP!.split(" ")).toEqual(expect.arrayContaining(["h-3.5", "w-3.5"]));
+  });
+
+  it("a side WITH a badge draws the division bracket's chip, token for token, in front of its name", () => {
+    url.view = "draw";
+    const [ana, ben] = rowsOf(render(CRESTS), "q1");
+    expect(ana).toMatch(
+      new RegExp(
+        `^<span class="flex h-\\[22px\\][^"]*"><img src="${reEsc(ANA_BADGE)}" alt="" class="${reEsc(BRACKET_CHIP!)}"/><span class="[^"]*" title="Ana">Ana</span>`,
+      ),
+    );
+    expect(ben).toContain(">Ben</span>");
+  });
+
+  it("a side WITHOUT a badge draws its name and NO chip — no img, no placeholder, nothing in front of the name", () => {
+    url.view = "draw";
+    const h = render(CRESTS);
+    const [ana, ben] = rowsOf(h, "q1");
+    expect(ben).not.toContain("<img");
+    expect(ben).not.toContain("data-crest");
+    expect(ben).toMatch(nameFirst("Ben"));
+    // The positive pair, same node: the badged side does draw one.
+    expect(ana).toContain(`<img src="${ANA_BADGE}"`);
+  });
+
+  it("a PENDING slot keeps its italic feeder text and draws no chip, beside a badged entrant that does; a tree with no badge anywhere draws none", () => {
+    url.view = "draw";
+    const h = render(CRESTS);
+    const [ana, slot] = rowsOf(h, "s1");
+    const pair = `${LONG} or Dev`;
+    expect(slot).toMatch(nameFirst(pair));
+    expect(slot).toMatch(new RegExp(`<span class="[^"]*italic[^"]*" title="${reEsc(pair)}">`));
+    expect(slot).not.toContain("<img");
+    expect(ana).toContain(`<img src="${ANA_BADGE}"`);
+
+    // MID carries no badge at all; its final still waits on the engine's own
+    // "Winner of SF 1" sentence. Not one chip in the whole tree.
+    const mid = render(MID);
+    const tree = mid.slice(mid.indexOf(`data-testid="mh-knockout-draw-region-${VIEW}"`));
+    expect(tree).toContain(">Winner of SF 1<");
+    expect(tree).not.toContain("<img");
+  });
+
+  it("with a badge the NAME still truncates: the chip holds its size and the name is the flex item that gives", () => {
+    url.view = "draw";
+    const [long] = rowsOf(render(CRESTS), "q2");
+    expect(long).toContain(`<img src="${LONG_BADGE}"`);
+    expect(long.match(/<img [^>]*class="([^"]*)"/)?.[1]?.split(" ")).toContain("shrink-0");
+    expect(long.match(/^<span class="([^"]*)"/)?.[1]?.split(" ")).toEqual(expect.arrayContaining(["flex", "min-w-0"]));
+    const name = long.match(new RegExp(`<span class="([^"]*)" title="${reEsc(LONG)}">${reEsc(LONG)}</span>`))?.[1];
+    expect(name, "the long name's span, titled with the whole name").toBeDefined();
+    expect(name!.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "truncate"]));
   });
 });
 

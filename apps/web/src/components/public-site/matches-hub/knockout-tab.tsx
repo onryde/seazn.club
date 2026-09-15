@@ -460,6 +460,23 @@ function drawNode(match: HubMatchT, dict: PublicDict): ReactNode {
               : "text-ink";
         return (
           <span key={i} className="flex h-[22px] min-w-0 items-center gap-2 text-[13px]">
+            {/* A crest ONLY where the side has a real badge (owner ruling v1,
+                option b), and NOTHING otherwise: no placeholder tile, no "?".
+                A node is narrow, so a grey tile on every player of a 32-draw
+                costs each name ~20px and says nothing, while a team draw —
+                where the logo is the point — gets it. The Rounds cards keep
+                all three crest states; they have the room.
+
+                The division page's bracket chip, class for class
+                (`bracket.tsx`), so the two trees match — the suite reads that
+                file's chip and compares. Not `EntityLogo`: its `size` is a
+                closed 20|24|32|40 union with no 14, and with no `src` it paints
+                initials, which is the option the owner turned down. A
+                badge-less row is therefore exactly the row it was before. */}
+            {side.badgeUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={side.badgeUrl} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
+            ) : null}
             <span className={`min-w-0 flex-1 truncate ${tone}`} title={side.name}>
               {side.name}
             </span>
