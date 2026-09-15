@@ -455,7 +455,7 @@ describe("KnockoutTab — the round rail", () => {
     expect(h).toMatch(/data-testid="mh-knockout-divisions"[^>]*role="group"[^>]*tabindex="0"[^>]*aria-label="/);
   });
 
-  it("SNAPS to chip boundaries, so the chip at the rail's leading edge is whole or gone, never cut mid-word (C-1)", () => {
+  it("rails carry snap-x snap-proximity with scroll padding equal to the inset; every chip is snap-start (C-1)", () => {
     // Visual gate C-1: at phone widths the rail's leading chip read
     // "uarter-finals", "ualifier 1", "als 2/2". The fix is `snap-x
     // snap-proximity` on the track, `snap-start` on each chip, and scroll
@@ -749,7 +749,7 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
     expect(tree).not.toContain("<img");
   });
 
-  it("with a badge the NAME still truncates: the chip holds its size and the name is the flex item that gives", () => {
+  it("with a badge the name keeps min-w-0 flex-1 truncate and the chip shrink-0", () => {
     url.view = "draw";
     const [long] = rowsOf(render(CRESTS), "q2");
     expect(long).toContain(`<img src="${LONG_BADGE}"`);
