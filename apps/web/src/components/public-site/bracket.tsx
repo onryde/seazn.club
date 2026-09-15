@@ -23,6 +23,7 @@ import {
 } from "@seazn/engine/scheduling";
 import type { RoundRole } from "@seazn/engine/competition";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { BRACKET_CREST_CLASS } from "./matches-hub/bracket-crest";
 
 interface Props {
   kind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
@@ -97,7 +98,7 @@ function FixtureCard({
       <span className="flex min-w-0 items-center gap-1.5">
         {badge ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={badge} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
+          <img src={badge} alt="" className={BRACKET_CREST_CLASS} />
         ) : null}
         <span
           title={label}

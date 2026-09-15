@@ -22,7 +22,6 @@
 //    the server snapshot (null) by both environments, so the browser SOURCE is
 //    stubbed below — and only the source: the mode rule stays real.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import en from "@/dictionaries/en/public.json";
@@ -45,6 +44,7 @@ vi.mock("../use-tab-param", async (importOriginal) => ({
 }));
 
 import { initials } from "@/components/ui/entity-logo";
+import { BRACKET_CREST_CLASS } from "../matches-hub/bracket-crest";
 import { MatchCard, type MatchCardProps } from "../matches-hub/match-card";
 import { MatchesTab } from "../matches-hub/matches-tab";
 import {
@@ -662,15 +662,16 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
   // name ~20px and says nothing, while a team draw — where the logo is the
   // point — gets it. The Rounds cards keep all three crest states.
   //
-  // The chip is the division bracket's, read out of its SOURCE, so the two
-  // trees cannot drift apart without this suite saying so.
+  // The chip is the division bracket's: both trees render
+  // `BRACKET_CREST_CLASS`, one constant with one authority, and this suite
+  // asserts against the same import (review N2 m3). It used to parse
+  // `bracket.tsx`'s SOURCE inside this describe, so a planned redirect that
+  // deletes that file would have thrown at collection and dropped all 88 tests
+  // out of the counts.
   //
   // A class scan, not a measurement: vitest is `environment: "node"`, so these
   // pin what the markup ASKS for. That the name really ellipsizes beside the
   // chip is a browser's to show.
-  const BRACKET_CHIP = readFileSync(new URL("../bracket.tsx", import.meta.url), "utf8").match(
-    /<img src=\{badge\} alt="" className="([^"]+)" \/>/,
-  )?.[1];
   const ANA_BADGE = "https://cdn.example.test/crests/ana.png";
   const LONG = "Oliver Whitcombe-Harrington of the North Harbour Racquets Club";
   const LONG_BADGE = "https://cdn.example.test/crests/whitcombe.png";
@@ -704,9 +705,8 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
   const nameFirst = (name: string) =>
     new RegExp(`^<span class="flex h-\\[22px\\][^"]*"><span class="[^"]*" title="${reEsc(name)}">${reEsc(name)}</span>`);
 
-  it("the premise: the division bracket's chip is found in its source, and it is the 14px box that fits a 22px row", () => {
-    expect(BRACKET_CHIP, "bracket.tsx's crest <img>").toBeDefined();
-    expect(BRACKET_CHIP!.split(" ")).toEqual(expect.arrayContaining(["h-3.5", "w-3.5"]));
+  it("the premise: the shared crest class is the 14px box that fits a 22px row", () => {
+    expect(BRACKET_CREST_CLASS.split(" ")).toEqual(expect.arrayContaining(["h-3.5", "w-3.5"]));
   });
 
   it("a side WITH a badge draws the division bracket's chip, token for token, in front of its name", () => {
@@ -714,7 +714,7 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
     const [ana, ben] = rowsOf(render(CRESTS), "q1");
     expect(ana).toMatch(
       new RegExp(
-        `^<span class="flex h-\\[22px\\][^"]*"><img src="${reEsc(ANA_BADGE)}" alt="" class="${reEsc(BRACKET_CHIP!)}"/><span class="[^"]*" title="Ana">Ana</span>`,
+        `^<span class="flex h-\\[22px\\][^"]*"><img src="${reEsc(ANA_BADGE)}" alt="" class="${reEsc(BRACKET_CREST_CLASS)}"/><span class="[^"]*" title="Ana">Ana</span>`,
       ),
     );
     expect(ben).toContain(">Ben</span>");

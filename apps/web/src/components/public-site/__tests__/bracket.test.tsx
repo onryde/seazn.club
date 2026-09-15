@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Bracket } from "../bracket";
+import { BRACKET_CREST_CLASS } from "../matches-hub/bracket-crest";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { msgFor } from "@/lib/messages-i18n";
 // P6 fix round 2, coordinator item #2: `lookup` is now compile-mandatory
@@ -201,6 +202,8 @@ describe("public Bracket", () => {
     expect(html).toContain('src="https://flags.example/a.png"');
     // b has no badge and d has no entry — exactly one img chip.
     expect(html.match(/<img/g)?.length).toBe(1);
+    // Review N2 m3: its class is the ONE constant the hub's Draw renders too.
+    expect(html).toContain(`<img src="https://flags.example/a.png" alt="" class="${BRACKET_CREST_CLASS}"/>`);
     const without = renderToStaticMarkup(
       createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText }),
     );
