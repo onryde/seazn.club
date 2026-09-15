@@ -281,9 +281,9 @@ test.describe.serial("officiating: accept, score, and access boundaries", () => 
       // fixture has: the legacy /fixtures/{id} route was deleted 2026-08-06,
       // and it would not have served this account anyway (it resolved through
       // org membership, which an official does not hold).
-      const matchLink = page.getByRole("link").filter({ hasText: /Slip|Cordon|Gully|Point/ }).first();
-      await expect(matchLink).toBeVisible({ timeout: 20_000 });
-      await matchLink.click();
+      const scoreLink = cardA.getByRole("link", { name: /Score this match/i });
+      await expect(scoreLink).toBeVisible({ timeout: 20_000 });
+      await scoreLink.click();
       await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/[^/]+\/f\/\d+/, { timeout: 20_000 });
       await expect(page.getByText(/Slip|Cordon|Gully|Point/).first()).toBeVisible({ timeout: 20_000 });
       await scoreFixture(page.request, fixtureA, 2, 1);
