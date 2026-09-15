@@ -368,7 +368,10 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
   });
 
   it("draws a GIF as large as a 4K screen frame", async () => {
-    spyFetch(async () => imageResponse(await canvas(3840, 2160).gif().toBuffer(), "image/gif"));
+    // Encoded BEFORE the fetch is stubbed: inside the stub, the encode ran on
+    // the fetcher's own 1500ms clock and a loaded machine refused the image.
+    const frame = await canvas(3840, 2160).gif().toBuffer();
+    spyFetch(async () => imageResponse(frame, "image/gif"));
     expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 576]);
   });
 
@@ -377,7 +380,9 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
     spyFetch(async () => imageResponse(past, "image/gif"));
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
     // The same canvas as a PNG draws: the refusal is GIF's, not the frame's.
-    spyFetch(async () => imageResponse(await canvas(3841, 2160).png().toBuffer(), "image/png"));
+    // Encoded before the stub, off the fetcher's 1500ms clock (as above).
+    const asPng = await canvas(3841, 2160).png().toBuffer();
+    spyFetch(async () => imageResponse(asPng, "image/png"));
     expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 576]);
   });
 
