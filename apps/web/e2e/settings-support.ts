@@ -159,7 +159,7 @@ export async function seedMemberIdentity(
   browser: Browser,
   owner: APIRequestContext,
   orgId: string,
-  role: "admin" | "viewer" | "scorer",
+  role: "admin" | "viewer",
 ): Promise<MemberIdentity> {
   const invite = await owner.post(`/api/orgs/${orgId}/invites`, {
     data: { role, max_uses: 1 },

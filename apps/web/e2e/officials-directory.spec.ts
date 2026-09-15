@@ -149,7 +149,7 @@ test("schedule Officials tab: compact roster strip reflects the pool and links t
 });
 
 // officials-unify: officials ARE the umpire/scoring path — invite → claim →
-// /me accept → score on the full fixture console from My Matches (Tasks 1-4).
+// /me accept → score on the full fixture console from /me (Tasks 1-4).
 // No separate device-mint. Covers the acceptance surfaces spec'd for this
 // wave: (a) an accepted official scores through the fixture console, (b) a
 // still-pending official is refused the same fixture (404 — accepted-only
@@ -276,13 +276,11 @@ test.describe.serial("officiating: accept, score, and access boundaries", () => 
       await cardA.getByRole("button", { name: "Accept" }).click();
       await expect(cardA.getByText("Accepted")).toBeVisible({ timeout: 20_000 });
 
-      // (a) Accepted fixture surfaces on My Matches — the scorer console's own
-      // landing page — and its full board opens, via the slug link an official
-      // actually clicks. That is now the only address a fixture has: the legacy
-      // /fixtures/{id} route was deleted 2026-08-06, and it would not have
-      // served this account anyway (it resolved through org membership, which
-      // an official does not hold).
-      await page.goto("/my-matches");
+      // (a) Accepted fixture surfaces on /me and its full board opens, via the
+      // slug link an official actually clicks. That is now the only address a
+      // fixture has: the legacy /fixtures/{id} route was deleted 2026-08-06,
+      // and it would not have served this account anyway (it resolved through
+      // org membership, which an official does not hold).
       const matchLink = page.getByRole("link").filter({ hasText: /Slip|Cordon|Gully|Point/ }).first();
       await expect(matchLink).toBeVisible({ timeout: 20_000 });
       await matchLink.click();

@@ -184,7 +184,7 @@ test("the same viewer is ALLOWED what a viewer may do", async ({ browser, reques
  * that would stop it).
  *
  * `POST /api/orgs/{id}/invites` cannot mint an "owner" invite directly
- * (`createInviteSchema` only accepts admin/viewer/scorer — lib/types.ts), so
+ * (`createInviteSchema` only accepts admin/viewer — lib/types.ts), so
  * the second owner is minted by inviting an admin, then promoting them via
  * the same role route this test is exercising — verified as a real,
  * assertable precondition, not just setup.

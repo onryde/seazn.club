@@ -703,8 +703,8 @@ export function resolveAttention(input: PhaseInput): Attention[] {
       // F4 fix: the old test was bare `eventCount === 0` — a division- or
       // fixture-scoped scorer sitting on a 0-0 read as "missing", and
       // assigning one never cleared the row (only the first score event did).
-      // `hasScorer` is resolved by the caller from scorer_assignments at both
-      // scopes; once someone is assigned, the organiser's own job here is
+      // `hasScorer` is resolved by the caller from fixture_officials (any
+      // non-declined response); once someone is assigned, the organiser's job
       // done, so the row clears immediately — matching design doc line 101
       // ("a scorerless fixture reads 'No scorer' until it is assigned"), not
       // left waiting on whether that scorer has actually typed anything yet.
