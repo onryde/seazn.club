@@ -497,18 +497,30 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
   });
 
   it("never lets the row shrink a child painted beside a rail word: its class SET holds shrink-0 (N1h h1, review-n1g G1)", () => {
+    // A bare `shrink-0` anywhere in the list. `max-sm:shrink-0` holds at some
+    // widths only, so it does not count.
+    const holdsShrink0 = (child: Span, where: string) => new Set(tokensOf(child, where)).has("shrink-0");
     const { words, dates, spans } = railWords(SCHEDULE_SRC);
     const seen: string[] = [];
     for (const w of [...words, ...dates]) {
       for (const child of childrenBeside(w.chain, spans)) {
         const tokens = tokensOf(child, w.what);
         seen.push(`${w.what}: [${tokens.join(" ")}]`);
-        expect(new Set(tokens).has("shrink-0"), `${w.what}: the child beside it is [${tokens.join(" ")}], which its row may shrink`).toBe(
-          true,
-        );
+        expect(holdsShrink0(child, w.what), `${w.what}: the child beside it is [${tokens.join(" ")}], which its row may shrink`).toBe(true);
       }
     }
     expect(seen.length, "no rail word has a child beside it, so this guards nothing").toBeGreaterThan(0);
+    const synthetic = (dotClasses: string) => {
+      const row = railWords(
+        `<Link className="grid grid-cols-[3.5rem_minmax(0,1fr)_auto]"><span className="min-w-0">` +
+          `<span className="flex gap-1 text-[11px]"><span className="${dotClasses}" />{copy.live}</span></span></Link>`,
+      );
+      return row.words.flatMap((w) => childrenBeside(w.chain, row.spans).map((c) => holdsShrink0(c, "synthetic")));
+    };
+    expect(synthetic("shrink-0 h-1.5 w-1.5")).toEqual([true]);
+    expect(synthetic("h-1.5 w-1.5 shrink-0")).toEqual([true]);
+    expect(synthetic("h-1.5 w-1.5 max-sm:shrink-0")).toEqual([false]);
+    expect(synthetic("h-1.5 w-1.5")).toEqual([false]);
     console.log(`[rail children] ${seen.join("  |  ")}`);
   });
 
