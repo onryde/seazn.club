@@ -451,16 +451,6 @@ export async function postAuthLanding(
     }
     return { redirect: safe, orgId: null, hasOrg: false };
   }
-  // Scorer-only members land on their console, never the org dashboard
-  // (doc 13 §4) — checked before auto-provisioning would give them an org.
-  {
-    const { isScorerOnly } = await import("@/server/usecases/scorers");
-    if (await isScorerOnly(userId)) {
-      const orgs = await getUserOrgs(userId);
-      await setActiveOrgId(orgs[0].id);
-      return { redirect: "/my-matches", orgId: orgs[0].id, hasOrg: true };
-    }
-  }
   // Same rule for claimed players (PROMPT-53): their home is /me — a player
   // must never be walked into organiser onboarding or handed a default org.
   {

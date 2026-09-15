@@ -6,7 +6,7 @@
 import { test, expect } from "@playwright/test";
 import {
   TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, competitionPath,
-  setFixtureStatusSql, setFixtureScheduledAtSql, setStageStatusSql, assignScorerSql,
+  setFixtureStatusSql, setFixtureScheduledAtSql, setStageStatusSql, assignFixtureOfficialSql,
 } from "./helpers";
 import { NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
 
@@ -33,7 +33,7 @@ test("round J: capture the desk at three widths", async ({ page, request }) => {
 
   // 1. A live match nobody is recording, with a scorer assigned (F3).
   const live = await makeDiv("Saturday Premier");
-  await assignScorerSql(live.fixtureIds[0]!);
+  await assignFixtureOfficialSql(live.fixtureIds[0]!);
   await setFixtureScheduledAtSql(
     live.fixtureIds[0]!,
     new Date(Date.now() - (NOT_RECORDING_GRACE_MINUTES + 40) * 60_000).toISOString(),

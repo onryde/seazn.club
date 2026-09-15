@@ -12,13 +12,8 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 
 /** What accepting will do for someone who is ALREADY a member (invites are
  *  additive — they never change an existing role). */
-function memberBlurb(dict: Dict, invite: InviteRow, existing: OrgRole): string {
-  const additive =
-    invite.role === "scorer" &&
-    invite.default_scope !== null &&
-    (existing === "viewer" || existing === "scorer");
-  const key = additive ? "join.member.additive" : "join.member.noChange";
-  return t(dict, key, { role: existing });
+function memberBlurb(dict: Dict, _invite: InviteRow, existing: OrgRole): string {
+  return t(dict, "join.member.noChange", { role: existing });
 }
 
 export async function generateMetadata({

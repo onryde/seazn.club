@@ -162,17 +162,6 @@ describe.skipIf(!HAS_DB)("a group's payer can open the billing UI for the bill t
     expect(viaBilling.viaPayer).toBe(false);
   });
 
-  it("still bounces a scorer who does not pay for the group", async () => {
-    const club = await makeFundedClub();
-    const scorer = await makeUser("Scorer");
-    await setRole(club.orgId, scorer, "scorer");
-    authState.userId = scorer;
-
-    await expect(requireBillingPage(club.orgSlug, { tail: "/settings/billing" })).rejects.toThrow(
-      "REDIRECT:/my-matches",
-    );
-  });
-
   it("admits a viewer, as the billing tabs have always been member-visible", async () => {
     const club = await makeFundedClub();
     const viewer = await makeUser("Viewer");

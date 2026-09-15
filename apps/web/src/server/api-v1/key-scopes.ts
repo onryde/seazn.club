@@ -318,7 +318,6 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "GET /orgs/:id/sponsor-orders",
   "POST /orgs/:id/sponsor-orders",
   "POST /orgs/:id/sponsor-orders/:orderId/refund",
-  "GET /me/assigned-fixtures",
   "POST /fixtures/:id/device-links",
   "GET /fixtures/:id/device-links",
   "DELETE /fixtures/:id/device-links/:linkId",
@@ -350,7 +349,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   // Official onboarding (PROMPT-57): the invite mints a login capability and
   // the officiating /me surface is session-personal — same rules as players.
   "POST /officials/:id/invite",
-  "PATCH /me/assigned-fixtures/:id/response",
+  "PATCH /me/fixtures/:id/officiating-response",
   "POST /me/availability/officiating",
   "DELETE /me/availability/officiating",
   // Pending officiating invites (v11.1): accepting links a login exactly

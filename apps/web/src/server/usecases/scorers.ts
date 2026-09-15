@@ -1,19 +1,9 @@
 import "server-only";
-// Scorer role machinery (doc 13, PROMPT-18): scoped-assignment resolution
-// (fixture ⊂ division ⊂ competition), the requireScorable gate, assignment
-// writes, and the "My matches" read. Enforcement lives here in the use-case
-// layer — never UI-only (doc 13 §3).
+// Fixture scoring authority: requireScorable gate and accepted-official
+// coverage. Org-member scorers and assignment-table auth were retired (#707).
 import { sql } from "@/lib/db";
-import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { ScorerScopeType } from "@/lib/types";
-import type { SlotLabel } from "@/server/usecases/stage-seeding";
-// #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
-// scorer/official is usually not an org member) — `courtLabelsByOrg` is the
-// cross-org twin of schedule.ts's `courtNamesById`; see that helper's own
-// doc comment.
-import { courtLabelsByOrg } from "./cross-org-court-labels";
 
 export interface FixtureScope {
   id: string;
@@ -36,22 +26,6 @@ export async function fixtureScope(fixtureId: string): Promise<FixtureScope | nu
   return row ?? null;
 }
 
-/** Does any assignment cover this fixture (doc 13 §3 resolution)? */
-export async function scorerCovers(
-  orgId: string,
-  userId: string,
-  scope: Pick<FixtureScope, "id" | "division_id" | "competition_id">,
-): Promise<boolean> {
-  const rows = await sql`
-    select 1 from scorer_assignments
-    where org_id = ${orgId} and user_id = ${userId}
-      and ((scope_type = 'fixture'     and scope_id = ${scope.id})
-        or (scope_type = 'division'    and scope_id = ${scope.division_id})
-        or (scope_type = 'competition' and scope_id = ${scope.competition_id}))
-    limit 1`;
-  return rows.length > 0;
-}
-
 /** Does the user hold an ACCEPTED official assignment covering this fixture?
  *  Officials are usually NOT org members, so this is a superuser read pinned
  *  through persons.user_id = the user and officials.person_id (the tenant door
@@ -68,200 +42,23 @@ export async function acceptedOfficialCovers(userId: string, fixtureId: string):
   return rows.length > 0;
 }
 
-/** Roles whose scoring rights come from assignments, not the role itself:
- *  scorers always; viewers additively (an accepted umpire invite keeps their
- *  role and adds the assignment). The scorer capability config gates bind
- *  both — only editors bypass them. */
-export function scoresViaAssignment(role: string | null): boolean {
-  return role === "scorer" || role === "viewer";
+/** Per-division scorer capability flags bind non-editors (accepted officials). */
+export function subjectToScorerCapabilityGates(auth: AuthCtx): boolean {
+  if (auth.via === "api_key") return false;
+  if (auth.role === "owner" || auth.role === "admin") return false;
+  return true;
 }
 
 /**
- * THE scorer gate (doc 13 §2/§3): editor roles and write-scoped API keys
- * pass; scorers — and viewers, whose umpire invites grant assignments on top
- * of their read role — pass iff a covering assignment exists. Everyone else
- * is 403. Returns the fixture scope so callers can apply the capability
- * config without a second lookup.
+ * THE scorer gate: editor roles and write-scoped API keys pass; everyone else
+ * passes iff they hold an accepted fixture_officials assignment. Returns the
+ * fixture scope so callers can apply the capability config without a second lookup.
  */
 export async function requireScorable(auth: AuthCtx, fixtureId: string): Promise<FixtureScope> {
   const scope = await fixtureScope(fixtureId);
   if (!scope || scope.org_id !== auth.orgId) throw new HttpError(404, "fixture not found");
-  if (auth.via === "api_key") return scope; // scope checked at key auth (write)
+  if (auth.via === "api_key") return scope;
   if (auth.role === "owner" || auth.role === "admin") return scope;
-  if (scoresViaAssignment(auth.role)) {
-    if (auth.userId && (await scorerCovers(auth.orgId, auth.userId, scope))) return scope;
-    if (auth.role === "scorer") throw new HttpError(403, "You are not assigned to this fixture");
-  }
-  // Accepted officials score the fixtures they are assigned to (design v2 §A3):
-  // fixture_officials is the authority; officials are usually non-members, so
-  // this runs off userId, not a membership role.
   if (auth.userId && (await acceptedOfficialCovers(auth.userId, fixtureId))) return scope;
   throw new HttpError(403, "Your role cannot record scores");
-}
-
-// ---------------------------------------------------------------------------
-// Assignments
-// ---------------------------------------------------------------------------
-
-const SCOPE_TABLE: Record<ScorerScopeType, "competitions" | "divisions" | "fixtures"> = {
-  competition: "competitions",
-  division: "divisions",
-  fixture: "fixtures",
-};
-
-/** Create an assignment (idempotent on the unique key). Validates the scope
- *  target exists in the org — RLS bounds the lookup. */
-export async function createAssignment(
-  orgId: string,
-  userId: string,
-  scope: { type: ScorerScopeType; id: string },
-  createdBy: string | null,
-): Promise<void> {
-  await withTenant(orgId, async (tx) => {
-    const table = SCOPE_TABLE[scope.type];
-    const [target] = await tx`select 1 from ${tx(table)} where id = ${scope.id}`;
-    if (!target) throw new HttpError(422, `${scope.type} not found in this organization`);
-    await tx`
-      insert into scorer_assignments (org_id, user_id, scope_type, scope_id, created_by)
-      values (${orgId}, ${userId}, ${scope.type}, ${scope.id}, ${createdBy})
-      on conflict (org_id, user_id, scope_type, scope_id) do nothing`;
-  });
-}
-
-// ---------------------------------------------------------------------------
-// My matches (doc 13 §3/§6): every fixture covered by the user's assignments,
-// across all their orgs. Superuser read — assignments span orgs and the
-// public read views don't carry private divisions.
-// ---------------------------------------------------------------------------
-
-export interface AssignedFixture {
-  id: string;
-  fixture_no: number;
-  org_id: string;
-  org_name: string;
-  org_slug: string;
-  competition_id: string;
-  competition_name: string;
-  competition_slug: string;
-  division_id: string;
-  division_name: string;
-  division_slug: string;
-  division_status: string;
-  sport_key: string;
-  module_version: string;
-  round_no: number;
-  home_entrant_id: string | null;
-  away_entrant_id: string | null;
-  home_name: string | null;
-  away_name: string | null;
-  /** D4b (P6) — {key, params} i18n pattern ref while the matching
-   *  *_entrant_id is null (V360's fixtures.home/away_slot_label). */
-  home_slot_label: SlotLabel | null;
-  away_slot_label: SlotLabel | null;
-  scheduled_at: string | null;
-  /** Venue zone (V305): division override → org timezone → UTC. */
-  venue_tz: string | null;
-  /** P9 cutover: DERIVED from `venues`/`courts` via `fixtures.venue_id`/
-   *  `court_id`; the frozen `fixtures.venue`/`court_label` columns are no
-   *  longer written and would render blank post-cutover.
-   *  Review finding #9: this interface used to also declare a dead `venue:
-   *  string | null` for the retired column — the SQL below never selected it. */
-  venue_id: string | null;
-  venue_name: string | null;
-  court_id: string | null;
-  court_name: string | null;
-  status: string;
-}
-
-const SCORABLE_STATUSES = ["scheduled", "in_play"];
-
-/** Assigned fixtures, soonest first. `date` (YYYY-MM-DD) filters to one day;
- *  otherwise: unscheduled + everything from the start of today onward. */
-export async function listAssignedFixtures(
-  userId: string,
-  date?: string,
-): Promise<AssignedFixture[]> {
-  const dayFrom = date ? new Date(`${date}T00:00:00Z`) : null;
-  const dayTo = dayFrom ? new Date(dayFrom.getTime() + 24 * 60 * 60 * 1000) : null;
-  const raw = await sql<Omit<AssignedFixture, "court_name">[]>`
-    select distinct on (scheduled_at, id) * from (
-      select f.id, f.fixture_no, f.org_id, o.name as org_name, o.slug as org_slug,
-             c.id as competition_id, c.name as competition_name, c.slug as competition_slug,
-             d.id as division_id, d.name as division_name, d.slug as division_slug,
-             d.status as division_status,
-             d.sport_key, d.module_version, f.round_no,
-             f.home_entrant_id, f.away_entrant_id,
-             he.display_name as home_name, ae.display_name as away_name,
-             f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
-             f.venue_id, ven.name as venue_name, f.court_id, f.status
-      from scorer_assignments sa
-      join fixtures f on (
-           (sa.scope_type = 'fixture'     and f.id = sa.scope_id)
-        or (sa.scope_type = 'division'    and f.division_id = sa.scope_id)
-        or (sa.scope_type = 'competition' and f.division_id in
-              (select id from divisions where competition_id = sa.scope_id))
-      ) and f.org_id = sa.org_id
-      left join venues ven on ven.id = f.venue_id
-      join divisions d on d.id = f.division_id
-      join competitions c on c.id = d.competition_id
-      join organizations o on o.id = f.org_id
-      left join schedule_settings ss on ss.division_id = d.id
-      left join organizations vorg on vorg.id = d.org_id
-      left join entrants he on he.id = f.home_entrant_id
-      left join entrants ae on ae.id = f.away_entrant_id
-      where sa.user_id = ${userId}
-
-      union
-
-      select f.id, f.fixture_no, f.org_id, o.name as org_name, o.slug as org_slug,
-             c.id as competition_id, c.name as competition_name, c.slug as competition_slug,
-             d.id as division_id, d.name as division_name, d.slug as division_slug,
-             d.status as division_status,
-             d.sport_key, d.module_version, f.round_no,
-             f.home_entrant_id, f.away_entrant_id,
-             he.display_name as home_name, ae.display_name as away_name,
-             f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, coalesce(ss.tz, vorg.timezone, 'UTC') as venue_tz,
-             f.venue_id, ven.name as venue_name, f.court_id, f.status
-      from fixture_officials fo
-      join officials ofc on ofc.id = fo.official_id
-      join persons p on p.id = ofc.person_id
-      join fixtures f on f.id = fo.fixture_id
-      left join venues ven on ven.id = f.venue_id
-      join divisions d on d.id = f.division_id
-      join competitions c on c.id = d.competition_id
-      join organizations o on o.id = f.org_id
-      left join schedule_settings ss on ss.division_id = d.id
-      left join organizations vorg on vorg.id = d.org_id
-      left join entrants he on he.id = f.home_entrant_id
-      left join entrants ae on ae.id = f.away_entrant_id
-      where p.user_id = ${userId} and fo.response = 'accepted'
-    ) merged
-    where status = any(${SCORABLE_STATUSES})
-      and (
-        (${date ?? null}::text is null
-          and (scheduled_at is null or scheduled_at >= date_trunc('day', now())))
-        or (${date ?? null}::text is not null
-          and scheduled_at >= ${dayFrom ?? null} and scheduled_at < ${dayTo ?? null})
-      )
-    order by scheduled_at nulls last, id
-    limit 200`;
-  // #14: venue-qualified label, resolved per-org (this read spans every org
-  // the caller scores/officiates for) — same fallback convention as
-  // FixtureRow's own doc comment: fall back to the id on a miss (should not
-  // happen; FK-restricted).
-  const courtNames = await courtLabelsByOrg(raw);
-  return raw.map((r) => ({
-    ...r,
-    court_name: r.court_id !== null ? (courtNames.get(r.court_id) ?? r.court_id) : null,
-  }));
-}
-
-/** True when the user holds ONLY scorer memberships (doc 13 §4 — their
- *  post-login landing is "My matches", not the org dashboard). */
-export async function isScorerOnly(userId: string): Promise<boolean> {
-  const rows = await sql<{ role: string }[]>`
-    select distinct role from org_members where user_id = ${userId}`;
-  return rows.length > 0 && rows.every((r) => r.role === "scorer");
 }

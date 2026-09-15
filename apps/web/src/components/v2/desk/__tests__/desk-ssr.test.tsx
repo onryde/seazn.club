@@ -262,9 +262,8 @@ describe("NeedsYou", () => {
     expect(html).toContain('data-attention="no_scorer"');
     expect(html).toContain('data-severity="red"');
     // M2 (fix round I, Important): this row used to read "Assign scorer",
-    // an action nobody can take — `createAssignment` (scorers.ts) has zero
-    // production callers and `scorer_assignments` is written only by
-    // accepting a scoped INVITE, which no UI creates. The landing fixture
+    // an action nobody can take — org-member scorers and assignment invites
+    // were retired (#707). The landing fixture
     // console had 0 such controls (counted live, 11:39Z on 2026-09-03).
     // The row now asks for the thing that IS on that screen: the pad.
     expect(html).toContain("Open scoring");

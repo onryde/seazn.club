@@ -42,11 +42,10 @@ export default async function NewOrgPage({
           </p>
         </div>
         {/* The bill picker links a FULL bill to its Add-ons tab (v17 gap #293),
-            and every /o page is member-gated — so it needs to know which of the
-            organisations on a bill this user can open. Scorers are excluded:
-            requireOrgPage bounces them to /my-matches. */}
+            and every /o page is member-gated — so it needs org ids the visitor
+            can open. */}
         <CreateOrgForm
-          memberOrgIds={orgs.filter((o) => o.role !== "scorer").map((o) => o.id)}
+          memberOrgIds={orgs.map((o) => o.id)}
           next={next}
         />
         {orgs.length > 0 && (

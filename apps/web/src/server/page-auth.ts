@@ -87,16 +87,7 @@ export function newOrgDestination(sp: Record<string, string | undefined>): strin
   return safeNextPath(sp.next);
 }
 
-/** Session auth against the active org. Redirects out when unauthenticated.
- *  A scorer-role active org has no organiser surface (doc 13 §4): straight
- *  to "My matches".
- *
- *  `opts.next` is where the caller was actually trying to go. It has to be
- *  passed in: this is a Server Component helper and there is no current-URL
- *  API to read it from — the repo runs no middleware, Next's `next-url`
- *  header exists only on client-side RSC navigations (and every route into
- *  this bounce is a server `NextResponse.redirect`, i.e. a document request),
- *  and `x-matched-path` is minimal-mode only. */
+/** Session auth against the active org. Redirects out when unauthenticated. */
 export async function requirePageAuth(opts: { next?: unknown } = {}): Promise<PageAuth> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -104,13 +95,6 @@ export async function requirePageAuth(opts: { next?: unknown } = {}): Promise<Pa
   if (orgs.length === 0) redirect(orgLessRedirect(opts.next));
   const activeId = await getActiveOrgId();
   const org = orgs.find((o) => o.id === activeId) ?? (orgs[0] as OrgMembership);
-  // Deliberately NOT given the same treatment, and this is not an oversight to
-  // "finish": a scorer has no organiser surface at all (doc 13 §4). Every
-  // destination this contract carries is an organiser page — the settings tabs
-  // — so forwarding one through here would land them on a page that 404s or
-  // bounces them straight back. For a scorer the bounce is the answer, not a
-  // stop on the way to somewhere else.
-  if (org.role === "scorer") redirect("/my-matches");
   return {
     auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
     user,
@@ -132,15 +116,11 @@ function settle(res: Resolution, target: (newSlug: string) => string): ResolvedE
   return res;
 }
 
-/**
- * Session auth from the org slug in the path. Members only — non-members
- * 404 (existence never leaks). Scorers have no organiser surface (doc 13
- * §4) and bounce to "My matches" unless the caller opts in (the /o layout
- * does, so scorer fixture deep-links can reach requireFixturePage).
- */
+/** Session auth from the org slug in the path. Members only — non-members
+ * 404 (existence never leaks). */
 export async function requireOrgPage(
   orgSlug: string,
-  opts: { allowScorer?: boolean; tail?: string } = {},
+  opts: { tail?: string } = {},
 ): Promise<PageAuth> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -152,7 +132,6 @@ export async function requireOrgPage(
   const orgs = await getUserOrgs(user.id);
   const org = orgs.find((o) => o.id === resolved.id);
   if (!org) notFound();
-  if (org.role === "scorer" && !opts.allowScorer) redirect("/my-matches");
   return {
     auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
     user,
@@ -181,7 +160,6 @@ export async function requireOrgPage(
  *     with the same role and the same `canEdit`;
  *   - a non-member who does NOT pay for this org's group still 404s, so
  *     existence is never leaked to a stranger;
- *   - a scorer who does not pay still bounces to "My matches" (doc 13 §4);
  *   - the payer is admitted READ-ONLY as far as the org goes: `role` is null
  *     and `canEdit` is false, so nothing here becomes a way to edit a club.
  *     What they get is the bill, which is theirs already.
@@ -209,10 +187,7 @@ export async function requireBillingPage(
   const orgs = await getUserOrgs(user.id);
   const org = orgs.find((o) => o.id === resolved.id);
 
-  // Members first, and untouched: whatever `requireOrgPage` would have handed
-  // them, they still get. Only the two arms it REFUSES are reconsidered below,
-  // so no existing visitor's outcome can move.
-  if (org && org.role !== "scorer") {
+  if (org) {
     return {
       auth: { orgId: org.id, via: "session", userId: user.id, role: org.role, keyId: null },
       user,
@@ -222,31 +197,16 @@ export async function requireBillingPage(
     };
   }
 
-  // Does this person pay for the group this organisation bills through? Read
-  // straight off `subscriptions.owner_user_id` — the same column
-  // `requireBillingOwner` gates the mutating routes on, so the pages a payer
-  // can OPEN and the writes a payer can MAKE cannot answer differently. An org
-  // with no group (`subscription_id` null) simply has no payer, and the join
-  // drops it.
   const [payer] = await sql<{ owner_user_id: string }[]>`
     select s.owner_user_id
       from organizations o
       join subscriptions s on s.id = o.subscription_id
      where o.id = ${resolved.id}`;
-  if (!payer || payer.owner_user_id !== user.id) {
-    // Unchanged refusals: a scorer keeps its own bounce (doc 13 §4), and a
-    // non-member gets the 404 that never leaks existence.
-    if (org) redirect("/my-matches");
-    notFound();
-  }
+  if (!payer || payer.owner_user_id !== user.id) notFound();
 
   return {
     auth: { orgId: resolved.id, via: "session", userId: user.id, role: null, keyId: null },
     user,
-    // Payer placeholder. They hold no role in this organisation and must not
-    // acquire one here: the pages read `org.id` for the bill and `org.role`
-    // only to decide what a MEMBER may see, and null denies all of it. Same
-    // shape requireFixturePage uses for a non-member official.
     org: {
       id: resolved.id,
       slug: resolved.slug,
@@ -265,10 +225,7 @@ export async function requireCompetitionPage(
   compSlug: string,
   opts: { tail?: string } = {},
 ): Promise<PageAuth & { competition: ResolvedEntity }> {
-  // Scorers have no organiser surface below the org level — 404, never a
-  // redirect (doc 13 §2 parity with requireResourcePageAuth).
-  const page = await requireOrgPage(orgSlug, { allowScorer: true });
-  if (page.org.role === "scorer") notFound();
+  const page = await requireOrgPage(orgSlug, opts);
   const competition = settle(
     await compBySlug(page.org.id, compSlug),
     (s) => routes.competition(orgSlug, s) + (opts.tail ?? ""),
@@ -291,8 +248,8 @@ export async function requireDivisionPage(
 }
 
 /**
- * Fixture pages allow scorers WITH a covering assignment (doc 13 §2) —
- * parity with requireResourcePageAuth's fixture path.
+ * Fixture pages allow accepted officials (design v2 §A2) — parity with
+ * requireResourcePageAuth's fixture path.
  */
 export async function requireFixturePage(
   orgSlug: string,
@@ -312,14 +269,11 @@ export async function requireFixturePage(
   const org = settle(await orgBySlug(orgSlug), (s) => routes.orgHome(s));
   const orgs = await getUserOrgs(user.id);
   const membership = orgs.find((o) => o.id === org.id);
-  // Membership is checked below, AFTER resolving comp/division/fixture and
-  // the accepted-official branch — a non-member with an accepted assignment
-  // still needs those to render the fixture console (design v2 §A2/§A5).
   const compRes = await compBySlug(org.id, compSlug);
   if (!compRes) notFound();
   if ("renamedTo" in compRes) {
     if (membership) permanentRedirect(routes.competition(orgSlug, compRes.renamedTo));
-    notFound(); // non-member must not learn a renamed slug (existence leak)
+    notFound();
   }
   const competition = compRes;
 
@@ -337,22 +291,7 @@ export async function requireFixturePage(
     ? (EDITOR_ROLES as readonly string[]).includes(membership.role)
     : false;
   let canScore = canEdit;
-  if (membership?.role === "scorer") {
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(fixture.id);
-    if (!scope || !(await scorerCovers(org.id, user.id, scope))) notFound();
-    canScore = true;
-  } else if (membership?.role === "viewer") {
-    // A viewer scores the fixtures their umpire-invite assignments cover
-    // (additive invites) — the page stays readable either way.
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(fixture.id);
-    canScore = !!scope && (await scorerCovers(org.id, user.id, scope));
-  }
   if (!canScore) {
-    // Non-member (or a member who can't score this fixture) — an accepted
-    // fixture_officials assignment is the only remaining way in. Never a
-    // member-widening grant: canEdit stays false either way (doc 13 §A2/§A5).
     const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
     if (await acceptedOfficialCovers(user.id, fixture.id)) canScore = true;
     else if (!membership) notFound();
@@ -362,9 +301,6 @@ export async function requireFixturePage(
     user,
     org:
       membership ??
-      // Non-member official placeholder — the fixture page never reads
-      // `org` for identity (only auth/canScore/canEdit/fixtureId), so this
-      // only needs to typecheck against PageAuth["org"].
       ({ id: org.id, slug: org.slug, name: org.name, role: null } as unknown as OrgMembership),
     canEdit,
     canScore,
@@ -379,9 +315,8 @@ export async function requireFixturePage(
  * across the user's orgs). 404 when the resource doesn't exist or the user
  * has no role in its org — existence is never leaked.
  *
- * Scorers (doc 13 §2) see their ASSIGNED scope only: a fixture page renders
- * when a covering assignment exists (canScore true); every other organiser
- * page 404s for them.
+ * Non-editors see fixture pages when a covering official assignment exists
+ * (canScore true); every other organiser page 404s for non-members.
  */
 export async function requireResourcePageAuth(
   kind: ResourceKind,
@@ -398,44 +333,21 @@ export async function requireResourcePageAuth(
   }
   const orgs = await getUserOrgs(user.id);
   const org = orgs.find((o) => o.id === orgId);
-  // Membership is checked below — a non-member official may still reach a
-  // "fixture" resource via an accepted fixture_officials assignment.
 
   const canEdit = org ? (EDITOR_ROLES as readonly string[]).includes(org.role) : false;
   let canScore = canEdit;
-  if (org?.role === "scorer") {
-    if (kind !== "fixture") notFound();
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(id);
-    if (!scope || !(await scorerCovers(orgId, user.id, scope))) notFound();
-    canScore = true;
-  } else if (org?.role === "viewer" && kind === "fixture") {
-    // Additive invites: a viewer's covering assignment turns the score pad on.
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(id);
-    canScore = !!scope && (await scorerCovers(orgId, user.id, scope));
-  }
-  if (!canScore) {
-    if (kind === "fixture") {
-      // Non-member (or a member who can't score this fixture) — an accepted
-      // fixture_officials assignment is the only remaining way in.
-      const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
-      if (await acceptedOfficialCovers(user.id, id)) canScore = true;
-      else if (!org) notFound();
-    } else if (!org) {
-      // Officials pass ONLY for kind === "fixture" — every other resource
-      // 404s a non-member outright (existence never leaks, doc 13 §A5).
-      notFound();
-    }
+  if (!canScore && kind === "fixture") {
+    const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
+    if (await acceptedOfficialCovers(user.id, id)) canScore = true;
+    else if (!org) notFound();
+  } else if (!org) {
+    notFound();
   }
   return {
     auth: { orgId, via: "session", userId: user.id, role: org?.role ?? null, keyId: null },
     user,
     org:
       org ??
-      // Non-member official placeholder — only reachable for kind==="fixture"
-      // (see notFound() above for every other kind); callers of this path
-      // only read auth/canScore/canEdit, so this only needs to typecheck.
       ({ id: orgId, slug: "", name: "", role: null } as unknown as OrgMembership),
     canEdit,
     canScore,

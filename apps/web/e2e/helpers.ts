@@ -873,35 +873,42 @@ export async function setFixtureScheduledAtSql(fixtureId: string, at: string | n
   });
 }
 
-/** Assign a scorer to a fixture, by SQL (competition-desk e2e, round J).
+/** Assign a fixture official to a fixture, by SQL (competition-desk e2e, round J).
  *
  *  `not_recording` is the one attention that needs an assignment to EXIST
  *  while the fixture stays silent, and there is no write API that produces
  *  that state without also inviting a person: the product's own path is an
- *  org invite carrying a scope, which mints a user, sends mail and lands the
- *  assignment as a side effect. The desk's read
- *  (`competition-desk.ts`'s `scorerAssignments`) only asks whether a row
- *  exists at fixture or division scope, so the org's own owner standing in as
- *  the assignee is faithful to what the page reads — same bypass-the-engine
- *  convention as `setFixtureStatusSql` above.
+ *  official invite through the claim rail. The desk's read
+ *  (`competition-desk.ts`'s `fixture_officials`) only asks whether a row
+ *  exists with a non-declined response, so a synthetic official standing in
+ *  is faithful to what the page reads — same bypass-the-engine convention as
+ *  `setFixtureStatusSql` above.
  *
- *  Derives org and assignee from the fixture itself so a caller needs no ids
- *  beyond the one it already has. */
-export async function assignScorerSql(fixtureId: string): Promise<void> {
+ *  Derives org from the fixture itself so a caller needs no ids beyond the
+ *  one it already has. */
+export async function assignFixtureOfficialSql(
+  fixtureId: string,
+  response: "accepted" | "declined" | "pending" | null = "accepted",
+): Promise<void> {
   await withDb(async (sql) => {
     const rows = await sql<{ ok: boolean }[]>`
-      insert into scorer_assignments (org_id, user_id, scope_type, scope_id)
-      select c.org_id, m.user_id, 'fixture', f.id
-      from fixtures f
-      join divisions d on d.id = f.division_id
-      join competitions c on c.id = d.competition_id
-      join org_members m on m.org_id = c.org_id and m.role = 'owner'
-      where f.id = ${fixtureId}
-      limit 1
-      on conflict do nothing
+      with ins as (
+        insert into officials (org_id, display_name, role_keys)
+        select c.org_id, 'E2E Official', ${sql.json(["scorer"])}
+          from fixtures f
+          join divisions d on d.id = f.division_id
+          join competitions c on c.id = d.competition_id
+         where f.id = ${fixtureId}
+         returning id, org_id
+      )
+      insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+      select org_id, ${fixtureId}, id, 'scorer', ${response}
+        from ins
       returning true as ok`;
     if (rows.length === 0) {
-      throw new Error(`assignScorerSql: no scorer assignment written for fixture ${fixtureId} — the fixture, its org or its owner is missing`);
+      throw new Error(
+        `assignFixtureOfficialSql: no fixture official written for fixture ${fixtureId} — the fixture or its org is missing`,
+      );
     }
   });
 }

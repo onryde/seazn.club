@@ -73,7 +73,7 @@ async function signedInOwner() {
   return { orgId, owner: asOwner(orgId, ownerId) };
 }
 
-async function memberWithRole(orgId: string, role: "admin" | "viewer" | "scorer"): Promise<string> {
+async function memberWithRole(orgId: string, role: "admin" | "viewer"): Promise<string> {
   const userId = await makeUser(role);
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, ${role})`;
   return userId;
@@ -143,21 +143,16 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/resend-confirmation", () => {
     expect(emailMock.sendRegistrationEmail.mock.calls[0]![0].payUrl).toBeNull();
   });
 
-  it("authz: owner and admin allowed; viewer and scorer denied", async () => {
+  it("authz: owner and admin allowed; viewer denied", async () => {
     const { orgId, owner } = await signedInOwner();
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
     const { competition, division } = await rig(owner);
     const { registration: untouched } = await seedRegistration(competition.id, division.id, SETTINGS, {
       refCode: `SZ-RS${randomUUID().slice(0, 6).toUpperCase()}`,
     });
 
     authState.userId = viewerId;
-    expect(
-      (await resendRoute(postReq(`/registrations/${untouched.id}/resend-confirmation`), ctx(untouched.id))).status,
-    ).toBe(403);
-    authState.userId = scorerId;
     expect(
       (await resendRoute(postReq(`/registrations/${untouched.id}/resend-confirmation`), ctx(untouched.id))).status,
     ).toBe(403);

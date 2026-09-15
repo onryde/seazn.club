@@ -185,7 +185,7 @@ export default async function BillingPage({
   const dashboardsPublic = await countPublicDashboards(orgId);
   const [counts] = await sql<{ members: number }[]>`
     select (select count(*)::int from org_members m
-      where m.org_id = ${orgId} and m.role != 'scorer') as members`;
+      where m.org_id = ${orgId}) as members`;
   const [competitionsLimit, dashboardsLimit, membersLimit] = await Promise.all([
     getLimit(orgId, "competitions.max_active"),
     getLimit(orgId, "dashboard.public.max"),
@@ -559,7 +559,6 @@ export default async function BillingPage({
               label={t(dict, "billing.usage.members")}
               current={counts?.members ?? 0}
               limit={membersLimit}
-              note={t(dict, "billing.usage.scorerNote")}
             />
           </div>
         </section>

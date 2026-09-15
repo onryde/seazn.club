@@ -33,13 +33,12 @@ export default async function OrgLayout({
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
-  // Full console chrome only for members with an organiser role. Scorers (doc
-  // 13 §3) AND non-members reaching a fixture deep-link (an accepted official —
-  // design v2 §A2) get the stripped courtside shell: no org nav or breadcrumbs,
-  // no active-org sync into an org they don't belong to. The child page does
-  // the real gate — a non-member hitting anything but the fixture console 404s
-  // there (every /o page runs its own requireOrgPage/…/requireFixturePage).
-  const chromed = !!membership && membership.role !== "scorer";
+  // Full console chrome only for members. Non-members reaching a fixture
+  // deep-link (an accepted official — design v2 §A2) get the stripped courtside
+  // shell: no org nav or breadcrumbs, no active-org sync into an org they don't
+  // belong to. The child page does the real gate — a non-member hitting
+  // anything but the fixture console 404s there.
+  const chromed = !!membership;
   if (!chromed) {
     return (
       <DictProvider dict={ui} locale={locale}>

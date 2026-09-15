@@ -653,7 +653,7 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // this route-level pass cannot — see that harness for the layout check.
     { path: "/directory?tab=venues" },
     { path: "/import" },
-    { path: "/my-matches" },
+    { path: "/me" },
     // P4/D1a wizard step 0 — the template gallery. A 6-card grid, which is the
     // shape most likely to force a min-width overflow at 320 (grid items
     // default to `min-width: auto`).

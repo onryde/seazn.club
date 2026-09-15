@@ -886,7 +886,7 @@ async function main() {
   // --- v5 i18n: marketing [lang] routing + translated copy.
   await i18nSuite();
 
-  // --- Growth-wave gaps (device links, scorer seats, discovery, registration,
+  // --- Growth-wave gaps (device links, official scoring, discovery, registration,
   // ownership transfer, downgrade freeze) — pro paths on org2, free paths on a
   // fresh community owner. Destructive downgrade runs last.
   // --- v8: division settings — format lock + logo upload URL.
@@ -1864,8 +1864,8 @@ async function smokePlanMatrix(): Promise<void> {
   // Task 20 — the four-users-per-org, full-data-feed, populated-competition
   // pass. For a plan org's owner + host competition, seed a division that
   // covers all three entrant shapes (individual + team + pair), generate and
-  // start it, provision the org's OTHER three users (member/scorer, official,
-  // player), record real results, then run the five tier-gated assertions
+  // start it, provision the org's OTHER three users (two officials, player),
+  // record real results, then run the five tier-gated assertions
   // against the now-POPULATED competition (not an empty shell). Plan-generic:
   // the branded-vs-plain export outcome is driven by `expectBranded`, never a
   // hardcoded plan. `hostComp` is the persona's existing competition (reused so
@@ -1943,16 +1943,15 @@ async function smokePlanMatrix(): Promise<void> {
     await call(officialSession, `/api/claims/${offToken}/accept`, "POST");
     const offAccept = await v1(
       officialSession,
-      `/api/v1/me/assigned-fixtures/${feedFixtures[0].id}/response`,
+      `/api/v1/me/fixtures/${feedFixtures[0].id}/officiating-response`,
       "PATCH",
       {
         response: "accepted",
       },
     );
-    const offDuties = v1data<unknown[]>(await v1(officialSession, "/api/v1/me/assigned-fixtures"));
     check(
-      `matrix/${key}: the official sees their duty in the officiating lane`,
-      offAccept.status === 200 && Array.isArray(offDuties) && offDuties.length > 0,
+      `matrix/${key}: the official accepts their duty`,
+      offAccept.status === 200 && v1data<{ response: string }>(offAccept).response === "accepted",
     );
     const offState = await v1(officialSession, `/api/v1/fixtures/${feedFixtures[0].id}/state`);
     const offScore = await v1(
@@ -1967,36 +1966,46 @@ async function smokePlanMatrix(): Promise<void> {
     );
     check(`matrix/${key}: the accepted official records a result`, offScore.status === 201);
 
-    // --- User 3 (member/scorer): a division-scoped scorer invite seats a
-    // member who scores a DIFFERENT fixture via the assignment path
-    // (scoresViaAssignment). V395 deleted `scorers.max`; the seat is charged
-    // against `members.max` now, which on community is 3 — so one still fits.
-    const scorerEmail = `delivered+scorer_${key}_${tag}@resend.dev`;
-    const scorerSession = newSession();
-    await signIn(scorerSession, scorerEmail);
-    const scorerInvite = (await call(owner, `/api/orgs/${orgId}/invites`, "POST", {
-      role: "scorer",
-      max_uses: 1,
-      default_scope: { type: "division", id: feedDiv.id },
-    })) as { token: string };
-    await call(scorerSession, `/api/invites/${scorerInvite.token}/accept`, "POST", {});
-    const scorerAssigned = v1data<unknown[]>(
-      await v1(scorerSession, "/api/v1/me/assigned-fixtures"),
+    // --- User 3 (official #2): assigned to fixture[1], invited through the shared
+    // person-claim rail, claims + accepts, and records a result on the Free path.
+    const official2Email = `delivered+official2_${key}_${tag}@resend.dev`;
+    const official2Session = newSession();
+    await signIn(official2Session, official2Email);
+    const official2 = v1data<{ id: string }>(
+      await v1(owner, "/api/v1/officials", "POST", {
+        display_name: `Feed Ref2 ${key} ${tag}`,
+        role_keys: ["referee"],
+      }),
     );
-    const scorerState = await v1(scorerSession, `/api/v1/fixtures/${feedFixtures[1].id}/state`);
-    const scorerScore = await v1(
-      scorerSession,
+    await v1(owner, `/api/v1/fixtures/${feedFixtures[1].id}/officials`, "PATCH", {
+      set: [{ official_id: official2.id, role_key: "referee", locked: false }],
+    });
+    const off2Invite = await v1(owner, `/api/v1/officials/${official2.id}/invite`, "POST", {
+      email: official2Email,
+    });
+    const off2Token =
+      (v1data<{ claim_url: string }>(off2Invite).claim_url ?? "").split("/claim/")[1] ?? "";
+    await call(official2Session, `/api/claims/${off2Token}/accept`, "POST");
+    const off2Accept = await v1(
+      official2Session,
+      `/api/v1/me/fixtures/${feedFixtures[1].id}/officiating-response`,
+      "PATCH",
+      { response: "accepted" },
+    );
+    const off2State = await v1(official2Session, `/api/v1/fixtures/${feedFixtures[1].id}/state`);
+    const off2Score = await v1(
+      official2Session,
       `/api/v1/fixtures/${feedFixtures[1].id}/events`,
       "POST",
       {
-        expected_seq: v1data<{ last_seq: number }>(scorerState).last_seq,
+        expected_seq: v1data<{ last_seq: number }>(off2State).last_seq,
         type: "generic.result",
         payload: { p1Score: 1, p2Score: 3 },
       },
     );
     check(
-      `matrix/${key}: the scorer seats via invite and scores via assignment`,
-      Array.isArray(scorerAssigned) && scorerAssigned.length > 0 && scorerScore.status === 201,
+      `matrix/${key}: the second official claims, accepts and scores fixture[1]`,
+      off2Accept.status === 200 && off2Score.status === 201,
     );
 
     // --- User 4 (player): claims the person on entrant #1 and reads their own
@@ -2437,8 +2446,8 @@ async function smokePlanMatrix(): Promise<void> {
   );
 
   // === Task 20 — populated-competition assertions per plan org ===========
-  // Each plan org now gets four users (owner + member/scorer + official +
-  // player) and a full data feed (individual + team + pair entrants, fixtures,
+  // Each plan org now gets four users (owner + two officials + player) and a
+  // full data feed (individual + team + pair entrants, fixtures,
   // recorded results), then the five tier-gated assertions run against the
   // populated competition. Reuses each persona's existing competition; for
   // event_pass the PASSED comp hosts the feed so the comp-scoped exports grant
@@ -4526,7 +4535,7 @@ async function officialOnboardingSuite(
   // Accept; then decline a second assignment with a reason → organiser flag.
   const acceptRes = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
+    `/api/v1/me/fixtures/${fixtures[0].id}/officiating-response`,
     "PATCH",
     {
       response: "accepted",
@@ -4539,7 +4548,7 @@ async function officialOnboardingSuite(
   await v1(admin, `/api/v1/fixtures/${fixtures[1].id}/officials`, "PATCH", {
     set: [{ official_id: offId, role_key: "referee", locked: false }],
   });
-  await v1(ref, `/api/v1/me/assigned-fixtures/${fixtures[1].id}/response`, "PATCH", {
+  await v1(ref, `/api/v1/me/fixtures/${fixtures[1].id}/officiating-response`, "PATCH", {
     response: "declined",
     decline_reason: "smoke clash",
   });
@@ -4556,7 +4565,7 @@ async function officialOnboardingSuite(
   // accepted → declined is refused (ask the organiser)
   const illegal = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
+    `/api/v1/me/fixtures/${fixtures[0].id}/officiating-response`,
     "PATCH",
     {
       response: "declined",
@@ -4573,15 +4582,14 @@ async function officialOnboardingSuite(
   const cleared = await v1(ref, "/api/v1/me/availability/officiating?date=2027-03-07", "DELETE");
   check("off blackout date cleared", cleared.status === 200);
 
-  // Score this match: accepted officials score exactly like a scorer, straight
-  // through the fixture console — no separate device-mint (design v2 §A3;
-  // Tasks 1-4 wire acceptedOfficialCovers through requireFixtureActor). The
-  // accepted assignment also surfaces the fixture on My Matches, the scorer
-  // console's own landing page, unioned in from fixture_officials.
-  const myMatches = await html(ref, "/my-matches");
+  // Score this match: accepted officials score straight through the fixture
+  // console — no separate device-mint (design v2 §A3; Tasks 1-4 wire
+  // acceptedOfficialCovers through requireFixtureActor). The accepted assignment
+  // also surfaces the fixture on /me, unioned in from fixture_officials.
+  const mePage = await html(ref, "/me");
   check(
-    "off accepted fixture reachable via My Matches",
-    myMatches.status === 200 && myMatches.body.includes(`Whistle A ${tag}`),
+    "off accepted fixture reachable via /me",
+    mePage.status === 200 && mePage.body.includes(`Whistle A ${tag}`),
   );
   const offState = await v1(ref, `/api/v1/fixtures/${fixtures[0].id}/state`);
   check("off accepted official reads fixture state (non-member door)", offState.status === 200);
@@ -4859,7 +4867,7 @@ async function marksReportsSuite(
     });
     const token = (v1data<{ claim_url: string }>(inv).claim_url ?? "").split("/claim/")[1];
     await call(ref, `/api/claims/${token}/accept`, "POST");
-    await v1(ref, `/api/v1/me/assigned-fixtures/${fx}/response`, "PATCH", {
+    await v1(ref, `/api/v1/me/fixtures/${fx}/officiating-response`, "PATCH", {
       response: "accepted",
     });
     // The accepted official scores a generic result → the fixture decides
@@ -15996,7 +16004,7 @@ async function jul3Suite(admin: Session, orgId: string, orgSlug: string): Promis
 /**
  * Growth-wave coverage the earlier suites miss (kept per feedback: every
  * feature exercised on the pro AND the free path where a free path exists):
- * device links, scorer seats via scoped invites, discovery, public
+ * device links, free official scoring, discovery, public
  * registration, ownership transfer, account export, and the in-app
  * downgrade → competition-freeze path. `proOrgId` (org2) must be Pro on
  * entry; the downgrade at the end deliberately flips it to community.
@@ -16147,7 +16155,7 @@ async function divisionLifecycleSuite(admin: Session, proOrgId: string): Promise
 }
 
 async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promise<void> {
-  // A dedicated started division in the Pro org for device links + scorers.
+  // A dedicated started division in the Pro org for device links + officials.
   const comp = await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
     name: `Gap Cup ${tag}`,
   });
@@ -16264,99 +16272,42 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   const padHtml = await (await fetch(`${BASE}/score/${dlSecret}`)).text();
   check("gap device pad carries the org theme", padHtml.includes("--ps-accent:#1d4ed8"));
 
-  // --- Scorer seat: a division-scoped invite creates membership + assignment ---
-  const scorerInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
-    role: "scorer",
-    max_uses: 1,
-    default_scope: { type: "division", id: divId },
-  })) as { token: string };
-  const scorer = newSession();
-  await signIn(scorer, `delivered+scorer_${tag}@resend.dev`);
-  const accepted = (await call(
-    scorer,
-    `/api/invites/${scorerInvite.token}/accept`,
-    "POST",
-    {},
-  )) as {
-    landing: string;
-  };
-  check("gap scorer lands on my-matches", accepted.landing === "/my-matches");
-  const assigned = await v1(scorer, "/api/v1/me/assigned-fixtures");
-  check(
-    "gap scorer sees assigned fixtures",
-    assigned.status === 200 && v1data<unknown[]>(assigned).length > 0,
+  // --- Free official scores fixture[1]: assign → claim → accept → /me → score ---
+  const gapFixture2Id = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1].id;
+  const gapOfficial = v1data<{ id: string }>(
+    await v1(admin, "/api/v1/officials", "POST", {
+      display_name: `Gap Ref ${tag}`,
+      role_keys: ["referee"],
+    }),
   );
-  // V395 (entitlements v18 W2 T12) DELETED `scorers.max`. This check asserted
-  // 402 on the second scorer against a Pro cap of 1, and its own NAME stated
-  // that rule — so it is INVERTED rather than dropped, the same way the V393
-  // `officials.per_fixture.max` check above was: the interesting fact is now
-  // that the seat is FREE to take, and a check that quietly disappeared would
-  // leave the deletion's most likely failure (a key with no row resolving to 0,
-  // refusing every scorer) with nothing watching it end to end.
-  //
-  // The seat is charged against `members.max` now, which is 10 on Pro, so the
-  // second scorer fits — where a leftover `scorers.max` read would 402.
-  const scorerInvite2 = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
-    role: "scorer",
-    max_uses: 1,
-    default_scope: { type: "division", id: divId },
-  })) as { token: string };
-  const scorer2 = newSession();
-  await signIn(scorer2, `delivered+scorer2_${tag}@resend.dev`);
-  const secondSeat = await raw(scorer2, `/api/invites/${scorerInvite2.token}/accept`, "POST", {});
-  check(
-    "gap second scorer seat is free to take (V395 deleted scorers.max)",
-    secondSeat.status === 200,
+  await v1(admin, `/api/v1/fixtures/${gapFixture2Id}/officials`, "PATCH", {
+    set: [{ official_id: gapOfficial.id, role_key: "referee", locked: false }],
+  });
+  const gapOffEmail = `delivered+gap_official_${tag}@resend.dev`;
+  const gapOffSession = newSession();
+  await signIn(gapOffSession, gapOffEmail);
+  const gapOffInvite = await v1(admin, `/api/v1/officials/${gapOfficial.id}/invite`, "POST", {
+    email: gapOffEmail,
+  });
+  const gapOffToken =
+    (v1data<{ claim_url: string }>(gapOffInvite).claim_url ?? "").split("/claim/")[1] ?? "";
+  await call(gapOffSession, `/api/claims/${gapOffToken}/accept`, "POST");
+  const gapOffAccept = await v1(
+    gapOffSession,
+    `/api/v1/me/fixtures/${gapFixture2Id}/officiating-response`,
+    "PATCH",
+    { response: "accepted" },
   );
-
-  // --- Additive invites: accepting never changes an existing role. An
-  // editor's own test scan is a no-op that doesn't burn the link; a viewer
-  // accepting the same link keeps viewer and gains the assignment — and no
-  // seat is charged for it, because they already hold one ---
-  const gapViewerInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
-    role: "viewer",
-    max_uses: 1,
-  })) as { token: string };
-  const gapViewer = newSession();
-  await signIn(gapViewer, `delivered+gap_viewer_${tag}@resend.dev`);
-  await call(gapViewer, `/api/invites/${gapViewerInvite.token}/accept`, "POST", {});
-  const umpInvite = (await call(admin, `/api/orgs/${proOrgId}/invites`, "POST", {
-    role: "scorer",
-    max_uses: 1,
-    default_scope: { type: "division", id: divId },
-  })) as { token: string };
-  const ownScan = (await call(admin, `/api/invites/${umpInvite.token}/accept`, "POST", {})) as {
-    outcome: string;
-    role: string;
-  };
-  check(
-    "gap editor test-scan is a no-op (role kept)",
-    ownScan.outcome === "already_member" && ownScan.role !== "scorer",
-  );
-  const vAccept = (await call(gapViewer, `/api/invites/${umpInvite.token}/accept`, "POST", {})) as {
-    outcome: string;
-    role: string;
-    landing: string;
-  };
-  check(
-    "gap viewer umpire invite: scope added, role kept",
-    vAccept.outcome === "scope_added" &&
-      vAccept.role === "viewer" &&
-      vAccept.landing === "/my-matches",
-  );
-  const vAssigned = await v1(gapViewer, "/api/v1/me/assigned-fixtures");
-  check(
-    "gap viewer sees assigned fixtures",
-    vAssigned.status === 200 && v1data<unknown[]>(vAssigned).length > 0,
-  );
-  const vFixture = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[1].id;
-  const vState = await v1(gapViewer, `/api/v1/fixtures/${vFixture}/state`);
-  const vEvent = await v1(gapViewer, `/api/v1/fixtures/${vFixture}/events`, "POST", {
-    expected_seq: v1data<{ last_seq: number }>(vState).last_seq,
+  check("gap official accept lands", gapOffAccept.status === 200);
+  const gapMe = await html(gapOffSession, "/me");
+  check("gap accepted official sees duty on /me", gapMe.status === 200);
+  const gapOffState = await v1(gapOffSession, `/api/v1/fixtures/${gapFixture2Id}/state`);
+  const gapOffScore = await v1(gapOffSession, `/api/v1/fixtures/${gapFixture2Id}/events`, "POST", {
+    expected_seq: v1data<{ last_seq: number }>(gapOffState).last_seq,
     type: "generic.result",
     payload: { p1Score: 1, p2Score: 0 },
   });
-  check("gap viewer scores via assignment", vEvent.status === 201);
+  check("gap free official scores via fixture console API", gapOffScore.status === 201);
 
   // --- Discovery: public + discoverable (started division passes the quality
   // floor); discoverable without public visibility is rejected ---
@@ -16499,7 +16450,7 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
     role: string;
   }[];
   const owner = members.find((m) => m.role === "owner")!;
-  const target = members.find((m) => m.role !== "owner" && m.role !== "scorer")!;
+  const target = members.find((m) => m.role !== "owner")!;
   await call(admin, `/api/orgs/${org1Id}/transfer-owner`, "POST", {
     new_owner_id: target.user_id,
   });
@@ -18294,8 +18245,7 @@ async function cleanup(tag: string): Promise<void> {
     `delivered+admin_${tag}@resend.dev`,
     `delivered+viewer_${tag}@resend.dev`,
     `delivered+member_${tag}@resend.dev`,
-    `delivered+scorer_${tag}@resend.dev`,
-    `delivered+scorer2_${tag}@resend.dev`,
+    `delivered+gap_official_${tag}@resend.dev`,
     `delivered+free_${tag}@resend.dev`,
     `delivered+walkin_${tag}@resend.dev`,
     // #402 — gapSuite's signed-in self-registrant. Its persons rows live in the
@@ -18349,8 +18299,8 @@ async function cleanup(tag: string): Promise<void> {
     `delivered+passlpro_${tag}@resend.dev`,
     // Task 20 — the three extra users seeded per plan org (owner is above).
     ...["community", "pro", "enterprise", "pass"].flatMap((k) => [
-      `delivered+scorer_${k}_${tag}@resend.dev`,
       `delivered+official_${k}_${tag}@resend.dev`,
+      `delivered+official2_${k}_${tag}@resend.dev`,
       `delivered+player_${k}_${tag}@resend.dev`,
     ]),
     `delivered+clubpro_${tag}@resend.dev`,

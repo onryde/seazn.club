@@ -147,14 +147,14 @@ describe.skipIf(!HAS_DB)("Express dashboard login link", () => {
     const { orgId } = await seedProOrg();
     await sql`update organizations set stripe_account_id = ${"acct_x_" + orgId.slice(0, 8)}
               where id = ${orgId}`;
-    const scorer: AuthCtx = {
+    const viewer: AuthCtx = {
       orgId,
       via: "session",
       userId: randomUUID(),
-      role: "scorer",
+      role: "viewer",
       keyId: null,
     };
-    await expect(createConnectDashboardLink(scorer, orgId)).rejects.toMatchObject({
+    await expect(createConnectDashboardLink(viewer, orgId)).rejects.toMatchObject({
       status: 403,
     });
   });

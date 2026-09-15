@@ -4,7 +4,7 @@ import { listMyFixtures } from "@/server/usecases/me";
 
 /** The player home read (PROMPT-53): upcoming fixtures, recent results and
  *  teams for every claimed person of the caller, across all orgs. Session
- *  only — mirrors /me/assigned-fixtures. */
+ *  only. */
 export async function GET() {
   return v1(async () => {
     const user = await requireUser();

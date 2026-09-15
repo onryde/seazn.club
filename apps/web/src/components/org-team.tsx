@@ -23,10 +23,9 @@ const ROLE_BADGE: Record<OrgRole, string> = {
   owner: "bg-amber-100 text-amber-700",
   admin: "bg-purple-100 text-purple-700",
   viewer: "bg-slate-100 text-slate-600",
-  scorer: "bg-emerald-100 text-emerald-700",
 };
 
-type InviteRole = "admin" | "viewer" | "scorer";
+type InviteRole = "admin" | "viewer";
 
 /** How long a shareable team-settings link lives, in days. 24 hours: long
  *  enough to survive the tab that created it and be shared in the group
@@ -40,7 +39,6 @@ function RoleOptions() {
     <>
       <option value="viewer">{msg("settings.team.role.viewer")}</option>
       <option value="admin">{msg("settings.team.role.admin")}</option>
-      <option value="scorer">{msg("settings.team.role.scorer")}</option>
     </>
   );
 }

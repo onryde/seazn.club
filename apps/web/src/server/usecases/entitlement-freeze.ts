@@ -327,7 +327,7 @@ export async function frozenMemberIds(orgId: string): Promise<Set<string>> {
   const rows = await withTenant(orgId, (tx) =>
     tx<{ user_id: string; role: string; created_at: string }[]>`
       select user_id, role, created_at from org_members
-      where org_id = ${orgId} and role <> 'scorer'`,
+      where org_id = ${orgId}`,
   );
   if (rows.length <= limit) return new Set();
   const owners = rows.filter((r) => r.role === "owner");

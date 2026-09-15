@@ -269,7 +269,7 @@ export function CreateOrgForm({
   next = null,
 }: {
   /** Ids of the organisations this user can actually OPEN — their memberships,
-   *  minus scorer roles, which `requireOrgPage` bounces to /my-matches. Passed
+   *  the visitor can open. Passed
    *  from the page (which already loads them) because the payer-gated group
    *  payload this form fetches names organisations the payer may not belong
    *  to, and a link into one of those is a 404. */
