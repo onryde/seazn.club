@@ -125,6 +125,35 @@ const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
 export const shortDate = (iso: string, tz: string, dateTag: string) =>
   dayDateShort(dayKey(iso, tz), dateTag);
 
+/** A fixture's round NAME as the round view heads it: the public round namer's
+ *  label, or its round number when the caller has none for it. */
+export const roundNameOf = (f: Pick<PublicFixture, "id" | "round_no">, roundLabels: Record<string, string>) =>
+  roundLabels[f.id] ?? String(f.round_no);
+
+/** N1g g1 (review-n1f I1) — every round name that more than one STAGE of the
+ *  division produces (a knockout and its plate both ending in a "Final"). The
+ *  round view names the stage in front of exactly these headings.
+ *
+ *  Pass the division's WHOLE fixture list. Whether a name is shared is a fact
+ *  about the division, not about what is on screen: decided over the
+ *  entrant-filtered list, a spectator filtered to a plate finalist saw a bare
+ *  "Final" — reading as THE final — and the heading changed identity as the
+ *  filter changed. Stages are counted, not fixtures: a name repeated inside one
+ *  stage is not shared. */
+export function sharedRoundNames(
+  fixtures: readonly Pick<PublicFixture, "id" | "stage_id" | "round_no">[],
+  roundLabels: Record<string, string>,
+): Set<string> {
+  const stagesByName = new Map<string, Set<string>>();
+  for (const f of fixtures) {
+    const name = roundNameOf(f, roundLabels);
+    const stages = stagesByName.get(name) ?? new Set<string>();
+    stages.add(f.stage_id);
+    stagesByName.set(name, stages);
+  }
+  return new Set([...stagesByName].filter(([, stages]) => stages.size > 1).map(([name]) => name));
+}
+
 /** Per-side score lines fit the stacked layout only when short ("3", "21").
     Long lines (cricket innings, set strings) fall back to the headline chip. */
 function sideLines(f: PublicFixture): [string, string] | null {
@@ -281,7 +310,7 @@ export function Schedule({
     if (mode === "day") {
       key = f.scheduled_at ? dayKey(f.scheduled_at, tz) : UNSCHEDULED;
     } else {
-      const name = roundLabels[f.id] ?? String(f.round_no);
+      const name = roundNameOf(f, roundLabels);
       key = JSON.stringify([f.stage_id, name]);
       roundNames.set(key, name);
       groupStage.set(key, f.stage_id);
@@ -300,25 +329,17 @@ export function Schedule({
         })
       : [...groups.entries()];
 
-  // N1f f2 (review-n1e m1): two stages in one division can produce the SAME
-  // round name — a knockout and its plate both end in a "Final", two group
-  // stages both open with a "Round 1" — and the round view then shows two
-  // headings a spectator cannot tell apart. Count the DISTINCT stages behind
-  // each name, and name the stage in front of the ones that actually repeat:
-  // a heading unique in this division reads exactly as it did.
-  const stagesPerName = new Map<string, Set<string>>();
-  for (const [key, name] of roundNames) {
-    const seen = stagesPerName.get(name) ?? new Set<string>();
-    const stageId = groupStage.get(key);
-    if (stageId != null) seen.add(stageId);
-    stagesPerName.set(name, seen);
-  }
+  // N1f f2, N1g g1: a round name two stages share ("Final" in a knockout and
+  // in its plate) is headed with its stage. Decided over the division's WHOLE
+  // fixture list — `fixtures`, never the entrant-filtered `shown` — so a
+  // heading reads the same whoever the filter is on.
+  const shared = sharedRoundNames(fixtures, roundLabels);
 
   const groupLabel = (key: string): string => {
     if (mode === "round") {
       const name = roundNames.get(key);
       if (name == null) return key;
-      if ((stagesPerName.get(name)?.size ?? 0) < 2) return name;
+      if (!shared.has(name)) return name;
       const stageId = groupStage.get(key);
       const stageName = stageId != null ? stageNames[stageId] : undefined;
       // No name for the stage means nothing to tell them apart WITH, so the
