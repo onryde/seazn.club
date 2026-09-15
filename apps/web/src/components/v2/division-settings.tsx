@@ -370,7 +370,11 @@ export function DivisionSettings({
   const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>(() =>
     currentStandingsCarryFromStages(stages),
   );
-  const cfg = (division.config ?? {}) as { points?: Record<string, number>; progressScore?: boolean };
+  const cfg = (division.config ?? {}) as {
+    points?: Record<string, number>;
+    progressScore?: boolean;
+    onlinePlay?: string;
+  };
   // R3.5 review F7 — which boxes this editor shows/writes is derived from
   // the saved config's OWN points shape, not the sport key (see
   // editablePointsKeys above).
@@ -408,8 +412,12 @@ export function DivisionSettings({
     setSyncedConfigSignature(configSignature);
     setRuleValues(hydrateRuleValues(division.sport_key, division.config));
     setPointsValues(hydratePointsValues(division.sport_key, cfg.points));
+    setOnlinePlay(cfg.onlinePlay === "lichess" ? "lichess" : "off");
   }
   const [advancedText, setAdvancedText] = useState("");
+  const [onlinePlay, setOnlinePlay] = useState<"off" | "lichess">(
+    cfg.onlinePlay === "lichess" ? "lichess" : "off",
+  );
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
   const [entrantKinds, setEntrantKinds] = useState<string[]>(entrantModel.kinds);
@@ -594,6 +602,10 @@ export function DivisionSettings({
         } catch {
           throw new Error(msg("divset.invalidJson"));
         }
+      }
+      if (division.sport_key === "boardgame") {
+        if (onlinePlay === "lichess") override.onlinePlay = "lichess";
+        else delete override.onlinePlay;
       }
       await apiV1(`/api/v1/divisions/${division.id}`, {
         method: "PATCH",
@@ -870,6 +882,25 @@ export function DivisionSettings({
                 ))}
               </select>
             </label>
+
+            {division.sport_key === "boardgame" && (
+              <div>
+                <label className="block text-xs text-slate-500">
+                  {msg("divset.onlinePlay.label")}
+                  <select
+                    disabled={!canEdit}
+                    value={onlinePlay}
+                    onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
+                    className="input mt-1 w-full"
+                    data-testid="division-online-play"
+                  >
+                    <option value="off">{msg("divset.onlinePlay.off")}</option>
+                    <option value="lichess">{msg("divset.onlinePlay.lichess")}</option>
+                  </select>
+                </label>
+                <p className="mt-1 text-[11px] text-slate-400">{msg("divset.onlinePlay.help")}</p>
+              </div>
+            )}
 
             {pointsFieldKeys.length > 0 && (
               <div>

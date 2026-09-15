@@ -36,6 +36,12 @@ import { invalidateSlugCache } from "@/server/slug-resolve";
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
 import { normalizeTags } from "./venues";
+import {
+  applyOnlinePlayToConfig,
+  assertOnlinePlayValue,
+  readOnlinePlay,
+  withoutDivisionMetaKeys,
+} from "@/server/external-play/online-play";
 
 export interface DivisionRow {
   id: string;
@@ -261,6 +267,17 @@ export async function createDivision(
         issues: parsed.error.issues,
       });
     }
+    const finalConfig = parsed.data as Record<string, unknown>;
+    const inputCfg = input.config as Record<string, unknown>;
+    const onlinePlay =
+      inputCfg && "onlinePlay" in inputCfg
+        ? assertOnlinePlayValue(input.sport_key, inputCfg.onlinePlay)
+        : readOnlinePlay(null);
+    applyOnlinePlayToConfig(finalConfig, onlinePlay);
+    const incomingEntrants = inputCfg?.entrants;
+    if (incomingEntrants != null && typeof incomingEntrants === "object") {
+      finalConfig.entrants = incomingEntrants;
+    }
 
     // Shared by both slug paths so the generated one can be RETRIED against
     // the unique index — `q` is the savepoint, and replaces `tx` inside it.
@@ -283,7 +300,7 @@ export async function createDivision(
                                module_version, tiebreakers, category, age_min, age_max,
                                age_cutoff_month, age_cutoff_day, eligibility_note, youth)
         values (${competitionId}, ${input.name}, ${slug}, ${input.sport_key}, ${input.variant_key},
-                ${q.json(parsed.data as never)}, ${sport.module_version},
+                ${q.json(finalConfig as never)}, ${sport.module_version},
                 ${input.tiebreakers ? q.json(input.tiebreakers as never) : null},
                 ${input.category ?? null}, ${input.age_min ?? null}, ${ageMax},
                 ${input.age_cutoff_month ?? null}, ${input.age_cutoff_day ?? null},
@@ -574,9 +591,7 @@ function canonicalJson(value: unknown): string {
 }
 
 function withoutEntrants(config: Record<string, unknown>): Record<string, unknown> {
-  const rest: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(config)) if (k !== "entrants") rest[k] = v;
-  return rest;
+  return withoutDivisionMetaKeys(config);
 }
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
@@ -809,6 +824,15 @@ export async function patchDivision(
       const incomingEntrants = (patch.config as { entrants?: unknown } | undefined)?.entrants;
       if (incomingEntrants != null && typeof incomingEntrants === "object") {
         finalConfig.entrants = incomingEntrants;
+      }
+      const patchCfg = patch.config as Record<string, unknown> | undefined;
+      if (patchCfg && "onlinePlay" in patchCfg) {
+        applyOnlinePlayToConfig(
+          finalConfig,
+          assertOnlinePlayValue(current.sport_key, patchCfg.onlinePlay),
+        );
+      } else {
+        applyOnlinePlayToConfig(finalConfig, readOnlinePlay(current.config));
       }
       if (locked) {
         const nonEntrantsChanged =

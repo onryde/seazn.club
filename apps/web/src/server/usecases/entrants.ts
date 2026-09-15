@@ -27,6 +27,8 @@ import type {
 } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { gateRosterEligibility, type EligibilityIssue } from "./registration-eligibility";
+import { readOnlinePlay } from "@/server/external-play/online-play";
+import { assertPersonIdsLinkedForOnlinePlay } from "./external-accounts";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -212,8 +214,8 @@ async function insertMembers(
       insert into entrant_members (entrant_id, person_id, squad_number,
                                    default_position_key, is_captain, roles)
       values (${entrantId}, ${m.person_id}, ${m.squad_number ?? null},
-              ${m.default_position_key ?? null}, ${m.is_captain},
-              ${tx.json(m.roles as never)})`;
+              ${m.default_position_key ?? null}, ${m.is_captain ?? false},
+              ${tx.json((m.roles ?? []) as never)})`;
   }
   return warnings;
 }
@@ -282,8 +284,14 @@ export async function createEntrants(
   );
   return withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
-      { status: string; competition_id: string; sport_key: string; module_version: string }[]
-    >`select status, competition_id, sport_key, module_version
+      {
+        status: string;
+        competition_id: string;
+        sport_key: string;
+        module_version: string;
+        config: unknown;
+      }[]
+    >`select status, competition_id, sport_key, module_version, config
       from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
     assertNotFrozen(frozen, division.competition_id);
@@ -374,6 +382,13 @@ export async function createEntrants(
       // (cap 1) or pair (cap 2). Reuse the already-loaded `eff` (loaded once for
       // the batch) — same 422 ENTRANT_ROSTER_TOO_BIG as the early check.
       assertRosterFits(eff, input.kind ?? eff.defaultKind, members.length);
+
+      if (readOnlinePlay(division.config) === "lichess" && members.length > 0) {
+        await assertPersonIdsLinkedForOnlinePlay(
+          auth.orgId,
+          members.map((m) => m.person_id),
+        );
+      }
 
       let row: EntrantRow;
       try {
