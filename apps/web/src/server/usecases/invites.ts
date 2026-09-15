@@ -1,16 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { sql } from "@/lib/db";
-import { HttpError } from "@/lib/http";
-import type { OrgInvite, ScorerScopeType } from "@/lib/types";
-
-// Scope type → table, for validating a scorer invite's default_scope target
-// belongs to this org (doc 13 §4).
-const SCOPE_TABLES = {
-  competition: "competitions",
-  division: "divisions",
-  fixture: "fixtures",
-} as const;
+import type { OrgInvite } from "@/lib/types";
 
 /** No explicit expiry asked for → the courtside-QR default: one hour. */
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
@@ -18,10 +9,9 @@ const DEFAULT_TTL_MS = 60 * 60 * 1000;
 export const EMAIL_INVITE_TTL_DAYS = 7;
 
 export interface CreateInviteInput {
-  role: "admin" | "viewer" | "scorer";
+  role: "admin" | "viewer";
   max_uses: number;
   expires_in_days?: number | null;
-  default_scope?: { type: ScorerScopeType; id: string } | null;
   email?: string | null;
 }
 
@@ -36,19 +26,6 @@ export async function createInvite(
   createdBy: string,
   input: CreateInviteInput,
 ): Promise<OrgInvite> {
-  const { role, default_scope } = input;
-  if (default_scope && role !== "scorer") {
-    throw new HttpError(400, "default_scope applies to scorer invites only");
-  }
-  if (default_scope) {
-    const [target] = await sql<{ org_id: string }[]>`
-      select org_id from ${sql(SCOPE_TABLES[default_scope.type])}
-      where id = ${default_scope.id} limit 1`;
-    if (!target || target.org_id !== orgId) {
-      throw new HttpError(422, `${default_scope.type} not found in this organization`);
-    }
-  }
-
   const email = input.email?.trim().toLowerCase() || null;
   const maxUses = email ? 1 : input.max_uses;
   const days = email ? EMAIL_INVITE_TTL_DAYS : input.expires_in_days;
@@ -64,11 +41,10 @@ export async function createInvite(
   const token = crypto.randomBytes(24).toString("base64url");
   const [invite] = await sql<OrgInvite[]>`
     insert into org_invites
-      (org_id, role, default_scope, email, token, created_by, expires_at, max_uses)
+      (org_id, role, email, token, created_by, expires_at, max_uses)
     values
-      (${orgId}, ${role}, ${default_scope ? sql.json(default_scope) : null}, ${email},
-       ${token}, ${createdBy}, ${expiresAt}, ${maxUses})
-    returning id, org_id, role, default_scope, email, token, expires_at, max_uses,
+      (${orgId}, ${input.role}, ${email}, ${token}, ${createdBy}, ${expiresAt}, ${maxUses})
+    returning id, org_id, role, email, token, expires_at, max_uses,
               used_count, revoked, created_at`;
   return invite;
 }

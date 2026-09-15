@@ -37,7 +37,7 @@ describe("published OpenAPI document", () => {
       "/connect",
       "/device-links",
       "/refund",
-      "/me/assigned-fixtures",
+      "/me/fixtures",
     ]) {
       expect(keys.some((k) => k.includes(banned)), `${banned} leaked`).toBe(false);
     }

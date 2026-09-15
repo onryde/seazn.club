@@ -68,7 +68,7 @@ describe.skipIf(!HAS_DB)("createInvite (team invites)", () => {
   it("no expiry args → legacy one-hour TTL (courtside QR default)", async () => {
     const { orgId, ownerId } = await seedOrg();
     const invite = await createInvite(orgId, ownerId, {
-      role: "scorer",
+      role: "viewer",
       max_uses: 1,
     });
     expectExpiryNear(invite.expires_at, HOUR_MS);
@@ -138,18 +138,4 @@ describe.skipIf(!HAS_DB)("createInvite (team invites)", () => {
     expect(member?.role).toBe("viewer");
   });
 
-  it("default_scope on a non-scorer invite is rejected (400)", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    try {
-      await createInvite(orgId, ownerId, {
-        role: "viewer",
-        max_uses: 1,
-        default_scope: { type: "division", id: randomUUID() },
-      });
-      expect.unreachable();
-    } catch (err) {
-      expect(err).toBeInstanceOf(HttpError);
-      expect((err as HttpError).status).toBe(400);
-    }
-  });
 });

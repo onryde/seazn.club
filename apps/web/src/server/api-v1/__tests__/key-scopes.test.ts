@@ -40,7 +40,7 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("POST", "/api/v1/orgs/o1/api-keys")).toBeNull();
     expect(matchKeyRoute("POST", "/api/v1/registrations/r1/refund")).toBeNull();
     expect(matchKeyRoute("POST", "/api/v1/fixtures/f1/device-links")).toBeNull();
-    expect(matchKeyRoute("GET", "/api/v1/me/assigned-fixtures")).toBeNull();
+    expect(matchKeyRoute("PATCH", "/api/v1/me/fixtures/f1/officiating-response")).toBeNull();
     expect(matchKeyRoute("POST", "/api/v1/orgs/o1/connect")).toBeNull();
     // Competition delete cascades registrations/passes (money records) —
     // barred from keys (payments-hardening P0-1); console has no button either.

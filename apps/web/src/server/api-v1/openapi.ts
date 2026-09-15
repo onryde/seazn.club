@@ -163,10 +163,8 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/device-links", method: "post", summary: "Mint a day-of device link (editor session only; secret shown once; revokes prior active links; expiry = end of the fixture's local day)", tag: "device-links", request: S.CreateDeviceLink, response: S.CreatedDeviceLink, status: 201, errors: [402, 422, 429] },
   { path: "/fixtures/{id}/device-links", method: "get", summary: "The fixture's active device link, if any (never the secret)", tag: "device-links", response: S.DeviceLink.nullable() },
   { path: "/fixtures/{id}/device-links/{linkId}", method: "delete", summary: "Revoke a device link (immediate 401 for the holder)", tag: "device-links", response: S.DeviceLink },
-  // Scorer console (doc 13 §6, PROMPT-18)
-  { path: "/me/assigned-fixtures", method: "get", summary: "Fixtures covered by the caller's scorer assignments (session only)", tag: "scorers", response: z.array(S.AssignedFixture), query: { date: { schema: { type: "string", format: "date" }, description: "Narrow to one day (YYYY-MM-DD)" } } },
   // Officiating portal (PROMPT-57)
-  { path: "/me/assigned-fixtures/{id}/response", method: "patch", summary: "Accept or decline an officiating assignment (assigned official's session only; declines flag for a manual re-pick, never auto-reassign)", tag: "officials", request: S.OfficiatingResponseInput, response: S.OfficiatingResponseOut, errors: [422] },
+  { path: "/me/fixtures/{id}/officiating-response", method: "patch", summary: "Accept or decline an officiating assignment (assigned official's session only; declines flag for a manual re-pick, never auto-reassign)", tag: "officials", request: S.OfficiatingResponseInput, response: S.OfficiatingResponseOut, errors: [422] },
   { path: "/me/availability/officiating", method: "post", summary: "Mark a blackout date on every officiating profile linked to the caller (upsert on note)", tag: "officials", request: S.OfficiatingBlackoutInput, response: S.OfficiatingBlackout, status: 201 },
   { path: "/me/availability/officiating", method: "delete", summary: "Clear a blackout date (idempotent)", tag: "officials", query: { date: { schema: { type: "string", format: "date" }, description: "The date to clear (YYYY-MM-DD)" } } },
   { path: "/me/officiating-claims/{id}/accept", method: "post", summary: "Accept a pending officiating invite by id (v11.1 — /me 'Pending invites' card; no token in the URL, the session's verified email proves it; routes through the same accept core as /claim/{token})", tag: "officials", response: S.OfficiatingClaimAccepted, errors: [403, 404, 409] },
@@ -700,7 +698,7 @@ export function buildOpenApiDocument(
   const tags = [
     { name: "competitions" }, { name: "divisions" }, { name: "entrants" },
     { name: "persons" }, { name: "stages" }, { name: "fixtures" },
-    { name: "scoring" }, { name: "scheduling" }, { name: "scorers" },
+    { name: "scoring" }, { name: "scheduling" },
     { name: "device-links" }, { name: "api-keys" }, { name: "registration" },
     { name: "clubs" }, { name: "officials" }, { name: "sponsors" }, { name: "venues" }, { name: "history" },
     { name: "exports" }, { name: "stats" }, { name: "discipline" }, { name: "news" },

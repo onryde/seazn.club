@@ -112,7 +112,7 @@ test.describe.serial("official marks & match reports", () => {
     expect(claimed.status).toBe(200);
     const acc = await apiJson(
       officialPage.request,
-      `/api/v1/me/assigned-fixtures/${fixture.id}/response`,
+      `/api/v1/me/fixtures/${fixture.id}/officiating-response`,
       "PATCH",
       { response: "accepted" },
     );

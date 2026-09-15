@@ -72,7 +72,7 @@ async function signedInOwner() {
   return { orgId, owner: asOwner(orgId, ownerId) };
 }
 
-async function memberWithRole(orgId: string, role: "admin" | "viewer" | "scorer"): Promise<string> {
+async function memberWithRole(orgId: string, role: "admin" | "viewer"): Promise<string> {
   const userId = await makeUser(role);
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, ${role})`;
   return userId;
@@ -147,22 +147,17 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/approve", () => {
     expect(entrant!.display_name).toBe(registration.display_name);
   });
 
-  it("authz: owner and admin allowed; viewer and scorer denied", async () => {
+  it("authz: owner and admin allowed; viewer denied", async () => {
     const { orgId, owner } = await signedInOwner();
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
     const untouched = (await manualDivisionWithPending(owner)).registration;
 
     authState.userId = viewerId;
     expect(
       (await approveRoute(postReq(`/registrations/${untouched.id}/approve`), ctx(untouched.id))).status,
     ).toBe(403);
-    authState.userId = scorerId;
-    expect(
-      (await approveRoute(postReq(`/registrations/${untouched.id}/approve`), ctx(untouched.id))).status,
-    ).toBe(403);
-    expect(await status(untouched.id)).toBe("pending"); // neither denial mutated it
+    expect(await status(untouched.id)).toBe("pending");
 
     const ownerCase = (await manualDivisionWithPending(owner)).registration;
     authState.userId = owner.userId!;
@@ -198,18 +193,13 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/reject", () => {
     expect(await status(registration.id)).toBe("rejected"); // still terminal, not silently confirmed
   });
 
-  it("authz: owner and admin allowed; viewer and scorer denied", async () => {
+  it("authz: owner and admin allowed; viewer denied", async () => {
     const { orgId, owner } = await signedInOwner();
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
     const untouched = (await manualDivisionWithPending(owner)).registration;
 
     authState.userId = viewerId;
-    expect((await rejectRoute(postReq(`/registrations/${untouched.id}/reject`), ctx(untouched.id))).status).toBe(
-      403,
-    );
-    authState.userId = scorerId;
     expect((await rejectRoute(postReq(`/registrations/${untouched.id}/reject`), ctx(untouched.id))).status).toBe(
       403,
     );
@@ -294,21 +284,16 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/promote", () => {
     expect(body.data).toBeNull();
   });
 
-  it("authz: owner and admin allowed; viewer and scorer denied", async () => {
+  it("authz: owner and admin allowed; viewer denied", async () => {
     const { orgId, owner } = await signedInOwner();
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
     const { competition, division } = await rig(owner);
     const { registration: untouched } = await seedRegistration(competition.id, division.id, SETTINGS, {
       status: "waitlisted",
     });
 
     authState.userId = viewerId;
-    expect(
-      (await promoteRoute(postReq(`/registrations/${untouched.id}/promote`, {}), ctx(untouched.id))).status,
-    ).toBe(403);
-    authState.userId = scorerId;
     expect(
       (await promoteRoute(postReq(`/registrations/${untouched.id}/promote`, {}), ctx(untouched.id))).status,
     ).toBe(403);

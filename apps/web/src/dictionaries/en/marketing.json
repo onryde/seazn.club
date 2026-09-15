@@ -118,7 +118,6 @@
   "pricing.matrix.divisions.per_competition.max": "Divisions per competition",
   "pricing.matrix.entrants.per_division.max": "Entrants per division",
   "pricing.matrix.members.max": "Team members",
-  "pricing.matrix.scorers.max": "Scorer seats",
   "pricing.matrix.stages.per_division.max": "Stages per division",
   "pricing.matrix.dashboard.public.max": "Public dashboards",
   "pricing.matrix.import.bulk": "Bulk entrant import",

@@ -245,7 +245,7 @@ function AssignmentCard({ a }: { a: MyOfficiatingAssignment }) {
     setBusy(true);
     setError(null);
     try {
-      await apiV1(`/api/v1/me/assigned-fixtures/${a.fixture_id}/response`, {
+      await apiV1(`/api/v1/me/fixtures/${a.fixture_id}/officiating-response`, {
         method: "PATCH",
         json: { response: next, decline_reason: next === "declined" ? reason.trim() || null : null },
       });

@@ -342,20 +342,8 @@ export async function getCompetitionDesk(
           select division_id, tz, (config ->> 'matchMinutes')::int as match_minutes
             from schedule_settings where division_id = any(${ids})`
       : [];
-    // F4 fix (final review, Important): who is on record to score, read
-    // once per competition (no N+1) — both scopes the finding names, a
-    // fixture-scoped assignment or a division-scoped one; a competition-
-    // scoped assignment is deliberately not checked here (scorers.ts's own
-    // `scorerCovers` checks all three for AUTHZ, a stricter question than
-    // this attention row asks).
-    const scorerAssignments = ids.length
-      ? await tx<ScorerAssignmentRaw[]>`
-          select scope_type, scope_id from scorer_assignments
-           where (scope_type = 'division' and scope_id = any(${ids}))
-              or (scope_type = 'fixture' and scope_id = any(
-                    select id from fixtures where division_id = any(${ids})
-                  ))`
-      : [];
+    // F4 (#707 Task 4): hasScorer will repoint to fixture_officials; table gone.
+    const scorerAssignments: ScorerAssignmentRaw[] = [];
     return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, scorerAssignments };
   });
   const divisionsWithScorer = new Set(

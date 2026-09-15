@@ -57,7 +57,7 @@ async function signedInOwner() {
 /** Adds a second org member with the given role and returns their id — NOT
  *  signed in yet; callers set `authState.userId` when they want to act as
  *  this member. */
-async function memberWithRole(orgId: string, role: "owner" | "admin" | "viewer" | "scorer"): Promise<string> {
+async function memberWithRole(orgId: string, role: "owner" | "admin" | "viewer"): Promise<string> {
   const userId = await makeUser(role);
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, ${role})`;
   return userId;
@@ -220,12 +220,11 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations", () => {
   // permissive than RS004 ruling 2 ("Hub is owner/admin only... RS005's
   // Registrants tab carries names, emails and consent state") — flagged
   // there rather than silently narrowed by this route on its own judgment.
-  it("authz: owner, admin and viewer are let in; scorer is refused", async () => {
+  it("authz: owner, admin and viewer are let in", async () => {
     const { orgId, owner } = await signedInOwner();
     const { competition } = await rig(owner);
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
 
     authState.userId = owner.userId!;
     expect((await GET(listReq(competition.id), ctx(competition.id))).status).toBe(200);
@@ -235,9 +234,6 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations", () => {
 
     authState.userId = viewerId;
     expect((await GET(listReq(competition.id), ctx(competition.id))).status).toBe(200);
-
-    authState.userId = scorerId;
-    expect((await GET(listReq(competition.id), ctx(competition.id))).status).toBe(403);
   });
 
   it("authz: a non-member of the org is refused (401, not a member)", async () => {
