@@ -211,22 +211,23 @@ describe("ProgressionSchema", () => {
   // early unless `timing === "on_complete"`; the combination parsed, charged
   // the org's `standings.carry_over` Pro entitlement (stages.ts's gate reads
   // `progression?.carry` regardless of timing) and then silently no-opped.
-  // F6 applies carry on the confirm path too — confirmSeedProposal runs only
-  // once every named source is complete, so it holds the same
+  // F6 WILL apply carry on the confirm path too: confirmSeedProposal runs
+  // only once every named source is complete, so it will hold the same
   // freshness-verified tables carryDeltas needs, exactly as seedNextStage
-  // does. These cases assert only the SCHEMA edge (F6's first step): the pair
-  // parses. That the confirm path then applies it is asserted by the
-  // confirm-path tests, not here. `standings.carry_over` is sold on the
-  // public pricing page in four locales, and before F6 no template, gallery
-  // entry or picker control could emit it on a setup-timing stage — which is
-  // every stage the picker builds.
-  describe("carry with timing: setup (F6 — confirm-path carry)", () => {
+  // already does. As of this commit that wiring does NOT exist —
+  // confirmSeedProposal never reads `carry`, and no confirm-path carry test
+  // exists yet. These cases therefore assert ONLY the schema edge (F6's first
+  // step): the pair parses, and nothing here claims it is applied.
+  // `standings.carry_over` is sold on the public pricing page in four
+  // locales, and before F6 no template, gallery entry or picker control could
+  // emit it on a setup-timing stage — which is every stage the picker builds.
+  describe("carry with timing: setup (F6 — schema edge only)", () => {
     // Asserting only `success` would be satisfied by a parse that silently
     // dropped `carry` — the exact shape stages.ts reads (`progression?.carry`)
     // to decide whether to charge the entitlement and apply the deltas. Pin
     // the parsed VALUE, so a schema that accepts the pair but forgets the
     // field is still a failure here.
-    it("accepts carry: \"points\" when timing is \"setup\" — confirmSeedProposal applies it", () => {
+    it("accepts carry: \"points\" when timing is \"setup\" — the pair now parses (application lands with the confirm-path wiring)", () => {
       const result = ProgressionSchema.safeParse({
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
