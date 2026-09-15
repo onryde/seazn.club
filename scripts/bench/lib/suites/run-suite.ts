@@ -121,6 +121,7 @@ import {
   type PackExpectedMatch,
   type PackClaim,
   type PackExpectedOutcome,
+  type PackStream,
 } from "../pack-schema.ts";
 import { bootRegistry, resolveDivisionCfg } from "../validate-pack.ts";
 import { computeProvenance } from "../provenance.ts";
@@ -1734,6 +1735,95 @@ function specialStandingsDelta(
  */
 export function formatAdaptation(a: PackAdaptation): string {
   return `${a.what} — WHY: ${a.why}${a.where === undefined ? "" : ` [${a.where}]`}`;
+}
+
+/** `se-r{n}-i{i}` — the single-elim generator's own id shape
+ *  (`packages/engine/src/scheduling/singleelim.ts`, and `_tiny`'s own
+ *  `se-r0-i0`, `pack-schema.test.ts`). Both captures parsed as integers —
+ *  see `publishTargets` below for why. */
+const SE_ROUND_KEY = /^se-r(\d+)-i(\d+)$/;
+
+interface ParsedSeKey {
+  readonly extKey: string;
+  readonly round: number;
+  readonly index: number;
+}
+
+/**
+ * B07a Task 12 / Ruling R70 — the array `publishTargets` returns, PLUS one
+ * non-enumerable property naming the input keys that did not parse as
+ * `se-r{n}-i{i}`.
+ *
+ * Non-enumerable deliberately: `expect(publishTargets(x)).toEqual([...])`
+ * (the brief's own three tests) compares plain arrays via `Object.keys`,
+ * which never sees a non-enumerable property, so the brief's assertions
+ * keep working unmodified. `runPackSuite` reads `.unparsedKeys` directly
+ * (bracket/dot access does not care about enumerability) to push a warning
+ * naming what it silently excluded — see rule 4.
+ */
+export type PublishTargets = readonly string[] & {
+  readonly unparsedKeys: readonly string[];
+};
+
+function withUnparsedKeys(published: readonly string[], unparsedKeys: readonly string[]): PublishTargets {
+  const result: string[] = published.slice();
+  Object.defineProperty(result, "unparsedKeys", {
+    value: unparsedKeys,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return result as unknown as PublishTargets;
+}
+
+/**
+ * B07a Task 12 / Ruling R70 — the news step publishes the SEMIS and the
+ * FINAL, not the whole last stage. Pure over ONE stage's streams: the caller
+ * (`runPackSuite`, below) filters to division0's last stage before calling
+ * this, exactly as it filtered before Task 12 — this function only decides
+ * WHICH of those streams' ext keys publish.
+ *
+ * - Empty case FIRST (rule 3): no streams in => `[]` out. NOT a separate
+ *   early return — the mutation sweep proved one dead (removing it never
+ *   reddened a test): `parsed` stays `[]`, so `roundsPresent` is `[]`,
+ *   `topTwoRounds` is the empty set, and the final filter falls through to
+ *   `[]` on its own. Left out rather than shipped as decoration
+ *   (AGENTS.md recurring-failure class 3 — "a guard nothing kills is not
+ *   tested"). This is also a DIFFERENT empty case from "streams present but
+ *   none parse" below — both land on `[]`, for different reasons, and rule 4
+ *   requires the second one to say so via `unparsedKeys` while this one has
+ *   nothing to name.
+ * - The round is parsed from `se-r{n}-i{i}` with BOTH `n` and `i` read as
+ *   INTEGERS (rule 2): a string sort would put `"se-r10-i0"` between
+ *   `"se-r1x"` and `"se-r2x"`, so `se-r10` would wrongly outrank `se-r9`.
+ * - The TOP TWO distinct rounds present publish, in round-then-index order.
+ *   Exactly one round present => that round only — never an invented semi.
+ * - A key that does not match `se-r{n}-i{i}` is excluded from the published
+ *   set (never guessed at) and reported on the returned array's
+ *   `unparsedKeys` (rule 4) so `runPackSuite` can warn by name instead of
+ *   the list silently coming back short.
+ */
+export function publishTargets(streams: readonly Pick<PackStream, "fixtureExtKey">[]): PublishTargets {
+  const parsed: ParsedSeKey[] = [];
+  const unparsedKeys: string[] = [];
+  for (const st of streams) {
+    const m = SE_ROUND_KEY.exec(st.fixtureExtKey);
+    if (m === null) {
+      unparsedKeys.push(st.fixtureExtKey);
+      continue;
+    }
+    parsed.push({ extKey: st.fixtureExtKey, round: Number(m[1]), index: Number(m[2]) });
+  }
+
+  const roundsPresent = [...new Set(parsed.map((p) => p.round))].sort((a, b) => a - b);
+  const topTwoRounds = new Set(roundsPresent.slice(-2));
+
+  const published = parsed
+    .filter((p) => topTwoRounds.has(p.round))
+    .sort((a, b) => (a.round !== b.round ? a.round - b.round : a.index - b.index))
+    .map((p) => p.extKey);
+
+  return withUnparsedKeys(published, unparsedKeys);
 }
 
 export async function runPackSuite(
@@ -5491,23 +5581,30 @@ export async function runPackSuite(
     if (input.sql !== undefined && newsEnable !== undefined && newsEnable.enabled > 0) {
       try {
         const newsTransport = input.oracleTransport ?? defaultProbeTransport;
-        // Publish the LAST stage's fixtures — the closest `_tiny` has to the
-        // design's "semis and final", and a proper SUBSET so what stays draft
-        // is provable. Derived from the pack, never a count typed in here.
-        // `fixtureKey`, never a hand-built string. The map is keyed by
-        // `JSON.stringify([divisionRef, extKey])` (`pack-schema.ts:1579`) —
-        // a delimiter join misses EVERY entry, and it misses silently: the
-        // list comes back empty and the two oracles below report NO SUBJECT,
-        // which reads exactly like a suite that legitimately drafted nothing.
+        // Publish the semis and the final of the LAST stage — not the whole
+        // stage (B07a Task 12 / Ruling R70) — and a proper SUBSET so what
+        // stays draft is provable. Derived from the pack, never a count
+        // typed in here. `fixtureKey`, never a hand-built string: the map is
+        // keyed by `JSON.stringify([divisionRef, extKey])`
+        // (`pack-schema.ts:1579`) — a delimiter join misses EVERY entry, and
+        // it misses silently: the list comes back empty and the two oracles
+        // below report NO SUBJECT, which reads exactly like a suite that
+        // legitimately drafted nothing.
         const lastStage = division0.stages[division0.stages.length - 1];
         const division0Streams = pack.streams.filter((st) => st.divisionRef === division0.ref);
-        const publishFixtureIds =
-          lastStage === undefined
-            ? []
-            : division0Streams
-                .filter((st) => st.stageRef === lastStage.ref)
-                .map((st) => seeded.fixtureIdByKey.get(fixtureKey(st.divisionRef, st.fixtureExtKey)))
-                .filter((id): id is string => id !== undefined);
+        const lastStageStreams =
+          lastStage === undefined ? [] : division0Streams.filter((st) => st.stageRef === lastStage.ref);
+        const targets = publishTargets(lastStageStreams);
+        if (targets.unparsedKeys.length > 0) {
+          warnings.push(
+            `${suiteKey}: news publish skipped ${targets.unparsedKeys.length} last-stage fixture key(s) that ` +
+              `do not match se-r{n}-i{i}, so they were neither published nor counted toward the top two rounds: ` +
+              targets.unparsedKeys.join(", "),
+          );
+        }
+        const publishFixtureIds = targets
+          .map((extKey) => seeded.fixtureIdByKey.get(fixtureKey(division0.ref, extKey)))
+          .filter((id): id is string => id !== undefined);
 
         const news = await runNewsStep({
           base,

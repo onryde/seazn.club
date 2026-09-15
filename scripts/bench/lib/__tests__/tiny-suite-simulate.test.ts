@@ -1401,6 +1401,71 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     expect(report.gate).toBe("green");
   });
 
+  it("B07a T12 — a last-stage key that fails to parse as se-r{n}-i{i} is excluded from publish and named in a warning; nothing parsing reads NO SUBJECT, never a pass or a fail", async () => {
+    // Ruling R70 rule 4, driven through the REAL wired pipeline rather than
+    // only `publishTargets` itself. The single-elim generator ALWAYS emits
+    // `se-r{n}-i{i}` for a knockout bracket (confirmed by hand: renaming
+    // `d-tiny`'s own playoff stream fails `seedSuite`'s pack-to-generated-
+    // fixture binding, since the product's `/generate` call re-derives the
+    // same key the pack must match) — so the only way a real last-stage key
+    // fails to parse is a last stage that is NOT a knockout at all. `d-tiny`
+    // is `division0` by pack order and always has a knockout `s-playoff`
+    // last stage, so this reorders `divisions` in a temp copy to put
+    // `d-badminton` first instead — its one stage is a plain round robin
+    // (one leg, two entrants), whose real generator emits `rr-r1-c1`, which
+    // never matches `se-r{n}-i{i}`. `PackSchema` does not care about
+    // division ORDER (`divisions: z.array(...).min(1)`, no ordering rule),
+    // so this is a legal pack, just a different division sitting first.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      divisions: { ref: string }[];
+    };
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) throw new Error("test fixture assumption broken: d-badminton not found");
+    raw.divisions = [badminton, ...raw.divisions.filter((d) => d.ref !== "d-badminton")];
+
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-"));
+    const mutatedPackPath = join(dir, "_tiny.json");
+    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: mutatedPackPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // Excluded from publish, never silently — a warning names the key.
+    expect(
+      (report.warnings ?? []).some((w) => w.includes("rr-r1-c1") && w.includes("news publish skipped")),
+    ).toBe(true);
+    // Drafting itself still worked (this pack's folds still draft posts) —
+    // only PUBLISHING has no subject, because nothing in the last stage
+    // parsed as se-r{n}-i{i}.
+    const drafted = (report.oracles ?? []).find((o) => o.name === "news: folding drafted posts");
+    expect(drafted).toMatchObject({ passed: true, verdict: "pass", subject: true });
+    // askedFor === 0 (nothing parsed, so nothing to publish) reads
+    // NO SUBJECT — never a pass (it proved nothing) and never a fail (it
+    // asked for nothing and got nothing).
+    const publishOracle = (report.oracles ?? []).find(
+      (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+    );
+    expect(publishOracle).toMatchObject({ passed: true, verdict: "no_subject", subject: false });
+    expect(report.news).toMatchObject({ published: 0 });
+  });
+
   it("B06a T7 — an org that cannot buy news.auto never turns drafting on, and says so", async () => {
     // `PATCH /divisions/{id}` refuses `auto_posts: true` without the
     // entitlement (`usecases/divisions.ts:652-654`). Because drafting is a
