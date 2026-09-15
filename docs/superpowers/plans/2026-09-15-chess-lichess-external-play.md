@@ -330,13 +330,13 @@ Mirror Google OAuth cookie/state patterns in `apps/web/src/app/api/auth/google/`
 - Short note in plan/spec or `docs/` only if owner wants — prefer comment on cron route pointing at workflow repo
 - Verify OpenAPI drift CI clean
 
-- [ ] **Step 1: Happy-path e2e** — linked enroll → division onlinePlay → fixture scheduled → prepare → play url present → apply mate fixture → standings
+- [x] **Step 1: Happy-path e2e** — linked enroll → division onlinePlay → fixture scheduled → prepare → play url present → apply mate fixture → standings
 
-- [ ] **Step 2: Regression** — onlinePlay off: unlinked enroll OK; no `fixture_external_play` row after prepare sweep
+- [x] **Step 2: Regression** — onlinePlay off: unlinked enroll OK; no `fixture_external_play` row after prepare sweep
 
-- [ ] **Step 3: Full gate** — vitest JSON counts for new files; targeted e2e file (whole file, no `-g` slice); smoke path
+- [x] **Step 3: Full gate** — vitest JSON counts for new files; targeted e2e file (whole file, no `-g` slice); smoke path
 
-- [ ] **Step 4: Commit** `test(chess): external-play happy path and OTB regression coverage`
+- [x] **Step 4: Commit** `test(chess): external-play happy path and OTB regression coverage`
 
 ---
 

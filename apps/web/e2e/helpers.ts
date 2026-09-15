@@ -860,6 +860,43 @@ export async function setFixtureStatusSql(fixtureId: string, status: string): Pr
   });
 }
 
+/** Seed a `fixture_external_play` bridge row for e2e (chess Lichess external-play).
+ *  Prepare runs under cron with a live Lichess adapter; e2e stubs the row so the
+ *  public CTA and organiser queue can be driven without network. */
+export async function seedFixtureExternalPlaySql(
+  fixtureId: string,
+  opts: {
+    status: "pending" | "ready" | "live" | "finished" | "needs_organiser";
+    playUrl?: string | null;
+    lastError?: string | null;
+    externalChallengeId?: string | null;
+  },
+): Promise<void> {
+  await withDb(async (sql) => {
+    const [fx] = await sql<{ org_id: string }[]>`
+      select org_id from fixtures where id = ${fixtureId}`;
+    if (!fx) throw new Error(`seedFixtureExternalPlaySql: fixture ${fixtureId} not found`);
+    await sql`
+      insert into fixture_external_play (
+        fixture_id, org_id, provider, status, play_url, last_error, external_challenge_id
+      ) values (
+        ${fixtureId},
+        ${fx.org_id},
+        'lichess',
+        ${opts.status},
+        ${opts.playUrl ?? null},
+        ${opts.lastError ?? null},
+        ${opts.externalChallengeId ?? null}
+      )
+      on conflict (fixture_id) do update set
+        status = excluded.status,
+        play_url = excluded.play_url,
+        last_error = excluded.last_error,
+        external_challenge_id = excluded.external_challenge_id,
+        updated_at = now()`;
+  });
+}
+
 /** Force a fixture's `scheduled_at` directly, bypassing the schedule engine
  *  (H2 e2e, final review round 3): a division that has only been PUBLISHED
  *  (`publishSchedule`, status 'scheduled') never got that far through the
