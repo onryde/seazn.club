@@ -288,6 +288,48 @@ function unlessHung(decode: Promise<Buffer | null>): Promise<Buffer | null> {
  * `work` must never reject. A rejection would sit in the queue and fail every
  * share-image decode queued after it, on that machine, until a restart.
  */
+/**
+ * The ceiling under the queue. Its valve, and the header read's own deadline,
+ * free the SLOT, not the work: a decode given up as hung, or a header read
+ * abandoned at its caller's deadline, is still running in libvips. Freed
+ * without a ceiling, the slot would admit one more stuck operation every time —
+ * one per request for a header read that hangs — until the threadpool was gone.
+ * So at most this many sharp operations (header reads and pipelines, released
+ * or not) are unsettled at once, and a call that would start another is
+ * answered with the monogram. Under a real libvips hang, share images fall back
+ * until a stuck operation settles or the process restarts.
+ */
+const MAX_UNSETTLED_SHARP_OPS = 2;
+let unsettledSharpOps = 0;
+/** Set by the first refusal at the cap and cleared when an operation settles
+ *  below it, so an episode at the cap warns once, not once per refused call. */
+let refusingAtCap = false;
+
+/** Whether a call may start sharp work now. Warns on the first refusal of an episode. */
+function sharpHasRoom(): boolean {
+  if (unsettledSharpOps < MAX_UNSETTLED_SHARP_OPS) return true;
+  if (!refusingAtCap) {
+    refusingAtCap = true;
+    log.warn(
+      { unsettled: unsettledSharpOps, cap: MAX_UNSETTLED_SHARP_OPS },
+      "poster-image: sharp operations still unsettled at the cap; share images fall back to the monogram until one settles",
+    );
+  }
+  return false;
+}
+
+/** Counts a sharp operation as unsettled until it settles, however its caller stopped waiting for it. */
+function counted<T>(op: Promise<T>): Promise<T> {
+  unsettledSharpOps += 1;
+  const settled = (): void => {
+    unsettledSharpOps -= 1;
+    if (unsettledSharpOps < MAX_UNSETTLED_SHARP_OPS) refusingAtCap = false;
+  };
+  // Both handlers, not `finally`: that would pass a rejection on to a promise nobody holds.
+  void op.then(settled, settled);
+  return op;
+}
+
 function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
   const turn = decodeQueue.then(() => (signal.aborted ? null : unlessHung(work())));
   // The tail keeps the turn's outcome but not its value: the PNG goes to the
@@ -334,6 +376,8 @@ async function readCapped(res: Response): Promise<Buffer | null> {
 export async function posterImageDataUrl(raw: string | null | undefined): Promise<string | null> {
   const url = allowedPosterImageUrl(raw);
   if (url === null) return null;
+  // Over the cap, answer now: no fetch, no wait for the slot, no sharp.
+  if (!sharpHasRoom()) return null;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), POSTER_IMAGE_TIMEOUT_MS);
@@ -366,6 +410,10 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
     // nobody is listening for, once the deadline has already answered — and
     // the decode queue relies on it (see `afterEarlierDecodes`).
     const decode = afterEarlierDecodes(controller.signal, async (): Promise<Buffer | null> => {
+      // Again at the turn: the cap can fill while a call waits for the slot.
+      // Nothing further is needed before the pipeline, since the header read
+      // it follows has settled and no other sharp work starts outside the slot.
+      if (!sharpHasRoom()) return null;
       try {
         const image = sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS });
         // The format the BYTES are, not the one the response called them. Also
@@ -376,23 +424,25 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
         // the output pipeline only, `metadata()` has none, and a header read
         // that never settled would hold the slot until the valve. It allocates
         // no canvas, so abandoning one keeps the memory bound.
-        const { format, width, height } = await Promise.race([image.metadata(), deadline(controller.signal)]);
+        const { format, width, height } = await Promise.race([counted(image.metadata()), deadline(controller.signal)]);
         if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
         // Also from the header: GIF is held whole, so it has a ceiling of its own.
         if (format === "gif" && width * height > POSTER_IMAGE_MAX_GIF_PIXELS) return null;
-        return await image
-          .resize({
-            width: POSTER_IMAGE_MAX_EDGE,
-            height: POSTER_IMAGE_MAX_EDGE,
-            fit: "inside",
-            withoutEnlargement: true,
-          })
-          // libvips' own watchdog. The race below bounds what the ROUTE waits
-          // for; this is what stops an abandoned decode carrying on burning a
-          // threadpool slot after we have already answered.
-          .timeout({ seconds: SHARP_TIMEOUT_SECONDS })
-          .png()
-          .toBuffer();
+        return await counted(
+          image
+            .resize({
+              width: POSTER_IMAGE_MAX_EDGE,
+              height: POSTER_IMAGE_MAX_EDGE,
+              fit: "inside",
+              withoutEnlargement: true,
+            })
+            // libvips' own watchdog. The race below bounds what the ROUTE waits
+            // for; this is what stops an abandoned decode carrying on burning a
+            // threadpool slot after we have already answered.
+            .timeout({ seconds: SHARP_TIMEOUT_SECONDS })
+            .png()
+            .toBuffer(),
+        );
       } catch {
         return null;
       }

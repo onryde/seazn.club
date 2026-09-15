@@ -18,26 +18,47 @@ const decode = vi.hoisted(() => ({
   throws: false,
   timeouts: [] as unknown[],
   /** Per-decode dials, taken in call order; `ms`/`throws` once they run out.
-   *  `never`: the decode never settles, as libvips work that is never scheduled. */
+   *  `never`: the decode does not settle until the test settles it (`stuck`). */
   plan: [] as { ms: number; throws?: boolean; never?: boolean }[],
-  /** Per-pipeline, in call order: true makes that `metadata()` never settle. */
-  metadataNever: [] as boolean[],
+  /** Per-pipeline header-read dials, in call order: `ms` delays it; `never`
+   *  holds it until the test settles it (`stuck`). Immediate once they run out. */
+  metadataPlan: [] as { ms?: number; never?: boolean }[],
+  /** Settles each operation a `never` dial is holding, oldest first. */
+  stuck: [] as (() => void)[],
   /** Pipelines built — i.e. decodes that actually STARTED. */
   started: 0,
   inFlight: 0,
   maxInFlight: 0,
+  /** sharp operations — header reads AND pipelines — not yet settled, as sharp
+   *  itself would count them: the witness for the cap, kept apart from the
+   *  module's own count. */
+  unsettled: 0,
+  maxUnsettled: 0,
   /** The buffer the latest decode resolved with, weakly: collectable once nothing holds it. */
   lastPng: undefined as WeakRef<Buffer> | undefined,
 }));
 
 vi.mock("sharp", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  /** An operation sharp is running, counted until it settles. */
+  function watched<T>(op: Promise<T>): Promise<T> {
+    decode.unsettled += 1;
+    decode.maxUnsettled = Math.max(decode.maxUnsettled, decode.unsettled);
+    const settled = (): void => {
+      decode.unsettled -= 1;
+    };
+    void op.then(settled, settled);
+    return op;
+  }
   const make = (): Record<string, unknown> => {
     const pipeline: Record<string, unknown> = {
-      metadata: () =>
-        decode.metadataNever.shift()
-          ? new Promise<never>(() => {})
-          : Promise.resolve({ format: "png", width: 64, height: 64 }),
+      metadata: () => {
+        const dial = decode.metadataPlan.shift() ?? {};
+        const header = { format: "png", width: 64, height: 64 };
+        if (dial.never) return watched(new Promise((resolve) => decode.stuck.push(() => resolve(header))));
+        if (dial.ms === undefined) return watched(Promise.resolve(header));
+        return watched(new Promise((resolve) => setTimeout(() => resolve(header), dial.ms)));
+      },
       resize: () => pipeline,
       timeout: (opts: unknown) => {
         decode.timeouts.push(opts);
@@ -52,13 +73,24 @@ vi.mock("sharp", () => {
         // whether anything still holds the last one.
         const png = Buffer.from(PNG);
         decode.lastPng = new WeakRef(png);
-        if (dial.never) return new Promise<Buffer>(() => {});
-        return new Promise<Buffer>((resolve, reject) =>
-          setTimeout(() => {
-            decode.inFlight -= 1;
-            if (dial.throws) reject(new Error("vips: too slow"));
-            else resolve(png);
-          }, dial.ms),
+        if (dial.never) {
+          return watched(
+            new Promise<Buffer>((resolve) =>
+              decode.stuck.push(() => {
+                decode.inFlight -= 1;
+                resolve(png);
+              }),
+            ),
+          );
+        }
+        return watched(
+          new Promise<Buffer>((resolve, reject) =>
+            setTimeout(() => {
+              decode.inFlight -= 1;
+              if (dial.throws) reject(new Error("vips: too slow"));
+              else resolve(png);
+            }, dial.ms),
+          ),
         );
       },
     };
@@ -94,7 +126,10 @@ beforeEach(() => {
   decode.inFlight = 0;
   decode.maxInFlight = 0;
   decode.lastPng = undefined;
-  decode.metadataNever = [];
+  decode.metadataPlan = [];
+  decode.stuck = [];
+  decode.unsettled = 0;
+  decode.maxUnsettled = 0;
   for (const fn of Object.values(logMock)) fn.mockClear();
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", STORAGE_ORIGIN);
   vi.stubGlobal(
@@ -111,13 +146,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  // Let every decode a test left running FINISH before the clock goes back to
-  // real: decodes are serialized for the whole module, so a fake-timer decode
-  // abandoned here would hold the slot into the next test forever.
+  // Settle what a test left stuck, then let every decode a test left running
+  // FINISH before the clock goes back to real: the slot and the count of
+  // unsettled sharp operations are the whole module's, so an operation
+  // abandoned here would hold them into the next test forever.
+  for (const settle of decode.stuck.splice(0)) settle();
   await vi.runAllTimersAsync();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  expect(decode.unsettled).toBe(0);
 });
 
 /** Starts the call and records what it answered, WITHOUT awaiting it — the
@@ -129,6 +167,18 @@ function start(): { answer: () => string | null | undefined } {
     answer = v;
   });
   return { answer: () => answer };
+}
+
+/** How long after it takes the slot a decode is given up as hung: its caller's
+ *  budget, then the sharp timeout the pipeline was really handed. */
+function valveAfter(): number {
+  const [{ seconds }] = decode.timeouts as [{ seconds: number }];
+  return POSTER_IMAGE_TIMEOUT_MS + seconds * 1000;
+}
+
+/** The warnings the cap gave, apart from the valve's. */
+function capWarnings(): unknown[][] {
+  return logMock.warn.mock.calls.filter(([, message]) => /at the cap/.test(String(message)));
 }
 
 describe("posterImageDataUrl — the budget covers the decode, not just the fetch", () => {
@@ -291,7 +341,7 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     // sharp's timeout is attached to the output pipeline only, and
     // `metadata()` has none. A header read allocates no canvas, so abandoning
     // one at its caller's deadline frees the slot without breaking the bound.
-    decode.metadataNever = [true];
+    decode.metadataPlan = [{ never: true }];
     const stuck = start();
     await vi.advanceTimersByTimeAsync(1000);
     const next = start(); // its own budget runs a second past the first's
@@ -308,5 +358,120 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     expect(next.answer()?.startsWith("data:image/png;base64,")).toBe(true);
     // The header bound freed the slot, not the valve.
     expect(logMock.warn).not.toHaveBeenCalled();
+  });
+});
+
+// The valve and the header bound free the SLOT, not the work: a decode given up
+// as hung, or a header read abandoned at its caller's deadline, is still running
+// in libvips. Freeing the slot without a ceiling admits one more stuck operation
+// every time it happens — one per request for a hung header read, silently —
+// until the threadpool is gone. So the number of sharp operations still
+// unsettled is capped, and a call over the cap is answered with the monogram at
+// once.
+
+/** Leaves two header reads hung and the slot free, at the second caller's
+ *  deadline: the first read was abandoned at its own, and the second started
+ *  then. */
+async function twoHeaderReadsStuck(): Promise<void> {
+  decode.metadataPlan.push({ never: true }, { never: true });
+  start();
+  await vi.advanceTimersByTimeAsync(1000);
+  start();
+  await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
+  expect(decode.unsettled).toBe(2);
+}
+
+describe("posterImageDataUrl — at most two sharp operations unsettled", () => {
+  it("admits no third, however many decodes hang: each later call is refused at once, with one warning", async () => {
+    const hangs = 6;
+    decode.plan = Array.from({ length: hangs }, () => ({ ms: 0, never: true }));
+    const calls = [start()];
+    await vi.advanceTimersByTimeAsync(0);
+    const held = valveAfter();
+    // Every later call arrives a second before whichever decode holds the slot
+    // is given up, so the valve alone would start it.
+    await vi.advanceTimersByTimeAsync(held - 1000);
+    for (let i = 1; i < hangs; i += 1) {
+      const call = start();
+      calls.push(call);
+      await vi.advanceTimersByTimeAsync(0);
+      // The first two are the cap. Every call past it answers now, not at its
+      // deadline and not after waiting for the slot.
+      if (i >= 2) expect(call.answer()).toBeNull();
+      await vi.advanceTimersByTimeAsync(held);
+      expect(decode.maxUnsettled).toBeLessThanOrEqual(2);
+    }
+    expect(decode.maxUnsettled).toBe(2);
+    expect(decode.started).toBe(2);
+    expect(calls.map((call) => call.answer())).toEqual(Array.from({ length: hangs }, () => null));
+    expect(capWarnings()).toHaveLength(1);
+  });
+
+  it("counts a header read toward the cap, refusing at its turn a call admitted while it waited, and at once a call arriving over it", async () => {
+    decode.metadataPlan = [{ never: true }, { never: true }, { never: true }];
+    const first = start(); // its header read hangs: one unsettled
+    await vi.advanceTimersByTimeAsync(1000);
+    const second = start(); // admitted, waits for the slot
+    await vi.advanceTimersByTimeAsync(200);
+    const third = start(); // admitted, waits behind the second
+    // The first is abandoned at its deadline and the second's read starts, and
+    // hangs: two unsettled. The second is abandoned at ITS deadline, and the
+    // third's turn comes 200 ms inside its own budget.
+    await vi.advanceTimersByTimeAsync(300 + 1000);
+    expect([first.answer(), second.answer()]).toEqual([null, null]);
+    expect(third.answer()).toBeNull();
+    expect(decode.started).toBe(2);
+    expect(decode.maxUnsettled).toBe(2);
+    // Arriving over the cap: no fetch, no wait for the slot, no sharp.
+    const fourth = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fourth.answer()).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(decode.started).toBe(2);
+    expect(capWarnings()).toHaveLength(1);
+  });
+
+  it("warns once per episode at the cap, not once per refused call", async () => {
+    await twoHeaderReadsStuck();
+    const refused = [start(), start(), start()];
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refused.map((call) => call.answer())).toEqual([null, null, null]);
+    expect(capWarnings()).toHaveLength(1);
+    // One settles, which ends the episode; a third hang fills the cap again,
+    // and the next refusal is a new episode.
+    decode.stuck.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    decode.metadataPlan.push({ never: true });
+    start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(decode.unsettled).toBe(2);
+    const again = [start(), start()];
+    await vi.advanceTimersByTimeAsync(0);
+    expect(again.map((call) => call.answer())).toEqual([null, null]);
+    expect(capWarnings()).toHaveLength(2);
+  });
+
+  it("admits a call again the moment a stuck operation settles, and only as many as it freed", async () => {
+    await twoHeaderReadsStuck();
+    const refused = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refused.answer()).toBeNull();
+    decode.stuck.shift()!();
+    await vi.advanceTimersByTimeAsync(0);
+    const next = start();
+    // Its zero-ms mock decode lands a millisecond later, as a timer scheduled
+    // during a fake-timer tick does.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(next.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(decode.started).toBe(3);
+    // Room for exactly one more stuck operation: one settling freed one place.
+    decode.metadataPlan.push({ never: true });
+    start();
+    await vi.advanceTimersByTimeAsync(0);
+    const over = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(over.answer()).toBeNull();
+    expect(decode.started).toBe(4);
+    expect(decode.maxUnsettled).toBe(2);
   });
 });
