@@ -1,7 +1,11 @@
 /**
  * FIXTURE for `share-image-surfaces.test.tsx` — not a route (it lives under
- * `__tests__`). A dynamic import: no `from "next/og"`, so only the
- * `new ImageResponse` literal rule can find this one.
+ * `__tests__`). A dynamic import with no static import statement, so only the
+ * construction-literal rule can find this one.
+ *
+ * Do not spell out the import this file lacks in this comment: the walk reads
+ * comments as text, and naming the missing token here once made this fixture
+ * match the very rule it exists to rule out.
  */
 export async function GET(): Promise<Response> {
   const { ImageResponse } = await import("next/og");
