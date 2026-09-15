@@ -1402,8 +1402,8 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
     // at a different `round_no` in each draw.
     expect(railLabel(doc, feeder)).toBe(msgFor("en", "bracket.round.quarter"));
     expect(nameOf(doc, semi, 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, feeder), seq: 2 }));
-    expect(nameOf(doc, semi, 1)).toBe("Winner of Quarter-finals, match 2");
-    expect(nameOf(doc, semi, 0)).toBe("Winner of Quarter-finals, match 1");
+    expect(nameOf(doc, semi, 1)).toBe("Winner of Quarter-finals, match\u00a02");
+    expect(nameOf(doc, semi, 0)).toBe("Winner of Quarter-finals, match\u00a01");
     expect(codes(doc)).toEqual([]);
   });
 
@@ -1413,7 +1413,7 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
     expect(nameOf(doc, "ko-r2-1", 0)).toBe(
       t(en, "knockout.feederWinner", { round: railLabel(doc, "ko-r1-1"), seq: 1 }),
     );
-    expect(nameOf(doc, "ko-r2-8", 1)).toBe("Winner of Round of 32, match 16");
+    expect(nameOf(doc, "ko-r2-8", 1)).toBe("Winner of Round of 32, match\u00a016");
     expect(codes(doc)).toEqual([]);
   });
 
@@ -1453,7 +1453,7 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
     );
     expect(railLabel(doc, "wb-2")).toBe(msgFor("en", "bracket.round.semi"));
     expect(nameOf(doc, "lb-1", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-2"), seq: 2 }));
-    expect(nameOf(doc, "lb-1", 0)).toBe("Loser of Semi-finals, match 2");
+    expect(nameOf(doc, "lb-1", 0)).toBe("Loser of Semi-finals, match\u00a02");
     // Each lane's feeds name the FEEDER's lane round: the winners' final a
     // loser drops from, the losers' round a winner climbs out of, and so on up.
     // Each of those rounds holds ONE match, so the sentence drops its number
@@ -1515,7 +1515,7 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
     expect(nameOf(doc, "lb-f", 1)).toBe(t(en, "knockout.feederLoserOnly", { round: railLabel(doc, "wb-f") }));
     // Two matches in the feeder's round: the number stays.
     expect(nameOf(doc, "lb-1", 0)).toBe(t(en, "knockout.feederLoser", { round: railLabel(doc, "wb-1"), seq: 1 }));
-    expect(nameOf(doc, "lb-1", 1)).toBe("Loser of Semi-finals, match 2");
+    expect(nameOf(doc, "lb-1", 1)).toBe("Loser of Semi-finals, match\u00a02");
     expect(nameOf(doc, "wb-f", 1)).toBe(t(en, "knockout.feederWinner", { round: railLabel(doc, "wb-2"), seq: 2 }));
     expect(codes(doc)).toEqual([]);
   });
@@ -1546,7 +1546,7 @@ describe("loadCompetitionHub — N1: a slot waiting on a match names that match'
         [league, cup],
       );
       expect(railLabel(doc, "ko-r1-2")).toBe(msgFor("en", "bracket.round.semi"));
-      expect(nameOf(doc, "ko-r2-1", 1)).toBe("Winner of Semi-finals, match 2");
+      expect(nameOf(doc, "ko-r2-1", 1)).toBe("Winner of Semi-finals, match\u00a02");
       expect(nameOf(doc, "ko-r2-1", 1)).not.toBe(
         t(en, "knockout.feederWinner", { round: msgFor("en", "bracket.round.plain", { n: 1 }), seq: 2 }),
       );

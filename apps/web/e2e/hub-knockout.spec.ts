@@ -990,10 +990,11 @@ test.describe("competition hub: Knockout tab", () => {
     const target = byId.get(targetId)!;
     // The premise, read from the document the page renders: both sides wait.
     expect(target.header.sides.map((s) => s.entrantId), JSON.stringify(target)).toEqual(["", ""]);
-    // `knockout.feederWinner`, en "Winner of {round}, match {seq}". The words are
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}" with a NO-BREAK
+    // space before {seq} (fix round N2f, m5). The words are
     // literal (a spec cannot import a JSON-backed module); the round is the
     // rail's own label, out of the same document.
-    const expected = [`Winner of ${first.label}, match 1`, `Winner of ${first.label}, match 2`];
+    const expected = [`Winner of ${first.label}, match\u00a01`, `Winner of ${first.label}, match\u00a02`];
     expect(target.header.sides.map((s) => s.name)).toEqual(expected);
 
     await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
@@ -1019,9 +1020,10 @@ test.describe("competition hub: Knockout tab", () => {
     const lbTarget = byId.get(lbTargetId)!;
     expect(first.fixtureIds, "the winners' first round of an 8-draw").toHaveLength(4);
     expect(lbTarget.header.sides.map((s) => s.entrantId), JSON.stringify(lbTarget)).toEqual(["", ""]);
-    // `knockout.feederLoser`, en "Loser of {round}, match {seq}" — literal words,
+    // `knockout.feederLoser`, en "Loser of {round}, match {seq}", a NO-BREAK space
+    // before {seq} (fix round N2f, m5) — literal words,
     // the round read from the same document.
-    const lbExpected = [`Loser of ${first.label}, match 1`, `Loser of ${first.label}, match 2`];
+    const lbExpected = [`Loser of ${first.label}, match\u00a01`, `Loser of ${first.label}, match\u00a02`];
     expect(lbTarget.header.sides.map((s) => s.name)).toEqual(lbExpected);
 
     await roundChip(page, view, lbFirst).click();
@@ -1059,10 +1061,11 @@ test.describe("competition hub: Knockout tab", () => {
       const semi = byId.get(semiId)!;
       expect(semi.header.sides.map((s) => s.entrantId), JSON.stringify(semi)).toEqual(["", ""]);
     }
-    // `knockout.feederWinner`, en "Winner of {round}, match {seq}". The words are
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}" with a NO-BREAK
+    // space before {seq} (fix round N2f, m5). The words are
     // literal (a spec cannot import a JSON-backed module); the round is the
     // rail's own label, out of the same document.
-    const expected = [`Winner of ${semis.label}, match 1`, `Winner of ${semis.label}, match 2`];
+    const expected = [`Winner of ${semis.label}, match\u00a01`, `Winner of ${semis.label}, match\u00a02`];
     expect(finalMatch.header.sides.map((s) => s.name)).toEqual(expected);
 
     await openKnockout(page, hubUrl(orgSlug, unplayed, "?tab=knockout&view=draw"));

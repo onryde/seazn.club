@@ -210,7 +210,7 @@ describe("buildPublicDivisionSlides — waiting sides name their feeder's ROUND;
       const dict = await getDictionary(locale, "public");
       const semi = msgFor(locale, "bracket.round.semi");
       const expected = [1, 2].map((seq) => t(dict, "knockout.feederWinner", { round: semi, seq }));
-      if (locale === "en") expect(expected).toEqual(["Winner of Semi-finals, match 1", "Winner of Semi-finals, match 2"]);
+      if (locale === "en") expect(expected).toEqual(["Winner of Semi-finals, match\u00a01", "Winner of Semi-finals, match\u00a02"]);
       else {
         const en = t(await getDictionary("en", "public"), "knockout.feederWinner", { round: msgFor("en", "bracket.round.semi"), seq: 1 });
         expect(expected[0], "the premise: the fr sentence is not the English one").not.toBe(en);

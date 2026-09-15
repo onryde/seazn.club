@@ -147,7 +147,7 @@ describe.skipIf(!HAS_DB)("loadMatchCentre reads the stage only for a side still 
     const finalDoc = await loadMatchCentre(waiting.traced, final!, ctx);
     expect(waiting.texts.filter(isStageRead), waiting.texts.join("\n")).toHaveLength(1);
     expect(dictionaryLoads.count).toBe(1);
-    expect([...names(finalDoc)].sort()).toEqual(["Winner of Semi-finals, match 1", "Winner of Semi-finals, match 2"]);
+    expect([...names(finalDoc)].sort()).toEqual(["Winner of Semi-finals, match\u00a01", "Winner of Semi-finals, match\u00a02"]);
   });
 
   it("a fixture with ONE entrant set and one side still waiting names the waiting side by its feeder's round, not the board's R·code", async () => {
@@ -166,7 +166,7 @@ describe.skipIf(!HAS_DB)("loadMatchCentre reads the stage only for a side still 
 
     expect(recorded.texts.filter(isStageRead), recorded.texts.join("\n")).toHaveLength(1);
     const waitingName = names(doc)[waitingSide]!;
-    expect(waitingName).toMatch(/^Winner of Semi-finals(, match \d+)?$/);
+    expect(waitingName).toMatch(/^Winner of Semi-finals(, match\u00a0\d+)?$/);
     expect(waitingName).not.toBe(resolveSlotLabel(label, ctx.slotLabelLookup, "schedule.tbd"));
     // The set side is its entrant.
     expect(["A", "B", "C"]).toContain(names(doc)[1 - waitingSide]);

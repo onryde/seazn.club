@@ -557,7 +557,7 @@ describe("public Bracket — a waiting side names its feeder's ROUND (R10d n4)",
     const semi = msg("bracket.round.semi");
     const winner = t(dict, "knockout.feederWinner", { round: semi, seq: 1 });
     const loser = t(dict, "knockout.feederLoser", { round: semi, seq: 2 });
-    expect(winner).toBe("Winner of Semi-finals, match 1");
+    expect(winner).toBe("Winner of Semi-finals, match\u00a01");
     expect(html).toContain(`title="${winner}"`);
     expect(html).toContain(`>${winner}</span>`);
     expect(html).toContain(`title="${loser}"`);

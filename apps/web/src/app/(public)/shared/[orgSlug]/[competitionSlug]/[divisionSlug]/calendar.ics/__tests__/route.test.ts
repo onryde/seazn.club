@@ -576,7 +576,7 @@ describe("GET .../calendar.ics — a waiting side names its feeder's ROUND (N1 f
     const dict = await getDictionary("en", "public");
     const semi = msgFor("en", "bracket.round.semi");
     const expected = `${t(dict, "knockout.feederWinner", { round: semi, seq: 1 })} vs ${t(dict, "knockout.feederWinner", { round: semi, seq: 2 })} — Open`;
-    expect(expected).toBe("Winner of Semi-finals, match 1 vs Winner of Semi-finals, match 2 — Open");
+    expect(expected).toBe("Winner of Semi-finals, match\u00a01 vs Winner of Semi-finals, match\u00a02 — Open");
     const lines = summaries(text);
     expect(lines, text).toContain(expected);
     // The filled semi-finals keep their entrants.

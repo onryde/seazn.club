@@ -133,8 +133,8 @@ describe("embed schedule widget — a waiting side names its feeder's ROUND (N1 
       "final:away": t(dict, "knockout.feederWinner", { round: semi, seq: 2 }),
     };
     expect(expected).toEqual({
-      "final:home": "Winner of Semi-finals, match 1",
-      "final:away": "Winner of Semi-finals, match 2",
+      "final:home": "Winner of Semi-finals, match\u00a01",
+      "final:away": "Winner of Semi-finals, match\u00a02",
     });
     expect(slotLabels).toEqual(expected);
     expect(Object.values(slotLabels).join(" | ")).not.toMatch(/R\d+·\d+/);

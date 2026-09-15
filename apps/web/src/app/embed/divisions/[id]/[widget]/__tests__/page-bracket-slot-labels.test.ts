@@ -137,7 +137,7 @@ describe("embed bracket widget — a waiting side names its feeder's ROUND (R10d
     const semi = msgFor("en", "bracket.round.semi");
     const home = t(dict, "knockout.feederWinner", { round: semi, seq: 1 });
     const away = t(dict, "knockout.feederWinner", { round: semi, seq: 2 });
-    expect([home, away]).toEqual(["Winner of Semi-finals, match 1", "Winner of Semi-finals, match 2"]);
+    expect([home, away]).toEqual(["Winner of Semi-finals, match\u00a01", "Winner of Semi-finals, match\u00a02"]);
     expect(html).toContain(`title="${attr(home)}"`);
     expect(html).toContain(`>${attr(home)}</span>`);
     expect(html).toContain(`title="${attr(away)}"`);

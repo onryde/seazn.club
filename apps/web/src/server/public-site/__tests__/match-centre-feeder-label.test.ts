@@ -141,7 +141,7 @@ describe.skipIf(!HAS_DB)("the public match centre — a feeder slot names its RO
     expect(names).toEqual(
       labels.map((label) => t(dict, "knockout.feederWinner", { round: railName(label), seq: label.params.seq })),
     );
-    expect([...names].sort()).toEqual(["Winner of Semi-finals, match 1", "Winner of Semi-finals, match 2"]);
+    expect([...names].sort()).toEqual(["Winner of Semi-finals, match\u00a01", "Winner of Semi-finals, match\u00a02"]);
     // Today's text is the board's short code; the match centre no longer shows it.
     expect(names).not.toEqual(labels.map((label) => resolveSlotLabel(label, ui, "schedule.tbd")));
     expect(names.join(" | ")).not.toMatch(/R\d+·\d+/);

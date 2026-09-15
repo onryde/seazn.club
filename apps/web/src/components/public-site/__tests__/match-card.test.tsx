@@ -22,6 +22,11 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { HubMatchT } from "@/server/public-site/competition-hub-schema";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
 import { MatchCard } from "../matches-hub/match-card";
+import { getDictionary } from "@/lib/i18n";
+import { t as translate } from "@/lib/i18n-runtime";
+import { msg } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import { publicSlotLabel } from "@/server/public-site/feeder-slot-label";
 
 const dict = en as Dict;
 const NOW = Date.parse("2026-09-05T12:00:00Z");
@@ -463,6 +468,47 @@ describe("MatchCard", () => {
       expect(tokens, name).not.toContain("md:truncate");
     }
   });
+
+  // Review N2 m5: now that a waiting side wraps (C-2), its number must never
+  // start a line on its own. `knockout.feederWinner` and `knockout.feederLoser`
+  // put a NO-BREAK SPACE between the match word and `{seq}`, in every locale.
+  // Driven through the REAL namer with each locale's own dictionary, then
+  // through the card's markup.
+  it.each(["en", "es", "fr", "nl"] as const)(
+    "m5 (%s): a feeder label joins its match word to the number with a no-break space, and the card renders it so",
+    async (locale) => {
+      const NBSP = String.fromCharCode(0xa0);
+      const localeDict = await getDictionary(locale, "public");
+      const round = msgFor(locale, "bracket.round.semi");
+      for (const key of ["slot.winner_match", "slot.loser_match"] as const) {
+        const label = publicSlotLabel(
+          { key, params: { round: 1, seq: 3 } },
+          msg,
+          (phrase, vars) => translate(localeDict, phrase, vars),
+          () => ({ name: round, matches: 4 }),
+        );
+        const seen = `${locale} ${key}: ${JSON.stringify(label)}`;
+        // The premise: the real round-named sentence, its number last.
+        expect(label, seen).toContain(round);
+        expect(label.endsWith("3"), seen).toBe(true);
+        // A no-break space right before the digit, after a word (not a second space).
+        expect(label.at(-2), seen).toBe(NBSP);
+        expect(label.at(-3), seen).toMatch(/\S/);
+        const h = card(
+          hubMatch({
+            fixtureId: `m5-${locale}`,
+            header: {
+              sides: [
+                { entrantId: "", name: label, short: "", colour: null, badgeUrl: null },
+                { entrantId: "e2", name: "Dev", short: "", colour: null, badgeUrl: null },
+              ],
+            },
+          }),
+        );
+        expect(h, `${seen}: the card's waiting side, whole`).toContain(`>${label}</span>`);
+      }
+    },
+  );
 
   it("crest: img when badgeUrl; initials otherwise (never an empty tile)", () => {
     const withBadge = card(
