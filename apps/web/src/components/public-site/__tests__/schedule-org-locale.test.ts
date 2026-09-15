@@ -238,6 +238,13 @@ describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (sur
       enGB: false,
     });
     expect(shows(html, clippedWeekdayDay(DAY_2, "es")), "the weekday form is what got clipped").toBe(false);
+    // N1g g5 (review-n1f m5): the round view heads its groups by ROUND, so no
+    // heading names a day and the rail's short date is the only date a
+    // spectator sees there — the day view's case above finds these same long
+    // day names, so their absence here is not a probe that can never match.
+    for (const day of [DAY_1, DAY_2]) {
+      expect({ day, heading: shows(html, longDay(day, "es")) }).toEqual({ day, heading: false });
+    }
   });
 
   it("es org, no fixtures: the empty state is the es dictionary's", async () => {

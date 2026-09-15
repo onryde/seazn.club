@@ -120,8 +120,12 @@ const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
  *  ~56px track, so EVERY locale's date ended in an ellipsis, English included.
  *  Day + short month is the shortest unambiguous form (a bare day number is
  *  not: the round view spans months) and it fits every locale in every month
- *  — `__tests__/schedule-rail-fits.test.ts` measures all 48. The group heading
- *  above the row still carries the full day, so nothing is lost. */
+ *  — `__tests__/schedule-rail-fits.test.ts` measures all 48.
+ *  What it costs (review-n1f m5): the round view heads its groups by ROUND,
+ *  not by day, so this rail line is the ONLY place a match's date appears in
+ *  that view — and it no longer names the weekday. Whether the weekday comes
+ *  back in some other form is an owner decision, still open. The day view is
+ *  unaffected: its rail shows the court, and its group heading the full day. */
 export const shortDate = (iso: string, tz: string, dateTag: string) =>
   dayDateShort(dayKey(iso, tz), dateTag);
 
