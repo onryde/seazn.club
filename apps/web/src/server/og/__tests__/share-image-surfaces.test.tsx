@@ -23,16 +23,32 @@ import sharp from "sharp";
  * `<img>` and the request appears here immediately.)
  *
  * The surface LIST is read off the filesystem, not typed out — every module
- * under `src/app` that constructs an `ImageResponse`. A new share image that
- * skips the fetcher does not quietly go uncovered: it fails `every satori
- * surface is driven here` with its own path in the message.
+ * under `src` that imports `next/og` or constructs an `ImageResponse`. A new
+ * share image that skips the fetcher does not quietly go uncovered: it fails
+ * `every satori surface is driven here` with its own path in the message.
  */
 
-const APP_DIR = path.resolve(import.meta.dirname, "../../../app");
 const SRC_DIR = path.resolve(import.meta.dirname, "../../..");
 
-/** Every module under `src/app` that builds an `ImageResponse`, derived. */
-function satoriSurfaces(): string[] {
+/** `import { ImageResponse } from "next/og"`, however it is spelled or aliased. */
+const NEXT_OG_IMPORT = /from\s+["']next\/og["']/;
+
+/** A miniature `src` tree that holds each escape shape the walk must catch. */
+const WALK_FIXTURE = path.resolve(import.meta.dirname, "fixtures/satori-walk");
+
+/**
+ * Every module under `root` that can draw a satori image, as paths relative to
+ * `root`.
+ *
+ * Keyed on the `next/og` IMPORT as well as the `new ImageResponse` literal, and
+ * run from `src`, not `src/app`. Rooted at `src/app` on the literal alone, a
+ * share image whose `ImageResponse` is built in a shared helper under
+ * `src/server/og` — the natural tidy-up, since `match-poster-data.ts` already
+ * centralises the loader — left its route file with neither, and went
+ * uncovered with this suite green. Now the helper itself is derived and has to
+ * be driven. Over today's tree both rules give the same nine modules.
+ */
+function satoriModules(root: string): string[] {
   const found: string[] = [];
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -43,12 +59,21 @@ function satoriSurfaces(): string[] {
         continue;
       }
       if (!/\.tsx?$/.test(entry.name)) continue;
-      if (!fs.readFileSync(full, "utf8").includes("new ImageResponse")) continue;
-      found.push(path.relative(SRC_DIR, full).split(path.sep).join("/"));
+      const source = fs.readFileSync(full, "utf8");
+      if (!NEXT_OG_IMPORT.test(source) && !source.includes("new ImageResponse")) continue;
+      found.push(path.relative(root, full).split(path.sep).join("/"));
     }
   };
-  walk(APP_DIR);
+  walk(root);
   return found.sort();
+}
+
+let derived: string[] | null = null;
+
+/** Every live satori surface in the app — walked once per file run. */
+function satoriSurfaces(): string[] {
+  derived ??= satoriModules(SRC_DIR);
+  return derived;
 }
 
 const STORAGE_ORIGIN = "https://projectref.supabase.co";
@@ -317,7 +342,7 @@ afterEach(() => {
 });
 
 describe("every public share image draws its logo through the guarded fetcher", () => {
-  it("every satori surface under src/app is driven here", () => {
+  it("every satori surface under src is driven here", () => {
     const undriven = satoriSurfaces().filter((f) => !(f in DRIVERS));
     expect(undriven).toEqual([]);
   });
@@ -329,6 +354,22 @@ describe("every public share image draws its logo through the guarded fetcher", 
 
   it("the derived list is not empty — the walk itself is proved", () => {
     expect(satoriSurfaces().length).toBeGreaterThan(5);
+  });
+
+  it("the walk cannot be escaped by a helper, an alias, or a dynamic import", () => {
+    // Over today's tree the old rule (`src/app`, literal only) and this one
+    // agree, so the live list cannot witness the difference. This fixture can:
+    //  - `server/og/escape-frame.tsx` is a shared helper OUTSIDE `app` — only
+    //    the `src` root finds it (its route, `app/escape/…`, carries neither
+    //    marker and is correctly not listed: the helper is what reds the gate);
+    //  - `server/og/aliased-frame.tsx` has no literal — only the import finds it;
+    //  - `app/dynamic/route.tsx` has no static import — only the literal does;
+    //  - `app/__tests__/ignored.tsx` imports `next/og` and is skipped.
+    expect(satoriModules(WALK_FIXTURE)).toEqual([
+      "app/dynamic/route.tsx",
+      "server/og/aliased-frame.tsx",
+      "server/og/escape-frame.tsx",
+    ]);
   });
 });
 
