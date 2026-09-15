@@ -291,5 +291,28 @@ describe("public division page — its Bracket's card footers are in the org's l
       expect(leaks.filter((word) => count(html, word) > 0)).toEqual([]);
     },
   );
+
+  // B2 — a dated card printed the SERVER's clock. It is now the division's
+  // venue clock: the page's own `tz`, the zone it hands its Schedule. 09:00 UTC
+  // on 25 September 2026 is 05:00 in New York; the verify runs this file under
+  // TZ=UTC and TZ=Asia/Tokyo, neither of which is the venue.
+  it("a dated card reads the venue's clock from the page's tz, never the server's (B2)", async () => {
+    const venue = "America/New_York";
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the process zone must not be the venue's").not.toBe(venue);
+    getPublicDivision.mockResolvedValue({ ...divisionData(), tz: venue });
+
+    const root = await DivisionHomePage({
+      params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
+    });
+    const brackets = findElements(root, Bracket);
+    expect(brackets, "the page builds one Bracket for its one knockout stage").toHaveLength(1);
+
+    // All three fixtures kick off at 09:00 UTC (the file's `F` default).
+    expect(footersOf(renderToStaticMarkup(brackets[0]!))).toEqual(
+      Object.fromEntries(
+        ["semi-1", "semi-2", "final"].map((id) => [`/shared/test-org/test-comp/open/fixtures/${id}`, "25 Sept, 05:00"]),
+      ),
+    );
+  });
 });
 

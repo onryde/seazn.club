@@ -199,6 +199,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 lookup={lookup}
                 slotText={namer.slot}
                 copy={scheduleCopy}
+                tz={tz}
               />
             </section>
           );

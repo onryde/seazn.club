@@ -222,4 +222,21 @@ describe("embed bracket widget — its card footers are in the org's locale (B1)
       expect(leaks.filter((word) => count(html, word) > 0)).toEqual([]);
     },
   );
+
+  // B2 — a dated card printed the SERVER's clock. It is now the division's
+  // venue clock: the payload's `tz`, the zone the schedule widget gets. 09:00
+  // UTC on 25 September 2026 is 05:00 in New York; the verify runs this file
+  // under TZ=UTC and TZ=Asia/Tokyo, neither of which is the venue.
+  it("a dated card reads the venue's clock from the payload's tz, never the server's (B2)", async () => {
+    const venue = "America/New_York";
+    expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the process zone must not be the venue's").not.toBe(venue);
+    // All three fixtures kick off at 09:00 UTC (the file's `F` default).
+    embedDivisionData.mockResolvedValue({ ok: true, data: { ...payload("en", semisThenFinal(null)), tz: venue } });
+
+    expect(footersOf(await bracketMarkup())).toEqual(
+      Object.fromEntries(
+        ["semi-1", "semi-2", "final"].map((id) => [`/shared/test-org/test-comp/open/fixtures/${id}`, "25 Sept, 05:00"]),
+      ),
+    );
+  });
 });

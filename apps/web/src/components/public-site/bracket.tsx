@@ -23,6 +23,7 @@ import {
 } from "@seazn/engine/scheduling";
 import type { RoundRole } from "@seazn/engine/competition";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { fmtDateTime } from "@/lib/format";
 import { BRACKET_CREST_CLASS } from "./matches-hub/bracket-crest";
 import type { ScheduleCopy } from "./schedule";
 
@@ -65,6 +66,11 @@ interface Props {
    *  Compile-required for the reason `lookup` is: an optional English
    *  fallback would compile clean and print English again. */
   copy: BracketCopy;
+  /** B2: the venue's zone (division override → org tz → UTC), the one both
+   *  callers already hand their Schedule as `tz`. A dated card's footer is the
+   *  venue's clock, never the server's. Compile-required for the reason
+   *  `copy` is. */
+  tz: string;
 }
 
 /** The two schedule-rail words a bracket card's footer shows. */
@@ -94,6 +100,7 @@ function FixtureCard({
   lookup,
   slotText,
   copy,
+  tz,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -102,6 +109,7 @@ function FixtureCard({
   lookup: SlotLabelLookup;
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
+  tz: string;
 }) {
   const winner = fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {
@@ -155,7 +163,8 @@ function FixtureCard({
           </span>
         ) : fixture.scheduled_at ? (
           // en-GB in every locale: left as is, open owner question "en-GB formatting move" (B1).
-          new Date(fixture.scheduled_at).toLocaleString("en-GB", {
+          // The venue's clock (B2): `fmtDateTime` is that en-GB form with `timeZone: tz`, UTC on an unknown zone.
+          fmtDateTime(tz, fixture.scheduled_at, {
             day: "numeric",
             month: "short",
             hour: "2-digit",
@@ -183,6 +192,7 @@ function TwoSided({
   lookup,
   slotText,
   copy,
+  tz,
 }: {
   layout: BracketLayout;
   fixtures: PublicFixture[];
@@ -192,6 +202,7 @@ function TwoSided({
   lookup: SlotLabelLookup;
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
+  tz: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const rowsPerSide = Math.max(
@@ -334,7 +345,7 @@ function TwoSided({
               className="absolute"
               style={{ left: colX(node), top: nodeTop(node), width: NODE_W }}
             >
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
             </div>
           );
         })}
@@ -356,6 +367,7 @@ function DoubleElim({
   lookup,
   slotText,
   copy,
+  tz,
 }: {
   layout: DoubleElimLayout;
   fixtures: PublicFixture[];
@@ -365,6 +377,7 @@ function DoubleElim({
   lookup: SlotLabelLookup;
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
+  tz: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
@@ -484,7 +497,7 @@ function DoubleElim({
               {node.lane === "GF" && (
                 <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? lookup("bracket.grandFinal") : lookup("bracket.reset")}</p>
               )}
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
             </div>
           );
         })}
@@ -493,7 +506,7 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy, tz }: Props) {
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
@@ -508,6 +521,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           lookup={lookup}
           slotText={slotText}
           copy={copy}
+          tz={tz}
         />
       );
     }
@@ -526,6 +540,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           lookup={lookup}
           slotText={slotText}
           copy={copy}
+          tz={tz}
         />
       );
     }
@@ -544,6 +559,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           lookup={lookup}
           slotText={slotText}
           copy={copy}
+          tz={tz}
         />
       );
     }
@@ -607,6 +623,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
                     lookup={lookup}
                     slotText={slotText}
                     copy={copy}
+                    tz={tz}
                   />
                 ))}
             </div>
@@ -640,6 +657,7 @@ function PagePlayoff({
   lookup,
   slotText,
   copy,
+  tz,
 }: {
   layout: PagePlayoffLayout;
   fixtures: PublicFixture[];
@@ -649,6 +667,7 @@ function PagePlayoff({
   lookup: SlotLabelLookup;
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
+  tz: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LABEL_H = 22;
@@ -684,7 +703,7 @@ function PagePlayoff({
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                 {roundRoleLabel(lookup, PP_ROLE[n.slot])}
               </p>
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
             </div>
           );
         })}

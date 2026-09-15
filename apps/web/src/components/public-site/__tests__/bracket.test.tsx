@@ -71,7 +71,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain("<svg");
     expect(html).toContain('data-bracket="two-sided"');
@@ -87,7 +87,7 @@ describe("public Bracket", () => {
       F("f3", 3, 1, null, "d", null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "stepladder", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
     expect(html).toContain("Rung 1");
@@ -96,7 +96,7 @@ describe("public Bracket", () => {
   it("falls back to columns when a knockout's shape isn't single-elim (partial data)", () => {
     const fixtures = [F("f1", 0, 1, "a", "b", null), F("f2", 0, 2, "c", "d", null), F("f3", 0, 3, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).not.toContain('data-bracket="two-sided"');
   });
@@ -113,7 +113,7 @@ describe("public Bracket", () => {
       F("gf", 9, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain('data-bracket="double-elim"');
     expect(html).toContain("Winners bracket");
@@ -160,7 +160,7 @@ describe("public Bracket", () => {
       F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     // Confirms the TREE branch rendered, not the column fallback.
     expect(html).toContain('data-bracket="double-elim"');
@@ -191,7 +191,7 @@ describe("public Bracket", () => {
   it("keeps the column fallback for irregular double-elim shapes", () => {
     const fixtures = [F("f1", 1, 1, "a", "b", null), F("f2", 2, 1, "c", "d", null), F("f3", 2, 2, "a", "c", null)];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).not.toContain('data-bracket="double-elim"');
   });
@@ -206,7 +206,7 @@ describe("public Bracket", () => {
     const html = renderToStaticMarkup(
       createElement(Bracket, {
         kind: "knockout", fixtures: fixtures as never, entrantNames: names,
-        entrantLogos: logos, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy,
+        entrantLogos: logos, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC",
       }),
     );
     expect(html).toContain('src="https://flags.example/a.png"');
@@ -215,7 +215,7 @@ describe("public Bracket", () => {
     // Review N2 m3: its class is the ONE constant the hub's Draw renders too.
     expect(html).toContain(`<img src="https://flags.example/a.png" alt="" class="${BRACKET_CREST_CLASS}"/>`);
     const without = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(without).not.toContain("<img");
   });
@@ -228,7 +228,7 @@ describe("public Bracket", () => {
       F("fin", 3, 1, "a", null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "page_playoff", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain('data-bracket="page-playoff"');
     for (const cap of ["Qualifier 1", "Eliminator", "Qualifier 2", "Final"]) expect(html).toContain(cap);
@@ -259,7 +259,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null, "scheduled", { key: "slot.runner_up_group", params: { g: "B" } }, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     // Filled row: real entrant names, anchored as actual rendered text.
     expect(html).toMatch(/>Ants<\/span>/);
@@ -290,7 +290,7 @@ describe("public Bracket", () => {
       F("f3", 1, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain('title="Ants"');
     expect(html).toContain('title="Dogs"');
@@ -321,6 +321,7 @@ describe("public Bracket", () => {
         lookup: esLookup,
         slotText: (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, esLookup, "schedule.tbd"),
         copy: publicScheduleCopy(await getDictionary("es", "public"), esLookup),
+        tz: "UTC",
       }),
     );
     expect(html).toMatch(/>Ganador del Grupo A</); // slot.winner_group, es
@@ -358,7 +359,7 @@ describe("public Bracket", () => {
       F("gf", 14, 1, null, null, null, "scheduled", null, null, "GF", true, false, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "double_elim", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).not.toContain('data-bracket="double-elim"'); // confirms the fallback, not the tree
     expect(html).toContain("Quarter-finals"); // WB round 1 (4 games, 3 rounds out)
@@ -411,7 +412,7 @@ describe("public Bracket", () => {
       F("tp", 2, 2, null, null, null, "scheduled", null, null, null, false, true, false),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain('data-bracket="two-sided"'); // confirms the TREE branch, not the fallback
     // Each round name appears exactly TWICE — once above the L column, once
@@ -435,7 +436,7 @@ describe("public Bracket", () => {
       F("fin", 1, 1, null, null, null),
     ];
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC" }),
     );
     expect(html).toContain('data-bracket="two-sided"');
     expect(html.match(/>Semi-finals</g) ?? []).toHaveLength(2);
@@ -462,7 +463,7 @@ describe("public Bracket", () => {
           F("f2", 0, 2, "b", "c", null, "in_play"),
           F("f3", 1, 1, "a", null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC",
       }),
     );
     expect(twoSided).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="two-sided"/);
@@ -478,7 +479,7 @@ describe("public Bracket", () => {
           F("lf", 6, 1, null, null, null),
           F("gf", 9, 1, null, null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC",
       }),
     );
     expect(doubleElim).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="double-elim"/);
@@ -492,7 +493,7 @@ describe("public Bracket", () => {
           F("q2", 2, 1, "b", null, null),
           F("fin", 3, 1, "a", null, null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC",
       }),
     );
     expect(pagePlayoff).toMatch(/class="[^"]*\bbracket-bleed\b[^"]*"[^>]*data-bracket="page-playoff"/);
@@ -505,7 +506,7 @@ describe("public Bracket", () => {
           F("f2", 2, 1, null, "c", null),
           F("f3", 3, 1, null, "d", null),
         ] as never,
-        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy,
+        entrantNames: names, fixtureHref: href, lookup: msg, slotText: boardText, copy: enCopy, tz: "UTC",
       }),
     );
     expect(columns).not.toContain('data-bracket="two-sided"'); // confirms the fallback branch rendered
@@ -563,7 +564,7 @@ describe("public Bracket — a waiting side names its feeder's ROUND (R10d n4)",
     const dict = await getDictionary("en", "public");
     const namer = publicRoundNamer({ ui: msg, dict, fixtures: fixtures as never, stageKind: () => "knockout" });
     const html = renderToStaticMarkup(
-      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: namer.slot, copy: enCopy }),
+      createElement(Bracket, { kind: "knockout", fixtures: fixtures as never, entrantNames: names, fixtureHref: href, lookup: msg, slotText: namer.slot, copy: enCopy, tz: "UTC" }),
     );
     const semi = msg("bracket.round.semi");
     const winner = t(dict, "knockout.feederWinner", { round: semi, seq: 1 });
@@ -593,6 +594,7 @@ describe("public Bracket — a waiting side names its feeder's ROUND (R10d n4)",
           return "from the namer";
         },
         copy: publicScheduleCopy(await getDictionary("fr", "public"), frLookup),
+        tz: "UTC",
       }),
     );
     expect(asked, "only the labelled side reads through the namer").toEqual([
@@ -652,6 +654,7 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
         lookup,
         slotText: (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, lookup, "schedule.tbd"),
         copy: publicScheduleCopy(await getDictionary(locale, "public"), lookup),
+        tz: "UTC",
       }),
     );
   };
@@ -738,6 +741,7 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
             lookup,
             slotText: (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, lookup, "schedule.tbd"),
             copy,
+            tz: "UTC",
           }),
         );
         expect(html, `${kind} renders its ${branch} branch`).toContain(`data-bracket="${branch}"`);
@@ -763,5 +767,66 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
     );
     expect(dots).toHaveLength(1);
     expect(dots[0]).toContain("shrink-0");
+  });
+
+  // B2 — a dated card's footer called `toLocaleString("en-GB", …)` with no
+  // `timeZone`, so it printed the SERVER's clock (a 09:00 UTC kick-off read
+  // 10:00 on a server in Europe/London). It now prints the venue's clock, the
+  // zone the schedule rail (`fmtTime(tz, …)`) and the hub already use, handed in
+  // by the caller as `tz`. The en-GB form itself is untouched (an open owner
+  // question). The verify runs this file under TZ=UTC and under TZ=Asia/Tokyo.
+  describe("a dated card's footer is the VENUE's clock, never the server's (B2)", () => {
+    const VENUE = "America/New_York";
+    // 09:00 UTC on 25 September 2026 is 05:00 in New York (EDT, UTC-4), in the
+    // day, short month, 24-hour form the card has always printed.
+    const KICK_OFF = "2026-09-25T09:00:00.000Z";
+    const AT_VENUE = "25 Sept, 05:00";
+    const AT_UTC = "25 Sept, 09:00";
+    const dated = (fixtures: Array<ReturnType<typeof F>>) =>
+      fixtures.map((f) => ({ ...f, status: "scheduled", scheduled_at: KICK_OFF }));
+    const renderAt = (kind: (typeof shapes)[number]["kind"], fixtures: unknown[], tz: string) =>
+      renderToStaticMarkup(
+        createElement(Bracket, {
+          kind,
+          fixtures: fixtures as never,
+          entrantNames: names,
+          fixtureHref: href,
+          lookup: msg,
+          slotText: boardText,
+          copy: enCopy,
+          tz,
+        }),
+      );
+
+    it("the premise: a zone-less en-GB call in THIS process prints neither the venue's clock nor, here, UTC's", () => {
+      const zoneless = new Date(KICK_OFF).toLocaleString("en-GB", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      expect(Intl.DateTimeFormat().resolvedOptions().timeZone, "the process zone must not be the venue's").not.toBe(VENUE);
+      expect(zoneless, "what a zone-less call prints here").not.toBe(AT_VENUE);
+      expect(AT_VENUE, "the venue's clock is not UTC's").not.toBe(AT_UTC);
+    });
+
+    it.each(["knockout", "double_elim", "page_playoff", "stepladder"] as const)(
+      "%s: every dated card's footer reads the venue's day and hour",
+      (kind) => {
+        const shape = shapes.find((s) => s.kind === kind)!;
+        const fixtures = dated(shape.fixtures);
+        const html = renderAt(kind, fixtures, VENUE);
+        expect(html, `${kind} renders its ${shape.branch} branch`).toContain(`data-bracket="${shape.branch}"`);
+        expect(footersOf(html)).toEqual(Object.fromEntries(fixtures.map((f) => [href(f.id), AT_VENUE])));
+      },
+    );
+
+    // The rail's `fmtTime` falls back to UTC on a zone Intl does not know; a
+    // bare `toLocaleString({ timeZone })` would THROW and take the page down.
+    it("a zone Intl does not know falls back to UTC's clock rather than throwing", () => {
+      const fixtures = dated(cards);
+      const html = renderAt("knockout", fixtures, "Not/A_Zone");
+      expect(footersOf(html)).toEqual(Object.fromEntries(fixtures.map((f) => [href(f.id), AT_UTC])));
+    });
   });
 });

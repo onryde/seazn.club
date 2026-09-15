@@ -147,6 +147,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
         lookup={lookup}
         slotText={namer.slot}
         copy={scheduleCopy}
+        tz={tz}
       />
     ) : (
       <p className="p-2 text-sm text-zinc-500">No bracket stage in this division.</p>
