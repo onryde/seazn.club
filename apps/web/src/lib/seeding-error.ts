@@ -7,14 +7,17 @@
 // consumer of the `errors` namespace (lib/i18n-constants.ts's NAMESPACES
 // already listed it; nothing read it).
 //
-// The 13 codes are HttpError codes thrown by computeSeedProposal /
-// confirmSeedProposal (server/usecases/stages.ts) and resolveQualifiers
-// (server/usecases/stage-seeding.ts) — ALL_CAPS_SNAKE wire codes by repo
-// convention (schemas.ts:3024-3029's comment), never i18n keys themselves.
+// The codes in SEEDING_ERROR_CODES below are HttpError codes thrown by
+// computeSeedProposal / confirmSeedProposal (server/usecases/stages.ts) and
+// resolveQualifiers (server/usecases/stage-seeding.ts) — ALL_CAPS_SNAKE wire
+// codes by repo convention (schemas.ts:3024-3029's comment), never i18n keys
+// themselves. Read the count off that array, never off this comment: the "13"
+// in the ruling quoted above is the ruling's own figure and has been stale
+// since F3 added a 14th.
 //
 // Bundles all 4 locale errors.json files directly, unlike lib/messages.ts's
-// useMsg()/msgFor() split for the (much larger) `ui` catalog — errors.json is
-// 13 short strings, every code fires from a client-side POST response (the
+// useMsg()/msgFor() split for the (much larger) `ui` catalog — errors.json is a
+// short flat map, every code fires from a client-side POST response (the
 // panel's own fetch), and there is no DictProvider carrying `errors` to ride.
 // Not `server-only`: this must work from the client panel's catch block.
 import en from "@/dictionaries/en/errors.json";
@@ -48,14 +51,16 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  validateStageProgression's save-time check — so it has a real call site
  *  today, independent of any rules-editor UI.
  *
- *  SEEDING_CARRY_SOURCE_INVALID is the 16th, added by F6 (#625) under the
+ *  SEEDING_CARRY_SOURCE_INVALID is the 15th, added by F6 (#625) under the
  *  design of record's own authorisation to "reuse or add beside seeding-error
  *  helpers" (docs/superpowers/specs/2026-09-15-standings-carry-over-f6-design.md,
  *  owner-approved 2026-09-15) — NOT a re-opening of the scope note above.
- *  computeSeedProposal throws it when a progression carries points from a
- *  source whose completion snapshots positional placements only. It needed a
- *  code of its own rather than SEEDING_RULES_MISSING's: that copy tells the
- *  organiser to add rules or regenerate fixtures, and neither would fix this. */
+ *  computeSeedProposal throws it when `progression.carry` names a source that
+ *  offers a downstream stage a finishing order rather than a points table —
+ *  every kind outside REAL_TABLE_KINDS (usecases/stages.ts), whose comment
+ *  carries the per-kind detail. It needed a code of its own rather than
+ *  SEEDING_RULES_MISSING's: that copy tells the organiser to add rules or
+ *  regenerate fixtures, and neither would fix this. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",

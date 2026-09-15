@@ -147,7 +147,12 @@ describe.skipIf(!HAS_DB)("F6 — carry-over source validation at propose time (t
     const http = err as HttpError;
     expect(http.status).toBe(422);
     expect(http.code).toBe("SEEDING_CARRY_SOURCE_INVALID");
+    // Names the offending kind AND the kinds that WOULD work — the actionable
+    // half. Deliberately does not pin the whole sentence: the reason clause was
+    // reworded once already (F6 review round 1, where "this completion has no
+    // real points" turned out to be false for an americano source).
     expect(http.message).toMatch(/knockout/);
+    expect(http.message).toMatch(/league\/group\/swiss/);
     expect(http.extra).toMatchObject({ stageId: main!.id, kind: "knockout", carry: "points" });
 
     // Refused BEFORE a draft is written — an organiser must not be handed a

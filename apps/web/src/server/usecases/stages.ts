@@ -2246,15 +2246,41 @@ export async function fillSlot(
   }
 }
 
-// L3/#414 pass 3 — REAL_TABLE_KINDS are the only kinds whose standings
-// snapshot carries actual points/metrics (folded via completeTableStage,
-// engine-db/competition.ts): league/group/swiss. Carry-over (seedNextStage,
-// below) can only source from these — a bracket/ladder/americano completion
-// snapshots POSITIONAL placements only (placementTable zeroes every stat),
-// so carrying from one would seed the next stage with fabricated zeros
-// instead of refusing outright. BRACKET_KINDS mirrors engine-db/
-// competition.ts's own (unexported) list — losersOfRound only makes sense
-// sourced from one of these.
+// L3/#414 pass 3 — REAL_TABLE_KINDS are the kinds a carry-over may source
+// from: league/group/swiss. Carry-over (seedNextStage below, and
+// computeSeedProposal's propose-time guard since F6) refuses every other kind,
+// because what a progression actually READS from a source is the PoolTable
+// that tablesForCompletedStage / sourcesToTables builds — and for every OTHER
+// kind that table comes from `placementTable`, which zeroes played/won/drawn/
+// lost/points and metrics (engine competition/progression.ts). Carrying from
+// one would seed the next stage with fabricated zeros instead of refusing
+// outright.
+//
+// Corrected 2026-09-15 (F6 review round 1) — this used to claim
+// REAL_TABLE_KINDS were "the only kinds whose standings snapshot carries
+// actual points/metrics (folded via completeTableStage)" and lumped americano
+// in with the bracket kinds as snapshotting placements. Both halves were wrong
+// about americano, and the error propagated out of here into F6's organiser
+// copy before review caught it. What is actually true:
+//
+//   - americano IS in engine-db/competition.ts's TABLE_KINDS, so its own
+//     completion snapshot folds REAL points via completeTableStage — but over
+//     the EPHEMERAL per-round PAIR entrants (Jul3/08 §3). That is precisely why
+//     the progression path never reads that snapshot: americanoPlacementTables
+//     (below) re-derives personal points, maps them onto the division's
+//     individual entrants, and returns `placementTable(ordered)`. Both the
+//     on_complete and the setup path go through it. So americano does reach a
+//     carry as zeroed placements like the rest — by a different ROUTE than the
+//     old comment described, which is the part that was wrong.
+//   - ladder is `placementTable(config.ladder_order)` and the bracket kinds are
+//     `placementTable(bracketRanks(...))`, both written at completion time by
+//     completeStageIfReady — those two the old comment had right.
+//
+// The refusal set is therefore correct as shipped; only its stated reason was
+// not. Do not "simplify" this back to a claim about completeTableStage.
+//
+// BRACKET_KINDS mirrors engine-db/competition.ts's own list — losersOfRound
+// only makes sense sourced from one of these.
 const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
 // Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
 // SAME set to know when a source needs bracket data for a roundLosers take
@@ -2284,7 +2310,7 @@ export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "
 //
 // Sharing the SENTENCE gets the drift protection without either compromise.
 
-/** The first carry source whose kind has no real points to carry, or
+/** The first carry source whose kind offers no points table to carry from, or
  *  `undefined` when every source is a REAL_TABLE_KINDS stage. */
 function nonRealCarrySource(
   resolved: readonly { id: string; kind: string }[],
@@ -2293,9 +2319,16 @@ function nonRealCarrySource(
 }
 
 /** The one sentence both refusal sites raise. Named `kind` is the offending
- *  source's stage kind, not the target's. */
+ *  source's stage kind, not the target's.
+ *
+ *  Says "offers a finishing order" rather than the "completion has no real
+ *  points" this carried from Jul3/05 until the F6 round-1 review: that older
+ *  wording is false for an americano source, whose own completion snapshot
+ *  DOES fold real points (over pair entrants) — see REAL_TABLE_KINDS above.
+ *  What is true of every refused kind is the finishing order a progression
+ *  reads from it. */
 function carrySourceRefusal(kind: string): string {
-  return `carry-over needs a table-stage source (league/group/swiss) — a "${kind}" completion has no real points to carry`;
+  return `carry-over needs a table-stage source (league/group/swiss) — a "${kind}" source offers a finishing order, not a points table`;
 }
 
 /** Opening deltas for a target stage: every source-table row belonging to an
@@ -2973,9 +3006,9 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
  * no standings yet); 409 SEEDING_ALREADY_CONFIRMED (this stage's slots are
  * already filled — recompute is refused, not just a no-op, so the caller
  * doesn't mistake a stale draft for something actionable); 422
- * SEEDING_CARRY_SOURCE_INVALID (F6 — `carry` set against a source whose
- * completion snapshots positional placements only, so there are no real
- * points to carry).
+ * SEEDING_CARRY_SOURCE_INVALID (F6 — `carry` set against a source that offers
+ * a downstream stage a finishing order rather than a points table, i.e. any
+ * kind outside REAL_TABLE_KINDS).
  */
 export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut> {
   return withTenant(auth.orgId, async (tx) => {
@@ -3005,8 +3038,8 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // function has always had, generalised from one source to N.
     const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
 
-    // F6 (#625) — carry-over refuses a source with no real points to carry,
-    // raised at PROPOSE rather than only where carry is applied. Before this,
+    // F6 (#625) — carry-over refuses a source that offers only a finishing
+    // order, raised at PROPOSE rather than only where carry is applied. Before this,
     // the refusal existed on the `timing:"on_complete"` path alone
     // (seedNextStage), so a setup-timing organiser was handed a draft they
     // could confirm into a stage whose carry could never be honoured. `carry`

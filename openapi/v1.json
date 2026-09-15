@@ -23392,7 +23392,7 @@
     },
     "/api/v1/stages/{id}/seed-proposal": {
       "post": {
-        "summary": "Compute (or recompute) a draft seed proposal for a stage whose `progression.timing` is `setup`. 409 SEEDING_SOURCE_INCOMPLETE, 409 SEEDING_ALREADY_CONFIRMED, 422 SEEDING_RULES_MISSING, 422 SEEDING_CARRY_SOURCE_INVALID (`progression.carry` set against a source whose completion records finishing positions only — knockout/ladder/americano — so it has no real points to carry)",
+        "summary": "Compute (or recompute) a draft seed proposal for a stage whose `progression.timing` is `setup`. 409 SEEDING_SOURCE_INCOMPLETE, 409 SEEDING_ALREADY_CONFIRMED, 422 SEEDING_RULES_MISSING, 422 SEEDING_CARRY_SOURCE_INVALID (`progression.carry` set against a source that offers a downstream stage a finishing order rather than a points table — every kind except `league`/`group`/`swiss`, i.e. the four bracket kinds plus `ladder` and `americano`)",
         "tags": [
           "stages"
         ],

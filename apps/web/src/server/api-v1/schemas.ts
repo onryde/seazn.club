@@ -930,8 +930,8 @@ export const ProgressionSchema = z
     // Deleting it would silently break a paid, advertised feature.
     // Accepted on BOTH timings as of F6. `on_complete` is applied in
     // seedNextStage (stages.ts). On `setup`, computeSeedProposal now READS it
-    // — it refuses a source whose completion has no real points to carry,
-    // HttpError 422 SEEDING_CARRY_SOURCE_INVALID — but nothing APPLIES it yet:
+    // — it refuses a source that offers a finishing order rather than a points
+    // table, HttpError 422 SEEDING_CARRY_SOURCE_INVALID — but nothing APPLIES it yet:
     // confirmSeedProposal does not write `carry_deltas`, so a setup-timing
     // organiser gets the refusal without the feature. Treat the `setup` pair
     // as validated-but-unapplied until that confirm wiring lands beside it.

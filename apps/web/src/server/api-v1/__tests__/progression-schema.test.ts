@@ -217,8 +217,8 @@ describe("ProgressionSchema", () => {
   // already does. As of this commit that wiring does NOT exist —
   // confirmSeedProposal never reads `carry`, and no confirm-path carry test
   // exists yet. The setup pair is no longer wholly unread, though:
-  // computeSeedProposal REFUSES a carry whose source has no real points
-  // (HttpError 422 SEEDING_CARRY_SOURCE_INVALID), asserted by
+  // computeSeedProposal REFUSES a carry whose source offers only a finishing
+  // order (HttpError 422 SEEDING_CARRY_SOURCE_INVALID), asserted by
   // usecases/__tests__/carry-setup-path.test.ts. These cases still assert ONLY
   // the schema edge: the pair parses, and nothing here claims it is applied.
   // `standings.carry_over` is sold on the public pricing page in four
