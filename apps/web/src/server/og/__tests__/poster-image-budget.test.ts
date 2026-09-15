@@ -10,7 +10,17 @@ import { POSTER_IMAGE_TIMEOUT_MS, posterImageDataUrl } from "@/server/og/poster-
 // that costs. These tests are about the clock, not about sharp — so sharp is
 // replaced wholesale and how long a decode takes becomes a dial.
 
-const decode = vi.hoisted(() => ({ ms: 0, throws: false, timeouts: [] as unknown[] }));
+const decode = vi.hoisted(() => ({
+  ms: 0,
+  throws: false,
+  timeouts: [] as unknown[],
+  /** Per-decode dials, taken in call order; `ms`/`throws` once they run out. */
+  plan: [] as { ms: number; throws?: boolean }[],
+  /** Pipelines built — i.e. decodes that actually STARTED. */
+  started: 0,
+  inFlight: 0,
+  maxInFlight: 0,
+}));
 
 vi.mock("sharp", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -23,14 +33,27 @@ vi.mock("sharp", () => {
         return pipeline;
       },
       png: () => pipeline,
-      toBuffer: () =>
-        new Promise<Buffer>((resolve, reject) =>
-          setTimeout(() => (decode.throws ? reject(new Error("vips: too slow")) : resolve(PNG)), decode.ms),
-        ),
+      toBuffer: () => {
+        const dial = decode.plan.shift() ?? { ms: decode.ms, throws: decode.throws };
+        decode.inFlight += 1;
+        decode.maxInFlight = Math.max(decode.maxInFlight, decode.inFlight);
+        return new Promise<Buffer>((resolve, reject) =>
+          setTimeout(() => {
+            decode.inFlight -= 1;
+            if (dial.throws) reject(new Error("vips: too slow"));
+            else resolve(PNG);
+          }, dial.ms),
+        );
+      },
     };
     return pipeline;
   };
-  return { default: () => make() };
+  return {
+    default: () => {
+      decode.started += 1;
+      return make();
+    },
+  };
 });
 
 const STORAGE_ORIGIN = "https://projectref.supabase.co";
@@ -40,6 +63,10 @@ beforeEach(() => {
   decode.ms = 0;
   decode.throws = false;
   decode.timeouts = [];
+  decode.plan = [];
+  decode.started = 0;
+  decode.inFlight = 0;
+  decode.maxInFlight = 0;
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", STORAGE_ORIGIN);
   vi.stubGlobal(
     "fetch",
@@ -54,7 +81,11 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Let every decode a test left running FINISH before the clock goes back to
+  // real: decodes are serialized for the whole module, so a fake-timer decode
+  // abandoned here would hold the slot into the next test forever.
+  await vi.runAllTimersAsync();
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -111,5 +142,54 @@ describe("posterImageDataUrl — the budget covers the decode, not just the fetc
     const call = start();
     await vi.advanceTimersByTimeAsync(1);
     expect(call.answer()).toBeNull();
+  });
+});
+
+// Memory, not time, is why these exist. A PNG gets no shrink-on-load: sharp
+// streams it at FULL input width, so what one decode holds grows with the
+// canvas — and a match poster draws three images. Decoded in parallel their
+// peaks add; decoded one at a time, a process never holds more than one
+// decode's worth, for one render and across concurrent renders alike.
+describe("posterImageDataUrl — one decode at a time, for the whole process", () => {
+  it("never runs two decodes together, so a render's three images never hold their canvases at once", async () => {
+    decode.ms = 400;
+    const calls = [start(), start(), start()];
+    await vi.advanceTimersByTimeAsync(3 * 400);
+    expect(calls.map((call) => call.answer()?.startsWith("data:image/png;base64,"))).toEqual([true, true, true]);
+    expect(decode.maxInFlight).toBe(1);
+  });
+
+  it("spends the wait for the slot from the call's own budget", async () => {
+    decode.plan = [{ ms: POSTER_IMAGE_TIMEOUT_MS - 100 }, { ms: 200 }];
+    const first = start();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
+    expect(first.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    // In parallel the second would have drawn at 200ms. Queued behind the
+    // first, it cannot finish inside its budget — so it falls back, on time.
+    expect(second.answer()).toBeNull();
+  });
+
+  it("never starts the decode of a call whose budget ran out while it waited", async () => {
+    // Abandoned-but-queued work must not allocate: nobody is waiting for it.
+    decode.plan = [{ ms: POSTER_IMAGE_TIMEOUT_MS * 2 }];
+    const first = start();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
+    expect([first.answer(), second.answer()]).toEqual([null, null]);
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS); // the first decode ends; the slot is free
+    expect(decode.started).toBe(1);
+  });
+
+  it("hands the slot on after a decode that fails", async () => {
+    // A failure that escaped the decode would poison the queue: every later
+    // image on the machine would fall back, silently, until a restart.
+    decode.plan = [{ ms: 1, throws: true }, { ms: 1 }];
+    const first = start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.answer()).toBeNull();
+    const second = start();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(second.answer()?.startsWith("data:image/png;base64,")).toBe(true);
   });
 });

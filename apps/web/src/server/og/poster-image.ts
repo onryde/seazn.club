@@ -186,6 +186,34 @@ function deadline(signal: AbortSignal): Promise<never> {
   });
 }
 
+/**
+ * The tail of the decode queue: every decode waits for the one before it.
+ *
+ * Memory, not speed. A PNG gets no shrink-on-load — sharp streams it at FULL
+ * input width — so what one decode holds grows with the canvas, and the match
+ * poster draws three images at once. Decoded in parallel their peaks add;
+ * decoded one at a time the process holds one decode's worth, for a single
+ * render and across concurrent renders alike. It costs no throughput where
+ * this runs: the machine is one shared vCPU (`fly.toml`, `shared-cpu-1x`).
+ */
+let decodeQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `work` once every earlier decode has FINISHED — not merely been
+ * abandoned by its caller, since an abandoned decode still holds its memory
+ * until libvips lets go. The wait is spent from the caller's own budget, and
+ * a caller whose budget ran out while it waited never starts: nobody is left
+ * to draw what it would allocate.
+ *
+ * `work` must never reject. A rejection would sit in the queue and fail every
+ * decode queued after it, on the whole machine, until a restart.
+ */
+function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
+  const turn = decodeQueue.then(() => (signal.aborted ? null : work()));
+  decodeQueue = turn;
+  return turn;
+}
+
 /** Drain a body we are not going to use, so the connection is not left open. */
 function discard(res: Response): void {
   void res.body?.cancel().catch(() => {});
@@ -253,8 +281,9 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
     if (bytes === null) return null;
 
     // Never rejects: an unwinnable race would otherwise leave a rejection
-    // nobody is listening for, once the deadline has already answered.
-    const decode = (async (): Promise<Buffer | null> => {
+    // nobody is listening for, once the deadline has already answered — and
+    // the decode queue relies on it (see `afterEarlierDecodes`).
+    const decode = afterEarlierDecodes(controller.signal, async (): Promise<Buffer | null> => {
       try {
         const image = sharp(bytes, { limitInputPixels: POSTER_IMAGE_MAX_PIXELS });
         // The format the BYTES are, not the one the response called them. Also
@@ -278,7 +307,7 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
       } catch {
         return null;
       }
-    })();
+    });
 
     const png = await Promise.race([decode, deadline(controller.signal)]);
     if (png === null) return null;
