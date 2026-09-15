@@ -80,13 +80,30 @@ function errorOf(result: RawResult): { code?: string; message?: string } {
   return { code: err?.code, message: err?.message };
 }
 
-function dataOf<T>(result: RawResult, path: string, label: string): T {
-  const data = (result.json as unknown as { data?: T })?.data;
-  if (data === undefined) {
-    throw new Error(`oracle: ${label} response for ${path} carried no data`);
-  }
-  return data;
+// Minors row 7 (task-1-review.md §Minor M4 / task-1-re-review.md §4): this
+// exact shape used to be hand-copied into `advance.ts` too, differing only
+// in the literal module prefix ("oracle" vs "advance") — genuinely the same
+// function, so `advanceStageSeeding`'s own `dataOf` now binds this factory
+// to "advance" instead of re-declaring it. `ledger.ts`'s `dataOrThrow` and
+// `import.ts`'s inline check were read too and deliberately NOT folded in
+// here: `dataOrThrow` also performs the refusal check (`status !== 200`) in
+// the same function and treats `null` as absent alongside `undefined`, and
+// `import.ts`'s throw has no `label` at all (hardcodes "200") and appends
+// its own "— cannot read its report" clause — real behavioural differences
+// a shared helper would either erase or have to grow conditionals to keep,
+// which defeats the point of sharing. Only the two byte-identical copies
+// were merged.
+export function makeDataOf(modulePrefix: string) {
+  return function dataOf<T>(result: RawResult, path: string, label: string): T {
+    const data = (result.json as unknown as { data?: T })?.data;
+    if (data === undefined) {
+      throw new Error(`${modulePrefix}: ${label} response for ${path} carried no data`);
+    }
+    return data;
+  };
 }
+
+const dataOf = makeDataOf("oracle");
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -1280,8 +1297,18 @@ function outcomeWinnerOf(o: MatchOutcome): string | undefined {
  *  an award has a winner and no named loser, and a draw/tie/no_result has
  *  neither. Every other kind therefore answers `undefined`, which the
  *  comparator reads as "this shape asserts no losing side" rather than as a
- *  value that went missing. */
-function outcomeLoserOf(o: MatchOutcome): string | undefined {
+ *  value that went missing.
+ *
+ *  Exported for `oracle-matches.test.ts` (Minors row 10 / task-2-review.md
+ *  Minor 2): through `compareMatches` alone, no test can ever tell this
+ *  kind-narrowing ternary apart from a naive `return o.loser` — the four
+ *  non-"win" kinds are `z.object({kind: literal})` shapes with no `loser`
+ *  property at all, and `MatchOutcome.safeParse` strips anything extra
+ *  before it would reach here, so reading `.loser` off a REAL parsed
+ *  no-loser outcome is `undefined` either way. Calling this directly with a
+ *  hand-built (zod-bypassing) object that carries a stray `loser` is the
+ *  only way to make the kind check observable at all. */
+export function outcomeLoserOf(o: MatchOutcome): string | undefined {
   return o.kind === "win" ? o.loser : undefined;
 }
 

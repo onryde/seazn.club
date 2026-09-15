@@ -33,6 +33,13 @@
 // find nothing — `completeStageCapture` reads `events[0]` off THIS response,
 // once, and that is the only chance there ever is.
 import { raw, type RawResult, type Session } from "./http.ts";
+// Minors row 7 (task-1-review.md M4 / re-review §4): `dataOf` below used to
+// be a byte-identical hand copy of `oracle.ts`'s own, differing only in the
+// literal module prefix ("advance" vs "oracle"). Genuinely the same shape
+// once read, so it is shared now rather than re-declared — see the factory's
+// own comment in `oracle.ts` for why `ledger.ts`/`import.ts` were NOT folded
+// in too.
+import { makeDataOf } from "./oracle.ts";
 
 // ---------------------------------------------------------------------------
 // Transport — same narrow, injected, defaulted-to-the-real-thing shape every
@@ -122,13 +129,7 @@ function errorOf(result: RawResult): { code?: string; message?: string } {
   return { code: err?.code, message: err?.message };
 }
 
-function dataOf<T>(result: RawResult, path: string, label: string): T {
-  const data = (result.json as unknown as { data?: T })?.data;
-  if (data === undefined) {
-    throw new Error(`advance: ${label} response for ${path} carried no data`);
-  }
-  return data;
-}
+const dataOf = makeDataOf("advance");
 
 // ---------------------------------------------------------------------------
 // The qualifier assertion (D7) — pure, so the ordering/mismatch branches are

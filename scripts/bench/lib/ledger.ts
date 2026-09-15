@@ -75,11 +75,14 @@ export interface LedgerRow {
   readonly payload: unknown;
 }
 
-function rowsOf(data: unknown, sinceSeq: number, path: string): readonly LedgerRow[] {
+function rowsOf(data: unknown, sinceSeq: number, path: string, label: string): readonly LedgerRow[] {
   if (!Array.isArray(data)) {
-    throw new Error(
-      `ledger: fixture events response for ${path} was not a list of rows (got ${typeof data})`,
-    );
+    // Threaded from the caller rather than hardcoded (Minors row 5 /
+    // task-1-re-review.md §2) — `dataOrThrow`, one call up, already takes a
+    // `label`; hardcoding "fixture events" here was asymmetric and would go
+    // stale silently if this helper were ever reused for a differently-
+    // labelled read.
+    throw new Error(`ledger: ${label} response for ${path} was not a list of rows (got ${typeof data})`);
   }
   const rows: LedgerRow[] = [];
   for (const item of data) {
@@ -92,6 +95,15 @@ function rowsOf(data: unknown, sinceSeq: number, path: string): readonly LedgerR
     // tap": a row AT the anchor drifting through would surface there as a
     // phantom extra event, blamed on the pad rather than on the read.
     if (r.seq <= sinceSeq) continue;
+    // Deliberate, not drift (Minors row 6 / task-1-re-review.md §3): this is
+    // the one TOLERANT branch in a module whose whole thesis is that an
+    // unrecognised shape must be loud. A row at-or-before the anchor should
+    // never come back at all given `since_seq` is exclusive server-side, so
+    // seeing one here is itself a sign of drift — but dropping it silently
+    // is what keeps the driver's "exactly one new row per tap" contract
+    // correct downstream; throwing here would turn a single stray boundary
+    // row into an outage for every caller, for a case the boundary test
+    // below already guards against reappearing.
     // Narrowed rather than `String(r.id ?? "")`: `r.id` is `unknown` here, and
     // coercing an object id would mint the literal string "[object Object]"
     // and hand it to the driver as a real event id (@typescript-eslint/
@@ -118,7 +130,7 @@ export async function fetchFixtureLedger(
 ): Promise<readonly LedgerRow[]> {
   const path = `/api/v1/fixtures/${fixtureId}/events?since_seq=${sinceSeq}`;
   const result = await transport.raw(base, session, path, "GET");
-  return rowsOf(dataOrThrow(result, path, "fixture events"), sinceSeq, path);
+  return rowsOf(dataOrThrow(result, path, "fixture events"), sinceSeq, path, "fixture events");
 }
 
 /**
@@ -137,12 +149,33 @@ export async function fetchFixtureStatus(
 ): Promise<{ status: string; lastSeq: number }> {
   const path = `/api/v1/fixtures/${fixtureId}/state`;
   const result = await transport.raw(base, session, path, "GET");
-  const data = dataOrThrow(result, path, "fixture state") as Record<string, unknown>;
+  const raw = dataOrThrow(result, path, "fixture state");
+  // Status-side twin of `rowsOf`'s "was not a list of rows" throw (Minors
+  // row 4 / task-1-re-review.md §1): without this, a primitive or an array
+  // `data` cast straight to `Record<string, unknown>` and read back as
+  // `{status:"(absent)", lastSeq:-1}` — the SAME output an unrecognised-but-
+  // object-shaped state produces, hiding a genuinely broken envelope behind
+  // a merely-unusual one.
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error(
+      `ledger: fixture state response for ${path} was not an object (got ${Array.isArray(raw) ? "array" : typeof raw})`,
+    );
+  }
+  const data = raw as Record<string, unknown>;
   // `(absent)` rather than a plausible-looking default: an unrecognised state
   // shape has to READ as unrecognised downstream (oracle.ts's own convention),
   // never as a fixture that merely hasn't started.
+  //
+  // `lastSeq` used to fall back to a plausible `0` here — the one line in this
+  // function with a philosophy different from its sibling `status` (Minors
+  // row 2 / task-1-review.md M4). `0` IS the correct value for a genuinely
+  // unscored fixture (the server always sends `last_seq: 0` for one,
+  // `fixtures.ts:551`), so it cannot be reused as the "absent" sentinel too —
+  // `-1` never a real seq (rows start at 1), and is loud downstream: fed back
+  // as `since_seq=-1` on the next ledger read, it 400s at the route rather
+  // than silently anchoring the driver on a wrong tip.
   return {
     status: typeof data.status === "string" ? data.status : "(absent)",
-    lastSeq: typeof data.last_seq === "number" ? data.last_seq : 0,
+    lastSeq: typeof data.last_seq === "number" ? data.last_seq : -1,
   };
 }

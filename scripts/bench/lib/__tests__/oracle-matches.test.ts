@@ -11,9 +11,10 @@
 // union on `kind` — win/draw/tie/no_result/award. Scorelines exist only where
 // a pack declares `perSide`, and come from the fixture STATE route.
 import { describe, expect, it } from "vitest";
-import { compareMatches } from "../oracle.ts";
+import { compareMatches, outcomeLoserOf } from "../oracle.ts";
 import type { PackExpectedOutcome } from "../pack-schema.ts";
 import { resolveExpectedOutcome } from "../suites/run-suite.ts";
+import type { MatchOutcome } from "@seazn/engine/core";
 
 const won = (winner: string, loser: string, method?: string) =>
   ({ kind: "win" as const, winner, loser, ...(method === undefined ? {} : { method }) });
@@ -192,6 +193,16 @@ describe("compareMatches — the losing side", () => {
     // A draw, a tie, a no_result and an award carry no losing side at all.
     // Reading the field off them regardless would report `(none)` against
     // every one of these, turning four correct results into four mismatches.
+    //
+    // This loop alone kills NOTHING (Minors row 10 / task-2-review.md Minor
+    // 2, honestly labelled by the report as such): `expected` and `actual`
+    // are the exact same `outcome` reference, so any DETERMINISTIC function
+    // of it — including a broken `outcomeLoserOf` — produces the same value
+    // on both sides and the comparator's `expectedLoser !== actualLoser`
+    // guard never fires either way. Kept as an integration smoke check (it
+    // does still prove the winner/method/line checks don't false-positive
+    // on these shapes), but the loser-specific claim needs the direct call
+    // below to actually be falsifiable.
     for (const outcome of [
       { kind: "draw" as const },
       { kind: "tie" as const },
@@ -204,6 +215,26 @@ describe("compareMatches — the losing side", () => {
       );
       expect(result.mismatches).toEqual([]);
     }
+  });
+
+  // Minors row 10 fix: a genuinely differential case. `MatchOutcome`'s zod
+  // schema strips unknown keys on parse, so a "leaked" `loser` on a
+  // non-"win" outcome can never survive `compareMatches`'s own
+  // `MatchOutcome.safeParse` — which is exactly why the loop above cannot
+  // witness a broken kind check. Calling `outcomeLoserOf` directly with a
+  // hand-built object that bypasses that parse is the only way to prove the
+  // ternary — not just "no property exists" — is what returns `undefined`.
+  it("outcomeLoserOf ignores a loser field leaked onto a non-win outcome", () => {
+    for (const kind of ["draw", "tie", "no_result", "award"] as const) {
+      const leaked = {
+        kind,
+        winner: "en-more",
+        loser: "en-leaked",
+      } as unknown as MatchOutcome;
+      expect(outcomeLoserOf(leaked)).toBeUndefined();
+    }
+    // The positive pair: a real "win" outcome's loser IS read through.
+    expect(outcomeLoserOf(won("en-more", "en-lenus"))).toBe("en-lenus");
   });
 
   it("reports the winner first when BOTH sides are wrong — the order is the contract", () => {
