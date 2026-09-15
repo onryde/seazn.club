@@ -1573,7 +1573,9 @@ describe("revealScrollLeft — the arithmetic behind scrolling the pressed chip 
   // The DOM half (reading two rects and a padding, writing `scrollLeft` from a
   // layout effect) cannot run without a browser; Task 3's e2e owns it. What is
   // pinned here is every arm of the decision.
-  const rail = { scrollLeft: 0, left: 0, width: 390, padStart: 16, padEnd: 16 };
+  // `max` (the rail's scroll end) is far past every answer in the arms below,
+  // so the scroll end never decides for them; the m6 arms at the end set it.
+  const rail = { scrollLeft: 0, left: 0, width: 390, padStart: 16, padEnd: 16, max: 10_000 };
 
   // C-1 (visual gate): the rail left its leading chip cut mid-glyph
   // ("uarter-finals", "ualifier 1", "als 2/2"), because a reveal past the RIGHT
@@ -1626,5 +1628,72 @@ describe("revealScrollLeft — the arithmetic behind scrolling the pressed chip 
 
   it("never scrolls to a negative offset", () => {
     expect(revealScrollLeft({ ...rail, scrollLeft: 10 }, { left: -100, width: 50 }, [-100])).toBe(0);
+  });
+
+  // Review N2 m6. The least boundary that shows the pressed chip clear of the
+  // right gutter can lie PAST the rail's scroll end. The browser clamps it to
+  // the end, and at the end the leading chip can be left cut mid-word. When a
+  // boundary shows the pressed chip whole with its end INSIDE the right gutter,
+  // missing it by at most `padEnd`, that boundary is taken instead: a snap
+  // position that cuts nothing. The first three arms use the reviewer's Geist
+  // probe geometry at 320 (`n2-rev-probe-residual-railrows.json`: chip starts
+  // at rest, the pressed chip in its bold face).
+  const at320 = (max: number) => ({ scrollLeft: 0, left: 0, width: 320, padStart: 16, padEnd: 16, max });
+  /** Chip starts whose TEXT straddles the rail's left edge at `scrollLeft`. A
+   *  chip's text sits inside its own 16px padding (`px-4`), so a chip whose box
+   *  ends in the gutter's first 8px is not cut. */
+  const cutAtLeft = (starts: readonly number[], ends: readonly number[], scrollLeft: number) =>
+    starts.filter((s, i) => s + 16 - scrollLeft < 0 && ends[i]! - 16 - scrollLeft > 0);
+
+  it("m6: an 8-draw at 320 opened on its Semi-finals stays at 0, where both chips are whole, instead of clamping to the end and cutting Quarter-finals", () => {
+    // Quarter-finals 16-168, Semi-finals 176-314, Final 322-415; the scroll end
+    // is 111. Clear of the gutter needs 10, and the least boundary at or after
+    // that is the Semi-finals' own start, 160: past 111, so the browser would
+    // rest at 111 with Quarter-finals cut. At 0 the Semi-finals end at 314,
+    // inside the rail's 320px box.
+    const starts = [16, 176, 322];
+    const ends = [168, 314, 415];
+    expect(cutAtLeft(starts, ends, 111), "the premise: the clamped end cuts Quarter-finals").toEqual([16]);
+    const next = revealScrollLeft(at320(111), { left: 176, width: 138 }, starts);
+    expect(next).toBe(0);
+    expect(cutAtLeft(starts, ends, next)).toEqual([]);
+    expect(314 - next).toBeLessThanOrEqual(320);
+  });
+
+  it("m6: a 32-draw at 320 opened on its Semi-finals lands on Quarter-finals' start (311), not on a boundary past the end (472, clamped to 422)", () => {
+    // Round of 32 16-171, Round of 16 179-319, Quarter-finals 327-480,
+    // Semi-finals 488-626, Final 634-726; the scroll end is 422. Clear of the
+    // gutter needs 322, and the least boundary at or after it is 472, past the
+    // end. 311 puts Quarter-finals on the gutter and ends the Semi-finals at 315.
+    const starts = [16, 179, 327, 488, 634];
+    const ends = [171, 319, 480, 626, 726];
+    expect(cutAtLeft(starts, ends, 422), "the premise: the clamped end cuts Quarter-finals").toEqual([327]);
+    const next = revealScrollLeft(at320(422), { left: 488, width: 138 }, starts);
+    expect(next).toBe(311);
+    expect(cutAtLeft(starts, ends, next)).toEqual([]);
+    expect(626 - next).toBeLessThanOrEqual(320);
+  });
+
+  it("m6: a finished 16-draw at 320 opened on its Final, the LAST chip, keeps its old answer: no boundary ends the Final within the gutter, so the end still cuts (als 2/2)", () => {
+    // Final 609-703; the scroll end is 399. Clear of the gutter needs 399, the
+    // least boundary at or after it is 453 (Third place), and no boundary lies
+    // in [383, 399). The answer is the one a rail with no scroll end gets.
+    const starts = [16, 164, 325, 469, 609];
+    const final = { left: 609, width: 94 };
+    expect(revealScrollLeft(at320(399), final, starts)).toBe(453);
+    expect(revealScrollLeft(at320(10_000), final, starts)).toBe(453);
+  });
+
+  it("m6: the pressed chip may END at most padEnd into the gutter: 16px is taken, 17px is not", () => {
+    // Boundaries 0 / 164 / 314 away and a scroll end of 100, so the least
+    // boundary at or after the need (164) would clamp. A chip ending at 320
+    // misses the gutter by exactly 16 and rests at 0; one ending at 321 misses
+    // it by 17 and keeps the old answer.
+    expect(revealScrollLeft(at320(100), { left: 180, width: 140 }, [16, 180, 330])).toBe(0);
+    expect(revealScrollLeft(at320(100), { left: 180, width: 141 }, [16, 180, 330])).toBe(164);
+  });
+
+  it("m6: a least boundary EXACTLY at the scroll end is a resting place, not a clamp, so it is kept", () => {
+    expect(revealScrollLeft(at320(164), { left: 180, width: 140 }, [16, 180, 330])).toBe(164);
   });
 });

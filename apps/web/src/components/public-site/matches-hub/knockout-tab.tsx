@@ -319,12 +319,22 @@ function withPendingSides(
  * the right edge now takes the least scroll that puts SOME chip's start on the
  * gutter and still shows the pressed chip whole: the first such boundary at or
  * before the pressed chip. A chip past the left edge already lands on its own
- * start. An answer beyond the rail's end is clamped by the browser to the end,
- * which is itself a snap position and still shows the pressed chip whole.
+ * start.
+ *
+ * UNLESS THAT BOUNDARY IS PAST THE RAIL'S END (review N2 m6). The browser clamps
+ * such an answer to the end (`max`), which still shows the pressed chip whole
+ * but can leave the leading chip cut mid-word, as an 8-draw at 320 opened on its
+ * Semi-finals did ("uarter-finals") when resting at 0 showed both chips whole.
+ * So when the least boundary would clamp, the largest boundary that shows the
+ * pressed chip whole with its end inside the right gutter, missing the gutter by
+ * at most `padEnd`, is taken instead, if there is one: a chip start on the
+ * gutter, so nothing is cut at the leading edge. With none, the old answer
+ * stands, and a rail at its end cuts what it must (a finished draw's Final).
  *
  * Both boxes, and `starts` (every chip's left edge, in rail order), are in
  * VIEWPORT coordinates (`getBoundingClientRect`). `width` is the rail's
- * `clientWidth`. The paddings are the rail's own (equal to its scroll padding),
+ * `clientWidth`; `max` its scroll end, `scrollWidth - clientWidth`. The
+ * paddings are the rail's own (equal to its scroll padding),
  * so a chip is brought in clear of the phone gutter the rail bleeds into. A chip
  * wider than the window shows its start. Never `scrollIntoView`: that also
  * scrolls the PAGE to the rail, which is not what a round tap asked for.
@@ -333,7 +343,7 @@ function withPendingSides(
  * the layout effect below, which only a browser can run.
  */
 export function revealScrollLeft(
-  rail: { scrollLeft: number; left: number; width: number; padStart: number; padEnd: number },
+  rail: { scrollLeft: number; left: number; width: number; padStart: number; padEnd: number; max: number },
   chip: { left: number; width: number },
   starts: readonly number[],
 ): number {
@@ -348,8 +358,16 @@ export function revealScrollLeft(
     // start. If there is none (a chip wider than the window), its own start.
     const need = chip.left + chip.width - end;
     const own = chip.left - start;
-    const shifts = starts.map((left) => left - start).filter((shift) => shift >= need && shift <= own);
-    next += shifts.length > 0 ? Math.min(...shifts) : own;
+    const boundaries = starts.map((left) => left - start);
+    const shifts = boundaries.filter((shift) => shift >= need && shift <= own);
+    let shift = shifts.length > 0 ? Math.min(...shifts) : own;
+    if (next + shift > rail.max) {
+      // That boundary would clamp to the end. The largest one that leaves the
+      // pressed chip's end in the right gutter, at most `padEnd` past `end`.
+      const inGutter = boundaries.filter((b) => b < need && b >= need - rail.padEnd);
+      if (inGutter.length > 0) shift = Math.max(...inGutter);
+    }
+    next += shift;
   }
   return Math.max(0, next);
 }
@@ -642,6 +660,7 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
           width: rail.clientWidth,
           padStart: Number.parseFloat(style.paddingLeft) || 0,
           padEnd: Number.parseFloat(style.paddingRight) || 0,
+          max: rail.scrollWidth - rail.clientWidth,
         },
         chip.getBoundingClientRect(),
         // Every chip's own left edge, so the answer is a boundary the rail
