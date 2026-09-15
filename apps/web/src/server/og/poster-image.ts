@@ -64,7 +64,9 @@ export const POSTER_IMAGE_MAX_EDGE = 1024;
  * ceiling that matters for memory; this is. It is a ceiling that REFUSES: a
  * canvas past it is not downscaled, it falls back to the monogram. So it must
  * sit above every picture an organiser really uploads, and memory is bounded
- * another way as well (one decode at a time — `decodeQueue`, below).
+ * another way as well (share-image decodes one at a time, and never more than
+ * two sharp operations unsettled — `decodeQueue` and `MAX_UNSETTLED_SHARP_OPS`,
+ * below).
  *
  * Chosen from real uploads, not from the size we draw. Entrant badges are
  * stored exactly as uploaded: a designer's 2560–4096px export, or a phone
@@ -225,7 +227,12 @@ function deadline(signal: AbortSignal): Promise<never> {
  * input width — so what one decode holds grows with the canvas, and the match
  * poster draws three images at once. Decoded in parallel their peaks add;
  * decoded one at a time, share images hold one decode's worth between them,
- * for a single render and across concurrent renders alike. That is one
+ * for a single render and across concurrent renders alike, until a decode
+ * stops settling. The queue lets that one go so it can move on (`unlessHung`,
+ * and the header read's deadline), but it still runs, so the bound is a cap:
+ * at most two sharp operations unsettled at once (`MAX_UNSETTLED_SHARP_OPS`),
+ * and a call past that gets the monogram. At worst, then, share images hold
+ * two decodes' worth between them. That is one
  * SHARE-IMAGE decode at a time, not one sharp decode for the whole process:
  * Next's `/_next/image` optimizer runs sharp in this same process, outside
  * this queue (`next/image` in the org layout and the sponsors board), so a
@@ -238,7 +245,9 @@ function deadline(signal: AbortSignal): Promise<never> {
  * production's count): a render drawing three PNGs at `POSTER_IMAGE_MAX_PIXELS`
  * peaks ~73 MB one at a time — the same as one alone — against ~216 MB in
  * parallel. At staging's 4 threads one alone is ~126 MB; the per-thread figures
- * are at `POSTER_IMAGE_MAX_PIXELS`. Either fits in 1 GB.
+ * are at `POSTER_IMAGE_MAX_PIXELS`. The cap's two decodes' worth was not
+ * measured; inferred from those figures it is about twice one alone, ~146 MB at
+ * one thread and ~252 MB at four. Either fits in 1 GB.
  */
 let decodeQueue: Promise<unknown> = Promise.resolve();
 
@@ -273,8 +282,9 @@ const DECODE_HUNG_MS = POSTER_IMAGE_TIMEOUT_MS + SHARP_TIMEOUT_SECONDS * 1000 + 
  * schedules. A decode that never settled would hold the slot for the life of
  * the process, and every later share image on that machine would fall back to
  * the monogram, silently. So a decode still running `DECODE_HUNG_MS` after it
- * took the slot is given up, with one warning. In that pathological case two
- * decodes can overlap briefly; everywhere else the memory bound holds.
+ * took the slot is given up, with one warning. Given up is not stopped: it runs
+ * on beside the next decode, and counts toward `MAX_UNSETTLED_SHARP_OPS` until
+ * it settles, so hung decodes cannot pile up behind the valve.
  *
  * Armed when the decode STARTS: a waiter whose budget ran out never starts,
  * settles at once, and needs no valve.
@@ -290,18 +300,6 @@ function unlessHung(decode: Promise<Buffer | null>): Promise<Buffer | null> {
   return Promise.race([decode, hung]).finally(() => clearTimeout(valve));
 }
 
-/**
- * Runs `work` once every earlier decode has FINISHED — not merely been
- * abandoned by its caller, since an abandoned decode still holds its memory
- * until libvips lets go — or has been given up as hung (`unlessHung`). The
- * wait is spent from the caller's own budget, and a caller whose budget ran
- * out while it waited never starts: nobody is left to draw what it would
- * allocate.
- *
- * `work` must never reject. A rejection would sit in the queue and fail every
- * share-image decode queued after it, on that machine, until a restart. It is
- * reported once when that happens (`reportPoisonedQueue`).
- */
 /**
  * The ceiling under the queue. Its valve, and the header read's own deadline,
  * free the SLOT, not the work: a decode given up as hung, or a header read
@@ -344,6 +342,20 @@ function counted<T>(op: Promise<T>): Promise<T> {
   return op;
 }
 
+/**
+ * Runs `work` once every earlier decode has settled or been let go of: a
+ * header read abandoned at its caller's deadline, which allocates no canvas,
+ * or a decode given up as hung (`unlessHung`). A pipeline merely abandoned by
+ * its caller still holds the slot, since it holds its memory until libvips
+ * lets go. Whatever is let go of runs on, and counts toward
+ * `MAX_UNSETTLED_SHARP_OPS` until it settles. The wait is spent from the
+ * caller's own budget, and a caller whose budget ran out while it waited never
+ * starts: nobody is left to draw what it would allocate.
+ *
+ * `work` must never reject. A rejection would sit in the queue and fail every
+ * share-image decode queued after it, on that machine, until a restart. It is
+ * reported once when that happens (`reportPoisonedQueue`).
+ */
 function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
   const turn = decodeQueue.then(() => (signal.aborted ? null : unlessHung(work())));
   // The tail keeps the turn's outcome but not its value: the PNG goes to the

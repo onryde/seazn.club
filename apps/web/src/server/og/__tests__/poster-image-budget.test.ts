@@ -229,9 +229,12 @@ describe("posterImageDataUrl — the budget covers the decode, not just the fetc
 // Memory, not time, is why these exist. A PNG gets no shrink-on-load: sharp
 // streams it at FULL input width, so what one decode holds grows with the
 // canvas — and a match poster draws three images. Decoded in parallel their
-// peaks add; decoded one at a time, share images never hold more than one
-// decode's worth between them, for one render and across concurrent renders
-// alike. The queue is this fetcher's, not the process's: Next's
+// peaks add; decoded one at a time, share images hold one decode's worth
+// between them, for one render and across concurrent renders alike, until a
+// decode stops settling. The valve and the header read's deadline let such a
+// decode go so the queue can move on, and it runs on — so the worst case is
+// the cap tested below: two sharp operations unsettled at once, two decodes'
+// worth. The queue is this fetcher's, not the process's: Next's
 // `/_next/image` optimizer decodes with sharp in the same process, outside it.
 describe("posterImageDataUrl — one share-image decode at a time", () => {
   it("never runs two decodes together, so a render's three images never hold their canvases at once", async () => {
