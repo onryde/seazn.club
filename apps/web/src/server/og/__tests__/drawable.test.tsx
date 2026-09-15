@@ -80,10 +80,15 @@ describe("the shared satori frames refuse a URL handed to them directly", () => 
         OG_SIZE,
       );
 
+    // The URL render is the one this test is NAMED for, so its requests are
+    // read before anything is reset. Asserting after the reset — as this test
+    // once did — only ever witnessed the null render.
     const withUrl = await render(frame(REMOTE) as unknown as Response);
+    const askedForWithUrl = remoteRequests();
     requested = [];
     const withNothing = await render(frame(null) as unknown as Response);
 
+    expect(askedForWithUrl).toEqual([]);
     expect(remoteRequests()).toEqual([]);
     // Identical to the card an org with no logo gets — no gap, no empty box.
     expect(withUrl.equals(withNothing)).toBe(true);
@@ -107,10 +112,13 @@ describe("the shared satori frames refuse a URL handed to them directly", () => 
         STORY_SIZE,
       );
 
+    // Same shape, same fix: read the URL render's requests before the reset.
     const withUrl = await render(card(REMOTE) as unknown as Response);
+    const askedForWithUrl = remoteRequests();
     requested = [];
     const withNothing = await render(card(null) as unknown as Response);
 
+    expect(askedForWithUrl).toEqual([]);
     expect(remoteRequests()).toEqual([]);
     expect(withUrl.equals(withNothing)).toBe(true);
   });
