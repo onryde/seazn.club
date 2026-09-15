@@ -170,10 +170,12 @@ function start(): { answer: () => string | null | undefined } {
 }
 
 /** How long after it takes the slot a decode is given up as hung: its caller's
- *  budget, then the sharp timeout the pipeline was really handed. */
+ *  budget, the sharp timeout the pipeline was really handed, and the valve's
+ *  grace past that timeout — written down here as 500 ms rather than read from
+ *  the module, so the grace cannot quietly shrink. */
 function valveAfter(): number {
   const [{ seconds }] = decode.timeouts as [{ seconds: number }];
-  return POSTER_IMAGE_TIMEOUT_MS + seconds * 1000;
+  return POSTER_IMAGE_TIMEOUT_MS + seconds * 1000 + 500;
 }
 
 /** The warnings the cap gave, apart from the valve's. */
@@ -306,15 +308,12 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     // would hold the slot for the life of the process, and every later share
     // image on the machine would fall back until a restart. So a decode that
     // has held the slot for its caller's whole budget, plus sharp's timeout on
-    // top, is taken to be hung and let go.
+    // top and a grace past that, is taken to be hung and let go.
     decode.plan = [{ ms: 0, never: true }];
     const hung = start();
     await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
     expect(hung.answer()).toBeNull(); // its own caller still answers on time
-    // The grace is the timeout the pipeline was really handed, not a number
-    // written down here.
-    const [{ seconds }] = decode.timeouts as [{ seconds: number }];
-    const hungAfter = POSTER_IMAGE_TIMEOUT_MS + seconds * 1000;
+    const hungAfter = valveAfter();
 
     // A call that arrives a second before the valve waits for it…
     await vi.advanceTimersByTimeAsync(hungAfter - 1000 - POSTER_IMAGE_TIMEOUT_MS);
@@ -335,6 +334,40 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     // One line for one hung decode, however long it stays hung.
     await vi.advanceTimersByTimeAsync(hungAfter * 4);
     expect(logMock.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not give up, or log as never settled, a decode sharp's own timeout ends a little late", async () => {
+    // sharp checks its timeout from libvips' progress callback, so a pipeline
+    // it kills settles AFTER the timeout, not at it. A valve with no margin
+    // over that timeout would release — and report as hung — a decode that
+    // was already ending.
+    const sharpTimeoutMs = Math.ceil(POSTER_IMAGE_TIMEOUT_MS / 1000) * 1000;
+    // The header read lands a millisecond inside its caller's deadline, so the
+    // pipeline starts as late after taking the slot as it can…
+    decode.metadataPlan = [{ ms: POSTER_IMAGE_TIMEOUT_MS - 1 }];
+    // …and sharp ends it 50 ms past its own timeout.
+    decode.plan = [{ ms: sharpTimeoutMs + 50, throws: true }];
+    const killed = start();
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
+    expect(killed.answer()).toBeNull();
+    expect(decode.inFlight).toBe(1); // the pipeline is running, past its caller
+    expect(decode.timeouts).toEqual([{ seconds: sharpTimeoutMs / 1000 }]);
+    const endsAt = POSTER_IMAGE_TIMEOUT_MS - 1 + sharpTimeoutMs + 50;
+
+    // A call that arrives a second before sharp's kill lands waits for it…
+    await vi.advanceTimersByTimeAsync(endsAt - 1000 - POSTER_IMAGE_TIMEOUT_MS);
+    const waiting = start();
+    await vi.advanceTimersByTimeAsync(1000 - 1);
+    expect(decode.started).toBe(1);
+    expect(logMock.warn).not.toHaveBeenCalled();
+    // …starts when the kill settles the decode, and not before…
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decode.started).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(waiting.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    // …and nothing ever says the killed decode never settled.
+    await vi.advanceTimersByTimeAsync(valveAfter() * 2);
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 
   it("bounds the header read as well: a metadata() that never settles monograms on time and frees the slot then", async () => {

@@ -244,14 +244,27 @@ let decodeQueue: Promise<unknown> = Promise.resolve();
 
 /**
  * sharp's own watchdog on a decode, in the whole seconds it takes, from the
- * same budget. It is also the grace the valve allows past that budget, so the
- * two cannot drift apart.
+ * same budget. The valve waits for it too, so the two cannot drift apart.
  */
 const SHARP_TIMEOUT_SECONDS = Math.ceil(POSTER_IMAGE_TIMEOUT_MS / 1000);
 
-/** How long a decode may hold the slot before it is taken to be hung: its
- *  caller's whole budget, and sharp's watchdog on top of that. */
-const DECODE_HUNG_MS = POSTER_IMAGE_TIMEOUT_MS + SHARP_TIMEOUT_SECONDS * 1000;
+/**
+ * How far past sharp's watchdog the valve waits. sharp checks its timeout from
+ * libvips' progress callback, so a pipeline it kills settles AFTER the timeout,
+ * not at it (1046 ms for a 1 s timeout, measured), and its clock only starts
+ * once the work leaves libuv's queue. With no margin, a decode sharp was
+ * already ending would be released and logged as never settled.
+ */
+const VALVE_GRACE_MS = 500;
+
+/**
+ * How long a decode may hold the slot before it is taken to be hung: its
+ * caller's whole budget, sharp's watchdog, and the grace. Counted from when it
+ * takes the slot, which is never less than that: the header read before the
+ * pipeline ends by the caller's deadline, so the pipeline starts at most one
+ * budget after the slot is taken, and gets its watchdog plus the grace.
+ */
+const DECODE_HUNG_MS = POSTER_IMAGE_TIMEOUT_MS + SHARP_TIMEOUT_SECONDS * 1000 + VALVE_GRACE_MS;
 
 /**
  * The escape valve. The queue frees its slot when a decode settles, and
