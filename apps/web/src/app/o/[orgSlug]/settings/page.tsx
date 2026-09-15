@@ -109,7 +109,7 @@ export default async function SettingsPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ tab?: string; email_change?: string }>;
+  searchParams: Promise<{ tab?: string; email_change?: string; lichess?: string }>;
 }) {
   const { orgSlug } = await params;
   const page = await requireOrgPage(orgSlug, { tail: "/settings" });
@@ -118,7 +118,7 @@ export default async function SettingsPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, email_change } = await searchParams;
+  const { tab: rawTab, email_change, lichess } = await searchParams;
   const tab: Tab = (SETTINGS_TABS.includes(rawTab as SettingsTab) ? rawTab : "organization") as Tab;
 
   // Per-tab lazy data loading.
@@ -292,6 +292,17 @@ export default async function SettingsPage({
     ["success", "invalid", "expired", "taken", "error"].includes(email_change)
       ? t(dict, `settings.emailChange.${email_change}`)
       : null;
+
+  const lichessMessageKey =
+    lichess === "linked"
+      ? "settings.account.lichess.flash.linked"
+      : lichess === "oauth_state" ||
+          lichess === "token" ||
+          lichess === "account" ||
+          lichess === "not_configured"
+        ? (`settings.account.lichess.flash.${lichess}` as const)
+        : null;
+  const lichessMessage = lichessMessageKey ? t(dict, lichessMessageKey) : null;
 
   return (
     <>
@@ -622,6 +633,18 @@ export default async function SettingsPage({
                     }`}
                   >
                     {emailChangeMessage}
+                  </div>
+                )}
+                {lichessMessage && (
+                  <div
+                    className={`rounded-lg px-4 py-3 text-sm ${
+                      lichess === "linked"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-red-50 text-red-700"
+                    }`}
+                    data-testid="lichess-flash"
+                  >
+                    {lichessMessage}
                   </div>
                 )}
 
