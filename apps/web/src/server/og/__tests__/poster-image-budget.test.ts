@@ -17,8 +17,11 @@ const decode = vi.hoisted(() => ({
   ms: 0,
   throws: false,
   timeouts: [] as unknown[],
-  /** Per-decode dials, taken in call order; `ms`/`throws` once they run out. */
-  plan: [] as { ms: number; throws?: boolean }[],
+  /** Per-decode dials, taken in call order; `ms`/`throws` once they run out.
+   *  `never`: the decode never settles, as libvips work that is never scheduled. */
+  plan: [] as { ms: number; throws?: boolean; never?: boolean }[],
+  /** Per-pipeline, in call order: true makes that `metadata()` never settle. */
+  metadataNever: [] as boolean[],
   /** Pipelines built — i.e. decodes that actually STARTED. */
   started: 0,
   inFlight: 0,
@@ -31,7 +34,10 @@ vi.mock("sharp", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const make = (): Record<string, unknown> => {
     const pipeline: Record<string, unknown> = {
-      metadata: async () => ({ format: "png", width: 64, height: 64 }),
+      metadata: () =>
+        decode.metadataNever.shift()
+          ? new Promise<never>(() => {})
+          : Promise.resolve({ format: "png", width: 64, height: 64 }),
       resize: () => pipeline,
       timeout: (opts: unknown) => {
         decode.timeouts.push(opts);
@@ -46,6 +52,7 @@ vi.mock("sharp", () => {
         // whether anything still holds the last one.
         const png = Buffer.from(PNG);
         decode.lastPng = new WeakRef(png);
+        if (dial.never) return new Promise<Buffer>(() => {});
         return new Promise<Buffer>((resolve, reject) =>
           setTimeout(() => {
             decode.inFlight -= 1;
@@ -65,6 +72,16 @@ vi.mock("sharp", () => {
   };
 });
 
+const logMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  fatal: vi.fn(),
+  trace: vi.fn(),
+}));
+vi.mock("@/server/logger", () => ({ log: logMock }));
+
 const STORAGE_ORIGIN = "https://projectref.supabase.co";
 const uploadedBadge = () => publicStorageUrl("orgs/org-1/entrant-badges/abc123.png");
 
@@ -77,6 +94,8 @@ beforeEach(() => {
   decode.inFlight = 0;
   decode.maxInFlight = 0;
   decode.lastPng = undefined;
+  decode.metadataNever = [];
+  for (const fn of Object.values(logMock)) fn.mockClear();
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", STORAGE_ORIGIN);
   vi.stubGlobal(
     "fetch",
@@ -229,5 +248,65 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     await vi.advanceTimersByTimeAsync(0);
     gc();
     expect(decode.lastPng?.deref()).toBeUndefined();
+  });
+
+  it("gives the slot up, with one warning, when a decode never settles", async () => {
+    // sharp's own timeout ends a running pipeline, but it cannot fire on work
+    // libvips never schedules. Without a valve, one decode that never settled
+    // would hold the slot for the life of the process, and every later share
+    // image on the machine would fall back until a restart. So a decode that
+    // has held the slot for its caller's whole budget, plus sharp's timeout on
+    // top, is taken to be hung and let go.
+    decode.plan = [{ ms: 0, never: true }];
+    const hung = start();
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS);
+    expect(hung.answer()).toBeNull(); // its own caller still answers on time
+    // The grace is the timeout the pipeline was really handed, not a number
+    // written down here.
+    const [{ seconds }] = decode.timeouts as [{ seconds: number }];
+    const hungAfter = POSTER_IMAGE_TIMEOUT_MS + seconds * 1000;
+
+    // A call that arrives a second before the valve waits for it…
+    await vi.advanceTimersByTimeAsync(hungAfter - 1000 - POSTER_IMAGE_TIMEOUT_MS);
+    const waiting = start();
+    await vi.advanceTimersByTimeAsync(1000 - 1);
+    expect(waiting.answer()).toBeUndefined();
+    expect(decode.started).toBe(1);
+    expect(logMock.warn).not.toHaveBeenCalled();
+    // …starts the moment the slot is given up…
+    await vi.advanceTimersByTimeAsync(1);
+    expect(decode.started).toBe(2);
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+    expect(logMock.warn).toHaveBeenCalledWith({ heldMs: hungAfter }, expect.stringMatching(/never settled/));
+    // …and draws inside its own budget. (The mock's zero-ms decode, scheduled
+    // during a fake-timer tick, lands one millisecond later.)
+    await vi.advanceTimersByTimeAsync(1);
+    expect(waiting.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    // One line for one hung decode, however long it stays hung.
+    await vi.advanceTimersByTimeAsync(hungAfter * 4);
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the header read as well: a metadata() that never settles monograms on time and frees the slot then", async () => {
+    // sharp's timeout is attached to the output pipeline only, and
+    // `metadata()` has none. A header read allocates no canvas, so abandoning
+    // one at its caller's deadline frees the slot without breaking the bound.
+    decode.metadataNever = [true];
+    const stuck = start();
+    await vi.advanceTimersByTimeAsync(1000);
+    const next = start(); // its own budget runs a second past the first's
+    await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS - 1000 - 1);
+    expect([stuck.answer(), next.answer()]).toEqual([undefined, undefined]);
+    expect(decode.started).toBe(1);
+    // At the first call's deadline it has answered, and the slot is free.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stuck.answer()).toBeNull();
+    expect(decode.started).toBe(2);
+    // The next draws inside its own budget (its zero-ms mock decode lands a
+    // millisecond later, as a timer scheduled during a fake-timer tick does).
+    await vi.advanceTimersByTimeAsync(1);
+    expect(next.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    // The header bound freed the slot, not the valve.
+    expect(logMock.warn).not.toHaveBeenCalled();
   });
 });

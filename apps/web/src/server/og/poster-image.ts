@@ -1,5 +1,6 @@
 import "server-only";
 import sharp from "sharp";
+import { log } from "@/server/logger";
 
 /**
  * The ONE fetcher behind every remote image the match share card and the
@@ -242,17 +243,53 @@ function deadline(signal: AbortSignal): Promise<never> {
 let decodeQueue: Promise<unknown> = Promise.resolve();
 
 /**
+ * sharp's own watchdog on a decode, in the whole seconds it takes, from the
+ * same budget. It is also the grace the valve allows past that budget, so the
+ * two cannot drift apart.
+ */
+const SHARP_TIMEOUT_SECONDS = Math.ceil(POSTER_IMAGE_TIMEOUT_MS / 1000);
+
+/** How long a decode may hold the slot before it is taken to be hung: its
+ *  caller's whole budget, and sharp's watchdog on top of that. */
+const DECODE_HUNG_MS = POSTER_IMAGE_TIMEOUT_MS + SHARP_TIMEOUT_SECONDS * 1000;
+
+/**
+ * The escape valve. The queue frees its slot when a decode settles, and
+ * sharp's `.timeout()` is what makes a slow one settle — but that timeout is
+ * on the output pipeline only, and its clock cannot fire on work libvips never
+ * schedules. A decode that never settled would hold the slot for the life of
+ * the process, and every later share image on that machine would fall back to
+ * the monogram, silently. So a decode still running `DECODE_HUNG_MS` after it
+ * took the slot is given up, with one warning. In that pathological case two
+ * decodes can overlap briefly; everywhere else the memory bound holds.
+ *
+ * Armed when the decode STARTS: a waiter whose budget ran out never starts,
+ * settles at once, and needs no valve.
+ */
+function unlessHung(decode: Promise<Buffer | null>): Promise<Buffer | null> {
+  let valve: ReturnType<typeof setTimeout> | undefined;
+  const hung = new Promise<null>((resolve) => {
+    valve = setTimeout(() => {
+      log.warn({ heldMs: DECODE_HUNG_MS }, "poster-image: a share-image decode never settled; releasing its slot");
+      resolve(null);
+    }, DECODE_HUNG_MS);
+  });
+  return Promise.race([decode, hung]).finally(() => clearTimeout(valve));
+}
+
+/**
  * Runs `work` once every earlier decode has FINISHED — not merely been
  * abandoned by its caller, since an abandoned decode still holds its memory
- * until libvips lets go. The wait is spent from the caller's own budget, and
- * a caller whose budget ran out while it waited never starts: nobody is left
- * to draw what it would allocate.
+ * until libvips lets go — or has been given up as hung (`unlessHung`). The
+ * wait is spent from the caller's own budget, and a caller whose budget ran
+ * out while it waited never starts: nobody is left to draw what it would
+ * allocate.
  *
  * `work` must never reject. A rejection would sit in the queue and fail every
  * share-image decode queued after it, on that machine, until a restart.
  */
 function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
-  const turn = decodeQueue.then(() => (signal.aborted ? null : work()));
+  const turn = decodeQueue.then(() => (signal.aborted ? null : unlessHung(work())));
   // The tail keeps the turn's outcome but not its value: the PNG goes to the
   // caller, and is not held here until whenever the next decode arrives.
   decodeQueue = turn.then(() => undefined);
@@ -334,7 +371,12 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
         // The format the BYTES are, not the one the response called them. Also
         // where `limitInputPixels` fires: sharp reads the header here, so an
         // oversized canvas is refused before anything is allocated for it.
-        const { format, width, height } = await image.metadata();
+        //
+        // Raced against the call's own deadline: sharp's timeout below is on
+        // the output pipeline only, `metadata()` has none, and a header read
+        // that never settled would hold the slot until the valve. It allocates
+        // no canvas, so abandoning one keeps the memory bound.
+        const { format, width, height } = await Promise.race([image.metadata(), deadline(controller.signal)]);
         if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
         // Also from the header: GIF is held whole, so it has a ceiling of its own.
         if (format === "gif" && width * height > POSTER_IMAGE_MAX_GIF_PIXELS) return null;
@@ -348,7 +390,7 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
           // libvips' own watchdog. The race below bounds what the ROUTE waits
           // for; this is what stops an abandoned decode carrying on burning a
           // threadpool slot after we have already answered.
-          .timeout({ seconds: Math.ceil(POSTER_IMAGE_TIMEOUT_MS / 1000) })
+          .timeout({ seconds: SHARP_TIMEOUT_SECONDS })
           .png()
           .toBuffer();
       } catch {
