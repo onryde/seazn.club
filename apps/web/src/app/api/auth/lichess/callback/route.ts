@@ -1,8 +1,9 @@
 import { cookies } from "next/headers";
 import {
   LICHESS_ACCOUNT_URL,
+  LICHESS_OAUTH_NEXT_COOKIE,
+  LICHESS_OAUTH_STATE_COOKIE,
   LICHESS_TOKEN_URL,
-  OAUTH_STATE_COOKIE,
   lichessConfigured,
   lichessRedirectUri,
   type LichessAccount,
@@ -31,8 +32,8 @@ export async function GET(req: Request) {
   const state = url.searchParams.get("state");
 
   const jar = await cookies();
-  const expected = jar.get(OAUTH_STATE_COOKIE)?.value;
-  jar.delete(OAUTH_STATE_COOKIE);
+  const expected = jar.get(LICHESS_OAUTH_STATE_COOKIE)?.value;
+  jar.delete(LICHESS_OAUTH_STATE_COOKIE);
   if (!code || !state || !expected || state !== expected) {
     return fail("oauth_state");
   }
@@ -78,8 +79,8 @@ export async function GET(req: Request) {
     tokenExpiresAt: expiresAt,
   });
 
-  const next = jar.get("seazn_oauth_next")?.value;
-  jar.delete("seazn_oauth_next");
+  const next = jar.get(LICHESS_OAUTH_NEXT_COOKIE)?.value;
+  jar.delete(LICHESS_OAUTH_NEXT_COOKIE);
   if (next && next.startsWith("/") && !next.startsWith("//")) {
     return redirectLocal(next.includes("?") ? `${next}&lichess=linked` : `${next}?lichess=linked`);
   }
