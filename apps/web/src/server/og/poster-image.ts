@@ -299,7 +299,8 @@ function unlessHung(decode: Promise<Buffer | null>): Promise<Buffer | null> {
  * allocate.
  *
  * `work` must never reject. A rejection would sit in the queue and fail every
- * share-image decode queued after it, on that machine, until a restart.
+ * share-image decode queued after it, on that machine, until a restart. It is
+ * reported once when that happens (`reportPoisonedQueue`).
  */
 /**
  * The ceiling under the queue. Its valve, and the header read's own deadline,
@@ -348,7 +349,32 @@ function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | n
   // The tail keeps the turn's outcome but not its value: the PNG goes to the
   // caller, and is not held here until whenever the next decode arrives.
   decodeQueue = turn.then(() => undefined);
+  // Every tail is handled, or each call behind a poisoned queue would leave an
+  // unhandled rejection of its own. The queue itself stays rejected.
+  void decodeQueue.catch(reportPoisonedQueue);
   return turn;
+}
+
+let poisonReported = false;
+
+/** Logs a poisoned queue once for the life of the process: after the first,
+ *  every call behind it is the same failure, not news. */
+function reportPoisonedQueue(err: unknown): void {
+  if (poisonReported) return;
+  poisonReported = true;
+  log.error(
+    { err },
+    "poster-image: the share-image decode queue is poisoned; every share image on this machine falls back to the monogram until a restart",
+  );
+}
+
+/** Test-only: leaves the decode queue rejected, the way a decode whose `work`
+ *  rejected would. Nothing reachable rejects, so this is the only way to test
+ *  how a poisoned queue is reported. */
+export function __poisonDecodeQueueForTests(reason: unknown): void {
+  const poisoned = Promise.reject(reason);
+  void poisoned.catch(() => {});
+  decodeQueue = poisoned;
 }
 
 /** Drain a body we are not going to use, so the connection is not left open. */
