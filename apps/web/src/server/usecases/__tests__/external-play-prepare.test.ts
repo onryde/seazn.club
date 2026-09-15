@@ -113,7 +113,8 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       config: {},
     });
 
-    const now = new Date("2026-10-01T12:00:00.000Z");
+    // Unique clock so this fixture never collides with leftover DB rows from prior runs.
+    const now = new Date(Date.now() + Math.floor(Math.random() * 1e12));
     const scheduledAt = new Date(now.getTime() + 10 * 60 * 1000);
     const [fixture] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
@@ -138,6 +139,7 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       origin: "https://example.test",
       adapter,
       sendReadyEmail,
+      orgId: owner.orgId,
     });
     expect(first.prepared).toBe(1);
     expect(first.emailed).toBe(1);
@@ -171,6 +173,7 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       origin: "https://example.test",
       adapter,
       sendReadyEmail,
+      orgId: owner.orgId,
     });
     expect(second.prepared).toBe(0);
     expect(createChallenge).not.toHaveBeenCalled();
@@ -229,7 +232,7 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       name: "RR",
       config: {},
     });
-    const now = new Date("2026-10-01T12:00:00.000Z");
+    const now = new Date(Date.now() + Math.floor(Math.random() * 1e12));
     const [fixture] = await sql<{ id: string }[]>`
       insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key,
                             status, home_entrant_id, away_entrant_id, scheduled_at)
@@ -243,6 +246,7 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       origin: "https://example.test",
       adapter: { createChallenge: vi.fn(), fetchGame: vi.fn() },
       sendReadyEmail,
+      orgId: owner.orgId,
     });
     expect(counts.deferred).toBeGreaterThanOrEqual(1);
     expect(sendReadyEmail).not.toHaveBeenCalled();

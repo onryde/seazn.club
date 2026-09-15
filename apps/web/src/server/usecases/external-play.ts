@@ -2,17 +2,23 @@ import "server-only";
 // External-play prepare / sync usecases (chess Lichess design 2026-09-15).
 // Cron-shaped: privileged `sql` across orgs (same as registration sweeps).
 // Wire every 5 min in onryde/seazn.club.workflow (external).
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { sendExternalPlayReadyEmail } from "@/lib/email";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { mapBoardgameClockToLichess } from "@/server/external-play/clock";
+import { mapLichessGameToBoardgameResult } from "@/server/external-play/map-result";
 import { createLichessAdapter } from "@/server/external-play/lichess/client";
-import type { ExternalPlayAdapter } from "@/server/external-play/types";
+import type {
+  ExternalPlayAdapter,
+  LichessGameSnapshot,
+} from "@/server/external-play/types";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   getLichessAccessToken,
   getLinkedAccount,
 } from "@/server/usecases/external-accounts";
+import { scoreEvent } from "@/server/usecases/scoring";
 
 const PREPARE_AHEAD_MS = 15 * 60 * 1000;
 /** Catch fixtures whose T−15 window already passed but were never prepared. */
@@ -31,6 +37,8 @@ export type PrepareExternalPlayDeps = {
   origin: string;
   adapter?: ExternalPlayAdapter;
   sendReadyEmail?: typeof sendExternalPlayReadyEmail;
+  /** Optional org scope (tests / targeted re-runs). */
+  orgId?: string;
 };
 
 type CandidateRow = {
@@ -180,7 +188,12 @@ export async function prepareExternalPlayWindow(
        and f.away_entrant_id is not null
        and f.status in ('scheduled', 'in_play')
        and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
-       and (ep.fixture_id is null or ep.status = 'pending')
+       and (
+         ep.fixture_id is null
+         or ep.status = 'pending'
+         or (ep.status = 'ready' and ep.emailed_at is null)
+       )
+       and (${deps.orgId ?? null}::uuid is null or o.id = ${deps.orgId ?? null})
      order by f.scheduled_at asc
      limit 100`;
 
@@ -235,24 +248,27 @@ export async function prepareExternalPlayWindow(
         continue;
       }
 
-      const challenge = await adapter.createChallenge({
-        whiteAccessToken: whiteToken,
-        blackLichessUsername: blackLink.username,
-        clock: clockMap.clock,
-        rated: false,
-      });
+      // Already ready (email-only retry after a prior send failure) — skip recreate.
+      if (row.ep_status !== "ready") {
+        const challenge = await adapter.createChallenge({
+          whiteAccessToken: whiteToken,
+          blackLichessUsername: blackLink.username,
+          clock: clockMap.clock,
+          rated: false,
+        });
 
-      await upsertExternalPlay({
-        fixtureId: row.fixture_id,
-        orgId: row.org_id,
-        status: "ready",
-        lastError: null,
-        challengeId: challenge.challengeId,
-        playUrl: challenge.whitePlayUrl,
-        whitePlayUrl: challenge.whitePlayUrl,
-        blackPlayUrl: challenge.blackPlayUrl,
-      });
-      counts.prepared += 1;
+        await upsertExternalPlay({
+          fixtureId: row.fixture_id,
+          orgId: row.org_id,
+          status: "ready",
+          lastError: null,
+          challengeId: challenge.challengeId,
+          playUrl: challenge.whitePlayUrl,
+          whitePlayUrl: challenge.whitePlayUrl,
+          blackPlayUrl: challenge.blackPlayUrl,
+        });
+        counts.prepared += 1;
+      }
 
       if (row.ep_emailed_at) continue;
 
@@ -294,6 +310,254 @@ export async function prepareExternalPlayWindow(
         lastError: message,
       }).catch(() => undefined);
       counts.failed += 1;
+    }
+  }
+
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
+// Webhook / poll sync → real scoreEvent path (Task 6)
+// ---------------------------------------------------------------------------
+
+export type ApplyProviderResult = "ignored" | "live" | "finished" | "needs_organiser";
+
+type ExternalPlayBridgeRow = {
+  fixture_id: string;
+  org_id: string;
+  status: string;
+  external_challenge_id: string | null;
+  external_game_id: string | null;
+  home_entrant_id: string;
+  away_entrant_id: string;
+  fixture_status: string;
+  fixture_outcome: unknown;
+};
+
+async function loadBridgeByGameId(gameId: string): Promise<ExternalPlayBridgeRow | null> {
+  const rows = await sql<ExternalPlayBridgeRow[]>`
+    select ep.fixture_id, ep.org_id, ep.status,
+           ep.external_challenge_id, ep.external_game_id,
+           f.home_entrant_id, f.away_entrant_id,
+           f.status as fixture_status, f.outcome as fixture_outcome
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+     where ep.provider = 'lichess'
+       and (ep.external_game_id = ${gameId} or ep.external_challenge_id = ${gameId})
+     limit 1`;
+  return rows[0] ?? null;
+}
+
+async function mintOrgOwnerAuth(orgId: string): Promise<AuthCtx> {
+  const [owner] = await sql<{ user_id: string }[]>`
+    select user_id from org_members
+     where org_id = ${orgId} and role = 'owner'
+     order by created_at asc
+     limit 1`;
+  if (!owner) {
+    throw new Error(`no owner for org ${orgId}`);
+  }
+  return {
+    orgId,
+    via: "session",
+    userId: owner.user_id,
+    role: "owner",
+    keyId: null,
+  };
+}
+
+async function nextExpectedSeq(orgId: string, fixtureId: string): Promise<number> {
+  const [row] = await withTenant(orgId, (tx) => tx<{ seq: number }[]>`
+    select coalesce(max(seq), 0)::int as seq from score_events where fixture_id = ${fixtureId}`);
+  return row?.seq ?? 0;
+}
+
+async function markNeedsOrganiser(
+  fixtureId: string,
+  reason: string,
+  gameId?: string | null,
+): Promise<"needs_organiser"> {
+  await sql`
+    update fixture_external_play
+       set status = 'needs_organiser',
+           last_error = ${reason},
+           external_game_id = coalesce(${gameId ?? null}, external_game_id),
+           updated_at = now()
+     where fixture_id = ${fixtureId}`;
+  return "needs_organiser";
+}
+
+async function markLive(fixtureId: string, gameId: string): Promise<"live"> {
+  await sql`
+    update fixture_external_play
+       set status = 'live',
+           external_game_id = ${gameId},
+           started_at = coalesce(started_at, now()),
+           last_error = null,
+           play_url = coalesce(play_url, ${`https://lichess.org/${gameId}`}),
+           updated_at = now()
+     where fixture_id = ${fixtureId}`;
+  return "live";
+}
+
+/**
+ * Append a mapped boardgame.result through the REAL scoreEvent door (start
+ * first if the fixture is still in pre). Must not write standings itself.
+ */
+async function appendExternalResult(
+  orgId: string,
+  fixtureId: string,
+  payload: { winner: string | null; method: string },
+  idempotencyKey: string,
+): Promise<void> {
+  const auth = await mintOrgOwnerAuth(orgId);
+  let seq = await nextExpectedSeq(orgId, fixtureId);
+  if (seq === 0) {
+    await scoreEvent(auth, fixtureId, {
+      expected_seq: 0,
+      type: "core.start",
+      payload: {},
+      idempotency_key: `${idempotencyKey}:start`,
+    });
+    seq = 1;
+  }
+  await scoreEvent(auth, fixtureId, {
+    expected_seq: seq,
+    type: "boardgame.result",
+    payload,
+    idempotency_key: idempotencyKey,
+  });
+}
+
+export type ApplyProviderGameUpdateOpts = {
+  provider: "lichess";
+  gameId: string;
+  snapshot?: LichessGameSnapshot;
+  adapter?: ExternalPlayAdapter;
+};
+
+/**
+ * Fold a Lichess game snapshot into Seazn scoring. Clean finishes call
+ * scoreEvent; mismatch/abort → needs_organiser; already decided → ignored.
+ */
+export async function applyProviderGameUpdate(
+  opts: ApplyProviderGameUpdateOpts,
+): Promise<ApplyProviderResult> {
+  if (opts.provider !== "lichess") return "ignored";
+
+  const bridge = await loadBridgeByGameId(opts.gameId);
+  if (!bridge) return "ignored";
+  if (bridge.status === "finished") return "ignored";
+  if (bridge.fixture_outcome != null) return "ignored";
+  if (["decided", "finalized", "abandoned", "forfeited", "cancelled"].includes(bridge.fixture_status)) {
+    return "ignored";
+  }
+
+  const adapter = opts.adapter ?? createLichessAdapter({ fetch });
+  const snapshot = opts.snapshot ?? (await adapter.fetchGame(opts.gameId));
+
+  if (snapshot.status === "created" || snapshot.status === "started" || snapshot.status === "paused") {
+    return markLive(bridge.fixture_id, snapshot.id);
+  }
+
+  const white = await loadSide(bridge.home_entrant_id);
+  const black = await loadSide(bridge.away_entrant_id);
+  if (!white?.userId || !black?.userId) {
+    return markNeedsOrganiser(bridge.fixture_id, "missing_linked_user", snapshot.id);
+  }
+
+  const homeLink = await getLinkedAccount(white.userId, "lichess");
+  const awayLink = await getLinkedAccount(black.userId, "lichess");
+  if (!homeLink || !awayLink) {
+    return markNeedsOrganiser(bridge.fixture_id, "lichess_link_missing", snapshot.id);
+  }
+
+  const mapped = mapLichessGameToBoardgameResult({
+    game: snapshot,
+    homeEntrantId: bridge.home_entrant_id,
+    awayEntrantId: bridge.away_entrant_id,
+    homeLichessId: homeLink.externalUserId,
+    awayLichessId: awayLink.externalUserId,
+  });
+
+  if (!mapped.ok) {
+    if (mapped.reason === "unfinished") {
+      return markLive(bridge.fixture_id, snapshot.id);
+    }
+    return markNeedsOrganiser(bridge.fixture_id, mapped.reason, snapshot.id);
+  }
+
+  try {
+    await appendExternalResult(
+      bridge.org_id,
+      bridge.fixture_id,
+      mapped.payload,
+      `lichess:${snapshot.id}`,
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message.slice(0, 500) : "score_failed";
+    return markNeedsOrganiser(bridge.fixture_id, message, snapshot.id);
+  }
+
+  await sql`
+    update fixture_external_play
+       set status = 'finished',
+           external_game_id = ${snapshot.id},
+           finished_at = now(),
+           last_error = null,
+           updated_at = now()
+     where fixture_id = ${bridge.fixture_id}`;
+  return "finished";
+}
+
+export type PollLiveExternalPlayCounts = {
+  polled: number;
+  live: number;
+  finished: number;
+  needs_organiser: number;
+  ignored: number;
+};
+
+/** Poll ready/live bridges that have a challenge or game id. Invoked from cron. */
+export async function pollLiveExternalPlay(deps?: {
+  adapter?: ExternalPlayAdapter;
+  limit?: number;
+}): Promise<PollLiveExternalPlayCounts> {
+  const adapter = deps?.adapter ?? createLichessAdapter({ fetch });
+  const limit = deps?.limit ?? 50;
+  const rows = await sql<{ fixture_id: string; game_key: string }[]>`
+    select fixture_id,
+           coalesce(external_game_id, external_challenge_id) as game_key
+      from fixture_external_play
+     where provider = 'lichess'
+       and status in ('ready', 'live')
+       and coalesce(external_game_id, external_challenge_id) is not null
+     order by updated_at asc
+     limit ${limit}`;
+
+  const counts: PollLiveExternalPlayCounts = {
+    polled: 0,
+    live: 0,
+    finished: 0,
+    needs_organiser: 0,
+    ignored: 0,
+  };
+
+  for (const row of rows) {
+    if (!row.game_key) continue;
+    counts.polled += 1;
+    try {
+      const result = await applyProviderGameUpdate({
+        provider: "lichess",
+        gameId: row.game_key,
+        adapter,
+      });
+      if (result === "live") counts.live += 1;
+      else if (result === "finished") counts.finished += 1;
+      else if (result === "needs_organiser") counts.needs_organiser += 1;
+      else counts.ignored += 1;
+    } catch {
+      counts.ignored += 1;
     }
   }
 
