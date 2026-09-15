@@ -5136,8 +5136,7 @@
   "slideshow.status.cancelled": "Afgelast",
   "slideshow.slideN": "Dia {n}",
   "slideshow.rung": "Trede {n}",
-  "slideshow.tvHint.label": "Tip voor groot scherm",
-  "slideshow.tvHint.message": "Gemaakt voor tv of groot scherm.",
-  "slideshow.tvHint.phoneView": "Mobiele weergave",
-  "slideshow.tvHint.fullScreen": "Volledig scherm"
+  "slideshow.phoneCard.title": "Dit bord is gemaakt voor een tv",
+  "slideshow.phoneCard.openLive": "Open de livepagina",
+  "slideshow.phoneCard.showBoard": "Toch het bord tonen"
 }

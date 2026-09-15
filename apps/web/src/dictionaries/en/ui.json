@@ -5136,8 +5136,7 @@
   "slideshow.status.cancelled": "Cancelled",
   "slideshow.slideN": "Slide {n}",
   "slideshow.rung": "Rung {n}",
-  "slideshow.tvHint.label": "Big-screen tip",
-  "slideshow.tvHint.message": "Made for a TV or big screen.",
-  "slideshow.tvHint.phoneView": "Open phone view",
-  "slideshow.tvHint.fullScreen": "Full screen"
+  "slideshow.phoneCard.title": "This board is made for a TV",
+  "slideshow.phoneCard.openLive": "Open the live page",
+  "slideshow.phoneCard.showBoard": "Show the board anyway"
 }

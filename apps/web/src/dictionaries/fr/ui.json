@@ -5136,8 +5136,7 @@
   "slideshow.status.cancelled": "Annulé",
   "slideshow.slideN": "Diapositive {n}",
   "slideshow.rung": "Échelon {n}",
-  "slideshow.tvHint.label": "Conseil grand écran",
-  "slideshow.tvHint.message": "Conçu pour TV ou grand écran.",
-  "slideshow.tvHint.phoneView": "Vue mobile",
-  "slideshow.tvHint.fullScreen": "Plein écran"
+  "slideshow.phoneCard.title": "Ce tableau est conçu pour une TV",
+  "slideshow.phoneCard.openLive": "Ouvrir la page en direct",
+  "slideshow.phoneCard.showBoard": "Afficher le tableau quand même"
 }

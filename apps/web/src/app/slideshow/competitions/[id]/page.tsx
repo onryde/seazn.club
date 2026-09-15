@@ -52,6 +52,10 @@ export default async function CompetitionSlideshowPage({
       title={competition.name}
       slides={slides}
       backHref={routes.competition(org.slug, competition.slug)}
+      // C1: a phone gets the same "made for a TV" card as the public kiosk.
+      // Its Open the live page goes where the back link goes: this
+      // competition's console page, which the viewer can always open.
+      liveHref={routes.competition(org.slug, competition.slug)}
       divisionIds={ordered.map((d) => d.id)}
       realtime={realtime}
       // Same gate as the division board: console reads don't empty branding,

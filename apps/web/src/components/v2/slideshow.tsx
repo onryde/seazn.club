@@ -13,10 +13,11 @@
 // type (Barlow Condensed via the slideshow layout), an accent keel under the
 // masthead, and scorebug strips sized for a TV across the hall.
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties } from "react";
 import Link from "@/components/ui/console-link";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { KioskPhoneGate } from "@/components/public-site/kiosk-phone-card";
 import type { BracketSlideFixture, Slide } from "@/server/slideshow-data";
 import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
 // Type-only: every string on the board arrives resolved in ONE locale as the
@@ -54,7 +55,7 @@ export function Slideshow({
   logo = null,
   sponsors = [],
   labels,
-  notice,
+  liveHref,
 }: {
   title: string;
   slides: Slide[];
@@ -73,9 +74,10 @@ export function Slideshow({
   /** Every string on the board, in one locale, resolved server-side by
    *  `slideshowLabels` (the public kiosk passes the org's default_locale). */
   labels: SlideshowLabels;
-  /** A banner the page pins over the board: the public kiosk's TV hint
-   *  (N1d d6). Organiser boards pass none. */
-  notice?: ReactNode;
+  /** Where a phone should go instead of this board (C1): Open the live page on
+   *  the card shown below lg. The public kiosk passes the hub; an organiser
+   *  board passes its own console page. */
+  liveHref: string;
 }) {
   const router = useRouter();
   // v13 (PROMPT-64): rotation is step-based so the in-play slide can pin —
@@ -178,11 +180,13 @@ export function Slideshow({
   );
 
   return (
+    // C1: below lg a card stands in for the board until the viewer chooses the
+    // board (kiosk-phone-card.tsx). The board below is not re-indented inside it.
+    <KioskPhoneGate liveHref={liveHref} labels={labels.phoneCard} themeStyle={themeStyle}>
     <div
       style={themeStyle}
       className="relative flex min-h-screen flex-col overflow-hidden bg-court text-court-ink"
     >
-      {notice}
       {/* Static backdrop — soft accent wash from the top, vignette below.
           No animation: this board is left running on a TV all day. */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
@@ -449,6 +453,7 @@ export function Slideshow({
         </footer>
       )}
     </div>
+    </KioskPhoneGate>
   );
 }
 

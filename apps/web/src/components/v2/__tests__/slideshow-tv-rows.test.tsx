@@ -76,7 +76,7 @@ const spacingPx = (steps: string) => Number(steps) * themePx("spacing");
 
 // ---- The board's rendered classes -------------------------------------------
 const board = (slide: Slide) =>
-  renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", labels: slideshowLabels("en") }));
+  renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/shared/o/c", labels: slideshowLabels("en") }));
 
 /** Class tokens of the first element whose class list satisfies `pick`. */
 function classesWhere(html: string, pick: (tokens: string[]) => boolean, what: string): string[] {

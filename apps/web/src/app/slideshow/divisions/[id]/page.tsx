@@ -38,6 +38,11 @@ export default async function DivisionSlideshowPage({
       title={`${competition.name} · ${division.name}`}
       slides={slides}
       backHref={routes.division(org.slug, competition.slug, division.slug)}
+      // C1: a phone gets the same "made for a TV" card as the public kiosk.
+      // Its Open the live page goes where the back link goes: this division's
+      // console page, which the viewer can always open (a private
+      // competition's public hub would 404).
+      liveHref={routes.division(org.slug, competition.slug, division.slug)}
       divisionIds={[id]}
       realtime={realtime}
       // competition.branding comes off the console read model (NOT emptied

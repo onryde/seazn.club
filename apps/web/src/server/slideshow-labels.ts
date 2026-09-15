@@ -52,6 +52,8 @@ export interface SlideshowLabels {
   eliminator: string;
   qualifier2: string;
   status: Record<SlideshowStatus, string>;
+  /** The card a phone sees instead of the board (C1). */
+  phoneCard: KioskPhoneCardLabels;
 }
 
 export function slideshowLabels(locale: string | null | undefined): SlideshowLabels {
@@ -94,28 +96,20 @@ export function slideshowLabels(locale: string | null | undefined): SlideshowLab
       abandoned: m("slideshow.status.abandoned"),
       cancelled: m("slideshow.status.cancelled"),
     },
+    phoneCard: {
+      title: m("slideshow.phoneCard.title"),
+      openLive: m("slideshow.phoneCard.openLive"),
+      showBoard: m("slideshow.phoneCard.showBoard"),
+    },
   };
 }
 
-/** The public /present kiosk's "made for a TV" banner (N1d d6), in the same
- *  locale as the board. Public kiosk pages only; organiser boards get none. */
-export interface KioskTvHintLabels {
-  /** The banner region's accessible name. */
-  region: string;
-  message: string;
-  phoneView: string;
-  fullScreen: string;
-  /** The ✕'s accessible label. */
-  dismiss: string;
-}
-
-export function kioskTvHintLabels(locale: string | null | undefined): KioskTvHintLabels {
-  const l = toLocale(locale);
-  return {
-    region: msgFor(l, "slideshow.tvHint.label"),
-    message: msgFor(l, "slideshow.tvHint.message"),
-    phoneView: msgFor(l, "slideshow.tvHint.phoneView"),
-    fullScreen: msgFor(l, "slideshow.tvHint.fullScreen"),
-    dismiss: msgFor(l, "tips.dismiss"),
-  };
+/** The card a board shows below the TV cut-off (OWNER RULING C1, 2026-09-15;
+ *  `components/public-site/kiosk-phone-card.tsx`), in the board's locale. It
+ *  replaced the "made for a TV" banner (N1d d6). The heading names the card's
+ *  region, so it needs no label of its own. */
+export interface KioskPhoneCardLabels {
+  title: string;
+  openLive: string;
+  showBoard: string;
 }

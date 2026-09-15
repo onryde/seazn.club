@@ -36,11 +36,11 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 import PresentDivisionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
 import PresentCompetitionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/present/page";
 import { Slideshow } from "@/components/v2/slideshow";
-import { KioskTvHint } from "@/components/public-site/kiosk-tv-hint";
 import type { BracketSlideFixture, FixtureSlideItem, Slide } from "@/server/slideshow-data";
-import { slideshowLabels } from "@/server/slideshow-labels";
+import { slideshowLabels, type SlideshowLabels } from "@/server/slideshow-labels";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
+import { LOCALES } from "@/lib/i18n-constants";
 
 /** Every plain `ui` key the board renders. */
 const PLAIN_KEYS = [
@@ -71,6 +71,11 @@ const PLAIN_KEYS = [
   "slideshow.status.forfeit",
   "slideshow.status.abandoned",
   "slideshow.status.cancelled",
+  // C1: the phone card is in the board's markup at every width (CSS hides it
+  // from lg up), so its copy is board copy too.
+  "slideshow.phoneCard.title",
+  "slideshow.phoneCard.openLive",
+  "slideshow.phoneCard.showBoard",
 ] as const;
 
 /** Numbers the boards below render into the templated keys. */
@@ -274,6 +279,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
       title: "Copa",
       slides: EVERY_BRANCH,
       backHref: "/shared/o/c",
+      liveHref: "/shared/o/c",
       sponsors: [{ name: "Acme" }],
       labels: slideshowLabels("es"),
     }) as ReactElement<{ slides: Slide[] }>;
@@ -300,6 +306,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
           title: "Copa",
           slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item(status, 1)] }],
           backHref: "/",
+          liveHref: "/shared/o/c",
           labels: slideshowLabels("es"),
         }),
       );
@@ -345,6 +352,7 @@ describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
         title: "Copa",
         slides: EVERY_BRANCH,
         backHref: "/shared/o/c",
+        liveHref: "/shared/o/c",
         labels: slideshowLabels(locale!),
       }) as ReactElement<{ slides: Slide[] }>;
       const all = renderEachSlide(board);
@@ -431,6 +439,7 @@ describe("public /present kiosk: fixtures rows name the round, not the organiser
         title: "Copa",
         slides: [{ kind: "fixtures", division: "Open", title: "Board", items: [item("scheduled", 3)] }],
         backHref: "/",
+        liveHref: "/shared/o/c",
         labels: slideshowLabels("en"),
       }),
     );
@@ -451,100 +460,93 @@ describe("public /present kiosk: fixtures rows name the round, not the organiser
   });
 });
 
-// --- N1d d6: the "made for a TV" hint, public kiosk only ----------------------
+// --- C1 (OWNER RULING 2026-09-15): the phone card, on both kiosk pages -------
 //
-// The kiosk is built for a screen across a hall; a spectator who opens the
-// link on a phone gets a banner pointing them at the hub. The pages hand the
-// board the hint as its `notice`, with the hub link and the copy resolved on
-// the server in the org's locale. Whether it SHOWS (width, dismissal) is the
-// hint's own client logic: kiosk-tv-hint.test.tsx and e2e/kiosk-tv-hint.spec.ts.
+// Below the TV cut-off a board shows a card instead of itself: "This board is
+// made for a TV", Open the live page, and Show the board anyway. It replaced
+// the "made for a TV" banner (N1d d6). The pages hand the board WHERE the live
+// page is; the card's copy rides in the board's own labels, in the org's
+// locale. Whether the card or the board shows (CSS classes, the remembered
+// choice) is the gate's own logic: kiosk-phone-card.test.tsx and
+// e2e/kiosk-phone-card.spec.ts.
 
-/** Where each field of the hint's copy comes from. */
-const TV_HINT_KEYS = {
-  region: "slideshow.tvHint.label",
-  message: "slideshow.tvHint.message",
-  phoneView: "slideshow.tvHint.phoneView",
-  fullScreen: "slideshow.tvHint.fullScreen",
-  dismiss: "tips.dismiss",
+/** Where each field of the card's copy comes from. */
+const PHONE_CARD_KEYS = {
+  title: "slideshow.phoneCard.title",
+  openLive: "slideshow.phoneCard.openLive",
+  showBoard: "slideshow.phoneCard.showBoard",
 } as const;
-type TvHintField = keyof typeof TV_HINT_KEYS;
-const TV_HINT_FIELDS = Object.keys(TV_HINT_KEYS) as TvHintField[];
+type PhoneCardField = keyof typeof PHONE_CARD_KEYS;
+const PHONE_CARD_FIELDS = Object.keys(PHONE_CARD_KEYS) as PhoneCardField[];
 
-async function tvHintCopy(locale: Parameters<typeof getDictionary>[0]): Promise<Record<TvHintField, string>> {
+async function phoneCardCopy(locale: Parameters<typeof getDictionary>[0]): Promise<Record<PhoneCardField, string>> {
   const dict = await getDictionary(locale, "ui");
-  return Object.fromEntries(TV_HINT_FIELDS.map((f) => [f, t(dict, TV_HINT_KEYS[f])])) as Record<TvHintField, string>;
+  return Object.fromEntries(PHONE_CARD_FIELDS.map((f) => [f, t(dict, PHONE_CARD_KEYS[f])])) as Record<PhoneCardField, string>;
 }
 
-type Notice = ReactElement<{ hubHref: string; labels: Record<TvHintField, string> }>;
+type Board = ReactElement<{ liveHref?: string; labels: SlideshowLabels }>;
 
-describe("public /present kiosk: the 'made for a TV' hint (N1d d6)", () => {
-  it("the premise: every field of the hint's copy exists and es spells it differently from en", async () => {
-    const [es, en] = await Promise.all([tvHintCopy("es"), tvHintCopy("en")]);
-    for (const f of TV_HINT_FIELDS) {
-      expect(en[f], `en ${TV_HINT_KEYS[f]} is in the dictionary`).not.toBe(TV_HINT_KEYS[f]);
-      expect(es[f], `es ${TV_HINT_KEYS[f]} differs from en`).not.toBe(en[f]);
+/** The rendered card's Open the live page: its opening tag, or a stand-in that no assertion accepts. */
+const openLiveTag = (html: string) =>
+  /<a\b[^>]*\bdata-testid="kiosk-phone-card-open-live"[^>]*>/.exec(html)?.[0] ?? "(no Open the live page rendered)";
+
+describe("public /present kiosk: the phone card (C1)", () => {
+  it("the premise: every field of the card's copy is in each locale's dictionary, and es/fr/nl each spell it differently from en", async () => {
+    const en = await phoneCardCopy("en");
+    for (const f of PHONE_CARD_FIELDS) expect(en[f], `en ${PHONE_CARD_KEYS[f]} is in the dictionary`).not.toBe(PHONE_CARD_KEYS[f]);
+    for (const locale of LOCALES.filter((l) => l !== "en")) {
+      const copy = await phoneCardCopy(locale);
+      for (const f of PHONE_CARD_FIELDS) {
+        expect(copy[f], `${locale} ${PHONE_CARD_KEYS[f]} is in the dictionary`).not.toBe(PHONE_CARD_KEYS[f]);
+        expect(copy[f], `${locale} ${PHONE_CARD_KEYS[f]} differs from en`).not.toBe(en[f]);
+      }
     }
   });
 
-  // N1e e2 (review-n1d m2, m3): the es/fr/nl copy was long enough that on a
-  // 320 phone the two buttons alone overflowed a row. The controller ruled
-  // shorter copy, verbatim; en and every region label stay as they were.
-  it("the es/fr/nl message and buttons are the ruled short copy; en and the region labels are unchanged (N1e e2)", async () => {
-    const [en, es, fr, nl] = await Promise.all([tvHintCopy("en"), tvHintCopy("es"), tvHintCopy("fr"), tvHintCopy("nl")]);
-    const shown = (c: Record<TvHintField, string>) => ({ message: c.message, phoneView: c.phoneView, fullScreen: c.fullScreen });
-
-    expect(shown(es)).toEqual({ message: "Hecho para TV o pantalla grande.", phoneView: "Vista móvil", fullScreen: "Pantalla completa" });
-    expect(shown(fr)).toEqual({ message: "Conçu pour TV ou grand écran.", phoneView: "Vue mobile", fullScreen: "Plein écran" });
-    expect(shown(nl)).toEqual({ message: "Gemaakt voor tv of groot scherm.", phoneView: "Mobiele weergave", fullScreen: "Volledig scherm" });
-    expect(en).toEqual({
-      region: "Big-screen tip",
-      message: "Made for a TV or big screen.",
-      phoneView: "Open phone view",
-      fullScreen: "Full screen",
-      dismiss: "Dismiss tip",
+  it("en is the owner's words, verbatim", async () => {
+    expect(await phoneCardCopy("en")).toEqual({
+      title: "This board is made for a TV",
+      openLive: "Open the live page",
+      showBoard: "Show the board anyway",
     });
-    expect([es.region, fr.region, nl.region]).toEqual(["Aviso de pantalla grande", "Conseil grand écran", "Tip voor groot scherm"]);
   });
 
-  it("division kiosk, es org: the hint links the hub filtered to this division, with its copy in es", async () => {
-    const es = await tvHintCopy("es");
+  it("division kiosk, es org: Open the live page goes to the hub filtered to this division, the card speaks es, and the rendered card links there", async () => {
+    const es = await phoneCardCopy("es");
     getPublicDivision.mockResolvedValue(orgData("es"));
     const board = (await PresentDivisionPage(
       params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
-    )) as ReactElement<{ notice?: Notice }>;
+    )) as Board;
 
-    const notice = board.props.notice;
-    expect(notice?.type, "the board's notice is the TV hint").toBe(KioskTvHint);
-    expect(notice?.props.hubHref).toBe("/shared/o/c?division=d");
-    expect(notice?.props.labels).toEqual(es);
+    expect(board.props.liveHref).toBe("/shared/o/c?division=d");
+    expect(board.props.labels.phoneCard).toEqual(es);
+    expect(board.props, "the retired banner is not handed over").not.toHaveProperty("notice");
+    const html = renderToStaticMarkup(board);
+    expect(openLiveTag(html)).toContain('href="/shared/o/c?division=d"');
+    expect(html).not.toContain("kiosk-tv-hint");
   });
 
-  it("competition kiosk, es org: the hint links the whole competition's hub, copy in the shell's locale", async () => {
-    const es = await tvHintCopy("es");
+  it("competition kiosk, es org: Open the live page goes to the competition's hub, with no division filter", async () => {
+    const es = await phoneCardCopy("es");
     getPublicCompetition.mockResolvedValue({
       org: { default_locale: "es" },
       competition: { name: "Copa", branding: null },
       divisions: [{ slug: "open" }],
     });
     getPublicDivision.mockResolvedValue(orgData("es"));
-    const board = (await PresentCompetitionPage(
-      params({ orgSlug: "o", competitionSlug: "c" }),
-    )) as ReactElement<{ notice?: Notice }>;
+    const board = (await PresentCompetitionPage(params({ orgSlug: "o", competitionSlug: "c" }))) as Board;
 
-    const notice = board.props.notice;
-    expect(notice?.type, "the board's notice is the TV hint").toBe(KioskTvHint);
-    expect(notice?.props.hubHref).toBe("/shared/o/c");
-    expect(notice?.props.labels).toEqual(es);
+    expect(board.props.liveHref).toBe("/shared/o/c");
+    expect(board.props.labels.phoneCard).toEqual(es);
+    expect(board.props).not.toHaveProperty("notice");
+    expect(openLiveTag(renderToStaticMarkup(board))).toContain('href="/shared/o/c"');
   });
 
-  it("the board renders the notice it is handed, and a board handed none renders no trace of one", async () => {
-    getPublicDivision.mockResolvedValue(orgData("en"));
-    const board = (await PresentDivisionPage(
-      params({ orgSlug: "o", competitionSlug: "c", divisionSlug: "d" }),
-    )) as ReactElement<{ notice?: ReactElement }>;
-
-    const probe = createElement("aside", { "data-probe": "notice" });
-    expect(renderToStaticMarkup(cloneElement(board, { notice: probe }))).toContain('data-probe="notice"');
-    expect(renderToStaticMarkup(cloneElement(board, { notice: undefined }))).not.toContain("data-probe");
+  it("the board's card links the liveHref it is handed, not its back link", () => {
+    const html = renderToStaticMarkup(
+      createElement(Slideshow, { title: "Copa", slides: [], backHref: "/probe/back", liveHref: "/probe/live", labels: slideshowLabels("en") }),
+    );
+    expect(openLiveTag(html)).toContain('href="/probe/live"');
+    expect(openLiveTag(html)).not.toContain('href="/probe/back"');
   });
 });

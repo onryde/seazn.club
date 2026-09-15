@@ -5136,8 +5136,7 @@
   "slideshow.status.cancelled": "Cancelado",
   "slideshow.slideN": "Diapositiva {n}",
   "slideshow.rung": "Escalón {n}",
-  "slideshow.tvHint.label": "Aviso de pantalla grande",
-  "slideshow.tvHint.message": "Hecho para TV o pantalla grande.",
-  "slideshow.tvHint.phoneView": "Vista móvil",
-  "slideshow.tvHint.fullScreen": "Pantalla completa"
+  "slideshow.phoneCard.title": "Este panel está pensado para una TV",
+  "slideshow.phoneCard.openLive": "Abrir la página en directo",
+  "slideshow.phoneCard.showBoard": "Mostrar el panel de todos modos"
 }
