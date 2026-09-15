@@ -12,8 +12,15 @@
 // suite measures the real dictionary values in the real faces
 // (`__tests__/font-advance.ts`) against the rail track read out of the
 // component's own Tailwind class. The rail does not scroll: it is a fixed
-// column inside an `overflow-hidden` list, so a word that does not fit is
-// clipped SILENTLY, and this suite is the only guard against it.
+// column. A word that does not fit is NOT clipped (review-n1g m4): the list's
+// `overflow-hidden` cuts only at the card edge, outside the row's `px-3.5`.
+// What happens instead:
+// - a status word breaks MID-WORD inside the column (`break-words`): visible,
+//   and broken ("détermine" / "r");
+// - the live chip overflows and paints over the entrant name, silently;
+// - only the court/date line truncates, by design.
+// No no-scroll or scrollWidth gate sees either failure, and nothing in this
+// vitest has a layout, so this suite is the only guard against them.
 //
 // Nothing is typed here that the source already says (N1g g4, review-n1f m3):
 // - the words are the `copy.<key>` / `timeOf(` / `shortDate(` calls the rail
