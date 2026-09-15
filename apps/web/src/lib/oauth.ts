@@ -44,3 +44,24 @@ export interface GoogleProfile {
   name: string | null;
   picture: string | null;
 }
+
+// --- Lichess (external play link; not sign-in) --------------------------------
+
+export const LICHESS_AUTH_URL = "https://lichess.org/oauth";
+export const LICHESS_TOKEN_URL = "https://lichess.org/api/token";
+export const LICHESS_ACCOUNT_URL = "https://lichess.org/api/account";
+/** challenge:write — create challenges as White; preference:read — account id. */
+export const LICHESS_OAUTH_SCOPES = "challenge:write preference:read";
+
+export function lichessConfigured(): boolean {
+  return Boolean(process.env.LICHESS_CLIENT_ID && process.env.LICHESS_CLIENT_SECRET);
+}
+
+export function lichessRedirectUri(req: Request): string {
+  return process.env.LICHESS_REDIRECT_URI || `${baseUrl(req)}/api/auth/lichess/callback`;
+}
+
+export interface LichessAccount {
+  id: string;
+  username: string;
+}
