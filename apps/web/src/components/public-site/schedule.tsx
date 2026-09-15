@@ -235,7 +235,11 @@ function ScorebugRow({
       <span className="row-span-2 flex min-w-0 flex-col items-start">
         {live ? (
           <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-emerald-600">
-            <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            {/* `shrink-0` (N1h h1, review-n1g G1): when the word and the dot
+                are wider than the track together (fr "EN DIRECT"), this row
+                shrinks its items, and an empty dot has no minimum, so without
+                it the dot painted as a 4.7×6px oval. The word wraps instead. */}
+            <span className="animate-live-pulse h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
             {copy.live}
           </span>
         ) : (

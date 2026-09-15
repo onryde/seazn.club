@@ -277,16 +277,30 @@ function typographyOf(chain: Span[], spans: Span[], where: string): Typography {
 
   // The chip's dot: a self-closing child of the word's own span, a flex item
   // with a fixed `w-<n>`, and the flex `gap-<n>` between it and the text.
-  const inner = chain.at(-1)!;
-  const deepestAround = (at: number) => spans.filter((s) => !s.selfClosing && s.open < at && at < s.close).at(-1);
   let extraPx = 0;
-  for (const child of spans.filter((s) => s.selfClosing && deepestAround(s.open) === inner)) {
-    const w = tokensOf(child, where).map((t) => /^w-([0-9.]+)$/.exec(t)).find(Boolean);
-    if (!w) throw new Error(`${where}: a child painted beside the text has no w-<n> to measure`);
-    const gap = tokensOf(inner, where).map((t) => /^gap-(?:x-)?([0-9.]+)$/.exec(t)).find(Boolean);
-    extraPx += spacingPx(Number(w[1])) + (gap ? spacingPx(Number(gap[1])) : 0);
+  for (const child of childrenBeside(chain, spans)) {
+    const w = spacingOf(child, "w", where);
+    if (w === undefined) throw new Error(`${where}: a child painted beside the text has no w-<n> to measure`);
+    extraPx += w + gapOf(chain.at(-1)!, where);
   }
   return { family, weight, sizePx, trackingEm, uppercase, nowrap, extraPx };
+}
+
+/** The self-closing children of a word's own span: what is painted beside its text. */
+function childrenBeside(chain: Span[], spans: Span[]): Span[] {
+  const inner = chain.at(-1)!;
+  const deepestAround = (at: number) => spans.filter((s) => !s.selfClosing && s.open < at && at < s.close).at(-1);
+  return spans.filter((s) => s.selfClosing && deepestAround(s.open) === inner);
+}
+/** A span's `w-<n>` / `h-<n>` in px, or undefined when it declares none. */
+function spacingOf(span: Span, axis: "w" | "h", where: string): number | undefined {
+  const m = tokensOf(span, where).map((t) => new RegExp(`^${axis}-([0-9.]+)$`).exec(t)).find(Boolean);
+  return m ? spacingPx(Number(m[1])) : undefined;
+}
+/** A flex row's `gap-<n>` / `gap-x-<n>` in px (0 when it declares none). */
+function gapOf(span: Span, where: string): number {
+  const m = tokensOf(span, where).map((t) => /^gap-(?:x-)?([0-9.]+)$/.exec(t)).find(Boolean);
+  return m ? spacingPx(Number(m[1])) : 0;
 }
 
 /** The narrowest box `text` fits in when painted with `type`. */
@@ -295,6 +309,87 @@ function measureIn(type: Typography, text: string): number {
   const painted = type.uppercase ? text.toUpperCase() : text;
   const run = type.nowrap ? textWidth : minContentWidth;
   return run(face, painted, type.sizePx, type.trackingEm) + type.extraPx;
+}
+
+// ---- A child beside a word keeps its box (N1h h1, review-n1g G1) -----------
+// The live chip is a flex ROW: a 6px dot, a gap, then the word. The gates
+// above ask whether the word CAN fit (its min-content beside the dot); they
+// do not ask how the row shares the squeeze. When the word's UNWRAPPED run and
+// the dot are wider than the track together (fr "EN DIRECT"), the row shrinks
+// every item that may shrink, in proportion to its basis — and a dot with no
+// `shrink-0` has an automatic minimum of 0 (it has no content), so it gave up
+// width with the word and painted as a 4.7×6px oval in fr.
+
+/** A child's flex-shrink factor, read off its classes. */
+function shrinkOf(child: Span, where: string): number {
+  let factor = 1;
+  for (const token of tokensOf(child, where)) {
+    const base = utilityOf(token);
+    let value: number | undefined;
+    let m: RegExpExecArray | null;
+    if (base === "shrink" || base === "flex-shrink") value = 1;
+    else if ((m = /^(?:flex-)?shrink-([0-9]+)$/.exec(base))) value = Number(m[1]);
+    else if (base === "flex-none") value = 0;
+    else if (/^(flex-(?:1|auto|initial|[0-9]|\[)|basis-|min-w-|grow)/.test(base)) {
+      throw new Error(`${where}: "${token}" changes how a child beside the text flexes, which this test cannot price yet`);
+    }
+    if (value === undefined) continue;
+    if (token !== base && token.includes(":")) {
+      throw new Error(`${where}: "${token}" changes flex-shrink behind a variant; measure that state too`);
+    }
+    factor = value;
+  }
+  return factor;
+}
+
+/**
+ * The used width of each child beside `text` once the word's flex row is laid
+ * out in the track: CSS Flexbox §9.7, shrinking only (nothing here grows).
+ * - The row is a column-flex item of the cell, so it is fit-content in the
+ *   track: its max-content, capped at the track, never below its min-content.
+ *   (A stretched row gives the same children whenever the min-content gate
+ *   holds.)
+ * - Items: each child (basis its `w-<n>`, automatic minimum 0, its own shrink
+ *   factor), then the text (basis its unwrapped run, minimum its min-content,
+ *   factor 1), with the row's gap between each.
+ * - Widths come from the same font reader as every other measurement here,
+ *   which over-estimates text (no kerning): a squeeze is over-reported, never
+ *   missed.
+ */
+function rowOf(type: Typography, inner: Span, children: Span[], text: string, track: number, where: string) {
+  const bare: Typography = { ...type, extraPx: 0 };
+  if (!tokensOf(inner, where).some((t) => t === "flex" || t === "inline-flex")) {
+    throw new Error(`${where}: children are painted beside the text outside a flex row, which this test does not model`);
+  }
+  const items = [
+    ...children.map((c) => {
+      const w = spacingOf(c, "w", where);
+      if (w === undefined) throw new Error(`${where}: a child painted beside the text has no w-<n> to measure`);
+      return { basis: w, min: 0, shrink: shrinkOf(c, where) };
+    }),
+    { basis: measureIn({ ...bare, nowrap: true }, text), min: measureIn(bare, text), shrink: 1 },
+  ];
+  const gaps = gapOf(inner, where) * (items.length - 1);
+  const sum = (f: (i: (typeof items)[number], k: number) => number) => items.reduce((a, i, k) => a + f(i, k), 0);
+  const maxContent = gaps + sum((i) => i.basis);
+  const minContent = gaps + sum((i, k) => (k < children.length ? i.basis : i.min));
+  const row = Math.max(minContent, Math.min(maxContent, track));
+  const size = items.map((i) => i.basis);
+  const frozen = items.map((i) => i.shrink === 0);
+  while (maxContent > row && frozen.includes(false)) {
+    const open = items.flatMap((_, k) => (frozen[k] ? [] : [k]));
+    const overflow = gaps + sum((i, k) => (frozen[k] ? size[k] : i.basis)) - row;
+    const scaled = open.reduce((a, k) => a + items[k].shrink * items[k].basis, 0);
+    if (scaled === 0) break;
+    const violators: number[] = [];
+    for (const k of open) {
+      const target = items[k].basis - (overflow * items[k].shrink * items[k].basis) / scaled;
+      size[k] = Math.max(target, items[k].min);
+      if (size[k] > target) violators.push(k);
+    }
+    for (const k of violators.length > 0 ? violators : open) frozen[k] = true;
+  }
+  return { row, text: size.at(-1)!, children: size.slice(0, children.length) };
 }
 
 /** Every clock the rail can show: each minute of a day. */
@@ -399,6 +494,72 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     // Print what was asserted, so a green run is not a silent one.
     expect(report.length).toBe(LOCALES.length * words.length);
     console.log(`[rail top line] ${report.join("  |  ")}`);
+  });
+
+  it("never lets the row shrink a child painted beside a rail word: its class SET holds shrink-0 (N1h h1, review-n1g G1)", () => {
+    const { words, dates, spans } = railWords(SCHEDULE_SRC);
+    const seen: string[] = [];
+    for (const w of [...words, ...dates]) {
+      for (const child of childrenBeside(w.chain, spans)) {
+        const tokens = tokensOf(child, w.what);
+        seen.push(`${w.what}: [${tokens.join(" ")}]`);
+        expect(new Set(tokens).has("shrink-0"), `${w.what}: the child beside it is [${tokens.join(" ")}], which its row may shrink`).toBe(
+          true,
+        );
+      }
+    }
+    expect(seen.length, "no rail word has a child beside it, so this guards nothing").toBeGreaterThan(0);
+    console.log(`[rail children] ${seen.join("  |  ")}`);
+  });
+
+  it("keeps the live dot round in every locale: the chip's row squeezes the word, never the dot (N1h h1, review-n1g G1)", async () => {
+    const track = railPx();
+    const { words, spans } = railWords(SCHEDULE_SRC);
+    const report: string[] = [];
+    let tightest: { line: string; need: number } | undefined;
+    for (const w of words) {
+      const children = childrenBeside(w.chain, spans);
+      if (children.length === 0) continue;
+      const type = typographyOf(w.chain, spans, w.what);
+      const inner = w.chain.at(-1)!;
+      const square = children.map((child) => {
+        const [width, height] = [spacingOf(child, "w", w.what), spacingOf(child, "h", w.what)];
+        expect(height, `${w.what}: the premise, the child beside it declares a height`).toBeDefined();
+        expect(width, `${w.what}: the premise, the child beside it is as wide as it is tall`).toBe(height);
+        return height!;
+      });
+      const check = (text: string, label: string, cs: Span[] = children) => {
+        const laid = rowOf(type, inner, cs, text, track, w.what);
+        const painted = JSON.stringify(type.uppercase ? text.toUpperCase() : text);
+        const line = `${label} ${w.what} ${painted}: child ${laid.children.map((c, k) => `${c.toFixed(2)}x${square[k]}`).join(", ")}px, word ${laid.text.toFixed(1)}px, row ${laid.row.toFixed(1)}px / ${track}px`;
+        return { laid, line };
+      };
+      for (const locale of LOCALES) {
+        for (const text of await valuesOf(w.what, locale)) {
+          const { laid, line } = check(text, locale);
+          report.push(line);
+          laid.children.forEach((c, k) => expect(c, `${line}: the row squeezed the child out of round`).toBeCloseTo(square[k], 6));
+          const need = measureIn({ ...type, nowrap: true }, text);
+          if (!tightest || need > tightest.need) tightest = { line, need };
+        }
+      }
+      // The positive pair, on a run built from the face rather than typed: one
+      // that overflows the track unwrapped but fits wrapped. With shrink-0 taken
+      // off, this model MUST see the child squeezed — so a green above is the
+      // class holding the dot, not a model that cannot see a squeeze.
+      const run = separatingRun(track, (t) => measureIn(type, t), (t) => measureIn({ ...type, nowrap: true }, t));
+      expect(run, `${w.what}: no run overflows the track unwrapped yet fits wrapped`).toBeDefined();
+      const loose = children.map((c) => ({ ...c, classes: new Set([...(c.classes ?? [])].filter((t) => t !== "shrink-0")) }));
+      const held = check(run!, "derived");
+      const squeezed = check(run!, "derived, shrink-0 removed", loose);
+      held.laid.children.forEach((c, k) => expect(c, `${held.line}: the row squeezed the child`).toBeCloseTo(square[k], 6));
+      squeezed.laid.children.forEach((c, k) =>
+        expect(c, `${squeezed.line}: the model cannot see a squeeze`).toBeLessThan(square[k] - 0.1),
+      );
+      report.push(held.line, squeezed.line);
+    }
+    expect(tightest, "no rail word has a child beside it, so this guards nothing").toBeDefined();
+    console.log(`[rail dot] tightest: ${tightest!.line}  ||  ${report.join("  |  ")}`);
   });
 
   it("reads typography off a word's classes, priced from Tailwind's theme (N1g g4)", () => {
