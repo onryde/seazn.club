@@ -928,15 +928,11 @@ export const ProgressionSchema = z
     // (standings.carry_over — feature-copy.ts's paywall copy,
     // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
     // Deleting it would silently break a paid, advertised feature.
-    // Accepted on BOTH timings as of F6. `on_complete` is applied in
-    // seedNextStage (stages.ts). On `setup`, computeSeedProposal now READS it
-    // — it refuses a source that offers a finishing order rather than a points
-    // table, HttpError 422 SEEDING_CARRY_SOURCE_INVALID — but nothing APPLIES it yet:
-    // confirmSeedProposal does not write `carry_deltas`, so a setup-timing
-    // organiser gets the refusal without the feature. Treat the `setup` pair
-    // as validated-but-unapplied until that confirm wiring lands beside it.
-    // (carry-setup-path.test.ts is the propose-side reader; grep
-    // `carry_deltas` in stages.ts for whether the confirm side has arrived.)
+    // Accepted on BOTH timings as of F6. Applied in seedNextStage for
+    // `on_complete` and in confirmSeedProposal for `setup`. computeSeedProposal
+    // refuses a non-real source at propose time (HttpError 422
+    // SEEDING_CARRY_SOURCE_INVALID); confirm re-checks the same belt before
+    // writing `carry_deltas` + one `standings_carried` event.
     // A refine here used to reject the pair outright, because carry was
     // read only under `on_complete` and the entitlement gate
     // (`progression?.carry`, timing-agnostic) would otherwise have charged

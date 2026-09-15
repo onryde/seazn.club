@@ -2346,6 +2346,19 @@ function buildCarryDeltas(
   return carryDeltas(rows, mode);
 }
 
+/** One auditable `standings_carried` row — shared by seedNextStage and
+ *  confirmSeedProposal so the two paths cannot drift on payload shape. */
+async function insertStandingsCarriedEvent(
+  tx: Tx,
+  divisionId: string,
+  seq: number,
+  payload: { stageId: string; from: string; mode: "points" | "full"; entrants: string[] },
+): Promise<void> {
+  await tx`
+    insert into division_events (division_id, seq, type, payload)
+    values (${divisionId}, ${seq}, 'standings_carried', ${tx.json(payload as never)})`;
+}
+
 // Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
 // DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
 // only to satisfy BracketFixture's required `status` field when rebuilding a
@@ -2856,11 +2869,13 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     let seq = last + 1;
     if (carriedDeltas !== undefined) {
       // auditable carry (Jul3/05 §3)
-      await tx`
-        insert into division_events (division_id, seq, type, payload)
-        values (${current.division_id}, ${seq + 1}, 'standings_carried',
-                ${tx.json({ stageId: next.id, from: completedStageId, mode: carryMode, entrants } as never)})`;
       seq += 1;
+      await insertStandingsCarriedEvent(tx, current.division_id, seq, {
+        stageId: next.id,
+        from: completedStageId,
+        mode: carryMode,
+        entrants,
+      });
     }
     await tx`update divisions set seq = ${seq} where id = ${current.division_id}`;
 
@@ -3230,7 +3245,7 @@ export async function confirmSeedProposal(
     // Step 1 — freshness. A standings override could have landed between the
     // draft's compute and this request; re-derive the hash rather than trust
     // the row's status alone.
-    const { tables } = await sourcesToTables(tx, stage, progression.sources);
+    const { tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
     if (standingsHash(poolTableRowsAcrossSources(tables)) !== proposal.computed.standingsHash) {
       await tx`update stage_seed_proposals set status = 'stale' where id = ${proposal.id}`;
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
@@ -3331,6 +3346,37 @@ export async function confirmSeedProposal(
       await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
     }
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
+
+    const carryMode = (progression as { carry?: "none" | "points" | "full" }).carry ?? "none";
+    if (carryMode !== "none") {
+      // Belt beside propose-time guard — stale drafts from before Task 2 may
+      // still reach confirm; re-check against the same freshness-verified
+      // `resolved` sourcesToTables just read for the hash.
+      const nonReal = nonRealCarrySource(resolved);
+      if (nonReal) {
+        throw new HttpError(422, carrySourceRefusal(nonReal.kind), "SEEDING_CARRY_SOURCE_INVALID", {
+          stageId: nonReal.id,
+          kind: nonReal.kind,
+          carry: carryMode,
+        });
+      }
+      const entrants = [...new Set(expandedEntries.map(([, id]) => id))];
+      const carriedDeltas = buildCarryDeltas(tables, entrants, carryMode);
+      await tx`
+        update stages set config = ${tx.json({ ...stage.config, carry_deltas: carriedDeltas } as never)}
+        where id = ${stageId}`;
+      const [{ seq: last }] = await tx<{ seq: number }[]>`
+        select coalesce(max(seq), 0)::int as seq from division_events
+        where division_id = ${stage.division_id}`;
+      const nextSeq = last + 1;
+      await insertStandingsCarriedEvent(tx, stage.division_id, nextSeq, {
+        stageId,
+        from: resolved[resolved.length - 1]!.id,
+        mode: carryMode,
+        entrants,
+      });
+      await tx`update divisions set seq = ${nextSeq} where id = ${stage.division_id}`;
+    }
 
     const fixturesRaw = await tx<Omit<FixtureRow, "court_name">[]>`
       select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,

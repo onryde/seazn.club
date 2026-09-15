@@ -22,6 +22,7 @@ import { scoreEvent } from "../scoring";
 import {
   completeStage,
   computeSeedProposal,
+  confirmSeedProposal,
   createStages,
   generateStageFixtures,
   type StageRow,
@@ -195,5 +196,93 @@ describe.skipIf(!HAS_DB)("F6 — carry-over source validation at propose time (t
     const proposal = await computeSeedProposal(auth, ko.id);
     expect(proposal.status).toBe("draft");
     expect(proposal.computed.qualifiers).toHaveLength(8);
+  });
+});
+
+describe.skipIf(!HAS_DB)("F6 — carry-over APPLIED at confirm time (timing: setup)", () => {
+  // The same league -> super-pool graph custom-points.test.ts carries on
+  // `on_complete`, flipped to `timing: "setup"`: day-one TBD fixtures in the
+  // target, then propose + confirm. What the two paths write must agree, so
+  // the assertions below are deliberately the on_complete test's own —
+  // E1's 9 points, a carry covering exactly the entrants that qualified, and
+  // one `standings_carried` row.
+  it("confirmSeedProposal writes carry_deltas on the target stage and one standings_carried event", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, entrants } = await seedDivision(auth, 4);
+    const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
+    const [phase1, superPool] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "Phase 1", config: {} },
+      {
+        seq: 2,
+        kind: "league",
+        name: "Super pool",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+          placement: "rank_order",
+          timing: "setup",
+          carry: "points",
+        },
+      },
+    ]);
+    // Day-one TBD round robin for the target BEFORE startDivision — start
+    // generates only the first stage.
+    await generateStageFixtures(auth, superPool!.id);
+    const { fixtures } = await generateStageFixtures(auth, phase1!.id);
+    await startDivision(auth, division.id);
+    // Lower seed always wins => E1 9, E2 6, E3 3, E4 0. No ties, so the
+    // confirm below needs no tiePicks (an unresolved tie 422s).
+    for (const f of fixtures) {
+      const homeWins = (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99);
+      await decide(auth, f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
+    }
+    await completeStage(auth, phase1!.id);
+
+    const proposal = await computeSeedProposal(auth, superPool!.id);
+    expect(proposal.computed.qualifiers).toHaveLength(3);
+    const confirmed = await confirmSeedProposal(auth, superPool!.id, { proposalId: proposal.id });
+    expect(confirmed.filled).toBeGreaterThan(0);
+
+    const [target] = await sql<{ config: { carry_deltas?: { entrantId: string; points: number }[] } }[]>`
+      select config from stages where id = ${superPool!.id}`;
+    expect(target!.config.carry_deltas).toBeDefined();
+    const carried = target!.config.carry_deltas!;
+    const byId = new Map(entrants.map((e) => [e.display_name, e.id]));
+    expect(carried.find((d) => d.entrantId === byId.get("E1"))!.points).toBe(9);
+
+    // Carry covers EXACTLY the entrants the confirm actually seated — E4
+    // finished 4th under this rankRange{1,3} and must not arrive in the super
+    // pool's opening table with points from a phase it was eliminated in.
+    // Derived from the target stage's OWN filled fixtures (the same
+    // transaction's other half) rather than a hand-listed set, so a change to
+    // who qualifies moves both sides together. Without buildCarryDeltas'
+    // qualified-set filter (stages.ts) every source row folds in: 4, not 3.
+    const seated = await sql<{ entrant_id: string }[]>`
+      select distinct home_entrant_id as entrant_id from fixtures
+        where stage_id = ${superPool!.id} and home_entrant_id is not null
+      union
+      select distinct away_entrant_id as entrant_id from fixtures
+        where stage_id = ${superPool!.id} and away_entrant_id is not null`;
+    expect([...carried.map((d) => d.entrantId)].sort()).toEqual([...seated.map((r) => r.entrant_id)].sort());
+    expect(carried).toHaveLength(3);
+
+    // One auditable ledger row, naming the target stage and the mode.
+    const events = await sql<{ payload: { stageId: string; mode: string; entrants: string[] } }[]>`
+      select payload from division_events
+      where division_id = ${division.id} and type = 'standings_carried'`;
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload.stageId).toBe(superPool!.id);
+    expect(events[0]!.payload.mode).toBe("points");
+    expect([...events[0]!.payload.entrants].sort()).toEqual([...seated.map((r) => r.entrant_id)].sort());
+    // The event's seq must not collide with anything the confirm's own
+    // division already wrote, and divisions.seq must have kept up.
+    const [chain] = await sql<{ broken: string | null }[]>`
+      select verify_division_events_chain(${division.id})::text as broken`;
+    expect(chain).toEqual({ broken: null });
+    const [{ seq: watermark }] = await sql<{ seq: number }[]>`
+      select seq from divisions where id = ${division.id}`;
+    const [{ seq: maxSeq }] = await sql<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${division.id}`;
+    expect(watermark).toBe(maxSeq);
   });
 });
