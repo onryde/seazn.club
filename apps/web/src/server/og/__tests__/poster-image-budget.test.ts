@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { publicStorageUrl } from "@/lib/storage-url";
 import { POSTER_IMAGE_TIMEOUT_MS, posterImageDataUrl } from "@/server/og/poster-image";
@@ -21,6 +23,8 @@ const decode = vi.hoisted(() => ({
   started: 0,
   inFlight: 0,
   maxInFlight: 0,
+  /** The buffer the latest decode resolved with, weakly: collectable once nothing holds it. */
+  lastPng: undefined as WeakRef<Buffer> | undefined,
 }));
 
 vi.mock("sharp", () => {
@@ -38,11 +42,15 @@ vi.mock("sharp", () => {
         const dial = decode.plan.shift() ?? { ms: decode.ms, throws: decode.throws };
         decode.inFlight += 1;
         decode.maxInFlight = Math.max(decode.maxInFlight, decode.inFlight);
+        // A fresh buffer per decode, watched but not held, so a test can ask
+        // whether anything still holds the last one.
+        const png = Buffer.from(PNG);
+        decode.lastPng = new WeakRef(png);
         return new Promise<Buffer>((resolve, reject) =>
           setTimeout(() => {
             decode.inFlight -= 1;
             if (dial.throws) reject(new Error("vips: too slow"));
-            else resolve(PNG);
+            else resolve(png);
           }, dial.ms),
         );
       },
@@ -68,6 +76,7 @@ beforeEach(() => {
   decode.started = 0;
   decode.inFlight = 0;
   decode.maxInFlight = 0;
+  decode.lastPng = undefined;
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", STORAGE_ORIGIN);
   vi.stubGlobal(
     "fetch",
@@ -202,5 +211,23 @@ describe("posterImageDataUrl — one share-image decode at a time", () => {
     const second = start();
     await vi.advanceTimersByTimeAsync(1);
     expect(second.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
+  it("does not hold the last decoded image once its caller has answered", async () => {
+    // The queue's tail outlives every call. If it held the value a decode
+    // resolved with, the last share image drawn — up to 1024² of PNG — would
+    // stay in memory until the next decode came along, however long that is.
+    setFlagsFromString("--expose_gc");
+    const gc = runInNewContext("gc") as () => void;
+    const call = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(call.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    // The anti-vacuous half: the probe really watched a decoded buffer.
+    expect(decode.lastPng).toBeDefined();
+    // A WeakRef keeps its target alive until the current job ends; the async
+    // tick yields to the real event loop first, then a full collection runs.
+    await vi.advanceTimersByTimeAsync(0);
+    gc();
+    expect(decode.lastPng?.deref()).toBeUndefined();
   });
 });

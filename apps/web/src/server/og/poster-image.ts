@@ -253,7 +253,9 @@ let decodeQueue: Promise<unknown> = Promise.resolve();
  */
 function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
   const turn = decodeQueue.then(() => (signal.aborted ? null : work()));
-  decodeQueue = turn;
+  // The tail keeps the turn's outcome but not its value: the PNG goes to the
+  // caller, and is not held here until whenever the next decode arrives.
+  decodeQueue = turn.then(() => undefined);
   return turn;
 }
 
