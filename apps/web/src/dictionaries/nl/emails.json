@@ -361,5 +361,12 @@
   "soloSignUpAssigned.preheader": "De organisatie heeft je bij {teamName} ingedeeld.",
   "soloSignUpAssigned.title": "Je hebt een team",
   "soloSignUpAssigned.intro": "Hoi {playerName}, de organisatie heeft je ingedeeld bij {teamName} in {divisionName} van {competitionName}. Je hoeft verder niets te doen; je team neemt contact met je op.",
-  "soloSignUpAssigned.viewStatus": "Je inschrijving bekijk je hier: {url}"
+  "soloSignUpAssigned.viewStatus": "Je inschrijving bekijk je hier: {url}",
+  "externalPlayReady.subject": "Je partij tegen {opponentName} is klaar",
+  "externalPlayReady.preheader": "Open Seazn voor je Lichess-link — het begint zo.",
+  "externalPlayReady.title": "Klaar om te spelen",
+  "externalPlayReady.body": "Je online schaakpartij tegen <strong>{opponentName}</strong> staat gepland om {when}. Open de wedstrijd op Seazn om op Lichess te spelen.",
+  "externalPlayReady.button": "Wedstrijd openen",
+  "externalPlayReady.footer": "Je ontvangt dit omdat je bent ingeschreven in een online schaakdivisie bij {orgName} op Seazn Club.",
+  "externalPlayReady.text": "Je partij tegen {opponentName} ({when}) is klaar. Open je wedstrijd: {fixtureUrl}"
 }

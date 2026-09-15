@@ -1,0 +1,301 @@
+import "server-only";
+// External-play prepare / sync usecases (chess Lichess design 2026-09-15).
+// Cron-shaped: privileged `sql` across orgs (same as registration sweeps).
+// Wire every 5 min in onryde/seazn.club.workflow (external).
+import { sql } from "@/lib/db";
+import { sendExternalPlayReadyEmail } from "@/lib/email";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
+import { routes } from "@/lib/routes";
+import { mapBoardgameClockToLichess } from "@/server/external-play/clock";
+import { createLichessAdapter } from "@/server/external-play/lichess/client";
+import type { ExternalPlayAdapter } from "@/server/external-play/types";
+import {
+  getLichessAccessToken,
+  getLinkedAccount,
+} from "@/server/usecases/external-accounts";
+
+const PREPARE_AHEAD_MS = 15 * 60 * 1000;
+/** Catch fixtures whose T−15 window already passed but were never prepared. */
+const PREPARE_LOOKBACK_MS = 60 * 60 * 1000;
+
+export type PrepareExternalPlayCounts = {
+  prepared: number;
+  emailed: number;
+  deferred: number;
+  failed: number;
+};
+
+export type PrepareExternalPlayDeps = {
+  now?: Date;
+  /** Absolute origin for Seazn fixture links (e.g. https://seazn.club). */
+  origin: string;
+  adapter?: ExternalPlayAdapter;
+  sendReadyEmail?: typeof sendExternalPlayReadyEmail;
+};
+
+type CandidateRow = {
+  fixture_id: string;
+  scheduled_at: Date;
+  home_entrant_id: string;
+  away_entrant_id: string;
+  org_id: string;
+  org_slug: string;
+  org_name: string;
+  competition_slug: string;
+  division_slug: string;
+  division_config: unknown;
+  ep_status: string | null;
+  ep_emailed_at: Date | null;
+};
+
+type SidePlayer = {
+  entrantId: string;
+  displayName: string;
+  userId: string | null;
+  email: string | null;
+  locale: string | null;
+};
+
+async function loadSide(entrantId: string): Promise<SidePlayer | null> {
+  const rows = await sql<
+    {
+      display_name: string;
+      user_id: string | null;
+      email: string | null;
+      locale: string | null;
+    }[]
+  >`
+    select e.display_name, p.user_id, u.email, u.locale
+      from entrants e
+      join entrant_members em on em.entrant_id = e.id
+      join persons p on p.id = em.person_id
+      left join users u on u.id = p.user_id
+     where e.id = ${entrantId}
+     order by em.is_captain desc, em.person_id
+     limit 1`;
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    entrantId,
+    displayName: row.display_name,
+    userId: row.user_id,
+    email: row.email,
+    locale: row.locale,
+  };
+}
+
+function scheduledLabel(at: Date): string {
+  try {
+    return at.toLocaleString("en-GB", {
+      timeZone: "UTC",
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }) + " (UTC)";
+  } catch {
+    return at.toISOString();
+  }
+}
+
+function fixtureUrl(origin: string, row: CandidateRow): string {
+  const path = routes.sharedFixture(
+    row.org_slug,
+    row.competition_slug,
+    row.division_slug,
+    row.fixture_id,
+  );
+  return `${origin.replace(/\/$/, "")}${path}`;
+}
+
+async function upsertExternalPlay(opts: {
+  fixtureId: string;
+  orgId: string;
+  status: string;
+  lastError: string | null;
+  challengeId?: string | null;
+  playUrl?: string | null;
+  whitePlayUrl?: string | null;
+  blackPlayUrl?: string | null;
+  emailedAt?: Date | null;
+}): Promise<void> {
+  await sql`
+    insert into fixture_external_play (
+      fixture_id, org_id, provider, status,
+      external_challenge_id, play_url, white_play_url, black_play_url,
+      last_error, emailed_at, updated_at
+    ) values (
+      ${opts.fixtureId}, ${opts.orgId}, 'lichess', ${opts.status},
+      ${opts.challengeId ?? null}, ${opts.playUrl ?? null},
+      ${opts.whitePlayUrl ?? null}, ${opts.blackPlayUrl ?? null},
+      ${opts.lastError}, ${opts.emailedAt ?? null}, now()
+    )
+    on conflict (fixture_id) do update set
+      status = excluded.status,
+      external_challenge_id = coalesce(excluded.external_challenge_id, fixture_external_play.external_challenge_id),
+      play_url = coalesce(excluded.play_url, fixture_external_play.play_url),
+      white_play_url = coalesce(excluded.white_play_url, fixture_external_play.white_play_url),
+      black_play_url = coalesce(excluded.black_play_url, fixture_external_play.black_play_url),
+      last_error = excluded.last_error,
+      emailed_at = coalesce(fixture_external_play.emailed_at, excluded.emailed_at),
+      updated_at = now()`;
+}
+
+/**
+ * T−15 window: create Lichess challenges for onlinePlay=lichess fixtures and
+ * email both players a Seazn fixture link once. Idempotent on emailed_at.
+ */
+export async function prepareExternalPlayWindow(
+  deps: PrepareExternalPlayDeps,
+): Promise<PrepareExternalPlayCounts> {
+  const now = deps.now ?? new Date();
+  const windowStart = new Date(now.getTime() - PREPARE_LOOKBACK_MS);
+  const windowEnd = new Date(now.getTime() + PREPARE_AHEAD_MS);
+  const adapter = deps.adapter ?? createLichessAdapter({ fetch });
+  const sendReady = deps.sendReadyEmail ?? sendExternalPlayReadyEmail;
+
+  const candidates = await sql<CandidateRow[]>`
+    select f.id as fixture_id,
+           f.scheduled_at,
+           f.home_entrant_id,
+           f.away_entrant_id,
+           o.id as org_id,
+           o.slug as org_slug,
+           o.name as org_name,
+           c.slug as competition_slug,
+           d.slug as division_slug,
+           d.config as division_config,
+           ep.status as ep_status,
+           ep.emailed_at as ep_emailed_at
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      join competitions c on c.id = d.competition_id
+      join organizations o on o.id = c.org_id
+      left join fixture_external_play ep on ep.fixture_id = f.id
+     where f.scheduled_at is not null
+       and f.scheduled_at >= ${windowStart}
+       and f.scheduled_at <= ${windowEnd}
+       and f.home_entrant_id is not null
+       and f.away_entrant_id is not null
+       and f.status in ('scheduled', 'in_play')
+       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
+       and (ep.fixture_id is null or ep.status = 'pending')
+     order by f.scheduled_at asc
+     limit 100`;
+
+  const counts: PrepareExternalPlayCounts = {
+    prepared: 0,
+    emailed: 0,
+    deferred: 0,
+    failed: 0,
+  };
+
+  for (const row of candidates) {
+    try {
+      const cfg = (row.division_config ?? {}) as {
+        clock?: { base: number; increment?: number; delay?: number };
+      };
+      const clockMap = mapBoardgameClockToLichess(cfg.clock);
+      if (!clockMap.ok) {
+        await upsertExternalPlay({
+          fixtureId: row.fixture_id,
+          orgId: row.org_id,
+          status: "needs_organiser",
+          lastError: clockMap.reason,
+        });
+        counts.deferred += 1;
+        continue;
+      }
+
+      const white = await loadSide(row.home_entrant_id);
+      const black = await loadSide(row.away_entrant_id);
+      if (!white?.userId || !black?.userId) {
+        await upsertExternalPlay({
+          fixtureId: row.fixture_id,
+          orgId: row.org_id,
+          status: "pending",
+          lastError: "missing_linked_user",
+        });
+        counts.deferred += 1;
+        continue;
+      }
+
+      const whiteLink = await getLinkedAccount(white.userId, "lichess");
+      const blackLink = await getLinkedAccount(black.userId, "lichess");
+      const whiteToken = await getLichessAccessToken(white.userId);
+      if (!whiteLink || !blackLink || !whiteToken) {
+        await upsertExternalPlay({
+          fixtureId: row.fixture_id,
+          orgId: row.org_id,
+          status: "pending",
+          lastError: "lichess_link_or_token_missing",
+        });
+        counts.deferred += 1;
+        continue;
+      }
+
+      const challenge = await adapter.createChallenge({
+        whiteAccessToken: whiteToken,
+        blackLichessUsername: blackLink.username,
+        clock: clockMap.clock,
+        rated: false,
+      });
+
+      await upsertExternalPlay({
+        fixtureId: row.fixture_id,
+        orgId: row.org_id,
+        status: "ready",
+        lastError: null,
+        challengeId: challenge.challengeId,
+        playUrl: challenge.whitePlayUrl,
+        whitePlayUrl: challenge.whitePlayUrl,
+        blackPlayUrl: challenge.blackPlayUrl,
+      });
+      counts.prepared += 1;
+
+      if (row.ep_emailed_at) continue;
+
+      const url = fixtureUrl(deps.origin, row);
+      const when = scheduledLabel(row.scheduled_at);
+      const recipients: { side: SidePlayer; opponent: SidePlayer }[] = [
+        { side: white, opponent: black },
+        { side: black, opponent: white },
+      ];
+      let anySent = false;
+      for (const { side, opponent } of recipients) {
+        if (!side.email) continue;
+        const locale: Locale = toLocale(side.locale);
+        const ok = await sendReady(
+          side.email,
+          {
+            orgName: row.org_name,
+            opponentName: opponent.displayName,
+            scheduledLabel: when,
+            fixtureUrl: url,
+          },
+          locale,
+        );
+        if (ok) anySent = true;
+      }
+      if (anySent) {
+        await sql`
+          update fixture_external_play
+             set emailed_at = coalesce(emailed_at, now()), updated_at = now()
+           where fixture_id = ${row.fixture_id}`;
+        counts.emailed += 1;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message.slice(0, 500) : "prepare_failed";
+      await upsertExternalPlay({
+        fixtureId: row.fixture_id,
+        orgId: row.org_id,
+        status: "pending",
+        lastError: message,
+      }).catch(() => undefined);
+      counts.failed += 1;
+    }
+  }
+
+  return counts;
+}

@@ -361,5 +361,12 @@
   "soloSignUpAssigned.preheader": "The organiser has placed you on {teamName}.",
   "soloSignUpAssigned.title": "You have a team",
   "soloSignUpAssigned.intro": "Hi {playerName} — the organiser has placed you on {teamName} in {divisionName} at {competitionName}. Nothing else to do; your team will be in touch about playing.",
-  "soloSignUpAssigned.viewStatus": "You can see your entry here: {url}"
+  "soloSignUpAssigned.viewStatus": "You can see your entry here: {url}",
+  "externalPlayReady.subject": "Your game vs {opponentName} is ready",
+  "externalPlayReady.preheader": "Open Seazn for your Lichess play link — starts soon.",
+  "externalPlayReady.title": "Ready to play",
+  "externalPlayReady.body": "Your online chess game against <strong>{opponentName}</strong> is set for {when}. Open the fixture on Seazn to play on Lichess.",
+  "externalPlayReady.button": "Open fixture",
+  "externalPlayReady.footer": "You received this because you're entered in an online chess division at {orgName} on Seazn Club.",
+  "externalPlayReady.text": "Your game vs {opponentName} ({when}) is ready. Open your fixture: {fixtureUrl}"
 }

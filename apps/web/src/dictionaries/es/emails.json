@@ -361,5 +361,12 @@
   "soloSignUpAssigned.preheader": "La organización te ha asignado a {teamName}.",
   "soloSignUpAssigned.title": "Ya tienes equipo",
   "soloSignUpAssigned.intro": "Hola {playerName}: la organización te ha asignado a {teamName} en {divisionName} de {competitionName}. No tienes que hacer nada más; tu equipo se pondrá en contacto contigo.",
-  "soloSignUpAssigned.viewStatus": "Puedes consultar tu inscripción aquí: {url}"
+  "soloSignUpAssigned.viewStatus": "Puedes consultar tu inscripción aquí: {url}",
+  "externalPlayReady.subject": "Tu partida contra {opponentName} está lista",
+  "externalPlayReady.preheader": "Abre Seazn para el enlace de Lichess — empieza pronto.",
+  "externalPlayReady.title": "Listo para jugar",
+  "externalPlayReady.body": "Tu partida de ajedrez en línea contra <strong>{opponentName}</strong> está programada para {when}. Abre el partido en Seazn para jugar en Lichess.",
+  "externalPlayReady.button": "Abrir partido",
+  "externalPlayReady.footer": "Recibes esto porque estás inscrito en una división de ajedrez en línea de {orgName} en Seazn Club.",
+  "externalPlayReady.text": "Tu partida contra {opponentName} ({when}) está lista. Abre el partido: {fixtureUrl}"
 }
