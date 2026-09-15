@@ -1943,16 +1943,15 @@ async function smokePlanMatrix(): Promise<void> {
     await call(officialSession, `/api/claims/${offToken}/accept`, "POST");
     const offAccept = await v1(
       officialSession,
-      `/api/v1/me/assigned-fixtures/${feedFixtures[0].id}/response`,
+      `/api/v1/me/fixtures/${feedFixtures[0].id}/officiating-response`,
       "PATCH",
       {
         response: "accepted",
       },
     );
-    const offDuties = v1data<unknown[]>(await v1(officialSession, "/api/v1/me/assigned-fixtures"));
     check(
-      `matrix/${key}: the official sees their duty in the officiating lane`,
-      offAccept.status === 200 && Array.isArray(offDuties) && offDuties.length > 0,
+      `matrix/${key}: the official accepts their duty`,
+      offAccept.status === 200 && v1data<{ response: string }>(offAccept).response === "accepted",
     );
     const offState = await v1(officialSession, `/api/v1/fixtures/${feedFixtures[0].id}/state`);
     const offScore = await v1(
@@ -1989,11 +1988,10 @@ async function smokePlanMatrix(): Promise<void> {
     await call(official2Session, `/api/claims/${off2Token}/accept`, "POST");
     const off2Accept = await v1(
       official2Session,
-      `/api/v1/me/assigned-fixtures/${feedFixtures[1].id}/response`,
+      `/api/v1/me/fixtures/${feedFixtures[1].id}/officiating-response`,
       "PATCH",
       { response: "accepted" },
     );
-    const off2Duties = v1data<unknown[]>(await v1(official2Session, "/api/v1/me/assigned-fixtures"));
     const off2State = await v1(official2Session, `/api/v1/fixtures/${feedFixtures[1].id}/state`);
     const off2Score = await v1(
       official2Session,
@@ -2007,10 +2005,7 @@ async function smokePlanMatrix(): Promise<void> {
     );
     check(
       `matrix/${key}: the second official claims, accepts and scores fixture[1]`,
-      off2Accept.status === 200 &&
-        Array.isArray(off2Duties) &&
-        off2Duties.length > 0 &&
-        off2Score.status === 201,
+      off2Accept.status === 200 && off2Score.status === 201,
     );
 
     // --- User 4 (player): claims the person on entrant #1 and reads their own
@@ -4540,7 +4535,7 @@ async function officialOnboardingSuite(
   // Accept; then decline a second assignment with a reason → organiser flag.
   const acceptRes = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
+    `/api/v1/me/fixtures/${fixtures[0].id}/officiating-response`,
     "PATCH",
     {
       response: "accepted",
@@ -4553,7 +4548,7 @@ async function officialOnboardingSuite(
   await v1(admin, `/api/v1/fixtures/${fixtures[1].id}/officials`, "PATCH", {
     set: [{ official_id: offId, role_key: "referee", locked: false }],
   });
-  await v1(ref, `/api/v1/me/assigned-fixtures/${fixtures[1].id}/response`, "PATCH", {
+  await v1(ref, `/api/v1/me/fixtures/${fixtures[1].id}/officiating-response`, "PATCH", {
     response: "declined",
     decline_reason: "smoke clash",
   });
@@ -4570,7 +4565,7 @@ async function officialOnboardingSuite(
   // accepted → declined is refused (ask the organiser)
   const illegal = await v1(
     ref,
-    `/api/v1/me/assigned-fixtures/${fixtures[0].id}/response`,
+    `/api/v1/me/fixtures/${fixtures[0].id}/officiating-response`,
     "PATCH",
     {
       response: "declined",
@@ -4872,7 +4867,7 @@ async function marksReportsSuite(
     });
     const token = (v1data<{ claim_url: string }>(inv).claim_url ?? "").split("/claim/")[1];
     await call(ref, `/api/claims/${token}/accept`, "POST");
-    await v1(ref, `/api/v1/me/assigned-fixtures/${fx}/response`, "PATCH", {
+    await v1(ref, `/api/v1/me/fixtures/${fx}/officiating-response`, "PATCH", {
       response: "accepted",
     });
     // The accepted official scores a generic result → the fixture decides
@@ -16299,18 +16294,13 @@ async function gapSuite(admin: Session, org1Id: string, proOrgId: string): Promi
   await call(gapOffSession, `/api/claims/${gapOffToken}/accept`, "POST");
   const gapOffAccept = await v1(
     gapOffSession,
-    `/api/v1/me/assigned-fixtures/${gapFixture2Id}/response`,
+    `/api/v1/me/fixtures/${gapFixture2Id}/officiating-response`,
     "PATCH",
     { response: "accepted" },
   );
   check("gap official accept lands", gapOffAccept.status === 200);
   const gapMe = await html(gapOffSession, "/me");
   check("gap accepted official sees duty on /me", gapMe.status === 200);
-  const gapAssigned = await v1(gapOffSession, "/api/v1/me/assigned-fixtures");
-  check(
-    "gap official sees assigned fixtures",
-    gapAssigned.status === 200 && v1data<unknown[]>(gapAssigned).length > 0,
-  );
   const gapOffState = await v1(gapOffSession, `/api/v1/fixtures/${gapFixture2Id}/state`);
   const gapOffScore = await v1(gapOffSession, `/api/v1/fixtures/${gapFixture2Id}/events`, "POST", {
     expected_seq: v1data<{ last_seq: number }>(gapOffState).last_seq,
