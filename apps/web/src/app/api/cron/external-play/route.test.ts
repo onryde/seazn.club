@@ -8,9 +8,11 @@ vi.mock("next/headers", () => ({ headers: async () => hdrs.store }));
 
 const prepareMock = vi.hoisted(() => vi.fn());
 const pollMock = vi.hoisted(() => vi.fn());
+const escalateMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/usecases/external-play", () => ({
   prepareExternalPlayWindow: prepareMock,
   pollLiveExternalPlay: pollMock,
+  escalateStaleExternalPlay: escalateMock,
 }));
 
 vi.mock("@/lib/oauth", () => ({
@@ -24,6 +26,7 @@ afterEach(() => {
   hdrs.store = new Headers();
   prepareMock.mockReset();
   pollMock.mockReset();
+  escalateMock.mockReset();
 });
 
 describe("POST /api/cron/external-play", () => {
@@ -38,6 +41,7 @@ describe("POST /api/cron/external-play", () => {
     );
     expect(prepareMock).not.toHaveBeenCalled();
     expect(pollMock).not.toHaveBeenCalled();
+    expect(escalateMock).not.toHaveBeenCalled();
   });
 
   it("503s when CRON_SECRET is not configured", async () => {
@@ -47,7 +51,7 @@ describe("POST /api/cron/external-play", () => {
     );
   });
 
-  it("runs prepare + poll and returns both counts with the right secret", async () => {
+  it("runs prepare + poll + escalate and returns all counts with the right secret", async () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
     hdrs.store = new Headers({ "x-cron-secret": "s3cret" });
     prepareMock.mockResolvedValue({ prepared: 1, emailed: 2, deferred: 0, failed: 0 });
@@ -58,6 +62,7 @@ describe("POST /api/cron/external-play", () => {
       needs_organiser: 0,
       ignored: 0,
     });
+    escalateMock.mockResolvedValue({ escalated: 1 });
     const res = await POST(new Request("http://localhost/api/cron/external-play", { method: "POST" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
@@ -65,9 +70,11 @@ describe("POST /api/cron/external-play", () => {
       data: {
         prepare: { prepared: 1, emailed: 2, deferred: 0, failed: 0 },
         poll: { polled: 1, live: 0, finished: 1, needs_organiser: 0, ignored: 0 },
+        escalate: { escalated: 1 },
       },
     });
     expect(prepareMock).toHaveBeenCalledWith({ origin: "https://example.test" });
     expect(pollMock).toHaveBeenCalledTimes(1);
+    expect(escalateMock).toHaveBeenCalledTimes(1);
   });
 });

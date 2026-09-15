@@ -3,6 +3,7 @@ import "server-only";
 // Cron-shaped: privileged `sql` across orgs (same as registration sweeps).
 // Wire every 5 min in onryde/seazn.club.workflow (external).
 import { sql, withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { sendExternalPlayReadyEmail } from "@/lib/email";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
@@ -409,8 +410,9 @@ async function appendExternalResult(
   fixtureId: string,
   payload: { winner: string | null; method: string },
   idempotencyKey: string,
-): Promise<void> {
-  const auth = await mintOrgOwnerAuth(orgId);
+  authOverride?: AuthCtx,
+): Promise<Awaited<ReturnType<typeof scoreEvent>>> {
+  const auth = authOverride ?? (await mintOrgOwnerAuth(orgId));
   let seq = await nextExpectedSeq(orgId, fixtureId);
   if (seq === 0) {
     await scoreEvent(auth, fixtureId, {
@@ -421,7 +423,7 @@ async function appendExternalResult(
     });
     seq = 1;
   }
-  await scoreEvent(auth, fixtureId, {
+  return scoreEvent(auth, fixtureId, {
     expected_seq: seq,
     type: "boardgame.result",
     payload,
@@ -562,4 +564,111 @@ export async function pollLiveExternalPlay(deps?: {
   }
 
   return counts;
+}
+
+const ESCALATE_GRACE_MS = 20 * 60 * 1000;
+
+export type EscalateStaleExternalPlayCounts = {
+  escalated: number;
+};
+
+/**
+ * T+20 no-show: ready/pending bridges whose scheduled_at + 20m has passed
+ * and the game never went live/finished → needs_organiser.
+ */
+export async function escalateStaleExternalPlay(opts?: {
+  now?: Date;
+}): Promise<EscalateStaleExternalPlayCounts> {
+  const now = opts?.now ?? new Date();
+  const cutoff = new Date(now.getTime() - ESCALATE_GRACE_MS);
+  const rows = await sql<{ fixture_id: string }[]>`
+    update fixture_external_play ep
+       set status = 'needs_organiser',
+           last_error = coalesce(nullif(ep.last_error, ''), 'no_show_grace_elapsed'),
+           updated_at = now()
+      from fixtures f
+     where ep.fixture_id = f.id
+       and ep.provider = 'lichess'
+       and ep.status in ('ready', 'pending')
+       and f.scheduled_at is not null
+       and f.scheduled_at < ${cutoff}
+       and f.outcome is null
+       and f.status in ('scheduled', 'in_play')
+    returning ep.fixture_id`;
+  return { escalated: rows.length };
+}
+
+export const ResolveExternalPlayKinds = [
+  "home_forfeit",
+  "away_forfeit",
+  "draw",
+  "no_result",
+] as const;
+export type ResolveExternalPlayKind = (typeof ResolveExternalPlayKinds)[number];
+
+/**
+ * Organiser resolve for an open external-play bridge: append boardgame.result
+ * via scoreEvent (organiser attribution), then mark finished.
+ */
+export async function resolveExternalPlay(
+  auth: AuthCtx,
+  fixtureId: string,
+  kind: ResolveExternalPlayKind,
+): Promise<{ status: "finished"; score: Awaited<ReturnType<typeof scoreEvent>> }> {
+  const [bridge] = await withTenant(auth.orgId, (tx) =>
+    tx<
+      {
+        status: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        fixture_outcome: unknown;
+      }[]
+    >`
+    select ep.status, f.home_entrant_id, f.away_entrant_id,
+           f.outcome as fixture_outcome
+      from fixture_external_play ep
+      join fixtures f on f.id = ep.fixture_id
+     where ep.fixture_id = ${fixtureId}`,
+  );
+  if (!bridge) throw new HttpError(404, "No external-play record for this fixture");
+  if (bridge.fixture_outcome != null || bridge.status === "finished") {
+    throw new HttpError(409, "Fixture already has a result", "ALREADY_RESOLVED");
+  }
+  if (!bridge.home_entrant_id || !bridge.away_entrant_id) {
+    throw new HttpError(422, "Both sides must be seated before resolving");
+  }
+
+  let payload: { winner: string | null; method: string };
+  switch (kind) {
+    case "home_forfeit":
+      payload = { winner: bridge.away_entrant_id, method: "forfeit" };
+      break;
+    case "away_forfeit":
+      payload = { winner: bridge.home_entrant_id, method: "forfeit" };
+      break;
+    case "draw":
+      payload = { winner: null, method: "agreement" };
+      break;
+    case "no_result":
+      payload = { winner: null, method: "double_forfeit" };
+      break;
+  }
+
+  const score = await appendExternalResult(
+    auth.orgId,
+    fixtureId,
+    payload,
+    `external-play-resolve:${fixtureId}:${kind}`,
+    auth,
+  );
+
+  await sql`
+    update fixture_external_play
+       set status = 'finished',
+           finished_at = coalesce(finished_at, now()),
+           last_error = null,
+           updated_at = now()
+     where fixture_id = ${fixtureId}`;
+
+  return { status: "finished", score };
 }
