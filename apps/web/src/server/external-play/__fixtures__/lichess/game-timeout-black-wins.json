@@ -1,0 +1,9 @@
+{
+  "id": "gameTimeout1",
+  "status": "outoftime",
+  "winner": "black",
+  "players": {
+    "white": { "userId": "lichess-home" },
+    "black": { "userId": "lichess-away" }
+  }
+}
