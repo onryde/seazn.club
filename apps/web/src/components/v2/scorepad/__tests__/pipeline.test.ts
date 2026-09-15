@@ -589,3 +589,192 @@ describe("F2/R63 — two legitimate identical consecutive taps (fix round 3, R65
     expect(await peekInOrder(store)).toEqual([]); // dropped, nothing left queued
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task 10 fix round 4 (B07a, ruling R68) — review finding C1: round 3's gate
+// (`event.attempts > 0`) is correct, but nothing durably marked an event as
+// "sent" until AFTER an OBSERVED failure (network-error/indeterminate 409/
+// conflict-again — the three recordAttempt call sites round 3 shipped). A
+// send whose response is never observed at all (tab death mid-flight — no
+// client timeout in transport.ts) left `attempts` at 0 forever, so a resend
+// that lands on the server's Redis replay-cache-miss path 409ed against its
+// own already-landed row while still reading attempts===0 — misread as
+// fresh, renegotiated, DUPLICATED. Fix: sendOne now persists a pre-send
+// marker to the store BEFORE calling the transport at all, unconditionally.
+// resolveConflict itself is unchanged — it still judges the value AS LOADED
+// at the start of the CURRENT call, never that call's own just-written
+// marker, which is what keeps F2 (a genuinely first-ever send) renegotiating
+// instead of misreading itself as its own prior attempt.
+// ---------------------------------------------------------------------------
+describe("Task 10 fix round 4 (R68/C1) — a resend after an unobserved send still drops as already-applied", () => {
+  it("C1: an unobserved send that actually landed is dropped on resend, never duplicated", async () => {
+    const store = memoryQueueStore();
+    const pending = event("a", { expectedSeq: 10, type: "core.note", payload: { text: "a" } }); // attempts: 0, genuinely fresh
+    await store.put(pending);
+
+    // First "mount": the send leaves the wire but the tab dies before any
+    // response is ever read back — modelled with a transport whose
+    // appendEvent hangs until explicitly released. Fired but NOT awaited
+    // yet: we need to inspect what is durably persisted the instant BEFORE
+    // any outcome is observed — exactly the window a real tab death cuts
+    // through.
+    let releaseHang: ((r: AppendCallResult) => void) | undefined;
+    const hangingTransport: ScoringTransport = {
+      appendEvent: () =>
+        new Promise<AppendCallResult>((resolve) => {
+          releaseHang = resolve;
+        }),
+      listEventsSince: async () => [],
+      getLastSeq: async () => {
+        throw new Error("unused in this phase");
+      },
+    };
+    const firstAttempt = sendOne(hangingTransport, store, "fx-1", pending, ME);
+    await new Promise((r) => setTimeout(r, 0)); // flush microtasks past the pre-send write, up to the hung network call
+
+    const midFlight = (await peekInOrder(store))[0];
+    // The fix's whole point: on 8b5476e93 (pre-fix) nothing writes here
+    // before an outcome is observed, so midFlight.attempts reads 0, not 1.
+    expect(midFlight?.attempts).toBe(1);
+
+    // Let the abandoned first call resolve harmlessly (a belated network
+    // error — the real browser never gets this far) so nothing leaks past
+    // this test.
+    releaseHang?.({ kind: "network-error", message: "abandoned — models a tab death, never actually observed live" });
+    await firstAttempt;
+
+    // Second "mount": resumes with whatever the store now holds — the exact
+    // record a reload would load. The original send in fact landed
+    // server-side (see the matching ledger slot below); the server's Redis
+    // replay cache missed on this resend, so it 409s.
+    const reloaded = (await peekInOrder(store))[0]!;
+    const { transport, calls } = fakeTransport({
+      appendScript: { a: [{ kind: "conflict", currentSeq: 11, message: "seq conflict" }] },
+      slotsBySinceSeq: {
+        10: [{ seq: 11, type: "core.note", payload: { text: "a" }, recorded_by: "user-1", device_link_id: null }],
+      },
+    });
+
+    const outcome = await sendOne(transport, store, "fx-1", reloaded, ME);
+
+    expect(outcome).toEqual({ kind: "already-applied", localId: "local-a", idempotencyKey: "a" });
+    expect(calls).toHaveLength(1); // NO second append — the exact duplicate C1 found
+    expect(await peekInOrder(store)).toEqual([]);
+  });
+
+  it("F2 stays fixed: a genuinely first-ever send (never marked before) still renegotiates against an identical prior event, both land", async () => {
+    const store = memoryQueueStore();
+    // Two REAL, separately-tapped events, same device — neither has EVER
+    // been through sendOne before (attempts: 0, the true default, not
+    // hand-constructed). e2's stale expectedSeq collides with e1's landed
+    // row once e1 lands first.
+    await store.put(event("e1", { type: "generic.score", payload: { by: "id-alpha", points: 1 }, expectedSeq: 5 }));
+    await store.put(event("e2", { type: "generic.score", payload: { by: "id-alpha", points: 1 }, expectedSeq: 5 }));
+
+    const { transport, calls } = fakeTransport({
+      appendScript: {
+        e1: [{ kind: "ok", data: success(6) }],
+        e2: [
+          { kind: "conflict", currentSeq: 6, message: "conflict" },
+          { kind: "ok", data: success(7) },
+        ],
+      },
+      slotsBySinceSeq: {
+        5: [
+          {
+            seq: 6,
+            type: "generic.score",
+            payload: { by: "id-alpha", points: 1 },
+            recorded_by: "user-organiser",
+            device_link_id: "dl-1",
+          },
+        ],
+      },
+    });
+
+    const identity: OwnIdentity = { recordedBy: "user-organiser", deviceLinkId: "dl-1" };
+    const report = await drainQueue(transport, store, "fx-1", identity);
+
+    expect(report.outcomes.map((o) => o.kind)).toEqual(["acked", "acked"]); // BOTH land, never dropped
+    expect(calls).toHaveLength(3); // e1 once, e2 twice (original + renegotiated resend)
+    expect(await peekInOrder(store)).toEqual([]);
+  });
+
+  it("a genuine network-error retry still drops on its 409 resend — the original S10 duplicate protection is untouched by this fix", async () => {
+    const store = memoryQueueStore();
+    const pending = event("b", { type: "core.note", payload: { text: "b" }, expectedSeq: 20 });
+    await store.put(pending);
+
+    const { transport: firstPass } = fakeTransport({
+      appendScript: { b: [{ kind: "network-error", message: "offline" }] },
+    });
+    const first = await sendOne(firstPass, store, "fx-1", pending, ME);
+    expect(first).toEqual({ kind: "stayed-queued", localId: "local-b", idempotencyKey: "b", reason: "network" });
+    const requeued = (await peekInOrder(store))[0]!;
+    expect(requeued.attempts).toBe(1); // the OBSERVED failure marks it too — same value the pre-send marker already wrote
+
+    const { transport: secondPass, calls } = fakeTransport({
+      appendScript: { b: [{ kind: "conflict", currentSeq: 21, message: "conflict" }] },
+      slotsBySinceSeq: {
+        20: [{ seq: 21, type: "core.note", payload: { text: "b" }, recorded_by: "user-1", device_link_id: null }],
+      },
+    });
+    const outcome = await sendOne(secondPass, store, "fx-1", requeued, ME);
+
+    expect(outcome).toEqual({ kind: "already-applied", localId: "local-b", idempotencyKey: "b" });
+    expect(calls).toHaveLength(1); // no resend
+    expect(await peekInOrder(store)).toEqual([]);
+  });
+
+  it("ordering: the pre-send marker is durably persisted BEFORE the transport call, not after", async () => {
+    const store = memoryQueueStore();
+    const pending = event("a", { expectedSeq: 10 });
+    await store.put(pending);
+
+    const order: string[] = [];
+    const observingTransport: ScoringTransport = {
+      appendEvent: async () => {
+        const stored = (await store.list()).find((e) => e.idempotencyKey === "a");
+        order.push(`transport-call:attempts=${stored?.attempts}`);
+        return { kind: "ok", data: success(11) };
+      },
+      listEventsSince: async () => [],
+      getLastSeq: async () => 10,
+    };
+
+    await sendOne(observingTransport, store, "fx-1", pending, ME);
+
+    // A single, unambiguous assertion: by the time the transport function
+    // ran, the store already read attempts:1 — the marker write's promise
+    // was awaited to completion before appendEvent was ever invoked. If the
+    // marker moved to AFTER the send (or never happened), this reads
+    // "attempts=0" instead and the test fails.
+    expect(order).toEqual(["transport-call:attempts=1"]);
+  });
+
+  it("an old-shape record (attempts field absent/corrupted) never throws and stays on the SAFE side: healed to a real number, treated as never-sent", async () => {
+    const store = memoryQueueStore();
+    const corrupted = event("a", { expectedSeq: 10 });
+    // Force the field out entirely — a hypothetical this type has never
+    // actually shipped: `attempts` has been a required PendingEvent field
+    // since the chassis's first commit (cc907a0b6, S10/#419), so no real
+    // persisted queue can lack it. Tested anyway, belt-and-braces, per R68's
+    // explicit ask about old-shape queues.
+    const { attempts, ...withoutAttempts } = corrupted;
+    void attempts;
+    await store.put(withoutAttempts as unknown as PendingEvent);
+
+    const { transport } = fakeTransport({
+      appendScript: { a: [{ kind: "network-error", message: "offline" }] },
+    });
+
+    const outcome = await sendOne(transport, store, "fx-1", withoutAttempts as unknown as PendingEvent, ME);
+
+    expect(outcome).toEqual({ kind: "stayed-queued", localId: "local-a", idempotencyKey: "a", reason: "network" });
+    const remaining = await peekInOrder(store);
+    // Healed to a real number (1), never NaN (`undefined + 1`) — and never
+    // treated as an already-sent retry on the strength of a corrupted or
+    // missing counter.
+    expect(remaining[0]?.attempts).toBe(1);
+  });
+});
