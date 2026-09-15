@@ -75,14 +75,12 @@ describe("StagesPanel — roster-drift banner (F3 Task 5)", () => {
     expect(html).not.toMatch(banner);
   });
 
-  // W3 item 6 (review finding M3). Swiss pairs ONE ROUND AT A TIME, so an
-  // active entrant with no fixture is its normal resting state -- the
-  // odd-roster bye every round, and any entrant added before the next round
-  // is generated. The old banner told the organiser their fixtures did not
-  // match their roster, named the player who sat out by design, and offered a
-  // btn-danger "Rebuild fixtures" whose effect is to delete the round,
-  // regenerate it (sitting somebody out again, so the banner returns) and
-  // discard the officials, team sheets and device links attached to it.
+  // W3 item 6 (review finding M3). Swiss pairs ONE ROUND AT A TIME. A
+  // designed sit-out is now a real bye fixture (swissGen persists
+  // pairRound's `bye`), so it no longer appears in `unplaced`. What still
+  // does: an entrant added before the next round is generated. The soft
+  // banner tells the organiser to wait for Pair next, and withholds the
+  // btn-danger "Rebuild fixtures" that would delete the round.
   const SWISS_STAGE = { ...STAGE, kind: "swiss", name: "Swiss" };
   const swissProps = { ...baseProps, stages: [SWISS_STAGE] };
   const rebuild = /data-testid="roster-drift-rebuild"/;

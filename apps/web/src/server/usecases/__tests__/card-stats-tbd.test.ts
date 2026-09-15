@@ -180,4 +180,52 @@ describe.skipIf(!HAS_DB)("card-stats: TBD fixtures never surface as 'next' (D4a/
 
     expect(divNext!.court_label ?? "").not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
   });
+
+  // W3 item 6 follow-up — forfeited award byes must count as played, or an
+  // odd-swiss (or knockout) round permanently reads "N-1 of N" on the ledger
+  // while the sit-out is already decided. Differential: after generate, the
+  // bye is forfeited (played=1) and the two pairings are still scheduled.
+  it("a swiss generation-time bye counts in played, not only in total", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Card Stats Swiss Bye " + randomUUID().slice(0, 6),
+      visibility: "private",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(auth, division.id, [
+      { kind: "individual", display_name: "A", seed: 1, members: [] },
+      { kind: "individual", display_name: "B", seed: 2, members: [] },
+      { kind: "individual", display_name: "C", seed: 3, members: [] },
+      { kind: "individual", display_name: "D", seed: 4, members: [] },
+      { kind: "individual", display_name: "E", seed: 5, members: [] },
+    ]);
+    const [stage] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: {},
+      progression: null,
+    });
+    const { fixtures } = await generateStageFixtures(auth, stage!.id);
+    expect(fixtures.length).toBe(3);
+    expect(fixtures.filter((f) => f.status === "forfeited")).toHaveLength(1);
+
+    const divisionStats = await listDivisionCardStats(auth, comp.id);
+    const stats = divisionStats.get(division.id)!;
+    expect(stats.total).toBe(3);
+    expect(stats.played).toBe(1);
+
+    const competitionStats = await listCompetitionCardStats(auth);
+    const cStats = competitionStats.get(comp.id)!;
+    expect(cStats.total).toBe(3);
+    expect(cStats.played).toBe(1);
+  });
 });

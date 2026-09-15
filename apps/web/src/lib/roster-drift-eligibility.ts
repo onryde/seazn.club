@@ -26,16 +26,11 @@ export function isRosterDriftEligible(stage: { kind: string; progression: unknow
 /**
  * A swiss stage that is simply BETWEEN ROUNDS, not drifted (W3 item 6).
  *
- * Swiss pairs one round at a time, so "active entrant with no fixture" is its
- * normal resting state: the odd-roster bye every round, and any entrant added
- * before the next round is generated. `getStageRosterDrift` cannot tell that
- * apart from real drift — `swissGen` writes no row for a byed entrant, so
- * there is no stored "considered, sat out" fact to key on — and two attempts
- * to guess it (a `created_at` heuristic, a round-membership rule) were
- * reviewed out as unsound. The signal therefore stays, and the PRESENTATION
- * changes: this predicate marks the case where the only evidence is
- * `unplaced`, on a swiss stage, so the banner can say what is actually
- * happening and withhold a remedy that would destroy the round.
+ * Swiss pairs one round at a time. After the bye-row follow-up, a designed
+ * sit-out is a real forfeited fixture and no longer appears in `unplaced` —
+ * this predicate now mainly covers an entrant added before the next round
+ * is generated (genuine late registration shape, still unplaced-only).
+ * Ghosts keep the full warning and rebuild button.
  *
  * Deliberately NOT `ROSTER_DRIFT_INELIGIBLE_KINDS` (the design doc's option
  * 3): ineligibility suppresses BOTH halves, taking ghost detection with it. A
