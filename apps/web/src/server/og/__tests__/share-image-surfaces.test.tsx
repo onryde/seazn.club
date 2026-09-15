@@ -225,8 +225,8 @@ interface Surface {
  *    QR code built locally by `QRCode.toDataURL` (`:39`), i.e. a `data:` URI.
  *
  * Every OTHER derived surface gets the logo cases by default: a new share image
- * is driven through the fetcher unless someone edits this set, whose size is
- * pinned below so the edit shows up as a red and in review. This replaces a
+ * is driven through the fetcher unless someone edits this set, whose members
+ * are pinned by name below so the edit shows up as a red and in review. This replaces a
  * per-driver `drawsOrgLogo` flag, where writing `false` silently skipped all
  * three cases. The exempt surfaces still run the uniform "nothing but `data:`"
  * case, which is what reds if one of them later draws a remote `<img>`.
@@ -381,10 +381,17 @@ describe("every public share image draws its logo through the guarded fetcher", 
     ]);
   });
 
-  it("the exempt set is exactly the three re-pinned surfaces, and each is really driven", () => {
-    // A fourth exemption is a deliberate edit to this number AND the set above —
-    // never a quiet way to spare a new logo surface its three cases.
-    expect(NO_LOGO_SURFACES.size).toBe(3);
+  it("exempts exactly these three surfaces, by name, and each is really driven", () => {
+    // Pinned by NAME, not by size. A size pin stays green when one exempt file
+    // is swapped for a logo surface: the swapped-in surface quietly loses its
+    // three cases, and the only red is the swapped-out one's, downstream, and
+    // only for as long as it still draws nothing. Any change to the exemptions
+    // is an edit to this list AND the set above.
+    expect([...NO_LOGO_SURFACES].sort()).toEqual([
+      "app/(public)/r/[ref]/ticket.png/route.tsx",
+      "app/join/[token]/opengraph-image.tsx",
+      "app/opengraph-image.tsx",
+    ]);
     expect([...NO_LOGO_SURFACES].filter((file) => !(file in DRIVERS))).toEqual([]);
   });
 
