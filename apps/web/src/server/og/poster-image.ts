@@ -213,8 +213,13 @@ function deadline(signal: AbortSignal): Promise<never> {
  * Memory, not speed. A PNG gets no shrink-on-load — sharp streams it at FULL
  * input width — so what one decode holds grows with the canvas, and the match
  * poster draws three images at once. Decoded in parallel their peaks add;
- * decoded one at a time the process holds one decode's worth, for a single
- * render and across concurrent renders alike. It costs no throughput where
+ * decoded one at a time, share images hold one decode's worth between them,
+ * for a single render and across concurrent renders alike. That is one
+ * SHARE-IMAGE decode at a time, not one sharp decode for the whole process:
+ * Next's `/_next/image` optimizer runs sharp in this same process, outside
+ * this queue (`next/image` in the org layout and the sponsors board), so a
+ * cold optimizer request that lands on a poster render adds its peak to this
+ * one. It costs no throughput where
  * this runs: the machine is one shared vCPU (`fly.toml`, `shared-cpu-1x`).
  *
  * Measured at the ceilings above (sharp 0.34.5, libvips concurrency 1): a
@@ -231,7 +236,7 @@ let decodeQueue: Promise<unknown> = Promise.resolve();
  * to draw what it would allocate.
  *
  * `work` must never reject. A rejection would sit in the queue and fail every
- * decode queued after it, on the whole machine, until a restart.
+ * share-image decode queued after it, on that machine, until a restart.
  */
 function afterEarlierDecodes(signal: AbortSignal, work: () => Promise<Buffer | null>): Promise<Buffer | null> {
   const turn = decodeQueue.then(() => (signal.aborted ? null : work()));
