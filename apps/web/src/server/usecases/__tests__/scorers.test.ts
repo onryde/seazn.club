@@ -1,15 +1,12 @@
-// PROMPT-18 acceptance (doc 13): role × capability authz matrix, scoped
-// assignment resolution, the invite→score→finalize scorer journey, seat
-// quotas (members.max / scorers.max / orgs.max_owned) and the doc 10 §2.4
-// member freeze. Real Postgres required; skipped without DATABASE_URL.
+// Scoring auth (#707): requireScorable via owner/admin or accepted officials
+// only — scorer_assignments and the org scorer role are retired. Real Postgres
+// required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { PaymentRequiredError, HttpError } from "@/lib/errors";
 import { createOrgForUser } from "@/lib/auth";
-import { acceptInvite, grantInvite, loadInvite } from "@/lib/invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { AssignedFixture } from "@/server/api-v1/schemas";
 import type { OrgRole } from "@/lib/types";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -20,11 +17,7 @@ import { scoreEvent, finalizeFixture } from "../scoring";
 import { putLineup } from "../fixtures";
 import {
   requireScorable,
-  scorerCovers,
   fixtureScope,
-  createAssignment,
-  listAssignedFixtures,
-  isScorerOnly,
   acceptedOfficialCovers,
 } from "../scorers";
 import {
@@ -69,8 +62,6 @@ async function seedOrg(): Promise<{ orgId: string; ownerId: string; slug: string
     insert into sport_variants (sport_key, key, name, config, is_system)
     values ('generic', 'score', 'Score', ${sql.json(DIVISION_CONFIG)}, true)
     on conflict do nothing`;
-  // Role tests rig several competitions per org; the v3 free cap (1 active)
-  // is not under test here — lift it via override.
   await sql`
     insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
     values (${orgId}, 'competitions.max_active', 10, 'test probe')`;
@@ -85,7 +76,6 @@ const asRole = (orgId: string, userId: string | null, role: OrgRole | null): Aut
   keyId: null,
 });
 
-/** Division rig: 4 entrants, generated + started league; returns 2 fixtures. */
 async function rig(owner: AuthCtx) {
   const competition = await createCompetition(owner, {
     ends_on: "2030-12-31",
@@ -95,7 +85,7 @@ async function rig(owner: AuthCtx) {
   });
   const division = await createDivision(owner, competition.id, {
     name: "Open", sport_key: "generic", variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false }, 
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
   });
   await createEntrants(owner, division.id, ["A", "B", "C", "D"].map((n, i) => ({
     kind: "individual" as const, display_name: n, seed: i + 1, members: [],
@@ -114,16 +104,20 @@ async function addMember(orgId: string, role: OrgRole): Promise<string> {
   return userId;
 }
 
-async function makeInvite(
+async function acceptOfficial(
   orgId: string,
-  role: OrgRole,
-  defaultScope: { type: "competition" | "division" | "fixture"; id: string } | null = null,
-): Promise<string> {
-  const token = randomUUID();
+  userId: string,
+  fixtureId: string,
+): Promise<void> {
+  const [person] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, user_id)
+    values (${orgId}, 'Official', ${userId}) returning id`;
+  const [official] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys)
+    values (${orgId}, ${person!.id}, 'Official', ${sql.json(["referee"])}) returning id`;
   await sql`
-    insert into org_invites (org_id, role, default_scope, token, max_uses)
-    values (${orgId}, ${role}, ${defaultScope ? sql.json(defaultScope) : null}, ${token}, 1)`;
-  return token;
+    insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+    values (${orgId}, ${fixtureId}, ${official!.id}, 'referee', 'accepted')`;
 }
 
 afterAll(async () => {
@@ -134,24 +128,20 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
-  it("authz matrix: role × capability (doc 13 §2, table-driven)", async () => {
+describe.skipIf(!HAS_DB)("requireScorable without assignments (#707)", () => {
+  it("authz matrix: owner/admin pass; viewer and unassigned member 403", async () => {
     const { orgId, ownerId } = await seedOrg();
     const owner = asRole(orgId, ownerId, "owner");
     const { division, fixtures } = await rig(owner);
     const adminId = await addMember(orgId, "admin");
     const viewerId = await addMember(orgId, "viewer");
-    const scorerId = await addMember(orgId, "scorer");
-    const strangerScorerId = await addMember(orgId, "scorer");
-    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
+    const strangerId = await makeUser("stranger");
 
-    // The gate itself: who may act on this fixture at all (doc 13 §2/§3).
-    const gate: { role: OrgRole; userId: string; pass: boolean }[] = [
+    const gate: { role: OrgRole | null; userId: string; pass: boolean }[] = [
       { role: "owner", userId: ownerId, pass: true },
       { role: "admin", userId: adminId, pass: true },
       { role: "viewer", userId: viewerId, pass: false },
-      { role: "scorer", userId: scorerId, pass: true }, // covering assignment
-      { role: "scorer", userId: strangerScorerId, pass: false }, // no assignment
+      { role: null, userId: strangerId, pass: false },
     ];
     for (const probe of gate) {
       const attempt = requireScorable(asRole(orgId, probe.userId, probe.role), fixtures[0].id);
@@ -162,185 +152,83 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
       }
     }
 
-    // Capabilities on a fixture the scorer covers (defaults: finalize +
-    // lineups allowed; void pre-finalize only).
-    const scorer = asRole(orgId, scorerId, "scorer");
+    // Accepted official with no org membership scores.
+    await acceptOfficial(orgId, strangerId, fixtures[0].id);
+    await expect(
+      requireScorable(asRole(orgId, strangerId, null), fixtures[0].id),
+    ).resolves.toMatchObject({ id: fixtures[0].id });
+
+    // Official on a different fixture does not cover this one.
+    await expect(
+      requireScorable(asRole(orgId, strangerId, null), fixtures[1].id),
+    ).rejects.toMatchObject({ status: 403 });
+
+    void division;
+  });
+
+  it("accepted official scores with capability gates; editors bypass them", async () => {
+    const { orgId, ownerId } = await seedOrg();
+    const owner = asRole(orgId, ownerId, "owner");
+    const { division, fixtures } = await rig(owner);
+    const officialId = await makeUser("official");
+    await acceptOfficial(orgId, officialId, fixtures[0].id);
+    const official = asRole(orgId, officialId, null);
+
     const fx = fixtures[0].id;
-    await scoreEvent(scorer, fx, { expected_seq: 0, type: "core.start", payload: {} });
-    const note = await scoreEvent(scorer, fx, {
+    await scoreEvent(official, fx, { expected_seq: 0, type: "core.start", payload: {} });
+    const note = await scoreEvent(official, fx, {
       expected_seq: 1, type: "core.note", payload: { text: "oops" },
     });
     const [noteRow] = await sql<{ id: string }[]>`
       select id from score_events where fixture_id = ${fx} and seq = ${note.seq}`;
-    const voided = await scoreEvent(scorer, fx, {
+    const voided = await scoreEvent(official, fx, {
       expected_seq: note.seq, type: "core.void", payload: { event_id: noteRow.id },
     });
-    const decided = await scoreEvent(scorer, fx, {
+    const decided = await scoreEvent(official, fx, {
       expected_seq: voided.seq, type: "generic.result", payload: { p1Score: 2, p2Score: 1 },
     });
     expect(decided.status).toBe("decided");
-    const finalized = await finalizeFixture(scorer, fx, decided.seq);
+    const finalized = await finalizeFixture(official, fx, decided.seq);
     expect(finalized.status).toBe("finalized");
 
-    // Post-finalize void is an editor's power, not a scorer's (doc 13 §2).
     const [starter] = await sql<{ id: string }[]>`
       select id from score_events where fixture_id = ${fx} and seq = 1`;
     await expect(
-      scoreEvent(scorer, fx, {
+      scoreEvent(official, fx, {
         expected_seq: finalized.seq, type: "core.void", payload: { event_id: starter.id },
       }),
     ).rejects.toMatchObject({ status: 403 });
 
-    // Lineups: allowed by default on a still-scheduled fixture…
     const fx2 = fixtures[1];
     const entrantId = (fx2.home_entrant_id ?? fx2.away_entrant_id) as string;
-    await expect(putLineup(scorer, fx2.id, entrantId, { slots: [] })).resolves.toBeTruthy();
-    // …and config-gated off per division (scorerCanEnterLineups=false).
+    await expect(putLineup(official, fx2.id, entrantId, { slots: [] })).resolves.toBeTruthy();
     await sql`update divisions set scorer_can_enter_lineups = false where id = ${division.id}`;
-    await expect(putLineup(scorer, fx2.id, entrantId, { slots: [] })).rejects.toMatchObject({
+    await expect(putLineup(official, fx2.id, entrantId, { slots: [] })).rejects.toMatchObject({
       status: 403,
     });
-    // Editors are unaffected by the scorer config gates.
     await expect(putLineup(owner, fx2.id, entrantId, { slots: [] })).resolves.toBeTruthy();
 
-    // Finalize config gate (scorerCanFinalize=false → 403 for the scorer).
     await sql`update divisions set scorer_can_finalize = false where id = ${division.id}`;
-    await scoreEvent(scorer, fx2.id, { expected_seq: 0, type: "core.start", payload: {} });
-    const d2 = await scoreEvent(scorer, fx2.id, {
+    await scoreEvent(official, fx2.id, { expected_seq: 0, type: "core.start", payload: {} });
+    const d2 = await scoreEvent(official, fx2.id, {
       expected_seq: 1, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
     });
-    await expect(finalizeFixture(scorer, fx2.id, d2.seq)).rejects.toMatchObject({ status: 403 });
+    await expect(finalizeFixture(official, fx2.id, d2.seq)).rejects.toMatchObject({ status: 403 });
     await expect(finalizeFixture(owner, fx2.id, d2.seq)).resolves.toBeTruthy();
   });
 
-  it("assignment resolution: fixture ⊂ division ⊂ competition (doc 13 §3)", async () => {
+  it("viewer role never scores; HttpError carries 403 not 401", async () => {
     const { orgId, ownerId } = await seedOrg();
     const owner = asRole(orgId, ownerId, "owner");
-    const { competition, division, fixtures } = await rig(owner);
-    const other = await rig(owner); // second division, never assigned
-
-    const scope = (await fixtureScope(fixtures[0].id))!;
-    for (const s of [
-      { type: "fixture" as const, id: fixtures[0].id },
-      { type: "division" as const, id: division.id },
-      { type: "competition" as const, id: competition.id },
-    ]) {
-      const userId = await addMember(orgId, "scorer");
-      await createAssignment(orgId, userId, s, ownerId);
-      expect(await scorerCovers(orgId, userId, scope), s.type).toBe(true);
-      // Same user never covers the unrelated division's fixture…
-      const otherScope = (await fixtureScope(other.fixtures[0].id))!;
-      const covered = await scorerCovers(orgId, userId, otherScope);
-      // …except via competition scope on a shared competition (each rig makes
-      // its own competition, so this must be false for all three).
-      expect(covered, `${s.type} must not leak`).toBe(false);
+    const { fixtures } = await rig(owner);
+    const viewerId = await addMember(orgId, "viewer");
+    try {
+      await requireScorable(asRole(orgId, viewerId, "viewer"), fixtures[0].id);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpError);
+      expect((err as HttpError).status).toBe(403);
     }
-
-    // A fixture-scoped assignment covers exactly that fixture.
-    const fxScorer = await addMember(orgId, "scorer");
-    await createAssignment(orgId, fxScorer, { type: "fixture", id: fixtures[0].id }, ownerId);
-    const sibling = (await fixtureScope(fixtures[1].id))!;
-    expect(await scorerCovers(orgId, fxScorer, sibling)).toBe(false);
-  });
-
-  it("E2E: scorer invite with division scope → my matches → score; other scopes 403", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-    const other = await rig(owner);
-
-    // Owner mints a division-scoped scorer invite; a fresh user accepts.
-    const token = await makeInvite(orgId, "scorer", { type: "division", id: division.id });
-    const invite = (await loadInvite(token))!;
-    expect(invite.default_scope).toEqual({ type: "division", id: division.id });
-    const scorerId = await makeUser("volunteer");
-    await grantInvite(invite, scorerId);
-
-    const [membership] = await sql<{ role: string }[]>`
-      select role from org_members where org_id = ${orgId} and user_id = ${scorerId}`;
-    expect(membership.role).toBe("scorer");
-    expect(await isScorerOnly(scorerId)).toBe(true);
-
-    // My matches: the assigned division's fixtures, nothing else.
-    const mine = await listAssignedFixtures(scorerId);
-    expect(mine.length).toBe(fixtures.length);
-    expect(new Set(mine.map((f) => f.division_id))).toEqual(new Set([division.id]));
-    expect(mine[0].sport_key).toBe("generic");
-
-    // Scores a fixture (winner), voids a mistake — the full courtside loop.
-    const scorer = asRole(orgId, scorerId, "scorer");
-    const fx = mine[0].id;
-    await scoreEvent(scorer, fx, { expected_seq: 0, type: "core.start", payload: {} });
-    const mistake = await scoreEvent(scorer, fx, {
-      expected_seq: 1, type: "core.note", payload: { text: "wrong court" },
-    });
-    const [mistakeRow] = await sql<{ id: string; recorded_by: string | null }[]>`
-      select id, recorded_by from score_events where fixture_id = ${fx} and seq = ${mistake.seq}`;
-    expect(mistakeRow.recorded_by).toBe(scorerId); // audit trail stays real (doc 13 §4)
-    await scoreEvent(scorer, fx, {
-      expected_seq: mistake.seq, type: "core.void", payload: { event_id: mistakeRow.id },
-    });
-    const done = await scoreEvent(scorer, fx, {
-      expected_seq: mistake.seq + 1, type: "generic.result", payload: { p1Score: 3, p2Score: 2 },
-    });
-    expect(done.status).toBe("decided");
-    await finalizeFixture(scorer, fx, done.seq); // scorerCanFinalize default true
-
-    // Everything outside the assigned scope is 403 (acceptance): the door
-    // (requireFixtureActor → requireScorable) rejects the other division.
-    await expect(requireScorable(scorer, other.fixtures[0].id)).rejects.toMatchObject({
-      status: 403,
-    });
-  });
-
-  it("quotas: one member and one scorer past the cap → 402 with the feature key (doc 13 §5)", async () => {
-    const { orgId } = await seedOrg();
-    // The cap is READ from the matrix, never typed: it has moved three times
-    // (V319 members 5 / scorers 1, V393 members 3 / scorers 2, V395 deleted the
-    // scorer key outright) and a stale literal makes every "expect 402" pass as
-    // an accept without failing.
-    const cap = async (key: string): Promise<number> => {
-      const [row] = await sql<{ int_value: number | null }[]>`
-        select int_value from plan_entitlements
-         where plan_key = 'community' and feature_key = ${key}`;
-      expect(row?.int_value, `${key} must be a finite community cap`).toBeTypeOf("number");
-      return row!.int_value!;
-    };
-    const members = await cap("members.max");
-    // V395 (W2 T12): `scorers.max` is GONE from the matrix. Asserted here and
-    // not merely assumed, because a key with no row resolves to 0 rather than
-    // to unlimited — if it came back with a value, every expectation below
-    // about which pool is charged would be measuring the wrong thing.
-    const [scorerRow] = await sql<{ int_value: number | null }[]>`
-      select int_value from plan_entitlements
-       where plan_key = 'community' and feature_key = 'scorers.max'`;
-    expect(scorerRow, "V395 deletes scorers.max from every plan").toBeUndefined();
-
-    // Members pool: the owner occupies one seat, so `members - 1` more accepts
-    // fit and the next one is 402.
-    for (let i = 0; i < members - 1; i++) {
-      const t = await makeInvite(orgId, "viewer");
-      await grantInvite((await loadInvite(t))!, await makeUser(`v${i}`));
-    }
-    const overflow = await makeInvite(orgId, "viewer");
-    await expect(
-      grantInvite((await loadInvite(overflow))!, await makeUser("v-over")),
-    ).rejects.toMatchObject({ featureKey: "members.max" });
-
-    // The scorer pool is still COUNTED separately — design §2 lists merging it
-    // into the staff seats as the rejected alternative — so scorers still fit
-    // at a full member pool. What V395 changed is the NUMBER it draws on: the
-    // same `members.max` figure, because the seat is no longer sold separately.
-    for (let i = 0; i < members; i++) {
-      const t = await makeInvite(orgId, "scorer");
-      await grantInvite((await loadInvite(t))!, await makeUser(`s${i}`));
-    }
-    // …and the seat past that cap is a 402 naming `members.max`, NOT the
-    // deleted key, and NOT the silent deny-at-zero a leftover read produces.
-    const sOver = await makeInvite(orgId, "scorer");
-    await expect(
-      grantInvite((await loadInvite(sOver))!, await makeUser("s-over")),
-    ).rejects.toMatchObject({ featureKey: "members.max" });
   });
 
   it("orgs.max_owned (decision a): 2nd community org blocked at creation", async () => {
@@ -357,11 +245,6 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
 
   it("downgrade freeze (doc 10 §2.4): over-quota member seats go read-only, owner exempt", async () => {
     const { orgId, ownerId } = await seedOrg();
-    // Force an over-quota state (as a pro→community downgrade would): exactly
-    // `members.max` admins + owner = one seat too many, so precisely one seat
-    // freezes. The cap is READ (V319 5 -> V393 3); seeding a fixed 5 against a
-    // cap of 3 froze three and the "exactly one" assertion stopped meaning
-    // "the oldest, and only the oldest".
     const [memberRow] = await sql<{ int_value: number | null }[]>`
       select int_value from plan_entitlements
        where plan_key = 'community' and feature_key = 'members.max'`;
@@ -378,7 +261,7 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
 
     const frozen = await frozenMemberIds(orgId);
     expect(frozen.size).toBe(1);
-    const [oldest] = admins; // insertion order = created_at order
+    const [oldest] = admins;
     expect(frozen.has(oldest)).toBe(true);
     expect(frozen.has(ownerId)).toBe(false);
 
@@ -387,231 +270,6 @@ describe.skipIf(!HAS_DB)("scorer role (doc 13, PROMPT-18)", () => {
     });
     await expect(assertMemberNotFrozen(orgId, admins[2])).resolves.toBeUndefined();
     await expect(assertMemberNotFrozen(orgId, ownerId)).resolves.toBeUndefined();
-  });
-
-  it("viewer with a covering assignment scores; scorer config gates apply to them", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-    const viewerId = await addMember(orgId, "viewer");
-    await createAssignment(orgId, viewerId, { type: "division", id: division.id }, ownerId);
-
-    const viewer = asRole(orgId, viewerId, "viewer");
-    const fx = fixtures[0].id;
-    await expect(requireScorable(viewer, fx)).resolves.toBeTruthy();
-
-    // Assignments show up in their "My matches" like any umpire's.
-    const mine = await listAssignedFixtures(viewerId);
-    expect(new Set(mine.map((f) => f.division_id))).toEqual(new Set([division.id]));
-
-    // They score like a scorer — and the per-division scorer config gates
-    // bind them too (they are not editors).
-    await scoreEvent(viewer, fx, { expected_seq: 0, type: "core.start", payload: {} });
-    const decided = await scoreEvent(viewer, fx, {
-      expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 },
-    });
-    await sql`update divisions set scorer_can_finalize = false where id = ${division.id}`;
-    await expect(finalizeFixture(viewer, fx, decided.seq)).rejects.toMatchObject({ status: 403 });
-    await sql`update divisions set scorer_can_finalize = true where id = ${division.id}`;
-    const finalized = await finalizeFixture(viewer, fx, decided.seq);
-
-    // Post-finalize void stays an editor's power.
-    const [starter] = await sql<{ id: string }[]>`
-      select id from score_events where fixture_id = ${fx} and seq = 1`;
-    await expect(
-      scoreEvent(viewer, fx, {
-        expected_seq: finalized.seq, type: "core.void", payload: { event_id: starter.id },
-      }),
-    ).rejects.toMatchObject({ status: 403 });
-
-    // Lineup config gate binds viewers-with-assignment as it does scorers.
-    const fx2 = fixtures[1];
-    const entrantId = (fx2.home_entrant_id ?? fx2.away_entrant_id) as string;
-    await sql`update divisions set scorer_can_enter_lineups = false where id = ${division.id}`;
-    await expect(putLineup(viewer, fx2.id, entrantId, { slots: [] })).rejects.toMatchObject({
-      status: 403,
-    });
-
-    // Their unassigned fixtures stay 403 — assignment, not role, is the key.
-    const other = await rig(owner);
-    await expect(requireScorable(viewer, other.fixtures[0].id)).rejects.toMatchObject({
-      status: 403,
-    });
-  });
-
-  it("listAssignedFixtures rows parse against the published AssignedFixture contract (review finding #9) — court_id/venue_id and derived court_name/venue_name, not the retired venue/court_label", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-    const scorerId = await addMember(orgId, "scorer");
-    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
-
-    // A real venue/court by id (P9 cutover) attached to one covered fixture —
-    // proves the derived court_name/venue_name resolve, not just that the
-    // schema shape happens to line up.
-    const [{ id: venueId }] = await sql<{ id: string }[]>`
-      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
-    const [{ id: courtId }] = await sql<{ id: string }[]>`
-      insert into courts (venue_id, org_id, name, tags)
-      values (${venueId}, ${orgId}, ${"Court 9"}, ${sql.array([])})
-      returning id`;
-    await sql`update fixtures set venue_id = ${venueId}, court_id = ${courtId} where id = ${fixtures[0].id}`;
-
-    const mine = await listAssignedFixtures(scorerId);
-    expect(mine.length).toBeGreaterThan(0);
-    // Would throw pre-fix: the published schema still required `venue`/
-    // `court_label` as present keys, which listAssignedFixtures stopped
-    // selecting — parsing a REAL row (not a hand-built literal) catches that.
-    for (const f of mine) AssignedFixture.parse(f);
-
-    const withCourt = mine.find((f) => f.id === fixtures[0].id)!;
-    expect(withCourt.venue_name).toBe("Riverside");
-    expect(withCourt.court_name).toBe("Court 9");
-
-    // The OTHER half of contract drift: a field the usecase ships but the
-    // schema never declares is STRIPPED by z.object rather than rejected, so
-    // the parse above stays green while the published contract understates the
-    // payload. Reading them back off the PARSED value is what makes that
-    // visible. All seven pre-date the venues cutover.
-    const parsed = AssignedFixture.parse(withCourt);
-    for (const k of [
-      "fixture_no", "org_slug", "competition_slug", "division_slug",
-      "home_slot_label", "away_slot_label", "venue_tz",
-    ] as const) {
-      expect({ [k]: parsed[k] }).toEqual({ [k]: withCourt[k] });
-      expect(parsed[k]).not.toBeUndefined();
-    }
-  });
-
-  // #14: listAssignedFixtures is a SUPERUSER, cross-org read (no
-  // withTenant/RLS) — a court name is unique only WITHIN its venue, so it
-  // must venue-qualify via the same rule the board/AI pack use, not show two
-  // indistinguishable "Court 1" entries for two different physical courts.
-  it("#14: disambiguates two same-named courts across two venues; never renders a bare uuid", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-    const scorerId = await addMember(orgId, "scorer");
-    await createAssignment(orgId, scorerId, { type: "division", id: division.id }, ownerId);
-
-    const [{ id: venueA }] = await sql<{ id: string }[]>`
-      insert into venues (org_id, name) values (${orgId}, ${"Riverside"}) returning id`;
-    const [{ id: venueB }] = await sql<{ id: string }[]>`
-      insert into venues (org_id, name) values (${orgId}, ${"Lakeside"}) returning id`;
-    const [{ id: courtA }] = await sql<{ id: string }[]>`
-      insert into courts (venue_id, org_id, name, tags)
-      values (${venueA}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
-    const [{ id: courtB }] = await sql<{ id: string }[]>`
-      insert into courts (venue_id, org_id, name, tags)
-      values (${venueB}, ${orgId}, ${"Court 1"}, ${sql.array([])}) returning id`;
-    await sql`update fixtures set venue_id = ${venueA}, court_id = ${courtA} where id = ${fixtures[0].id}`;
-    await sql`update fixtures set venue_id = ${venueB}, court_id = ${courtB} where id = ${fixtures[1].id}`;
-
-    const mine = await listAssignedFixtures(scorerId);
-    for (const f of mine) AssignedFixture.parse(f);
-    const c1 = mine.find((f) => f.id === fixtures[0].id)!;
-    const c2 = mine.find((f) => f.id === fixtures[1].id)!;
-    expect(c1.court_name).toBe("Court 1 (Riverside)");
-    expect(c2.court_name).toBe("Court 1 (Lakeside)");
-    const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
-    for (const f of mine) expect(f.court_name ?? "").not.toMatch(uuidRe);
-  });
-
-  it("accept, existing viewer × scorer invite: scope added, role kept, no scorer seat", async () => {
-    const { orgId, ownerId } = await seedOrg(); // community: seats drawn from members.max
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-
-    // Fill the single scorer seat so the additive path would 402 if it
-    // (wrongly) charged the scorer pool.
-    const seatFiller = await makeInvite(orgId, "scorer");
-    await grantInvite((await loadInvite(seatFiller))!, await makeUser("seat"));
-
-    const viewerId = await addMember(orgId, "viewer");
-    const token = await makeInvite(orgId, "scorer", { type: "division", id: division.id });
-    const outcome = await acceptInvite((await loadInvite(token))!, viewerId);
-    expect(outcome).toBe("scope_added");
-
-    const [membership] = await sql<{ role: string }[]>`
-      select role from org_members where org_id = ${orgId} and user_id = ${viewerId}`;
-    expect(membership.role).toBe("viewer"); // never a silent role change
-    const scope = (await fixtureScope(fixtures[0].id))!;
-    expect(await scorerCovers(orgId, viewerId, scope)).toBe(true);
-    const [{ used_count }] = await sql<{ used_count: number }[]>`
-      select used_count from org_invites where token = ${token}`;
-    expect(used_count).toBe(1);
-  });
-
-  it("accept, existing scorer × second invite: assignment added for the new scope", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const first = await rig(owner);
-    const second = await rig(owner);
-
-    const scorerId = await addMember(orgId, "scorer");
-    await createAssignment(orgId, scorerId, { type: "division", id: first.division.id }, ownerId);
-
-    const token = await makeInvite(orgId, "scorer", {
-      type: "division", id: second.division.id,
-    });
-    const outcome = await acceptInvite((await loadInvite(token))!, scorerId);
-    expect(outcome).toBe("scope_added");
-
-    const scope = (await fixtureScope(second.fixtures[0].id))!;
-    expect(await scorerCovers(orgId, scorerId, scope)).toBe(true);
-    // First assignment untouched.
-    const firstScope = (await fixtureScope(first.fixtures[0].id))!;
-    expect(await scorerCovers(orgId, scorerId, firstScope)).toBe(true);
-  });
-
-  it("accept, editor × scorer invite: no-op — role kept, no assignment, use not burnt", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-
-    const token = await makeInvite(orgId, "scorer", { type: "division", id: division.id });
-    const outcome = await acceptInvite((await loadInvite(token))!, ownerId);
-    expect(outcome).toBe("already_member");
-
-    const [membership] = await sql<{ role: string }[]>`
-      select role from org_members where org_id = ${orgId} and user_id = ${ownerId}`;
-    expect(membership.role).toBe("owner"); // never downgraded by scanning own QR
-    const scope = (await fixtureScope(fixtures[0].id))!;
-    expect(await scorerCovers(orgId, ownerId, scope)).toBe(false);
-    const [{ used_count }] = await sql<{ used_count: number }[]>`
-      select used_count from org_invites where token = ${token}`;
-    expect(used_count).toBe(0); // the single-use link survives an owner's test scan
-  });
-
-  it("accept, fresh user: joins as scorer with the assignment (unchanged path)", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { division, fixtures } = await rig(owner);
-
-    const userId = await makeUser("fresh");
-    const token = await makeInvite(orgId, "scorer", { type: "division", id: division.id });
-    const outcome = await acceptInvite((await loadInvite(token))!, userId);
-    expect(outcome).toBe("joined");
-
-    const [membership] = await sql<{ role: string }[]>`
-      select role from org_members where org_id = ${orgId} and user_id = ${userId}`;
-    expect(membership.role).toBe("scorer");
-    const scope = (await fixtureScope(fixtures[0].id))!;
-    expect(await scorerCovers(orgId, userId, scope)).toBe(true);
-  });
-
-  it("viewer role never scores; HttpError carries 403 not 401", async () => {
-    const { orgId, ownerId } = await seedOrg();
-    const owner = asRole(orgId, ownerId, "owner");
-    const { fixtures } = await rig(owner);
-    const viewerId = await addMember(orgId, "viewer");
-    try {
-      await requireScorable(asRole(orgId, viewerId, "viewer"), fixtures[0].id);
-      expect.unreachable();
-    } catch (err) {
-      expect(err).toBeInstanceOf(HttpError);
-      expect((err as HttpError).status).toBe(403);
-    }
   });
 });
 
@@ -631,18 +289,15 @@ describe.skipIf(!HAS_DB)("accepted-official scoring authority", () => {
       insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
       values (${auth.orgId}, ${fixtureId}, ${official!.id}, 'referee', 'pending')`;
 
-    // pending → no authority
     expect(await acceptedOfficialCovers(user.id, fixtureId)).toBe(false);
 
     await sql`update fixture_officials set response = 'accepted'
               where fixture_id = ${fixtureId} and official_id = ${official!.id}`;
     expect(await acceptedOfficialCovers(user.id, fixtureId)).toBe(true);
 
-    // "official" is not (yet) part of OrgRole — requireScorable only reads
-    // userId for this branch, so the cast is safe here.
     const officialAuth = {
-      orgId: auth.orgId, via: "session" as const, userId: user.id, role: "official", keyId: null,
-    } as unknown as AuthCtx;
+      orgId: auth.orgId, via: "session" as const, userId: user.id, role: null, keyId: null,
+    } satisfies AuthCtx;
     await expect(requireScorable(officialAuth, fixtureId)).resolves.toMatchObject({ id: fixtureId });
 
     await sql`update fixture_officials set response = 'declined'
@@ -650,28 +305,15 @@ describe.skipIf(!HAS_DB)("accepted-official scoring authority", () => {
     expect(await acceptedOfficialCovers(user.id, fixtureId)).toBe(false);
     await expect(requireScorable(officialAuth, fixtureId)).rejects.toThrow(/cannot record scores/);
   });
-});
 
-describe.skipIf(!HAS_DB)("my-matches includes accepted officials", () => {
-  it("lists an accepted official's fixture, excludes a declined one", async () => {
+  it("fixtureScope returns division capability flags", async () => {
     const { auth } = await seedSeedOrg("pro");
     const { fixtures } = await seedFutureDivision(auth);
-    const fixtureId = fixtures[0]!.id;
-    const user = await makeSeedUser("Ref Two");
-    const [person] = await sql<{ id: string }[]>`
-      insert into persons (org_id, full_name, user_id)
-      values (${auth.orgId}, 'Ref Two', ${user.id}) returning id`;
-    const [official] = await sql<{ id: string }[]>`
-      insert into officials (org_id, person_id, display_name, role_keys)
-      values (${auth.orgId}, ${person!.id}, 'Ref Two', ${sql.json(["referee"])}) returning id`;
-    await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
-              values (${auth.orgId}, ${fixtureId}, ${official!.id}, 'referee', 'accepted')`;
-
-    let list = await listAssignedFixtures(user.id);
-    expect(list.map((f) => f.id)).toContain(fixtureId);
-
-    await sql`update fixture_officials set response = 'declined' where fixture_id = ${fixtureId}`;
-    list = await listAssignedFixtures(user.id);
-    expect(list.map((f) => f.id)).not.toContain(fixtureId);
+    const scope = await fixtureScope(fixtures[0]!.id);
+    expect(scope).toMatchObject({
+      id: fixtures[0]!.id,
+      scorer_can_finalize: true,
+      scorer_can_enter_lineups: true,
+    });
   });
 });

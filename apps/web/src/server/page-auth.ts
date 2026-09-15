@@ -337,22 +337,7 @@ export async function requireFixturePage(
     ? (EDITOR_ROLES as readonly string[]).includes(membership.role)
     : false;
   let canScore = canEdit;
-  if (membership?.role === "scorer") {
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(fixture.id);
-    if (!scope || !(await scorerCovers(org.id, user.id, scope))) notFound();
-    canScore = true;
-  } else if (membership?.role === "viewer") {
-    // A viewer scores the fixtures their umpire-invite assignments cover
-    // (additive invites) — the page stays readable either way.
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(fixture.id);
-    canScore = !!scope && (await scorerCovers(org.id, user.id, scope));
-  }
   if (!canScore) {
-    // Non-member (or a member who can't score this fixture) — an accepted
-    // fixture_officials assignment is the only remaining way in. Never a
-    // member-widening grant: canEdit stays false either way (doc 13 §A2/§A5).
     const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
     if (await acceptedOfficialCovers(user.id, fixture.id)) canScore = true;
     else if (!membership) notFound();
@@ -403,30 +388,14 @@ export async function requireResourcePageAuth(
 
   const canEdit = org ? (EDITOR_ROLES as readonly string[]).includes(org.role) : false;
   let canScore = canEdit;
-  if (org?.role === "scorer") {
-    if (kind !== "fixture") notFound();
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(id);
-    if (!scope || !(await scorerCovers(orgId, user.id, scope))) notFound();
-    canScore = true;
-  } else if (org?.role === "viewer" && kind === "fixture") {
-    // Additive invites: a viewer's covering assignment turns the score pad on.
-    const { fixtureScope, scorerCovers } = await import("@/server/usecases/scorers");
-    const scope = await fixtureScope(id);
-    canScore = !!scope && (await scorerCovers(orgId, user.id, scope));
-  }
-  if (!canScore) {
-    if (kind === "fixture") {
-      // Non-member (or a member who can't score this fixture) — an accepted
-      // fixture_officials assignment is the only remaining way in.
-      const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
-      if (await acceptedOfficialCovers(user.id, id)) canScore = true;
-      else if (!org) notFound();
-    } else if (!org) {
-      // Officials pass ONLY for kind === "fixture" — every other resource
-      // 404s a non-member outright (existence never leaks, doc 13 §A5).
-      notFound();
-    }
+  if (!canScore && kind === "fixture") {
+    const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
+    if (await acceptedOfficialCovers(user.id, id)) canScore = true;
+    else if (!org) notFound();
+  } else if (!org) {
+    // Officials pass ONLY for kind === "fixture" — every other resource
+    // 404s a non-member outright (existence never leaks, doc 13 §A5).
+    notFound();
   }
   return {
     auth: { orgId, via: "session", userId: user.id, role: org?.role ?? null, keyId: null },

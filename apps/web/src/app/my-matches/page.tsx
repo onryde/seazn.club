@@ -6,7 +6,8 @@ import Link from "next/link";
 import { routes } from "@/lib/routes";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
-import { listAssignedFixtures } from "@/server/usecases/scorers";
+import type { z } from "zod";
+import { AssignedFixture } from "@/server/api-v1/schemas";
 import { resolveModule } from "@/server/engine-db";
 import { LogoutButton } from "@/components/logout-button";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
@@ -19,7 +20,8 @@ import type { Locale } from "@/lib/i18n-constants";
 export default async function MyMatchesPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/my-matches");
-  const fixtures = await listAssignedFixtures(user.id);
+  // Task 3 deletes this page; assignments table is gone (#707).
+  const fixtures: z.infer<typeof AssignedFixture>[] = [];
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "console");
 
@@ -69,7 +71,7 @@ function sameDay(a: Date, b: Date): boolean {
   );
 }
 
-type Assigned = Awaited<ReturnType<typeof listAssignedFixtures>>[number];
+type Assigned = z.infer<typeof AssignedFixture>;
 
 function Section({
   title,
