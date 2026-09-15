@@ -136,12 +136,15 @@ describe.skipIf(!HAS_DB)("requireScorable without assignments (#707)", () => {
     const adminId = await addMember(orgId, "admin");
     const viewerId = await addMember(orgId, "viewer");
     const strangerId = await makeUser("stranger");
+    const legacyScorerId = await makeUser("legacy-scorer");
 
     const gate: { role: OrgRole | null; userId: string; pass: boolean }[] = [
       { role: "owner", userId: ownerId, pass: true },
       { role: "admin", userId: adminId, pass: true },
       { role: "viewer", userId: viewerId, pass: false },
       { role: null, userId: strangerId, pass: false },
+      // Synthetic AuthCtx — V404 CHECK forbids org_members.role = 'scorer'.
+      { role: "scorer", userId: legacyScorerId, pass: false },
     ];
     for (const probe of gate) {
       const attempt = requireScorable(asRole(orgId, probe.userId, probe.role), fixtures[0].id);
