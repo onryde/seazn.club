@@ -779,7 +779,7 @@ describe("KnockoutTab — a feeder label wraps at every width instead of truncat
    *  before matching, so `md:truncate` counts and so does `truncate`. */
   const clipping = (tokens: string[]) =>
     tokens.filter((token) =>
-      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|text-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
     );
   const labels = [
     "Winner of Quarter-finals, match 2",

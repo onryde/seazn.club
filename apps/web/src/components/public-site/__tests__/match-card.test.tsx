@@ -439,7 +439,7 @@ describe("MatchCard", () => {
     // label really takes a second line is a browser's to show.
     const clipping = (tokens: string[]) =>
       tokens.filter((token) =>
-        /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+        /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|text-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
       );
     const LONG = "Oliver Whitcombe-Harrington of the North Harbour Racquets Club";
     const labels = ["Winner of Quarter-finals, match 2", "Winner of Quarter-finals, match 3"];

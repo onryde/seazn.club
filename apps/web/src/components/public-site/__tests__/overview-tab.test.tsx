@@ -700,7 +700,7 @@ describe("OverviewTab — a waiting side in Next up wraps at every width (review
   // was measured in. It does not show a second line.
   const clipping = (tokens: string[]) =>
     tokens.filter((token) =>
-      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|text-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
     );
   const side = (entrantId: string, name: string) => ({ entrantId, name, short: "", colour: null, badgeUrl: null });
   const labels = ["Winner of Quarter-finals, match 2", "Winner of Quarter-finals, match 3"] as const;
