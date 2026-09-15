@@ -2839,6 +2839,11 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // helpers' comment for why each path keeps its own error type.
     const carryMode = progression.carry ?? "none";
     let carriedDeltas: unknown[] | undefined;
+    // Narrowed separately from `carryMode` — the event write sits outside the
+    // `!== "none"` block (after `stage_seeded`), and TS does not retain the
+    // narrowing across that gap (`carriedDeltas !== undefined` alone is not
+    // enough to prove mode is points|full).
+    let carriedMode: "points" | "full" | undefined;
     if (carryMode !== "none") {
       const nonReal = nonRealCarrySource(resolvedSources);
       if (nonReal) {
@@ -2848,6 +2853,7 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
           carry: carryMode,
         });
       }
+      carriedMode = carryMode;
       carriedDeltas = buildCarryDeltas(sourceTables, entrants, carryMode);
     }
     await tx`
@@ -2867,13 +2873,13 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
       values (${current.division_id}, ${last + 1}, 'stage_seeded',
               ${tx.json({ stageId: next.id, from: completedStageId, entrants } as never)})`;
     let seq = last + 1;
-    if (carriedDeltas !== undefined) {
+    if (carriedDeltas !== undefined && carriedMode !== undefined) {
       // auditable carry (Jul3/05 §3)
       seq += 1;
       await insertStandingsCarriedEvent(tx, current.division_id, seq, {
         stageId: next.id,
         from: completedStageId,
-        mode: carryMode,
+        mode: carriedMode,
         entrants,
       });
     }
