@@ -3,6 +3,7 @@ import "server-only";
 // user_external_accounts and are only touched via privileged `sql` (FORCE RLS
 // with no app_user policy — see V405).
 import { sql, withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 
 export type ExternalAccountProvider = "lichess";
 
@@ -90,4 +91,36 @@ export async function getLichessAccessToken(userId: string): Promise<string | nu
     select access_token from user_external_accounts
      where user_id = ${userId} and provider = 'lichess'`;
   return rows[0]?.access_token ?? null;
+}
+
+export async function assertUserHasLichessForOnlinePlay(userId: string | null): Promise<void> {
+  if (!userId) {
+    throw new HttpError(
+      422,
+      "Sign in and link your Lichess account to register for online play",
+      "LICHESS_LINK_REQUIRED",
+    );
+  }
+  if (!(await getLinkedAccount(userId, "lichess"))) {
+    throw new HttpError(
+      422,
+      "Link your Lichess account in Settings before registering for online play",
+      "LICHESS_LINK_REQUIRED",
+    );
+  }
+}
+
+export async function assertPersonIdsLinkedForOnlinePlay(
+  orgId: string,
+  personIds: string[],
+): Promise<void> {
+  for (const personId of personIds) {
+    if (!(await personHasLichessLink(orgId, personId))) {
+      throw new HttpError(
+        422,
+        "Every player must link a Lichess account before entering online play",
+        "LICHESS_LINK_REQUIRED",
+      );
+    }
+  }
 }
