@@ -210,14 +210,32 @@ const req = (url: string) => new Request(`https://seazn.club${url}`);
 interface Surface {
   /** How to produce the image. */
   render: () => Promise<Response>;
-  /**
-   * Whether the surface's own data carries an organiser-controlled image URL.
-   * `false` is not an exemption — such a surface is still rendered and still
-   * has to request nothing but `data:`, which is exactly what breaks if
-   * someone later gives it a remote `<img>`.
-   */
-  drawsOrgLogo: boolean;
 }
+
+/**
+ * The ONLY surfaces allowed to skip the three logo cases at the bottom of this
+ * file. Each one re-pinned at the code, because an exemption is a claim about a
+ * file, not a label on its driver:
+ *
+ *  - `app/opengraph-image.tsx` — a constant tree of divs and text; it has no
+ *    `<img>` at all.
+ *  - `app/join/[token]/opengraph-image.tsx` — hands `CardFrame` `logo={null}` as
+ *    a literal (`:30`).
+ *  - `app/(public)/r/[ref]/ticket.png/route.tsx` — its only `<img>` (`:156`) is a
+ *    QR code built locally by `QRCode.toDataURL` (`:39`), i.e. a `data:` URI.
+ *
+ * Every OTHER derived surface gets the logo cases by default: a new share image
+ * is driven through the fetcher unless someone edits this set, whose size is
+ * pinned below so the edit shows up as a red and in review. This replaces a
+ * per-driver `drawsOrgLogo` flag, where writing `false` silently skipped all
+ * three cases. The exempt surfaces still run the uniform "nothing but `data:`"
+ * case, which is what reds if one of them later draws a remote `<img>`.
+ */
+const NO_LOGO_SURFACES: ReadonlySet<string> = new Set([
+  "app/opengraph-image.tsx",
+  "app/join/[token]/opengraph-image.tsx",
+  "app/(public)/r/[ref]/ticket.png/route.tsx",
+]);
 
 /**
  * Keyed by the path `satoriSurfaces()` derives. Adding a share image without
@@ -226,41 +244,32 @@ interface Surface {
 const DRIVERS: Record<string, Surface> = {
   "app/opengraph-image.tsx": {
     render: async () => RootOg() as Response,
-    drawsOrgLogo: false,
   },
   "app/join/[token]/opengraph-image.tsx": {
     render: async () => (await JoinOg({ params })) as Response,
-    drawsOrgLogo: false,
   },
   "app/(public)/r/[ref]/ticket.png/route.tsx": {
     render: () => TicketPng(req("/r/SCC-1234/ticket.png"), { params }),
-    drawsOrgLogo: false,
   },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/opengraph-image.tsx": {
     render: async () => (await CompetitionOg({ params })) as Response,
-    drawsOrgLogo: true,
   },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image.tsx": {
     render: async () => (await DivisionOg({ params })) as Response,
-    drawsOrgLogo: true,
   },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/opengraph-image.tsx":
     {
       render: async () => (await FixtureOg({ params })) as Response,
-      drawsOrgLogo: true,
     },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/poster.png/route.tsx":
     {
       render: () => PosterPng(req("/poster.png"), { params }),
-      drawsOrgLogo: true,
     },
   "app/(public)/shared/[orgSlug]/news/[postSlug]/opengraph-image.tsx": {
     render: async () => (await NewsOg({ params })) as Response,
-    drawsOrgLogo: true,
   },
   "app/(public)/shared/[orgSlug]/news/[postSlug]/story.png/route.tsx": {
     render: () => StoryPng(req("/story.png"), { params }),
-    drawsOrgLogo: true,
   },
 };
 
@@ -371,10 +380,24 @@ describe("every public share image draws its logo through the guarded fetcher", 
       "server/og/escape-frame.tsx",
     ]);
   });
+
+  it("the exempt set is exactly the three re-pinned surfaces, and each is really driven", () => {
+    // A fourth exemption is a deliberate edit to this number AND the set above —
+    // never a quiet way to spare a new logo surface its three cases.
+    expect(NO_LOGO_SURFACES.size).toBe(3);
+    expect([...NO_LOGO_SURFACES].filter((file) => !(file in DRIVERS))).toEqual([]);
+  });
+
+  it("every derived surface outside the exempt set is driven through the logo cases", () => {
+    // Keyed on the DERIVED list, not on DRIVERS, so coverage follows the tree.
+    const owed = satoriSurfaces().filter((file) => !NO_LOGO_SURFACES.has(file));
+    expect(owed.length).toBeGreaterThan(0);
+    expect(logoSurfaces.map(([file]) => file).sort()).toEqual(owed);
+  });
 });
 
 const everySurface = Object.entries(DRIVERS);
-const logoSurfaces = everySurface.filter(([, s]) => s.drawsOrgLogo);
+const logoSurfaces = everySurface.filter(([file]) => !NO_LOGO_SURFACES.has(file));
 
 describe.each(everySurface)("%s", (_name, surface) => {
   it("requests nothing but `data:` when it has no logo to draw", async () => {
