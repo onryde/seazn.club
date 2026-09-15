@@ -317,7 +317,8 @@ const LIVE = new Set(["scheduled", "in_play"]);
 /** card-stats.ts's own PLAYED set ("a result exists"), mirrored here so a
  *  purely-derived phase check agrees with what the desk's own played/total
  *  count shows — never abandoned/forfeited/cancelled, which are terminal but
- *  not a played result. */
+ *  not a played result. (Generation-time award byes are counted in card-stats
+ *  via a one-sided-null clause, not this set — see card-stats.ts.) */
 const PLAYED_STATUSES = new Set(["decided", "finalized"]);
 
 /**

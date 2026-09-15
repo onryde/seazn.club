@@ -4,16 +4,15 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 - **Design of record:** `../2026-09-02-competition-desk-design.md`
 - **W1 plan:** `../../plans/2026-09-02-competition-desk-w1.md`
-- **Waves:** W1 competition page (in flight) · W2 fixtures tab as a run sheet ·
-  W3 phone layouts and the in-play band
+- **Waves:** W1–W3 + W4 follow-ups MERGED; W3 item 6 (swiss bye row) CLOSED 2026-09-15
 
 ## Status
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1 | Competition page: derived phase, Needs you, division ledger, tip gating, stage order | In flight — fix round A after a Needs-fixes final review |
-| W2 | Fixtures tab as a run sheet (`stages-panel.tsx`), desktop two-column | Sheet shipped (#725); **Task 5 / stage rail still owed — ruling 13** |
-| W3 | Two-line run-sheet rows, bottom-sheet stage rail, in-play band, odd-Swiss roster-drift miscopy (ruling 12) | Not started — no plan file yet |
+| W1 | Competition page: derived phase, Needs you, division ledger, tip gating, stage order | **MERGED** #708 (2026-09-03) |
+| W2 | Fixtures tab as a run sheet (`stages-panel.tsx`), desktop two-column | **MERGED** #725 (2026-09-05); stage rail landed with W3 |
+| W3 | Two-line run-sheet rows, bottom-sheet stage rail, in-play band | **MERGED** #740 (2026-09-07); W4 follow-ups #742; item 6 bye-row CLOSED 2026-09-15 |
 
 ## Owner rulings
 
@@ -531,14 +530,12 @@ than deferring to W3.
   reverting the branch reddens exactly one test
   (`fixture-row-action.test.ts`, "F5: a timed, awaiting-draw fixture is VIEW,
   never score or assign_scorer") and nothing else.
-- **F6 (closed, no code change)** — grepped `packages/engine/src` for every
-  writer of the bracket-only `award` marker; it is set exclusively in
-  `scheduling/bracket.ts`, never by league/swiss/group/americano/ladder
-  generators. R7(c)'s "accepted information loss" ruling defends a
-  precondition that cannot currently occur through any non-bracket stage —
-  confirmed at the code level, not just "the walkthrough didn't hit it".
-  Nothing to fix unless a future generator starts setting `award` outside a
-  bracket.
+- **F6 (amended 2026-09-15)** — was closed as "award is set exclusively in
+  `scheduling/bracket.ts`". That was true of the engine. Apps/web's
+  `swissGen` now also emits `GenFixture.award` for odd-round sit-outs (W3
+  item 6 follow-up), written through the same insert path as bracket byes.
+  R7(c)'s information-loss ruling still holds for non-bye generators;
+  swiss award rows are intentional sit-outs, not fabricated placements.
 - **F7 (closed, duplicate)** — same defect and same call site as F8/F9's
   12-hour-clock / wrap fix above; `hourCycle: "h23"` already resolves F7's
   symptom. No separate work needed.
@@ -560,74 +557,36 @@ missing bye. Flagging for a future wave; see the original walkthrough report.
 **Nothing is owed to W3 from this gate any more.** F1/F2/F3/F4/F5/F8/F9 are
 fixed; F6/F7 are closed with no code owed.
 
-## W3 item 6 — the odd-Swiss roster-drift miscopy (scoped 2026-09-06, ruling 12)
+## W3 item 6 — the odd-Swiss roster-drift miscopy (CLOSED 2026-09-15)
 
-Located, not yet fixed. Pins below are branch-relative to `main` at
-`ca016e25c`; re-pin by symbol, not by line, before building on them.
+**Status: FIXED** on `fix/swiss-bye-roster-drift` — `swissGen` persists
+`pairRound`'s `bye` as a forfeited award fixture (home set / away null),
+matching knockout. Sit-out is referenced → not in `unplaced`. `card-stats`
+counts `forfeited` award byes (one side null) in `played` so the ledger does not stick at N−1 of N.
+Characterisation test inverted; late-reg sibling still flags only the
+reinstated entrant. Soft `swissAwaitingPairing` banner kept for between-round
+late adds.
 
-**Mechanism.** `swiss.ts`'s `pairRound` puts the sat-out entrant in a separate
-`bye` field, excluded from `pairings`. `stages.ts`'s `swissGen` mapping reads
-only `round.pairings` — `round.bye` is never read, so the sat-out entrant gets
-**no fixture row at all** (not a bye row, not a null-opponent row; simply one
-fewer fixture). Roster drift then computes `unplaced` as active entrants
-referenced by no fixture **stage-wide** (`home_entrant_id`/`away_entrant_id`
-over the whole stage, not round-scoped), so the sat-out entrant lands in
-`unplaced`, `hasDrift` goes true, and the banner + "Rebuild fixtures" CTA
-render. A designed sit-out is being reported as a data fault.
+### Mechanism (historical — how it broke)
+
+`swiss.ts`'s `pairRound` put the sat-out entrant in a separate `bye` field,
+excluded from `pairings`. `stages.ts`'s `swissGen` mapped only `round.pairings`
+— `round.bye` was never read — so the sat-out got no fixture row. Roster
+drift computed `unplaced` stage-wide, so the sit-out looked like a late
+registration and fired the banner.
+
+Two suppression predicates were tried and both failed (2026-09-06): (1)
+`created_at` heuristic — CRITICAL, hid genuine withdraw→reinstate; (2)
+round-membership — vacuous without a stored bye row. Real fix was always
+persisting the bye row.
 
 | Thing | Where |
 | --- | --- |
-| Copy keys | `progression.rosterDrift.heading` / `.rebuildCta` — `dictionaries/en/ui.json` (present and translated in all four locales) |
-| Render sites | `components/v2/stages-panel.tsx` — banner heading, ghosts/unplaced labels, CTA |
-| Predicate | `stages-panel.tsx` — `hasDrift = Boolean(drift && (drift.ghosts.length > 0 \|\| drift.unplaced.length > 0))` |
-| Gate | `stages-panel.tsx` — `canEdit && stage.status !== "complete" && hasDrift && drift` |
-| Drift computation | `server/usecases/stages.ts` — `ghosts` / `unplaced` from the stage-wide referenced-entrant query |
-| Eligibility | `lib/roster-drift-eligibility.ts` — `ROSTER_DRIFT_INELIGIBLE_KINDS = {ladder, americano}`; **swiss is not excluded** |
-| Swiss bye | `packages/engine/src/scheduling/swiss.ts` — `pairRound`'s `bye` field |
-| Swiss mapping | `server/usecases/stages.ts` — `swissGen` maps `round.pairings` only |
-
-**The coverage hole.** `__tests__/stage-roster-drift.test.ts` asserts only a
-KNOCKOUT generation-time bye (a null-opponent row, `status: "forfeited"`).
-`grep -a swiss` across all three roster-drift test files returns **zero hits**.
-No test has ever exercised this path — do not read that suite's green as
-coverage for it.
-
-**CONFIRMED — driven in a browser, 2026-09-06 (Task 1).** A 5-entrant
-progression-less Swiss stage, round 1 generated: the banner rendered exactly
-as predicted, `"Active, but not on a fixture yet: <round-1 sit-out's name>"`.
-Both round-1 fixtures decided, round 2 generated (the sit-out now plays) —
-the banner disappeared entirely, confirming `referenced` is stage-wide: once
-the sat-out entrant has ANY fixture in the stage, they drop out of
-`unplaced` on their own. The flag is transient, not standing.
-
-**Status: NOT FIXED. Ships as tests plus documentation, zero net behaviour
-change.** Two suppression predicates were tried and both failed, for
-different reasons: (1) excluding an unplaced entrant whose `created_at`
-predated the stage's latest round — reviewed out as CRITICAL, because
-`entrants` has no `updated_at` and `patchEntrant` applies no
-active-division lock, so withdrawing an entrant before Generate and
-reinstating it later leaves zero timestamp trace, and the heuristic
-silently and permanently hid that genuine drift case forever; (2) deriving
-the same exclusion from round membership instead — reviewed out as provably
-vacuous (by set algebra, not merely suspected), because `swissGen` never
-writes a fixture row for the byed entrant at all (unlike knockout, which
-represents a bye as a real row), so there is no "I was considered, I sat
-out" fact stored anywhere to suppress on. Both attempts are gone from the
-code; `getStageRosterDrift` is back to its plain pre-Task-1 stage-wide
-computation for every stage kind, unchanged.
-
-**The real fix — swissGen persisting a real bye reference per round, the
-way knockout already does — is OUT of this wave, its own scoped follow-up.**
-Pricing (recorded so the next session does not re-derive it): ~6–10 source
-files. `competition.ts`'s decided-fixture fold is shared by every stage
-kind, not swiss-only. `card-stats.ts` counts a forfeited bye in `total` but
-not in `played`, so the division ledger would read "N-1 of N played"
-permanently for that round — a real regression, not a rounding quirk. A
-swiss-emitted `award` outcome breaks the bracket-only invariant F6
-confirmed. `__tests__/stage-roster-drift.test.ts`'s "KNOWN DEFECT" case
-(under "F3 Task 5 (5a) — getStageRosterDrift") characterises the live
-defect and is EXPECTED to invert once that follow-up ships — that inversion
-is the fix landing, not a regression.
+| Bye emit | `swissGen` — `award: round.bye` GenFixture when `round.bye` set |
+| Insert path | shared `g.award` → status `forfeited` + `outcome.kind: "award"` |
+| Drift | unchanged stage-wide `referencedIds` — bye home counts |
+| Card stats | `played` includes one-sided `forfeited` award byes (not two-sided walkovers) |
+| Tests | `stage-roster-drift.test.ts` (inverted); `card-stats-tbd.test.ts` |
 
 ## W3 planning — false premises found (2026-09-06)
 

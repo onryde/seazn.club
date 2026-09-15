@@ -72,8 +72,12 @@ export interface DivisionCardStats {
   next: NextFixture | null;
 }
 
-// "Played" = a result exists (decided/finalized); denominator excludes
-// cancelled fixtures. Matches how organisers count a matchday.
+// "Played" = a recorded result (decided/finalized), plus generation-time
+// award byes (forfeited with one side null — knockout + swiss sit-outs).
+// Two-sided forfeited walkovers stay out so they match division-phase's
+// PLAYED_STATUSES. Without the bye clause, a sit-out sits in `total`
+// forever and the ledger reads "N-1 of N" for a round that is done.
+// Denominator still excludes cancelled fixtures.
 const PLAYED = ["decided", "finalized"] as const;
 
 // RS004 W2b review finding 1 — declared locally, NOT imported from
@@ -113,7 +117,9 @@ export async function listCompetitionCardStats(
         (select count(*)::int from fixtures f
           join divisions d on d.id = f.division_id
           where d.competition_id = c.id and d.archived_at is null
-            and f.status in ${tx([...PLAYED])}) as played,
+            and (f.status in ${tx([...PLAYED])}
+              or (f.status = 'forfeited'
+                and (f.home_entrant_id is null or f.away_entrant_id is null)))) as played,
         (select count(*)::int from fixtures f
           join divisions d on d.id = f.division_id
           where d.competition_id = c.id and d.archived_at is null
@@ -178,7 +184,10 @@ export async function listDivisionCardStats(
         coalesce((select array_agg(distinct s.kind order by s.kind)
           from stages s where s.division_id = d.id), '{}') as stage_kinds,
         (select count(*)::int from fixtures f
-          where f.division_id = d.id and f.status in ${tx([...PLAYED])}) as played,
+          where f.division_id = d.id
+            and (f.status in ${tx([...PLAYED])}
+              or (f.status = 'forfeited'
+                and (f.home_entrant_id is null or f.away_entrant_id is null)))) as played,
         (select count(*)::int from fixtures f
           where f.division_id = d.id and f.status <> 'cancelled') as total,
         nf.next

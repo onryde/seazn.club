@@ -215,7 +215,7 @@ describe.skipIf(!HAS_DB)("groupByRef — token gate", () => {
 // intent and a real competition row, not just callable in isolation.
 describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", () => {
   it("a paid entry with no refund_lock_at falls back to the competition's own starts_on, and reads refundable while that is still ahead", async () => {
-    const { competition, division } = await stripeSettingsRig(); // rig()'s default starts_on: 2026-09-15 (future)
+    const { competition, division } = await stripeSettingsRig(); // shared rig: clock-relative future starts_on
     const refCode = freshRef();
     const { registration, access_token } = await seedRegistration(
       competition.id,
@@ -254,7 +254,10 @@ describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", (
     const entry = view.entries[0]!;
     expect(entry.refund_policy.refundable).toBe(true);
     expect(entry.refund_policy.amount_cents).toBe(500);
-    expect(entry.refund_policy.deadline).toBe(new Date("2026-09-15").toISOString());
+    // Deadline follows the competition row the rig just wrote — never a
+    // hardcoded calendar day (that literal became "today" and froze this
+    // suite red on 2026-09-15).
+    expect(entry.refund_policy.deadline).toBe(new Date(competition.starts_on!).toISOString());
   });
 
   it("falls back to NOT refundable once the competition itself has already started", async () => {
