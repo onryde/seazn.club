@@ -5825,5 +5825,18 @@
   "admin.captureRecords.unlinked": "Journaux qui ne nomment aucune session",
   "admin.captureRecords.noneForFixture": "Aucun journal de capture pour ce match.",
   "admin.captureRecords.breadcrumb": "Admin",
-  "admin.captureRecords.invalidLines": "Lignes invalides écartées (non conformes ou ressemblant à un secret)"
+  "admin.captureRecords.invalidLines": "Lignes invalides écartées (non conformes ou ressemblant à un secret)",
+  "externalPlay.playOnLichess": "Jouer sur Lichess",
+  "externalPlay.waitingForLink": "Votre lien Lichess arrive environ 15 minutes avant le début ({when}).",
+  "externalPlay.soon": "bientôt",
+  "externalPlay.needsOrganiser": "Cette partie en ligne doit être confirmée par l'organisateur.",
+  "externalPlay.queue.title": "Jeu en ligne — résultat manquant",
+  "externalPlay.queue.help": "Ces parties Lichess ne se sont pas terminées proprement. Réglez-les ici.",
+  "externalPlay.queue.match": "Match {no}",
+  "externalPlay.queue.matchUnknown": "Match",
+  "externalPlay.resolve.homeForfeit": "Forfait du local",
+  "externalPlay.resolve.awayForfeit": "Forfait du visiteur",
+  "externalPlay.resolve.draw": "Nulle",
+  "externalPlay.resolve.noResult": "Sans résultat",
+  "externalPlay.resolve.failed": "Impossible d'enregistrer le résultat. Réessayez."
 }
