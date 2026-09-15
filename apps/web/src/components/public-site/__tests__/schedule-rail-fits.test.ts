@@ -556,6 +556,42 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     console.log(`[rail top line] ${report.join("  |  ")}`);
   });
 
+  it("measures every minute a clock can show, and the widest is the widest HH:MM the face can draw (N1h h2, review-n1g m6)", async () => {
+    // The clock is the one rail word whose values are enumerated rather than
+    // read from a dictionary, and every minute fits with room to spare, so the
+    // fit gate above cannot tell all 1440 clocks from one typed sample. Two
+    // things can, and both read the values `valuesOf` hands that gate:
+    // - they are every minute of a day, 24 x 60 distinct clocks;
+    // - their widest measures the same as the widest HH:MM this face can draw,
+    //   built from the widest hour (00-23) and the widest minute (00-59).
+    //   Advances add, so no other pair is wider.
+    const { words, spans } = railWords(SCHEDULE_SRC);
+    const clock = words.find((w) => w.what === "timeOf()");
+    expect(clock, "the rail cell paints no clock").toBeDefined();
+    const type = typographyOf(clock!.chain, spans, clock!.what);
+    const widestOf = (texts: string[]) =>
+      texts.reduce((best, text) => {
+        const px = measureIn(type, text);
+        return px > best.px ? { text, px } : best;
+      }, { text: "", px: -1 });
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const hour = widestOf(Array.from({ length: 24 }, (_, h) => pad(h)));
+    const minute = widestOf(Array.from({ length: 60 }, (_, m) => pad(m)));
+    const drawable = `${hour.text}:${minute.text}`;
+    const seen: string[] = [];
+    for (const locale of LOCALES) {
+      const values = await valuesOf(clock!.what, locale);
+      expect(new Set(values).size, `${locale}: distinct clocks measured`).toBe(24 * 60);
+      const measured = widestOf(values);
+      expect(
+        measured.px,
+        `${locale}: the widest clock measured is ${JSON.stringify(measured.text)}, the widest this face can draw is ${JSON.stringify(drawable)}`,
+      ).toBeCloseTo(measureIn(type, drawable), 6);
+      seen.push(`${locale} ${values.length} clocks, widest ${JSON.stringify(measured.text)} ${measured.px.toFixed(2)}px`);
+    }
+    console.log(`[rail clock] drawable ${JSON.stringify(drawable)} ${measureIn(type, drawable).toFixed(2)}px  |  ${seen.join("  |  ")}`);
+  });
+
   it("never lets the row shrink a child painted beside a rail word: its class SET holds shrink-0 (N1h h1, review-n1g G1)", () => {
     // A bare `shrink-0` anywhere in the list. `max-sm:shrink-0` holds at some
     // widths only, so it does not count.
