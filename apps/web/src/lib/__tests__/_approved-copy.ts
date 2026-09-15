@@ -359,13 +359,10 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
  *    `server/api-v1/auth.ts:213-214`, gated on `via: session` AND
  *    `scope === "write"` AND `role === "admin"` — a bearer token returns from
  *    `apiKeyAuth` first, so API-KEY writes are never freeze-checked. What IS
- *    enforced everywhere is ADMISSION: `lib/invites.ts:72-79` and
- *    `app/api/orgs/[id]/members/[userId]/role/route.ts:47-54` both count the
- *    quota and throw `PaymentRequiredError` inside the same transaction as the
- *    write. (Both were previously cited at the line that merely RESOLVES the
- *    quota key, six and twenty-five lines earlier respectively — and the
- *    route's own comment on that line says "before the tx", the opposite of
- *    what it was cited for.)
+ *    enforced everywhere is ADMISSION: `lib/invites.ts:63-69` counts the quota
+ *    and throws `PaymentRequiredError` inside the same transaction as the
+ *    invite grant. Role changes among owner/admin/viewer no longer check seats
+ *    (the scorer pool and its promotion gate were retired in #707).
  *
  *    ROUND 3'S REPLACEMENT WAS ALSO WRONG about the surface: it said "enforced
  *    on our public API today", but on that API the normal caller is a bearer
@@ -437,7 +434,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "7d1518387c5c90e4",
   "d1d87a9a3dbdeb8e",
   "b50fa0d68d469172",
-  "83bc6609f7aa1de5",
+  "43d91a56e8035992",
   "7e9eaa52377fc2e6",
   "89e6a00cfa216278",
   "e0bc899381ce86af",
