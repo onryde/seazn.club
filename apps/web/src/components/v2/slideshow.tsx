@@ -239,7 +239,11 @@ export function Slideshow({
             </p>
           </div>
         ) : (
-          <div key={index} className="animate-slide-in mx-auto w-full max-w-6xl">
+          // K-2: from 2xl the slide widens past max-w-6xl, so a TV's width
+          // goes to the rows. 100rem is the smallest cap that fits the final
+          // between two unplayed semi-finals, and two 43-character names, at
+          // 1920 (measured: slideshow-tv-rows.test.tsx). Below 2xl nothing moves.
+          <div key={index} className="animate-slide-in mx-auto w-full max-w-6xl 2xl:max-w-[100rem]">
             <div className="mb-8">
               <p className="font-display text-xl font-semibold uppercase tracking-[0.28em] text-accent-line">
                 {slide.division}
@@ -316,14 +320,21 @@ export function Slideshow({
                   // ("Losers' round 1") and takes a wider first column that
                   // may wrap to two lines; an organiser board row carries none
                   // and keeps its short code in the original 4rem column.
+                  //
+                  // K-2: the name tracks are sized by their names, not equal
+                  // halves, and they are the only tracks that take free space
+                  // (the vs is max-content). A long name beside a short one
+                  // takes the room the short one leaves; a name is cut only
+                  // when the two together overflow the row. The cost: "vs" no
+                  // longer sits on one axis down the list.
                   const named = f.roundName !== undefined;
                   return (
                     <li
                       key={i}
                       className={`relative grid ${
                         named
-                          ? "grid-cols-[9rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem]"
-                          : "grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem]"
+                          ? "grid-cols-[9rem_minmax(0,auto)_max-content_minmax(0,auto)_6.5rem]"
+                          : "grid-cols-[4rem_minmax(0,auto)_max-content_minmax(0,auto)_6.5rem]"
                       } items-center gap-x-6 rounded-lg px-7 py-3.5 ring-1 ring-inset ring-white/10 ${
                         live ? "bg-white/[0.09]" : "bg-white/[0.05]"
                       }`}
