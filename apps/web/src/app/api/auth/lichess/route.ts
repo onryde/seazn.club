@@ -3,8 +3,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
   LICHESS_AUTH_URL,
+  LICHESS_OAUTH_NEXT_COOKIE,
   LICHESS_OAUTH_SCOPES,
-  OAUTH_STATE_COOKIE,
+  LICHESS_OAUTH_STATE_COOKIE,
   lichessConfigured,
   lichessRedirectUri,
 } from "@/lib/oauth";
@@ -25,7 +26,7 @@ export async function GET(req: Request) {
 
   const state = crypto.randomUUID();
   const jar = await cookies();
-  jar.set(OAUTH_STATE_COOKIE, state, {
+  jar.set(LICHESS_OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -35,7 +36,7 @@ export async function GET(req: Request) {
 
   const next = new URL(req.url).searchParams.get("next");
   if (next && next.startsWith("/") && !next.startsWith("//")) {
-    jar.set("seazn_oauth_next", next, {
+    jar.set(LICHESS_OAUTH_NEXT_COOKIE, next, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
