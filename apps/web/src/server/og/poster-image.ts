@@ -73,12 +73,21 @@ export const POSTER_IMAGE_MAX_EDGE = 1024;
  * real photograph that large is far past the byte cap anyway, so in practice
  * this is what a well-compressing image — flat art, or a bomb — meets.
  *
- * What one decode at the ceiling holds, measured with sharp 0.34.5 at libvips
- * concurrency 1 (one vCPU, as production runs): JPEG ~11 MB and WebP ~12 MB,
- * because sharp shrinks both WHILE loading (libjpeg's 1/2–1/8 DCT scaling,
- * libwebp's scaled decode); PNG ~72 MB, because it has no shrink-on-load and
- * is streamed at full width. The PNG figure grows with libvips threads:
- * ~126 MB at 4, ~175 MB at 12.
+ * What one decode at the ceiling holds, measured with sharp 0.34.5 (macOS
+ * RSS): JPEG ~11 MB and WebP ~12 MB at one libvips thread (22 and 14 MB at
+ * 12), because sharp shrinks both WHILE loading (libjpeg's 1/2–1/8 DCT
+ * scaling, libwebp's scaled decode). PNG has no shrink-on-load and is streamed
+ * at full width in per-thread regions, so its peak follows libvips' thread
+ * count: ~72 MB at 1 thread, ~74 MB at 2, ~126 MB at 4, ~175 MB at 12.
+ *
+ * Nothing in the app sets that count, deliberately: `sharp.concurrency()` is
+ * process-wide and would throttle `/_next/image` too. On node:26-alpine (musl)
+ * sharp leaves libvips at the vCPU count, and Next's image optimizer halves it
+ * on first use when it is above 1. So production (`fly.toml`,
+ * `shared-cpu-1x`, 1 GB) runs 1 thread, ~72 MB; staging (`fly.stg.toml`,
+ * `shared-cpu-4x`, 1 GB) runs 4, ~126 MB, and 2 (~74 MB) once `/_next/image`
+ * has served a request. It fits in 1 GB either way. Inferred from those files
+ * and sharp's own rule, not measured on Fly.
  *
  * sharp checks this from the image HEADER (it throws "Input image exceeds
  * pixel limit" at `.metadata()` below), so an oversized canvas is refused
@@ -92,7 +101,8 @@ export const POSTER_IMAGE_MAX_PIXELS = 8688 * 5792;
  * above — and GIF is a screen format, not a camera one: the org content
  * uploader takes GIFs for prose images, and a typed `badge_url` can point at
  * one. So a 4K UHD frame, 3840×2160 = 8,294,400 px; a 9 MP GIF measured
- * ~65 MB at libvips concurrency 1.
+ * ~65 MB at one libvips thread (production's count, above; not measured at
+ * more).
  */
 export const POSTER_IMAGE_MAX_GIF_PIXELS = 3840 * 2160;
 
@@ -219,12 +229,15 @@ function deadline(signal: AbortSignal): Promise<never> {
  * Next's `/_next/image` optimizer runs sharp in this same process, outside
  * this queue (`next/image` in the org layout and the sponsors board), so a
  * cold optimizer request that lands on a poster render adds its peak to this
- * one. It costs no throughput where
- * this runs: the machine is one shared vCPU (`fly.toml`, `shared-cpu-1x`).
+ * one. It costs no throughput in production, which is one shared vCPU
+ * (`fly.toml`, `shared-cpu-1x`); staging's four (`fly.stg.toml`,
+ * `shared-cpu-4x`) give up parallel decodes for the same bound.
  *
- * Measured at the ceilings above (sharp 0.34.5, libvips concurrency 1): a
- * render drawing three PNGs at `POSTER_IMAGE_MAX_PIXELS` peaks ~73 MB one at
- * a time — the same as one alone — against ~216 MB in parallel.
+ * Measured at the ceilings above (sharp 0.34.5, one libvips thread, which is
+ * production's count): a render drawing three PNGs at `POSTER_IMAGE_MAX_PIXELS`
+ * peaks ~73 MB one at a time — the same as one alone — against ~216 MB in
+ * parallel. At staging's 4 threads one alone is ~126 MB; the per-thread figures
+ * are at `POSTER_IMAGE_MAX_PIXELS`. Either fits in 1 GB.
  */
 let decodeQueue: Promise<unknown> = Promise.resolve();
 
