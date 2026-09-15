@@ -25,7 +25,20 @@ import type { ReactNode } from "react";
 // effect in `knockout-tab.tsx` finds every chip already inside the rail and
 // leaves `scrollLeft` at 0. The rail keeps `tabIndex={0}`, its role and its
 // name at every width — tabindex cannot vary by media query (AGENTS.md 23).
-export const HUB_RAIL_CLASS = "flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4 lg:flex-wrap";
+//
+// It SNAPS to chip starts (visual gate C-1). A scrolled rail used to come to
+// rest with its leading chip cut mid-word ("uarter-finals", "als 2/2"). The
+// snap is `snap-proximity`, not mandatory, so a swipe that stops far from every
+// chip stays where it was left. The scroll padding is the inset padding's own
+// value, and `max-md:` like it, so a snapped chip lands on the gutter.
+// `revealScrollLeft` (knockout-tab.tsx) aligns a revealed chip to that same
+// padding, so its answer IS a snap point and the browser has nothing to move.
+// Change one and you must change the other. Snapping cannot help at the very END
+// of a rail: every chip start past the last reachable offset clamps to that
+// offset, so a rail scrolled fully right can still cut its leading chip. That
+// is geometry, not a rule this class can express.
+export const HUB_RAIL_CLASS =
+  "flex snap-x snap-proximity gap-2 overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:scroll-px-4 lg:flex-wrap";
 
 // `min-h-11` is the 44px tap target (AGENTS.md). NOTE the divergence from
 // `PublicTabRail`, which splits the button (hit area) from an inner span (the
@@ -35,8 +48,12 @@ export const HUB_RAIL_CLASS = "flex gap-2 overflow-x-auto max-md:-mx-4 max-md:px
 // that. The chip therefore IS the tap target, 44px tall — which is the
 // ordinary shape of a mobile filter chip, and a deliberate difference from the
 // tab rail directly above it rather than a copy of it that went wrong.
+//
+// `snap-start` is the other half of the rail's `snap-x` (above). It does
+// nothing on a chip whose parent does not scroll, such as the Knockout tab's
+// view switch.
 const CHIP_CLASS =
-  "inline-flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-full px-4 text-sm tabular-nums transition";
+  "inline-flex min-h-11 shrink-0 snap-start items-center whitespace-nowrap rounded-full px-4 text-sm tabular-nums transition";
 const CHIP_ON = "bg-accent font-semibold text-accent-ink shadow-sm";
 const CHIP_OFF = "font-medium text-ink-muted hover:bg-accent-soft hover:text-accent-strong";
 

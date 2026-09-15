@@ -308,11 +308,25 @@ function withPendingSides(
  * rail's visible window, moving the rail as little as possible — and not at
  * all when the chip is already visible.
  *
- * Both boxes in VIEWPORT coordinates (`getBoundingClientRect`); `width` is the
- * rail's `clientWidth`, and the paddings are the rail's own, so a chip is
- * brought in clear of the phone gutter the rail bleeds into. A chip wider than
- * the window shows its start. Never `scrollIntoView`: that also scrolls the
- * PAGE to the rail, which is not what a round tap asked for.
+ * AND ALWAYS TO A CHIP BOUNDARY (visual gate C-1). The rail snaps to chip
+ * starts (`HUB_RAIL_CLASS`). This used to answer "just far enough to show the
+ * chip's end", a mid-chip offset that left the leading chip cut mid-word
+ * ("uarter-finals"). Under the snap it was worse: the browser re-snapped that
+ * offset to the NEAREST chip start. Measured in Chromium over 620 load and tap
+ * cases at phone widths, that start was behind the pressed chip's end in 59 of
+ * them, which left the very chip being revealed cut on the right. So a chip past
+ * the right edge now takes the least scroll that puts SOME chip's start on the
+ * gutter and still shows the pressed chip whole: the first such boundary at or
+ * before the pressed chip. A chip past the left edge already lands on its own
+ * start. An answer beyond the rail's end is clamped by the browser to the end,
+ * which is itself a snap position and still shows the pressed chip whole.
+ *
+ * Both boxes, and `starts` (every chip's left edge, in rail order), are in
+ * VIEWPORT coordinates (`getBoundingClientRect`). `width` is the rail's
+ * `clientWidth`. The paddings are the rail's own (equal to its scroll padding),
+ * so a chip is brought in clear of the phone gutter the rail bleeds into. A chip
+ * wider than the window shows its start. Never `scrollIntoView`: that also
+ * scrolls the PAGE to the rail, which is not what a round tap asked for.
  *
  * Pure so every arm is unit-testable; the element reads and the write live in
  * the layout effect below, which only a browser can run.
@@ -320,6 +334,7 @@ function withPendingSides(
 export function revealScrollLeft(
   rail: { scrollLeft: number; left: number; width: number; padStart: number; padEnd: number },
   chip: { left: number; width: number },
+  starts: readonly number[],
 ): number {
   const start = rail.left + rail.padStart;
   const end = rail.left + rail.width - rail.padEnd;
@@ -327,7 +342,13 @@ export function revealScrollLeft(
   if (chip.left < start) {
     next -= start - chip.left;
   } else if (chip.left + chip.width > end) {
-    next += Math.min(chip.left + chip.width - end, chip.left - start);
+    // How far each chip boundary is from the gutter. The least of them that
+    // shows the pressed chip's end, without passing the pressed chip's own
+    // start. If there is none (a chip wider than the window), its own start.
+    const need = chip.left + chip.width - end;
+    const own = chip.left - start;
+    const shifts = starts.map((left) => left - start).filter((shift) => shift >= need && shift <= own);
+    next += shifts.length > 0 ? Math.min(...shifts) : own;
   }
   return Math.max(0, next);
 }
@@ -622,6 +643,9 @@ export function KnockoutTab({ doc, dict, locale, now, initialDivision }: Knockou
           padEnd: Number.parseFloat(style.paddingRight) || 0,
         },
         chip.getBoundingClientRect(),
+        // Every chip's own left edge, so the answer is a boundary the rail
+        // snaps to rather than an offset the browser would move again.
+        Array.from(rail.children, (child) => child.getBoundingClientRect().left),
       );
     }
   }, [pressedKey, mode]);

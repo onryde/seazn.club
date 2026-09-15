@@ -455,6 +455,31 @@ describe("KnockoutTab — the round rail", () => {
     expect(h).toMatch(/data-testid="mh-knockout-divisions"[^>]*role="group"[^>]*tabindex="0"[^>]*aria-label="/);
   });
 
+  it("SNAPS to chip boundaries, so the chip at the rail's leading edge is whole or gone, never cut mid-word (C-1)", () => {
+    // Visual gate C-1: at phone widths the rail's leading chip read
+    // "uarter-finals", "ualifier 1", "als 2/2". The fix is `snap-x
+    // snap-proximity` on the track, `snap-start` on each chip, and scroll
+    // padding EQUAL to the track's own inset padding. The reveal effect aligns
+    // a chip to that padding, so if the two differed, every reveal would land
+    // off a snap point and the browser would move it again. Proximity, not
+    // mandatory: a hand swipe that stops far from any chip is left where it
+    // stopped. The division rail is the same rail (`HUB_RAIL_CLASS`).
+    //
+    // Tokens only. That Chromium obeys them, and what the reveal does under
+    // them, was measured by the N2 harness, not here.
+    const h = render(MULTI);
+    for (const testid of [`mh-knockout-rail-${VIEW}`, "mh-knockout-divisions"]) {
+      const tokens = classOf(h, testid);
+      expect(tokens, testid).toEqual(
+        expect.arrayContaining(["snap-x", "snap-proximity", "max-md:px-4", "max-md:scroll-px-4"]),
+      );
+      expect(tokens, testid).not.toContain("snap-mandatory");
+    }
+    for (const testid of [`mh-knockout-round-${VIEW}-main-1`, `mh-knockout-round-${VIEW}-main-3`, "mh-knockout-division-all"]) {
+      expect(classOf(h, testid), testid).toContain("snap-start");
+    }
+  });
+
   it("exactly one chip is pressed PER VIEW when two views render", () => {
     const h = render(MULTI);
     expect(pressedRounds(h)).toEqual([
@@ -1541,24 +1566,56 @@ describe("revealScrollLeft — the arithmetic behind scrolling the pressed chip 
   // pinned here is every arm of the decision.
   const rail = { scrollLeft: 0, left: 0, width: 390, padStart: 16, padEnd: 16 };
 
+  // C-1 (visual gate): the rail left its leading chip cut mid-glyph
+  // ("uarter-finals", "ualifier 1", "als 2/2"), because a reveal past the RIGHT
+  // edge scrolled "just far enough to show its end", which is almost never a
+  // chip boundary. Snapping the rail to chip starts did not fix that by itself.
+  // Measured in Chromium (N2 harness, run B), the browser re-snapped that
+  // mid-chip offset to the NEAREST chip start. In 59 of 620 load and tap cases,
+  // that start was behind the pressed chip's end, so the chip the reveal exists
+  // to show was left cut on the right. The reveal therefore lands on a chip
+  // boundary itself. `starts` is every chip's left edge, in viewport
+  // coordinates, in rail order.
+  const starts = [16, 150, 290, 500];
+
   it("a chip already inside the window does not move the rail", () => {
-    expect(revealScrollLeft(rail, { left: 100, width: 120 })).toBe(0);
+    expect(revealScrollLeft(rail, { left: 150, width: 120 }, starts)).toBe(0);
   });
 
-  it("a chip past the RIGHT edge scrolls just far enough to show its end", () => {
-    // window ends at 390 - 16 = 374; the chip ends at 620.
-    expect(revealScrollLeft(rail, { left: 500, width: 120 })).toBe(246);
+  it("a chip past the RIGHT edge scrolls to the FIRST chip boundary that shows it whole, never to a mid-chip offset (C-1)", () => {
+    // The window is [16, 374]. The chip ends at 620, which is 246 past the window.
+    // The old answer, 246, would put the chip that starts at 290 at 44, across
+    // the gutter with its glyphs cut. The boundaries are 0 / 134 / 274 / 484 away.
+    // 274 is the least that shows the pressed chip whole, and it lands the
+    // chip at 290 exactly on the gutter.
+    const next = revealScrollLeft(rail, { left: 500, width: 120 }, starts);
+    expect(next).toBe(274);
+    expect(starts.map((s) => s - next)).toContain(rail.padStart);
+    expect(500 - next).toBeGreaterThanOrEqual(16);
+    expect(620 - next).toBeLessThanOrEqual(374);
+  });
+
+  it("a boundary EXACTLY at the least shift is taken, not skipped for the next one", () => {
+    // The chip at 262 is exactly 246 from the gutter, the least scroll that shows the pressed chip's end.
+    expect(revealScrollLeft(rail, { left: 500, width: 120 }, [16, 262, 500])).toBe(246);
+  });
+
+  it("the pressed chip's OWN start, when no earlier boundary shows it whole", () => {
+    // Showing its end needs 126. The earlier boundaries are 0 and 44 away, not enough.
+    expect(revealScrollLeft(rail, { left: 300, width: 200 }, [16, 60, 300])).toBe(284);
   });
 
   it("a chip past the LEFT edge scrolls back to put its start at the gutter", () => {
-    expect(revealScrollLeft({ ...rail, scrollLeft: 300 }, { left: -40, width: 120 })).toBe(244);
+    expect(revealScrollLeft({ ...rail, scrollLeft: 300 }, { left: -40, width: 120 }, [-40, 90])).toBe(244);
   });
 
-  it("a chip WIDER than the window shows its start rather than its end", () => {
-    expect(revealScrollLeft(rail, { left: 400, width: 500 })).toBe(384);
+  it("a chip WIDER than the window shows its start rather than its end, and never a LATER chip's boundary", () => {
+    // Showing its end would need 526. The only boundary that far is the NEXT
+    // chip's, 934 away, and it would scroll the pressed chip clean off the left.
+    expect(revealScrollLeft(rail, { left: 400, width: 500 }, [16, 400, 950])).toBe(384);
   });
 
   it("never scrolls to a negative offset", () => {
-    expect(revealScrollLeft({ ...rail, scrollLeft: 10 }, { left: -100, width: 50 })).toBe(0);
+    expect(revealScrollLeft({ ...rail, scrollLeft: 10 }, { left: -100, width: 50 }, [-100])).toBe(0);
   });
 });
