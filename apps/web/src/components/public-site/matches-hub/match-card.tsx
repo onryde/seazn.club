@@ -189,20 +189,22 @@ export function MatchCard({
             AGENTS.md, "`truncate` needs `min-w-0` on the whole ancestor
             chain".
 
-            A side with nobody in it WRAPS below md instead (visual gate C-2).
-            Its name is a feeder label, "Winner of Quarter-finals, match 2",
-            and at 320 two such labels truncated to the same "Winner of
-            Quarter-finals, matc…", so a spectator could not tell which match
-            feeds which: the one thing the label is for. The card has the
-            height for a second line. From md, where the same labels fit, it
-            truncates as before. A real entrant keeps `truncate` at every
-            width, because a name is an identifier that can be genuinely too
-            long. Its class string is unchanged. */}
+            A side with nobody in it WRAPS instead, at every width (visual gate
+            C-2, review N2 I1). Its name is a feeder label, "Winner of
+            Quarter-finals, match 2", and at 320 two such labels truncated to
+            the same "Winner of Quarter-finals, matc…", so a spectator could not
+            tell which match feeds which: the one thing the label is for. The
+            card has the height for a second line. It used to truncate again
+            from md, where the Knockout tab's two-up cards have room; the
+            Overview's Next up does not (three-up from md, the split main column
+            from lg), and the same two labels read identically there at
+            768-1280. A real entrant keeps `truncate` at every width, because a
+            name is an identifier that can be genuinely too long. */}
         <span
           className={
             entrant
               ? "min-w-0 flex-1 truncate text-[15px]"
-              : "min-w-0 flex-1 break-words text-[15px] italic text-ink-muted md:truncate"
+              : "min-w-0 flex-1 break-words text-[15px] italic text-ink-muted"
           }
           title={side.name}
         >

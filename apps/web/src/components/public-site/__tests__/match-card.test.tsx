@@ -408,8 +408,8 @@ describe("MatchCard", () => {
     // Mutant (a), Step 7: drop `min-w-0` from the name span — token-exact, so
     // it reds on the CLASS itself, not merely the text. Pinned on the LONG
     // ENTRANT, the cell this test is named for. It used to be pinned on the TBD
-    // side's span, and since C-2 that side truncates only from `md` — which a
-    // substring regex went on reading as `truncate`.
+    // side's span, and since C-2 that side does not truncate at all (it used to
+    // from `md`, which a substring regex went on reading as `truncate`).
     const cls = h.match(new RegExp(`<span class="([^"]*)" title="${longName}">`))?.[1];
     expect(cls, "the long entrant's name span").toBeDefined();
     expect(cls!.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "truncate"]));
@@ -418,17 +418,24 @@ describe("MatchCard", () => {
     expect(h).not.toContain('title=""');
   });
 
-  it("C-2: a side with nobody in it yet WRAPS below md instead of truncating, so two feeder labels sharing a prefix stay tellable apart at 320; a real entrant keeps its ellipsis", () => {
+  it("C-2 / review N2 I1: a side with nobody in it yet WRAPS at every width, with no clipping token under any variant, so two feeder labels sharing a prefix stay tellable apart; a real entrant keeps its ellipsis", () => {
     // Visual gate, pending-slot-cards-320: two semi-final cards both read
     // "Winner of Quarter-finals, matc…", so a spectator could not tell which
     // quarter-final feeds which semi — the one thing that label is for. The
-    // card has the height for a second line. A real entrant's name is an
-    // identifier that can be genuinely too long, so it keeps `truncate`.
+    // card has the height for a second line. Review N2 I1: truncating again
+    // from md cut the same two labels identically in the Overview's three-up
+    // Next-up grid and its lg split column, so a waiting side wraps at every
+    // width. A real entrant's name is an identifier that can be genuinely too
+    // long, so it keeps `truncate`.
     //
-    // A class scan, not a measurement (vitest is `environment: "node"`): this
-    // pins that a waiting side's span ASKS to wrap below md and to truncate from
-    // md, and that an entrant's does not. That the label really takes a second
-    // line at 320 is a browser's to show.
+    // A class scan, not a measurement (vitest is `environment: "node"`): the
+    // tokens are read as a SET and each is matched with its variant prefix
+    // stripped, so `md:truncate` is caught as surely as `truncate`. That the
+    // label really takes a second line is a browser's to show.
+    const clipping = (tokens: string[]) =>
+      tokens.filter((token) =>
+        /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+      );
     const LONG = "Oliver Whitcombe-Harrington of the North Harbour Racquets Club";
     const labels = ["Winner of Quarter-finals, match 2", "Winner of Quarter-finals, match 3"];
     const side = (entrantId: string, name: string) => ({ entrantId, name, short: "", colour: null, badgeUrl: null });
@@ -445,9 +452,8 @@ describe("MatchCard", () => {
     expect(labels[0]).not.toBe(labels[1]);
     for (const label of labels) {
       const tokens = nameClass(label);
-      expect(tokens, label).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "break-words", "md:truncate"]));
-      expect(tokens, `${label}: no truncation below md`).not.toContain("truncate");
-      expect(tokens, label).not.toContain("whitespace-nowrap");
+      expect(tokens, label).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "break-words"]));
+      expect(clipping(tokens), `${label}: clipping tokens, any breakpoint`).toEqual([]);
     }
     // The positive pair, same markup: a real entrant keeps its ellipsis at every width.
     for (const name of [LONG, "Dev"]) {

@@ -761,17 +761,26 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
   });
 });
 
-describe("KnockoutTab — a feeder label wraps on a phone instead of truncating (C-2)", () => {
+describe("KnockoutTab — a feeder label wraps at every width instead of truncating (C-2, review N2 I1)", () => {
   // Visual gate, pending-slot-cards-320: a 32-draw's semi-final cards both read
   // "Winner of Quarter-finals, matc…", so which quarter-final feeds which semi
-  // could not be told apart. At 390 the same labels fit. This is that screen's
-  // shape. The semi-finals are this view's FIRST round, so it opens on them and
-  // no pair sentence replaces the document's own labels. One card is a real
-  // entrant against a feeder label, the other is two feeder labels.
+  // could not be told apart. This is that screen's shape. The semi-finals are
+  // this view's FIRST round, so it opens on them and no pair sentence replaces
+  // the document's own labels. One card is a real entrant against a feeder
+  // label, the other is two feeder labels. Review N2 I1: the label truncated
+  // again from md, and the two-up grid at md cut the same way, so a waiting
+  // side now asks for no clipping at ANY breakpoint.
   //
   // A class scan (vitest is `environment: "node"`): it pins that each label is
-  // in the markup whole and that its span asks to wrap below md. That it really
-  // takes a second line at 320 is not something this environment can see.
+  // in the markup whole and that its span carries no clipping token under any
+  // variant. That it really takes a second line is not something this
+  // environment can see.
+  /** Tokens that clip a line, at any breakpoint: the variant prefix is stripped
+   *  before matching, so `md:truncate` counts and so does `truncate`. */
+  const clipping = (tokens: string[]) =>
+    tokens.filter((token) =>
+      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+    );
   const labels = [
     "Winner of Quarter-finals, match 2",
     "Winner of Quarter-finals, match 3",
@@ -786,7 +795,7 @@ describe("KnockoutTab — a feeder label wraps on a phone instead of truncating 
     knockouts: [knockoutView("cup", "premier", [koRound("main-1", SF, ["s1", "s2"]), koRound("main-2", F, ["f1"])])],
   });
 
-  it("each semi-final card carries its feeder label WHOLE, in a span that wraps below md; the real entrant beside it keeps its ellipsis", () => {
+  it("each semi-final card carries its feeder label WHOLE, in a span with no clipping token at any breakpoint; the real entrant beside it keeps its ellipsis", () => {
     const h = render(FEEDERS);
     expect(cardIds(h)).toEqual(["s1", "s2"]);
     const nameClass = (title: string) => {
@@ -796,8 +805,8 @@ describe("KnockoutTab — a feeder label wraps on a phone instead of truncating 
     };
     for (const label of labels) {
       const tokens = nameClass(label);
-      expect(tokens, label).toEqual(expect.arrayContaining(["break-words", "md:truncate"]));
-      expect(tokens, `${label}: no truncation below md`).not.toContain("truncate");
+      expect(tokens, label).toContain("break-words");
+      expect(clipping(tokens), `${label}: clipping tokens, any breakpoint`).toEqual([]);
     }
     const amelia = nameClass("Amelia Hartley");
     expect(amelia).toContain("truncate");

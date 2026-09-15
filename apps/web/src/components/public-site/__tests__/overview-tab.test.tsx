@@ -686,6 +686,65 @@ describe("OverviewTab — the Live-now rail", () => {
   });
 });
 
+describe("OverviewTab — a waiting side in Next up wraps at every width (review N2 I1)", () => {
+  // Next up is three-up from md (`md:grid-cols-3`) and, from lg, sits in the
+  // split main column. The reviewer's Geist probe measured name columns of
+  // 167px at 768, 189px at 834 and 138px at 1024/1280, and with `md:truncate` on
+  // a waiting side two semi-finals' "Winner of Quarter-finals, match 2" and
+  // "…match 3" read the same "Winner of Quarter-…" in every locale: C-2's defect,
+  // from md up. A waiting side now carries no clipping token at any breakpoint;
+  // an entrant's name keeps its ellipsis.
+  //
+  // A class scan: node vitest has no widths, so this pins the TOKENS on the two
+  // spans, and that the grid and the split they sit in are the ones the defect
+  // was measured in. It does not show a second line.
+  const clipping = (tokens: string[]) =>
+    tokens.filter((token) =>
+      /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+    );
+  const side = (entrantId: string, name: string) => ({ entrantId, name, short: "", colour: null, badgeUrl: null });
+  const labels = ["Winner of Quarter-finals, match 2", "Winner of Quarter-finals, match 3"] as const;
+  const doc = hubDoc({
+    matches: [
+      m("sf1", "upcoming", "2026-09-05T15:00:00.000Z", "premier", {
+        header: { sides: [side("e1", "Amelia Hartley"), side("", labels[0])] },
+      }),
+      m("sf2", "upcoming", "2026-09-05T16:00:00.000Z", "premier", {
+        header: { sides: [side("", labels[1]), side("e2", "Dev")] },
+      }),
+    ],
+  });
+  /** One name span's class tokens, found by its whole title and text inside one card. */
+  const nameTokens = (card: string, name: string): string[] => {
+    const cls = card.match(new RegExp(`<span class="([^"]*)" title="${name}">${name}</span>`))?.[1];
+    expect(cls, `the name span for "${name}", whole`).toBeDefined();
+    return cls!.split(" ");
+  };
+
+  it("in the md three-up grid and the lg split column, a feeder label's span has no clipping token at any breakpoint, while the entrant beside it keeps truncate", () => {
+    const h = render(doc);
+    // The premise: both cards are in Next up, in the grid and the split the
+    // defect was measured in.
+    expect(cardIds(h, "next-up")).toEqual(["sf1", "sf2"]);
+    expect(classesOf(h, "mh-next-up")).toContain("md:grid-cols-3");
+    expect(tagOf(h, "mh-overview")).toContain(`data-split="true"`);
+    expect(classesOf(h, "mh-overview")).toContain("lg:grid-cols-[minmax(0,1fr)_20rem]");
+
+    const cards = { sf1: cardHtml(h, "mh-next-up-card-sf1"), sf2: cardHtml(h, "mh-next-up-card-sf2") };
+    for (const [card, label] of [[cards.sf1, labels[0]], [cards.sf2, labels[1]]] as const) {
+      const tokens = nameTokens(card, label);
+      expect(clipping(tokens), `${label}: clipping tokens, any breakpoint`).toEqual([]);
+      expect(tokens, label).toContain("break-words");
+    }
+    // The positive pair, same cards: an entrant's name still truncates.
+    for (const [card, name] of [[cards.sf1, "Amelia Hartley"], [cards.sf2, "Dev"]] as const) {
+      const tokens = nameTokens(card, name);
+      expect(tokens, name).toContain("truncate");
+      expect(tokens, name).not.toContain("break-words");
+    }
+  });
+});
+
 describe("OverviewTab — next up and the table previews", () => {
   it("an OVERDUE fixture is not 'next' — the rail and the status line must name the same match", () => {
     // Review I1, and the finding neither the 773-test suite nor a 40-mutant
