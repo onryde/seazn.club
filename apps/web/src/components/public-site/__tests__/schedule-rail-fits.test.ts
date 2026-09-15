@@ -11,18 +11,28 @@
 // is no layout and no font. What can see it is the font's own metrics, so this
 // suite measures the real dictionary values in the real faces
 // (`__tests__/font-advance.ts`) against the rail track read out of the
-// component's own Tailwind class. Expected values are derived end to end:
-// the strings come from `publicScheduleCopy`, the builder BOTH production
-// callers use, and the date from the component's own exported formatter.
+// component's own Tailwind class. The rail does not scroll: it is a fixed
+// column inside an `overflow-hidden` list, so a word that does not fit is
+// clipped SILENTLY, and this suite is the only guard against it.
+//
+// Nothing is typed here that the source already says (N1g g4, review-n1f m3):
+// - the words are the `copy.<key>` / `timeOf(` / `shortDate(` calls the rail
+//   cell itself makes, parsed out of `schedule.tsx`, and valued through
+//   `publicScheduleCopy`, the builder BOTH production callers use;
+// - the typography — face, weight, size, tracking, case, whether the text can
+//   wrap, and the fixed-width dot and gap beside a word — is read off the
+//   classes around each word and priced from Tailwind's own theme;
+// - the locales are the app's `LOCALES`.
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { toLocale } from "@/lib/i18n-constants";
+import { LOCALES, toLocale } from "@/lib/i18n-constants";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
-import { dateTagFor, shortDate } from "../schedule";
+import { dateTagFor, shortDate, timeOf } from "../schedule";
 import { openFace, minContentWidth, textWidth, type Face } from "./font-advance";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -39,11 +49,15 @@ const SCHEDULE_SRC = readFileSync(path.join(HERE, "../schedule.tsx"), "utf8");
 // chip is `font-bold`, and until N1g g3 it was measured in a regular face,
 // 0.9px narrower than it paints (review-n1f m2).
 const FONTS = path.join(WEB, "assets/fonts");
-const GEIST_400 = openFace(path.join(FONTS, "Geist-Regular.ttf"), "Geist Regular");
-const GEIST_700 = openFace(path.join(FONTS, "Geist-Bold.ttf"), "Geist Bold");
 const FACES: Record<"display" | "body", Record<number, Face>> = {
-  display: { 600: openFace(path.join(FONTS, "BarlowCondensed-SemiBold.ttf"), "Barlow Condensed SemiBold") },
-  body: { 400: GEIST_400, 700: GEIST_700 },
+  display: {
+    600: openFace(path.join(FONTS, "BarlowCondensed-SemiBold.ttf"), "Barlow Condensed SemiBold"),
+    700: openFace(path.join(FONTS, "BarlowCondensed-Bold.ttf"), "Barlow Condensed Bold"),
+  },
+  body: {
+    400: openFace(path.join(FONTS, "Geist-Regular.ttf"), "Geist Regular"),
+    700: openFace(path.join(FONTS, "Geist-Bold.ttf"), "Geist Bold"),
+  },
 };
 function faceFor(family: "display" | "body", weight: number): Face {
   const face = FACES[family][weight];
@@ -51,11 +65,35 @@ function faceFor(family: "display" | "body", weight: number): Face {
   return face;
 }
 
-// The live chip: `text-[11px] font-bold uppercase tracking-wide` on the body
-// face, after its `h-1.5 w-1.5` dot and `gap-1` (6px + 4px).
-const LIVE_DOT_AND_GAP = 10;
-const chipWidthIn = (face: Face, text: string) => minContentWidth(face, text, 11, 0.025) + LIVE_DOT_AND_GAP;
-const liveChipWidth = (text: string) => chipWidthIn(faceFor("body", 700), text);
+// ---- What a class is worth: Tailwind's own theme (N1g g4) ------------------
+// The installed `tailwindcss/theme.css`, then `globals.css`; a later
+// declaration of the same variable wins, as it does in the cascade.
+const THEME_CSS = [
+  path.join(path.dirname(createRequire(import.meta.url).resolve("tailwindcss/package.json")), "theme.css"),
+  path.join(WEB, "src/app/globals.css"),
+].map((file) => readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, ""));
+
+/** A theme variable priced in px (rem at 16px), em, or a bare number; undefined when no theme declares it. */
+function themeVar(name: string): { value: number; unit: "px" | "em" | "" } | undefined {
+  if (!/^[a-z0-9-]+$/.test(name)) throw new Error(`not a theme variable name: ${name}`);
+  let raw: string | undefined;
+  for (const css of THEME_CSS) {
+    for (const m of css.matchAll(new RegExp(`(?:^|[\\s;{])--${name}:\\s*([^;}]+)`, "g"))) raw = m[1].trim();
+  }
+  if (raw === undefined) return undefined;
+  const v = /^(-?[0-9.]+)(rem|px|em)?$/.exec(raw);
+  if (!v) throw new Error(`--${name}: "${raw}" is not a length this test can price`);
+  const n = Number(v[1]);
+  if (v[2] === "rem") return { value: n * 16, unit: "px" };
+  if (v[2] === "px") return { value: n, unit: "px" };
+  return { value: n, unit: v[2] === "em" ? "em" : "" };
+}
+const themeNumber = (name: string): number => {
+  const v = themeVar(name);
+  if (!v) throw new Error(`the theme declares no --${name}`);
+  return v.value;
+};
+const spacingPx = (steps: number) => steps * themeNumber("spacing");
 
 /** The rail track, in px, read from the row grid the component declares. */
 function railPx(): number {
@@ -64,8 +102,8 @@ function railPx(): number {
   return Number(m[1]) * 16; // Tailwind rem against the default 16px root
 }
 
-const LOCALES = ["en", "es", "fr", "nl"] as const;
-
+// The locales are the app's own list, never a listing of the dictionaries
+// directory, where a stray folder would read as a locale (review-n1f m3).
 async function railCopy(locale: string) {
   const l = toLocale(locale);
   const dict = await getDictionary(l, "public");
@@ -90,9 +128,11 @@ const CLIPPING = new Set([
   "overflow-x-hidden",
   "overflow-x-clip",
 ]);
-/** Does this class token clip text? Variants (`max-sm:`) and `!` are stripped first. */
+/** A class token's utility, with its variants (`max-sm:`) and `!` stripped. */
+const utilityOf = (token: string) => token.slice(token.lastIndexOf(":") + 1).replace(/^!|!$/g, "");
+/** Does this class token clip text? */
 const clips = (token: string) => {
-  const base = token.slice(token.lastIndexOf(":") + 1).replace(/^!|!$/g, "");
+  const base = utilityOf(token);
   return CLIPPING.has(base) || /^line-clamp-(?!none$)/.test(base);
 };
 
@@ -101,6 +141,7 @@ interface Span {
   classes: Set<string> | null;
   open: number;
   close: number;
+  selfClosing: boolean;
 }
 
 /** Blank comments, keeping every offset, so a key or class a comment NAMES is not read as markup. */
@@ -134,10 +175,11 @@ function railCell(source: string): { text: string; cell: Span; spans: Span[] } {
       classes: literal ? new Set(literal[1].split(/\s+/).filter(Boolean)) : null,
       open: m.index,
       close: m.index,
+      selfClosing: m[1].trimEnd().endsWith("/"),
     };
     if (!cell && stack.length === 0 && !span.classes?.has("absolute")) cell = span;
     if (cell) spans.push(span);
-    if (m[1].trimEnd().endsWith("/")) {
+    if (span.selfClosing) {
       if (span === cell) return { text, cell, spans };
     } else {
       stack.push(span);
@@ -147,27 +189,144 @@ function railCell(source: string): { text: string; cell: Span; spans: Span[] } {
 }
 
 /**
- * Every place the rail cell paints a status word — each `copy.<key>` and each
- * `timeOf(` inside it — with the chain of spans around it, outermost (the
- * cell) first. The court/date line's `shortDate(` is not a status word.
+ * What the rail cell paints, each with the chain of spans around it, outermost
+ * (the cell) first: its status words — each `copy.<key>` and each `timeOf(` —
+ * and its short dates, each `shortDate(`. The date line is not a status word:
+ * it doubles as the court-name line, which is free text and may truncate.
  */
 function railWords(source: string) {
   const { text, cell, spans } = railCell(source);
   const inCell = text.slice(cell.open, cell.close);
-  const words = [...inCell.matchAll(/\bcopy\.(\w+)|\btimeOf\(/g)].map((m) => {
-    const at = cell.open + (m.index ?? 0);
-    return {
-      what: m[1] ? `copy.${m[1]}` : "timeOf()",
-      chain: spans.filter((s) => s.open < at && at < s.close),
-    };
-  });
-  return { cell, words };
+  const found = (re: RegExp, what: (m: RegExpMatchArray) => string) =>
+    [...inCell.matchAll(re)].map((m) => {
+      const at = cell.open + (m.index ?? 0);
+      return { what: what(m), chain: spans.filter((s) => !s.selfClosing && s.open < at && at < s.close) };
+    });
+  return {
+    cell,
+    spans,
+    words: found(/\bcopy\.(\w+)|\btimeOf\(/g, (m) => (m[1] ? `copy.${m[1]}` : "timeOf()")),
+    dates: found(/\bshortDate\(/g, () => "shortDate()"),
+  };
 }
 
 const tokensOf = (s: Span, where: string): string[] => {
   if (!s.classes) throw new Error(`${where}: a span has a non-literal className, which this guard cannot read`);
   return [...s.classes];
 };
+
+// ---- Typography, read off the classes around a word (N1g g4) ---------------
+interface Typography {
+  family: "display" | "body";
+  weight: number;
+  sizePx: number;
+  trackingEm: number;
+  uppercase: boolean;
+  /** `truncate` / `whitespace-nowrap`: the text cannot wrap, so its whole run must fit. */
+  nowrap: boolean;
+  /** Fixed-width children painted beside the text, and the gap to each, in px. */
+  extraPx: number;
+}
+
+/**
+ * The typography a word inherits down its chain of spans (an inner class wins).
+ * What the rail's spans do not say is the page's: the body face, at the normal
+ * weight, with no tracking. A typographic class behind a variant, or one this
+ * test cannot price, THROWS — a silent guess would be a guard that lies.
+ */
+function typographyOf(chain: Span[], spans: Span[], where: string): Typography {
+  let family: Typography["family"] = "body";
+  let weight = themeNumber("font-weight-normal");
+  let sizePx: number | undefined;
+  let trackingEm = 0;
+  let uppercase = false;
+  let nowrap = false;
+  for (const span of chain) {
+    for (const token of tokensOf(span, where)) {
+      const base = utilityOf(token);
+      let apply: (() => void) | undefined;
+      let m: RegExpExecArray | null;
+      if (base === "font-display") apply = () => (family = "display");
+      else if (base === "font-sans") apply = () => (family = "body");
+      else if ((m = /^font-([a-z]+)$/.exec(base)) && themeVar(`font-weight-${m[1]}`)) {
+        const w = themeNumber(`font-weight-${m[1]}`);
+        apply = () => (weight = w);
+      } else if ((m = /^text-\[([0-9.]+)px\]$/.exec(base))) {
+        const px = Number(m[1]);
+        apply = () => (sizePx = px);
+      } else if ((m = /^text-([a-z0-9]+)$/.exec(base)) && themeVar(`text-${m[1]}`)?.unit === "px") {
+        const px = themeNumber(`text-${m[1]}`);
+        apply = () => (sizePx = px);
+      } else if ((m = /^tracking-([a-z]+)$/.exec(base)) && themeVar(`tracking-${m[1]}`)) {
+        const em = themeNumber(`tracking-${m[1]}`);
+        apply = () => (trackingEm = em);
+      } else if (base === "uppercase") apply = () => (uppercase = true);
+      else if (base === "normal-case") apply = () => (uppercase = false);
+      else if (base === "truncate" || base === "whitespace-nowrap" || base === "text-nowrap") apply = () => (nowrap = true);
+      else if (/^(font-(mono|serif)$|lowercase$|capitalize$|tracking-\[|text-\[)/.test(base)) {
+        throw new Error(`${where}: "${token}" is typography this test cannot price yet`);
+      }
+      if (!apply) continue;
+      if (token !== base && token.includes(":")) {
+        throw new Error(`${where}: "${token}" changes typography behind a variant; measure that state too`);
+      }
+      apply();
+    }
+  }
+  if (sizePx === undefined) throw new Error(`${where}: no font size on the rail's spans`);
+
+  // The chip's dot: a self-closing child of the word's own span, a flex item
+  // with a fixed `w-<n>`, and the flex `gap-<n>` between it and the text.
+  const inner = chain.at(-1)!;
+  const deepestAround = (at: number) => spans.filter((s) => !s.selfClosing && s.open < at && at < s.close).at(-1);
+  let extraPx = 0;
+  for (const child of spans.filter((s) => s.selfClosing && deepestAround(s.open) === inner)) {
+    const w = tokensOf(child, where).map((t) => /^w-([0-9.]+)$/.exec(t)).find(Boolean);
+    if (!w) throw new Error(`${where}: a child painted beside the text has no w-<n> to measure`);
+    const gap = tokensOf(inner, where).map((t) => /^gap-(?:x-)?([0-9.]+)$/.exec(t)).find(Boolean);
+    extraPx += spacingPx(Number(w[1])) + (gap ? spacingPx(Number(gap[1])) : 0);
+  }
+  return { family, weight, sizePx, trackingEm, uppercase, nowrap, extraPx };
+}
+
+/** The narrowest box `text` fits in when painted with `type`. */
+function measureIn(type: Typography, text: string): number {
+  const face = faceFor(type.family, type.weight);
+  const painted = type.uppercase ? text.toUpperCase() : text;
+  const run = type.nowrap ? textWidth : minContentWidth;
+  return run(face, painted, type.sizePx, type.trackingEm) + type.extraPx;
+}
+
+/** Every clock the rail can show: each minute of a day. */
+const CLOCKS = Array.from({ length: 24 * 60 }, (_, i) =>
+  timeOf(new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(), "UTC"),
+);
+
+/** The texts a rail word can take in `locale`. */
+async function valuesOf(what: string, locale: string): Promise<string[]> {
+  if (what === "timeOf()") return CLOCKS;
+  const key = what.slice("copy.".length);
+  const value = ((await railCopy(locale)) as unknown as Record<string, unknown>)[key];
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`${locale}: the rail renders ${what}, which publicScheduleCopy gives no text`);
+  }
+  return [value];
+}
+
+/** The one-letter run that fits the track by `lesser` and overflows it by `gate`, widest margin either side. */
+function separatingRun(track: number, lesser: (t: string) => number, gate: (t: string) => number) {
+  let best: { text: string; margin: number } | undefined;
+  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+    for (let n = 1; n <= 40; n++) {
+      const text = letter.repeat(n);
+      const [a, b] = [lesser(text), gate(text)];
+      if (a > track || b <= track) continue;
+      const margin = Math.min(track - a, b - track);
+      if (!best || margin > best.margin) best = { text, margin };
+    }
+  }
+  return best?.text;
+}
 
 describe("public Schedule rail — every translated word fits its column (N1f f1)", () => {
   it("declares a rail track and a rail that can wrap inside it, never over the name", () => {
@@ -212,31 +371,72 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     expect(clipped("line-clamp-none font-display break-words")).toEqual([]);
   });
 
-  it("fits every locale's Live / Ended / TBD and a clock inside the rail track", async () => {
+  it("fits every word the rail cell renders, in every locale, in the face and box it paints in (N1f f1, N1g g4)", async () => {
     const track = railPx();
+    const { words, spans } = railWords(SCHEDULE_SRC);
+    expect(words.length, "the rail cell renders no status word").toBeGreaterThan(0);
     const report: string[] = [];
     for (const locale of LOCALES) {
-      const copy = await railCopy(locale);
-      // The status/time line is `font-display text-sm font-semibold` -> the
-      // display face at 14px, weight 600. The live chip: `liveChipWidth`.
-      const display = faceFor("display", 600);
-      const cases: [string, number][] = [
-        [copy.ended, minContentWidth(display, copy.ended, 14)],
-        [copy.tbd, minContentWidth(display, copy.tbd, 14)],
-        ["14:30", textWidth(display, "14:30", 14)],
-        [copy.live.toUpperCase(), liveChipWidth(copy.live.toUpperCase())],
-      ];
-      for (const [word, width] of cases) {
-        report.push(`${locale} ${JSON.stringify(word)} ${width.toFixed(1)}px / ${track}px`);
+      for (const w of words) {
+        const type = typographyOf(w.chain, spans, w.what);
+        let widest = { text: "", px: -1 };
+        for (const text of await valuesOf(w.what, locale)) {
+          const px = measureIn(type, text);
+          if (px > widest.px) widest = { text: type.uppercase ? text.toUpperCase() : text, px };
+        }
+        report.push(`${locale} ${w.what} ${JSON.stringify(widest.text)} ${widest.px.toFixed(1)}px / ${track}px`);
         expect(
-          width,
-          `${locale}: ${JSON.stringify(word)} needs ${width.toFixed(1)}px in a ${track}px rail`,
+          widest.px,
+          `${locale}: ${w.what} ${JSON.stringify(widest.text)} needs ${widest.px.toFixed(1)}px in a ${track}px rail`,
         ).toBeLessThanOrEqual(track);
       }
     }
     // Print what was asserted, so a green run is not a silent one.
-    expect(report.length).toBe(LOCALES.length * 4);
+    expect(report.length).toBe(LOCALES.length * words.length);
     console.log(`[rail top line] ${report.join("  |  ")}`);
+  });
+
+  it("reads typography off a word's classes, priced from Tailwind's theme (N1g g4)", () => {
+    const row = (chipClasses: string) =>
+      `<Link className="grid grid-cols-[3.5rem_minmax(0,1fr)_auto]"><span className="min-w-0 text-sm">` +
+      `<span className="${chipClasses}"><span className="h-1.5 w-1.5 rounded-full" />{copy.live}</span>` +
+      `<span className="font-display font-semibold">{copy.ended}</span>` +
+      `<span className="truncate text-[10px]">{shortDate(x)}</span></span></Link>`;
+    const typed = (chipClasses: string) => {
+      const { words, dates, spans } = railWords(row(chipClasses));
+      return [...words, ...dates].map((w) => typographyOf(w.chain, spans, w.what));
+    };
+    const [live, ended, date] = typed("flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide");
+    expect(live).toEqual({
+      family: "body",
+      weight: themeNumber("font-weight-bold"),
+      sizePx: 11,
+      trackingEm: themeNumber("tracking-wide"),
+      uppercase: true,
+      nowrap: false,
+      extraPx: spacingPx(1.5) + spacingPx(1),
+    });
+    // `text-sm` is inherited from the cell; nothing here says a weight for the date.
+    expect(ended).toEqual({
+      family: "display",
+      weight: themeNumber("font-weight-semibold"),
+      sizePx: themeNumber("text-sm"),
+      trackingEm: 0,
+      uppercase: false,
+      nowrap: false,
+      extraPx: 0,
+    });
+    expect(date).toEqual({
+      family: "body",
+      weight: themeNumber("font-weight-normal"),
+      sizePx: 10,
+      trackingEm: 0,
+      uppercase: false,
+      nowrap: true,
+      extraPx: 0,
+    });
+    expect(() => typed("flex gap-1 text-[11px] max-sm:text-[13px]")).toThrow(/behind a variant/);
+    expect(() => typed("flex gap-1 text-[11px] tracking-[0.2em]")).toThrow(/cannot price/);
   });
 
   it("files every face under the weight it IS, so a weight cannot be measured in another's file (N1g g3)", () => {
@@ -247,32 +447,37 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     }
   });
 
-  it("measures the live chip in the BOLD body face: a word that fits in Geist 400 but not 700 is refused (N1g g3)", () => {
+  it("refuses a run that fits only in a lighter face or without the dot beside it (N1g g3, g4)", () => {
+    // Built from the faces, not typed: for every rail word painted at a weight
+    // that has a lighter committed face, or beside a fixed-width child, the
+    // one-letter run that fits the track WITHOUT that and overflows WITH it.
+    // The gate the locale loop uses must refuse it — so measuring the bold chip
+    // in a regular face, or forgetting its dot and gap, goes red.
     const track = railPx();
-    // Built from the faces, not typed: the one-letter run, at the chip's own
-    // typography, that fits the track in the regular file and overflows it in
-    // the bold one — the widest margin on both sides of the track wins.
-    let sentinel: { text: string; margin: number } | undefined;
-    for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-      for (let n = 1; n <= 24; n++) {
-        const text = letter.repeat(n);
-        const regular = chipWidthIn(GEIST_400, text);
-        const bold = chipWidthIn(GEIST_700, text);
-        if (regular > track || bold <= track) continue;
-        const margin = Math.min(track - regular, bold - track);
-        if (!sentinel || margin > sentinel.margin) sentinel = { text, margin };
+    const { words, spans } = railWords(SCHEDULE_SRC);
+    const seen: string[] = [];
+    for (const w of words) {
+      const type = typographyOf(w.chain, spans, w.what);
+      const lighter: [string, Typography][] = [];
+      const normal = themeNumber("font-weight-normal");
+      if (type.weight !== normal && FACES[type.family][normal]) {
+        lighter.push([`weight ${type.weight} measured as ${normal}`, { ...type, weight: normal }]);
+      }
+      if (type.extraPx > 0) lighter.push([`the ${type.extraPx}px beside it dropped`, { ...type, extraPx: 0 }]);
+      for (const [what, lesser] of lighter) {
+        const run = separatingRun(track, (t) => measureIn(lesser, t), (t) => measureIn(type, t));
+        expect(run, `${w.what}: the gate measures it the same with ${what}`).toBeDefined();
+        expect(measureIn(lesser, run!), `${w.what}: the premise, ${JSON.stringify(run)} fits with ${what}`).toBeLessThanOrEqual(
+          track,
+        );
+        expect(measureIn(type, run!), `${w.what}: ${JSON.stringify(run)} must be refused`).toBeGreaterThan(track);
+        seen.push(
+          `${w.what}, ${what}: ${JSON.stringify(run)} ${measureIn(lesser, run!).toFixed(2)} -> ${measureIn(type, run!).toFixed(2)}px / ${track}px`,
+        );
       }
     }
-    expect(sentinel, `no one-letter run separates Geist 400 from 700 at ${track}px`).toBeDefined();
-    const { text } = sentinel!;
-    const regular = chipWidthIn(GEIST_400, text);
-    // The premise: in a regular face this word would pass the gate…
-    expect(regular).toBeLessThanOrEqual(track);
-    // …and the gate the locale loop uses refuses it.
-    expect(liveChipWidth(text), `${JSON.stringify(text)}: ${regular.toFixed(2)}px regular`).toBeGreaterThan(track);
-    console.log(
-      `[rail chip face] ${JSON.stringify(text)} regular ${regular.toFixed(2)}px, chip gate ${liveChipWidth(text).toFixed(2)}px / ${track}px`,
-    );
+    expect(seen.length, "no rail word is bold or painted beside a dot, so these sentinels guard nothing").toBeGreaterThan(0);
+    console.log(`[rail sentinels] ${seen.join("  |  ")}`);
   });
 });
 
@@ -293,29 +498,32 @@ describe("public Schedule rail — the round view's short date (N1f f3)", () => 
 
   it("fits the rail track in every locale, on every month", () => {
     const track = railPx();
+    const { dates, spans } = railWords(SCHEDULE_SRC);
+    expect(dates.length, "the rail cell renders no short date").toBeGreaterThan(0);
     const worst: string[] = [];
-    for (const locale of LOCALES) {
-      const tag = dateTagFor(locale);
-      let max = 0;
-      let arg = "";
-      for (let month = 0; month < 12; month++) {
-        for (const day of [1, 20, 24, 28]) {
-          const iso = new Date(Date.UTC(2026, month, day, 12)).toISOString();
-          // `text-[10px] uppercase tracking-wide` on the body face.
-          const label = shortDate(iso, "UTC", tag).toUpperCase();
-          const width = textWidth(faceFor("body", 400), label, 10, 0.025);
-          if (width > max) {
-            max = width;
-            arg = label;
+    for (const d of dates) {
+      const type = typographyOf(d.chain, spans, d.what);
+      for (const locale of LOCALES) {
+        const tag = dateTagFor(locale);
+        let max = 0;
+        let arg = "";
+        for (let month = 0; month < 12; month++) {
+          for (const day of [1, 20, 24, 28]) {
+            const label = shortDate(new Date(Date.UTC(2026, month, day, 12)).toISOString(), "UTC", tag);
+            const width = measureIn(type, label);
+            if (width > max) {
+              max = width;
+              arg = type.uppercase ? label.toUpperCase() : label;
+            }
           }
         }
+        worst.push(`${locale} ${JSON.stringify(arg)} ${max.toFixed(1)}px / ${track}px`);
+        expect(max, `${locale}: ${JSON.stringify(arg)} needs ${max.toFixed(1)}px in a ${track}px rail`).toBeLessThanOrEqual(
+          track,
+        );
       }
-      worst.push(`${locale} ${JSON.stringify(arg)} ${max.toFixed(1)}px / ${track}px`);
-      expect(max, `${locale}: ${JSON.stringify(arg)} needs ${max.toFixed(1)}px in a ${track}px rail`).toBeLessThanOrEqual(
-        track,
-      );
     }
-    expect(worst.length).toBe(LOCALES.length);
+    expect(worst.length).toBe(LOCALES.length * dates.length);
     console.log(`[rail date] ${worst.join("  |  ")}`);
   });
 });

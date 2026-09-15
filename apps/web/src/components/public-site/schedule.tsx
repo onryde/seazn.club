@@ -113,7 +113,9 @@ export const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : local
 
 const UNSCHEDULED = "unscheduled";
 
-const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
+/** The rail's clock, in the venue's zone. Exported for `schedule-rail-fits.test.ts`,
+ *  which measures every minute of a day in the face the rail paints it in. */
+export const timeOf = (iso: string, tz: string) => fmtTime(tz, iso);
 /** The round view's rail date ("25 sept"): the venue-local day, in the tag.
  *  N1f f3 (review-n1e m2) — this used to be `dayLabel`, which leads with the
  *  weekday: "THU 24 SEPT" needs 68px, "JEU. 24 SEPT." 72px, and the rail is a
