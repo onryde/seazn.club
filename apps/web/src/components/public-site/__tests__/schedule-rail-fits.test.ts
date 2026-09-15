@@ -23,21 +23,39 @@ import { msgFor } from "@/lib/messages-i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { dateTagFor, shortDate } from "../schedule";
-import { openFace, minContentWidth, textWidth } from "./font-advance";
+import { openFace, minContentWidth, textWidth, type Face } from "./font-advance";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.resolve(HERE, "../../../..");
 const SCHEDULE_SRC = readFileSync(path.join(HERE, "../schedule.tsx"), "utf8");
 
-// The faces the rail actually paints in. `font-display` resolves to
-// `var(--ps-font-display, …)` (globals.css `@theme inline`), which both the
-// /shared org layout and the /embed layout set to Barlow Condensed; the rest
-// of the rail inherits the body sans. `next/font` fetches those at build time
-// and commits nothing, so the measurement uses the repo's own copies of the
-// same faces — the built `Barlow Condensed SemiBold` woff2 agrees with the
-// committed .ttf to 0.00px on every string in this suite.
-const DISPLAY = openFace(path.join(WEB, "assets/fonts/BarlowCondensed-SemiBold.ttf"), "Barlow Condensed SemiBold");
-const BODY = openFace(path.join(WEB, "assets/fonts/Inter-Regular.otf"), "Inter Regular");
+// The faces the rail actually paints in, filed by family and CSS weight.
+// `font-display` resolves to `var(--ps-font-display, …)` (globals.css
+// `@theme inline`), which both the /shared org layout and the /embed layout
+// set to Barlow Condensed; the rest of the rail inherits the body sans, Geist.
+// `next/font` fetches both at build time and commits nothing, so these are the
+// repo's own copies of the faces the build ships (provenance and the accepted
+// drift: `__tests__/font-advance.ts`). A weight is a DIFFERENT file: the live
+// chip is `font-bold`, and until N1g g3 it was measured in a regular face,
+// 0.9px narrower than it paints (review-n1f m2).
+const FONTS = path.join(WEB, "assets/fonts");
+const GEIST_400 = openFace(path.join(FONTS, "Geist-Regular.ttf"), "Geist Regular");
+const GEIST_700 = openFace(path.join(FONTS, "Geist-Bold.ttf"), "Geist Bold");
+const FACES: Record<"display" | "body", Record<number, Face>> = {
+  display: { 600: openFace(path.join(FONTS, "BarlowCondensed-SemiBold.ttf"), "Barlow Condensed SemiBold") },
+  body: { 400: GEIST_400, 700: GEIST_700 },
+};
+function faceFor(family: "display" | "body", weight: number): Face {
+  const face = FACES[family][weight];
+  if (!face) throw new Error(`no committed ${family} face at weight ${weight}: add the file before measuring in it`);
+  return face;
+}
+
+// The live chip: `text-[11px] font-bold uppercase tracking-wide` on the body
+// face, after its `h-1.5 w-1.5` dot and `gap-1` (6px + 4px).
+const LIVE_DOT_AND_GAP = 10;
+const chipWidthIn = (face: Face, text: string) => minContentWidth(face, text, 11, 0.025) + LIVE_DOT_AND_GAP;
+const liveChipWidth = (text: string) => chipWidthIn(faceFor("body", 700), text);
 
 /** The rail track, in px, read from the row grid the component declares. */
 function railPx(): number {
@@ -200,13 +218,13 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     for (const locale of LOCALES) {
       const copy = await railCopy(locale);
       // The status/time line is `font-display text-sm font-semibold` -> the
-      // display face at 14px. The live chip is the body face at 11px with
-      // `tracking-wide` (0.025em), plus its 6px dot and 4px gap.
+      // display face at 14px, weight 600. The live chip: `liveChipWidth`.
+      const display = faceFor("display", 600);
       const cases: [string, number][] = [
-        [copy.ended, minContentWidth(DISPLAY, copy.ended, 14)],
-        [copy.tbd, minContentWidth(DISPLAY, copy.tbd, 14)],
-        ["14:30", textWidth(DISPLAY, "14:30", 14)],
-        [copy.live.toUpperCase(), minContentWidth(BODY, copy.live.toUpperCase(), 11, 0.025) + 10],
+        [copy.ended, minContentWidth(display, copy.ended, 14)],
+        [copy.tbd, minContentWidth(display, copy.tbd, 14)],
+        ["14:30", textWidth(display, "14:30", 14)],
+        [copy.live.toUpperCase(), liveChipWidth(copy.live.toUpperCase())],
       ];
       for (const [word, width] of cases) {
         report.push(`${locale} ${JSON.stringify(word)} ${width.toFixed(1)}px / ${track}px`);
@@ -219,6 +237,42 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     // Print what was asserted, so a green run is not a silent one.
     expect(report.length).toBe(LOCALES.length * 4);
     console.log(`[rail top line] ${report.join("  |  ")}`);
+  });
+
+  it("files every face under the weight it IS, so a weight cannot be measured in another's file (N1g g3)", () => {
+    for (const [family, byWeight] of Object.entries(FACES)) {
+      for (const [weight, face] of Object.entries(byWeight)) {
+        expect(face.weightClass, `${family} ${weight} is ${face.name}`).toBe(Number(weight));
+      }
+    }
+  });
+
+  it("measures the live chip in the BOLD body face: a word that fits in Geist 400 but not 700 is refused (N1g g3)", () => {
+    const track = railPx();
+    // Built from the faces, not typed: the one-letter run, at the chip's own
+    // typography, that fits the track in the regular file and overflows it in
+    // the bold one — the widest margin on both sides of the track wins.
+    let sentinel: { text: string; margin: number } | undefined;
+    for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      for (let n = 1; n <= 24; n++) {
+        const text = letter.repeat(n);
+        const regular = chipWidthIn(GEIST_400, text);
+        const bold = chipWidthIn(GEIST_700, text);
+        if (regular > track || bold <= track) continue;
+        const margin = Math.min(track - regular, bold - track);
+        if (!sentinel || margin > sentinel.margin) sentinel = { text, margin };
+      }
+    }
+    expect(sentinel, `no one-letter run separates Geist 400 from 700 at ${track}px`).toBeDefined();
+    const { text } = sentinel!;
+    const regular = chipWidthIn(GEIST_400, text);
+    // The premise: in a regular face this word would pass the gate…
+    expect(regular).toBeLessThanOrEqual(track);
+    // …and the gate the locale loop uses refuses it.
+    expect(liveChipWidth(text), `${JSON.stringify(text)}: ${regular.toFixed(2)}px regular`).toBeGreaterThan(track);
+    console.log(
+      `[rail chip face] ${JSON.stringify(text)} regular ${regular.toFixed(2)}px, chip gate ${liveChipWidth(text).toFixed(2)}px / ${track}px`,
+    );
   });
 });
 
@@ -249,7 +303,7 @@ describe("public Schedule rail — the round view's short date (N1f f3)", () => 
           const iso = new Date(Date.UTC(2026, month, day, 12)).toISOString();
           // `text-[10px] uppercase tracking-wide` on the body face.
           const label = shortDate(iso, "UTC", tag).toUpperCase();
-          const width = textWidth(BODY, label, 10, 0.025);
+          const width = textWidth(faceFor("body", 400), label, 10, 0.025);
           if (width > max) {
             max = width;
             arg = label;

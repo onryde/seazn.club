@@ -11,21 +11,40 @@
 // Why no library: `fontkit` is hoisted into the workspace root but is not a
 // dependency of `apps/web`, and the faces `next/font` serves (`.next/static/
 // media/*.woff2`) only exist after a build — neither is safe for a test that
-// has to run on a fresh checkout. The committed `.ttf`/`.otf` files are the
-// same faces the build ships: measured against the built
-// `Barlow Condensed SemiBold` woff2, every string in this suite agrees to
-// 0.00px (recorded in `t3/n1-report.md`, N1f).
+// has to run on a fresh checkout. The committed files are the faces the build
+// ships:
+// - `BarlowCondensed-SemiBold.ttf`: measured against the built
+//   `Barlow Condensed SemiBold` woff2, every rail string agrees to 0.00px
+//   (spectator N1f).
+// - `Geist-Regular.ttf` / `Geist-Bold.ttf` (N1g g3): the body face is a
+//   VARIABLE font that `next/font/google` fetches at build time, and nothing
+//   of it was committed, so the rail's body-face lines used to be measured in
+//   Inter as a stand-in — which put the bold live chip 0.9px narrower than it
+//   paints. These two are static instances (wght 400 and 700, fontTools
+//   `instantiateVariableFont`) of the build's own latin Geist woff2; every
+//   advance in them equals HarfBuzz's on the variable file at the same weight
+//   (225 codepoints, 0 font units apart). OFL 1.1, no Reserved Font Name:
+//   `assets/fonts/OFL-Geist.txt`.
 //
-// This reads only `head`, `maxp`, `hhea`, `hmtx` and `cmap` — the horizontal
-// metrics — so it works on both sfnt flavours (glyf `.ttf` and CFF `.otf`).
-// It does NOT apply GPOS kerning; Barlow Condensed and Inter carry none for
-// the letter pairs in this suite (cross-checked against fontkit, same report).
+// Accepted drift (review-n1f m4, parked): `next/font/google` fetches BOTH
+// families at build time, so an upstream update can move the shipped metrics
+// away from these copies without a test noticing. Nothing detects that; if
+// either family is updated, re-derive the copies from `.next/static/media`.
+//
+// This reads only `head`, `maxp`, `hhea`, `hmtx`, `cmap` and `OS/2` — so it
+// works on both sfnt flavours (glyf `.ttf` and CFF `.otf`). It applies no
+// GPOS kerning, and kerning only NARROWS the rail's words (HarfBuzz on Geist
+// 400/700: unkerned minus kerned is 0 to 142 font units per word, never
+// negative; Barlow Condensed at most 1.35px at 14px), so every width here is
+// an over-estimate — the safe direction for a "fits" gate.
 import { readFileSync } from "node:fs";
 
 export interface Face {
   /** Advance width of one codepoint, in font units. */
   advance(codePoint: number): number;
   unitsPerEm: number;
+  /** `OS/2.usWeightClass`: the CSS weight this file IS (400, 600, 700…). */
+  weightClass: number;
   name: string;
 }
 
@@ -107,7 +126,8 @@ export function openFace(path: string, name: string): Face {
   const hmtx = tables.get("hmtx");
   const maxp = tables.get("maxp");
   const cmap = tables.get("cmap");
-  if (head == null || hhea == null || hmtx == null || maxp == null || cmap == null) {
+  const os2 = tables.get("OS/2");
+  if (head == null || hhea == null || hmtx == null || maxp == null || cmap == null || os2 == null) {
     throw new Error(`${name}: missing a required sfnt table`);
   }
   const unitsPerEm = buf.readUInt16BE(head + 18);
@@ -120,6 +140,7 @@ export function openFace(path: string, name: string): Face {
   };
   return {
     unitsPerEm,
+    weightClass: buf.readUInt16BE(os2 + 4),
     name,
     advance(codePoint: number): number {
       const gid = chars.get(codePoint);
