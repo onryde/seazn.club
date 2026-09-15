@@ -209,6 +209,22 @@ function fakeServer(
      *  WIRING. Symmetric with `emptyCareerSports`, and equally scoped: the
      *  leaderboard oracle for the same board must still pass. */
     emptyPersonDivisions?: boolean;
+    /** B07a T12 fix round 1 (R73 I1/I2) — override `/generate`'s knockout
+     *  branch's hardcoded single `["se-r0-i0"]` placeholder with an
+     *  arbitrary ext_key list, so a temp-mutated copy of `_tiny.json` (never
+     *  the committed file — `streams`/`expected.matches` gain matching rows
+     *  in the test itself) can drive a genuinely MIXED last stage
+     *  (`se-r{n}-i{i}` alongside a `se-3p` third-place key that never
+     *  matches that pattern — `bracket.ts:220-227`) or a multi-ROUND one
+     *  (3+ distinct rounds) through the REAL wired news step, without
+     *  needing the real single-elim generator's own bracket math: this
+     *  fake's `/generate` never derived home/away from the bracket shape
+     *  anyway (see the comment above), so a caller-supplied ext_key list is
+     *  exactly as honest as the one placeholder it replaces. Scoped
+     *  globally, not per-stage, because `_tiny.json` declares exactly ONE
+     *  knockout stage (`d-tiny`/`s-playoff`) — a second one would need this
+     *  keyed by stageId. */
+    knockoutFixtureExtKeys?: string[];
   } = {},
 ): {
   transport: ProbeTransport;
@@ -524,15 +540,17 @@ function fakeServer(
         // B05 T3 — a knockout `timing:"setup"` progression stage mints ONE
         // TBD placeholder (`se-r0-i0`, `buildSingleElim`'s own id for a
         // 2-slot single-elim bracket), never this fake's round-robin
-        // arithmetic — see `kindByStageId`'s own comment.
+        // arithmetic — see `kindByStageId`'s own comment. B07a T12 fix
+        // round 1: `opts.knockoutFixtureExtKeys` overrides the placeholder
+        // list (see its own doc comment above) — default unchanged.
         const fixtures =
           kindByStageId.get(stageId) === "knockout"
-            ? [(() => {
+            ? (opts.knockoutFixtureExtKeys ?? ["se-r0-i0"]).map((extKey) => {
                 const id = `fx-${++fixtureCounter}`;
                 if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                fixtureExtKeyById.set(id, "se-r0-i0");
-                return { id, ext_key: "se-r0-i0" };
-              })()]
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              })
             : Array.from(
                 {
                   length: roundRobinRoundCount(
@@ -1424,46 +1442,268 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     raw.divisions = [badminton, ...raw.divisions.filter((d) => d.ref !== "d-badminton")];
 
     const dir = await mkdtemp(join(tmpdir(), "b07a-t12-"));
-    const mutatedPackPath = join(dir, "_tiny.json");
-    await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
 
-    const { transport, sql } = fakeServer();
-    const report = await runTinySuite({
-      base: "http://bench.example",
-      engine: "optimized",
-      keep: false,
-      log: silent,
-      cliEntry: "admin",
-      packPath: mutatedPackPath,
-      transport,
-      sql,
-      probeTransport: transport,
-      simTransport: transport,
-      importTransport: transport,
-      startTransport: transport,
-      advanceTransport: transport,
-      oracleTransport: transport,
-      matchBoard: echoExpectedBoard,
-      specialSubjects: echoSpecialSubjects,
+      const { transport, sql } = fakeServer();
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // Excluded from publish, never silently — a warning names the key.
+      expect(
+        (report.warnings ?? []).some((w) => w.includes("rr-r1-c1") && w.includes("news publish skipped")),
+      ).toBe(true);
+      // Drafting itself still worked (this pack's folds still draft posts) —
+      // only PUBLISHING has no subject, because nothing in the last stage
+      // parsed as se-r{n}-i{i}.
+      const drafted = (report.oracles ?? []).find((o) => o.name === "news: folding drafted posts");
+      expect(drafted).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      // askedFor === 0 (nothing parsed, so nothing to publish) reads
+      // NO SUBJECT — never a pass (it proved nothing) and never a fail (it
+      // asked for nothing and got nothing).
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "no_subject", subject: false });
+      expect(report.news).toMatchObject({ published: 0 });
+    } finally {
+      // m1 (Task 12 fix round 1 review, Minor-1): this leaked a tmp dir on
+      // every run before — cleaned up the same way the describe block at
+      // ~:3237 cleans its own `reportDir` in `afterEach`.
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("B07a T12 fix round 1 (R73 I1) — a MIXED last stage (se-r{n}-i{i} beside a third-place se-3p) warns by name AND still publishes what parsed", async () => {
+    // R73 I1. `packages/engine/src/scheduling/bracket.ts:220-227`'s
+    // `generateSingleElim` conditionally appends ONE more fixture,
+    // `` `${idPrefix ?? "se"}-3p"` `` (`se-3p` by default), in the SAME
+    // stage as every `se-r{n}-i{i}` key, when `thirdPlace: true` and both
+    // semifinals exist — a real, reachable MIXED last stage neither
+    // committed pack uses today (`grep -rl thirdPlace scripts/bench/packs`
+    // finds nothing), but one the call site's warning guard must still get
+    // right. `d-tiny`'s own `se-r0-i0` stays; a second stream, `se-3p`, is
+    // added to the SAME `s-playoff` stage in a temp copy, with its own
+    // `expected.matches` row — legal pack data (`PackExtKey` has no format
+    // restriction). `fakeServer`'s `knockoutFixtureExtKeys` knob makes
+    // `/generate` mint both ids, exactly the two this pack now declares, so
+    // `bindStreamFixtures` has a real match for each side — no need to
+    // reproduce the generator's own bracket math (see that knob's doc
+    // comment for why the fake never needed to).
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      streams: {
+        divisionRef: string;
+        fixtureExtKey: string;
+        stageRef?: string;
+        home: string;
+        away: string;
+        provenance: string;
+        events: unknown[];
+      }[];
+      expected: {
+        matches: {
+          divisionRef: string;
+          fixtureExtKey: string;
+          outcome: unknown;
+          perSide?: unknown[];
+        }[];
+      };
+    };
+    raw.streams.push({
+      divisionRef: "d-tiny",
+      fixtureExtKey: "se-3p",
+      stageRef: "s-playoff",
+      home: "e-bravo",
+      away: "e-alpha",
+      provenance: "real",
+      events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 1, p2Score: 0 } }],
+    });
+    raw.expected.matches.push({
+      divisionRef: "d-tiny",
+      fixtureExtKey: "se-3p",
+      outcome: { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" },
+      perSide: [
+        { entrant: "e-bravo", line: "1" },
+        { entrant: "e-alpha", line: "0" },
+      ],
     });
 
-    // Excluded from publish, never silently — a warning names the key.
-    expect(
-      (report.warnings ?? []).some((w) => w.includes("rr-r1-c1") && w.includes("news publish skipped")),
-    ).toBe(true);
-    // Drafting itself still worked (this pack's folds still draft posts) —
-    // only PUBLISHING has no subject, because nothing in the last stage
-    // parsed as se-r{n}-i{i}.
-    const drafted = (report.oracles ?? []).find((o) => o.name === "news: folding drafted posts");
-    expect(drafted).toMatchObject({ passed: true, verdict: "pass", subject: true });
-    // askedFor === 0 (nothing parsed, so nothing to publish) reads
-    // NO SUBJECT — never a pass (it proved nothing) and never a fail (it
-    // asked for nothing and got nothing).
-    const publishOracle = (report.oracles ?? []).find(
-      (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-fix1-mixed-"));
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+      const { transport, sql } = fakeServer({ knockoutFixtureExtKeys: ["se-r0-i0", "se-3p"] });
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // The warning names se-3p BY NAME — never silently dropped.
+      expect(
+        (report.warnings ?? []).some((w) => w.includes("se-3p") && w.includes("news publish skipped")),
+      ).toBe(true);
+      // se-r0-i0 is never named as skipped — only the key that failed to
+      // parse is.
+      expect((report.warnings ?? []).some((w) => w.includes("news publish skipped") && w.includes("se-r0-i0"))).toBe(
+        false,
+      );
+      // The parsed fixture (se-r0-i0, the sole round present) STILL
+      // publishes — a mixed input must not silently swallow the half that
+      // DID parse.
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      expect(report.news).toMatchObject({ published: 1 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("B07a T12 fix round 1 (R73 I2) — a THREE-round last stage publishes exactly its top two rounds through the wired news step, not the whole stage", async () => {
+    // R73 I2. `_tiny.json`'s own `d-tiny`/`s-playoff` has one real round;
+    // `suite11.json`'s 7-round bracket is never driven through the news
+    // step by any test (Important-2 in the review). This builds a
+    // TEST-LOCAL 3-round last stage — never a pack-file or PackSchema edit,
+    // only a temp copy of `_tiny.json` — using the SAME
+    // `knockoutFixtureExtKeys` knob as the I1 test above. Each fixture
+    // reuses `d-tiny`'s own two entrants (`e-alpha`/`e-bravo`); nothing
+    // here depends on a REAL bracket's home/away feed structure — see that
+    // knob's own doc comment for why the fake was already indifferent to
+    // it, exactly as it already was for the pre-existing single-fixture
+    // case.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      streams: {
+        divisionRef: string;
+        fixtureExtKey: string;
+        stageRef?: string;
+        home: string;
+        away: string;
+        provenance: string;
+        events: unknown[];
+      }[];
+      expected: {
+        matches: {
+          divisionRef: string;
+          fixtureExtKey: string;
+          outcome: unknown;
+          perSide?: unknown[];
+        }[];
+      };
+    };
+    raw.streams.push(
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r1-i0",
+        stageRef: "s-playoff",
+        home: "e-alpha",
+        away: "e-bravo",
+        provenance: "real",
+        events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }],
+      },
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r2-i0",
+        stageRef: "s-playoff",
+        home: "e-bravo",
+        away: "e-alpha",
+        provenance: "real",
+        events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 4, p2Score: 2 } }],
+      },
     );
-    expect(publishOracle).toMatchObject({ passed: true, verdict: "no_subject", subject: false });
-    expect(report.news).toMatchObject({ published: 0 });
+    raw.expected.matches.push(
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r1-i0",
+        outcome: { kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" },
+        perSide: [
+          { entrant: "e-alpha", line: "3" },
+          { entrant: "e-bravo", line: "1" },
+        ],
+      },
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r2-i0",
+        outcome: { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" },
+        perSide: [
+          { entrant: "e-bravo", line: "4" },
+          { entrant: "e-alpha", line: "2" },
+        ],
+      },
+    );
+
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-fix1-threeround-"));
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+      const { transport, sql } = fakeServer({
+        knockoutFixtureExtKeys: ["se-r0-i0", "se-r1-i0", "se-r2-i0"],
+      });
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // No unparsed keys here — every one of the three rounds parses.
+      expect((report.warnings ?? []).some((w) => w.includes("news publish skipped"))).toBe(false);
+      // Exactly the top TWO rounds (se-r1-i0, se-r2-i0) publish — se-r0-i0
+      // stays draft. A "top three" or "whole stage" regression would
+      // publish 3; a "top one" regression would publish 1.
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      expect(report.news).toMatchObject({ published: 2 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("B06a T7 — an org that cannot buy news.auto never turns drafting on, and says so", async () => {

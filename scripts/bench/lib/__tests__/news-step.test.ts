@@ -118,7 +118,13 @@ describe("publishTargets", () => {
     expect(published.unparsedKeys).toEqual(["rr-r1-c1"]);
   });
 
-  it("when NOTHING parses, publishes nothing and names every key as unparsed — the caller reads NO SUBJECT from this, not a pass or a fail", () => {
+  it("when NOTHING parses, publishes nothing and names every key as unparsed", () => {
+    // m2 (Task 12 fix round 1 review, Minor-2): this title used to also
+    // claim "the caller reads NO SUBJECT from this" — true, but proven by
+    // a DIFFERENT test (the wired integration test in
+    // tiny-suite-simulate.test.ts, "a last-stage key that fails to parse
+    // as se-r{n}-i{i}..."), not by this pure `publishTargets` call, which
+    // asserts only the two lines below.
     const streams = [streamOf("rr-r1-c1"), streamOf("rr-r2-c1")];
     const published = publishTargets(streams);
     expect(published).toEqual([]);
