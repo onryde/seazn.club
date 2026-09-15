@@ -1,0 +1,9 @@
+{
+  "id": "gameMateWhite1",
+  "status": "mate",
+  "winner": "white",
+  "players": {
+    "white": { "userId": "lichess-home" },
+    "black": { "userId": "lichess-away" }
+  }
+}

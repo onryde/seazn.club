@@ -1,0 +1,9 @@
+{
+  "id": "gameResignBlack1",
+  "status": "resign",
+  "winner": "white",
+  "players": {
+    "white": { "userId": "lichess-home" },
+    "black": { "userId": "lichess-away" }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "gameMismatch1",
+  "status": "mate",
+  "winner": "white",
+  "players": {
+    "white": { "userId": "wrong-white" },
+    "black": { "userId": "lichess-away" }
+  }
+}
