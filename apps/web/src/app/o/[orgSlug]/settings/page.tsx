@@ -27,6 +27,8 @@ import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
+import { getLinkedAccount } from "@/server/usecases/external-accounts";
+import { lichessConfigured } from "@/lib/oauth";
 import {
   DisplayNameForm,
   ChangeEmailForm,
@@ -34,6 +36,7 @@ import {
   TransferOwnerForm,
   DeleteAccountButton,
 } from "@/components/account-actions";
+import { LichessLinkCard } from "@/components/lichess-link-card";
 import { ApiKeysPanel } from "@/components/api-keys";
 import { TimezonePreference } from "@/components/timezone-preference";
 import { LocalePreference } from "@/components/locale-preference";
@@ -217,7 +220,11 @@ export default async function SettingsPage({
 
   // Account tab data
   const orgMembersMap = new Map<string, OrgMember[]>();
+  let lichessUsername: string | null = null;
+  const lichessOk = lichessConfigured();
   if (tab === "account") {
+    const linked = await getLinkedAccount(user.id, "lichess");
+    lichessUsername = linked?.username ?? null;
     for (const org of orgs) {
       if (org.role === "owner") {
         const members = await sql<OrgMember[]>`
@@ -636,6 +643,8 @@ export default async function SettingsPage({
                   <SectionHeader icon={Mail}>{t(dict, "settings.account.changeEmail")}</SectionHeader>
                   <ChangeEmailForm currentEmail={user.email} />
                 </section>
+
+                <LichessLinkCard linkedUsername={lichessUsername} configured={lichessOk} />
 
                 {/* Export */}
                 <section className="card p-5">
