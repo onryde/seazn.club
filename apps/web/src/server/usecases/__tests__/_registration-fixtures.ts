@@ -74,13 +74,37 @@ export const asOwner = (orgId: string, userId: string): AuthCtx => ({
   keyId: null,
 });
 
-export async function rig(owner: AuthCtx, opts: { startsOn?: string } = {}) {
+/** A `starts_on` comfortably in the future, from the real clock — not a
+ *  hardcoded literal. `rig` used to default to `"2026-09-15"`; the day that
+ *  date arrived, every refund-path suite that relied on "competition still
+ *  upcoming ⇒ auto-refundable" went red with no code change (same failure
+ *  class as `registration-assign.test.ts`'s farFutureDate, found PR #782).
+ *  +60 days keeps refund / "not started" callers clear of `current_date`;
+ *  tests that need "already started" still force the past themselves. */
+export function farFutureDate(daysFromNow = 60): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
+export async function rig(
+  owner: AuthCtx,
+  opts: { startsOn?: string; endsOn?: string } = {},
+) {
+  const startsOn = opts.startsOn ?? farFutureDate();
+  const endsOn =
+    opts.endsOn ??
+    (() => {
+      const d = new Date(`${startsOn}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + 5);
+      return d.toISOString().slice(0, 10);
+    })();
   const competition = await createCompetition(owner, {
     name: "Reg Cup " + randomUUID().slice(0, 6),
     visibility: "public",
     branding: {},
-    starts_on: opts.startsOn ?? "2026-09-15",
-    ends_on: "2026-09-20",
+    starts_on: startsOn,
+    ends_on: endsOn,
   });
   const division = await createDivision(owner, competition.id, {
     name: "Open",
