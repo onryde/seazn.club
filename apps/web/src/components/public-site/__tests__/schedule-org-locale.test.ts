@@ -29,6 +29,7 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
 
 import { getDictionary } from "@/lib/i18n";
+import { LOCALES } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtZoneAbbrev } from "@/lib/format";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
@@ -173,6 +174,32 @@ const esc = (s: string) =>
 const shows = (html: string, text: string, as: "text" | "aria-label" = "text") =>
   as === "text" ? html.includes(`>${esc(text)}<`) : html.includes(`aria-label="${esc(text)}"`);
 
+// ---- Weekday names in a heading (N1h h4, review-n1g m3) --------------------
+/** Every weekday name `Intl` writes in `locale`, long and short, over seven consecutive days. */
+function weekdayNames(locale: string): string[] {
+  const names = new Set<string>();
+  for (const weekday of ["long", "short"] as const) {
+    const format = new Intl.DateTimeFormat(locale, { weekday, timeZone: "UTC" });
+    for (let d = 0; d < 7; d++) names.add(format.format(new Date(Date.UTC(2026, 8, 21 + d, 12))));
+  }
+  return [...names];
+}
+const unesc = (s: string) =>
+  s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+/** Each `<h3>` in the markup: its text, plus every attribute value but `class` (so a `title=` is read too). */
+function headingsOf(html: string): string[] {
+  return [...html.matchAll(/<h3\b[\s\S]*?<\/h3>/g)].map(([h3]) => {
+    const attributes = [...h3.matchAll(/\s([\w:-]+)="([^"]*)"/g)].filter(([, name]) => name !== "class").map(([, , value]) => value);
+    return unesc([h3.replace(/<[^>]*>/g, " "), ...attributes].join(" ")).replace(/\s+/g, " ").trim();
+  });
+}
+/** Does `text` name `name` as a word of its own (no letter or digit either side), in any case? The
+ *  trailing period is optional: fr writes "jeu.", and a heading may write "JEU". */
+function namesWeekday(text: string, name: string): boolean {
+  const word = name.replace(/\.$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${word}(?![\\p{L}\\p{N}])`, "iu").test(text);
+}
+
 type Probe = { what: string; ns: "public" | "ui"; key: string; vars?: Record<string, string>; as?: "aria-label" };
 const zone = fmtZoneAbbrev(TZ, `${DAY_1}T18:00:00.000Z`);
 /** Every G1 string the day view shows or announces, by dictionary key. */
@@ -238,13 +265,44 @@ describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (sur
       enGB: false,
     });
     expect(shows(html, clippedWeekdayDay(DAY_2, "es")), "the weekday form is what got clipped").toBe(false);
-    // N1g g5 (review-n1f m5): the round view heads its groups by ROUND, so no
-    // heading names a day and the rail's short date is the only date a
-    // spectator sees there — the day view's case above finds these same long
-    // day names, so their absence here is not a probe that can never match.
+    // N1g g5 (review-n1f m5), wording corrected in N1h h4 (review-n1g m3):
+    // this pins only that no text node in the round view IS a whole long day
+    // label ("jueves, 24 de septiembre"). The day view's case above finds those
+    // same labels, so the absence is not a probe that can never match. Whether
+    // a HEADING names a weekday in any form is the next case's question.
     for (const day of [DAY_1, DAY_2]) {
-      expect({ day, heading: shows(html, longDay(day, "es")) }).toEqual({ day, heading: false });
+      expect({ day, dayLabel: shows(html, longDay(day, "es")) }).toEqual({ day, dayLabel: false });
     }
+  });
+
+  it("every locale, round view: no heading names a weekday, long or short, in any of the app's locales (N1h h4, review-n1g m3)", async () => {
+    // The round view heads its groups by ROUND, so the rail's short date is the
+    // only date there, and it carries no weekday (N1f f3). Whether the weekday
+    // comes back somewhere in this view is the OWNER's open decision, and this
+    // case does not take it. It pins what is true today: no heading names a
+    // weekday in any form (prefix, suffix, `title=`), so one cannot reappear in
+    // a heading unannounced. If the owner puts it in a heading, change this
+    // case with that decision.
+    const names = LOCALES.flatMap((l) => weekdayNames(l).map((name) => ({ locale: l, name })));
+    const seen: string[] = [];
+    for (const locale of LOCALES) {
+      const schedule = await scheduleFrom(surface, locale);
+      const round = headingsOf(roundViewHtml(schedule));
+      const day = headingsOf(renderToStaticMarkup(schedule));
+      expect(round.length, `${locale}: the round view renders no heading`).toBeGreaterThan(0);
+      // The positive pair: the day view heads its groups by day, so the same
+      // extraction and matcher must find this locale's weekday there.
+      expect(
+        day.some((h) => weekdayNames(locale).some((n) => namesWeekday(h, n))),
+        `${locale}: no weekday found in the day view's headings ${JSON.stringify(day)}, so this probe cannot see one`,
+      ).toBe(true);
+      for (const heading of round) {
+        const hits = names.filter(({ name }) => namesWeekday(heading, name)).map(({ locale: l, name }) => `${l} ${name}`);
+        expect({ locale, heading, hits }).toEqual({ locale, heading, hits: [] });
+      }
+      seen.push(`${locale}: ${JSON.stringify(round)}`);
+    }
+    console.log(`[round headings, ${surface}] ${seen.join("  |  ")}  ||  names: ${names.map((n) => n.name).join(" ")}`);
   });
 
   it("es org, no fixtures: the empty state is the es dictionary's", async () => {
