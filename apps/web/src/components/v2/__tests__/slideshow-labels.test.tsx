@@ -13,7 +13,7 @@
 // Each negative has its positive pair: the same board in an en org DOES show
 // the en value, so the probe can see English when it is there.
 import { describe, expect, it, vi } from "vitest";
-import { cloneElement, createElement, type ReactElement } from "react";
+import { cloneElement, createElement, type CSSProperties, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const { getPublicDivision, getPublicCompetition } = vi.hoisted(() => ({
@@ -548,5 +548,23 @@ describe("public /present kiosk: the phone card (C1)", () => {
     );
     expect(openLiveTag(html)).toContain('href="/probe/live"');
     expect(openLiveTag(html)).not.toContain('href="/probe/back"');
+  });
+
+  it("the board hands its own palette to the card, so a branded board's card is branded too", () => {
+    const palette = { "--ps-accent": "#123456", "--ps-court": "#0a0b0c" } as CSSProperties;
+    const html = renderToStaticMarkup(
+      createElement(Slideshow, {
+        title: "Copa",
+        slides: [],
+        backHref: "/probe/back",
+        liveHref: "/probe/live",
+        themeStyle: palette,
+        labels: slideshowLabels("en"),
+      }),
+    );
+    const card = /<section\b[^>]*\bdata-testid="kiosk-phone-card"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(card, "the card is rendered").not.toBe("");
+    expect(card).toContain("--ps-accent:#123456");
+    expect(card).toContain("--ps-court:#0a0b0c");
   });
 });

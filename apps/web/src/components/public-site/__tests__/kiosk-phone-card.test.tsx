@@ -27,7 +27,7 @@
 // swapping them with no reload, the painted 44px, a tap landing, the choice
 // surviving a real reload, and the card at 320 with nothing cut off.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement, type ReactElement } from "react";
+import { createElement, type CSSProperties, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const store = vi.hoisted(() => ({ browser: false }));
@@ -246,6 +246,15 @@ describe("<KioskPhoneGate>: before any choice (the server render, and hydration'
   it("the retired TV hint banner is nowhere", () => {
     stubBrowser();
     expect(renderToStaticMarkup(gate())).not.toContain("kiosk-tv-hint");
+  });
+
+  it("the card wears the palette it is handed, so a branded board's card is branded too", () => {
+    stubBrowser();
+    const palette = { "--ps-accent": "#123456", "--ps-court": "#0a0b0c" } as CSSProperties;
+    const card = tagOf(renderToStaticMarkup(createElement(KioskPhoneGate, { ...props, themeStyle: palette })), "kiosk-phone-card");
+    expect(card, "the card is rendered").not.toBeNull();
+    expect(card).toContain("--ps-accent:#123456");
+    expect(card).toContain("--ps-court:#0a0b0c");
   });
 });
 
