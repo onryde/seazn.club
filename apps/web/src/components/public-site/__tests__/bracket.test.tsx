@@ -682,6 +682,72 @@ describe("public Bracket — a card footer's Live / TBD are the org locale's wor
     },
   );
 
+  // Every branch that renders a card (the two-sided tree, the double-elim
+  // lanes, the page-playoff card, the column fallback) hands `copy` to its
+  // cards on its own, so an English copy in any one of them would compile and
+  // pass a knockout-only probe. Each shape: one card in play, every other card
+  // with no result and no time.
+  const shapes: Array<{
+    kind: "knockout" | "double_elim" | "page_playoff" | "stepladder";
+    branch: string;
+    fixtures: Array<ReturnType<typeof F>>;
+  }> = [
+    { kind: "knockout", branch: "two-sided", fixtures: cards },
+    {
+      kind: "double_elim",
+      branch: "double-elim",
+      fixtures: [
+        F("w1", 1, 1, "a", "b", null, "in_play"),
+        F("w2", 1, 2, "c", "d", null),
+        F("wf", 2, 1, null, null, null),
+        F("l1", 5, 1, null, null, null),
+        F("lf", 6, 1, null, null, null),
+        F("gf", 9, 1, null, null, null),
+      ],
+    },
+    {
+      kind: "page_playoff",
+      branch: "page-playoff",
+      fixtures: [
+        F("q1", 1, 1, "a", "b", null, "in_play"),
+        F("el", 1, 2, "c", "d", null),
+        F("q2", 2, 1, null, null, null),
+        F("fin", 3, 1, null, null, null),
+      ],
+    },
+    {
+      kind: "stepladder",
+      branch: "columns",
+      fixtures: [F("r1", 1, 1, "a", "b", null, "in_play"), F("r2", 2, 1, null, "c", null), F("r3", 3, 1, null, "d", null)],
+    },
+  ];
+
+  it.each(LOCALES)(
+    "%s: every branch that renders a card (tree, double-elim, page playoff, columns) takes both words from `copy`",
+    async (locale) => {
+      const words = await wordsFor(locale);
+      const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
+      const copy = publicScheduleCopy(await getDictionary(locale, "public"), lookup);
+      for (const { kind, branch, fixtures } of shapes) {
+        const html = renderToStaticMarkup(
+          createElement(Bracket, {
+            kind,
+            fixtures: fixtures as never,
+            entrantNames: names,
+            fixtureHref: href,
+            lookup,
+            slotText: (_stageId: string, label: SlotLabel | null) => resolveSlotLabel(label, lookup, "schedule.tbd"),
+            copy,
+          }),
+        );
+        expect(html, `${kind} renders its ${branch} branch`).toContain(`data-bracket="${branch}"`);
+        expect(footersOf(html), `${kind}: every card's footer`).toEqual(
+          Object.fromEntries(fixtures.map((f) => [href(f.id), esc(f.status === "in_play" ? words.live : words.tbd)])),
+        );
+      }
+    },
+  );
+
   it("en still reads 'Live' and 'TBD', the words the card always printed", async () => {
     expect(await wordsFor("en")).toEqual({ live: "Live", tbd: "TBD" });
     expect(footersOf(await render("en"))).toEqual({ "/f/live": "Live", "/f/timeless": "TBD", "/f/final": "TBD" });
