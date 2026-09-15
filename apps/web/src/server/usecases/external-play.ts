@@ -672,3 +672,49 @@ export async function resolveExternalPlay(
 
   return { status: "finished", score };
 }
+
+/** List needs_organiser online-play fixtures for a division (organiser queue). */
+export async function listNeedsOrganiserExternalPlay(
+  auth: AuthCtx,
+  divisionId: string,
+): Promise<
+  {
+    fixtureId: string;
+    fixtureNo: number | null;
+    homeName: string;
+    awayName: string;
+    scheduledAt: string | null;
+    lastError: string | null;
+  }[]
+> {
+  return withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<
+      {
+        fixture_id: string;
+        fixture_no: number | null;
+        home_name: string | null;
+        away_name: string | null;
+        scheduled_at: Date | null;
+        last_error: string | null;
+      }[]
+    >`
+      select f.id as fixture_id, f.fixture_no,
+             eh.display_name as home_name, ea.display_name as away_name,
+             f.scheduled_at, ep.last_error
+        from fixture_external_play ep
+        join fixtures f on f.id = ep.fixture_id
+        left join entrants eh on eh.id = f.home_entrant_id
+        left join entrants ea on ea.id = f.away_entrant_id
+       where f.division_id = ${divisionId}
+         and ep.status = 'needs_organiser'
+       order by f.scheduled_at nulls last, f.fixture_no nulls last`;
+    return rows.map((r) => ({
+      fixtureId: r.fixture_id,
+      fixtureNo: r.fixture_no,
+      homeName: r.home_name ?? "TBD",
+      awayName: r.away_name ?? "TBD",
+      scheduledAt: r.scheduled_at ? r.scheduled_at.toISOString() : null,
+      lastError: r.last_error,
+    }));
+  });
+}

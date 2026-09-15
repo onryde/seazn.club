@@ -56,6 +56,8 @@ import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
+import { listNeedsOrganiserExternalPlay } from "@/server/usecases/external-play";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -515,6 +517,11 @@ export default async function DivisionPage({
   const streamStates =
     tab === "fixtures" && canEdit ? await openStreamStates(auth, fixtures.map((f) => f.id)) : {};
 
+  const needsOrganiserExternalPlay =
+    tab === "fixtures" && editable
+      ? await listNeedsOrganiserExternalPlay(auth, id)
+      : [];
+
   return (
     <>
       <main className="mx-auto max-w-6xl px-4 py-8">
@@ -755,6 +762,19 @@ export default async function DivisionPage({
                 canEdit={editable}
               />
             ))}
+            {needsOrganiserExternalPlay.length > 0 && (
+              <div className="mb-4">
+                <ExternalPlayNeedsResultQueue
+                  rows={needsOrganiserExternalPlay.map((r) => ({
+                    ...r,
+                    href:
+                      r.fixtureNo != null
+                        ? routes.fixture(orgSlug, compSlug, divSlug, r.fixtureNo)
+                        : routes.division(orgSlug, compSlug, divSlug, "fixtures"),
+                  }))}
+                />
+              </div>
+            )}
             <StagesPanel
               divisionId={id}
               competitionId={competition.id}
