@@ -170,7 +170,7 @@ describe("posterImageDataUrl — one decode at a time, for the whole process", (
     expect(second.answer()).toBeNull();
   });
 
-  it("never starts the decode of a call whose budget ran out while it waited", async () => {
+  it("never starts the decode of a call whose budget ran out while it waited, and gives its place up", async () => {
     // Abandoned-but-queued work must not allocate: nobody is waiting for it.
     decode.plan = [{ ms: POSTER_IMAGE_TIMEOUT_MS * 2 }];
     const first = start();
@@ -179,6 +179,14 @@ describe("posterImageDataUrl — one decode at a time, for the whole process", (
     expect([first.answer(), second.answer()]).toEqual([null, null]);
     await vi.advanceTimersByTimeAsync(POSTER_IMAGE_TIMEOUT_MS); // the first decode ends; the slot is free
     expect(decode.started).toBe(1);
+    // Not starting is half of it. A waiter that skipped its decode but kept its
+    // place would wedge every later share image, so the queue is checked HERE,
+    // not left for whichever test happens to run next: a fresh call goes
+    // straight in, and draws.
+    const third = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(third.answer()?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(decode.started).toBe(2);
   });
 
   it("hands the slot on after a decode that fails", async () => {
