@@ -9,4 +9,4 @@
 - Dropped three deleted-list GET assertions; retained PATCH 200 + score 201 and `/me` HTML checks where applicable.
 - Post-fix grep: zero `assigned-fixtures` or `/my-matches` in `scripts/smoke.ts`.
 
-**Commit:** `ed9c513af` — fix(smoke): retire assigned-fixtures routes for officiating-response
+**Commit:** `c9e04e2e7` — fix(smoke): retire assigned-fixtures routes for officiating-response
