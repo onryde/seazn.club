@@ -23,6 +23,7 @@
 // board's own console page). It sits OUTSIDE the slide, so it never rotates.
 import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
+import { TvMinimalPlay } from "lucide-react";
 import type { KioskPhoneCardLabels } from "@/server/slideshow-labels";
 import { readBoardChosen, writeBoardChosen } from "./kiosk-phone-card-logic";
 
@@ -73,9 +74,12 @@ export function KioskPhoneGate({
           style={themeStyle}
           className="flex min-h-dvh flex-col items-center justify-center gap-8 bg-court px-6 py-12 text-center text-court-ink lg:hidden"
         >
-          <span aria-hidden="true" className="text-6xl leading-none">
-            📺
-          </span>
+          <TvMinimalPlay
+            aria-hidden="true"
+            data-testid="kiosk-phone-card-icon"
+            strokeWidth={1.5}
+            className="size-16 shrink-0 text-accent"
+          />
           <h1
             id={TITLE_ID}
             className="max-w-sm break-words text-balance font-display text-4xl font-bold uppercase leading-tight tracking-tight"

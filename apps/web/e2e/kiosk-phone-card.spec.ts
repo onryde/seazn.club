@@ -167,7 +167,17 @@ async function cardReadability(page: Page): Promise<{ checked: string[]; problem
         const ab = a.getBoundingClientRect();
         if (box.left < ab.left - 1 || box.right > ab.right + 1) problems.push(`"${text}" cut off by <${a.tagName.toLowerCase()}>`);
       }
-      if (el.clientWidth > 0 && (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)) {
+      // Only a cut the element's own style hides: overflow that stays visible is
+      // drawn whole (a glyph taller than a leading-none line box overflows its
+      // box yet reads in full — this probe once failed the card's 📺 for that).
+      const st = getComputedStyle(el);
+      const clamped = st.webkitLineClamp !== "" && st.webkitLineClamp !== "none";
+      const hidesX = st.overflowX !== "visible";
+      const hidesY = st.overflowY !== "visible" || clamped;
+      if (
+        el.clientWidth > 0 &&
+        ((hidesX && el.scrollWidth > el.clientWidth + 1) || (hidesY && el.scrollHeight > el.clientHeight + 1))
+      ) {
         problems.push(`"${text}" truncated`);
       }
     }

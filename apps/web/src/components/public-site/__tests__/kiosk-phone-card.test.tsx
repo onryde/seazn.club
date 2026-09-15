@@ -243,6 +243,24 @@ describe("<KioskPhoneGate>: before any choice (the server render, and hydration'
     expect([...classesIn(tagOf(html, "kiosk-phone-card")!)].filter((c) => c.startsWith("animate-"))).toEqual([]);
   });
 
+  it("the card leads with the TvMinimalPlay line icon (OWNER, 2026-09-15: A), decorative and in the board's accent — the 📺 emoji is gone", () => {
+    stubBrowser();
+    const html = renderToStaticMarkup(gate());
+    const cardAt = html.indexOf('data-testid="kiosk-phone-card"');
+    const titleAt = html.indexOf("<h1", cardAt);
+    const icon = tagOf(html, "kiosk-phone-card-icon");
+    expect(icon, "the icon is rendered").not.toBeNull();
+    expect(icon, "an svg, not a glyph").toMatch(/^<svg\b/);
+    const classes = classesIn(icon!);
+    expect(classes.has("lucide-tv-minimal-play"), `lucide's own class names the icon (saw ${[...classes].join(" ")})`).toBe(true);
+    expect(classes.has("text-accent"), "drawn in the board's accent").toBe(true);
+    expect(icon).toContain('aria-hidden="true"');
+    const iconAt = html.indexOf('data-testid="kiosk-phone-card-icon"');
+    expect(iconAt, "inside the card, above its heading").toBeGreaterThan(cardAt);
+    expect(iconAt).toBeLessThan(titleAt);
+    expect(html).not.toContain("📺");
+  });
+
   it("the retired TV hint banner is nowhere", () => {
     stubBrowser();
     expect(renderToStaticMarkup(gate())).not.toContain("kiosk-tv-hint");
