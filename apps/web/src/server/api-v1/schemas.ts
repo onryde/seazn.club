@@ -1211,6 +1211,25 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
+/** POST /fixtures/{id}/external-play/resolve — organiser settles a needs_organiser bridge. */
+export const ResolveExternalPlay = z
+  .object({
+    kind: z.enum(["home_forfeit", "away_forfeit", "draw", "no_result"]),
+  })
+  .strict();
+export type ResolveExternalPlay = z.infer<typeof ResolveExternalPlay>;
+
+export const ResolveExternalPlayOut = z.object({
+  status: z.literal("finished"),
+  score: z.object({
+    seq: z.number().int(),
+    state_summary: z.unknown(),
+    outcome: z.unknown(),
+    status: z.string(),
+  }),
+});
+export type ResolveExternalPlayOut = z.infer<typeof ResolveExternalPlayOut>;
+
 export const FixtureStream = z.object({
   id: z.string(),
   stream_url: z.string().nullable(),
