@@ -313,16 +313,21 @@ async function valuesOf(what: string, locale: string): Promise<string[]> {
   return [value];
 }
 
-/** The one-letter run that fits the track by `lesser` and overflows it by `gate`, widest margin either side. */
+/**
+ * The run of one lower-case letter — alone, or twice with a space between, so
+ * wrapping can matter — that fits the track by `lesser` and overflows it by
+ * `gate`, with the widest margin either side.
+ */
 function separatingRun(track: number, lesser: (t: string) => number, gate: (t: string) => number) {
   let best: { text: string; margin: number } | undefined;
-  for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+  for (const letter of "abcdefghijklmnopqrstuvwxyz") {
     for (let n = 1; n <= 40; n++) {
-      const text = letter.repeat(n);
-      const [a, b] = [lesser(text), gate(text)];
-      if (a > track || b <= track) continue;
-      const margin = Math.min(track - a, b - track);
-      if (!best || margin > best.margin) best = { text, margin };
+      for (const text of [letter.repeat(n), `${letter.repeat(n)} ${letter.repeat(n)}`]) {
+        const [a, b] = [lesser(text), gate(text)];
+        if (a > track || b <= track) continue;
+        const margin = Math.min(track - a, b - track);
+        if (!best || margin > best.margin) best = { text, margin };
+      }
     }
   }
   return best?.text;
@@ -447,16 +452,17 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
     }
   });
 
-  it("refuses a run that fits only in a lighter face or without the dot beside it (N1g g3, g4)", () => {
-    // Built from the faces, not typed: for every rail word painted at a weight
-    // that has a lighter committed face, or beside a fixed-width child, the
-    // one-letter run that fits the track WITHOUT that and overflows WITH it.
-    // The gate the locale loop uses must refuse it — so measuring the bold chip
-    // in a regular face, or forgetting its dot and gap, goes red.
+  it("refuses a run that fits only when measured lighter than it paints: lighter face, no dot, lower case, or wrapping (N1g g3, g4)", () => {
+    // Built from the faces, not typed: for every word and date the rail paints
+    // at a weight that has a lighter committed face, beside a fixed-width
+    // child, in upper case, or unable to wrap, the run that fits the track
+    // WITHOUT that and overflows WITH it. The gate the measurements use must
+    // refuse it — so measuring the bold chip in a regular face, forgetting its
+    // dot and gap, its case, or the date line's `truncate`, goes red.
     const track = railPx();
-    const { words, spans } = railWords(SCHEDULE_SRC);
+    const { words, dates, spans } = railWords(SCHEDULE_SRC);
     const seen: string[] = [];
-    for (const w of words) {
+    for (const w of [...words, ...dates]) {
       const type = typographyOf(w.chain, spans, w.what);
       const lighter: [string, Typography][] = [];
       const normal = themeNumber("font-weight-normal");
@@ -464,6 +470,8 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
         lighter.push([`weight ${type.weight} measured as ${normal}`, { ...type, weight: normal }]);
       }
       if (type.extraPx > 0) lighter.push([`the ${type.extraPx}px beside it dropped`, { ...type, extraPx: 0 }]);
+      if (type.uppercase) lighter.push(["its upper case dropped", { ...type, uppercase: false }]);
+      if (type.nowrap) lighter.push(["allowed to wrap", { ...type, nowrap: false }]);
       for (const [what, lesser] of lighter) {
         const run = separatingRun(track, (t) => measureIn(lesser, t), (t) => measureIn(type, t));
         expect(run, `${w.what}: the gate measures it the same with ${what}`).toBeDefined();
@@ -476,7 +484,7 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
         );
       }
     }
-    expect(seen.length, "no rail word is bold or painted beside a dot, so these sentinels guard nothing").toBeGreaterThan(0);
+    expect(seen.length, "no rail word is bold, beside a dot, upper-cased or unwrappable, so these sentinels guard nothing").toBeGreaterThan(0);
     console.log(`[rail sentinels] ${seen.join("  |  ")}`);
   });
 });
