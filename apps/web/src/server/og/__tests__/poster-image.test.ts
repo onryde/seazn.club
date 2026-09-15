@@ -372,7 +372,7 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
     expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 576]);
   });
 
-  it("refuses a GIF one column past that, which any other format would draw", async () => {
+  it("refuses a GIF one column past that, which the same canvas as a PNG draws", async () => {
     const past = await canvas(3841, 2160).gif().toBuffer();
     spyFetch(async () => imageResponse(past, "image/gif"));
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();

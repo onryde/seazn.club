@@ -5,10 +5,11 @@ import { POSTER_IMAGE_TIMEOUT_MS, posterImageDataUrl } from "@/server/og/poster-
 // `POSTER_IMAGE_TIMEOUT_MS` is documented as "a slow host must not stall a
 // share preview or a download", but it used to bound the FETCH only: once the
 // bytes were in hand, the decode and re-encode ran with no ceiling at all, and
-// the timer was cleared regardless. A 4 Mpx canvas is a real amount of work on
-// a public route, so the half of the budget nobody was watching is the half
-// that costs. These tests are about the clock, not about sharp — so sharp is
-// replaced wholesale and how long a decode takes becomes a dial.
+// the timer was cleared regardless. A canvas at the pixel ceiling — a 50 MP
+// frame, `POSTER_IMAGE_MAX_PIXELS` — is a real amount of work on a public
+// route, so the half of the budget nobody was watching is the half that costs.
+// These tests are about the clock, not about sharp — so sharp is replaced
+// wholesale and how long a decode takes becomes a dial.
 
 const decode = vi.hoisted(() => ({
   ms: 0,
