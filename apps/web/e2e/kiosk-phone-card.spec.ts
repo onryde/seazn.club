@@ -21,8 +21,10 @@ import { KIOSK_BOARD_CHOSEN_STORAGE_KEY } from "../src/components/public-site/ki
 //   - a visible focus ring from the keyboard;
 //   - the choice surviving a real reload through real localStorage;
 //   - the card at 320 with nothing cut off and no horizontal page scroll;
-//   - K-1: the board spanning a TV-size viewport. RED until the org chrome
-//     leaves /present (K-1, the route-group move); written now, run after it.
+//   - K-1: the board spanning a TV-size viewport, now that /present lives in
+//     the `(kiosk)` route group, outside the org chrome layout;
+//   - K-1: a bad /present link still reaching the branded /shared 404, which
+//     inside `(kiosk)` only `(kiosk)/[orgSlug]/not-found.tsx` provides.
 //
 // Each "shown" assertion has its opposite in this file:
 //   card at 390                   <-> no card at 1024 and 1280 (same page, resized)
@@ -313,7 +315,7 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     expect(navigations, "no reload or navigation while resizing").toEqual([]);
   });
 
-  test("1280: no card, and the board spans the viewport (K-1: red until the org chrome leaves /present)", async ({ page }) => {
+  test("1280: no card, and the board spans the viewport (K-1: no org chrome around /present)", async ({ page }) => {
     await page.setViewportSize(DESKTOP);
     await openMounted(page, divisionKiosk());
 
@@ -325,6 +327,19 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     expect(box!.x, "board left edge").toBeLessThanOrEqual(1);
     expect(box!.width, "board width").toBeGreaterThanOrEqual(DESKTOP.width - 1);
     await expectNoHorizontalScroll(page);
+  });
+
+  test("K-1: a /present link to a competition that does not exist gets the branded /shared 404, not Next's bare page", async ({ page }) => {
+    // The page's own notFound() is caught by the nearest not-found.tsx above
+    // it. In the `(kiosk)` group that is `(kiosk)/[orgSlug]/not-found.tsx`;
+    // without it the miss falls through to Next's built-in page. (An org-level
+    // miss is thrown by the layout itself and skips its own segment's boundary
+    // in BOTH trees — not what this test covers.)
+    await page.setViewportSize(DESKTOP);
+    const response = await page.goto(`/shared/${seeded.orgSlug}/no-such-competition-${TAG.toLowerCase()}/present`);
+    expect(response?.status(), "a 404 status").toBe(404);
+    await expect(page.getByTestId("shared-not-found")).toBeVisible();
+    await expect(page.getByTestId("kiosk-board")).toHaveCount(0);
   });
 
   test("320: every text on the card reads in full, both controls sit inside the viewport, and the page has no horizontal scroll", async ({ page }) => {

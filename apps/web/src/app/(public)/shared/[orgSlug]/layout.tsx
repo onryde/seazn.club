@@ -6,17 +6,19 @@
 // scoreboard typography (Barlow Condensed, mounted only on this tree), and
 // one accent color driven by the --ps-* vars (lib/public-theme.ts) so an org
 // can re-brand the whole surface later without touching components.
+//
+// The /present kiosk is NOT under this layout (K-1): it lives in the sibling
+// `(kiosk)` group with a bare layout, so a TV board spans the screen instead of
+// sitting in this header and `max-w-5xl` main. Same URLs; both layouts share
+// the org door in `server/public-site/org-guard.ts`.
 import Link from "next/link";
-import { notFound, permanentRedirect } from "next/navigation";
 import Image from "next/image";
 import { Barlow_Condensed } from "next/font/google";
 import { AttributionLink } from "@/components/attribution-link";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
-import { isReservedSlug } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
-import { getPublicOrg } from "@/server/public-site/data";
-import { sharedRenameTarget } from "@/server/slug-resolve";
+import { publicOrgOr404 } from "@/server/public-site/org-guard";
 
 const displayFont = Barlow_Condensed({
   weight: ["500", "600", "700"],
@@ -43,15 +45,7 @@ export default async function PublicOrgLayout({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  if (isReservedSlug(orgSlug)) notFound();
-  const data = await getPublicOrg(orgSlug);
-  if (!data) {
-    // Renamed org? The old slug keeps working (v3/01 §2).
-    const renamed = await sharedRenameTarget(orgSlug);
-    if (renamed) permanentRedirect(renamed);
-    notFound();
-  }
-  const { org } = data;
+  const { org } = await publicOrgOr404(orgSlug);
   // N1e e7: the header strip and the footer in the org's own default_locale,
   // the same rule as every /shared page (ISR: the page's language is a
   // function of the org, never of the visitor's request). The brand name

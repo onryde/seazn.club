@@ -33,8 +33,8 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicCompetition,
 }));
 
-import PresentDivisionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
-import PresentCompetitionPage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/present/page";
+import PresentDivisionPage from "@/app/(public)/shared/(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
+import PresentCompetitionPage from "@/app/(public)/shared/(kiosk)/[orgSlug]/[competitionSlug]/present/page";
 import { Slideshow } from "@/components/v2/slideshow";
 import type { BracketSlideFixture, FixtureSlideItem, Slide } from "@/server/slideshow-data";
 import { slideshowLabels, type SlideshowLabels } from "@/server/slideshow-labels";
