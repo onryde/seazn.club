@@ -55,6 +55,9 @@ import {
 // Fix round N2f (review N2 I2), C-1's round rail at 320 and 390, on load and after one tap:
 //   the pressed chip is wholly inside the rail                                ↔ premise: it lay past the rail's right edge before the reveal moved it
 //   no chip's text crosses the rail's LEFT edge, unless the rail is at its scroll end ↔ premise: the tap's target is not the last chip, so the end's exemption cannot answer for it
+//
+// Fix round N2g (review N2f I-1), WHERE that rail rests, at 320 and 390:
+//   the 32-draw opened on its Semi-finals is short of its end, with Quarter-finals on the padding ↔ premises, same measurement: that boundary is short of the end and shows the Semi-finals whole, and Round of 16's does not
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -380,10 +383,14 @@ function railEdges(rail: Locator) {
     });
     const pressed = chips.find((c) => c.pressed) ?? null;
     const max = el.scrollWidth - el.clientWidth;
+    const style = getComputedStyle(el);
     return {
       scrollLeft: el.scrollLeft,
       max,
       clientWidth: el.clientWidth,
+      /** The rail's own paddings, which equal its scroll padding (fix round N2g). */
+      padStart: Number.parseFloat(style.paddingLeft) || 0,
+      padEnd: Number.parseFloat(style.paddingRight) || 0,
       atEnd: el.scrollLeft >= max - 1,
       pressed,
       pressedInside: pressed !== null && pressed.left >= -0.5 && pressed.right <= el.clientWidth + 0.5,
@@ -807,6 +814,61 @@ test.describe("competition hub: Knockout tab", () => {
       await expect(page.getByTestId(testid)).toHaveAttribute("aria-pressed", "true");
       expectC1(await settledRailEdges(page, rail), `tap on ${testid} at ${width}`);
       await expectNoHorizontalScroll(page);
+    }
+  });
+
+  test("g1 (review N2f I-1) at 320 and 390: a 32-draw opened on its Semi-finals rests with Quarter-finals' start on the rail's padding, short of its scroll end", async ({
+    page,
+  }) => {
+    // C-1's cut check cannot see a reveal that lands AT the scroll end (cuts
+    // there are exempt) or on the pressed chip's own start (nothing is cut).
+    // Both are where the regressions land: the effect passing no scroll end,
+    // passing no chip starts, or the gutter branch dropped. This pins WHERE the
+    // rail rests, on the one geometry the spec seeds for it.
+    test.setTimeout(budget(4));
+    const view = thirtyTwo.doc.knockouts[0]!;
+    const [, roundOf16, quarters, semis] = view.rounds as [HubRound, HubRound, HubRound, HubRound, HubRound];
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    const idOf = (round: HubRound) => `mh-knockout-round-${view.id}-${round.key}`;
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, thirtyTwo, "?tab=knockout"));
+      await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+      const g = await settledRailEdges(page, rail);
+      const seen = `load at ${width}: ${JSON.stringify(g)}`;
+      const chipOf = (round: HubRound) => g.chips.find((c) => c.testid === idOf(round));
+      const [r16, qf, sf] = [chipOf(roundOf16), chipOf(quarters), chipOf(semis)];
+      expect(r16 && qf && sf, `the three chips — ${seen}`).toBeTruthy();
+      expect(sf!.pressed, seen).toBe(true);
+
+      // Premises, from the same measurement, in the rail's CONTENT coordinates
+      // (independent of where it rests). `shift(c)` is the scrollLeft that puts
+      // c's start on the padding; `sfEnd` is the Semi-finals' right edge.
+      const shift = (c: { left: number }) => c.left + g.scrollLeft - g.padStart;
+      const sfEnd = sf!.right + g.scrollLeft;
+      expect(shift(qf!), `premise: Quarter-finals on the padding is short of the scroll end — ${seen}`).toBeLessThan(
+        g.max - 1,
+      );
+      expect(
+        sfEnd - shift(qf!),
+        `premise: with Quarter-finals on the padding the Semi-finals are whole — ${seen}`,
+      ).toBeLessThanOrEqual(g.clientWidth);
+      expect(
+        sfEnd - shift(r16!),
+        `premise: Round of 16 on the padding would leave the Semi-finals' end past the right padding — ${seen}`,
+      ).toBeGreaterThan(g.clientWidth - g.padEnd);
+      if (sfEnd - shift(qf!) > g.clientWidth - g.padEnd) {
+        expect(
+          shift(sf!),
+          `premise: Quarter-finals only shows the Semi-finals inside the right padding, so their own start must lie past the end — ${seen}`,
+        ).toBeGreaterThan(g.max);
+      }
+
+      const measured = `at ${width}: scrollLeft ${g.scrollLeft}, scrollWidth-clientWidth ${g.max}, Quarter-finals' chip at ${qf!.left} against padding ${g.padStart}`;
+      expect.soft(g.atEnd, `the rail rests at its scroll end — ${measured} — ${seen}`).toBe(false);
+      expect
+        .soft(Math.abs(qf!.left - g.padStart), `Quarter-finals' start is not on the rail's padding (±1px) — ${measured} — ${seen}`)
+        .toBeLessThanOrEqual(1);
     }
   });
 
