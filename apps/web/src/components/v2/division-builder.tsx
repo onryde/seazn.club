@@ -7,7 +7,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, SPORT_RULES, buildRuleOverride } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, type StageDraft } from "./format-templates";
+import {
+  STAGE_TEMPLATES,
+  applyStandingsCarry,
+  buildTemplateStages,
+  clampKnob,
+  templateHasProgression,
+  type StageDraft,
+  type StandingsCarry,
+} from "./format-templates";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -256,6 +264,7 @@ export function DivisionBuilder({
   const [swissRounds, setSwissRounds] = useState(5);
   const [poolCount, setPoolCount] = useState(2);
   const [legs, setLegs] = useState(1);
+  const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>("none");
 
   // Scheduling (optional — can also be edited later on the schedule board).
   // Real court ids picked from the org's own court list (P9 scope item 5) —
@@ -346,12 +355,15 @@ export function DivisionBuilder({
     // set) so this is defence-in-depth for it, not a live gap — same guard as
     // division-settings.tsx's free-text qualified input, for one shared
     // clampKnob (format-templates.ts) rather than two divergent ones.
-    return buildTemplateStages(template, {
-      qualified: clampKnob(qualified, 2, 32),
-      swissRounds,
-      poolCount: clampKnob(poolCount, 2, 8),
-      legs,
-    });
+    return applyStandingsCarry(
+      buildTemplateStages(template, {
+        qualified: clampKnob(qualified, 2, 32),
+        swissRounds,
+        poolCount: clampKnob(poolCount, 2, 8),
+        legs,
+      }),
+      standingsCarry,
+    );
   }
 
   async function submit() {
@@ -494,7 +506,7 @@ export function DivisionBuilder({
   // Any change to the format or its knobs invalidates a shown example.
   useEffect(() => {
     setPreview(null);
-  }, [template, qualified, swissRounds, poolCount, legs]);
+  }, [template, qualified, swissRounds, poolCount, legs, standingsCarry]);
 
   async function runPreview() {
     setPreviewError(null);
@@ -526,6 +538,7 @@ export function DivisionBuilder({
   }
   const hasSecondStage =
     template === "league_ko" || template === "groups_ko" || template === "group_stepladder";
+  const showStandingsCarry = templateHasProgression(template);
 
   return (
     <form onSubmit={(e) => e.preventDefault()} className="space-y-6">
@@ -815,6 +828,22 @@ export function DivisionBuilder({
                   </option>
                 ))}
               </select>
+            </label>
+          )}
+          {showStandingsCarry && (
+            <label className="block">
+              <span className="label">{msg("format.carry.label")}</span>
+              <select
+                data-testid="division-builder-carry"
+                value={standingsCarry}
+                onChange={(e) => setStandingsCarry(e.target.value as StandingsCarry)}
+                className="select"
+              >
+                <option value="none">{msg("format.carry.none")}</option>
+                <option value="points">{msg("format.carry.points")}</option>
+                <option value="full">{msg("format.carry.full")}</option>
+              </select>
+              <span className="mt-0.5 block text-xs text-slate-400">{msg("format.carry.help")}</span>
             </label>
           )}
         </div>

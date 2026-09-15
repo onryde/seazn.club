@@ -10,7 +10,17 @@ import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { MatchRuleFields, buildRuleOverride, hydrateRuleValues, SPORT_RULES } from "./match-rules";
-import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate, type StageDraft } from "./format-templates";
+import {
+  STAGE_TEMPLATES,
+  applyStandingsCarry,
+  buildTemplateStages,
+  clampKnob,
+  detectTemplate,
+  templateHasProgression,
+  type StageDraft,
+  type StandingsCarry,
+  type TemplateKnobs,
+} from "./format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
@@ -187,6 +197,35 @@ export function currentQualifiedFromStages(
   return matched ? total : 4;
 }
 
+/** Reverse-derives the carry knob from stored progression stages. Pure. */
+export function currentStandingsCarryFromStages(
+  stages: { progression: StageDraft["progression"] }[],
+): StandingsCarry {
+  for (const st of stages) {
+    if (!st.progression) continue;
+    const carry = st.progression.carry;
+    if (carry === "points" || carry === "full") return carry;
+  }
+  return "none";
+}
+
+/** Stage drafts applyStructure submits — pure mirror of its build path. */
+export function structureDraftsForApply(
+  templateKey: string,
+  knobs: TemplateKnobs,
+  carry: StandingsCarry,
+): StageDraft[] {
+  return applyStandingsCarry(
+    buildTemplateStages(templateKey, {
+      qualified: clampKnob(knobs.qualified, 2, 32),
+      swissRounds: knobs.swissRounds,
+      poolCount: clampKnob(knobs.poolCount, 2, 8),
+      legs: knobs.legs,
+    }),
+    carry,
+  );
+}
+
 /**
  * R3.5 review finding F7 — this editor used to hardcode `sportKey ===
  * "generic" ? w/d/l : win/draw/loss` for every OTHER sport. That shipped two
@@ -327,6 +366,9 @@ export function DivisionSettings({
   );
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
+  );
+  const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>(() =>
+    currentStandingsCarryFromStages(stages),
   );
   const cfg = (division.config ?? {}) as { points?: Record<string, number>; progressScore?: boolean };
   // R3.5 review F7 — which boxes this editor shows/writes is derived from
@@ -481,18 +523,11 @@ export function DivisionSettings({
 
   const applyStructure = () =>
     run(async () => {
-      // B (round-4 review): both poolCount AND qualified here are free
-      // `<input type="number">` fields — HTML `min` doesn't stop a cleared
-      // field reading as Number("")===0, which mints groups_ko's take rule
-      // with n:Infinity (serialises as n:null over the wire) rather than a
-      // clean validation message. Clamp right before buildTemplateStages,
-      // not on every keystroke (which would fight the organiser mid-edit).
-      const drafts = buildTemplateStages(template, {
-        qualified: clampKnob(qualified, 2, 32),
-        swissRounds,
-        poolCount: clampKnob(poolCount, 2, 8),
-        legs,
-      });
+      const drafts = structureDraftsForApply(
+        template,
+        { qualified, swissRounds, poolCount, legs },
+        standingsCarry,
+      );
       await apiV1(`/api/v1/divisions/${division.id}/stages`, {
         method: "PUT",
         json: drafts.map((d, i) => ({ ...d, seq: i + 1 })),
@@ -781,6 +816,23 @@ export function DivisionSettings({
                     {msg("divset.legs")}
                     <input type="number" min={1} max={4} disabled={!canEdit} value={legs}
                       onChange={(e) => setLegs(Number(e.target.value))} className="input mt-1 w-full" />
+                  </label>
+                )}
+                {templateHasProgression(template) && (
+                  <label className="block text-xs text-slate-500">
+                    {msg("format.carry.label")}
+                    <select
+                      data-testid="division-settings-carry"
+                      disabled={!canEdit}
+                      value={standingsCarry}
+                      onChange={(e) => setStandingsCarry(e.target.value as StandingsCarry)}
+                      className="input mt-1 w-full"
+                    >
+                      <option value="none">{msg("format.carry.none")}</option>
+                      <option value="points">{msg("format.carry.points")}</option>
+                      <option value="full">{msg("format.carry.full")}</option>
+                    </select>
+                    <span className="mt-0.5 block text-[11px] text-slate-400">{msg("format.carry.help")}</span>
                   </label>
                 )}
               </div>

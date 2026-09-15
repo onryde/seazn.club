@@ -16,7 +16,13 @@
 // alongside `qualified` to draw from every pool, not just A/B), not the
 // bare qualified count.
 import { describe, expect, it } from "vitest";
-import { STAGE_TEMPLATES, buildTemplateStages, clampKnob, detectTemplate } from "../format-templates";
+import {
+  STAGE_TEMPLATES,
+  applyStandingsCarry,
+  buildTemplateStages,
+  clampKnob,
+  detectTemplate,
+} from "../format-templates";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { ProgressionSchema } from "@/server/api-v1/schemas";
 import {
@@ -503,6 +509,24 @@ describe("clampKnob — guards poolCount/qualified before buildTemplateStages (B
 // contract — every template key resolves BOTH keys, in ALL FOUR locales,
 // non-empty, and es/fr/nl are real translations rather than English left in
 // place under a different key.
+describe("F6 — standings carry on progression stages", () => {
+  it("applyStandingsCarry with points sets carry on the finals stage only", () => {
+    const stages = buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
+    const withCarry = applyStandingsCarry(stages, "points");
+    expect(withCarry[0]!.progression).toBeNull();
+    expect(withCarry[1]!.progression).toMatchObject({
+      carry: "points",
+      timing: "setup",
+    });
+  });
+
+  it("applyStandingsCarry with none omits carry from progression stages", () => {
+    const stages = buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });
+    const withCarry = applyStandingsCarry(stages, "none");
+    expect(withCarry[1]!.progression).not.toHaveProperty("carry");
+  });
+});
+
 describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F3 Task 6)", () => {
   const DICTS: [string, Record<string, unknown>][] = [
     ["en", enUi as Record<string, unknown>],

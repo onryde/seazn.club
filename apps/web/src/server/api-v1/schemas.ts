@@ -927,46 +927,22 @@ export const ProgressionSchema = z
     // hand-built stage graph, and it backs a MARKETED Pro entitlement
     // (standings.carry_over — feature-copy.ts's paywall copy,
     // pricing.matrix.standings.carry_over in all 4 marketing dictionaries).
-    // Deleting it would silently break a paid, advertised feature —
-    // meaningful only when timing is "on_complete" (seedNextStage,
-    // stages.ts); a "setup"-timing stage's propose/confirm flow never reads
-    // it, same as `.seeding` never carried a field like this before F2.
-    // Enforced below (not just documented): the refine rejects the
-    // combination outright rather than letting it silently no-op.
+    // Deleting it would silently break a paid, advertised feature.
+    // Accepted on BOTH timings as of F6. Applied in seedNextStage for
+    // `on_complete` and in confirmSeedProposal for `setup`. computeSeedProposal
+    // refuses a non-real source at propose time (HttpError 422
+    // SEEDING_CARRY_SOURCE_INVALID); confirm re-checks the same belt before
+    // writing `carry_deltas` + one `standings_carried` event.
+    // A refine here used to reject the pair outright, because carry was
+    // read only under `on_complete` and the entitlement gate
+    // (`progression?.carry`, timing-agnostic) would otherwise have charged
+    // the org's `standings.carry_over` for a silent no-op.
     carry: z.enum(["none", "points", "full"]).optional(),
   })
   .strict()
   .refine((s) => s.placement !== "seeded_map" || (s.map !== undefined && s.map.length > 0), {
     message: "seeded_map placement needs a non-empty map",
     path: ["map"],
-  })
-  // F2 full-branch review — product question: pre-F2 `carry` lived only on
-  // `.qualification`, which was always `on_complete`, so this combination
-  // was inexpressible. Unification newly admits `{timing: "setup", carry:
-  // "points"|"full"}`, which parses fine and passes createStages' entitlement
-  // gate (stages.ts reads `progression?.carry` regardless of timing, so it
-  // charges the org's `standings.carry_over` Pro entitlement) — but `carry`
-  // is only ever read inside seedNextStage (stages.ts), which returns early
-  // unless `timing === "on_complete"`; the `setup` fixture generator never
-  // looks at it. That combination gates a paid feature on a no-op, which is
-  // worse than either rejecting it or ignoring it silently — so it is
-  // rejected here, at the edge, with a message naming the actual problem.
-  .refine((s) => s.timing === "on_complete" || s.carry === undefined || s.carry === "none", {
-    // F3, ruling 12's 2026-08-19 amendment: this message USED to claim a
-    // "setup"-timing stage "seeds placeholders independently of source
-    // completion and never reads carry". That is false, and a future reader
-    // acting on it would conclude carry is impossible here rather than
-    // unwired. Fixture GENERATION is independent of source completion;
-    // SEEDING is not — confirmSeedProposal runs only once every named source
-    // is complete, holding the same freshness-verified tables carryDeltas
-    // needs (stages.ts, seedNextStage does exactly this on the on_complete
-    // path). Nothing reads carry on the setup path because nobody wired it.
-    // Reachability is the real gap: standings.carry_over is sold on the public
-    // pricing page in four locales and has never been emitted by any template,
-    // gallery entry, catalogue file or picker control. Scoped as F6.
-    message:
-      'carry is not yet supported when timing is "setup" — carry-over is applied when a stage is seeded, and the setup path does not do that yet (see F6). Use timing "on_complete", or omit carry',
-    path: ["carry"],
   });
 export type ProgressionInput = z.infer<typeof ProgressionSchema>;
 

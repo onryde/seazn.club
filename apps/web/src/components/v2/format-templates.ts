@@ -39,6 +39,8 @@
 // regression net that replaces the old "has a label/help" field check.
 import type { TakeRule } from "@seazn/engine/competition";
 
+export type StandingsCarry = "none" | "points" | "full";
+
 export interface StageDraft {
   kind: string;
   name: string;
@@ -48,6 +50,7 @@ export interface StageDraft {
     placement: "rank_order" | "snake" | "seeded_map";
     map?: { slot: string; source: string }[];
     timing: "setup" | "on_complete";
+    carry?: StandingsCarry;
   } | null;
 }
 
@@ -260,6 +263,21 @@ export const STAGE_TEMPLATES: {
 export function clampKnob(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+/** True when a one-click template includes at least one progression-bearing stage. */
+export function templateHasProgression(templateKey: string): boolean {
+  const t = STAGE_TEMPLATES.find((s) => s.key === templateKey);
+  if (!t) return false;
+  return t.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 }).some((s) => s.progression !== null);
+}
+
+/** Bake the organiser's carry choice onto every progression-bearing stage draft. */
+export function applyStandingsCarry(stages: StageDraft[], carry: StandingsCarry): StageDraft[] {
+  if (carry === "none") return stages;
+  return stages.map((s) =>
+    s.progression ? { ...s, progression: { ...s.progression, carry } } : s,
+  );
 }
 
 /** Template + knob values → the stage specs the API accepts. */

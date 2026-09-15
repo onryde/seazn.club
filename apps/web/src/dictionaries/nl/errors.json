@@ -13,6 +13,7 @@
   "seeding.SEEDING_ENTRANT_FOREIGN": "Een van de geplaatste deelnemers hoort niet meer bij deze divisie.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Een van de doelposities hoort bij een andere fase. Bereken het voorstel opnieuw en probeer het nogmaals.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Een van de doelposities is al ingevuld. Bereken het voorstel opnieuw om te zien wat er nog over is.",
+  "seeding.SEEDING_CARRY_SOURCE_INVALID": "Puntenoverdracht heeft een bronfase met een puntentabel nodig: een competitie, groep of Zwitsers systeem. Een knock-out, ladder of americano geeft de volgende fase een eindklassering door in plaats van punten, dus er is niets om over te dragen. Zet de overdracht voor deze fase uit, of neem als bron een competitie, groep of Zwitsers systeem.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "Het schema van deze divisie begint vóór de competitie opent op {startsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "Het schema van deze divisie eindigt na het sluiten van de competitie op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "Het schema van deze divisie begint vóór de competitie opent op {startsOn} en eindigt na het sluiten op {endsOn}. Verruim de competitiedata of breng de divisie erbinnen.",

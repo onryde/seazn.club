@@ -28,7 +28,7 @@ describe("seedingErrorMessage — mechanics", () => {
     expect(out).not.toBe("fallback");
   });
 
-  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS (14 total)", () => {
+  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS and F6's SEEDING_CARRY_SOURCE_INVALID (15 total)", () => {
     const expected: SeedingErrorCode[] = [
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
@@ -44,6 +44,10 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_ENTRANT_FOREIGN",
       "SEEDING_SLOT_FOREIGN_FIXTURE",
       "SEEDING_FIXTURES_ALREADY_FILLED",
+      // F6 (#625) — computeSeedProposal's carry-source refusal. Added under
+      // the design of record's own authorisation to add beside these helpers,
+      // not by re-opening the "do NOT add more" scope note in seeding-error.ts.
+      "SEEDING_CARRY_SOURCE_INVALID",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
@@ -60,8 +64,10 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
         // `code` — t()'s own missing-key fallback (i18n-runtime.ts) returns the
         // full PREFIXED key it was asked to look up, i.e. `seeding.${code}`.
         // `expect(out).not.toBe(code)` alone would miss that entirely (review
-        // finding 3, P6/D4b task B fix round 1): a real gap in any of the 52
-        // (13 codes x 4 locales) dictionary values would pass undetected.
+        // finding 3, P6/D4b task B fix round 1): a real gap in any of the
+        // SEEDING_ERROR_CODES x LOCALES dictionary values would pass
+        // undetected. Both loops are derived, so the count moves with the list
+        // rather than needing a number retyped here.
         expect(out.startsWith("seeding.")).toBe(false);
         expect(out.length).toBeGreaterThan(0);
         expect(out).not.toMatch(/\{[a-zA-Z]+\}/);

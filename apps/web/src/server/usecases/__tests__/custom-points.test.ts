@@ -281,12 +281,21 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     }
     await completeStage(auth, g!.id);
     const [next] = await sql<
-      { config: { carry_deltas?: { entrantId: string; points: number }[] } }[]
+      { config: { carry_deltas?: { entrantId: string; points: number }[]; qualified?: string[] } }[]
     >`
       select config from stages where id = ${final!.id}`;
     expect(next!.config.carry_deltas).toBeDefined();
     const carried = next!.config.carry_deltas!;
     expect(carried.find((d) => d.entrantId === byId.get("A"))!.points).toBe(9);
+    // Carry covers EXACTLY the entrants that qualified — D finished 4th under
+    // this rankRange{1,3} and must not arrive in the super pool's opening
+    // table with points from a phase it was eliminated in. Compared against
+    // the seeding's own `config.qualified` (written by the same transaction)
+    // rather than a hand-listed set, so a change to who qualifies moves both
+    // sides together. Without buildCarryDeltas' qualified-set filter
+    // (stages.ts) every source row folds in and this is 4, not 3.
+    expect([...carried.map((d) => d.entrantId)].sort()).toEqual([...next!.config.qualified!].sort());
+    expect(carried).toHaveLength(3);
     // standings_carried in the ledger
     const [ev] = await sql<{ n: number }[]>`
       select count(*)::int as n from division_events
