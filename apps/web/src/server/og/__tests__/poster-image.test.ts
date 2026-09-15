@@ -4,6 +4,7 @@ import { publicStorageUrl } from "@/lib/storage-url";
 import {
   POSTER_IMAGE_MAX_BYTES,
   POSTER_IMAGE_MAX_EDGE,
+  POSTER_IMAGE_MAX_GIF_PIXELS,
   POSTER_IMAGE_MAX_PIXELS,
   POSTER_IMAGE_TIMEOUT_MS,
   allowedPosterImageUrl,
@@ -37,6 +38,18 @@ const webp = () =>
   sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 40, b: 255, alpha: 1 } } })
     .webp()
     .toBuffer();
+
+/** A flat-colour canvas of any size: small on the wire, however large decoded. */
+const canvas = (width: number, height: number) =>
+  sharp({ create: { width, height, channels: 4, background: { r: 200, g: 30, b: 60, alpha: 1 } } });
+
+/** The pixel size of the picture a returned `data:` URI really carries, or null. */
+async function drawnSize(dataUrl: string | null): Promise<[number, number] | null> {
+  const prefix = "data:image/png;base64,";
+  if (dataUrl === null || !dataUrl.startsWith(prefix)) return null;
+  const { width, height } = await sharp(Buffer.from(dataUrl.slice(prefix.length), "base64")).metadata();
+  return [width, height];
+}
 
 /** A perfectly ordinary crest-shaped SVG — with a `viewBox`, so satori itself
  *  would not even throw on it. What makes it inadmissible is that it is markup
@@ -301,38 +314,71 @@ describe("posterImageDataUrl — satori is handed bytes, never a URL", () => {
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
   });
 
-  // The three below are about the DECODED canvas, which the byte cap cannot
-  // see: a flat-colour 2100² PNG is ~90 KB on the wire and ~17 MB once it is
-  // RGBA in memory, and three of these are decoded in parallel per render on
-  // an unauthenticated public route.
+  // The pixel ceiling is about the DECODED canvas, which the byte cap cannot
+  // see: a flat-colour 8689×5792 PNG is ~1 MB on the wire and 200 MB as RGBA.
+  // It is a memory bound that REFUSES — a canvas past it is not downscaled, it
+  // becomes the monogram — so it has to sit above every picture an organiser
+  // really uploads. P4 set it at 2048² and silently turned ordinary oversized
+  // badges into monograms; the cases below pin that shut.
   //
-  // The sizes here are deliberately LITERAL. Derived from the constant they
-  // would move with it, and the whole point is that raising the cap must red.
-  it("pins the cap at the largest input that can still carry detail into the drawn picture", () => {
-    // The fetcher keeps at most POSTER_IMAGE_MAX_EDGE (1024) on the longest
-    // edge, and the largest of these surfaces DRAWS a badge at 260px
-    // (`SCALE.poster.badge`), a logo at 96px, a card crest at 52–64px. Past
-    // twice the kept edge no pixel of the input survives the downscale, so
-    // 2048² is the last input size that is not pure allocation.
+  // Sizes are deliberately LITERAL. Derived from the constant they would move
+  // with it, and the whole point is that moving the ceiling must red.
+  it("pins the ceiling at a 50 MP-class camera frame, 8688×5792", () => {
     expect(POSTER_IMAGE_MAX_EDGE).toBe(1024);
-    expect(POSTER_IMAGE_MAX_PIXELS).toBe(2048 * 2048);
+    expect(POSTER_IMAGE_MAX_PIXELS).toBe(8688 * 5792);
   });
 
-  it("refuses a canvas larger than that, however small the file is", async () => {
-    const huge = await png(2100); // 4.41 Mpx, past the cap
-    expect(huge.byteLength).toBeLessThan(POSTER_IMAGE_MAX_BYTES); // not the byte cap
-    spyFetch(async () => imageResponse(huge, "image/png"));
+  // The three the P4/P5 review measured: each drew before P4 and fell back
+  // after it. Entrant badges are stored exactly as uploaded, so these are what
+  // a designer's export or a phone photo used as a crest really arrives as.
+  it.each([
+    { name: "a 2560×2560 PNG", width: 2560, height: 2560, format: "png", drawn: [1024, 1024] },
+    { name: "a 3000×3000 WebP", width: 3000, height: 3000, format: "webp", drawn: [1024, 1024] },
+    { name: "a 4032×3024 phone-photo JPEG", width: 4032, height: 3024, format: "jpeg", drawn: [1024, 768] },
+  ] as const)("draws $name, downscaled to the edge we keep", async ({ width, height, format, drawn }) => {
+    const bytes = await canvas(width, height).toFormat(format).toBuffer();
+    expect(bytes.byteLength).toBeLessThan(POSTER_IMAGE_MAX_BYTES);
+    spyFetch(async () => imageResponse(bytes, `image/${format}`));
+    expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual(drawn);
+  });
+
+  it("draws the ceiling itself: a whole 8688×5792 frame", async () => {
+    // The anti-vacuous half: a ceiling set anywhere under the reference frame
+    // would pass the refusal below and quietly monogram real uploads again.
+    const frame = await canvas(8688, 5792).jpeg().toBuffer();
+    expect(frame.byteLength).toBeLessThan(POSTER_IMAGE_MAX_BYTES);
+    spyFetch(async () => imageResponse(frame, "image/jpeg"));
+    expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 683]);
+  });
+
+  it("refuses a canvas one column past the ceiling, however small the file is", async () => {
+    const past = await canvas(8689, 5792).png().toBuffer();
+    expect(past.byteLength).toBeLessThan(POSTER_IMAGE_MAX_BYTES); // not the byte cap
+    spyFetch(async () => imageResponse(past, "image/png"));
     expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
   });
 
-  it("still draws one just inside it, downscaled to the edge we keep", async () => {
-    // The anti-vacuous half: a cap low enough to refuse everything would pass
-    // the test above and quietly delete badges from every share image.
-    spyFetch(async () => imageResponse(await png(2000), "image/png")); // 4.0 Mpx
-    const out = await posterImageDataUrl(uploadedBadge());
-    expect(out?.startsWith("data:image/png;base64,")).toBe(true);
-    const drawn = await sharp(Buffer.from(out!.slice("data:image/png;base64,".length), "base64")).metadata();
-    expect(drawn.width).toBe(POSTER_IMAGE_MAX_EDGE);
+  // GIF gets a lower ceiling of its own. It is the one format libvips holds as
+  // a WHOLE canvas however small we draw it — measured, ~5 bytes a pixel, so a
+  // GIF at the frame ceiling above would hold 264 MB. And it is a screen
+  // format, not a camera one: the org content uploader takes GIFs for prose
+  // images, and a typed `badge_url` can point at one on the storage origin.
+  it("pins the GIF ceiling at a 4K UHD screen frame, 3840×2160", () => {
+    expect(POSTER_IMAGE_MAX_GIF_PIXELS).toBe(3840 * 2160);
+  });
+
+  it("draws a GIF as large as a 4K screen frame", async () => {
+    spyFetch(async () => imageResponse(await canvas(3840, 2160).gif().toBuffer(), "image/gif"));
+    expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 576]);
+  });
+
+  it("refuses a GIF one column past that, which any other format would draw", async () => {
+    const past = await canvas(3841, 2160).gif().toBuffer();
+    spyFetch(async () => imageResponse(past, "image/gif"));
+    expect(await posterImageDataUrl(uploadedBadge())).toBeNull();
+    // The same canvas as a PNG draws: the refusal is GIF's, not the frame's.
+    spyFetch(async () => imageResponse(await canvas(3841, 2160).png().toBuffer(), "image/png"));
+    expect(await drawnSize(await posterImageDataUrl(uploadedBadge()))).toEqual([1024, 576]);
   });
 
   it("returns null rather than throwing when the bytes are not really an image", async () => {

@@ -40,7 +40,7 @@ import sharp from "sharp";
  * A slow host must not stall a share preview or a download — and neither must
  * a slow picture. This is the budget for the WHOLE operation: the fetch, the
  * body read, and the decode and re-encode after it. Bounding the fetch alone
- * left the expensive half unwatched, since a 4 Mpx canvas is real work and a
+ * left the expensive half unwatched, since a 50 MP canvas is real work and a
  * `sharp` pipeline takes no `AbortSignal`.
  */
 export const POSTER_IMAGE_TIMEOUT_MS = 1500;
@@ -58,22 +58,43 @@ export const POSTER_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 export const POSTER_IMAGE_MAX_EDGE = 1024;
 
 /**
- * A 2 MB file can still decode to a gigapixel canvas — a flat-colour 5000²
- * PNG is ~500 KB on the wire and 100 MB once it is RGBA in memory, and three
- * images are decoded in parallel per render on an unauthenticated public
- * route. So the byte cap is not the ceiling that matters; this is.
+ * A 2 MB file can still decode to a huge canvas — a flat-colour 8689×5792 PNG
+ * is ~1 MB on the wire and 200 MB once it is RGBA — so the byte cap is not the
+ * ceiling that matters for memory; this is. It is a ceiling that REFUSES: a
+ * canvas past it is not downscaled, it falls back to the monogram. So it must
+ * sit above every picture an organiser really uploads, and memory is bounded
+ * another way as well (one decode at a time — `decodeQueue`, below).
  *
- * Derived from what these surfaces actually draw, not chosen: nothing here
- * keeps more than `POSTER_IMAGE_MAX_EDGE` on the longest edge, and past twice
- * that edge no pixel of the input survives the downscale. 2048² is therefore
- * the last input size that is picture rather than allocation — ~17 MB RGBA
- * each, ~50 MB for a render's three, against 100/300 MB before.
+ * Chosen from real uploads, not from the size we draw. Entrant badges are
+ * stored exactly as uploaded: a designer's 2560–4096px export, or a phone
+ * photo at 4032×3024 (12 MP). The reference is the largest common camera
+ * frame, a 50 MP-class full frame at 8688×5792 = 50,320,896 px; a 48 MP phone
+ * frame (8064×6048 = 48,771,072) and a 24 MP one (6000×4000) sit under it. A
+ * real photograph that large is far past the byte cap anyway, so in practice
+ * this is what a well-compressing image — flat art, or a bomb — meets.
+ *
+ * What one decode at the ceiling holds, measured with sharp 0.34.5 at libvips
+ * concurrency 1 (one vCPU, as production runs): JPEG ~11 MB and WebP ~12 MB,
+ * because sharp shrinks both WHILE loading (libjpeg's 1/2–1/8 DCT scaling,
+ * libwebp's scaled decode); PNG ~72 MB, because it has no shrink-on-load and
+ * is streamed at full width. The PNG figure grows with libvips threads:
+ * ~126 MB at 4, ~175 MB at 12.
  *
  * sharp checks this from the image HEADER (it throws "Input image exceeds
  * pixel limit" at `.metadata()` below), so an oversized canvas is refused
  * before anything is allocated for it.
  */
-export const POSTER_IMAGE_MAX_PIXELS = (2 * POSTER_IMAGE_MAX_EDGE) ** 2;
+export const POSTER_IMAGE_MAX_PIXELS = 8688 * 5792;
+
+/**
+ * GIF's own, lower ceiling. libvips holds a GIF as a WHOLE canvas however
+ * small it is drawn — measured ~5 bytes a pixel, so 264 MB at the ceiling
+ * above — and GIF is a screen format, not a camera one: the org content
+ * uploader takes GIFs for prose images, and a typed `badge_url` can point at
+ * one. So a 4K UHD frame, 3840×2160 = 8,294,400 px; a 9 MP GIF measured
+ * ~65 MB at libvips concurrency 1.
+ */
+export const POSTER_IMAGE_MAX_GIF_PIXELS = 3840 * 2160;
 
 /**
  * What we will draw. `image/svg+xml` is deliberately NOT here even though the
@@ -195,6 +216,10 @@ function deadline(signal: AbortSignal): Promise<never> {
  * decoded one at a time the process holds one decode's worth, for a single
  * render and across concurrent renders alike. It costs no throughput where
  * this runs: the machine is one shared vCPU (`fly.toml`, `shared-cpu-1x`).
+ *
+ * Measured at the ceilings above (sharp 0.34.5, libvips concurrency 1): a
+ * render drawing three PNGs at `POSTER_IMAGE_MAX_PIXELS` peaks ~73 MB one at
+ * a time — the same as one alone — against ~216 MB in parallel.
  */
 let decodeQueue: Promise<unknown> = Promise.resolve();
 
@@ -289,8 +314,10 @@ export async function posterImageDataUrl(raw: string | null | undefined): Promis
         // The format the BYTES are, not the one the response called them. Also
         // where `limitInputPixels` fires: sharp reads the header here, so an
         // oversized canvas is refused before anything is allocated for it.
-        const { format } = await image.metadata();
+        const { format, width, height } = await image.metadata();
         if (format === undefined || !POSTER_IMAGE_FORMATS.has(format)) return null;
+        // Also from the header: GIF is held whole, so it has a ceiling of its own.
+        if (format === "gif" && width * height > POSTER_IMAGE_MAX_GIF_PIXELS) return null;
         return await image
           .resize({
             width: POSTER_IMAGE_MAX_EDGE,
