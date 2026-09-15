@@ -211,9 +211,9 @@ describe("canEditFixtureTime — is the displayed time an affordance?", () => {
 // `and fo.response <> 'declined'`.
 //
 // NOT covered by the ledger, which was the review's own open question:
-// `division-phase`'s `hasScorer` is resolved from `scorer_assignments`
-// (competition-desk.ts:293-298), a DIFFERENT table from `fixture_officials`, so
-// the "Needs you" panel cannot cover for this row.
+// `division-phase`'s `hasScorer` is resolved from `fixture_officials` via the
+// same `hasAssignedScorer` rule (competition-desk.ts), so the "Needs you"
+// panel cannot cover for this row.
 //
 // The wire shape is `unknown[]`, so this reader is TOTAL: a malformed element
 // must not throw a match-day render.

@@ -1,5 +1,5 @@
 // Scoring auth (#707): requireScorable via owner/admin or accepted officials
-// only — scorer_assignments and the org scorer role are retired. Real Postgres
+// only — org-member scorers and assignment-table auth are retired. Real Postgres
 // required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";

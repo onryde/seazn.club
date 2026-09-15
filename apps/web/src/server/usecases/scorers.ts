@@ -1,6 +1,6 @@
 import "server-only";
 // Fixture scoring authority: requireScorable gate and accepted-official
-// coverage. Org-member scorers and scorer_assignments were retired (#707).
+// coverage. Org-member scorers and assignment-table auth were retired (#707).
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
