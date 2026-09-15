@@ -206,41 +206,51 @@ describe("ProgressionSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  // F2 full-branch review — product question: `carry` is only ever read
-  // inside seedNextStage (usecases/stages.ts), which returns early unless
-  // `timing === "on_complete"` — the `setup` fixture generator never looks
-  // at it. Before this refine, `{timing: "setup", carry: "points"}` parsed
-  // fine, createStages charged the org's `standings.carry_over` Pro
-  // entitlement for it (stages.ts's gate reads `progression?.carry`
-  // regardless of timing), and the carry then silently never happened.
-  // Gating a paid feature on a combination that no-ops is the worst
-  // option, so the combination is rejected at the edge instead — the
-  // organiser gets a 400 naming the problem, not a silent charge for
-  // nothing. Pre-F2 this was inexpressible: `carry` lived only on
-  // `.qualification`, which was always `on_complete`; unification newly
-  // admits the bad combination, so this refine is what keeps it closed.
-  describe("carry requires timing: on_complete (F2 review product question)", () => {
-    it("rejects carry: \"points\" when timing is \"setup\" — carry would silently no-op (setup never calls seedNextStage)", () => {
+  // F6 — `carry` used to be rejected alongside `timing: "setup"`, because it
+  // was read only inside seedNextStage (usecases/stages.ts), which returns
+  // early unless `timing === "on_complete"`; the combination parsed, charged
+  // the org's `standings.carry_over` Pro entitlement (stages.ts's gate reads
+  // `progression?.carry` regardless of timing) and then silently no-opped.
+  // F6 applies carry on the confirm path too — confirmSeedProposal runs only
+  // once every named source is complete, so it holds the same
+  // freshness-verified tables carryDeltas needs, exactly as seedNextStage
+  // does. These cases assert only the SCHEMA edge (F6's first step): the pair
+  // parses. That the confirm path then applies it is asserted by the
+  // confirm-path tests, not here. `standings.carry_over` is sold on the
+  // public pricing page in four locales, and before F6 no template, gallery
+  // entry or picker control could emit it on a setup-timing stage — which is
+  // every stage the picker builds.
+  describe("carry with timing: setup (F6 — confirm-path carry)", () => {
+    // Asserting only `success` would be satisfied by a parse that silently
+    // dropped `carry` — the exact shape stages.ts reads (`progression?.carry`)
+    // to decide whether to charge the entitlement and apply the deltas. Pin
+    // the parsed VALUE, so a schema that accepts the pair but forgets the
+    // field is still a failure here.
+    it("accepts carry: \"points\" when timing is \"setup\" — confirmSeedProposal applies it", () => {
       const result = ProgressionSchema.safeParse({
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
         timing: "setup",
         carry: "points",
       });
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues.some((i) => i.path.join(".") === "carry")).toBe(true);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.carry).toBe("points");
+        expect(result.data.timing).toBe("setup");
       }
     });
 
-    it("rejects carry: \"full\" when timing is \"setup\" the same way", () => {
+    it("accepts carry: \"full\" when timing is \"setup\" the same way", () => {
       const result = ProgressionSchema.safeParse({
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
         timing: "setup",
         carry: "full",
       });
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.carry).toBe("full");
+      }
     });
 
     it("accepts carry: \"none\" with timing: \"setup\" — equivalent to omitting carry, no entitlement gate fires on it", () => {
