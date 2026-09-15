@@ -44,14 +44,18 @@ async function seedOrg(): Promise<{ auth: AuthCtx }> {
   };
 }
 
-// F4 fix tests: `createAssignment` needs a real users row (FK), same
-// pattern as scorers.test.ts's own `makeUser`.
-async function makeUser(name: string): Promise<string> {
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name)
-    values (${`${name}-${randomUUID().slice(0, 8)}@test.local`}, ${name})
+async function assignFixtureOfficial(
+  orgId: string,
+  fixtureId: string,
+  response: "accepted" | "declined" | "pending" | null = "accepted",
+): Promise<void> {
+  const [official] = await sql<{ id: string }[]>`
+    insert into officials (org_id, display_name, role_keys)
+    values (${orgId}, 'Scorer', ${sql.json(["scorer"])})
     returning id`;
-  return id;
+  await sql`
+    insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+    values (${orgId}, ${fixtureId}, ${official!.id}, 'scorer', ${response})`;
 }
 
 // Same seeding as add-fixture.test.ts's seedDivision, return narrowed to
@@ -440,8 +444,9 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     expect(noScorerRows[0]).toMatchObject({ count: 2 });
   });
 
-  // F4 repoint to fixture_officials is Task 4 (#707); scorer_assignments is gone.
-  it.skip("F4: a fixture-scoped scorer assignment suppresses no_scorer for that fixture, even at zero events", async () => {
+  // F4 (#707 Task 4): hasScorer reads fixture_officials — same rule as
+  // hasAssignedScorer on the run sheet (only explicit declined is a refusal).
+  it("F4: an accepted fixture official suppresses no_scorer for that fixture, even at zero events", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -451,12 +456,13 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
     await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    await assignFixtureOfficial(auth.orgId, f!.id, "accepted");
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
     expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(false);
   });
 
-  it.skip("F4: a division-scoped scorer assignment ALSO suppresses no_scorer — assigning clears the row, not just the first score event", async () => {
+  it("F4: assigning a fixture official clears no_scorer — not just the first score event", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -466,15 +472,30 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
     await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
-    // Before the assignment: the row is up, same as the plain no_scorer test above.
     const before = await getCompetitionDesk(auth, competitionId);
     expect(before.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer")).toBe(true);
-    // After: cleared by the assignment alone — no score event was ever recorded.
+    await assignFixtureOfficial(auth.orgId, f!.id, "pending");
     const after = await getCompetitionDesk(auth, competitionId);
     expect(after.divisions.get(divisionId)!.attention.some((a) => a.kind === "no_scorer")).toBe(false);
   });
 
-  it.skip("F4: an assignment on a DIFFERENT fixture/division does not suppress this one's no_scorer", async () => {
+  it("F4: a declined fixture official does not suppress no_scorer", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 1`;
+    await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${f!.id}`;
+    await assignFixtureOfficial(auth.orgId, f!.id, "declined");
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(true);
+  });
+
+  it("F4: an official on a DIFFERENT fixture does not suppress this one's no_scorer", async () => {
     const { auth } = await seedOrg();
     const { competitionId, divisionId } = await seedDivision(auth, 4);
     const [stage] = await createStages(auth, divisionId, {
@@ -484,6 +505,7 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     await sql`update divisions set status = 'active' where id = ${divisionId}`;
     const rows = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 2`;
     await sql`update fixtures set status = 'in_play', scheduled_at = now() - interval '12 minutes' where id = ${rows[0]!.id}`;
+    await assignFixtureOfficial(auth.orgId, rows[1]!.id, "accepted");
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
     expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(true);

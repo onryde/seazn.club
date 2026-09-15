@@ -173,9 +173,10 @@ type FixtureRaw = {
   started_at_key: string | null;
 };
 type SettingsRaw = { division_id: string; tz: string | null; match_minutes: number | null };
-/** F4 (final review, Important) — resolved once per competition, not N+1:
- *  who is on record to score, at either scope the finding names. */
-type ScorerAssignmentRaw = { scope_type: "fixture" | "division"; scope_id: string };
+/** F4 (#707 Task 4) — fixtures with a non-declined scoring official, read
+ *  once per competition (no N+1). Same rule as `hasAssignedScorer`: only an
+ *  explicit `declined` means nobody is coming. */
+type FixtureWithOfficialRaw = { fixture_id: string };
 
 /** The division's own "what's next" fact, SEARCHED from the full fixtures
  *  list this function already has for the division (`rows`) — never
@@ -237,7 +238,7 @@ export async function getCompetitionDesk(
     listDivisionCardStats(auth, competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
-  const { orgTz, stages, fixtures, settings, scorerAssignments } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -342,16 +343,17 @@ export async function getCompetitionDesk(
           select division_id, tz, (config ->> 'matchMinutes')::int as match_minutes
             from schedule_settings where division_id = any(${ids})`
       : [];
-    // F4 (#707 Task 4): hasScorer will repoint to fixture_officials; table gone.
-    const scorerAssignments: ScorerAssignmentRaw[] = [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, scorerAssignments };
+    const fixturesWithOfficial = ids.length
+      ? await tx<FixtureWithOfficialRaw[]>`
+          select fo.fixture_id
+            from fixture_officials fo
+            join fixtures f on f.id = fo.fixture_id
+           where f.division_id = any(${ids})
+             and fo.response is distinct from 'declined'`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial };
   });
-  const divisionsWithScorer = new Set(
-    scorerAssignments.filter((a) => a.scope_type === "division").map((a) => a.scope_id),
-  );
-  const fixturesWithScorer = new Set(
-    scorerAssignments.filter((a) => a.scope_type === "fixture").map((a) => a.scope_id),
-  );
+  const fixturesWithScorer = new Set(fixturesWithOfficial.map((a) => a.fixture_id));
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();
@@ -431,7 +433,7 @@ export async function getCompetitionDesk(
       eventCount: x.event_count,
       startedAt: x.started_at === null ? null : new Date(x.started_at).toISOString(),
       matchMinutes,
-      hasScorer: fixturesWithScorer.has(x.id) || divisionsWithScorer.has(d.id),
+      hasScorer: fixturesWithScorer.has(x.id),
       stageId: x.stage_id,
       // M1 (fix round I): "has this bracket been drawn?" — the same
       // `left join entrants` this query already does for the row's own
