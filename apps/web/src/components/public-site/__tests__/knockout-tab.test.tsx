@@ -736,6 +736,50 @@ describe("KnockoutTab — the Draw's crest (owner ruling v1, option b)", () => {
   });
 });
 
+describe("KnockoutTab — a feeder label wraps on a phone instead of truncating (C-2)", () => {
+  // Visual gate, pending-slot-cards-320: a 32-draw's semi-final cards both read
+  // "Winner of Quarter-finals, matc…", so which quarter-final feeds which semi
+  // could not be told apart. At 390 the same labels fit. This is that screen's
+  // shape. The semi-finals are this view's FIRST round, so it opens on them and
+  // no pair sentence replaces the document's own labels. One card is a real
+  // entrant against a feeder label, the other is two feeder labels.
+  //
+  // A class scan (vitest is `environment: "node"`): it pins that each label is
+  // in the markup whole and that its span asks to wrap below md. That it really
+  // takes a second line at 320 is not something this environment can see.
+  const labels = [
+    "Winner of Quarter-finals, match 2",
+    "Winner of Quarter-finals, match 3",
+    "Winner of Quarter-finals, match 4",
+  ];
+  const FEEDERS = hubDoc({
+    matches: [
+      ko("s1", "upcoming", SF, [S("Amelia Hartley"), tbd(labels[0]!)]),
+      ko("s2", "upcoming", SF, [tbd(labels[1]!), tbd(labels[2]!)]),
+      ko("f1", "upcoming", F, [tbd("Winner of Semi-finals, match 1"), tbd("Winner of Semi-finals, match 2")]),
+    ],
+    knockouts: [knockoutView("cup", "premier", [koRound("main-1", SF, ["s1", "s2"]), koRound("main-2", F, ["f1"])])],
+  });
+
+  it("each semi-final card carries its feeder label WHOLE, in a span that wraps below md; the real entrant beside it keeps its ellipsis", () => {
+    const h = render(FEEDERS);
+    expect(cardIds(h)).toEqual(["s1", "s2"]);
+    const nameClass = (title: string) => {
+      const found = h.match(new RegExp(`<span class="([^"]*)" title="${title}">${title}</span>`))?.[1];
+      expect(found, `"${title}", whole`).toBeDefined();
+      return found!.split(" ");
+    };
+    for (const label of labels) {
+      const tokens = nameClass(label);
+      expect(tokens, label).toEqual(expect.arrayContaining(["break-words", "md:truncate"]));
+      expect(tokens, `${label}: no truncation below md`).not.toContain("truncate");
+    }
+    const amelia = nameClass("Amelia Hartley");
+    expect(amelia).toContain("truncate");
+    expect(amelia).not.toContain("break-words");
+  });
+});
+
 describe("KnockoutTab — the champion banner", () => {
   it("present when the view names a champion fixture: the WINNER's name, and who they beat in which round", () => {
     const h = render(doneDoc("f1"));
