@@ -23,3 +23,32 @@ export type LichessGameSnapshot = {
     black: { userId: string | null };
   };
 };
+
+export type CreateChallengeInput = {
+  whiteAccessToken: string;
+  blackLichessUsername: string;
+  clock: LichessClock;
+  rated: false;
+};
+
+export type CreateChallengeResult = {
+  challengeId: string;
+  gameId?: string;
+  whitePlayUrl: string;
+  blackPlayUrl: string;
+};
+
+export interface ExternalPlayAdapter {
+  createChallenge(input: CreateChallengeInput): Promise<CreateChallengeResult>;
+  fetchGame(gameId: string): Promise<LichessGameSnapshot>;
+}
+
+export class LichessHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LichessHttpError";
+  }
+}
