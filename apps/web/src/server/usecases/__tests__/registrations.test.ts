@@ -1294,7 +1294,7 @@ describe.skipIf(!HAS_DB)("registration flows (doc 16 §1.1, PROMPT-20a)", () => 
 
     const ics = await registrationIcs(reg.registration.id, reg.access_token);
     expect(ics).toContain("BEGIN:VCALENDAR");
-    expect(ics).toContain("DTSTART;VALUE=DATE:20260915");
+    expect(ics).toContain(`DTSTART;VALUE=DATE:${competition.starts_on!.replace(/-/g, "")}`);
 
     // Settings read-back includes charges_enabled for the console banner.
     const settingsReadback = await getRegistrationSettings(owner, division.id);
@@ -6032,18 +6032,29 @@ describe.skipIf(!HAS_DB)("mintGroupCheckout — per-currency matrix (RS003 W4)",
     it("PRESERVED: the all-day span still runs starts_on..ends_on+1 (multi-day), not collapsed to buildIcs's one-day allDayOn default", async () => {
       const { orgId, ownerId } = await seedOrg("pro");
       const owner = asOwner(orgId, ownerId);
-      const { competition, division } = await rig(owner); // starts_on 2026-09-15, ends_on 2026-09-20
+      const { competition, division } = await rig(owner); // clock-relative starts_on / ends_on = start+5
       const settings = await putRegistrationSettings(owner, division.id, {
         enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [],
         opens_at: null, closes_at: null, capacity: null, refund_lock_at: null,
       });
       const reg = await seedRegistration(competition.id, division.id, settings);
       const ics = await registrationIcs(reg.registration.id, reg.access_token);
-      expect(ics).toContain("DTSTART;VALUE=DATE:20260915");
-      // Exclusive DTEND the day AFTER ends_on (2026-09-21) — a one-day
-      // collapse would instead emit 20260916 (the day after DTSTART).
-      expect(ics).toContain("DTEND;VALUE=DATE:20260921");
-      expect(ics).not.toContain("DTEND;VALUE=DATE:20260916");
+      const startYmd = competition.starts_on!.replace(/-/g, "");
+      const endExclusive = (() => {
+        const d = new Date(`${competition.ends_on!}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + 1);
+        return d.toISOString().slice(0, 10).replace(/-/g, "");
+      })();
+      const oneDayCollapse = (() => {
+        const d = new Date(`${competition.starts_on!}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + 1);
+        return d.toISOString().slice(0, 10).replace(/-/g, "");
+      })();
+      expect(ics).toContain(`DTSTART;VALUE=DATE:${startYmd}`);
+      // Exclusive DTEND the day AFTER ends_on — a one-day collapse would
+      // instead emit the day after DTSTART.
+      expect(ics).toContain(`DTEND;VALUE=DATE:${endExclusive}`);
+      expect(ics).not.toContain(`DTEND;VALUE=DATE:${oneDayCollapse}`);
     });
 
     it("PRESERVED: no STATUS line — a confirmed registration is not TENTATIVE, unlike buildIcs's all-day default", async () => {
