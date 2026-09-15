@@ -51,6 +51,10 @@ import {
 //   N1 a waiting double-elimination card names its feeder's round with the rail's label ↔ no "R1·1" code anywhere in the panel
 //   M6 (fix round 1) a LOSERS' card names the winners' round its sides drop from ↔ the same panel, still no R·code
 //   M5 (fix round 1) a DRAWABLE slot whose feeder still waits names the feeder's round, on the Draw node and the card ↔ no R·code in either view
+//
+// Fix round N2f (review N2 I2), C-1's round rail at 320 and 390, on load and after one tap:
+//   the pressed chip is wholly inside the rail                                ↔ premise: it lay past the rail's right edge before the reveal moved it
+//   no chip's text crosses the rail's LEFT edge, unless the rail is at its scroll end ↔ premise: the tap's target is not the last chip, so the end's exemption cannot answer for it
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -73,6 +77,9 @@ const FILL_POLL_MS = 20_000;
 /** How many fixtures to score in each bracket round, in seq order. */
 const EIGHT_SCORED = [4, 1] as const; // every quarter-final, one semi-final
 const SIXTEEN_SCORED = [8, 4, 2, 1] as const; // the whole draw
+/** Every round through the quarter-finals, so the rail opens on the Semi-finals,
+ *  its fourth chip of five (fix round N2f). */
+const THIRTY_TWO_SCORED = [16, 8, 4] as const;
 const FIRST_DIVISION_SCORED = [2] as const;
 const SECOND_DIVISION_SCORED = [1] as const;
 
@@ -91,6 +98,7 @@ const SEED_CALLS =
   1 + // the active org's slug
   COMPETITION_CALLS + divisionCalls(EIGHT_SCORED) +
   COMPETITION_CALLS + divisionCalls(SIXTEEN_SCORED) +
+  COMPETITION_CALLS + divisionCalls(THIRTY_TWO_SCORED) +
   COMPETITION_CALLS + divisionCalls(FIRST_DIVISION_SCORED) + divisionCalls(SECOND_DIVISION_SCORED) +
   COMPETITION_CALLS + divisionCalls([]) + // double elimination, unplayed
   COMPETITION_CALLS + 5 + // league: division create + read, entrants, stage create + generate
@@ -343,6 +351,79 @@ type RailGeometry = Awaited<ReturnType<typeof railGeometry>>;
 const insideRail = (g: RailGeometry, chip: { left: number; right: number } | null) =>
   chip !== null && chip.left >= -0.5 && chip.right <= g.clientWidth + 0.5;
 
+/**
+ * C-1's two browser facts about a round rail (review N2 I2), measured as the N2
+ * harness's `__measure` did: each chip's box and its TEXT extent (a Range over
+ * the chip's contents), relative to the rail's own box.
+ *  - `leadingCut`: chips whose text straddles the rail's LEFT edge. The trailing
+ *    edge is not measured: a chip cut there is a scroller's "more this way" cue.
+ *  - `atEnd`: the rail is at its scroll end (within 1px), where no snap position
+ *    can cure a leading cut, as on a finished draw opened on its Final.
+ */
+function railEdges(rail: Locator) {
+  return rail.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const at = (x: number) => Math.round((x - box.left) * 10) / 10;
+    const chips = [...el.querySelectorAll("button")].map((chip) => {
+      const r = chip.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(chip);
+      const text = range.getBoundingClientRect();
+      return {
+        testid: chip.getAttribute("data-testid") ?? "",
+        pressed: chip.getAttribute("aria-pressed") === "true",
+        left: at(r.left),
+        right: at(r.right),
+        textLeft: at(text.left),
+        textRight: at(text.right),
+      };
+    });
+    const pressed = chips.find((c) => c.pressed) ?? null;
+    const max = el.scrollWidth - el.clientWidth;
+    return {
+      scrollLeft: el.scrollLeft,
+      max,
+      clientWidth: el.clientWidth,
+      atEnd: el.scrollLeft >= max - 1,
+      pressed,
+      pressedInside: pressed !== null && pressed.left >= -0.5 && pressed.right <= el.clientWidth + 0.5,
+      leadingCut: chips.filter((c) => c.textLeft < -0.5 && c.textRight > 0.5).map((c) => c.testid),
+      chips,
+    };
+  });
+}
+type RailEdges = Awaited<ReturnType<typeof railEdges>>;
+
+/** The rail once it has stopped: fonts loaded and two frames drawn, then the
+ *  same `scrollLeft` on two reads 150ms apart (a snap settling is a scroll too).
+ *  After ~3s it returns the last read, so a rail that never stops is printed by
+ *  the assertions rather than timed out on. */
+async function settledRailEdges(page: Page, rail: Locator): Promise<RailEdges> {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  let last = await railEdges(rail);
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(150);
+    const now = await railEdges(rail);
+    if (now.scrollLeft === last.scrollLeft) return now;
+    last = now;
+  }
+  return last;
+}
+
+/** Both C-1 facts; each failure carries everything that was measured. SOFT, so
+ *  a red at 320 still measures 390. */
+function expectC1(g: RailEdges, where: string) {
+  const seen = `${where}: ${JSON.stringify(g)}`;
+  expect.soft(g.pressedInside, `the pressed chip is not wholly inside the rail — ${seen}`).toBe(true);
+  expect.soft(
+    g.atEnd ? [] : g.leadingCut,
+    `a chip's text is cut at the rail's leading edge, away from its scroll end — ${seen}`,
+  ).toEqual([]);
+}
+
 // ---------------------------------------------------------------------------
 
 test.describe("competition hub: Knockout tab", () => {
@@ -354,6 +435,9 @@ test.describe("competition hub: Knockout tab", () => {
   let orgSlug = "";
   let eight: Seeded;
   let sixteen: Seeded;
+  /** Fix round N2f (review N2 I2): a 32-draw scored through its quarter-finals,
+   *  so a phone rail opens on the Semi-finals, the fourth chip of five. */
+  let thirtyTwo: Seeded;
   let twoDivisions: Seeded;
   let doubleElim: Seeded;
   let leagueOnly: Seeded;
@@ -384,6 +468,11 @@ test.describe("competition hub: Knockout tab", () => {
         const comp = await publicCompetition(request, "Hub KO Sixteen");
         const div = await bracketDivision(request, comp.id, "Open", 16, "knockout", SIXTEEN_SCORED);
         sixteen = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub KO ThirtyTwo");
+        const div = await bracketDivision(request, comp.id, "Grand", 32, "knockout", THIRTY_TWO_SCORED);
+        thirtyTwo = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
       }
       {
         const comp = await publicCompetition(request, "Hub KO Two");
@@ -473,6 +562,11 @@ test.describe("competition hub: Knockout tab", () => {
     const [sixteenView] = sixteen.doc.knockouts;
     expect(sixteenView!.rounds.map((r) => r.fixtureIds.length)).toEqual([8, 4, 2, 1]);
     expect(sixteenView!.championFixtureId).toBe(sixteenView!.rounds[3]!.fixtureIds[0]);
+
+    expect(thirtyTwo.doc.knockouts).toHaveLength(1);
+    const [thirtyTwoView] = thirtyTwo.doc.knockouts;
+    expect(thirtyTwoView!.rounds.map((r) => r.fixtureIds.length)).toEqual([16, 8, 4, 2, 1]);
+    expect(thirtyTwoView!.championFixtureId).toBeNull();
 
     expect(twoDivisions.doc.knockouts.map((v) => v.divisionSlug)).toEqual(twoDivisions.divisionSlugs);
 
@@ -663,6 +757,57 @@ test.describe("competition hub: Knockout tab", () => {
       })
       .toBe(true);
     for (const id of first.fixtureIds) await expect(page.getByTestId(`mh-match-${id}`)).toBeVisible();
+  });
+
+  test("C-1 (review N2 I2) at 320 and 390, on load: a mid-event 32-draw opened on its Semi-finals shows that chip whole and cuts no chip's text at the rail's leading edge", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    const view = thirtyTwo.doc.knockouts[0]!;
+    const semis = view.rounds[3]!;
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, thirtyTwo, "?tab=knockout"));
+      await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+      const g = await settledRailEdges(page, rail);
+      const seen = `load at ${width}: ${JSON.stringify(g)}`;
+      // Non-vacuous: the rail overflows, the Semi-finals lie past its right edge
+      // at rest (so the reveal had to move the rail), and they are not the last
+      // chip (so the scroll end's exemption is not what the reveal was for).
+      expect(g.max, seen).toBeGreaterThan(0);
+      expect(g.pressed!.right + g.scrollLeft, seen).toBeGreaterThan(g.clientWidth);
+      expect(g.chips.at(-1)!.pressed, seen).toBe(false);
+      expectC1(g, `load at ${width}`);
+      await expectNoHorizontalScroll(page);
+    }
+  });
+
+  test("C-1 (review N2 I2) at 320 and 390, after one tap: pressing the first chip past a double-elimination rail's right edge shows it whole and cuts no chip's text at the leading edge", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    const view = doubleElim.doc.knockouts[0]!;
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+      const before = await settledRailEdges(page, rail);
+      const seen = `before the tap at ${width}: ${JSON.stringify(before)}`;
+      // Non-vacuous: the rail overflows, the target lies past its right edge,
+      // and it is not the last chip, so the scroll end's exemption cannot answer
+      // for it. A DISPATCHED click, so Playwright does not scroll it in first.
+      expect(before.max, seen).toBeGreaterThan(0);
+      const target = before.chips.findIndex((c) => !c.pressed && c.right > before.clientWidth + 0.5);
+      expect(target, seen).toBeGreaterThan(-1);
+      expect(target, seen).toBeLessThan(before.chips.length - 1);
+      const testid = before.chips[target]!.testid;
+      expect(testid, seen).not.toBe("");
+      await page.getByTestId(testid).dispatchEvent("click");
+      await expect(page.getByTestId(testid)).toHaveAttribute("aria-pressed", "true");
+      expectC1(await settledRailEdges(page, rail), `tap on ${testid} at ${width}`);
+      await expectNoHorizontalScroll(page);
+    }
   });
 
   test("two knockout divisions: All shows both; a division chip shows one and writes division=; a division= link opens on it", async ({
