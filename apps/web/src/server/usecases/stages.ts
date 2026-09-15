@@ -2261,6 +2261,58 @@ const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
 // rule — see loadBracketFixtures' own export note below.
 export const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
+// F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
+// `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
+// confirmSeedProposal, `timing:"setup"`). The three helpers here are what both
+// read, so the pair cannot drift on WHICH sources may be carried from, WHAT
+// the refusal says, or WHICH rows fold into the deltas.
+//
+// They deliberately stop short of throwing, because the two paths surface from
+// DIFFERENT endpoints whose error vocabularies differ, and sharing the throw
+// would have to pick one and break the other:
+//
+//   - seedNextStage's refusal leaves POST /stages/{id}/complete. It keeps its
+//     EngineError CONFIG_INVALID — completeStage's catch swallows only
+//     STAGE_NOT_READY, so this one propagates and reaches the client through
+//     ENGINE_HTTP (api-v1/http.ts) as a 422. That is a shipped contract
+//     qualification-from-any-stage.test.ts pins on all three non-real kinds.
+//   - computeSeedProposal's refusal answers POST /stages/{id}/seed-proposal,
+//     whose whole error vocabulary is SEEDING_* HttpErrors that
+//     seeding-error.ts renders into localised organiser copy. An EngineError
+//     raised there would reach the panel as raw English, the way
+//     STAGE_NOT_READY's own unwired fallback still does.
+//
+// Sharing the SENTENCE gets the drift protection without either compromise.
+
+/** The first carry source whose kind has no real points to carry, or
+ *  `undefined` when every source is a REAL_TABLE_KINDS stage. */
+function nonRealCarrySource(
+  resolved: readonly { id: string; kind: string }[],
+): { id: string; kind: string } | undefined {
+  return resolved.find((s) => !REAL_TABLE_KINDS.has(s.kind));
+}
+
+/** The one sentence both refusal sites raise. Named `kind` is the offending
+ *  source's stage kind, not the target's. */
+function carrySourceRefusal(kind: string): string {
+  return `carry-over needs a table-stage source (league/group/swiss) — a "${kind}" completion has no real points to carry`;
+}
+
+/** Opening deltas for a target stage: every source-table row belonging to an
+ *  entrant that actually qualified, folded by the engine's own `carryDeltas`
+ *  (competition/points.ts) — never re-implemented here. The filter is the
+ *  load-bearing half: without it a knocked-out entrant's points would arrive
+ *  in the next stage's opening table. */
+function buildCarryDeltas(
+  tables: readonly SourceTables[],
+  entrantIds: readonly string[],
+  mode: "points" | "full",
+): unknown[] {
+  const qualified = new Set(entrantIds);
+  const rows = tables.flatMap((t) => t.pools.flatMap((p) => p.rows)).filter((r) => qualified.has(r.entrantId));
+  return carryDeltas(rows, mode);
+}
+
 // Mirrors engine-db/competition.ts's private toEngineStatus (not exported):
 // DB fixtures.status -> engine FixtureStatus (spec 05 §1 vocabulary). Needed
 // only to satisfy BracketFixture's required `status` field when rebuilding a
@@ -2732,22 +2784,25 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // Deleting it would silently break a paid, advertised feature. `carry`
     // is, like `timing`, an apps/web/DB-orchestration concept the engine's
     // pure ProgressionSpec has no notion of — see ProgressionSchema.
+    //
+    // The kind check and the delta fold moved to nonRealCarrySource /
+    // carrySourceRefusal / buildCarryDeltas (above, beside REAL_TABLE_KINDS) in
+    // F6, unchanged in behaviour — the `timing:"setup"` propose path reads the
+    // same helpers, so the two cannot drift on which sources are refusable, the
+    // sentence, or which rows fold in. The EngineError stays HERE: see those
+    // helpers' comment for why each path keeps its own error type.
     const carryMode = progression.carry ?? "none";
     let carriedDeltas: unknown[] | undefined;
     if (carryMode !== "none") {
-      const nonReal = resolvedSources.find((s) => !REAL_TABLE_KINDS.has(s.kind));
+      const nonReal = nonRealCarrySource(resolvedSources);
       if (nonReal) {
-        throw new EngineError(
-          "CONFIG_INVALID",
-          `carry-over needs a table-stage source (league/group/swiss) — a "${nonReal.kind}" completion has no real points to carry`,
-          { stageId: nonReal.id, kind: nonReal.kind, carry: carryMode },
-        );
+        throw new EngineError("CONFIG_INVALID", carrySourceRefusal(nonReal.kind), {
+          stageId: nonReal.id,
+          kind: nonReal.kind,
+          carry: carryMode,
+        });
       }
-      const qualifiedSet = new Set(entrants);
-      const sourceRows = sourceTables
-        .flatMap((t) => t.pools.flatMap((p) => p.rows))
-        .filter((r) => qualifiedSet.has(r.entrantId));
-      carriedDeltas = carryDeltas(sourceRows, carryMode);
+      carriedDeltas = buildCarryDeltas(sourceTables, entrants, carryMode);
     }
     await tx`
       update stages set config = ${tx.json({
@@ -2917,7 +2972,10 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
  * first); 409 SEEDING_SOURCE_INCOMPLETE (a source stage not complete, or has
  * no standings yet); 409 SEEDING_ALREADY_CONFIRMED (this stage's slots are
  * already filled — recompute is refused, not just a no-op, so the caller
- * doesn't mistake a stale draft for something actionable).
+ * doesn't mistake a stale draft for something actionable); 422
+ * SEEDING_CARRY_SOURCE_INVALID (F6 — `carry` set against a source whose
+ * completion snapshots positional placements only, so there are no real
+ * points to carry).
  */
 export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut> {
   return withTenant(auth.orgId, async (tx) => {
@@ -2946,6 +3004,28 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // its standings — same 409 SEEDING_SOURCE_INCOMPLETE contract this
     // function has always had, generalised from one source to N.
     const { shapes, tables, resolved } = await sourcesToTables(tx, stage, progression.sources);
+
+    // F6 (#625) — carry-over refuses a source with no real points to carry,
+    // raised at PROPOSE rather than only where carry is applied. Before this,
+    // the refusal existed on the `timing:"on_complete"` path alone
+    // (seedNextStage), so a setup-timing organiser was handed a draft they
+    // could confirm into a stage whose carry could never be honoured. `carry`
+    // is an apps/web/DB-orchestration concept the engine's pure
+    // ProgressionSpec has no notion of — hence the cast, same as
+    // seedNextStage's own widened read. Shared refusal sentence, deliberately
+    // NOT a shared throw: see nonRealCarrySource's comment for why this side
+    // is an HttpError and that side an EngineError.
+    const carryMode = (progression as { carry?: string }).carry ?? "none";
+    if (carryMode !== "none") {
+      const nonReal = nonRealCarrySource(resolved);
+      if (nonReal) {
+        throw new HttpError(422, carrySourceRefusal(nonReal.kind), "SEEDING_CARRY_SOURCE_INVALID", {
+          stageId: nonReal.id,
+          kind: nonReal.kind,
+          carry: carryMode,
+        });
+      }
+    }
     // A2 (round-4 review) — `stage` here IS the progression's own target
     // (computeSeedProposal proposes seeds INTO it), so `stage.kind` is the
     // real targetKind ruling 13's snake/bracket-target guard needs to fire

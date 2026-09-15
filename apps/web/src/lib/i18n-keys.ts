@@ -5249,6 +5249,7 @@ export type DictionaryKey =
   | "section.competitions"
   | "seeding.SEEDING_ALREADY_CONFIRMED"
   | "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS"
+  | "seeding.SEEDING_CARRY_SOURCE_INVALID"
   | "seeding.SEEDING_EDIT_UNKNOWN_SLOT"
   | "seeding.SEEDING_ENTRANT_FOREIGN"
   | "seeding.SEEDING_FIXTURES_ALREADY_FILLED"

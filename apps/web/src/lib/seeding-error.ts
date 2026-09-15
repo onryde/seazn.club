@@ -46,7 +46,16 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  progression.ts) now throws it directly from generateProgressionSetupFixtures
  *  (usecases/stages.ts) — the day-one/setup fixture-generation path, not just
  *  validateStageProgression's save-time check — so it has a real call site
- *  today, independent of any rules-editor UI. */
+ *  today, independent of any rules-editor UI.
+ *
+ *  SEEDING_CARRY_SOURCE_INVALID is the 16th, added by F6 (#625) under the
+ *  design of record's own authorisation to "reuse or add beside seeding-error
+ *  helpers" (docs/superpowers/specs/2026-09-15-standings-carry-over-f6-design.md,
+ *  owner-approved 2026-09-15) — NOT a re-opening of the scope note above.
+ *  computeSeedProposal throws it when a progression carries points from a
+ *  source whose completion snapshots positional placements only. It needed a
+ *  code of its own rather than SEEDING_RULES_MISSING's: that copy tells the
+ *  organiser to add rules or regenerate fixtures, and neither would fix this. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -62,6 +71,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_ENTRANT_FOREIGN",
   "SEEDING_SLOT_FOREIGN_FIXTURE",
   "SEEDING_FIXTURES_ALREADY_FILLED",
+  "SEEDING_CARRY_SOURCE_INVALID",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 

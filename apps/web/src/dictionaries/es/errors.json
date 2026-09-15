@@ -13,6 +13,7 @@
   "seeding.SEEDING_ENTRANT_FOREIGN": "Uno de los participantes clasificados ya no pertenece a esta división.",
   "seeding.SEEDING_SLOT_FOREIGN_FIXTURE": "Una de las posiciones de destino pertenece a otra fase. Vuelve a calcular la propuesta e inténtalo de nuevo.",
   "seeding.SEEDING_FIXTURES_ALREADY_FILLED": "Una de las posiciones de destino ya está cubierta. Vuelve a calcular la propuesta para ver qué queda.",
+  "seeding.SEEDING_CARRY_SOURCE_INVALID": "El arrastre de puntos necesita una fase de origen con una clasificación real: una liga, un grupo o un sistema suizo. Una eliminatoria, una escalera o un americano solo registran las posiciones finales, así que no hay puntos que arrastrar. Desactiva el arrastre en esta fase o toma el origen de una fase con clasificación.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.before": "El calendario de esta división empieza antes de que la competición abra el {startsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.after": "El calendario de esta división termina después de que la competición cierre el {endsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro.",
   "schedule.SCHEDULE_OUTSIDE_COMPETITION.both": "El calendario de esta división empieza antes de que la competición abra el {startsOn} y termina después de que cierre el {endsOn}. Amplía las fechas de la competición o ajusta la división para que quede dentro.",
