@@ -446,24 +446,56 @@ export function resolveLogoUrl(
   return logoUrl ?? null;
 }
 
+/** A competition as the org home lists it: the public row plus how many of its
+ *  public fixtures are in play right now (spectator W2, Task 15). */
+export interface PublicOrgCompetition extends PublicCompetition {
+  in_play: number;
+}
+
+/**
+ * The org home's competition list — the ONE query behind both the page's first
+ * paint (`getPublicOrg`) and the chip island's poll (`publicOrgLive`,
+ * usecases/public.ts), so the two can never disagree about which competitions
+ * are listed or what a count means.
+ *
+ * Listed: `visibility = 'public'` only. `public_competitions_v` admits
+ * `unlisted` too; an unlisted competition is readable by link and never listed.
+ *
+ * `in_play` counts `in_play` fixtures through `public_divisions_v`, and the
+ * join is what makes it a PUBLIC count: `public_fixtures_v` filters on the
+ * competition's visibility only, so it still returns the fixtures of an
+ * ARCHIVED division, which the public pages do not show (V262).
+ */
+export async function listOrgHomeCompetitions(orgId: string): Promise<PublicOrgCompetition[]> {
+  return sql<PublicOrgCompetition[]>`
+    select c.id, c.org_id, c.name, c.slug, c.description, c.starts_on, c.ends_on,
+           c.branding, c.status, c.visibility,
+           (select count(*)::int
+              from public_fixtures_v f
+              join public_divisions_v d on d.id = f.division_id
+             where d.competition_id = c.id and f.status = 'in_play') as in_play
+    from public_competitions_v c
+    where c.org_id = ${orgId} and c.visibility = 'public'
+    order by c.starts_on desc nulls last, c.created_at desc`;
+}
+
 /** Org landing: the org + its `public` competitions (unlisted stays link-only). */
 export async function getPublicOrg(orgSlug: string): Promise<{
   org: PublicOrg;
-  competitions: PublicCompetition[];
+  competitions: PublicOrgCompetition[];
 } | null> {
   return unstable_cache(
     async () => {
       const org = await loadOrg(orgSlug);
       if (!org) return null;
-      const competitions = await sql<PublicCompetition[]>`
-        select id, org_id, name, slug, description, starts_on, ends_on, branding,
-               status, visibility
-        from public_competitions_v
-        where org_id = ${org.id} and visibility = 'public'
-        order by starts_on desc nulls last, created_at desc`;
+      const competitions = await listOrgHomeCompetitions(org.id);
       return { org, competitions };
     },
-    ["pub-org", orgSlug],
+    // v2 (spectator W2, Task 15): each competition gained `in_play`. The page
+    // reads it for the chip, and a v1 entry would serve the old "Upcoming"
+    // on a live competition for a full REVALIDATE_FAST window after deploy —
+    // same reason `pub-player` and `pub-hub` retire their keys on a shape change.
+    ["pub-org-v2", orgSlug],
     { tags: [orgTag(orgSlug)], revalidate: REVALIDATE_FAST },
   )();
 }

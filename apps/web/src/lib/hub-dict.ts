@@ -93,16 +93,45 @@ export const SERVER_ONLY_KEYS = [
   "landing.partners",
 ] as const;
 
-/** The subset of `dict` the hub's client subtree may read. */
-export function hubDict(dict: Dict): Dict {
+/** The subset of `dict` a client subtree reads: every key under one of
+ *  `prefixes` or named in `keys`, minus `exclude`. */
+function sliceDict(
+  dict: Dict,
+  prefixes: readonly string[],
+  keys: readonly string[] = [],
+  exclude: readonly string[] = [],
+): Dict {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(dict)) {
-    const read =
-      HUB_DICT_PREFIXES.some((p) => key.startsWith(p)) ||
-      (HUB_DICT_KEYS as readonly string[]).includes(key);
+    const read = prefixes.some((p) => key.startsWith(p)) || keys.includes(key);
     if (!read) continue;
-    if ((SERVER_ONLY_KEYS as readonly string[]).includes(key)) continue;
+    if (exclude.includes(key)) continue;
     out[key] = dict[key];
   }
   return out;
+}
+
+/** The subset of `dict` the hub's client subtree may read. */
+export function hubDict(dict: Dict): Dict {
+  return sliceDict(dict, HUB_DICT_PREFIXES, HUB_DICT_KEYS, SERVER_ONLY_KEYS);
+}
+
+/**
+ * Key prefixes the org home's chip island (`components/public-site/
+ * org-live-chips.tsx`, spectator W2 Task 15) reads: the three status-chip
+ * labels and the in-play count sentence (`org.live.one` / `.other`), and
+ * nothing else. The island renders the competitions list, whose only copy is
+ * the chip; names and date lines arrive already resolved. The guarantee is the
+ * same differential render as the hub's, in `org-live-chips.test.tsx`.
+ */
+export const ORG_LIVE_DICT_PREFIXES = ["chip.", "org.live."] as const;
+
+/** EXACT keys the org home's chip island reads outside its prefixes: `empty`,
+ *  the page's own "no public competitions" sentence, which the island shows
+ *  when a poll drops every competition the page listed. */
+export const ORG_LIVE_DICT_KEYS = ["empty"] as const;
+
+/** The subset of `dict` the org home's chip island may read. */
+export function orgLiveDict(dict: Dict): Dict {
+  return sliceDict(dict, ORG_LIVE_DICT_PREFIXES, ORG_LIVE_DICT_KEYS);
 }

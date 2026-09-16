@@ -39,7 +39,8 @@ import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { LOCALES, toLocale } from "@/lib/i18n-constants";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
-import { dateTagFor, shortDate, timeOf } from "../schedule";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { shortDate, timeOf } from "../schedule";
 import { openFace, minContentWidth, textWidth, type Face } from "./font-advance";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -776,7 +777,7 @@ describe("public Schedule rail — every translated word fits its column (N1f f1
 describe("public Schedule rail — the round view's short date (N1f f3)", () => {
   it("carries no weekday, in any locale", () => {
     for (const locale of LOCALES) {
-      const tag = dateTagFor(locale);
+      const tag = intlLocaleFor(locale);
       for (let month = 0; month < 12; month++) {
         const iso = new Date(Date.UTC(2026, month, 24, 12)).toISOString();
         const expected = new Date(`2026-${String(month + 1).padStart(2, "0")}-24T12:00`).toLocaleDateString(
@@ -796,7 +797,7 @@ describe("public Schedule rail — the round view's short date (N1f f3)", () => 
     for (const d of dates) {
       const type = typographyOf(d.chain, spans, d.what);
       for (const locale of LOCALES) {
-        const tag = dateTagFor(locale);
+        const tag = intlLocaleFor(locale);
         let max = 0;
         let arg = "";
         for (let month = 0; month < 12; month++) {

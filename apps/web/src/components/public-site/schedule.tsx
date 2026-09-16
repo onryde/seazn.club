@@ -11,6 +11,7 @@ import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
 import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
@@ -107,9 +108,6 @@ function dayKey(iso: string, tz: string): string {
   }
 }
 
-/** The Intl tag dates are written in: the org's locale, "en" as en-GB
- *  ("Friday 25 September"), as every public date was before N1e e5. */
-export const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : locale);
 
 const UNSCHEDULED = "unscheduled";
 
@@ -296,7 +294,9 @@ export function Schedule({
   const shown = entrant
     ? fixtures.filter((f) => f.home_entrant_id === entrant || f.away_entrant_id === entrant)
     : fixtures;
-  const dateTag = dateTagFor(locale);
+  // The Intl tag dates are written in: the org's locale, "en" as en-GB
+  // ("Friday 25 September"), as every public date was before N1e e5.
+  const dateTag = intlLocaleFor(locale);
 
   // Only offer the day view when at least one fixture actually has a date.
   const anyScheduled = fixtures.some((f) => f.scheduled_at);

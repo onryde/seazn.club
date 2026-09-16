@@ -4952,4 +4952,20 @@ export const PublicFixtureSummary = z.object({
    *  page's own data fetch (`getPublicFixture`) uses. */
   match_centre: MatchCentreDoc,
 });
+
+/** Spectator W2, Task 15 — what the org home's chip island polls: the org's
+ *  LISTED (`visibility = 'public'`) competitions, each with its status and how
+ *  many of its public fixtures are in play. A competition with a match in play
+ *  is "on now" whatever its status says (`lib/public-site.ts`'s
+ *  `competitionChip`). */
+export const PublicOrgLive = z.object({
+  competitions: z.array(
+    z.object({
+      id: Uuid,
+      status: CompetitionStatus,
+      in_play: z.number().int().min(0),
+    }),
+  ),
+});
+export type PublicOrgLiveT = z.infer<typeof PublicOrgLive>;
 export type MergeLog = z.infer<typeof MergeLog>;
