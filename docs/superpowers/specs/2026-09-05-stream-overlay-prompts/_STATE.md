@@ -49,6 +49,11 @@ orchestrator commits (implementers never commit).
 - "yes" to "Are we planning to build a new page in /admin?" follow-up — the staff Match credits panel goes on the
   EXISTING `/admin/orgs/[id]` page (plan owner ruling 15, Task 7A); no new admin page.
 
+**Token policy (owner request 2026-09-16, adopted):** non-safety minors are ledgered "minor (deferred)" and fixed in
+ONE minors-sweep dispatch at lane close (grouped by file); fix rounds and small re-reviews RESUME the same
+implementer/reviewer; comment/title-only fixes are verified by orchestrator grep + JSON run; plan-text syncs are batched
+once per lane. Exception: money, safety (no second Machine), data loss, a 500 on read -> fix in the task loop at once.
+
 **Orchestrator rulings this session (full text + cost-if-wrong in the ledger):**
 - V408: fixture delete sets `fixture_stream_sessions.fixture_id` null (money/history survive); producer-less
   `vcpu_seconds`/`duplicated_frames` dropped; four org_id stream tables in `SUPERUSER_ONLY`; unmerged migration
