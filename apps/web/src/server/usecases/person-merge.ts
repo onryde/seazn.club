@@ -16,6 +16,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { recomputePlayerStats } from "./player-stats";
 import {
   courtNamesById,
@@ -289,6 +290,11 @@ export async function mergePersons(
     { orgId: auth.orgId, mergeId: merged.merge_id, survivorId, absorbedId },
     "persons: merge executed",
   );
+
+  // W2 Task 14 — after commit. The survivor's consent is now the stricter of
+  // the two (`resolveConsent`), and the public player page's cached match lines
+  // mask names by it only when rebuilt.
+  await retireOrgPlayerMatches(auth.orgId, { person: survivorId, absorbed: absorbedId, mergeId: merged.merge_id });
 
   // 8. Re-verify, AFTER the write has committed. Two people on two courts at
   //    once was a legal board a moment ago; one person on two courts is not, and
@@ -589,6 +595,11 @@ export async function reverseMerge(
       update person_merges set reversed_at = now(), reversed_by = ${opts.confirmedBy}
        where id = ${mergeId}`;
   });
+
+  // W2 Task 14 — after commit. Both people's consent is back to its snapshot,
+  // and the public player page's cached match lines mask names by it only when
+  // rebuilt.
+  await retireOrgPlayerMatches(auth.orgId, { mergeId });
 }
 
 /** One row of the merge log: what was fused, when, and whether it still stands.

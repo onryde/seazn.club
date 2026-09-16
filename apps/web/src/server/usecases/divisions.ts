@@ -32,6 +32,7 @@ import {
   RESERVED_ENTITY_SLUGS,
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 // D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
@@ -654,8 +655,26 @@ export async function patchDivision(
   }
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;
+  // The public player page masks each opponent's name by their division's
+  // `youth` and `player_name_display` (public-player-matches.ts), and caches
+  // the result under a generation token it re-reads only on a miss — so a
+  // change to either must retire the tokens (after commit, below). This is
+  // the one runtime writer of both columns on an existing row: `youth` set
+  // directly or re-derived from `age_max`. Compared stored-before against the
+  // returned row rather than on which fields the body NAMES, because the
+  // registration hub re-sends `age_max` on every Save. `for no key update` pins the
+  // "before" to what this write replaces: without it a concurrent PATCH could
+  // commit between the read and the update, and a masking change would
+  // compare equal to the stale read and retire nothing. NO KEY: a plain
+  // `for update` would also block the KEY SHARE locks FK inserts take, so every
+  // Save would queue behind (and stall) approvals and fixture generation.
+  let maskingBefore: { youth: boolean; player_name_display: string | null } | undefined;
   const row = await withTenant(auth.orgId, async (tx) => {
     const effective: Record<string, unknown> = { ...patch };
+    if (patch.youth !== undefined || patch.player_name_display !== undefined || patch.age_max !== undefined) {
+      [maskingBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`
+        select youth, player_name_display from divisions where id = ${id} for no key update`;
+    }
     // RS004 review finding 1: checkAgeBand (schemas.ts) only compares
     // age_min/age_max when BOTH are present in the SAME patch body — a
     // single-field PATCH (e.g. only age_min) used to reach here untouched
@@ -918,6 +937,14 @@ export async function patchDivision(
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {
     await invalidateSlugCache("division", previousCompetitionId, previousSlug, row.slug);
+  }
+  // Fail-open: the helper logs a failed list or DEL and never throws, so the
+  // organiser's committed write stands (player-matches-cache-keys.ts).
+  if (
+    maskingBefore &&
+    (maskingBefore.youth !== row.youth || maskingBefore.player_name_display !== row.player_name_display)
+  ) {
+    await retireOrgPlayerMatches(auth.orgId, { division: id });
   }
   return row;
 }

@@ -9,6 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import type { CreatePerson, PatchPerson, PutProfile } from "@/server/api-v1/schemas";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 
 export interface PersonRow {
   id: string;
@@ -127,8 +128,15 @@ export async function getPerson(auth: AuthCtx, id: string): Promise<PersonRow> {
   });
 }
 
+/** The patch fields that change what the public player page's cached match
+ *  lines may show about a person: their consent, the name those lines mask,
+ *  and the date of birth that decides who may change that consent (an
+ *  under-16's can only change here). `gender` and `external_ref` reach no
+ *  public document. */
+const PUBLIC_IDENTITY_FIELDS: readonly string[] = ["consent", "full_name", "dob"];
+
 export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson): Promise<PersonRow> {
-  return withTenant(auth.orgId, async (tx) => {
+  const updated = await withTenant(auth.orgId, async (tx) => {
     const cols = Object.keys(patch);
     const values = { ...patch, ...(patch.consent ? { consent: tx.json(patch.consent as never) } : {}) };
     const [row] = await tx<PersonRow[]>`
@@ -137,6 +145,12 @@ export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson)
     if (!row) throw new HttpError(404, "person not found");
     return row;
   });
+  // W2 Task 14 — after commit: a document rebuilt before it would put the old
+  // consent straight back.
+  if (Object.keys(patch).some((field) => PUBLIC_IDENTITY_FIELDS.includes(field))) {
+    await retireOrgPlayerMatches(auth.orgId, { person: id });
+  }
+  return updated;
 }
 
 // The merge lives in person-merge.ts (#404). It used to end here with

@@ -17,6 +17,7 @@ import { log } from "@/server/logger";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
+import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
 import {
   fireScoreRevalidate,
   fireDiscoveryRevalidate,
@@ -653,6 +654,12 @@ export async function invalidatePublicCache(
   //     scores, so a write to any fixture in the competition makes it stale.
   //     It is competition-keyed, not division-keyed, because one document
   //     spans the whole competition.
+  //   - W2 Task 14's player-matches GENERATION
+  //     (`pub:v1:player-matches-gen:{competitionId}`,
+  //     player-matches-cache-keys.ts). The public player page's poll keys each
+  //     person's lines under it; deleting it retires all of them. Those keys
+  //     are per PERSON and this write does not know who played, so the only
+  //     other door was a second keyspace SCAN on every score write.
   // Only the division's glob still needs a SCAN over the whole keyspace
   // (cache.ts), and no push depends on it. The hub rebuilds through
   // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
@@ -660,9 +667,11 @@ export async function invalidatePublicCache(
   // endpoints.
   const fixtureKey = `pub:v1:fixture:${fixtureId}`;
   // R10h: the advanced-into fixtures' own documents ride the same DEL, after
-  // the two keys every score drops. One round trip, and the pushes below then
+  // the three keys every score drops. One round trip, and the pushes below then
   // wait on the delete that covers all of them.
-  const keys = row ? [fixtureKey, `pub:v1:hub:${row.competition_id}`] : [fixtureKey];
+  const keys = row
+    ? [fixtureKey, `pub:v1:hub:${row.competition_id}`, playerMatchesGenKey(row.competition_id)]
+    : [fixtureKey];
   for (const id of alsoFixtureIds) keys.push(`pub:v1:fixture:${id}`);
   // F4: neither call is ever left to reject unhandled. Both helpers fail open
   // inside their try, but `client()` sits outside it (cache.ts). ioredis's

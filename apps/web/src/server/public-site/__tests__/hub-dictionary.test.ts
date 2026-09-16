@@ -113,9 +113,16 @@ export const W2_KEYS = [
   "division.seed", "division.filter.label", "division.filter.all", "division.filter.allEntrants", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
   // the schedule's zone caption and the division page's kiosk link (N1e e5, e7)
   "division.timesIn", "division.present", "division.filter.showFor",
-  // player page
-  "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling", "player.line.result",
+  // player page. NO `player.line.result` ("{result} — {opponent}"): Task 14's
+  // page renders the result as a chip and the opponent as its own element, so
+  // a joined sentence had no consumer, and a meta string glued with a dash is
+  // the composition _DESIGN.md §3 forbids. Deleted from all four locales with
+  // this line; `RETIRED_KEYS` below keeps it deleted.
+  "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling",
   "player.result.won", "player.result.lost", "player.result.drawn", "player.result.live",
+  // The opponent on a match line — "v Queens". The page used to have no way to
+  // say it that was not an English letter glued to a name.
+  "player.opponent",
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
   // format chips
@@ -198,6 +205,9 @@ describe("W2 public dictionary coverage", () => {
       // drops `{round}` says "Winner of" and stops.
       "knockout.feederWinnerOnly": ["round"],
       "knockout.feederLoserOnly": ["round"],
+      // player-matches.tsx — the opponent on the slab and on every row. A
+      // locale that drops `{opponent}` prints "v" against nobody.
+      "player.opponent": ["opponent"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -213,6 +223,25 @@ describe("W2 public dictionary coverage", () => {
           expect(params((dict as Record<string, string>)[k] ?? ""), `${locale} ${k}`).toEqual(wanted);
         }
       });
+    }
+  });
+});
+
+// Keys deleted on purpose. A deletion nothing asserts comes back with the next
+// translation sync that copies a stale locale over a fresh one.
+describe("retired public keys stay deleted", () => {
+  const RETIRED_KEYS = ["player.line.result"] as const;
+  for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {
+    it(`${locale} carries none of them`, () => {
+      for (const k of RETIRED_KEYS) expect(Object.hasOwn(dict, k), k).toBe(false);
+    });
+  }
+  // The positive pair: the sibling keys the reader still uses are present, so
+  // an assertion that could pass on an empty dictionary is not what holds the
+  // line above.
+  it("the player.line keys the reader uses are still authored", () => {
+    for (const k of ["player.line.cricket", "player.line.batting", "player.line.bowling"]) {
+      expect(Object.hasOwn(en, k), k).toBe(true);
     }
   });
 });

@@ -133,6 +133,11 @@ const COMPETITION = "comp-1";
 const FIXTURE_KEY = `pub:v1:fixture:${FIXTURE}`;
 const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
 const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
+/** Task 14 — the player page's match lines are keyed per PERSON under a
+ *  per-competition generation token. Deleting the token retires every one of
+ *  them, so a score write never has to SCAN for them. Spelled out here rather
+ *  than imported, so a drift in the production spelling reds. */
+const PLAYER_MATCHES_GEN_KEY = `pub:v1:player-matches-gen:${COMPETITION}`;
 const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
 const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
 const SCHEDULE_SWEEP_FAILED = "schedule: a public Redis sweep failed (the write stands)";
@@ -212,6 +217,17 @@ describe("invalidatePublicCache — a scoring write", () => {
     expect(fireScoreRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
   });
 
+  // W2 Task 14 (R10). Without this the player page's poll kept reading the
+  // pre-score lines for the rest of their 15 s TTL. A glob sweep would reach
+  // them too, but it is a second keyspace SCAN on EVERY score write, billed per
+  // page; the generation key is one more name in the DEL that already goes out.
+  it("retires every player's match lines in the COMPETITION by deleting its generation key — never by a SCAN", async () => {
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(deletedKeys()).toContain(PLAYER_MATCHES_GEN_KEY);
+    expect(deletedKeys(), "keyed by division, not competition").not.toContain(`pub:v1:player-matches-gen:${DIVISION}`);
+    expect(patterns().filter((pattern) => pattern.startsWith("pub:v1:player-matches")), "a player-matches SCAN").toEqual([]);
+  });
+
   it("is NOT keyed by division — one hub document spans the whole competition", async () => {
     // A division-keyed hub key would leave every OTHER competition-wide reader
     // stale, and would not be the key `publicCompetitionHub` reads.
@@ -228,11 +244,13 @@ describe("invalidatePublicCache — a scoring write", () => {
 });
 
 describe("invalidatePublicCache — literal keys by one DEL, only the glob by SCAN (R10 H4)", () => {
-  it("both literal keys go out in ONE direct DEL; no literal key goes through a SCAN, and no glob through DEL", async () => {
+  it("every literal key goes out in ONE direct DEL; no literal key goes through a SCAN, and no glob through DEL", async () => {
     await invalidatePublicCache(ORG, FIXTURE);
     expect(cacheDel, "one round trip for every literal key").toHaveBeenCalledTimes(1);
-    expect(deletedKeys()).toEqual(expect.arrayContaining([FIXTURE_KEY, HUB_KEY]));
-    expect(patterns()).toContain(DIVISION_GLOB);
+    expect(deletedKeys()).toEqual(expect.arrayContaining([FIXTURE_KEY, HUB_KEY, PLAYER_MATCHES_GEN_KEY]));
+    // The SCAN set is EXACT, unlike the DEL superset: a sweep walks the whole
+    // keyspace and is billed per page, so a new one must be seen here.
+    expect(patterns()).toEqual([DIVISION_GLOB]);
     expect(patterns().filter((pattern) => !pattern.endsWith("*")), "a literal key sent through a SCAN").toEqual([]);
     expect(deletedKeys().filter((key) => key.includes("*")), "a glob sent through DEL").toEqual([]);
   });

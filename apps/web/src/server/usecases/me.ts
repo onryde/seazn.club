@@ -9,6 +9,7 @@ import { HttpError } from "@/lib/errors";
 import { consentLocked } from "@/lib/guardian";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { publicStorageUrl } from "@/lib/supabase-storage";
 import { uploadPersonPhotoBytes } from "./persons";
 import {
@@ -467,8 +468,8 @@ export async function setMyConsent(
   personId: string,
   patch: { public_name?: boolean; public_photo?: boolean },
 ): Promise<MyPerson> {
-  const [person] = await sql<{ id: string; dob: string | null }[]>`
-    select id, dob from persons
+  const [person] = await sql<{ id: string; org_id: string; dob: string | null }[]>`
+    select id, org_id, dob from persons
      where id = ${personId} and user_id = ${userId} and merged_into is null`;
   if (!person) throw new HttpError(404, "player profile not found");
   if (consentLocked(person.dob)) {
@@ -488,6 +489,12 @@ export async function setMyConsent(
     join divisions d on d.id = e.division_id
     where em.person_id = ${personId}`;
   for (const m of memberships) fireDivisionRevalidate(m.division_id, m.competition_id);
+
+  // W2 Task 14 — the public player page's POLL document, and every other
+  // player's document naming this person as an opponent, is cached in Redis and
+  // gated only on a miss; the ISR revalidation above reaches neither. Retire the
+  // org's documents (`retireOrgPlayerMatches` — scope, cost and failure there).
+  await retireOrgPlayerMatches(person.org_id, { person: personId });
 
   const [me] = await listMyPersons(userId).then((all) => all.filter((p) => p.id === personId));
   return me;

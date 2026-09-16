@@ -388,12 +388,17 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
       // The public Redis deletes still run, and each one started only AFTER
       // the tag was pending: a delete first lets a hub rebuild re-cache the
-      // stale doc. R10 H4: the two LITERAL keys go out in one direct DEL, and
-      // only the division glob is a SCAN.
+      // stale doc. R10 H4: the LITERAL keys go out in one direct DEL — the
+      // fixture, the hub, and the competition's player-matches generation
+      // (Task 14) — and only the division glob is a SCAN.
       expect(targetsOf("del"), write.type).toEqual(
-        expect.arrayContaining([`pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
+        expect.arrayContaining([
+          `pub:v1:fixture:${fixtureId}`,
+          `pub:v1:hub:${competitionId}`,
+          `pub:v1:player-matches-gen:${competitionId}`,
+        ]),
       );
-      expect(targetsOf("scan"), write.type).toEqual(expect.arrayContaining([`pub:v1:div:${divisionId}:*`]));
+      expect(targetsOf("scan"), write.type).toEqual([`pub:v1:div:${divisionId}:*`]);
       expect(
         targetsOf("scan").filter((pattern) => !pattern.endsWith("*")),
         `${write.type}: a literal key sent through a SCAN`,
@@ -438,6 +443,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     const competitionId = await competitionOf(divisionId);
     const fixtureKey = `pub:v1:fixture:${fixtureId}`;
     const hubKey = `pub:v1:hub:${competitionId}`;
+    const playerMatchesGenKey = `pub:v1:player-matches-gen:${competitionId}`;
     const divisionGlob = `pub:v1:div:${divisionId}:*`;
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
@@ -449,7 +455,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
         inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
       );
       expect(probe.gates.map((g) => g.kind).sort()).toEqual(["del", "scan"]);
-      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey].sort());
+      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey, playerMatchesGenKey].sort());
       expect(targetsOf("scan")).toEqual([divisionGlob]);
 
       // The SCAN fails first, while the DEL is still in flight.

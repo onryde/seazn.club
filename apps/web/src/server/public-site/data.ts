@@ -29,6 +29,7 @@ import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
+import type { PlayerMatchLine } from "./public-player-matches";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -946,14 +947,60 @@ export interface PublicCareerSport extends CareerSportStats {
   meta: string;
 }
 
+/** What `publicPlayerGate` hands a caller that passed it: the context the page
+ *  and the player-matches endpoint both build on. */
+export interface PublicPlayerGate {
+  org: PublicOrg;
+  competition: PublicCompetition;
+  player: PublicPlayer;
+}
+
 /**
- * Player card. Two gates, in two places, deliberately:
+ * W2 Task 14 — the player page's REFUSAL, and nothing else: null exactly when
+ * `getPublicPlayer` is null, because `getPublicPlayer` is built on it — the two
+ * cannot drift. Folds nothing and reads no stats, so a caller that needs only
+ * "may this person be shown here" (the player-matches endpoint) does not pay
+ * for the page. Three conditions, all evaluated per call:
+ *  - the id is a uuid and the competition is public/unlisted
+ *    (`getPublicCompetition`, cached on the competition tag);
+ *  - the `dashboard.player_profiles` ENTITLEMENT for THIS competition (V307) —
+ *    outside any cache on purpose: no entitlement write busts the competition
+ *    tag, so a gate inside one would stay frozen at whatever the org held when
+ *    it was first cached. `hasFeature`'s own 5-minute cache is the only
+ *    staleness. The competition id is what makes an Event Pass count for the
+ *    competition it paid for, and only that one;
+ *  - CONSENT and org scope: the person is in `public_players_v` (granted
+ *    `public_name`, rostered in a public competition) for this org.
+ */
+export async function publicPlayerGate(
+  orgSlug: string,
+  compSlug: string,
+  personId: string,
+): Promise<PublicPlayerGate | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
+  const shell = await getPublicCompetition(orgSlug, compSlug);
+  if (!shell) return null;
+  if (!(await hasFeature(shell.org.id, "dashboard.player_profiles", shell.competition.id))) {
+    return null;
+  }
+  const [player] = await sql<PublicPlayer[]>`
+    select id, org_id, name, photo from public_players_v
+    where id = ${personId} and org_id = ${shell.org.id} limit 1`;
+  if (!player) return null;
+  return { org: shell.org, competition: shell.competition, player };
+}
+
+/**
+ * Player card. Every refusal is `publicPlayerGate`'s, evaluated first and per
+ * call, and the card adds none of its own. Two gates, in two places,
+ * deliberately:
  *  - consent lives in public_players_v (the view only contains persons who
- *    granted `public_name`);
- *  - the `dashboard.player_profiles` ENTITLEMENT lives here (V307). The view
- *    cannot hold it: its filter sits over `from persons p` and a person plays
- *    in many competitions, so there is no competition in scope to make the
- *    check pass-aware — and an org-wide check would ignore an Event Pass.
+ *    granted `public_name`), read by the gate;
+ *  - the `dashboard.player_profiles` ENTITLEMENT (V307) is checked by the
+ *    gate, not the view. The view cannot hold it: its filter sits over `from
+ *    persons p` and a person plays in many competitions, so there is no
+ *    competition in scope to make the check pass-aware — and an org-wide
+ *    check would ignore an Event Pass.
  */
 export async function getPublicPlayer(
   orgSlug: string,
@@ -972,22 +1019,19 @@ export async function getPublicPlayer(
   /** Pre-rendered "Career" section heading — this page has no Dict/locale
    *  pair (see statMsg), so, like `career[].meta`, the copy is baked here. */
   careerLabel: string;
+  /** W2 Task 14 — one line per started fixture the person appeared in within
+   *  THIS competition, newest first (`readPlayerMatchLines`). Empty → []. */
+  matches: PlayerMatchLine[];
+  /** W2 Task 14 — ISO instant of the CACHED read behind `matches` (which
+   *  fixtures, which side, the result): the page's true freshness. Repeats for
+   *  every render served from the same cache entry. */
+  generatedAt: string;
 } | null> {
-  if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
-  const shell = await getPublicCompetition(orgSlug, compSlug);
-  if (!shell) return null;
-
-  // OUTSIDE the cache on purpose. The closure below is keyed on
-  // `competition:{id}`, and no entitlement write busts that tag — a gate placed
-  // inside it would be frozen at whatever the org held when the page was first
-  // cached, so a lapsed org would keep serving player cards for a full
-  // REVALIDATE_SLOW window. Evaluated per request, `hasFeature`'s own 5-minute
-  // cache is the only staleness, which is the bound we accept everywhere else.
-  // The competition id is what makes an Event Pass count for the competition it
-  // paid for, and only that one.
-  if (!(await hasFeature(shell.org.id, "dashboard.player_profiles", shell.competition.id))) {
-    return null;
-  }
+  // OUTSIDE the cache on purpose, every condition of it — see `publicPlayerGate`.
+  const gate = await publicPlayerGate(orgSlug, compSlug, personId);
+  if (!gate) return null;
+  const shell = { org: gate.org, competition: gate.competition };
+  const { player } = gate;
 
   // Stat-row copy for spectators. Deliberately NOT resolveLocale(): that reads
   // cookies()/headers() and would opt this ISR route (revalidate = 300) into
@@ -996,12 +1040,26 @@ export async function getPublicPlayer(
   const orgLocale = toLocale(shell.org.default_locale);
   const statMsg = (k: Parameters<typeof msgFor>[1]) => msgFor(orgLocale, k);
 
+  // W2 Task 14 — the per-match lines. Imported lazily because the reader
+  // takes `maskPublicEntrantNames` from THIS file (one masking decision, never
+  // a second): a static import back would be a value-level module cycle, and a
+  // `vi.mock` of this module that spreads `importOriginal()` would meet itself
+  // half-built.
+  const { readPlayerMatchSeeds, completePlayerMatchLines } = await import("./public-player-matches");
+
   const detail = await unstable_cache(
     async () => {
-      const [player] = await sql<PublicPlayer[]>`
-        select id, org_id, name, photo from public_players_v
-        where id = ${personId} and org_id = ${shell.org.id} limit 1`;
-      if (!player) return null;
+      // Only the relational half is held in this entry; the cricket figures are
+      // added below, OUTSIDE it (see there). Same org-default locale as `statMsg`.
+      // `generatedAt` is taken with it, so it travels in the same entry.
+      const generatedAt = new Date().toISOString();
+      const matchSeeds = await readPlayerMatchSeeds(sql, {
+        personId,
+        competitionId: shell.competition.id,
+        orgSlug: shell.org.slug,
+        compSlug: shell.competition.slug,
+        locale: orgLocale,
+      });
       // Memberships within THIS competition, via the consent-filtered members
       // payload (person_id present only with consent — same gate as the card).
       const memberships = await sql<
@@ -1080,7 +1138,7 @@ export async function getPublicPlayer(
         (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
       );
       if (aggregating.length === 0) {
-        return { player, memberships, stats, career: [], careerLabel: statMsg("player.career.title") };
+        return { memberships, stats, career: [], careerLabel: statMsg("player.career.title"), matchSeeds, generatedAt };
       }
       const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
       const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
@@ -1102,8 +1160,15 @@ export async function getPublicPlayer(
         ].join(" · "),
       }));
 
-      return { player, memberships, stats, career, careerLabel: statMsg("player.career.title") };
+      return { memberships, stats, career, careerLabel: statMsg("player.career.title"), matchSeeds, generatedAt };
     },
+    // v16 (W2 Task 14): added `matchSeeds` and `generatedAt` to this cached
+    // payload, and moved `player` OUT of it (the consent read is now part of
+    // `publicPlayerGate`, evaluated per call). A live v15
+    // entry would keep serving without it for a full REVALIDATE_SLOW window
+    // after deploy, and the page would read `undefined` where it expects a
+    // list — same reason v15 retired v14's key rather than waiting.
+    //
     // v15 (S9/#418): added the `career` rollup to this cached payload. A live
     // v14 entry would keep serving without it for a full REVALIDATE_SLOW
     // window after deploy — same reason v13 → v14 retired its key instead of
@@ -1112,12 +1177,18 @@ export async function getPublicPlayer(
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v15", shell.competition.id, personId],
+    ["pub-player-v16", shell.competition.id, personId],
     { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
   )();
-  if (!detail) return null;
 
-  return { org: shell.org, competition: shell.competition, ...detail };
+  // The figures half runs HERE, after the entry above has resolved, because it
+  // reads a per-fixture `unstable_cache` of its own — and Next skips the cache
+  // read of an `unstable_cache` called inside another one's callback. From in
+  // there, every miss of this page's entry (every score write in the
+  // competition busts it) would re-fold every cricket match the person played.
+  const { matchSeeds, ...rest } = detail;
+  const matches = await completePlayerMatchLines(sql, matchSeeds, { personId, locale: orgLocale });
+  return { org: shell.org, competition: shell.competition, player, ...rest, matches };
 }
 
 /**

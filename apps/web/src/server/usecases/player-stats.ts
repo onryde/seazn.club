@@ -548,7 +548,7 @@ export async function personStats(
  *  never explicitly finalized contributed its stats to the snapshot while
  *  contributing ZERO to `matches` — on all three call sites at once. A
  *  player's card could read "5 goals · 0 matches". */
-const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
+export const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
 
 /** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
  *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).

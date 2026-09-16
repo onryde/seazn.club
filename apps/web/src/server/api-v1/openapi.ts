@@ -19,6 +19,9 @@ import { matchKeyRoute } from "./key-scopes.ts";
 // ./match-centre-schema.ts (zod only) and ../../lib/matches-hub.ts (no
 // imports at all), so nothing here reaches a `server-only` module.
 import { CompetitionHubDoc } from "../public-site/competition-hub-schema.ts";
+// Spectator W2, Task 14 — the player page's match lines. Same reasoning as the
+// hub's import above: `player-matches-schema.ts` imports zod and nothing else.
+import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -205,6 +208,7 @@ export const ROUTES: RouteSpec[] = [
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/hub", method: "get", summary: "Public competition hub: matches, tables, leaders, teams, info — the landing page's live document", tag: "public", public: true, response: CompetitionHubDoc },
+  { path: "/public/orgs/{orgSlug}/competitions/{slug}/players/{personId}/matches", method: "get", summary: "Public player match lines: one line per started match the player appeared in within the competition, newest first, with their figures, the opponent and the result — the player page's live document. 404 when the competition is private or the player's public page is not shown", tag: "public", public: true, response: PublicPlayerMatches, errors: [404] },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/schedule", method: "get", summary: "Public schedule", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings", method: "get", summary: "Public standings", tag: "public", public: true },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/entrants", method: "get", summary: "Public entrants (consent-filtered)", tag: "public", public: true },

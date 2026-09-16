@@ -20,6 +20,7 @@ import "server-only";
 // `PUBLICLY_READABLE_VISIBILITIES` (usecases/entitlement-freeze.ts) is now the
 // single authority for "readable by anyone with the link", and it is what the
 // quota, the create path, the PATCH guard and both usage meters read.
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
@@ -30,6 +31,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import {
   maskPublicEntrantNames,
+  publicPlayerGate,
   withCourtVenueName,
   withCourtVenueNames,
   type PublicEntrantMember,
@@ -37,7 +39,13 @@ import {
 } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
-// The one TYPED public usecase in this file — review note N5. Every other
+import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
+import { playerMatchesGenKey, playerMatchesKey } from "@/server/public-site/player-matches-cache-keys";
+import {
+  PublicPlayerMatches,
+  type PublicPlayerMatchesT,
+} from "@/server/public-site/player-matches-schema";
+// The first TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
 import {
@@ -194,6 +202,101 @@ export async function publicCompetitionHub(
       return doc;
     },
     (hit) => CompetitionHubDoc.safeParse(hit).success,
+  );
+}
+
+/** How long the player page's match lines may be served stale. The hub's
+ *  number and the hub's reason — these lines carry a live match's figures.
+ *  The key is per person, and a scoring write knows the fixture, not everyone
+ *  who played in it, so no writer can name it. Instead every document embeds
+ *  its competition's GENERATION (`player-matches-cache-keys.ts`), and a writer
+ *  deletes that one literal key: scoring's `invalidatePublicCache` in its
+ *  existing DEL, and a consent change (`setMyConsent`). So this TTL is a
+ *  ceiling on a failed delete, and the whole bound for a write that deletes
+ *  nothing here (a reschedule: `afterScheduleWrite` drops the hub and fixture
+ *  keys only). */
+export const PLAYER_MATCHES_TTL_SECONDS = 15;
+
+/** How long a minted generation token lives. Any value above the document TTL
+ *  is correct — a token that expires is simply re-minted, one miss per
+ *  person — so this only trades an idle competition's stored key against one
+ *  extra SET a day. */
+export const PLAYER_MATCHES_GEN_TTL_SECONDS = 86_400;
+
+/**
+ * The competition's current player-matches generation, minted when absent.
+ *
+ * Correct without SET NX. A token is random and written once, by its minter,
+ * and a reader keys a document under a token only AFTER it has seen that token
+ * in Redis (its own GET, or its own completed SET). So a document built before
+ * a write committed sits under a token that existed before that write's DEL —
+ * which the DEL removed, and nothing ever sets again. Two readers minting at
+ * once just overwrite each other: one extra miss, never a stale hit. That is
+ * also why the token is minted BEFORE the load and never after it: a token set
+ * after a slow load could land after a write's DEL and front a pre-write
+ * document. (A refused read therefore may leave a token behind — it names no
+ * person, and `findCompetition` has already 404'd an unknown competition.)
+ *
+ * Cost: one GET per poll on top of the document's own (two round trips where
+ * the hub has one), plus one SET on the first poll after each delete. Fail-open
+ * with the rest of cache.ts: with Redis down the GET misses, the SET no-ops, and
+ * the document read misses too.
+ */
+async function playerMatchesGeneration(competitionId: string): Promise<string> {
+  const key = playerMatchesGenKey(competitionId);
+  const held = await cacheGet<unknown>(key);
+  if (typeof held === "string" && held !== "") return held;
+  const minted = randomUUID();
+  await cacheSet(key, minted, PLAYER_MATCHES_GEN_TTL_SECONDS);
+  return minted;
+}
+
+/**
+ * Spectator W2, Task 14 — the public player page's match lines, the document
+ * its client island polls while a spectator has the page open (R10).
+ *
+ * A GATE, THEN ONE READ. `publicPlayerGate` is the page's own refusal —
+ * `getPublicPlayer` is built on it — so the consent view and the
+ * `dashboard.player_profiles` entitlement decide here exactly what they decide
+ * for the page, and a person whose page 404s cannot be read through this
+ * endpoint either. It folds nothing. `readPlayerMatchLines` is the DATA, read
+ * once per rebuild. Never `getPublicPlayer` itself: it would fold every line a
+ * second time, and its lines sit behind an `unstable_cache` entry that a score
+ * write only marks stale-while-revalidate (`fireScoreRevalidate`, competition
+ * tag 'max'), so the first read after a wicket still answers the figures from
+ * before it — the thing a poll exists to move past.
+ *
+ * Same refusal order as `publicCompetitionHub`: `findCompetition` 404s a
+ * private or unknown competition before the cache is touched. A 404 inside
+ * the loader throws before `cacheSet`, so a refusal is never cached.
+ *
+ * The key embeds the competition's generation (`playerMatchesGeneration`), so
+ * one DEL of the generation key retires every person's document at once.
+ */
+export async function publicPlayerMatches(
+  orgSlug: string,
+  slug: string,
+  personId: string,
+): Promise<PublicPlayerMatchesT> {
+  const full = await findCompetition(orgSlug, slug);
+  const generation = await playerMatchesGeneration(full.id);
+  return cachedFor(
+    playerMatchesKey(full.id, generation, personId),
+    PLAYER_MATCHES_TTL_SECONDS,
+    async () => {
+      const gate = await publicPlayerGate(orgSlug, slug, personId);
+      if (!gate) throw new HttpError(404, "player not found");
+      const matches = await readPlayerMatchLines(sql, {
+        personId,
+        competitionId: full.id,
+        orgSlug,
+        compSlug: slug,
+        // The page's locale — the org's, never the viewer's (the page is ISR).
+        locale: toLocale(gate.org.default_locale),
+      });
+      return { matches, generatedAt: new Date().toISOString() };
+    },
+    (hit) => PublicPlayerMatches.safeParse(hit).success,
   );
 }
 
