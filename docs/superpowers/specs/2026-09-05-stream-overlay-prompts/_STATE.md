@@ -28,7 +28,7 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Task 2C-post (F-A) implementer (opus) — brief `.superpowers/sdd/2026-09-13-streaming-r1/task-2C-post-brief.md`, report `task-2C-post-report.md` (incremental), BASE `525f22c92`. On return: re-run domain JSON, commit, reviewer, then the F-B/F-A plan-text drafter pass. If lost: read the report + `git status`; uncommitted domain edits are the implementer's.
+**In flight at time of writing:** Task 2C-post REVIEW — implementer done, committed `b98e5f22e` (domain 216/216/0, relay 266/266/0); reviewer writes `task-2C-post-review.md` (range 166d61e2b..b98e5f22e). Then: plan-text drafter pass for F-A (lifecycle table/mermaid/OPEN note, Step 6 216, killer tables) + F-B (Task 10 force_destroy stillOurs gate for destroy_ok). If lost: read the review file; re-dispatch if missing.
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
