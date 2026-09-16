@@ -14,9 +14,10 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
+import { AttributionLink } from "@/components/attribution-link";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
-import { getDictionary } from "@/lib/i18n";
+import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
@@ -148,9 +149,10 @@ export default async function EmbedWidgetPage({ params }: Props) {
         slotText={namer.slot}
         copy={scheduleCopy}
         tz={tz}
+        locale={orgLocale}
       />
     ) : (
-      <p className="p-2 text-sm text-zinc-500">No bracket stage in this division.</p>
+      <p className="p-2 text-sm text-zinc-500">{t(dict, "division.bracketEmpty")}</p>
     );
   } else {
     body = (
@@ -168,9 +170,10 @@ export default async function EmbedWidgetPage({ params }: Props) {
               entrantLogos={entrantLogos}
               caption={
                 snap.pool_id
-                  ? `${stage.name} — ${poolName.get(snap.pool_id) ?? "Pool"}`
+                  ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`
                   : stage.name
               }
+              dict={dict}
             />
           ));
         })}
@@ -178,5 +181,32 @@ export default async function EmbedWidgetPage({ params }: Props) {
     );
   }
 
-  return <div style={publicThemeStyle(competition.branding)}>{body}</div>;
+  return (
+    <EmbedFrame style={publicThemeStyle(competition.branding)} attribution={t(dict, "layout.attribution")}>
+      {body}
+    </EmbedFrame>
+  );
+}
+
+/** The widget, then the attribution beneath it — in the ORG's language like
+ *  every word above it. The attribution lived in the embed layout, which has
+ *  no org in scope and so could only ever say it in English (Task 16 fix round
+ *  2). The widget stays this element's `children`. */
+function EmbedFrame({
+  style,
+  attribution,
+  children,
+}: {
+  style: ReturnType<typeof publicThemeStyle>;
+  attribution: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <div style={style}>{children}</div>
+      <p className="mt-3 text-right text-[10px] text-zinc-400">
+        <AttributionLink surface="embed" label={attribution} />
+      </p>
+    </>
+  );
 }

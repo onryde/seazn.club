@@ -57,6 +57,7 @@ vi.mock("@/server/og/poster-image", () => ({
 }));
 
 import CompetitionOg from "../opengraph-image";
+import { LOCALES } from "@/lib/i18n-constants";
 
 const STARTS_ON = "2026-09-01";
 const ENDS_ON = "2026-09-13";
@@ -75,7 +76,7 @@ const dayIn = (tz: string, iso: string) =>
 /** What the zone-less formula prints on THIS runner, whatever zone it is. */
 const zoneless = (iso: string) => new Date(iso).toLocaleDateString(LOCALE, DATE_OPTS);
 
-async function renderCard(): Promise<string> {
+async function renderCard(defaultLocale = "en"): Promise<string> {
   captured.tree = null;
   getPublicCompetition.mockResolvedValue({
     org: {
@@ -86,7 +87,7 @@ async function renderCard(): Promise<string> {
       branding: {},
       logo: null,
       about: null,
-      default_locale: "en",
+      default_locale: defaultLocale,
     },
     competition: {
       id: "c1",
@@ -149,4 +150,26 @@ describe("competition share card — the date range is the calendar days the org
       "every date this card draws carries an explicit UTC zone",
     ).toEqual([]);
   });
+});
+
+// Owner ruling 2026-09-16: a public page writes its dates in the ORG's locale,
+// English day-month. This card was en-GB in all four, so a Spanish club's
+// WhatsApp preview read "1 Sept 2026" under Spanish copy. Every zone here is
+// explicit UTC, matching the card's own formatter.
+describe("competition share card — the date range is in the org's locale", () => {
+  it("an English org reads day-month", async () => {
+    expect(await renderCard("en")).toContain("1 Sept 2026 – 13 Sept 2026");
+  });
+
+  for (const locale of LOCALES.filter((l) => l !== "en")) {
+    it(`a ${locale} org reads its own Intl format, not en-GB`, async () => {
+      const inLocale = (iso: string) =>
+        new Intl.DateTimeFormat(locale, { ...DATE_OPTS, timeZone: "UTC" }).format(new Date(iso));
+      // The differential: the en-GB string really is a different string.
+      expect(inLocale(STARTS_ON)).not.toBe(dayIn("UTC", STARTS_ON));
+      const html = await renderCard(locale);
+      expect(html).toContain(`${inLocale(STARTS_ON)} – ${inLocale(ENDS_ON)}`);
+      expect(html).not.toContain(dayIn("UTC", STARTS_ON));
+    });
+  }
 });

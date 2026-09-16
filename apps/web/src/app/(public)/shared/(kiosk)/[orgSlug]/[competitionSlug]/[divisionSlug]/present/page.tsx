@@ -12,9 +12,32 @@ import { slideshowLabels } from "@/server/slideshow-labels";
 import { Slideshow } from "@/components/v2/slideshow";
 import { kioskHubHref } from "@/components/public-site/kiosk-phone-card-logic";
 import { publicThemeStyle } from "@/lib/public-theme";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 
 // Kiosk duplicate of the public division page — never indexed.
-export const metadata: Metadata = { robots: { index: false } };
+// Every field a page's metadata leaves out is INHERITED from the root layout,
+// whose title and description are English (`app/layout.tsx`), so this page
+// sets both in the org's language (Task 16 review, I2).
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ orgSlug: string; competitionSlug: string; divisionSlug: string }>;
+}): Promise<Metadata> {
+  const robots = { index: false };
+  const { orgSlug, competitionSlug, divisionSlug } = await params;
+  const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
+  if (!data) return { robots };
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
+  return {
+    title: t(dict, "kiosk.metaTitle", { name: `${data.competition.name} · ${data.division.name}` }),
+    description: t(dict, "division.metaDescription", {
+      division: data.division.name,
+      competition: data.competition.name,
+    }),
+    robots,
+  };
+}
 
 export default async function PresentDivisionPage({
   params,

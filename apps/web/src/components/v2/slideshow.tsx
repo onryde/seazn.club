@@ -41,6 +41,16 @@ const SLIDE_MS = 9000;
 const POLL_MS = 45_000;
 const SUBSCRIBED_POLL_MS = 5 * 60_000; // safety net once push is live
 
+/**
+ * The board's wall clock, "14:30", in the board's locale (`labels.clockLocale`,
+ * owner ruling 2026-09-16). The zone is the SCREEN's — a clock on a TV at the
+ * ground — so production passes none; `timeZone` exists so a test can pin one,
+ * because a vitest worker ignores a TZ mutation.
+ */
+export function clockText(now: Date, clockLocale: string, timeZone?: string): string {
+  return now.toLocaleTimeString(clockLocale, { hour: "2-digit", minute: "2-digit", timeZone });
+}
+
 /** Fill a label template's `{name}` placeholder: templates arrive unfilled. */
 const fill = (template: string, name: string, value: number): string =>
   template.replace(`{${name}}`, String(value));
@@ -153,13 +163,13 @@ export function Slideshow({
     return () => clearInterval(t);
   }, [router, subscribed]);
 
+  const clockLocale = labels.clockLocale;
   useEffect(() => {
-    const tick = () =>
-      setClock(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    const tick = () => setClock(clockText(new Date(), clockLocale));
     tick();
     const t = setInterval(tick, 10_000);
     return () => clearInterval(t);
-  }, []);
+  }, [clockLocale]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

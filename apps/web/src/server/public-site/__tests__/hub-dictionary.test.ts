@@ -105,6 +105,20 @@ export const W2_KEYS = [
   "knockout.feederWinnerOnly", "knockout.feederLoserOnly",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
+  // Task 16 (zero-English sweep): the structural headers' VISIBLE abbreviation.
+  // `table.col.*` translated only the hover title; the header itself read
+  // "P W D L Pts" in every locale, and a Spanish "P" is Perdidos — the lost
+  // column's letter printed over the played count.
+  "table.abbr.played", "table.abbr.won", "table.abbr.drawn", "table.abbr.lost", "table.abbr.points",
+  // Task 16 review (M2): the goal columns football and both hockeys declare
+  // read "GF GA GD", English initials, in every locale.
+  "table.abbr.gf", "table.abbr.ga", "table.abbr.gd", "table.col.gf", "table.col.ga", "table.col.gd",
+  // Fix round 2: every other sport's metric and derived column header
+  // (`METRIC_HEADER_KEYS`), which printed the engine's English label.
+  "table.abbr.ties", "table.col.ties", "table.abbr.noResults", "table.col.noResults", "table.col.wins",
+  "table.col.setsWon", "table.col.setsLost", "table.col.gamesWon", "table.col.gamesLost",
+  "table.col.for", "table.col.against", "table.col.difference",
+  "table.col.ratio", "table.col.boardRatio", "table.col.pointRatio",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
   "leaders.title", "leaders.empty",
   "teams.title", "teams.seed", "teams.division", "info.title", "info.dates", "info.venues", "info.registration.open", "info.registration.closed", "info.calendar", "info.share",
@@ -139,6 +153,11 @@ export const W2_KEYS = [
   // badge, and the match centre's fallback scorebug (realtime word, serve dot).
   "share.whatsappShort",
   "qrPoster.qrAlt", "qrPoster.scan", "qrPoster.print",
+  // Task 16 review (I1, I2): the division page's results-grid corner and share
+  // text, and the titles of the two pages that inherited the root's English one.
+  "division.resultsGrid.corner", "division.share.text", "qrPoster.metaTitle", "kiosk.metaTitle",
+  // Fix round 2: the embed bracket widget over a division with no bracket.
+  "division.bracketEmpty",
   "player.metaDescription", "og.tagline", "news.card.liveOn",
   "matchCentre.realtime", "matchCentre.serving",
   // Review F2: the division share card's placeholder name and the two lines
@@ -232,6 +251,11 @@ describe("W2 public dictionary coverage", () => {
       // (passed, so no translator retypes it).
       "qrPoster.qrAlt": ["url"],
       "player.metaDescription": ["competition", "player"],
+      // Task 16 review (I1, I2): the division page's share text and the page
+      // titles of the QR poster and the kiosk boards.
+      "division.share.text": ["competition", "division"],
+      "qrPoster.metaTitle": ["competition"],
+      "kiosk.metaTitle": ["name"],
       "news.card.liveOn": ["brand"],
       "og.standings.youth": ["brand"],
       "og.standings.empty": ["brand"],

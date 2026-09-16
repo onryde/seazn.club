@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Barlow_Condensed } from "next/font/google";
-import { AttributionLink } from "@/components/attribution-link";
 
 // The widgets are the /shared public tree's own components, and those ask for
 // the display face through `font-display` — which globals.css declares
@@ -40,10 +39,9 @@ const AUTO_HEIGHT = `
 export default function EmbedLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className={`${displayFont.variable} min-h-4 bg-white p-3`}>
+      {/* No words here: this layout has no org in scope, so it cannot choose a
+          language. The attribution renders from the widget page, which does. */}
       {children}
-      <p className="mt-3 text-right text-[10px] text-zinc-400">
-        <AttributionLink surface="embed" />
-      </p>
       <script dangerouslySetInnerHTML={{ __html: AUTO_HEIGHT }} />
     </div>
   );

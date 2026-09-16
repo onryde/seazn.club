@@ -173,6 +173,8 @@ vi.mock("@/server/usecases/org-posts", () => ({
 vi.mock("@/server/usecases/registrations", () => ({
   publicRegistrationStatusByRef: vi.fn(async () => ticketView()),
 }));
+// The ticket draws in the visitor's locale, which reads the request's cookies.
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 
 const RootOg = (await import("@/app/opengraph-image")).default;
 const JoinOg = (await import("@/app/join/[token]/opengraph-image")).default;
@@ -221,8 +223,8 @@ interface Surface {
  *    `<img>` at all.
  *  - `app/join/[token]/opengraph-image.tsx` — hands `CardFrame` `logo={null}` as
  *    a literal (`:30`).
- *  - `app/(public)/r/[ref]/ticket.png/route.tsx` — its only `<img>` (`:156`) is a
- *    QR code built locally by `QRCode.toDataURL` (`:39`), i.e. a `data:` URI.
+ *  - `app/(public)/r/[ref]/ticket.png/route.tsx` — its only `<img>` (`:167`) is a
+ *    QR code built locally by `QRCode.toDataURL` (`:50`), i.e. a `data:` URI.
  *
  * Every OTHER derived surface gets the logo cases by default: a new share image
  * is driven through the fetcher unless someone edits this set, whose members

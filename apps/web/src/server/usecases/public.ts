@@ -40,6 +40,7 @@ import {
 } from "@/server/public-site/data";
 import { PublicOrgLive, type PublicOrgLiveT } from "@/server/api-v1/schemas";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { variantLabel } from "@/server/public-site/variant-label";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
 import { playerMatchesGenKey, playerMatchesKey } from "@/server/public-site/player-matches-cache-keys";
@@ -536,6 +537,7 @@ async function loadFixtureMatchCentreCtx(
       sport_key: string;
       module_version: string;
       variant_key: string;
+      variant_name: string | null;
       youth: boolean;
       player_name_display: string | null;
       division_tz: string | null;
@@ -547,6 +549,14 @@ async function loadFixtureMatchCentreCtx(
     }[]
   >`
     select d.sport_key, d.module_version, d.variant_key,
+           -- T16b fix round 3: the stored format name, scoped like
+           -- getPublicFixture's (system rows and this org's own, org first) —
+           -- the fallback for a variant variant-label.ts does not name.
+           (select v.name from sport_variants v
+             where v.sport_key = d.sport_key and v.key = d.variant_key
+               and (v.org_id is null or v.org_id = d.org_id)
+             order by v.org_id nulls last
+             limit 1) as variant_name,
            d.youth, d.player_name_display,
            ss.tz as division_tz,
            o.slug as org_slug, o.timezone as org_tz, o.default_locale as org_default_locale,
@@ -565,7 +575,12 @@ async function loadFixtureMatchCentreCtx(
     division: {
       sportKey: row.sport_key,
       moduleVersion: row.module_version,
-      formatLabel: row.variant_key,
+      // T16b fix round 3: the same word the page's own loader prints
+      // (getPublicFixture) — this document replaces the page's on every poll.
+      formatLabel: variantLabel(
+        { sportKey: row.sport_key, variantKey: row.variant_key, storedName: row.variant_name },
+        (key) => msgFor(locale, key),
+      ),
       tz: row.division_tz,
       youth: row.youth,
       playerNameDisplay: row.player_name_display,

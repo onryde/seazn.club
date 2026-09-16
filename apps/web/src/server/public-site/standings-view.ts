@@ -11,13 +11,14 @@ import "server-only";
 // recomputed here. Column selection is `standingsColumns`, cell formatting is
 // `formatMetric`, derived-metric text is the engine's `derivedMetricText`, and
 // the tie-break phrase is the engine's `tieBreakLabel` — the same four helpers
-// `components/public-site/standings-table.tsx` (the organiser console's and
-// the embed's table, deliberately untouched) already uses. This file adds no
+// `components/public-site/standings-table.tsx` (the division page's, the
+// embed's and the organiser console's table) already uses. This file adds no
 // second formatter; the whole cell expression below is that component's, kept
 // byte-for-byte so the two tables cannot disagree about what a cell says.
 //
-// What this file DOES own, and the console table does not: which columns
-// survive a 320px viewport, and the localisation of the structural headers.
+// What this file DOES own: which columns survive a 320px viewport, and the
+// words over the columns and in the tie note (`columnHeader`, `tieBreakRule`),
+// which that component now reads from here too.
 import {
   DERIVED_METRICS,
   derivedMetricText,
@@ -39,9 +40,10 @@ export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "lost
 
 /** The ledger columns `standingsColumns` emits with `kind: "structural"`.
  *  These are COPY (Played, Won, Drawn, Lost, Points) and get a dictionary key;
- *  every other column header is the sport's own NOTATION (GF, NRR, Buchholz
- *  Cut-1) and keeps the engine's label in every locale — the same
- *  "notation, not copy" rule W1's `stat-table.tsx` states for R/B/4s/SR.
+ *  so does every sport metric and derived column in `METRIC_HEADER_KEYS`
+ *  below. Only the columns `NOTATION_HEADERS` names (NRR, Buchholz Cut-1) keep
+ *  the engine's label in every locale — the same "notation, not copy" rule
+ *  W1's `stat-table.tsx` states for R/B/4s/SR.
  *  Exported (final-review fix F2) so the dictionary-coverage test derives its
  *  `table.col.*` key list from here rather than typing a second copy. */
 export const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
@@ -51,6 +53,103 @@ export const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
   "lost",
   "points",
 ]);
+
+/** The VISIBLE abbreviation over each structural column, keyed per column.
+ *  `standingsColumns` labels them "P", "W", "D", "L", "Pts" — English letters
+ *  that a Spanish reader takes for PJ/G/E/P/Pts, where "P" is Perdidos, the
+ *  LOST column — so they are copy exactly as their `table.col.*` titles are
+ *  (Task 16's zero-English sweep found the header printing English in es, fr
+ *  and nl). Spelled out rather than concatenated, per NEW-3 below; exact
+ *  membership against `STRUCTURAL_KEYS` is pinned in `standings-view.test.ts`. */
+export const STRUCTURAL_ABBR_KEYS: Readonly<Record<string, TKey>> = {
+  played: "table.abbr.played",
+  won: "table.abbr.won",
+  drawn: "table.abbr.drawn",
+  lost: "table.abbr.lost",
+  points: "table.abbr.points",
+};
+
+/** A header's two dictionary keys: the letters over the column, and the word
+ *  they stand for (the `title` a pointer hovers and the word a screen reader
+ *  says). A column whose header was already a whole word uses one key for both. */
+export interface HeaderKeys {
+  abbr: TKey;
+  title: TKey;
+}
+const word = (key: TKey): HeaderKeys => ({ abbr: key, title: key });
+
+/** Every sport metric and derived column a shipped module can put in a table,
+ *  as COPY in the reader's language (Task 16 review M2, then fix round 2: the
+ *  goal columns first, then "Sets won", "For", "Ratio" and the rest, which
+ *  printed English in every locale).
+ *
+ *  Keyed by metric KEY, then by the engine's own LABEL for it, because a key
+ *  does not name one thing across sports: `sets_won` is "Sets won" in tennis
+ *  and volleyball and "Games won" in badminton, table tennis and carrom — the
+ *  same column, a different word. The pair is exactly what the module declares
+ *  on the spec the table is built from, so the lookup reads that declaration
+ *  and invents nothing; the dictionary keys are named for the WORD, so two
+ *  sports that say the same thing share one translation.
+ *
+ *  Spelled out per NEW-3 below. `standings-view.test.ts` enumerates every
+ *  shipped module's visible metrics and `DERIVED_METRICS`, and reds on any pair
+ *  that is neither here nor in `NOTATION_HEADERS` — so a new metric, or a
+ *  relabelled one, cannot fall back to its English label unnoticed. */
+export const METRIC_HEADER_KEYS: Readonly<Record<string, Readonly<Record<string, HeaderKeys>>>> = {
+  // football, hockey, ice hockey — GF/GA/GD are initials of English words: a
+  // Spanish table writes GF/GC/DG, a French one BP/BC/Diff, a Dutch one DV/DT/DS.
+  gf: { GF: { abbr: "table.abbr.gf", title: "table.col.gf" } },
+  ga: { GA: { abbr: "table.abbr.ga", title: "table.col.ga" } },
+  gd: { GD: { abbr: "table.abbr.gd", title: "table.col.gd" } },
+  // cricket
+  ties: { T: { abbr: "table.abbr.ties", title: "table.col.ties" } },
+  no_results: { NR: { abbr: "table.abbr.noResults", title: "table.col.noResults" } },
+  // board games
+  wins: { Wins: word("table.col.wins") },
+  // the set-based sports and carrom
+  sets_won: { "Sets won": word("table.col.setsWon"), "Games won": word("table.col.gamesWon") },
+  sets_lost: { "Sets lost": word("table.col.setsLost"), "Games lost": word("table.col.gamesLost") },
+  games_won: { "Games won": word("table.col.gamesWon") },
+  games_lost: { "Games lost": word("table.col.gamesLost") },
+  // generic
+  for: { For: word("table.col.for") },
+  against: { Against: word("table.col.against") },
+  diff: { Difference: word("table.col.difference") },
+  // derived cascade columns (`DERIVED_METRICS`)
+  set_ratio: { Ratio: word("table.col.ratio") },
+  board_ratio: { "Board ratio": word("table.col.boardRatio") },
+  point_ratio: { "Pts ratio": word("table.col.pointRatio") },
+};
+
+/** The columns whose header is the sport's own NOTATION, printed as the engine
+ *  labels it in every locale: net run rate, and the chess tie-break systems,
+ *  which are named for people (Buchholz, Sonneborn–Berger). Keyed like
+ *  `METRIC_HEADER_KEYS`, so the test's enumeration accounts for each by name. */
+export const NOTATION_HEADERS: Readonly<Record<string, readonly string[]>> = {
+  nrr: ["NRR"],
+  buchholz: ["Buchholz"],
+  buchholz_cut1: ["Buchholz Cut-1"],
+  sberger: ["SB"],
+};
+
+/** A column header in the page's language: what the header shows, and the
+ *  word it stands for. ONE authority for both standings tables — the hub's
+ *  view below and `components/public-site/standings-table.tsx` (the division
+ *  page, the embed, the organiser console) — so the two cannot print
+ *  different letters over the same column. */
+export function columnHeader(
+  column: { key: string; label: string },
+  msg: (key: TKey) => string,
+): { abbr: string; title: string } {
+  if (STRUCTURAL_KEYS.has(column.key)) {
+    return { abbr: msg(STRUCTURAL_ABBR_KEYS[column.key]!), title: msg(`table.col.${column.key}`) };
+  }
+  const keys = Object.hasOwn(METRIC_HEADER_KEYS, column.key) ? METRIC_HEADER_KEYS[column.key]! : undefined;
+  const header = keys && Object.hasOwn(keys, column.label) ? keys[column.label]! : undefined;
+  if (header !== undefined) return { abbr: msg(header.abbr), title: msg(header.title) };
+  // Notation, or a column no shipped module declares (a retired build's label).
+  return { abbr: column.label, title: column.label };
+}
 
 /** Tie-break trace keys the engine has an English phrase for
  *  (`packages/engine/src/competition/display.ts` — `TIE_BREAK_LABELS`). Each
@@ -111,6 +210,14 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
  *  unranked one. */
 const UNRANKED = Number.MAX_SAFE_INTEGER;
 
+/** The rule a tie was split on, in the page's language — the dictionary's
+ *  phrase where `TIE_BREAK_MSG_KEYS` has one, the engine's otherwise. Shared by
+ *  both standings tables, like `columnHeader`. */
+export function tieBreakRule(key: string, msg: (key: TKey) => string): string {
+  const dictKey = TIE_BREAK_MSG_KEYS[key];
+  return dictKey === undefined ? tieBreakLabel(key) : msg(dictKey);
+}
+
 export interface TableViewInput {
   /** Stable id for this table within the document — a division may publish an
    *  overall table and one per pool, so this is not the division id. */
@@ -142,10 +249,6 @@ export function buildTableView(input: TableViewInput): TableViewT {
   const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
-  const rule = (key: string) => {
-    const dictKey = TIE_BREAK_MSG_KEYS[key];
-    return dictKey === undefined ? tieBreakLabel(key) : input.msg(dictKey);
-  };
 
   return {
     id: input.id,
@@ -157,8 +260,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
     updatedAt: input.updatedAt,
     columns: columns.map((c) => ({
       key: c.key,
-      abbr: c.label,
-      title: STRUCTURAL_KEYS.has(c.key) ? input.msg(`table.col.${c.key}`) : c.label,
+      ...columnHeader(c, input.msg),
       compact: COMPACT_KEYS.has(c.key),
     })),
     rows: ranked.map((r) => ({
@@ -180,7 +282,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       tieBreakText: r.tieBreak
         ? input.msg("table.tieBreak", {
             with: r.tieBreak.with.map(name).join(", "),
-            rule: rule(r.tieBreak.key),
+            rule: tieBreakRule(r.tieBreak.key, input.msg),
           })
         : null,
       champion: input.championId === r.entrantId,

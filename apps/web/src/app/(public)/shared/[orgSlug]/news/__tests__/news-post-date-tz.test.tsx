@@ -14,6 +14,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { OrgPost } from "@/server/usecases/org-posts";
+import { LOCALES } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 
 // 01:30Z on 2 March is still 1 March in any zone behind UTC — a midday instant
 // would print the same day everywhere and prove nothing.
@@ -23,9 +25,9 @@ const OPTS = { day: "numeric", month: "short", year: "numeric" } as const;
 const WRONG_ZONE = "America/Los_Angeles";
 
 /** Derived from the same instant the page formats, never typed as a literal. */
-const UTC_DAY = new Date(ISO).toLocaleDateString(LOCALE, { ...OPTS, timeZone: "UTC" });
+const UTC_DAY = new Date(ISO).toLocaleDateString(intlLocaleFor(LOCALE), { ...OPTS, timeZone: "UTC" });
 /** What the unpinned code prints on a host in WRONG_ZONE. */
-const WRONG_DAY = new Date(ISO).toLocaleDateString(LOCALE, { ...OPTS, timeZone: WRONG_ZONE });
+const WRONG_DAY = new Date(ISO).toLocaleDateString(intlLocaleFor(LOCALE), { ...OPTS, timeZone: WRONG_ZONE });
 
 const ORG = {
   id: "00000000-0000-0000-0000-0000000000aa",
@@ -35,7 +37,7 @@ const ORG = {
   branding: {},
   logo: null,
   about: null,
-  default_locale: LOCALE,
+  default_locale: LOCALE as string,
   card_payments: false,
 };
 
@@ -152,4 +154,32 @@ describe("public post page — publishedAt is formatted in a pinned zone", () =>
     expect(html).toContain(UTC_DAY);
     expect(html).not.toContain(WRONG_DAY);
   });
+});
+
+// Owner ruling 2026-09-16: public dates are in the org's locale, and English is
+// day-month. This page passed bare "en" to `Intl`, which is the US month-day
+// form ("Mar 2, 2026"). A zone is named on every expectation: UTC, the page's.
+describe("public news post — publishedAt reads in the org's locale" , () => {
+  it("an English org reads day-month", async () => {
+    const html = await render();
+    expect(html).toContain("2 Mar 2026");
+    expect(html).not.toContain("Mar 2, 2026");
+  });
+
+  for (const locale of LOCALES.filter((l) => l !== "en")) {
+    it(`a ${locale} org reads its own Intl format, not en-GB`, async () => {
+      const own = new Intl.DateTimeFormat(locale, { ...OPTS, timeZone: "UTC" }).format(new Date(ISO));
+      const enGb = new Intl.DateTimeFormat("en-GB", { ...OPTS, timeZone: "UTC" }).format(new Date(ISO));
+      ORG.default_locale = locale;
+      try {
+        const html = await render();
+        expect(html).toContain(own);
+        // Differential only where the two strings differ (they do for es/fr/nl
+        // in March today; the guard keeps a future ICU from making it vacuous).
+        if (own !== enGb) expect(html).not.toContain(enGb);
+      } finally {
+        ORG.default_locale = LOCALE;
+      }
+    });
+  }
 });

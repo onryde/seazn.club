@@ -7,6 +7,7 @@ import { CardFrame, LivePill, OG_SIZE } from "@/server/og/card";
 import { posterImageDataUrl } from "@/server/og/poster-image";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, plural, t } from "@/lib/i18n";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -29,8 +30,11 @@ export default async function Image({ params }: Props) {
   // ("31 Aug 2026" in America/New_York). This card is every WhatsApp/iMessage/X
   // preview of the link, so the wrong day here reaches spectators who never
   // open the page. Reasoning in full on matches-hub/info-tab.tsx.
+  //
+  // In the ORG's locale, like the card's copy (owner ruling 2026-09-16): it
+  // was en-GB in all four. `intlLocaleFor` keeps English day-month.
   const fmt = (d: string) =>
-    new Date(d).toLocaleDateString("en-GB", {
+    new Date(d).toLocaleDateString(intlLocaleFor(locale), {
       day: "numeric",
       month: "short",
       year: "numeric",

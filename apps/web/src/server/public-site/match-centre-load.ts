@@ -36,7 +36,12 @@ type Sql = ReturnType<typeof postgres>;
 export interface MatchCentreLoadDivision {
   sportKey: string;
   moduleVersion: string;
-  /** The division's own variant/format key, printed verbatim as the Info
+  /** T16b fix round 3: both loaders now pass `variantLabel(...)` here — the
+   *  dictionary's word for an engine-declared variant, in the org's locale,
+   *  the stored catalog name only for a variant the map lacks. The history
+   *  below predates that.
+   *
+   *  The division's own variant/format key, printed verbatim as the Info
    *  tab's "format" row (fix round 1 ruling — `match-centre.ts`'s own doc
    *  comment on `MatchCentreInput.formatLabel`). No shared "described
    *  format" labeller exists on the public surface today (grepped

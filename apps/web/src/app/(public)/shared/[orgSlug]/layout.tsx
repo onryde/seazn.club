@@ -15,6 +15,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Barlow_Condensed } from "next/font/google";
 import { AttributionLink } from "@/components/attribution-link";
+import { HtmlLang } from "@/components/i18n/html-lang";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { publicThemeStyle } from "@/lib/public-theme";
@@ -51,7 +52,8 @@ export default async function PublicOrgLayout({
   // function of the org, never of the visitor's request). The brand name
   // stays literal and keeps its weight, so the footer template is split
   // around `{brand}` rather than interpolated.
-  const dict = await getDictionary(toLocale(org.default_locale), "public");
+  const locale = toLocale(org.default_locale);
+  const dict = await getDictionary(locale, "public");
   const tagline = t(dict, "layout.tagline");
   const [poweredByLead, poweredByTail = ""] = t(dict, "layout.poweredBy").split("{brand}");
 
@@ -63,6 +65,12 @@ export default async function PublicOrgLayout({
       style={publicThemeStyle(org.branding)}
       className={`${displayFont.variable} flex min-h-screen flex-col bg-canvas text-ink`}
     >
+      {/* `<html lang>` in the org's language. The static root layout renders
+          "en" for every route and only corrects it from the VISITOR's cookie;
+          every page under this layout is in the ORG's language, so it says so
+          here — after hydration, which is all a nested layout can do (the
+          server HTML keeps the root's "en"; see layout-html-lang.test.tsx). */}
+      <HtmlLang lang={locale} />
       <header className="sticky top-0 z-40 bg-court text-court-ink shadow-md">
         <div className="mx-auto flex h-[52px] max-w-5xl items-center gap-3 px-4">
           {org.logo ? (
@@ -116,7 +124,7 @@ export default async function PublicOrgLayout({
             {poweredByLead}
             <span className="font-medium">Seazn Club</span>
             {poweredByTail} ·{" "}
-            <AttributionLink surface="badge" />
+            <AttributionLink surface="badge" label={t(dict, "layout.attribution")} />
           </p>
         )}
       </footer>

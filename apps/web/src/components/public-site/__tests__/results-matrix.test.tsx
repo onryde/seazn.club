@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { ResultsMatrix } from "../results-matrix";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
 
 const FX = (id: string, home: string, away: string, status: string, headline?: string) => ({
   id, division_id: "d", stage_id: "s", pool_id: null, round_no: 1, seq_in_round: 1,
@@ -23,6 +25,7 @@ describe("ResultsMatrix", () => {
         entrantNames: names,
         fixtures: [FX("f1", "a", "b", "decided", "3–1"), FX("f2", "c", "a", "in_play")] as never,
         fixtureHref: href,
+        dict: en,
       }),
     );
     expect(html).toContain("data-results-matrix");
@@ -37,6 +40,25 @@ describe("ResultsMatrix", () => {
     expect(html.match(/—/g)?.length).toBe(3);
   });
 
+  it("its corner cell and the live dot's name are the page's dictionary's, never English literals", () => {
+    const html = renderToStaticMarkup(
+      createElement(ResultsMatrix, {
+        entrantIds: ["a", "c"],
+        entrantNames: names,
+        fixtures: [FX("f2", "c", "a", "in_play")] as never,
+        fixtureHref: href,
+        dict: es,
+      }),
+    );
+    // Premise: Spanish differs from English, so the Spanish render witnesses it.
+    expect(es["division.resultsGrid.corner"]).not.toBe(en["division.resultsGrid.corner"]);
+    expect(es["matchesHub.live"]).not.toBe(en["matchesHub.live"]);
+    expect(html).toContain(`>${es["division.resultsGrid.corner"]}</th>`);
+    expect(html).toContain(`aria-label="${es["matchesHub.live"]}"`);
+    expect(html).not.toContain("Home \\ Away");
+    expect(html).not.toContain('aria-label="Live"');
+  });
+
   it("returns nothing for fewer than two entrants", () => {
     const html = renderToStaticMarkup(
       createElement(ResultsMatrix, {
@@ -44,6 +66,7 @@ describe("ResultsMatrix", () => {
         entrantNames: names,
         fixtures: [] as never,
         fixtureHref: href,
+        dict: en,
       }),
     );
     expect(html).toBe("");

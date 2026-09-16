@@ -18,6 +18,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import {
   MatchCentreDoc,
@@ -157,4 +160,36 @@ describe("InfoTab", () => {
       expect(html).not.toContain("term.");
     }
   });
+});
+
+// Task 16 (zero-English sweep): the toss row's value is
+// `matchCentre.info.tossValue` with `elected` — the engine's own enum token,
+// "bat" or "bowl". The Summary tab already swapped it for its `term.*` word
+// (`localiseParams`); this tab did not, so a Spanish Info tab read
+// "Leones — eligió bat".
+describe("InfoTab — the toss row's engine token is localised", () => {
+  const TOSS: InfoViewT = {
+    ...FULL,
+    rows: [
+      {
+        label: { key: "matchCentre.info.toss" },
+        value: { key: "matchCentre.info.tossValue", params: { side: "Leones", elected: "bat" } },
+      },
+    ],
+  };
+  for (const [locale, d] of Object.entries({ en, es, fr, nl })) {
+    it(`${locale}: "elected" reads term.bat, never the bare token`, () => {
+      const pub = d as Dict;
+      const html = renderToStaticMarkup(<InfoTab doc={makeDoc({ info: TOSS })} dict={pub} data={data} />);
+      const term = (pub as Record<string, string>)["term.bat"]!;
+      const expected = (pub as Record<string, string>)["matchCentre.info.tossValue"]!
+        .replace("{side}", "Leones")
+        .replace("{elected}", term);
+      expect(html).toContain(expected);
+      if (locale !== "en") {
+        expect(term, "premise: the locale's word is not the token").not.toBe("bat");
+        expect(html).not.toMatch(/\bbat\b/);
+      }
+    });
+  }
 });

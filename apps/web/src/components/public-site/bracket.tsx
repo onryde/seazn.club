@@ -23,7 +23,7 @@ import {
 } from "@seazn/engine/scheduling";
 import type { RoundRole } from "@seazn/engine/competition";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
-import { fmtDateTime } from "@/lib/format";
+import { fmtPublicDateTime } from "@/lib/format";
 import { BRACKET_CREST_CLASS } from "./matches-hub/bracket-crest";
 import type { ScheduleCopy } from "./schedule";
 
@@ -71,6 +71,11 @@ interface Props {
    *  venue's clock, never the server's. Compile-required for the reason
    *  `copy` is. */
   tz: string;
+  /** The org's locale, which writes a dated card's footer (owner ruling
+   *  2026-09-16: public dates in the org's locale, English day-month). The one
+   *  both callers already hand their Schedule. Compile-required for the reason
+   *  `tz` is. */
+  locale: string;
 }
 
 /** The two schedule-rail words a bracket card's footer shows. */
@@ -101,6 +106,7 @@ function FixtureCard({
   slotText,
   copy,
   tz,
+  locale,
 }: {
   fixture: PublicFixture;
   entrantNames: Record<string, string>;
@@ -110,6 +116,7 @@ function FixtureCard({
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
   tz: string;
+  locale: string;
 }) {
   const winner = fixture.outcome?.winner;
   const side = (id: string | null, slotLabel: SlotLabel | null) => {
@@ -162,9 +169,10 @@ function FixtureCard({
             {fixture.summary.headline}
           </span>
         ) : fixture.scheduled_at ? (
-          // en-GB in every locale: left as is, open owner question "en-GB formatting move" (B1).
-          // The venue's clock (B2): `fmtDateTime` is that en-GB form with `timeZone: tz`, UTC on an unknown zone.
-          fmtDateTime(tz, fixture.scheduled_at, {
+          // The org's locale (owner ruling 2026-09-16, English day-month — the
+          // B1 "en-GB formatting move" question, answered), on the venue's
+          // clock (B2): `timeZone: tz`, UTC on an unknown zone.
+          fmtPublicDateTime(locale, tz, fixture.scheduled_at, {
             day: "numeric",
             month: "short",
             hour: "2-digit",
@@ -193,6 +201,7 @@ function TwoSided({
   slotText,
   copy,
   tz,
+  locale,
 }: {
   layout: BracketLayout;
   fixtures: PublicFixture[];
@@ -203,6 +212,7 @@ function TwoSided({
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
   tz: string;
+  locale: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const rowsPerSide = Math.max(
@@ -345,7 +355,7 @@ function TwoSided({
               className="absolute"
               style={{ left: colX(node), top: nodeTop(node), width: NODE_W }}
             >
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} locale={locale} />
             </div>
           );
         })}
@@ -368,6 +378,7 @@ function DoubleElim({
   slotText,
   copy,
   tz,
+  locale,
 }: {
   layout: DoubleElimLayout;
   fixtures: PublicFixture[];
@@ -378,6 +389,7 @@ function DoubleElim({
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
   tz: string;
+  locale: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LANE_GAP = 48;
@@ -497,7 +509,7 @@ function DoubleElim({
               {node.lane === "GF" && (
                 <p className={`mb-1 ${laneLabel}`}>{node.col === 0 ? lookup("bracket.grandFinal") : lookup("bracket.reset")}</p>
               )}
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} locale={locale} />
             </div>
           );
         })}
@@ -506,7 +518,7 @@ function DoubleElim({
   );
 }
 
-export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy, tz }: Props) {
+export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHref, lookup, slotText, copy, tz, locale }: Props) {
   // PROMPT-62: the connected two-sided tree, when the shape allows it.
   if (kind === "knockout") {
     const result = twoSidedBracket(fixtures);
@@ -522,6 +534,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           slotText={slotText}
           copy={copy}
           tz={tz}
+          locale={locale}
         />
       );
     }
@@ -541,6 +554,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           slotText={slotText}
           copy={copy}
           tz={tz}
+          locale={locale}
         />
       );
     }
@@ -560,6 +574,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
           slotText={slotText}
           copy={copy}
           tz={tz}
+          locale={locale}
         />
       );
     }
@@ -624,6 +639,7 @@ export function Bracket({ kind, fixtures, entrantNames, entrantLogos, fixtureHre
                     slotText={slotText}
                     copy={copy}
                     tz={tz}
+                    locale={locale}
                   />
                 ))}
             </div>
@@ -658,6 +674,7 @@ function PagePlayoff({
   slotText,
   copy,
   tz,
+  locale,
 }: {
   layout: PagePlayoffLayout;
   fixtures: PublicFixture[];
@@ -668,6 +685,7 @@ function PagePlayoff({
   slotText: PublicRoundNamer["slot"];
   copy: BracketCopy;
   tz: string;
+  locale: string;
 }) {
   const byId = new Map(fixtures.map((f) => [f.id, f]));
   const LABEL_H = 22;
@@ -703,7 +721,7 @@ function PagePlayoff({
               <p className="mb-1 font-display text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">
                 {roundRoleLabel(lookup, PP_ROLE[n.slot])}
               </p>
-              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} />
+              <FixtureCard fixture={f} entrantNames={entrantNames} entrantLogos={entrantLogos} href={fixtureHref(f.id)} lookup={lookup} slotText={slotText} copy={copy} tz={tz} locale={locale} />
             </div>
           );
         })}
