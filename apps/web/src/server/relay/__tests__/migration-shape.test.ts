@@ -137,14 +137,19 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(row).toEqual({ runner_state: "none", runner_name: null, end_reason: null });
     await expect(sql`update fixture_stream_sessions set runner_state = 'running' where id = ${sid}`).rejects.toMatchObject({ code: "23514" });
     await sql`update fixture_stream_sessions set runner_state = 'creating', runner_name = 'relay-x-r1' where id = ${sid}`;
-    await expect(sql`update fixture_stream_sessions set end_reason = 'crashed' where id = ${sid}`).rejects.toMatchObject({ code: "23514" });
     // REFUSED by the state check: a reason while the row is still `requested`, and a reason on a FAILED session.
     await expect(sql`update fixture_stream_sessions set end_reason = 'stopped' where id = ${sid}`).rejects.toMatchObject({ code: "23514" });
     await expect(
       sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'machine_boot_timeout', end_reason = 'stopped' where id = ${sid}`,
     ).rejects.toMatchObject({ code: "23514" });
-    // ACCEPTED: the same reason once the session is ending, and it survives the move to completed.
-    await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'max_duration' where id = ${sid}`;
+    // REFUSED by the VALUE check alone: 'ending' permits a reason, so the state check passes and only
+    // `end_reason in ('stopped','max_duration')` can refuse 'crashed' (a probe at `requested` is refused by both).
+    await expect(
+      sql`update fixture_stream_sessions set state = 'ending', end_reason = 'crashed' where id = ${sid}`,
+    ).rejects.toMatchObject({ code: "23514" });
+    // ACCEPTED: both reasons once the session is ending, and the last one survives the move to completed.
+    await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'stopped' where id = ${sid}`;
+    await sql`update fixture_stream_sessions set end_reason = 'max_duration' where id = ${sid}`;
     await sql`update fixture_stream_sessions set state = 'completed' where id = ${sid}`;
     // ACCEPTED: a failed session with NO end reason — fail_reason carries the cause. (Inserted after the row
     // above left the active set, or the one-active partial index would refuse the second session.)
@@ -154,7 +159,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
 
   // ---- ruling 13: the capture tables -------------------------------------
 
-  it("fixture_stream_events is append-only: UPDATE and direct DELETE are refused; (session_id, seq) is unique; the fixture cascade still works", async () => {
+  it("fixture_stream_events is append-only: UPDATE and direct DELETE are refused; (session_id, seq) is unique; a SESSION delete's cascade still works", async () => {
     const r = await rig();
     const sid = await insertSession(r, "requested");
     // kind is 'transition' — the migration's own vocabulary (and Task 2's EventKind); 'state' is not a kind and
@@ -168,10 +173,46 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     await expect(sql`update fixture_stream_events set to_state = 'live' where session_id = ${sid}`).rejects.toMatchObject({ code: "23001" });
     await expect(sql`delete from fixture_stream_events where session_id = ${sid}`).rejects.toMatchObject({ code: "23001" });
     await expect(sql`insert into fixture_stream_events (session_id, org_id, seq, source, kind, type) values (${sid}, ${r.orgId}, 3, 'ufo', 'transition', 'x')`).rejects.toMatchObject({ code: "23514" });
-    // The positive pair: history goes with its fixture (the FK cascade is not a direct delete).
-    await sql`delete from fixtures where id = ${r.fixtureId}`;
+    // The positive pair: history goes with its SESSION row — the FK cascade runs the trigger at
+    // pg_trigger_depth() 2, not 1, so it is not a direct delete. (A fixture delete no longer reaches this
+    // table at all: fixture_id is `on delete set null` — the next test.)
+    await sql`delete from fixture_stream_sessions where id = ${sid}`;
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid}`;
     expect(n).toBe(0);
+  });
+
+  it("deleting a STREAMED fixture keeps the stream: the session survives with fixture_id null, and its input, event and consume credit rows survive with the org balance unchanged", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "live");
+    await sql`insert into fixture_stream_inputs (session_id, slot, ingest_input_id) values (${sid}, 0, 'in-uid-kept')`;
+    await sql`insert into fixture_stream_events (session_id, org_id, seq, source, kind, type, from_state, to_state)
+              values (${sid}, ${r.orgId}, 1, 'domain', 'transition', 'admitted', 'requested', 'provisioning')`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, 5, 'grant', 5)`;
+    const [consume] = await sql<{ id: string }[]>`
+      insert into org_stream_credits (org_id, delta, reason, balance_after, session_id)
+      values (${r.orgId}, -1, 'consume', 4, ${sid}) returning id`;
+    await sql`update fixture_stream_sessions set credit_ledger_id = ${consume!.id} where id = ${sid}`;
+    const balance = async () => {
+      const [{ b }] = await sql<{ b: number }[]>`
+        select coalesce(sum(delta), 0)::int as b from org_stream_credits where org_id = ${r.orgId}`;
+      return b;
+    };
+    expect(await balance()).toBe(4);
+
+    // With `fixture_id … not null on delete cascade` this delete is REFUSED (23503: the consume row still
+    // references the cascaded session); without a consume row it silently erases the session, its inputs
+    // (the paid Cloudflare resources retention finds through them) and its append-only history.
+    await sql`delete from fixtures where id = ${r.fixtureId}`;
+
+    const [session] = await sql<{ fixture_id: string | null; credit_ledger_id: string | null }[]>`
+      select fixture_id, credit_ledger_id from fixture_stream_sessions where id = ${sid}`;
+    expect(session).toEqual({ fixture_id: null, credit_ledger_id: consume!.id });
+    const [kept] = await sql<{ inputs: number; events: number; credits: number }[]>`
+      select (select count(*) from fixture_stream_inputs where session_id = ${sid})::int as inputs,
+             (select count(*) from fixture_stream_events where session_id = ${sid})::int as events,
+             (select count(*) from org_stream_credits where session_id = ${sid})::int as credits`;
+    expect(kept).toEqual({ inputs: 1, events: 1, credits: 1 });
+    expect(await balance()).toBe(4);
   });
 
   it("stream_provider_calls: a path with a query string, a raw uuid or a raw machine/input id is refused (a template, never a URL); attempt 0 and a negative latency are refused; the twin lands", async () => {

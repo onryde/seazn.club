@@ -29,6 +29,26 @@
 --     (server/relay/domain/session.ts) refuses a second retry, the CHECK below
 --     refuses a negative, and the column is what makes both real.
 --
+-- Amended before merge by ORCHESTRATOR rulings on the Task 1 review
+-- (2026-09-16, progress.md "Task 1 REVIEW" I2/I3) — not owner rulings:
+--   * fixture_stream_sessions.fixture_id is NULLABLE, `on delete set null`
+--     (§6.1: not null, on delete cascade). Fixtures ARE deleted in production:
+--     directly (usecases/stages.ts delete + rebuild, history.ts) and through the
+--     cascade from a deleted division or competition (divisions.ts,
+--     competitions.ts). Under a cascade that delete either failed with a raw
+--     23503 (a consume row in org_stream_credits still names the session) or
+--     silently erased the session, its fixture_stream_inputs — the rows the
+--     planned retention sweep (Task 12) reads to find the paid Cloudflare
+--     live inputs it must delete — and
+--     its append-only fixture_stream_events. With set null the MONEY (consume
+--     rows), the RETAINED PAID RESOURCES (input rows) and the HISTORY (events)
+--     all survive, and the admission snapshot below (sport_key, competition_id,
+--     division_id, venue_id, …) keeps the context the fixture row carried.
+--     fixture_stream_sessions_one_active is unaffected: nulls never collide.
+--   * vcpu_seconds (§6.1) and fixture_stream_samples.duplicated_frames are NOT
+--     created: neither has an R1 producer, and a `default 0` or an always-null
+--     column reads as a measurement nobody took (the Task 0 rule below).
+--
 -- Task 0 data rulings (2026-09-14; _STATE.md "Owner data rulings at Task 0"):
 -- the owner ruled telemetry retention ("2 is ok") and the non-personal
 -- additions ("all"); the orchestrator — not the owner — narrowed their shapes
@@ -36,7 +56,8 @@
 -- named producer (plan §"Data captured"); a fact with no producer was dropped,
 -- not left inert. Facts an existing column carries are reused, never copied.
 -- The admission snapshot has NO foreign keys (it records what was true at
--- admission; fixture_id already joins the live rows) and is NOT NULL only where
+-- admission; fixture_id joins the live rows while the fixture exists, and is
+-- set null when it is deleted) and is NOT NULL only where
 -- its source is: divisions.sport_key and divisions.competition_id (not null,
 -- V209__divisions.sql), fixtures.division_id (not null) and fixtures.scheduled_at
 -- (null, V214__fixtures.sql), fixtures.court_id (null), courts.venue_id (not
@@ -76,7 +97,9 @@ create index on org_stream_targets (org_id, created_at);
 
 create table fixture_stream_sessions (
   id                   uuid primary key default gen_random_uuid(),
-  fixture_id           uuid not null references fixtures(id) on delete cascade,
+  -- NULL once the fixture is deleted: the session, its inputs, its events and its consume credit row outlive
+  -- the fixture (money, retention of paid Cloudflare inputs, append-only history); the snapshot keeps the context.
+  fixture_id           uuid null references fixtures(id) on delete set null,
   org_id               uuid not null references organizations(id) on delete cascade,
   mode                 text not null check (mode in ('passthrough','composed')),
   state                text not null check (state in ('requested','provisioning','warming','live','ending','completed','failed')),
@@ -95,7 +118,6 @@ create table fixture_stream_sessions (
   -- deadline, which is the very stranding that backstop exists to end. Written in the SAME statement as
   -- the transition into 'ending' (Task 10's persist), exactly like state and end_reason.
   ending_at            timestamptz null,
-  vcpu_seconds         integer not null default 0,
   egress_bytes         bigint not null default 0,
   max_duration_minutes integer not null default 300,
   runner_retries       smallint not null default 0 check (runner_retries >= 0),
@@ -245,8 +267,13 @@ create table fixture_stream_events (
 );
 create index on fixture_stream_events (session_id, occurred_at);
 create index on fixture_stream_events (org_id, occurred_at);
--- Append-only. A direct UPDATE or DELETE raises; the FK cascade from a deleted
--- fixture is the one delete allowed (it runs inside the RI trigger, depth > 1).
+-- Append-only. A direct UPDATE or DELETE raises (the trigger runs at
+-- pg_trigger_depth() 1). A delete arriving through an FK CASCADE runs it at
+-- depth > 1 and is allowed: a direct delete of the SESSION row, or of the
+-- ORGANIZATION (both measured at depth 2, 2026-09-16). A fixture delete no
+-- longer reaches this table — fixture_stream_sessions.fixture_id is set null.
+-- Two holes this trigger does not close: a delete issued from inside any
+-- other trigger also runs at depth > 1, and TRUNCATE fires no row trigger.
 create function fixture_stream_events_immutable() returns trigger language plpgsql as $$
 begin
   if tg_op = 'DELETE' and pg_trigger_depth() > 1 then return old; end if;
@@ -272,7 +299,6 @@ create table fixture_stream_samples (
   bitrate_kbps      integer null,
   fps               real null,
   dropped_frames    integer null,
-  duplicated_frames integer null,
   output_state      text null,                -- the destination output's status word, verbatim
   runner_cpu_pct    real null,
   runner_mem_mb     integer null,
