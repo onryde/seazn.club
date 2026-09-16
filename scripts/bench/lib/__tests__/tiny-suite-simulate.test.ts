@@ -3087,6 +3087,153 @@ describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
   });
 });
 
+/** `_tiny.json` with `d-badminton` given a progression-fed SECOND stage
+ *  whose ref is `s-playoff` — the SAME ref `d-tiny` already declares for its
+ *  own knockout. Legal per `pack-schema.ts`'s `checkRefsUnique`, which scopes
+ *  its `seenStage` set to ONE division (pack-schema.ts:1746-1750): stage refs
+ *  are unique only WITHIN a division, never across the pack. This is the
+ *  exact collision pre-B07b prerequisite P1 exists for (progress.md Ruling
+ *  R26, task-6-review.md CRUX 2) — `seed.ts`'s `stageIdByRef` used to be one
+ *  FLAT `Map<stageRef, stageId>` shared across every division, so two
+ *  divisions naming the same stage ref would silently overwrite each other's
+ *  entry. Otherwise identical to `twoAdvancingDivisionsPack` above (same
+ *  copied league stream/match, same rank-order-derived finalRanks row) —
+ *  only the ref changes. */
+async function collidingStageRefPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    badminton.stages.push({
+      // COLLIDES with d-tiny's own "s-playoff" (checked below) — the point
+      // of this fixture.
+      ref: "s-playoff",
+      seq: 2,
+      kind: "knockout",
+      name: "Badminton Playoff",
+      config: {},
+      progression: playoffProgressionOf(raw),
+    });
+    const tiny = raw.divisions.find((d) => d.ref === "d-tiny");
+    if (tiny?.stages.some((s) => s["ref"] === "s-playoff") !== true) {
+      throw new Error('test fixture assumption broken: d-tiny no longer declares a stage ref "s-playoff"');
+    }
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-playoff" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+    raw.expected.finalRanks.push({
+      divisionRef: "d-badminton",
+      stageRef: "s-playoff",
+      order: rankOrderOf(raw, "d-badminton", "s-badminton-league"),
+    });
+  });
+}
+
+describe("Pre-B07b prerequisite P1 — stageIdByRef keyed by division AND stage (Ruling R26)", () => {
+  it("two divisions sharing a stage ref seed, generate and advance INDEPENDENTLY, never colliding", async () => {
+    const packPath = await collidingStageRefPack();
+    const { transport, sql, calls } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // No advance-time or seed-time defect surfaced. The old flat map's
+    // failure mode is a SILENT wrong answer (AGENTS.md recurring-failure
+    // class 6) — both of `seedSuite`'s own "unmatched stream" / "unclaimed
+    // fixture" guards stay quiet even when the map has collided, because the
+    // generated rows are tagged with the LOOP's own divisionRef regardless
+    // of which real stage actually produced them (task-6-review.md CRUX 2).
+    // So this run must be clean, not merely "did not throw".
+    expect(report.errors ?? []).toEqual([]);
+
+    // (1) — each division's SEED-TIME `/generate` call targeted its OWN
+    // real stage id. A flat `Map<stageRef, id>` collides on the shared
+    // "s-playoff" ref and last-write-wins, so exactly ONE real stage id gets
+    // hit TWICE and the other never — asserted as the FULL SET of targeted
+    // ids, never "which one won", so either `Promise.all` interleaving reds
+    // this the same way (AGENTS.md: "make the red deterministic").
+    // Scoped to calls BEFORE the first `/seed-proposal` — `advance.ts` calls
+    // `/generate` a SECOND time per advanced target stage (idempotent,
+    // `existing: 1` in the fake), which is a different call this assertion
+    // is not about.
+    const firstProposalIdx = calls.findIndex((c) => c.method === "POST" && /\/seed-proposal$/.test(c.path));
+    expect(firstProposalIdx).toBeGreaterThan(-1);
+    const seedTimeGenerateStageIds = calls
+      .slice(0, firstProposalIdx)
+      .filter((c) => c.method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(c.path))
+      .map((c) => /^\/api\/v1\/stages\/([^/]+)\/generate$/.exec(c.path)![1]!);
+    // Every real stage id seen in this window is DISTINCT — never a count
+    // tied to how many divisions/stages this pack happens to declare (the
+    // DLS-gate probe mints and generates its own synthetic stage in this
+    // same window too, unconditionally — `dls-gate.ts:415`). The bug's own
+    // signature is not "the wrong total"; it is "one id repeats and another
+    // never appears" — so the number-of-distinct-ids-equals-number-of-calls
+    // check is what actually targets it, independent of how many other
+    // stages this pack or probe contribute.
+    const distinctSeedTimeIds = new Set(seedTimeGenerateStageIds);
+    expect(seedTimeGenerateStageIds.length).toBeGreaterThan(0);
+    expect(distinctSeedTimeIds.size).toBe(seedTimeGenerateStageIds.length);
+
+    // (2)/(3) — each division's stream bound to its OWN fixture, and
+    // advancement resolved the RIGHT source/target stage ids for EACH
+    // division. Both entries are present under the buggy flat map too — the
+    // failure is a WRONG value, not an absence — so the name/order assertion
+    // (proven correct above by the errors/id-set checks) is not enough on
+    // its own; `passed` must be checked too (AGENTS.md rule 19: pin what a
+    // control opens/seeds at, not just that it is reachable). Under the flat
+    // map, one division's advance resolves the OTHER division's real
+    // target stage and therefore compares against the OTHER division's real
+    // entrants — a mismatch, deterministically, for whichever division lost
+    // whatever `Promise.all` order produced (their entrant id sets are
+    // disjoint, so there is no coincidental pass).
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-playoff seed proposal qualifiers",
+    ]);
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // The captured `complete` response (D1 — the only time `finalRanks`
+    // crosses the wire) must belong to the CORRECT stage too: a wrong
+    // `targetStageId` would capture the wrong stage's completion.
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-playoff finalRanks",
+    ]);
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // B07a T7 — the runner DISPATCHES on the declared play mode.
 //

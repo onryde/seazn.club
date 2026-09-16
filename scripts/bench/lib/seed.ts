@@ -158,6 +158,28 @@ export const defaultTransport: SeedTransport = { signIn, request };
 // The result — pack ref -> real id, everywhere the plan declared a ref
 // ---------------------------------------------------------------------------
 
+/**
+ * Pre-B07b prerequisite (progress.md Ruling R26, task-6-review.md CRUX 2).
+ * Stage refs are unique only WITHIN one division — `pack-schema.ts`'s
+ * `checkRefsUnique` scopes its `seenStage` set to the per-division loop
+ * (pack-schema.ts:1746-1750), so two divisions may legally both declare
+ * `s-knockout`. `stageIdByRef` below is keyed by this composite pair, never
+ * a bare stage ref, for the identical reason `fixtureKey` exists for
+ * `fixtureIdByKey`.
+ *
+ * Built through JSON, never a delimiter join, for the SAME injectivity
+ * reason `fixtureKey`'s own header comment gives (pack-schema.ts:1624-1636):
+ * the contract is injectivity over arbitrary strings, and it must not
+ * quietly depend on `PackRef`'s current character class.
+ *
+ * ONE authority: every reader of `stageIdByRef` — in this file and in
+ * `run-suite.ts` — builds its key through this function, never through the
+ * bare ref, and never through a second hand-rolled format.
+ */
+export function stageKey(divisionRef: string, stageRef: string): string {
+  return JSON.stringify([divisionRef, stageRef]);
+}
+
 export interface SeededSuite {
   readonly orgId: string;
   readonly competitionId: string;
@@ -167,6 +189,8 @@ export interface SeededSuite {
   readonly venueIdByRef: ReadonlyMap<string, string>;
   readonly courtIdByRef: ReadonlyMap<string, string>;
   readonly divisionIdByRef: ReadonlyMap<string, string>;
+  /** Keyed by `stageKey(divisionRef, stageRef)`, defined just above — NEVER
+   *  by the bare stage ref, which two divisions may legally share. */
   readonly stageIdByRef: ReadonlyMap<string, string>;
   readonly personIdByRef: ReadonlyMap<string, string>;
   readonly entrantIdByRef: ReadonlyMap<string, string>;
@@ -667,7 +691,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
           `division "${d.ref}": POST .../stages returned ${stages.length} row(s) for ${d.stages.length} requested stage(s)`,
         );
       }
-      stages.forEach((row, i) => stageIdByRef.set(d.stages[i].ref, row.id));
+      stages.forEach((row, i) => stageIdByRef.set(stageKey(d.ref, d.stages[i].ref), row.id));
       stageRefsByDivisionRef.set(
         d.ref,
         d.stages.map((st) => st.ref),
@@ -685,7 +709,7 @@ export async function seedSuite(input: SeedSuiteInput): Promise<SeededSuite> {
       const stageRefs = stageRefsByDivisionRef.get(d.ref) ?? [];
       await Promise.all(
         stageRefs.map(async (stageRef) => {
-          const stageId = stageIdByRef.get(stageRef);
+          const stageId = stageIdByRef.get(stageKey(d.ref, stageRef));
           if (stageId === undefined) {
             throw new Error(`stage "${stageRef}" has no resolved id — POST .../stages did not return one`);
           }

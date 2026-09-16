@@ -28,6 +28,7 @@ import {
   runOfficialsAutoAssign,
   seedOfficialsAndClaims,
   seedSuite,
+  stageKey,
   type GeneratedFixtureRef,
   type RunOfficialsAutoAssignInput,
   type SeedOfficialsAndClaimsInput,
@@ -300,7 +301,7 @@ describe("seedSuite — single division, no venues (the _tiny shape)", () => {
     expect(result.venueIdByRef.size).toBe(0);
     expect(result.courtIdByRef.size).toBe(0);
     expect(result.divisionIdByRef.get("d1")).toBe("div-open-division");
-    expect(result.stageIdByRef.get("st1")).toBe("stage-league-one");
+    expect(result.stageIdByRef.get(stageKey("d1", "st1"))).toBe("stage-league-one");
     expect(result.personIdByRef.get("p1")).toBe("person-alice-anders");
     expect(result.entrantIdByRef.get("e1")).toBe("entrant-team-alpha");
     expect(result.entrantIdByRef.get("e2")).toBe("entrant-team-beta");

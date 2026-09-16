@@ -168,6 +168,7 @@ import {
   defaultTransport,
   runOfficialsAutoAssign,
   seedSuite,
+  stageKey,
   type ClaimInviteReadBack,
   type FixtureOfficialRow,
   type SeededSuite,
@@ -2231,7 +2232,7 @@ export async function runPackSuite(
       );
     }
     const divisionId = seeded.divisionIdByRef.get(division0.ref);
-    const stageId = seeded.stageIdByRef.get(stage0.ref);
+    const stageId = seeded.stageIdByRef.get(stageKey(division0.ref, stage0.ref));
     if (divisionId === undefined || stageId === undefined) {
       throw new Error(
         `${suiteKey}: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`,
@@ -2407,7 +2408,7 @@ export async function runPackSuite(
     for (const planned of seedPlan.divisions) {
       const plannedDivisionId = seeded.divisionIdByRef.get(planned.ref);
       const stage = planned.stages[0];
-      const plannedStageId = stage === undefined ? undefined : seeded.stageIdByRef.get(stage.ref);
+      const plannedStageId = stage === undefined ? undefined : seeded.stageIdByRef.get(stageKey(planned.ref, stage.ref));
       if (plannedDivisionId === undefined || stage === undefined || plannedStageId === undefined) {
         // Never silent: a division that was seeded and then not scheduled is
         // indistinguishable in a report from one that was scheduled cleanly.
@@ -3942,8 +3943,8 @@ export async function runPackSuite(
       sourceStage: SeedPlanStage,
       targetStage: SeedPlanStage,
     ): Promise<void> => {
-      const sourceStageId = seeded.stageIdByRef.get(sourceStage.ref);
-      const targetStageId = seeded.stageIdByRef.get(targetStage.ref);
+      const sourceStageId = seeded.stageIdByRef.get(stageKey(division.ref, sourceStage.ref));
+      const targetStageId = seeded.stageIdByRef.get(stageKey(division.ref, targetStage.ref));
       if (sourceStageId === undefined || targetStageId === undefined) {
         errors.push(
           `${suiteKey}: division "${division.ref}" declares a progression-fed stage "${targetStage.ref}" but one of ` +
@@ -4502,7 +4503,7 @@ export async function runPackSuite(
 
       const standingsByDivision = new Map<string, ReadonlyMap<string, Record<string, number>>>();
       for (const table of pack.expected.tables) {
-        const tableStageId = seeded.stageIdByRef.get(table.stageRef);
+        const tableStageId = seeded.stageIdByRef.get(stageKey(table.divisionRef, table.stageRef));
         if (tableStageId === undefined) {
           errors.push(
             `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names a stage ref with no resolved id`,
