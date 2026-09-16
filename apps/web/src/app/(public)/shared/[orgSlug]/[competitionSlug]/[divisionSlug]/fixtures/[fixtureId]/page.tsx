@@ -24,6 +24,7 @@ import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { ExternalPlayCta } from "@/components/public-site/external-play-cta";
+import { ExternalPlayLobby } from "@/components/public-site/external-play-lobby";
 import { fixtureSubheading } from "./fixture-subheading";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
@@ -340,7 +341,27 @@ export default async function FixturePage({ params }: Props) {
           ) : null;
         })()}
 
-        {data.externalPlay ? (
+        {data.externalPlay &&
+        (data.externalPlay.status === "pending" || data.externalPlay.status === "ready") ? (
+          <ExternalPlayLobby
+            fixtureId={fixtureId}
+            signInHref={`/login?next=${encodeURIComponent(`/shared/${orgSlug}/${competitionSlug}/${divisionSlug}/fixtures/${fixtureId}`)}`}
+            copy={{
+              ready: t(ui, "externalPlay.lobby.ready"),
+              youReady: t(ui, "externalPlay.lobby.youReady"),
+              opponentReady: t(ui, "externalPlay.lobby.opponentReady"),
+              waiting: t(ui, "externalPlay.lobby.waiting"),
+              countdown: t(ui, "externalPlay.lobby.countdown"),
+              missed: t(ui, "externalPlay.lobby.missed"),
+              signIn: t(ui, "externalPlay.lobby.signIn"),
+              signInCta: t(ui, "externalPlay.lobby.signInCta"),
+              play: t(ui, "externalPlay.playOnLichess"),
+              failed: t(ui, "externalPlay.lobby.failed"),
+            }}
+          />
+        ) : null}
+
+        {data.externalPlay && data.externalPlay.status !== "pending" ? (
           <ExternalPlayCta
             externalPlay={data.externalPlay}
             scheduledLabel={

@@ -221,6 +221,68 @@ export async function resolveRealtimeMintKey(): Promise<MintKey> {
  * Header must include `kid` when signing with an asymmetric key so Realtime
  * can pick the matching JWKS entry.
  */
+/** Private lobby topic. Not the paid `fixture:{id}` score channel. */
+export function externalPlayLobbyTopic(fixtureId: string): string {
+  return `external-play:${fixtureId}`;
+}
+
+/**
+ * Subscriber JWT for the online-play lobby. Same fixture_id claim shape as the
+ * score channel so Realtime Authorization can bind the topic. The route only
+ * mints this for a player on the fixture — not for the paid realtime add-on.
+ */
+export async function mintExternalPlayLobbyToken(
+  fixtureId: string,
+  userId: string,
+  ttlSeconds = 3600,
+): Promise<string> {
+  const { key, alg, kid } = await resolveRealtimeMintKey();
+  const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
+  if (kid) header.kid = kid;
+  return new SignJWT({
+    role: "authenticated",
+    sub: userId,
+    fixture_id: fixtureId,
+  })
+    .setProtectedHeader(header)
+    .setIssuedAt()
+    .setExpirationTime(`${ttlSeconds}s`)
+    .setAudience("authenticated")
+    .sign(key);
+}
+
+/** Tell the other lobby screen that Ready changed. Fire-and-forget. */
+export async function publishExternalPlayLobby(fixtureId: string): Promise<void> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return;
+  try {
+    const res = await fetch(`${url}/realtime/v1/api/broadcast`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+        apikey: key,
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            topic: externalPlayLobbyTopic(fixtureId),
+            event: "lobby_changed",
+            payload: { v: Date.now() },
+            private: true,
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[realtime] lobby broadcast failed (${res.status}) for ${fixtureId}`);
+    }
+  } catch (err) {
+    console.warn("[realtime] lobby broadcast error:", err);
+  }
+}
+
 export async function mintPublicFixtureToken(
   fixtureId: string,
   ttlSeconds = 3600,

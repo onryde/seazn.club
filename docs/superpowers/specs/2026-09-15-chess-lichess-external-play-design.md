@@ -18,11 +18,15 @@ time, and write the finished result back into the normal scoring pipeline.
   standings stay authoritative.
 - Players **link a Lichess account** on their profile; enrollment into an
   online-Lichess division **requires** that link.
-- At **T−15 minutes** before each fixture’s scheduled start, Seazn creates a
-  Lichess challenge (correct opponents, colour, clock) and **emails both
-  players a Seazn fixture link**.
-- Soft pre-window: players may open Play early within that window; the game
-  starts on Lichess only when **both** have joined.
+- At **T−15 minutes** before each fixture’s scheduled start, Seazn **emails
+  both players a Seazn lobby link**. It does not create a Lichess challenge
+  then. A direct Lichess challenge expires 20 seconds after creation unless a
+  stream is held open, so a link minted at T−15 is already dead.
+- Being on the page is not enough. Each player clicks **Ready**. When **both**
+  have clicked, Seazn mints the challenge as White and both screens get Play
+  plus a **20-second countdown**. If that window passes and the game has not
+  started, both Ready clicks are cleared and they click Ready again. A started
+  game never returns to Ready.
 - When Lichess reports game start → fixture becomes live in Seazn.
 - When Lichess reports a clean finish → Seazn appends the normal boardgame
   `result` score event.
@@ -47,12 +51,20 @@ time, and write the finished result back into the normal scoring pipeline.
 3. Organiser sets division **online play = Lichess** and a clock
    (`Cfg.clock` / variant as today — metadata already on boardgame).
 4. Seazn pairs the round as today (Swiss, colours; home = White).
-5. At **T−15**: job creates Lichess challenge per fixture, stores external-play
-   state, sends email with **Seazn fixture URL** (not a raw Lichess URL as the
-   durable link).
-6. Fixture page shows **Play on Lichess** once the challenge is ready.
-7. One player may wait in the Lichess lobby until the opponent joins.
-8. Lichess game start → Seazn marks fixture started.
+5. At **T−15**: job emails both players the **Seazn fixture URL** (not a raw
+   Lichess URL). No challenge is created. Enrollment already required a claimed
+   profile and a Lichess link; the email does not create either.
+6. Each signed-in player opens that page and clicks **Ready**. Realtime on
+   `external-play:{fixtureId}` tells the other screen that the click happened.
+   Presence alone does not mint.
+7. When both Ready clicks are stored, the server mints one direct challenge
+   (White’s token, home = White). Both screens show Play and a 20-second
+   countdown. If the countdown ends and the fixture is not `live`, both Ready
+   flags are cleared and the buttons come back. Clicking Ready again mints a
+   new link and restarts the countdown. `live`, `finished`, and
+   `needs_organiser` never mint again. Opening the link is not what stops it.
+8. Lichess game start (poll, or our workflow’s signed webhook) → Seazn marks
+   the fixture `live` and appends `core.start`. That flip is what stops minting.
 9. Clean Lichess finish → map to boardgame `result` → existing scoring usecase
    → standings.
 10. Abort / no-show / unfinished / account mismatch → `needs_organiser`.
@@ -63,8 +75,10 @@ time, and write the finished result back into the normal scoring pipeline.
 [Profile OAuth] ──► linked Lichess identity on person
 [Division cfg]  ──► onlinePlay: lichess | off
 [Pairing]       ──► fixtures (unchanged)
-[T−15 job]      ──► Lichess adapter.createChallenge(fixture)
-                ──► persist external_play row + email Seazn link
+[T−15 job]      ──► email Seazn lobby link (no Lichess challenge)
+[Lobby]         ──► each player clicks Ready (Realtime tells the other screen)
+                ──► both Ready → adapter.createChallenge as White
+                ──► 20s countdown; miss → clear Ready and ask again
 [Webhook/poll]  ──► adapter.mapResult(game) ──► scoring.append(result)
                 ──► or mark needs_organiser
 [Organiser UI]  ──► manual forfeit / draw / no-result on queued fixtures
@@ -105,6 +119,7 @@ Per fixture (when online play is on):
 | `play_url` | Current challenge/game URL for the Play button |
 | `status` | `pending` → `ready` → `live` → `finished` \| `needs_organiser` |
 | `last_error` | Optional create/sync failure detail |
+| `white_ready_at` / `black_ready_at` | Set when that side clicks Ready; cleared when the 20s window is missed |
 | `started_at` / `finished_at` | From provider signals |
 
 Exact table vs JSON column is an implementation choice; the fixture remains the
@@ -115,11 +130,9 @@ join key.
 - Create challenge between the two linked accounts with Seazn-assigned colour
   (home = White) and mapped time control.
 - **Auth model (v1):** Seazn’s Lichess OAuth app stores each player’s token.
-  At T−15, create the challenge **as White** (home) challenging Black, using
-  White’s token; persist the challenge URL / accept URL so Black can join
-  without White being online in Seazn. If White’s token is missing/revoked,
-  leave fixture `pending`/`needs_organiser` rather than challenging as Black
-  and flipping colours.
+  Mint the challenge **as White** (home) challenging Black, using White’s
+  token, only when both players have clicked Ready on the lobby. If White’s
+  token is missing/revoked, do not mint and do not flip colours.
 - Create games as **unrated/casual** by default (club comps must not surprise
   players’ Lichess ratings).
 - Expose current play URL for the fixture page (per side if accept URLs differ).
@@ -128,18 +141,25 @@ join key.
   method from Lichess termination when available).
 - **Reject** auto-apply if Lichess player ids do not match the linked accounts
   for that fixture.
-- Recreate challenge if expired and fixture not yet live (fixture page always
-  shows current Play target; do not re-spam email unless organiser resends).
+- If the 20-second window passes and the game has not started, clear both
+  Ready clicks. The next mint happens only when both click Ready again.
+  Do not recreate after `live` (game started), `finished`, or
+  `needs_organiser`. Do not treat “opened the link” as started — Lichess does
+  not report that click. Do not re-spam email unless the organiser resends.
 
 ## 8. Jobs & notifications
 
 | When | Action |
 |---|---|
-| T−15 before `fixture.scheduled_at` | Create/refresh challenge; set `ready`; email both players Seazn fixture link |
-| Ongoing | Poll/webhook: `ready` → `live` on start; `live` → `finished` or `needs_organiser` |
+| T−15 before `fixture.scheduled_at` | Email both players the Seazn lobby URL. No challenge yet. Status stays `pending`. |
+| Both players click Ready | Mint challenge as White; set `ready`; show Play and a 20-second countdown. |
+| Countdown ends, still not `live` | Clear both Ready clicks. Ask them to click Ready again, then mint a new link. |
+| Ongoing | Poll, or `POST /api/webhooks/lichess` signed with HMAC `x-lichess-signature` (`LICHESS_WEBHOOK_SECRET`, not a Lichess setting): `ready` → `live` on start; `live` → `finished` or `needs_organiser` |
 | Scheduled start + 20 min, still not `live` | Escalate to `needs_organiser` (organiser confirms forfeit / rewrite) |
-| Challenge create failure | Remain `pending`; retry with backoff; defer email until `ready` |
+| Challenge create failure | Stay `pending`; clear Ready so both click again. Email already sent is not repeated |
 
+The cron (`POST /api/cron/external-play`, `x-cron-secret`) is what polls Lichess.
+The webhook is our workflow poking the same path, not Lichess calling us.
 Emails point at Seazn so expired Lichess URLs are not the durable handle.
 
 ## 9. Scoring integration
@@ -156,8 +176,10 @@ Emails point at Seazn so expired Lichess URLs are not the durable handle.
 
 - Profile: Link / unlink Lichess.
 - Enrollment: block with clear CTA if online-Lichess division and no link.
-- Fixture (players): countdown / soft window; **Play on Lichess** when `ready`
-  or `live`; status when waiting / finished / needs organiser.
+- Fixture (players): **Ready** button for each signed-in player; Play and a
+  20-second countdown only after both have clicked; Ready again if that window
+  is missed. Lobby token is for the two matched players only and does not use
+  the paid `realtime` entitlement.
 - Organiser: division toggle for online play; needs-result queue; optional
   resend notification; manual result entry for queued fixtures.
 - OTB pad path unchanged when `onlinePlay` is off.
@@ -167,8 +189,9 @@ Emails point at Seazn so expired Lichess URLs are not the durable handle.
 | Case | Behaviour |
 |---|---|
 | Unlinked at enrollment | Block |
-| Lichess create fails | `pending`, retry, no email yet |
-| Challenge expired, not started | Recreate on job or fixture open |
+| Lichess create fails | Stay `pending`; email may already have gone out; mint again when both are present |
+| Challenge expired, not started | Clear both Ready clicks. Remint only after both click Ready again. Never remint if `live` / `finished` / `needs_organiser` |
+| One player opens Play, the other does not accept within 20s | Not a lock. Countdown ends, Ready buttons return |
 | One no-show past grace | `needs_organiser` |
 | Clean finish | Auto `result` |
 | Abort / unfinished | `needs_organiser` |
@@ -180,8 +203,9 @@ Emails point at Seazn so expired Lichess URLs are not the durable handle.
 
 - **Unit:** clock → Lichess time control; game payload → boardgame `result`;
   mismatch rejection.
-- **Integration:** T−15 job persistence + email-after-ready; webhook/poll
-  through real scoring usecase (prove the seam, not a fixture-only fake).
+- **Integration:** T−15 email without a challenge; mint only when both sides
+  are present; a second mint inside 20 seconds returns the same URL; `live`
+  refuses mint; webhook/poll through real scoring usecase.
 - **E2E:** linked player Play button; unlinked enrollment blocked; organiser
   queue path.
 - **Regression:** online play off — pairings + manual/pad result unchanged.

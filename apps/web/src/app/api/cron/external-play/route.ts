@@ -10,8 +10,10 @@ import {
 
 /** POST /api/cron/external-play — every ~5 min (chess Lichess design 2026-09-15):
  *  T−15 challenge prepare + play-ready email, poll ready/live games, then
- *  escalate T+20 no-shows. Wire in onryde/seazn.club.workflow (external).
- *  Cron-shaped like /api/cron/registrations: x-cron-secret header (CRON_SECRET). */
+ *  escalate T+20 no-shows. Wire in onryde/seazn.club.workflow.
+ *  Cron-shaped like /api/cron/registrations: x-cron-secret header (CRON_SECRET).
+ *  Game callbacks are not this route — they POST /api/webhooks/lichess with
+ *  HMAC `x-lichess-signature` (see webhook-signature.ts). */
 export async function POST(req: Request) {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;

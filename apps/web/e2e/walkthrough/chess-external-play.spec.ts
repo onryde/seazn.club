@@ -113,10 +113,11 @@ test("needs_organiser queue: organiser can resolve from division page", async ({
     timeout: 20_000,
   });
 
-  const state = await apiJson<{ status: string }>(
+  const state = await apiJson<{ status: string; outcome: { kind?: string } | null }>(
     page.request,
     `/api/v1/fixtures/${fx.fixtureId}/state`,
   );
   expect(state.status).toBe(200);
   expect(state.data?.status).toBe("decided");
+  expect(state.data?.outcome).toMatchObject({ kind: "draw" });
 });

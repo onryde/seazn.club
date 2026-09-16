@@ -160,6 +160,9 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}/state", method: "get", summary: "Live state (ETag = ledger seq)", tag: "scoring", response: S.FixtureState },
   { path: "/fixtures/{id}/finalize", method: "post", summary: "Lock the ledger (core.finalize)", tag: "scoring", request: z.object({ expected_seq: z.number().int().min(0) }), response: S.AppendEventResponse, errors: [409, 422] },
   { path: "/fixtures/{id}/external-play/resolve", method: "post", summary: "Organiser settles an online-play needs_organiser fixture (forfeit / draw / no-result) via the normal scoring path", tag: "fixtures", request: S.ResolveExternalPlay, response: S.ResolveExternalPlayOut, errors: [404, 409, 422] },
+  { path: "/fixtures/{id}/external-play/resend", method: "post", summary: "Re-email the Seazn fixture URL for an online-play fixture (does not mint a new Lichess challenge)", tag: "fixtures", response: z.object({ emailed: z.number().int() }), errors: [404, 409, 422] },
+  { path: "/fixtures/{id}/external-play/lobby", method: "get", summary: "Online-play lobby for a player on the fixture (Ready clicks, countdown). Session only.", tag: "fixtures", errors: [401, 403] },
+  { path: "/fixtures/{id}/external-play/lobby", method: "post", summary: "Click Ready. Mints the Lichess challenge when the other side has also clicked.", tag: "fixtures", errors: [401, 403, 422] },
   // Device links (doc 13 §7, PROMPT-21)
   { path: "/fixtures/{id}/device-links", method: "post", summary: "Mint a day-of device link (editor session only; secret shown once; revokes prior active links; expiry = end of the fixture's local day)", tag: "device-links", request: S.CreateDeviceLink, response: S.CreatedDeviceLink, status: 201, errors: [402, 422, 429] },
   { path: "/fixtures/{id}/device-links", method: "get", summary: "The fixture's active device link, if any (never the secret)", tag: "device-links", response: S.DeviceLink.nullable() },

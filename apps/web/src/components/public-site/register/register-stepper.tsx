@@ -169,7 +169,11 @@ export function RegisterStepper({
   // server message, still shown, but only ever as secondary text — server
   // errors are English-only by design (no server-side i18n), so it must
   // never be the primary thing a registrant reads.
-  const [submitError, setSubmitError] = useState<{ kind: SubmitFailureKind; detail: string } | null>(null);
+  const [submitError, setSubmitError] = useState<{
+    kind: SubmitFailureKind;
+    detail: string;
+    code?: string;
+  } | null>(null);
   // Review finding #2 (MEDIUM) — focus management across step transitions.
   // `containerRef` scopes the DOM query the focus effect below runs
   // (mirrors modal.tsx's own `dialogRef`/`querySelectorAll` pattern);
@@ -414,6 +418,7 @@ export function RegisterStepper({
       setSubmitError({
         kind: classifySubmitFailure(status),
         detail: err instanceof Error ? err.message : String(err),
+        code: err instanceof ApiV1Error ? err.code : undefined,
       });
       setSubmitting(false);
     }
@@ -498,7 +503,16 @@ export function RegisterStepper({
               {/* Secondary — the raw detail, de-emphasized: useful context
                   (e.g. "another checkout was just started"), never the
                   primary thing read. */}
-              <p className="text-xs text-ink-muted">{submitError.detail}</p>
+              {submitError.code === "LICHESS_LINK_REQUIRED" ? (
+                <p className="text-sm text-ink">
+                  {t("register.lichessLinkRequired")}{" "}
+                  <a href="/api/auth/lichess" className="font-medium underline" data-testid="register-lichess-link">
+                    {t("register.lichessLinkCta")}
+                  </a>
+                </p>
+              ) : (
+                <p className="text-xs text-ink-muted">{submitError.detail}</p>
+              )}
             </div>
           )}
         </>
