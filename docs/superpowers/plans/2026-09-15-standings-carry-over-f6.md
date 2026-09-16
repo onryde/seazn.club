@@ -293,6 +293,7 @@ EOF
 - Modify: `docs/superpowers/specs/2026-08-17-format-progression-prompts/_INDEX.md` — mark F6 shipped / link this plan+spec
 - Verify: typecheck/lint on touched packages
 
+<<<<<<< HEAD
 - [x] **Step 1: Update F6 row status** to implemented with PR placeholder / commit SHAs when known.
 
 - [x] **Step 2: Run focused gates**
@@ -310,6 +311,22 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/f6-carry-over/apps/web &
 ```
 
 - [x] **Step 3: Commit docs**
+=======
+- [ ] **Step 1: Update F6 row status** to implemented with PR placeholder / commit SHAs when known.
+
+- [ ] **Step 2: Run focused gates**
+
+```bash
+cd <worktree>/apps/web && pnpm exec vitest run \
+  src/server/usecases/__tests__/progression-schema.test.ts \
+  src/server/usecases/__tests__/custom-points.test.ts \
+  src/server/usecases/__tests__/progression-multi-source.test.ts \
+  --reporter=json --outputFile=/tmp/f6-gate.json
+# confirm numFailedTests === 0 and names under worktree
+```
+
+- [ ] **Step 3: Commit docs**
+>>>>>>> b944acdfd (adding design doc)
 
 ---
 
