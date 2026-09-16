@@ -25,7 +25,7 @@
 //  - a device (scorer) page cannot finalize (`scoring.ts:233-235`): a
 //    finalize tapped there writes nothing.
 import { readdirSync, readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DOCK_CHIP_TESTID_PREFIX,
   FINALIZE_TESTID,
@@ -708,26 +708,54 @@ describe("TAP_PACING_MS", () => {
 // hand-typed true/false table) to derive each sample's expected outcome, so a
 // change in WHAT counts as "named" reds this test even if nobody edits the
 // two sample values below (AGENTS.md class 19).
+//
+// Fix round 1 (Ruling R80, minors-B-review.md Check 4 / Important): the
+// extraction used to run in the describe BODY and `throw` on a non-match —
+// at describe-COLLECTION time, not inside an `it`. A whitespace-only
+// reformat of generic.tsx's one source line (a routine prettier-style wrap,
+// zero behaviour change) made the single-line regex miss, the describe-body
+// `throw` fired during COLLECTION, and that took the WHOLE FILE's collection
+// down with it: the JSON gate then read `numFailedTests: 0` while the suite
+// total silently dropped from 1839 to 1749 (reviewer's repro). Fixed two
+// ways: (1) the read + extraction now happens in `beforeAll`, and any
+// failure to extract surfaces as an ordinary assertion failure inside an
+// `it`, never a collection-time throw, so the rest of this file (and the
+// other 54) always collects; (2) the regex spans newlines (`[\s\S]+?`) and
+// the captured text is whitespace-normalized (runs of whitespace collapsed,
+// a stray trailing comma stripped) before comparing or evaluating it, so a
+// line-wrap or extra-whitespace reformat still matches — only a REAL
+// semantic change (a different operator, a different length threshold, a
+// renamed field, `named` disappearing entirely) reds anything, and it reds
+// only the tests in THIS describe, never the file's other ~89.
+//
+// What this pin cannot see: a semantics-preserving rewrite that stops being
+// textually anchored by `const named = ...;` (moved to a different variable
+// name, inlined directly into the `roster` line, extracted to a helper
+// function, or reordered into an equivalent-but-differently-worded
+// expression like `Boolean(payload?.person) && ...`) either escapes this
+// pin entirely (silently, if `named` still exists elsewhere unchanged) or
+// reds it as a false alarm (if the anchor line survives with reordered but
+// equivalent operands) — this regex proves ONE specific line's text, not
+// "whatever `buildDock` currently decides is a named person."
 // ---------------------------------------------------------------------------
 describe("the tolerated person value is pinned to the product's own \"named\" check (generic.tsx:701)", () => {
-  const genericSource = readFileSync(
-    new URL("../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx", import.meta.url),
-    "utf8",
-  );
-  const namedMatch = /const named = (.+?);/.exec(genericSource);
-  const namedExpr = namedMatch?.[1];
+  let namedExpr: string | undefined;
 
-  it('reads the exact "named" expression buildDock uses today', () => {
-    expect(namedExpr).toBe('typeof payload?.person === "string" && payload.person.length > 0');
+  beforeAll(() => {
+    const genericSource = readFileSync(
+      new URL("../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx", import.meta.url),
+      "utf8",
+    );
+    const match = /const\s+named\s*=\s*([\s\S]+?);/.exec(genericSource);
+    namedExpr = match?.[1]
+      .replace(/,\s*$/, "")
+      .replace(/\s+/g, " ")
+      .trim();
   });
 
-  if (namedExpr === undefined) {
-    throw new Error('generic.tsx\'s "named" check no longer matches this regex — re-pin scorer-driver.test.ts (item b)');
-  }
-  // Test-only: runs the pad's real check straight off its source text, so a
-  // changed rule moves with it instead of a hand-typed copy silently going
-  // stale.
-  const productNamed = new Function("payload", `return ${namedExpr};`) as (payload: { person?: unknown }) => boolean;
+  it('reads the exact "named" expression buildDock uses today, tolerant of reformatting', () => {
+    expect(namedExpr).toBe('typeof payload?.person === "string" && payload.person.length > 0');
+  });
 
   it.each([
     ["a real name", "p-solo"],
@@ -736,7 +764,15 @@ describe("the tolerated person value is pinned to the product's own \"named\" ch
     ["null", null],
     ["undefined", undefined],
   ] as const)("agrees with the product's own check for %s", async (_label, person) => {
+    if (namedExpr === undefined) {
+      throw new Error('generic.tsx\'s "named" check no longer matches this regex — re-pin scorer-driver.test.ts (item b)');
+    }
+    // Test-only: runs the pad's real check straight off its source text, so
+    // a changed rule moves with it instead of a hand-typed copy silently
+    // going stale.
+    const productNamed = new Function("payload", `return ${namedExpr};`) as (payload: { person?: unknown }) => boolean;
     const expectedNamed = productNamed({ person });
+
     const { result } = await play([START, scoreBy(HOME_REF)], SCORE_CFG, {
       recordedPayloadOverride: new Map([[1, { by: HOME_ID, points: 1, person }]]),
     });
