@@ -203,20 +203,26 @@ const DIAGRAMS: Record<string, () => React.ReactNode> = {
       </text>
     </Frame>
   ),
+  // Three columns, left to right: the swiss block, then the Page playoff's
+  // two round-1 games, then Qualifier 2 and the Final. Every arrow is
+  // labelled with WHICH side travels it — a Page playoff read wrong is the
+  // whole point of the picture, so the Qualifier 1 winner must visibly go
+  // straight to the Final and its loser must visibly drop to Qualifier 2.
+  // Keep every x inside the Frame's 520-wide viewBox.
   swiss_playoff: () => (
-    <Frame height={190}>
-      <Node x={16} y={20} w={128} label="Swiss rounds" sub="paired on the table" />
-      <Arrow x1={146} y1={37} x2={196} y2={37} />
-      <Node x={198} y={20} w={128} label="1v2 · 3v4 · 5v6" sub="neighbours meet" />
-      <Arrow x1={262} y1={56} x2={262} y2={96} label="top 4" />
-      <Node x={16} y={104} w={118} label="Qualifier 1" sub="1st × 2nd" />
-      <Node x={198} y={104} w={118} label="Eliminator" sub="3rd × 4th" />
-      <Arrow x1={134} y1={121} x2={196} y2={121} label="loser" />
-      <Arrow x1={316} y1={130} x2={352} y2={130} label="winner" />
-      <Node x={354} y={104} w={94} label="Qualifier 2" />
-      <Arrow x1={134} y1={112} x2={400} y2={98} label="winner" />
-      <Node x={354} y={60} w={94} label="Final" accent />
-      <text x={16} y={180} className="fill-slate-400 text-[10px]">
+    <Frame height={180}>
+      <Node x={14} y={58} w={140} label="Swiss rounds" sub="1v2 · 3v4 · 5v6" />
+      <Arrow x1={156} y1={68} x2={196} y2={36} label="1st/2nd" />
+      <Arrow x1={156} y1={84} x2={196} y2={122} label="3rd/4th" />
+      <Node x={198} y={18} w={118} label="Qualifier 1" sub="1st × 2nd" />
+      <Node x={198} y={106} w={118} label="Eliminator" sub="3rd × 4th" />
+      <Arrow x1={318} y1={30} x2={356} y2={30} label="winner" />
+      <Arrow x1={318} y1={48} x2={356} y2={116} label="loser" />
+      <Arrow x1={318} y1={123} x2={356} y2={123} label="winner" />
+      <Node x={358} y={106} w={118} label="Qualifier 2" sub="second chance" />
+      <Node x={358} y={18} w={118} label="Final" accent />
+      <Arrow x1={417} y1={104} x2={417} y2={56} />
+      <text x={14} y={168} className="fill-slate-400 text-[10px]">
         Nobody is eliminated until the last four; the top two then get a second life.
       </text>
     </Frame>
