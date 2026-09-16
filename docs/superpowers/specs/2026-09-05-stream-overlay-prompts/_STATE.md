@@ -25,27 +25,25 @@ orchestrator commits (implementers never commit).
 - Plan amendment Tasks 7 / 7A (staff Match credits panel) → `36a9132e6` (plan file only).
 - Task 2C runner table → `a49e3f4ff` + fix rounds `a21913582` (1), `292ac278b` (2+3), `56b29d971` (4),
   `30560cf9a` (5, FINAL). Domain 212/212/0, relay-with-DB 262/262/0, tsc/eslint 0.
+  **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
+  comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Task 2C scoped RE-REVIEW 3 of round 5 → writes
-`.superpowers/sdd/2026-09-13-streaming-r1/task-2C-rereview-3.md`. All 5 fix rounds are used: if it reports
-open findings, the orchestrator ADJUDICATES each (load-bearing → rule a fix; else park in ledger as carry),
-then writes `Task 2C: complete`. If the file is missing/partial after a compaction, re-dispatch the re-review
-(inputs: task-2C-rereview-2.md, report "## Fix round 5", `git diff 56b29d971 30560cf9a`).
+**In flight at time of writing:** nothing dispatched.
 
 **Next, in order:**
-1. Close 2C (above). Update MEMORY.md streaming line.
-2. Plan drafter pass BEFORE Task 7 (plan text owed): G1 `beat_window_at` — V408 column at Task 7 Step 0c,
+1. Plan drafter pass BEFORE Task 7 (plan text owed): G1 `beat_window_at` — V408 column at Task 7 Step 0c,
    persist (plan≈10361) + row select/mapper (≈10306, ≈10315), backdate it WITH `heartbeat_at` in DB tests
    plan≈10176–10195 and ≈11730–11745, add a DB test that two reads in one window re-issue force_destroy for a
    lost runner exactly once; runner table text L231–240 (C1 stale_beat column, lost × create_ok/create_failed,
    lost × grace_expired/orphan_listed stay lost, destroyed × create_ok → lost, creating row "no grace clock"
    superseded); 2C Step 6 counts (actual 212). Verify landing lines by grep, commit plan-only.
-3. Lane A: Tasks 3 → 4 → 5A → 5 → 6 (sequential dispatch), lane-A reviewer, orchestrator full gate (JSON vs floor).
-4. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
-5. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
+2. Lane A: Tasks 3 → 4 → 5A → 5 → 6 (sequential dispatch), lane-A reviewer, orchestrator full gate (JSON vs floor).
+3. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
+4. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
 
-**Owed by the owner:** `FLY_API_TOKEN=` in `apps/web/.env.local` before Task 5A's live test (0 in both env
-files as of 2026-09-16). Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
+**FLY_API_TOKEN:** owner says "Added already" (2026-09-16). Key-name check (names only): present in ROOT
+`.env.local`, ABSENT in `apps/web/.env.local`. Task 5A must confirm which file its live test loads; if it reads
+apps/web's, ask the owner to add it there too. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
 
 **Owner decisions this session (owner's words):**
 - "FLY_API_TOKEN -Ok" — the env var is named `FLY_API_TOKEN` (not FLY_IO_TOKEN).
