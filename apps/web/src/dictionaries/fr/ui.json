@@ -942,6 +942,7 @@
   "settings.account.lichess.flash.token": "Lichess a refusé la liaison. Réessayez.",
   "settings.account.lichess.flash.account": "Impossible de lire votre profil Lichess. Réessayez.",
   "settings.account.lichess.flash.not_configured": "La liaison Lichess n'est pas encore configurée sur ce serveur.",
+  "settings.account.lichess.flash.already_linked": "Ce compte Lichess est déjà lié à un autre compte Seazn.",
   "settings.account.export": "Exporter vos données",
   "settings.account.downloadJson": "Télécharger le JSON",
   "settings.account.exportDesc": "Téléchargez une copie de votre profil, de vos organisations et de vos tournois.",

@@ -40,6 +40,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 const upsertLichessLink = vi.hoisted(() => vi.fn());
 vi.mock("@/server/usecases/external-accounts", () => ({ upsertLichessLink }));
 
+import { HttpError } from "@/lib/errors";
 import { pkceChallenge } from "@/server/external-play/pkce";
 import { GET } from "../route";
 import { GET as CALLBACK } from "../callback/route";
@@ -154,5 +155,102 @@ describe("GET /api/auth/lichess/callback", () => {
     const loc = path(res.headers.get("location")!);
     expect(loc.pathname).toBe("/me");
     expect(loc.searchParams.get("lichess")).toBe("oauth_state");
+  });
+
+  // Fix round 1 (review, minor #1): the CSRF-relevant half of the guard —
+  // cookie state present but not equal to the query state — was reachable
+  // only through the combined boolean; nothing pinned it in isolation.
+  it("refuses on state mismatch, before any network call", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const res = await CALLBACK(
+      new Request("http://localhost/api/auth/lichess/callback?code=c&state=other"),
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/me");
+    expect(loc.searchParams.get("lichess")).toBe("oauth_state");
+  });
+
+  // Fix round 1 (review, minor #2): a THROWN fetch (network error / abort
+  // timeout) is a different failure mode than a non-ok response and used to
+  // reach neither `fail(...)` branch — it propagated as a raw 500.
+  it("token fetch throwing (timeout) redirects lichess=token, and never calls /api/account", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(url);
+        if (url.endsWith("/api/token") && init.method === "POST") {
+          throw new DOMException("The operation timed out.", "TimeoutError");
+        }
+        return new Response(null, { status: 500 });
+      }),
+    );
+
+    const res = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"));
+
+    expect(calls.some((u) => u.endsWith("/api/account"))).toBe(false);
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/me");
+    expect(loc.searchParams.get("lichess")).toBe("token");
+  });
+
+  it("account fetch throwing (network error) still revokes and redirects lichess=account", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    const calls: [string, RequestInit][] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push([url, init]);
+        if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "tok" });
+        if (url.endsWith("/api/account")) throw new TypeError("fetch failed");
+        if (url.endsWith("/api/token") && init.method === "DELETE") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      }),
+    );
+
+    const res = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"));
+
+    expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE")).toBe(true);
+    expect(upsertLichessLink).not.toHaveBeenCalled();
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/me");
+    expect(loc.searchParams.get("lichess")).toBe("account");
+  });
+
+  // Fix round 1 (review, Important): V405's second unique constraint —
+  // never let a second user steal an already-linked Lichess account.
+  it("already_linked when upsert rejects with the collision code, and still revokes", async () => {
+    cookieJar.set(STATE_COOKIE, "st");
+    cookieJar.set(VERIFIER_COOKIE, "ver");
+    upsertLichessLink.mockRejectedValueOnce(
+      new HttpError(409, "That Lichess account is already linked to a different Seazn account.", "LICHESS_ALREADY_LINKED"),
+    );
+    const calls: [string, RequestInit][] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push([url, init]);
+        if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "tok" });
+        if (url.endsWith("/api/account")) return Response.json({ id: "alice", username: "Alice" });
+        if (url.endsWith("/api/token") && init.method === "DELETE") return new Response(null, { status: 204 });
+        return new Response(null, { status: 500 });
+      }),
+    );
+
+    const res = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=st"));
+
+    expect(calls.some(([u, i]) => u.endsWith("/api/token") && i.method === "DELETE")).toBe(true);
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/me");
+    expect(loc.searchParams.get("lichess")).toBe("already_linked");
   });
 });

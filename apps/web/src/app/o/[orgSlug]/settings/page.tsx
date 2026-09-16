@@ -299,7 +299,8 @@ export default async function SettingsPage({
       : lichess === "oauth_state" ||
           lichess === "token" ||
           lichess === "account" ||
-          lichess === "not_configured"
+          lichess === "not_configured" ||
+          lichess === "already_linked"
         ? (`settings.account.lichess.flash.${lichess}` as const)
         : null;
   const lichessMessage = lichessMessageKey ? t(dict, lichessMessageKey) : null;

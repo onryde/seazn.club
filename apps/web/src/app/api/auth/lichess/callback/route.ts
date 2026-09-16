@@ -11,6 +11,7 @@ import {
 } from "@/lib/oauth";
 import { requireUser, safeNextPath } from "@/lib/auth";
 import { redirectLocal } from "@/lib/http";
+import { HttpError } from "@/lib/errors";
 import { upsertLichessLink } from "@/server/usecases/external-accounts";
 import { LICHESS_TIMEOUT_MS } from "@/server/external-play/window";
 
@@ -63,37 +64,58 @@ export async function GET(req: Request) {
   // failing — not only the happy path.
   let accessToken: string | undefined;
   try {
-    const tokenRes = await fetch(LICHESS_TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: lichessRedirectUri(req),
-        client_id: process.env.LICHESS_CLIENT_ID as string,
-        code_verifier: verifier,
-      }),
-      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
-    });
-    if (!tokenRes.ok) return fail(next, "token");
-
-    const tokenJson = (await tokenRes.json()) as { access_token?: string };
+    let tokenJson: { access_token?: string };
+    try {
+      const tokenRes = await fetch(LICHESS_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: lichessRedirectUri(req),
+          client_id: process.env.LICHESS_CLIENT_ID as string,
+          code_verifier: verifier,
+        }),
+        signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+      });
+      if (!tokenRes.ok) return fail(next, "token");
+      tokenJson = (await tokenRes.json()) as { access_token?: string };
+    } catch {
+      // Network error / AbortSignal timeout — same outcome as a non-ok
+      // response, not an uncaught 500.
+      return fail(next, "token");
+    }
     accessToken = tokenJson.access_token;
     if (!accessToken) return fail(next, "token");
 
-    const accountRes = await fetch(LICHESS_ACCOUNT_URL, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
-    });
-    if (!accountRes.ok) return fail(next, "account");
-
-    const account = (await accountRes.json()) as LichessAccount;
+    let account: LichessAccount;
+    try {
+      const accountRes = await fetch(LICHESS_ACCOUNT_URL, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(LICHESS_TIMEOUT_MS),
+      });
+      if (!accountRes.ok) return fail(next, "account");
+      account = (await accountRes.json()) as LichessAccount;
+    } catch {
+      // `accessToken` is already set, so the `finally` below still revokes it.
+      return fail(next, "account");
+    }
     if (!account.id || !account.username) return fail(next, "account");
 
-    await upsertLichessLink(user.id, {
-      externalUserId: account.id,
-      username: account.username,
-    });
+    try {
+      await upsertLichessLink(user.id, {
+        externalUserId: account.id,
+        username: account.username,
+      });
+    } catch (err) {
+      // V405's second unique constraint: this Lichess account is already
+      // linked to a DIFFERENT Seazn user — never steal the link. The token
+      // is still revoked below either way.
+      if (err instanceof HttpError && err.code === "LICHESS_ALREADY_LINKED") {
+        return fail(next, "already_linked");
+      }
+      throw err;
+    }
 
     return redirectLocal(landing(next, "lichess=linked"));
   } finally {
