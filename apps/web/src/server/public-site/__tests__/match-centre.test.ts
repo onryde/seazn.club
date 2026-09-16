@@ -9,7 +9,7 @@
 // non-cricket branch resolves a PINNED `moduleVersion`, and the Info tab
 // emits its six rows in `info-tab.tsx`'s documented order.
 import { describe, expect, it } from "vitest";
-import type { EventEnvelope } from "@seazn/engine/core";
+import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { registry as engineRegistry, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -1209,6 +1209,56 @@ describe("buildMatchCentre — cricket degrades rather than throwing", () => {
     expect(doc.header.sides).toHaveLength(2);
     expect(doc.derivedComplete).toBe(false);
     expect(doc.cricket).toBeNull();
+  });
+
+  // The positive pair of the refusal above, for the events the KERNEL folds
+  // itself. `deriveCricketScorecard` used to hand `core.suspend` and every
+  // `core.lineup.*` straight to `cricket.apply`, which refused them as unknown
+  // types — so one stoppage or one concussion replacement sent a perfectly
+  // legal fixture down the degrade path above, and spectators lost the
+  // Scorecard and Commentary tabs for the rest of the match.
+  //
+  // The replacement BOWLS on purpose. A fix that merely skipped lineup events
+  // would still refuse this ledger: `applyDelivery` checks the bowler against
+  // `state.orders`, and only the kernel's `onLineup` puts a9 there.
+  it("a stoppage and a concussion replacement who then bowls keep the scorecard and commentary tabs", () => {
+    const script: Script = { ...CHASE_SCRIPT, cfg: { ...CHASE_SCRIPT.cfg, lineupChanges: { concussionReplacements: 1 } } };
+    const ledger = scriptLedger(script);
+    // a6 bowls innings 1's second over (balls 6-11); a9 replaces a6 before it.
+    let balls = 0;
+    const overOne = ledger.events.findIndex((ev) => ev.type === "cricket.ball" && balls++ === 6);
+    const specs = [
+      ...ledger.events.slice(0, overOne),
+      { type: "core.suspend", payload: { reason: "rain" } },
+      { type: "core.resume", payload: {} },
+      {
+        type: "core.lineup.replacement",
+        payload: { side: "away", off: "a6", on: { personId: "a9", slot: "bench", orderNo: 9 }, exemption: "concussion" },
+      },
+      ...ledger.events.slice(overOne).map((ev) => {
+        const payload = ev.payload as { bowler?: string };
+        return payload.bowler === "a6" ? { type: ev.type, payload: { ...payload, bowler: "a9" } } : ev;
+      }),
+    ];
+    const events = specs.map((spec, seq) => makeEnvelope(seq, { type: spec.type, payload: spec.payload }));
+    // A ledger the pad could have written: the WHOLE stream folds strict.
+    const kernel = foldMatch(cricket, ledger.cfg, ledger.lineups, events, { strictFromSeq: 0 });
+
+    const base = lineupsFrom(HOME, AWAY);
+    const lineups = { ...base, away: [...(base.away ?? []), { personId: "a9", name: "Player A9", masked: false, slot: "bench" as const }] };
+    const doc = buildMatchCentre(cricketInput({ events, cfg: ledger.cfg, lineups }));
+
+    expect(doc.derivedComplete).toBe(true);
+    expect(doc.cricket).not.toBeNull();
+    expect(doc.tabs).toEqual(["summary", "scorecard", "commentary", "info"]);
+    const a9 = doc.cricket!.innings[0]!.bowling.find((row) => row.person.personId === "a9");
+    expect(a9).toBeDefined();
+    // The replacement's figures are the reducer's own, not merely present.
+    // (`bowlerWickets` has no key for a bowler who took none — the card's 0.)
+    expect([a9!.runs, a9!.wickets]).toEqual([kernel.innings[0]!.fine!.bowlerRuns.a9, kernel.innings[0]!.fine!.bowlerWickets.a9 ?? 0]);
+    expect(a9!.runs).toBe(12);
+    expect(kernel.innings[0]!.fine!.bowlerBalls.a9).toBe(6);
+    expect(a9!.overs).toBe("1.0");
   });
 
   // This test was written asserting the band SURVIVES a rejected config, and

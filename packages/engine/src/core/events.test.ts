@@ -777,3 +777,110 @@ describe("core.suspend / core.resume — stoppage lifetime (W4)", () => {
     expect(stoppage).toMatchObject({ eventId: "e-2" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// FoldOptions.onFolded — a per-event view of the ONE fold
+// ---------------------------------------------------------------------------
+//
+// Why it exists: a derivation that needs the state after EVERY event (the
+// cricket scorecard's accumulators) used to re-implement this loop by calling
+// `module.apply` itself — and so handed the module the kernel-owned events it
+// never sees, and threw `unknown event type` on the first `core.suspend` or
+// `core.lineup.*`. The observer lets such a derivation ride the kernel's own
+// dispatch instead of keeping a second copy of it. Its contract is therefore
+// "exactly the events the kernel folded, in order, each with the state and
+// squads AFTER it" — every clause below is one a copy got wrong or could.
+describe("FoldOptions.onFolded", () => {
+  type Seen = { id: string; type: string; score: CoinState["score"]; onField: string[] };
+  const watch = (events: EventEnvelope[]) => {
+    const seen: Seen[] = [];
+    const state = foldMatch(coinflip, cfg, lineups, events, {
+      onFolded: (after, event, squads) => {
+        seen.push({
+          id: event.id,
+          type: event.type,
+          score: after.score,
+          onField: squads.home.members.filter((m) => m.onField).map((m) => m.personId),
+        });
+      },
+    });
+    return { seen, state };
+  };
+
+  const ledger = [
+    env(0, "core.start"),
+    env(1, "coin.flip", { to: "home" }),
+    env(2, "core.suspend", { reason: "rain" }),
+    env(3, "core.resume"),
+    env(4, "core.lineup.entry", { side: "H", on: { personId: "p3", slot: "bench", orderNo: 2 } }),
+    env(5, "coin.flip", { to: "away" }),
+    env(6, "coin.flip", { to: "home" }),
+    env(7, "core.void", {}, "e-6"),
+  ];
+
+  it("sees every ACTIVE event once, in order — the kernel-owned ones included, the voided pair not", () => {
+    const { seen } = watch(ledger);
+    expect(seen.map((s) => s.id)).toEqual(["e-0", "e-1", "e-2", "e-3", "e-4", "e-5"]);
+  });
+
+  it("hands over the state AFTER each event — never the one before it", () => {
+    const { seen, state } = watch(ledger);
+    expect(seen.map((s) => s.score)).toEqual([
+      { home: 0, away: 0 },
+      { home: 1, away: 0 },
+      { home: 1, away: 0 },
+      { home: 1, away: 0 },
+      { home: 1, away: 0 },
+      { home: 1, away: 1 },
+    ]);
+    // The last view IS the fold's result, not a copy that could drift from it.
+    expect(seen.at(-1)?.score).toEqual(state.score);
+  });
+
+  it("hands over the squads AFTER a lineup event — the change is visible at that event, not the next", () => {
+    const { seen } = watch(ledger);
+    expect(seen.find((s) => s.id === "e-3")?.onField).toEqual(["p1"]);
+    expect(seen.find((s) => s.id === "e-4")?.onField).toEqual(["p1", "p3"]);
+  });
+
+  it("changes nothing about the fold itself", () => {
+    expect(watch(ledger).state).toEqual(fold(ledger));
+  });
+
+  it("is not called for an event the fold refuses", () => {
+    const seen: string[] = [];
+    expect(() =>
+      foldMatch(coinflip, cfg, lineups, [env(0, "core.start"), env(1, "coin.flip", { to: "nobody" })], {
+        onFolded: (_after, event) => seen.push(event.id),
+      }),
+    ).toThrow(EngineError);
+    expect(seen).toEqual(["e-0"]);
+  });
+  // A lineup event the replay policy refuses STRUCTURALLY is ignored, not
+  // thrown — and it is still observed, with the very same state and squads
+  // objects the event before it produced. The second half is a contract an
+  // observer relies on: the cricket scorecard reads "the squads reference did
+  // not change" as "the kernel moved nobody" (scorecard.ts `onFolded`).
+  it("observes a lineup event the replay IGNORED, handing over the SAME state and squads objects as the event before", () => {
+    const events = [
+      env(0, "core.start"),
+      env(1, "core.lineup.retirement", { side: "H", personId: "p1", reason: "injured" }),
+      // p1 is already off: refused `not-on-field`.
+      env(2, "core.lineup.retirement", { side: "H", personId: "p1", reason: "injured" }),
+    ];
+    // It really is a refusal — the same append on the write path throws.
+    expect(() => foldMatch(coinflip, cfg, lineups, events, { strictFromSeq: 2 })).toThrow(EngineError);
+
+    const seen: Array<{ id: string; state: unknown; squads: unknown }> = [];
+    foldMatch(coinflip, cfg, lineups, events, {
+      onFolded: (after, event, squads) => seen.push({ id: event.id, state: after, squads }),
+    });
+    expect(seen.map((s) => s.id)).toEqual(["e-0", "e-1", "e-2"]);
+    const [start, accepted, ignored] = seen;
+    // The ACCEPTED departure replaced the squads object…
+    expect(accepted?.squads).not.toBe(start?.squads);
+    // …the IGNORED one handed over exactly what the event before it left.
+    expect(ignored?.squads).toBe(accepted?.squads);
+    expect(ignored?.state).toBe(accepted?.state);
+  });
+});
