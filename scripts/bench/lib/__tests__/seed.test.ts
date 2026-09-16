@@ -53,6 +53,30 @@ function stream(divisionRef: string, fixtureExtKey: string, home: string, away: 
 }
 
 // ---------------------------------------------------------------------------
+// stageKey — the division + stage-ref join (Ruling R26 / CRUX 2)
+// ---------------------------------------------------------------------------
+
+describe("stageKey — the division + stage-ref join", () => {
+  it("is injective over arbitrary strings, not just today's PackRef charset", () => {
+    // Mirrors fixtureKey's own test one-for-one (pack-schema.test.ts,
+    // "fixtureKey — the division + ext_key join"). A `${division} ${stageRef}`
+    // join would merge these two into one bucket ("d-a b s-1"), and a
+    // genuinely duplicated stage ref across divisions would then hide behind
+    // the collision. Today's PackRef happens to forbid spaces so a
+    // space-delimiter join is accidentally safe (as the seed.ts header
+    // comment for stageKey warns: it "must not quietly depend on PackRef's
+    // current character class") — this test is what stops that accident from
+    // being load-bearing.
+    expect(stageKey("d-a", "s rr-1")).not.toBe(stageKey("d-a s", "rr-1"));
+    expect(stageKey("d", '"x')).not.toBe(stageKey('d"', "x"));
+  });
+
+  it("is stable — the same pair always yields the same key", () => {
+    expect(stageKey("d-main", "s-playoff")).toBe(stageKey("d-main", "s-playoff"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // bindStreamFixtures — the pure key-matching logic
 // ---------------------------------------------------------------------------
 
