@@ -1165,7 +1165,10 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
         ? null
         : {
             headline: summary.headline,
-            margin: (summary.detail as { margin?: unknown } | undefined)?.margin ?? null,
+            // The fold's own structured margin (kind + count), the same value
+            // `summary.detail.margin` publishes — never words, which are the
+            // web's to choose per locale.
+            margin: state.margin,
             winner,
           },
   };

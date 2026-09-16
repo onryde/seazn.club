@@ -130,7 +130,7 @@ const ORG = "org-1";
 const FIXTURE = "fx-1";
 const DIVISION = "div-1";
 const COMPETITION = "comp-1";
-const FIXTURE_KEY = `pub:v1:fixture:${FIXTURE}`;
+const FIXTURE_KEY = `pub:v1:fixture:v2:${FIXTURE}`;
 const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
 const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
 const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
@@ -627,7 +627,7 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
 // `fixture:{id}` push after that DEL, through the same bounded once-only
 // helper, so an open match centre refetches now instead of at its 60s poll.
 describe("afterScheduleWrite — the documents of the fixtures the write changed (R10d n2)", () => {
-  const keyOf = (id: string) => `pub:v1:fixture:${id}`;
+  const keyOf = (id: string) => `pub:v1:fixture:v2:${id}`;
   const ids = (n: number) => Array.from({ length: n }, (_, i) => `fx-moved-${i}`);
 
   it("the per-fixture push cap is the ruling's: 50", () => {

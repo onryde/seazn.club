@@ -723,7 +723,7 @@ export function foldMatchWithStoppage<Cfg, State>(
           });
         }
         // Replay reaches here only for a STRUCTURAL refusal — an unknown
-        // person, someone taken off who was never on — which no config edit
+        // person, someone taken off who was not on — which no config edit
         // can make coherent and which there is no longer an event to void. The
         // squads are left as they were and the fixture stays readable. Note
         // this is a no-op and NOT an approximation: applying half a swap would

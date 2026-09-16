@@ -162,7 +162,9 @@ function cricketDocFor(status: "in_play" | "decided"): MatchCentreDocT {
       battingIndex: status === "in_play" ? 0 : null,
       statusLine:
         status === "decided"
-          ? { key: "matchCentre.result.regulation", params: { winner: "Home XI", margin: "65 runs" } }
+          ? // The builder's decided shape since 2026-09-16: the unit and plural
+            // form in the KEY, the bare count as a param — never English prose.
+            { key: "matchCentre.result.runs.other", params: { winner: "Home XI", runs: 65 } }
           : null,
       rateLine: null,
       phase: null,
@@ -255,7 +257,7 @@ describe("FixturePage generateMetadata — score + result in the title (Task 14)
     });
     expect(m.title).toContain("HOM 245/6"); // score line 1
     expect(m.title).toContain("AWY 180"); // score line 2
-    expect(m.title).toContain("Home XI won 65 runs"); // the result phrase, resolved from header.statusLine
+    expect(m.title).toContain("Home XI won by 65 runs"); // the result phrase, resolved from header.statusLine
   });
 
   it("a SCHEDULED fixture's title is untouched — no bare, empty parentheses", async () => {

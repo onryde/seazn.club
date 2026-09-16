@@ -177,7 +177,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const hubKey = (competitionId: string) => `pub:v1:hub:${competitionId}`;
-const fixtureKey = (fixtureId: string) => `pub:v1:fixture:${fixtureId}`;
+const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v2:${fixtureId}`;
 
 /** Let a PREVIOUS write's DEL settle and its pushes land, then clear the
  *  recorders. */

@@ -37,6 +37,7 @@ import {
 } from "@/server/public-site/data";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
+import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
 // The one TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
@@ -434,7 +435,7 @@ async function loadFixtureMatchCentreCtx(
 /** Live public fixture summary (the score widget). */
 export async function publicFixture(fixtureId: string): Promise<unknown> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) throw new HttpError(404, "fixture not found");
-  return cached(`pub:v1:fixture:${fixtureId}`, async () => {
+  return cached(publicFixtureCacheKey(fixtureId), async () => {
     // Fix round 3 (Gap 9): same gap as publicSchedule above.
     // Task 9 — `pool_id` added to this Pick (was absent): `loadMatchCentre`
     // takes a full `PublicFixture` (match-centre.ts's own `MatchCentreInput`

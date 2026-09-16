@@ -157,9 +157,9 @@ const DISMISSAL_KINDS: readonly string[] = [...ENGINE_WICKET_KINDS, "not_out", "
  * list, pin the kinds in ONE constant with the file:line comment").
  *
  * REVIEW FIX ROUND 1 (Critical #1) — the FIRST version of this pin read
- * "runs"/"wickets" off the free-text `margin` STRING (e.g.
- * `` `by ${runs} run${…}` `` vs `` `by ${wicketsLeft} wicket${…}` ``,
- * `cricket.ts:891-925`) and treated them as members of the same field the
+ * "runs"/"wickets" off `margin` — at the time an English prose string the
+ * engine composed, since replaced by the structured `CricketMargin` (owner
+ * decision 2026-09-16) — and treated them as members of the same field the
  * comment cited for `method` — they are not. `outcome.method`
  * (`packages/engine/src/core/types.ts:122`, `z.string().min(1).optional()`
  * on the `win` branch of the `MatchOutcome` discriminated union, lines
@@ -169,18 +169,21 @@ const DISMISSAL_KINDS: readonly string[] = [...ENGINE_WICKET_KINDS, "not_out", "
  *   - `"regulation"` — lines 894 (one-innings chase, wickets margin), 903
  *     (one-innings chase, runs margin), 921 (two-innings, wickets margin),
  *     925 (two-innings, runs margin);
- *   - `"innings"` — line 936 (innings victory; the MARGIN string itself
- *     already reads "by an innings and N runs" — see the template comment);
+ *   - `"innings"` — line 936 (innings victory; its margin is
+ *     `{ kind: "innings_and_runs", value }`, worded by
+ *     `matchCentre.result.inningsRuns.*`);
  *   - `"dls"` — lines 1112, 1118 (DLS-revised target, runs margin only);
  *   - `"super_over"` — lines 1750, 1753;
  *   - `"boundary_count"` — line 1764.
  * Plus the three bare (non-`win`) outcomes cricket actually reaches: `"tie"`
  * (lines 876, 1115, 1762, 1767 — `{ kind: "tie" }`, no `decideWin` call),
  * `"no_result"` (line 1120) and `"draw"` (line 3330, `cricket.match.close`
- * time-expiry). The margin UNIT ("runs" vs "wickets") is never a separate
- * field a key could branch on — a builder that needs to show a bare number
- * of runs/wickets has to parse or independently derive that from `margin`
- * or the innings state, not from `outcome.method`/`outcome.kind`.
+ * time-expiry). The margin UNIT ("runs" vs "wickets") is never a member of
+ * `outcome.method`/`outcome.kind`. (Updated 2026-09-16: it IS now a field —
+ * the engine's structured `CricketMargin` `{ kind, value? }` — and the
+ * builder's unit-and-plural keys are pinned from `RESULT_MARGIN_KEYS` in
+ * `match-centre-parity.test.ts`, not here; this list stays the METHOD
+ * vocabulary.)
  *
  * These eight are read straight off that call-site list — no invented
  * categories, no assumption about what a "margin kind" would be beyond what

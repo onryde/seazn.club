@@ -887,7 +887,12 @@ export async function getPublicFixture(
         stageName: stageRow?.name ?? null,
       };
     },
-    ["pub-fixture", fixtureId],
+    // v2 (owner decision 2026-09-16): `matchCentre.header.statusLine` for a
+    // decided cricket match changed shape (the margin is its own key, not a
+    // `{margin}` word). A v1 entry would render "X won" without the margin
+    // for a REVALIDATE_FAST window after deploy, so retire the key rather than
+    // wait — same reason as `pub-player-v15` below.
+    ["pub-fixture-v2", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;

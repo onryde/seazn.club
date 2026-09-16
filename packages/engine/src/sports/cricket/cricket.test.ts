@@ -166,7 +166,7 @@ describe("cricket golden: ball-by-ball mini match (fine fidelity)", () => {
     expect(state.innings[0]).toMatchObject({ runs: 22, wickets: 2, legalBalls: 12, boundaries: 2 });
     expect(state.innings[1]).toMatchObject({ runs: 20, wickets: 1, legalBalls: 12, boundaries: 3 });
     expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "regulation" });
-    expect(state.margin).toBe("by 2 runs");
+    expect(state.margin).toEqual({ kind: "runs", value: 2 });
     const fine = state.innings[0]!.fine!;
     expect(fine.batterRuns).toMatchObject({ "H-1": 5, "H-2": 6, "H-3": 9, "H-4": 0 });
     expect(fine.batterBalls).toMatchObject({ "H-1": 2, "H-2": 2, "H-3": 8, "H-4": 1 });
@@ -482,7 +482,7 @@ describe("cricket golden (a): 2019 CWC final — tie, super over, boundary count
       loser: "H",
       method: "boundary_count",
     });
-    expect(state.margin).toBe("on boundary count");
+    expect(state.margin).toEqual({ kind: "boundary_count" });
     const so = state.superOver!;
     expect(so.innings.map((i) => ({ side: i.battingSide, runs: i.runs }))).toEqual([
       { side: "away", runs: 15 },
@@ -519,7 +519,7 @@ describe("cricket golden (b): all-out NRR ledger", () => {
   it("charges the bowled-out side its full 20-over quota", () => {
     const state = fold(t20, events);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "H" });
-    expect(state.margin).toBe("by 30 runs");
+    expect(state.margin).toEqual({ kind: "runs", value: 30 });
     const [home, away] = cricket.standingsDelta(state.outcome!, t20, league, state);
     expect(home.metrics).toMatchObject({
       runs_for: 180,
@@ -612,7 +612,7 @@ describe("cricket golden (c): DLS Standard Edition", () => {
     expect(state.revisedTarget).toBe(167);
     expect(state.targetSource).toBe("dls");
     expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "dls" });
-    expect(state.margin).toBe("by 7 wickets");
+    expect(state.margin).toEqual({ kind: "wickets", value: 7 });
   });
 
   it("computes the increased-target case (R2 > R1) with G50", () => {
@@ -646,7 +646,7 @@ describe("cricket golden (c): DLS Standard Edition", () => {
     );
     const state = fold(odiDls, events);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "dls" });
-    expect(state.margin).toBe("by 46 runs");
+    expect(state.margin).toEqual({ kind: "runs", value: 46 });
   });
 
   it("no_result below the minimum overs; manual umpire target always wins", () => {
@@ -841,7 +841,7 @@ describe("#451 regression: cfg-scaled DLS inputs", () => {
     expect(state.r1).toBeCloseTo(32.1, 9);
     expect(state.r2).toBeCloseTo(32.1, 9);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "dls" });
-    expect(state.margin).toBe("by 11 runs");
+    expect(state.margin).toEqual({ kind: "runs", value: 11 });
   });
 });
 
@@ -1036,6 +1036,7 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     ]);
     const state = fold(cfg, [...events, ...streamFrom(events.length, [...awaySO, ...homeSO])]);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "boundary_count" });
+    expect(state.margin).toEqual({ kind: "boundary_count" });
   });
 
   it("repeat: a second super over decides (batting order flips)", () => {
@@ -1075,6 +1076,7 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     ];
     const state = fold(cfg, [...events, ...streamFrom(events.length, [...so1, ...so2])]);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "super_over" });
+    expect(state.margin).toEqual({ kind: "super_over" });
     expect(state.superOver!.innings).toHaveLength(4);
   });
 
@@ -1100,6 +1102,7 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     ];
     const state = fold(cfg, [...events, ...streamFrom(events.length, so)]);
     expect(state.outcome).toEqual({ kind: "tie" });
+    expect(state.margin).toBeNull();
     const [home, away] = cricket.standingsDelta(state.outcome!, cfg, league, state);
     expect([home.points, away.points]).toEqual([1, 1]);
     expect(home.metrics.ties).toBe(1);
@@ -1109,6 +1112,7 @@ describe("cricket golden (d): tied T20 super over policies", () => {
     const { events } = tiedMain("repeat");
     const state = fold(t20, events); // superOver: false
     expect(state.outcome).toEqual({ kind: "tie" });
+    expect(state.margin).toBeNull();
   });
 });
 
@@ -1130,6 +1134,7 @@ describe("cricket golden (e): two-innings matches", () => {
     );
     const state = fold(test, events);
     expect(state.outcome).toEqual({ kind: "draw" });
+    expect(state.margin).toBeNull();
     expect(cricket.supportsDraws(test, "league")).toBe(true);
     expect(cricket.supportsDraws(t20, "league")).toBe(false);
     const [home, away] = cricket.standingsDelta(state.outcome!, test, league, state);
@@ -1147,7 +1152,7 @@ describe("cricket golden (e): two-innings matches", () => {
     );
     const state = fold(test, events);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "innings" });
-    expect(state.margin).toBe("by an innings and 50 runs");
+    expect(state.margin).toEqual({ kind: "innings_and_runs", value: 50 });
   });
 
   it("rejects a follow-on below the configured lead", () => {
@@ -1172,11 +1177,153 @@ describe("cricket golden (e): two-innings matches", () => {
     );
     const state = fold(test, events);
     expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "regulation" });
-    expect(state.margin).toBe("by 5 wickets");
+    expect(state.margin).toEqual({ kind: "wickets", value: 5 });
     expect(cricket.summary(state).perSide).toEqual([
       { entrantId: "H", line: "300 & 150" },
       { entrantId: "A", line: "250 & 201/5" },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owner decision 2026-09-16 — the margin is DATA, not English prose. The
+// engine used to compose "by 1 run" / "by 3 wickets" itself, and that string
+// reached es/fr/nl spectators untranslated. It now carries a kind and a bare
+// number; the web owns the words AND the plural (`Intl.PluralRules` per
+// locale — French puts 0 in `one`, which an English `=== 1` test would get
+// wrong). So the boundary these pin is the one the old string branched on:
+// a margin of exactly ONE must still be the number 1, never a special shape.
+// ---------------------------------------------------------------------------
+
+describe("cricket: the decided margin is structured data (kind + number)", () => {
+  const test = cricket.configSchema.parse(cricket.variants.test);
+
+  it("a chase that falls one short loses by { runs: 1 } — the value is target − 1 − chase", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 149, wickets: 8, legalBalls: 120 }],
+    );
+    const state = fold(t20, events);
+    expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "regulation" });
+    expect(state.margin).toEqual({ kind: "runs", value: 150 + 1 - 1 - 149 });
+    expect(state.margin).toEqual({ kind: "runs", value: 1 });
+  });
+
+  it("a chase won nine down wins by { wickets: 1 } — the value is the all-out count (players − 1) − wickets fallen", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 151, wickets: 9, legalBalls: 118 }],
+    );
+    const state = fold(t20, events);
+    expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "regulation" });
+    expect(state.margin).toEqual({ kind: "wickets", value: t20.playersPerSide - 1 - 9 });
+    expect(state.margin).toEqual({ kind: "wickets", value: 1 });
+  });
+
+  it("the all-out count follows a short team sheet, not the configured eleven", () => {
+    // allOutWickets reads min(playersPerSide, order length) − 1: six batters
+    // are all out at five wickets, so a chase three down has TWO in hand.
+    const six = (prefix: string): LineupPair["home"] => ({
+      entrantId: prefix,
+      slots: Array.from({ length: 6 }, (_, i) => ({
+        personId: `${prefix}-${i + 1}`,
+        slot: "starting" as const,
+        orderNo: i + 1,
+      })),
+    });
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 60, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 61, wickets: 3, legalBalls: 90 }],
+    );
+    const state = foldMatch(cricket, t20, { home: six("H"), away: six("A") }, events, STRICT_ALL);
+    expect(state.margin).toEqual({ kind: "wickets", value: 6 - 1 - 3 });
+  });
+
+  it("an innings victory by a single run is { innings_and_runs: 1 }", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 500, wickets: 3, legalBalls: 540, declared: true }],
+      ["cricket.innings.summary", { runs: 200, wickets: 10, legalBalls: 300 }],
+      ["cricket.followon"],
+      ["cricket.innings.summary", { runs: 299, wickets: 10, legalBalls: 350 }],
+    );
+    const state = fold(test, events);
+    expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "innings" });
+    expect(state.margin).toEqual({ kind: "innings_and_runs", value: 500 - (200 + 299) });
+    expect(state.margin).toEqual({ kind: "innings_and_runs", value: 1 });
+  });
+
+  it("a fourth-innings chase that falls short loses by { runs } — the value is the defending aggregate minus the chase's", () => {
+    // Review m1: the two-innings DEFENDED win is its own decideWin call site
+    // and no golden stream reaches it. 300 & 150 = 450 against 250 & 199 =
+    // 449, the chase all out one short.
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 300, wickets: 10, legalBalls: 400 }],
+      ["cricket.innings.summary", { runs: 250, wickets: 10, legalBalls: 380 }],
+      ["cricket.innings.summary", { runs: 150, wickets: 10, legalBalls: 200 }],
+      ["cricket.innings.summary", { runs: 199, wickets: 10, legalBalls: 240 }],
+    );
+    const state = fold(test, events);
+    expect(state.outcome).toMatchObject({ kind: "win", winner: "H", method: "regulation" });
+    expect(state.margin).toEqual({ kind: "runs", value: 300 + 150 - (250 + 199) });
+    expect(state.margin).toEqual({ kind: "runs", value: 1 });
+  });
+
+  it("a super over won by the side batting FIRST is { kind: super_over } — the reply fell short, not past", () => {
+    // Review m1: `closed.runs < first.runs` is a separate decideWin call site
+    // from the reply passing the target; no golden stream reaches it.
+    const cfg = cricket.configSchema.parse({ superOver: true, superOverStillTied: "repeat" });
+    const main = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 150, wickets: 7, legalBalls: 120 }],
+    );
+    // Away batted second ⇒ bats first in the super over (ICC): 10.
+    const awaySO = balls("cricket.superover.ball", [
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 4, boundary: 4 },
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 4, boundary: 4 },
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 2 },
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0 },
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0 },
+      { striker: "A-1", nonStriker: "A-2", bowler: "H-11", bat: 0 },
+    ]);
+    // Home reply with six singles: 6, the over runs out four short.
+    const homeSO = balls("cricket.superover.ball", [
+      { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 },
+      { striker: "H-2", nonStriker: "H-1", bowler: "A-11", bat: 1 },
+      { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 },
+      { striker: "H-2", nonStriker: "H-1", bowler: "A-11", bat: 1 },
+      { striker: "H-1", nonStriker: "H-2", bowler: "A-11", bat: 1 },
+      { striker: "H-2", nonStriker: "H-1", bowler: "A-11", bat: 1 },
+    ]);
+    const state = fold(cfg, [...main, ...streamFrom(main.length, [...awaySO, ...homeSO])]);
+    expect(state.outcome).toMatchObject({ kind: "win", winner: "A", method: "super_over" });
+    expect(state.margin).toEqual({ kind: "super_over" });
+  });
+
+  it("an undecided match carries no margin, and a forfeit (an award) carries none either", () => {
+    const live = fold(t20, stream(["core.start"], ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }]));
+    expect(live.outcome).toBeNull();
+    expect(live.margin).toBeNull();
+    const forfeited = fold(t20, stream(["core.start"], ["core.forfeit", { by: "A", reason: "no_show" }]));
+    expect(forfeited.outcome).toMatchObject({ kind: "award", winner: "H" });
+    expect(forfeited.margin).toBeNull();
+  });
+
+  it("the summary publishes the same structured margin the state holds — never a re-worded copy", () => {
+    const events = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 150, wickets: 5, legalBalls: 120 }],
+      ["cricket.innings.summary", { runs: 149, wickets: 8, legalBalls: 120 }],
+    );
+    const state = fold(t20, events);
+    const detail = cricket.summary(state).detail as { margin?: unknown };
+    expect(detail.margin).toEqual({ kind: "runs", value: 1 });
+    expect(detail.margin).toEqual(state.margin);
   });
 });
 

@@ -21,6 +21,7 @@ import { lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
 import type { Lineup } from "@seazn/engine/core";
 import { log } from "@/server/logger";
+import { withStructuredCricketMargin } from "./stored-cricket-margin";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
  *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
@@ -194,7 +195,7 @@ export interface FixtureStreamOut {
  *
  * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
  * `broadcastRevalidate` — the latter is the peer primitive that helper calls
- * internally. It is what busts the `["pub-fixture", fixtureId]` cache entry
+ * internally. It is what busts the `["pub-fixture-v2", fixtureId]` cache entry
  * tagged `divisionTag(division.id)` (data.ts:742), which is the entry the
  * public match page reads the link from.
  */
@@ -533,22 +534,40 @@ export interface FixtureStateOut {
   outcome: unknown;
 }
 
+/** The `/state` ETag. The `-m2` names the representation: the same `last_seq`
+ *  served an English cricket margin before 2026-09-16 and `{ kind, value? }`
+ *  after (`stored-cricket-margin.ts`), so a client revalidating a body it
+ *  cached before that must get the new body, not a 304 for the old one. */
+export function fixtureStateEtag(lastSeq: number): string {
+  return `"seq-${lastSeq}-m2"`;
+}
+
 /** Live state: fold cache summary + status + outcome (ETag on last_seq). */
 export async function getFixtureState(auth: AuthCtx, fixtureId: string): Promise<FixtureStateOut> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
-      { status: string; outcome: unknown; last_seq: number | null; state: unknown; summary: unknown }[]
+      {
+        status: string;
+        outcome: unknown;
+        sport_key: string;
+        last_seq: number | null;
+        state: unknown;
+        summary: unknown;
+      }[]
     >`
-      select f.status, f.outcome, m.last_seq, m.state, m.summary
-      from fixtures f left join match_states m on m.fixture_id = f.id
+      select f.status, f.outcome, d.sport_key, m.last_seq, m.state, m.summary
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      left join match_states m on m.fixture_id = f.id
       where f.id = ${fixtureId}`;
     if (!row) throw new HttpError(404, "fixture not found");
+    const stored = withStructuredCricketMargin(row.sport_key, { state: row.state ?? null, summary: row.summary ?? null });
     return {
       fixture_id: fixtureId,
       status: row.status,
       last_seq: row.last_seq ?? 0,
-      summary: row.summary ?? null,
-      state: row.state ?? null,
+      summary: stored.summary,
+      state: stored.state,
       outcome: row.outcome,
     };
   });
