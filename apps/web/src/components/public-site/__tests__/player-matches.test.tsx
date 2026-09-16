@@ -13,9 +13,12 @@
 // `setInterval`: the island also runs a clock for its "Updated Ns ago" line,
 // and a spy that reads interval lengths cannot tell that clock from the poll.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/public.json";
-import type { Dict } from "@/lib/i18n-constants";
+import es from "@/dictionaries/es/public.json";
+import type { Dict, Locale } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { PlayerMatchLineT, PublicPlayerMatchesT } from "@/server/public-site/player-matches-schema";
 
 vi.mock("../player-matches-data", () => ({ fetchPlayerMatches: vi.fn() }));
@@ -238,5 +241,67 @@ describe("PlayerMatches — the freshness line counts from the DOCUMENT's clock"
   it("with nothing live there is no freshness line (positive pair above)", () => {
     const island = mount(IDLE());
     expect(island.text()).not.toContain("Updated");
+  });
+});
+
+// The owner's day-month ruling (2026-09-16, `lib/public-date-locale.ts`): an
+// English org's dates read "5 Sept", never the US "Sep 5" that bare "en" gives
+// `Intl`. Every other locale keeps its own format. The slab is where the ORDER
+// shows — a row puts day and month in separate elements — so the order is
+// asserted there and the month word on a row.
+//
+// Expected strings are derived from `Intl` through `intlLocaleFor`, with the
+// venue zone pinned in the options (the worker's TZ is not something a test can
+// move), plus ONE literal so the day-month order itself is witnessed. Markup is
+// read through `renderToStaticMarkup` and anchored on `>…<`, so a string that
+// merely contains the expected one cannot pass.
+describe("PlayerMatches — dates in the org's locale, day-month for English", () => {
+  const TZ = "Europe/London";
+  const AT = "2026-09-05T10:00:00.000Z";
+  const SLAB: Intl.DateTimeFormatOptions = { timeZone: TZ, weekday: "short", day: "numeric", month: "short" };
+  const MONTH: Intl.DateTimeFormatOptions = { timeZone: TZ, month: "short" };
+  const fmt = (tag: string, opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(tag, opts).format(Date.parse(AT));
+
+  const markup = (locale: Locale, dict: Dict) =>
+    renderToStaticMarkup(
+      <PlayerMatches
+        orgSlug="riverside"
+        competitionSlug="autumn-cup"
+        personId={PERSON}
+        initial={doc([
+          line("f2", "54 (40)", { scheduledAt: AT, tz: TZ }),
+          line("f1", "12 (9)", { scheduledAt: AT, tz: TZ, result: "lost" }),
+        ])}
+        dict={dict}
+        locale={locale}
+      />,
+    );
+
+  it("premise: bare en and intlLocaleFor(en) really differ, in the slab and in the month word", () => {
+    expect(intlLocaleFor("en")).not.toBe("en");
+    expect(fmt(intlLocaleFor("en"), SLAB)).not.toBe(fmt("en", SLAB));
+    expect(fmt(intlLocaleFor("en"), MONTH)).not.toBe(fmt("en", MONTH));
+  });
+
+  it("en: the slab reads day-month — 'Sat 5 Sept', not the US 'Sat, Sep 5'", () => {
+    const html = markup("en", en as Dict);
+    expect(html).toContain(">Sat 5 Sept<");
+    expect(html).toContain(`>${fmt(intlLocaleFor("en"), SLAB)}<`);
+    expect(html).not.toContain(`>${fmt("en", SLAB)}<`);
+  });
+
+  it("en: a row's month word is the day-month locale's ('Sept'), not bare en's ('Sep')", () => {
+    const html = markup("en", en as Dict);
+    expect(html).toContain(`>${fmt(intlLocaleFor("en"), MONTH)}<`);
+    expect(html).not.toContain(`>${fmt("en", MONTH)}<`);
+  });
+
+  it("es: keeps its own format, in the slab and on a row (positive pair: not the English one)", () => {
+    expect(intlLocaleFor("es")).toBe("es");
+    const html = markup("es", es as Dict);
+    expect(html).toContain(`>${fmt("es", SLAB)}<`);
+    expect(html).toContain(`>${fmt("es", MONTH)}<`);
+    expect(fmt("es", SLAB)).not.toBe(fmt(intlLocaleFor("en"), SLAB));
+    expect(html).not.toContain(`>${fmt(intlLocaleFor("en"), SLAB)}<`);
   });
 });

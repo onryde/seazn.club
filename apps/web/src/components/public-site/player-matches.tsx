@@ -22,6 +22,7 @@
 import Link from "next/link";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { PlayerMatchLineT, PublicPlayerMatchesT } from "@/server/public-site/player-matches-schema";
 import { useNow } from "./match-centre/use-now";
 import { useLivePlayerMatches } from "./use-live-player-matches";
@@ -47,15 +48,17 @@ const NOW_TICK_IDLE_MS = 30_000;
 
 /** `Intl` in the org's locale and the VENUE's zone — never the runtime's.
  *  An unknown zone falls back to UTC rather than throwing into a render
- *  (`lib/format.ts`'s rule; that module is fixed to en-GB, this page is not). */
+ *  (`lib/format.ts`'s rule; that module is fixed to en-GB, this page is not).
+ *  The locale goes through `intlLocaleFor`: an English org reads day-month
+ *  ("Sat 5 Sept"), never bare en's US order (owner ruling 2026-09-16). */
 function formatIn(locale: Locale, tz: string, iso: string | null, opts: Intl.DateTimeFormatOptions): string | null {
   if (iso === null) return null;
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return null;
   try {
-    return new Intl.DateTimeFormat(locale, { timeZone: tz, ...opts }).format(ms);
+    return new Intl.DateTimeFormat(intlLocaleFor(locale), { timeZone: tz, ...opts }).format(ms);
   } catch {
-    return new Intl.DateTimeFormat(locale, { timeZone: "UTC", ...opts }).format(ms);
+    return new Intl.DateTimeFormat(intlLocaleFor(locale), { timeZone: "UTC", ...opts }).format(ms);
   }
 }
 
