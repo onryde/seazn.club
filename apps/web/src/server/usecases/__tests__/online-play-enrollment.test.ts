@@ -111,7 +111,6 @@ describe.skipIf(!HAS_DB)("onlinePlay division + enrollment gate", () => {
     await upsertLichessLink(owner.userId!, {
       externalUserId: `lid-${randomUUID().slice(0, 8)}`,
       username: "LinkedPlayer",
-      accessToken: "tok",
     });
 
     const created = await createEntrants(owner, division.id, [
