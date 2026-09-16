@@ -329,6 +329,33 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     await expectNoHorizontalScroll(page);
   });
 
+  test("no cookie banner on a board link, at either size — and the hub it links to still has one", async ({ page }) => {
+    // OWNER RULING (2026-09-16). The banner is mounted in the ROOT layout, so
+    // only a real page can prove it is gone. Consent is cleared first: the
+    // signed-in storage state may carry an earlier Accept, and then the hub
+    // would show no banner either and the positive pair would prove nothing.
+    await page.addInitScript(() => {
+      try {
+        localStorage.removeItem("seazn_cookie_consent");
+        localStorage.removeItem("seazn_cookie_consent_version");
+      } catch {
+        // A blocked store means the banner shows anyway, which is the state this wants.
+      }
+    });
+    const banner = page.getByTestId("cookie-consent");
+
+    await page.setViewportSize(PHONE);
+    await openMounted(page, divisionKiosk());
+    await expect(banner, "the card at 390").toHaveCount(0);
+
+    await page.setViewportSize(DESKTOP);
+    await openMounted(page, competitionKiosk());
+    await expect(banner, "the board at 1280").toHaveCount(0);
+
+    await page.goto(divisionHub());
+    await expect(banner, "the hub the card links to").toBeVisible();
+  });
+
   test("K-1: a /present link to a competition that does not exist gets the branded /shared 404, not Next's bare page", async ({ page }) => {
     // The page's own notFound() is caught by the nearest not-found.tsx above
     // it. In the `(kiosk)` group that is `(kiosk)/[orgSlug]/not-found.tsx`;

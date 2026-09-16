@@ -19,6 +19,30 @@ import { DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
  *  inlined so a future overlay route cannot forget it. */
 const OVERLAY_SEGMENT = "/overlay/";
 
+/** The kiosk board's own last segment (`/shared/<org>/<comp>[/<div>]/present`). */
+const KIOSK_SEGMENT = "present";
+
+/**
+ * A /present board (OWNER RULING, 2026-09-16). Same reasoning as the overlay
+ * segment: the board is what an organiser puts on a venue TV, where nobody is
+ * there to dismiss a banner, so it sits over the board all day — and there is
+ * nothing to dismiss, because PostHog inits `opt_out_capturing_by_default` and
+ * only opts in on an explicit Accept (`instrumentation-client.ts`), which a
+ * banner-free page can never collect. Essential cookies are unaffected.
+ *
+ * Below the TV cut-off the same route shows the "made for a TV" card, where the
+ * banner covered the card's only real control at 320 — the defect this closes.
+ * A visitor who taps through to the hub gets the banner there, as before.
+ *
+ * Matched on the SHAPE of the path, not a bare suffix: a competition slugged
+ * "present" is `/shared/<org>/present`, a hub page that must keep its banner.
+ */
+function isKioskBoard(pathname: string | null | undefined): boolean {
+  const parts = pathname?.split("/").filter(Boolean) ?? [];
+  // shared / org / comp / present, or shared / org / comp / division / present
+  return parts[0] === "shared" && parts.at(-1) === KIOSK_SEGMENT && (parts.length === 4 || parts.length === 5);
+}
+
 /**
  * Consent banner. Essential cookies (login) always run; analytics (PostHog) is
  * opt-in per GDPR. "Accept" opts PostHog into capturing; "Reject" keeps it
@@ -85,6 +109,11 @@ export function CookieConsent() {
   // reads `usePathname` from this same root-layout position, so the pattern
   // is the tree's, not this wave's.
   if (pathname?.startsWith(OVERLAY_SEGMENT)) return null;
+  // The kiosk board, for the reasons on isKioskBoard above. Here rather than in
+  // the kiosk layout for the same reason the overlay rule is here: this
+  // component is mounted once in the ROOT layout, as a sibling of `children`,
+  // so no nested layout can unmount it.
+  if (isKioskBoard(pathname)) return null;
 
   if (!visible) return null;
 
