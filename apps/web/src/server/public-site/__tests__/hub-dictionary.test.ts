@@ -125,6 +125,18 @@ export const W2_KEYS = [
   "player.opponent",
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
+  // Task 16 — the /shared leaf surfaces' sweep, one block: `shareLabels`' short
+  // WhatsApp label (read by every public ShareBar, and asserted nowhere until
+  // now), the QR poster page, the player page's meta description
+  // (`lib/public-meta.ts`), the share images' footer tagline and free-tier
+  // badge, and the match centre's fallback scorebug (realtime word, serve dot).
+  "share.whatsappShort",
+  "qrPoster.qrAlt", "qrPoster.scan", "qrPoster.print",
+  "player.metaDescription", "og.tagline", "news.card.liveOn",
+  "matchCentre.realtime", "matchCentre.serving",
+  // Review F2: the division share card's placeholder name and the two lines
+  // it draws in place of a table.
+  "og.standings.youth", "og.standings.empty", "og.division",
   // format chips
   "format.cricket.overs", "format.minutes", "format.sets.bestOf",
 ] as const;
@@ -208,6 +220,14 @@ describe("W2 public dictionary coverage", () => {
       // player-matches.tsx — the opponent on the slab and on every row. A
       // locale that drops `{opponent}` prints "v" against nobody.
       "player.opponent": ["opponent"],
+      // Task 16. The QR poster's alt names the URL it encodes; the player
+      // page's description names both; the share-image badge names the brand
+      // (passed, so no translator retypes it).
+      "qrPoster.qrAlt": ["url"],
+      "player.metaDescription": ["competition", "player"],
+      "news.card.liveOn": ["brand"],
+      "og.standings.youth": ["brand"],
+      "og.standings.empty": ["brand"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

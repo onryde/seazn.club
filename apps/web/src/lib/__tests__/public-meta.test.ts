@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { competitionMetaDescription, playerMetaDescription } from "@/lib/public-meta";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 
 // Task 12 changed this helper's signature: it no longer builds the English
 // fallback sentence itself, it takes the one the PAGE resolved. The English
@@ -47,5 +51,37 @@ describe("playerMetaDescription", () => {
     expect(playerMetaDescription("A. Kannan", "Riverside Open")).toBe(
       "A. Kannan's player card at Riverside Open — appearances, results and stats on Seazn Club.",
     );
+  });
+
+  // Task 16: the sentence lives in `player.metaDescription` now, four locales.
+  // A caller that passes the org's `public` dictionary gets that locale's
+  // sentence; a caller that passes nothing (the player page, until its own lane
+  // wires the dict) keeps the English above byte for byte.
+  const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
+  const expected = (d: Record<string, string>) =>
+    d["player.metaDescription"]!.replace("{player}", "A. Kannan").replace(
+      "{competition}",
+      "Riverside Open",
+    );
+
+  it("premise: the key exists in all four locales, with both params, and es differs from en", () => {
+    for (const [l, d] of Object.entries(DICTS)) {
+      expect(d["player.metaDescription"], l).toContain("{player}");
+      expect(d["player.metaDescription"], l).toContain("{competition}");
+    }
+    expect(expected(DICTS.es!)).not.toBe(expected(DICTS.en!));
+  });
+
+  for (const locale of ["en", "es", "fr", "nl"]) {
+    it(`${locale}: equals that locale's dictionary sentence, interpolated`, () => {
+      const d = DICTS[locale]!;
+      const out = playerMetaDescription("A. Kannan", "Riverside Open", d);
+      expect(out).toBe(expected(d));
+      expect(out).not.toMatch(/\{\w+\}/);
+    });
+  }
+
+  it("the no-dictionary default IS the English dictionary's sentence (one copy of the words)", () => {
+    expect(playerMetaDescription("A. Kannan", "Riverside Open")).toBe(expected(DICTS.en!));
   });
 });

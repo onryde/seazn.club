@@ -43,7 +43,7 @@ describe("standingsCardModel youth rule", () => {
   it("youth + individuals → no names at all, just the fallback line", () => {
     const m = standingsCardModel({ ...baseStandings, youth: true, entrantKind: "individual" });
     expect(m.rows).toHaveLength(0);
-    expect(m.fallbackLine).toBeTruthy();
+    expect(m.fallbackKey).toBe("og.standings.youth");
     expect(JSON.stringify(m)).not.toContain("Maya");
     expect(JSON.stringify(m)).not.toContain("Leo");
   });
@@ -61,7 +61,13 @@ describe("standingsCardModel youth rule", () => {
   it("adult division → names render, top 6, rank order", () => {
     const m = standingsCardModel({ ...baseStandings, youth: false, entrantKind: "individual" });
     expect(m.rows[0]).toMatchObject({ rank: 1, name: "Maya Kapoor", points: 9 });
-    expect(m.fallbackLine).toBeNull();
+    expect(m.fallbackKey).toBeNull();
+  });
+
+  it("no standings yet → the empty line's key, not the youth one", () => {
+    const m = standingsCardModel({ ...baseStandings, rows: [], youth: false, entrantKind: "individual" });
+    expect(m.rows).toHaveLength(0);
+    expect(m.fallbackKey).toBe("og.standings.empty");
   });
 });
 

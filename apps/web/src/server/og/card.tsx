@@ -12,9 +12,16 @@ export function CardFrame({
   orgName,
   logo,
   children,
+  tagline = "Live scores · fixtures · standings",
 }: {
   theme: OgTheme;
   orgName: string;
+  /**
+   * The footer's left-hand line. Defaults to the English it always drew, for
+   * the callers with no org locale in hand (the join-invite card). A public
+   * card passes `t(dict, "og.tagline")` in the org's language.
+   */
+  tagline?: string;
   /**
    * The org crest as bytes — a `data:` URI from `server/og/poster-image.ts`.
    * A remote URL is DROPPED, not drawn: satori would fetch it server-side from
@@ -89,7 +96,7 @@ export function CardFrame({
           color: theme.muted,
         }}
       >
-        <div style={{ display: "flex" }}>Live scores · fixtures · standings</div>
+        <div style={{ display: "flex" }}>{tagline}</div>
         <div style={{ display: "flex", fontWeight: 700, color: theme.ink }}>seazn.club</div>
       </div>
     </div>

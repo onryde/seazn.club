@@ -51,7 +51,8 @@ export interface PostCardModel {
   /** Result posts with a numeric scoreline render the scorebug; else null. */
   scoreline: Scoreline | null;
   title: string;
-  /** Free tier only — the "Run your own on seazn.club" acquisition badge. */
+  /** Free tier only — the acquisition badge (`news.card.liveOn`, "Live on
+   *  seazn.club" in English), resolved by the route and passed as `badge`. */
   showBadge: boolean;
 }
 
@@ -98,10 +99,14 @@ function Monogram({ name, color, s }: { name: string; color: string; s: number }
 export function PostShareCard({
   model,
   eyebrow,
+  badge,
   size,
 }: {
   model: PostCardModel;
   eyebrow: string;
+  /** The free-tier footer badge, resolved by the route in the org's locale
+   *  (`news.card.liveOn`). Drawn only when `model.showBadge`. */
+  badge: string;
   size: "og" | "story";
 }) {
   const story = size === "story";
@@ -244,7 +249,7 @@ export function PostShareCard({
       >
         {model.showBadge ? (
           <div style={{ display: "flex", fontWeight: 700, color: theme.ink }}>
-            Live on seazn.club
+            {badge}
           </div>
         ) : (
           <div style={{ display: "flex" }}>{model.orgName}</div>

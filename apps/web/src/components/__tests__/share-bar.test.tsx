@@ -43,10 +43,10 @@ describe("ShareBar hydration safety", () => {
       writable: true,
     });
 
-    const html = renderToStaticMarkup(<ShareBar path="/x" title="Y" />);
+    const html = renderToStaticMarkup(<ShareBar path="/x" title="Y" labels={LABELS} />);
 
     expect(html).not.toContain('data-testid="native-share"');
-    expect(html).toContain("WhatsApp");
+    expect(html).toContain("WA-TEXT");
   });
 });
 
@@ -94,12 +94,10 @@ describe("ShareBar labels", () => {
     for (const [, cls] of controls) expect(cls, cls).toContain("min-h-11");
   });
 
-  it("keeps the English it shipped with when no labels are passed (the news post page)", () => {
-    const html = renderToStaticMarkup(<ShareBar path="/x" title="Y" />);
-
-    expect(html).toMatch(/<a [^>]*aria-label="Share on WhatsApp"[^>]*>WhatsApp<\/a>/);
-    expect(html).toMatch(/<button [^>]*>Copy link<\/button>/);
-  });
+  // There is no "no labels" case any more: `labels` is required and the
+  // English defaults are gone (Task 16), so a caller that forgets is a tsc
+  // error rather than an English row. The four-locale copy each public page
+  // passes is asserted in `public-site/__tests__/share-labels.test.tsx`.
 });
 
 // The two labels NO server render can reach, and the reason they need their own

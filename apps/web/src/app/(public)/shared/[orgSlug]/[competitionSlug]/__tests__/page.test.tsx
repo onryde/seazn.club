@@ -786,9 +786,10 @@ describe("every word on this page comes from the org's dictionary", () => {
     // This is exactly the hole `ShareBarLabels`' all-five-or-none shape exists
     // to close. The interface guarantees all five are PRESENT; only this
     // asserts the page bound the right VALUES. Read at the prop boundary,
-    // deep-equal over all five, for BOTH bars — and note `DEFAULT_LABELS.copied`
-    // is "Copied ✓", a string that exists in no dictionary at all, so a page
-    // that simply dropped the prop would ship it in French.
+    // deep-equal over all five, for BOTH bars. (`ShareBar` once fell back to an
+    // English `DEFAULT_LABELS` whose `copied` was "Copied ✓", a string in no
+    // dictionary at all, so a page that dropped the prop shipped it in French.
+    // Task 16 deleted those defaults and made `labels` required.)
     it(`${locale}: both share bars carry all five of that locale's share words`, async () => {
       const dict = DICTS[locale]!;
       stub.getPublicCompetition.mockResolvedValue(shell({ locale }));

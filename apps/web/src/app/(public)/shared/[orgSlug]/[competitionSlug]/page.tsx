@@ -68,7 +68,8 @@ import { CompetitionLanding } from "@/components/public-site/matches-hub/competi
 // 2026 – 20 September 2026" is how one of them ends up a day out; `info-tab`'s
 // is the one that already fixes the calendar-date/timezone trap below.
 import { competitionDateLine } from "@/components/public-site/matches-hub/info-tab";
-import { ShareBar, type ShareBarLabels } from "@/components/share-bar";
+import { ShareBar } from "@/components/share-bar";
+import { shareLabels } from "@/components/public-site/share-labels";
 
 export const revalidate = 30;
 
@@ -177,26 +178,11 @@ export default async function CompetitionHomePage({ params }: Props) {
   const entrantCount = hub.divisions.reduce((n, d) => n + d.entrantCount, 0);
   const liveCount = hub.matches.filter((m) => m.bucket === "live").length;
 
-  const shareLabels: ShareBarLabels = {
-    share: t(dict, "share.share"),
-    // The SHORT label, visible on the button; the long sentence is the
-    // accessible name below. `share.whatsapp` ("Share on WhatsApp") in the
-    // visible slot put three full-sentence buttons in a phone hero and wrapped
-    // them onto two rows, which pushed the counters below the fold at 320.
-    //
-    // The verb is not lost: it is in `whatsappAria`, which is what a screen
-    // reader announces, and the button sits in a row headed by "Share". A
-    // brand name beside two verbs reads as the WhatsApp option, which is how
-    // every other share row on a phone works.
-    //
-    // `share.whatsapp` itself is deliberately NOT shortened — it must stay
-    // identical to ui.json's copy (`hub-dictionary.test.ts`), where it is the
-    // accessible name of the console's share button.
-    whatsapp: t(dict, "share.whatsappShort"),
-    whatsappAria: t(dict, "share.whatsappAria"),
-    copy: t(dict, "share.copy"),
-    copied: t(dict, "share.copied"),
-  };
+  // The five share words, from the ONE mapping every public page uses
+  // (`components/public-site/share-labels.ts` — short visible "WhatsApp", the
+  // full sentence as the accessible name). This page is a competition, so its
+  // accessible name says so.
+  const shareBarLabels = shareLabels(dict, "share.whatsappAria");
   // From the SHELL's slugs, deliberately, while `presentHref`/`registerHref`
   // below come off the document. The two cannot differ today (both resolve to
   // the route params), so this is a rule for the ~30s window above, and the
@@ -315,7 +301,7 @@ export default async function CompetitionHomePage({ params }: Props) {
                   tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
               <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} />
               <div className="mt-4 flex flex-wrap items-center gap-3">
-                <ShareBar path={sharePath} title={hub.name} labels={shareLabels} />
+                <ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />
                 {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
                     The `▸` stays OUT of the dictionary string: a decorative
                     glyph inside translated copy is what gets mangled per
@@ -412,7 +398,7 @@ export default async function CompetitionHomePage({ params }: Props) {
         // this is the one a spectator who scrolled into "everything about this
         // competition" expects to find there, and leaving the slot empty would
         // have shipped that section dead.
-        shareSlot={<ShareBar path={sharePath} title={hub.name} labels={shareLabels} />}
+        shareSlot={<ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />}
       />
 
       {/* THE PERIMETER BOARD, on the PAGE rather than inside a tab.

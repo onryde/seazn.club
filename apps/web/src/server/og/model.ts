@@ -56,9 +56,17 @@ export interface StandingsCardModel {
   divisionName: string;
   logo: string | null;
   rows: StandingsCardRow[];
-  /** Youth divisions of individuals/pairs list no names (gap 8). */
-  fallbackLine: string | null;
+  /**
+   * The `public` dictionary key for the line drawn INSTEAD of the table, or
+   * null when the table is drawn. Youth divisions of individuals/pairs list no
+   * names (gap 8); a division with no standings yet has nothing to list. A key,
+   * not a sentence: the route resolves it in the org's locale (the same split
+   * as `PostCardModel.eyebrowKey`). Both templates take `{brand}`.
+   */
+  fallbackKey: StandingsFallbackKey | null;
 }
+
+export type StandingsFallbackKey = "og.standings.youth" | "og.standings.empty";
 
 interface StandingsInput {
   orgName: string;
@@ -85,7 +93,7 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
   // division of individuals or pairs never prints entrant names at all.
   // Team names are fine (they name a side, not a child).
   if (input.youth && input.entrantKind !== "team") {
-    return { ...base, rows: [], fallbackLine: "Standings live on seazn.club" };
+    return { ...base, rows: [], fallbackKey: "og.standings.youth" };
   }
   const rows = input.rows
     .slice()
@@ -100,7 +108,7 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
   return {
     ...base,
     rows,
-    fallbackLine: rows.length === 0 ? "Fixtures & standings on seazn.club" : null,
+    fallbackKey: rows.length === 0 ? "og.standings.empty" : null,
   };
 }
 
