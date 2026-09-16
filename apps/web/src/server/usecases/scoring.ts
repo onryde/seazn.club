@@ -27,7 +27,7 @@ import type { AppendEventRequest } from "@/server/api-v1/schemas";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { subjectToScorerCapabilityGates } from "./scorers";
 import { fillSlot, markDependentSeedProposalsStale } from "./stages";
-import { detectSuspensions } from "./discipline";
+import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 
 export interface ScoreOutcome {
@@ -385,22 +385,30 @@ export function requiresDlsEntitlement(
 
 // Discipline (SPEC-1): a decided/void write re-folds the division's card ledger
 // into suspensions (recompute-on-read's write-side twin) and advances the
-// serving counter — but only when the division has enabled rules. A one-query
-// probe keeps the hot scoring path free for every division without discipline.
+// serving counter — when the division has enabled rules OR holds an active ban.
+// The second arm is a manual ban in a division whose auto-discipline is off:
+// nothing else on the write path serves it, and the public readers that used to
+// (the division page) are not a write path anyone should depend on. A one-query
+// probe keeps the hot scoring path free for every division with neither.
 //
 // Exported (P11): the batch importer fires the exact same decided side
 // effects scoreEvent does, in the same order — reusing these three rather
 // than copying their bodies is what keeps the two paths from drifting apart.
 export async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
-  await withTenant(auth.orgId, async (tx) => {
+  const served = await withTenant(auth.orgId, async (tx): Promise<ServedFlip[]> => {
     const [row] = await tx<{ division_id: string }[]>`
       select division_id from fixtures where id = ${fixtureId}`;
-    if (!row) return;
-    const [enabled] = await tx`
-      select 1 from discipline_rules where division_id = ${row.division_id} and enabled`;
-    if (!enabled) return;
-    await detectSuspensions(tx, row.division_id);
+    if (!row) return [];
+    const [due] = await tx`
+      select 1
+      where exists (select 1 from discipline_rules where division_id = ${row.division_id} and enabled)
+         or exists (select 1 from suspensions where division_id = ${row.division_id} and status = 'active')`;
+    if (!due) return [];
+    return detectSuspensions(tx, row.division_id);
   });
+  // After the commit, and only for the bans this pass flipped. The notice never
+  // throws (see `notifyServedSuspensions`): the score already stands.
+  await notifyServedSuspensions(served);
 }
 
 // News auto-drafts (SPEC-2): a decided/void write may draft a result/round_recap

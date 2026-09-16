@@ -13,6 +13,8 @@
 // and its `onClick` from every one of those tests. A function call leaves the
 // button in the caller's own tree, exactly where the Matches tab had it.
 import type { ReactNode } from "react";
+import type { Dict as PublicDict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 
 // One DOM, branched. Below `lg` the rail scrolls horizontally — a swipe rail —
 // and bleeds to the phone edge below `md` so a chip is never half-cut by the
@@ -86,3 +88,52 @@ export function hubChip(
     </button>
   );
 }
+
+/**
+ * The divisions a tab's items belong to, first-appearance order — and only when
+ * there are at least two, because one division is no choice. ONE list, read by
+ * the rail AND by the tab's reconciliation of `?division=`, so a chosen
+ * division is never honoured without a chip on screen that clears it (the
+ * Matches tab's review F2). Shared by the Knockout, Table and Teams tabs, so
+ * the three rails cannot drift apart on what counts as a choice.
+ */
+export function divisionChoices(
+  items: readonly { divisionSlug: string; divisionName: string }[],
+): { slug: string; name: string }[] {
+  const seen = new Map<string, string>();
+  for (const item of items) {
+    if (!seen.has(item.divisionSlug)) seen.set(item.divisionSlug, item.divisionName);
+  }
+  return seen.size > 1 ? [...seen].map(([slug, name]) => ({ slug, name })) : [];
+}
+
+/**
+ * The `?division=` rail: an All chip, then one chip per division — the
+ * Knockout tab's rail, testids and all, under the caller's `prefix`
+ * (`mh-table` → `mh-table-divisions`, `mh-table-division-all`,
+ * `mh-table-division-{slug}`). A function for the same reason `hubChip` is one:
+ * the tap tests walk the caller's tree, and a component would hide the buttons.
+ * Renders nothing when there is no choice.
+ */
+export function divisionRail(
+  prefix: string,
+  dict: PublicDict,
+  choices: readonly { slug: string; name: string }[],
+  division: string | null,
+  choose: (slug: string | null) => void,
+) {
+  if (choices.length === 0) return null;
+  return (
+    <div
+      data-testid={`${prefix}-divisions`}
+      role="group"
+      tabIndex={0}
+      aria-label={t(dict, "matchesHub.divisionsLabel")}
+      className={HUB_RAIL_CLASS}
+    >
+      {hubChip(`${prefix}-division-all`, t(dict, "matchesHub.division.all"), division === null, () => choose(null))}
+      {choices.map((d) => hubChip(`${prefix}-division-${d.slug}`, d.name, division === d.slug, () => choose(d.slug)))}
+    </div>
+  );
+}
+

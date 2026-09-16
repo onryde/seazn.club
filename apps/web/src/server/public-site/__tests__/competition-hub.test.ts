@@ -38,6 +38,7 @@ const readLeaderRowsMock = vi.hoisted(() => vi.fn());
 const registrationMock = vi.hoisted(() => vi.fn());
 const getPublicCompetitionMock = vi.hoisted(() => vi.fn());
 const getPublicDivisionMock = vi.hoisted(() => vi.fn());
+const memberRefsMock = vi.hoisted(() => vi.fn());
 
 // SPREAD the original in every case rather than replacing the module: each of
 // these files exports more than the one symbol under test, and other modules
@@ -60,7 +61,28 @@ vi.mock("../data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../data")>()),
   getPublicCompetition: getPublicCompetitionMock,
   getPublicDivision: getPublicDivisionMock,
+  readEntrantMemberRefs: memberRefsMock,
 }));
+// The discipline read is SQL — a real database's job
+// (`competition-hub-db.test.ts`, and `discipline.test.ts` for read-only-ness).
+// Here it is the seam whose OUTPUT the builder maps onto squads and division
+// boxes.
+const suspensionEntriesMock = vi.hoisted(() => vi.fn());
+vi.mock("@/server/usecases/discipline", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/discipline")>()),
+  activePublicSuspensionEntries: suspensionEntriesMock,
+}));
+// Observed, not silenced for its own sake: a read the hub swallows must still
+// leave a warning behind, or a broken discipline query reads as "no bans".
+const logMock = vi.hoisted(() => ({
+  error: vi.fn(),
+  warn: vi.fn(),
+  info: vi.fn(),
+  debug: vi.fn(),
+  fatal: vi.fn(),
+  trace: vi.fn(),
+}));
+vi.mock("@/server/logger", () => ({ log: logMock }));
 
 import { msgFor } from "@/lib/messages-i18n";
 import { decidedOutcomeText } from "@/lib/scoring-vocab";
@@ -726,6 +748,8 @@ beforeEach(() => {
   cacheCalls.splice(0);
   hasFeatureMock.mockResolvedValue(true);
   readLeaderRowsMock.mockResolvedValue([]);
+  suspensionEntriesMock.mockResolvedValue([]);
+  memberRefsMock.mockResolvedValue({});
   registrationMock.mockResolvedValue({
     competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
     org: { name: ORG.name, slug: ORG.slug, logo_url: null },
@@ -1158,6 +1182,429 @@ describe("loadCompetitionHub — info", () => {
     });
     const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
     expect(doc.info.registrationOpen).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Division-page parity (owner ruling 2026-09-16) — squads, suspensions,
+// division prose and the per-team calendar, before any redirect
+// ---------------------------------------------------------------------------
+
+describe("loadCompetitionHub — squads, suspensions, division prose, team calendars", () => {
+  type Member = PublicEntrant["members"][number];
+  const member = (over: Partial<Member> & { name: string }): Member => ({
+    photo: null,
+    person_id: null,
+    squad_number: null,
+    position: null,
+    ...over,
+  });
+  const withMembers = (byEntrant: Record<string, Member[]>): PublicEntrant[] =>
+    ENTRANTS.map((e) => ({ ...e, members: byEntrant[e.id] ?? [] }));
+  /** The INTERNAL row behind each squad line, positionally aligned with it. */
+  const ref = (
+    personId: string,
+    fullName: string,
+    squadNumber: number | null = null,
+    over: { consent?: { public_name?: boolean } | null; positionKey?: string | null } = {},
+  ) => ({ personId, fullName, consent: null, squadNumber, positionKey: null, ...over });
+  /** One active ban as the hub's single discipline read returns it. */
+  const ban = (personId: string, entrantId: string | null, name: string, remaining: number, divisionId = "div-1") => ({
+    divisionId,
+    personId,
+    entrantId,
+    name,
+    remaining,
+  });
+  const load = async () => {
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    return doc;
+  };
+  const marks = (doc: Awaited<ReturnType<typeof load>>) =>
+    doc.teams.map((t) => t.members!.map((m) => m.suspendedRemaining));
+
+  it("EMPTY FIRST: no squads and no bans → `members: []` and `suspensions: []` (never undefined, which reads as a document built before squads existed), and no internal member read", async () => {
+    const doc = await load();
+    expect(doc.teams.map((t) => t.members)).toEqual([[], [], []]);
+    expect(doc.divisions.map((d) => d.suspensions)).toEqual([[]]);
+    expect(memberRefsMock).not.toHaveBeenCalled();
+  });
+
+  it("members come from the masked entrant read, in the READ's order, with the raw squad number and position", async () => {
+    // Deliberately neither alphabetical nor by number: the order is the
+    // division page's (`public_entrants_v` sorts), and the builder must not
+    // re-sort what it was handed.
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [
+            member({ name: "Zed Adams", person_id: "pz", squad_number: 9, position: "FW" }),
+            member({ name: "Dev P.", squad_number: 3 }),
+            member({ name: "Arun Kumar", person_id: "pa" }),
+          ],
+        }),
+      }),
+    );
+    const doc = await load();
+    expect(doc.teams[0]!.members).toEqual([
+      {
+        personId: "pz",
+        name: "Zed Adams",
+        squadNumber: 9,
+        position: "FW",
+        playerHref: "/shared/riverside/autumn-cup/players/pz",
+        suspendedRemaining: null,
+      },
+      // No public id (no consent, or no player-profile entitlement): no link,
+      // and no id either — the view withheld it, so the document does.
+      { personId: null, name: "Dev P.", squadNumber: 3, position: null, playerHref: null, suspendedRemaining: null },
+      {
+        personId: "pa",
+        name: "Arun Kumar",
+        squadNumber: null,
+        position: null,
+        playerHref: "/shared/riverside/autumn-cup/players/pa",
+        suspendedRemaining: null,
+      },
+    ]);
+    // A squad and NO ban: the internal person read has nothing to mark, so it
+    // does not run (the EMPTY test cannot say this — it has no squad at all).
+    expect(memberRefsMock).not.toHaveBeenCalled();
+  });
+
+  it("a masked name never links: the DIVISION's name policy withholds the link and the id even where the view published one — the whole policy table", async () => {
+    // `public_entrants_v` publishes `person_id` on consent + entitlement and
+    // knows nothing of youth, so a consented minor arrives WITH an id and a
+    // masked name. The division page links on the id alone; the hub does not.
+    const cases: [youth: boolean, display: string | null, links: boolean][] = [
+      [false, null, true],
+      [true, null, false],
+      [true, "full", true],
+      [false, "first_initial", false],
+    ];
+    for (const [youth, display, links] of cases) {
+      const division: PublicDivision = { ...DIV, youth, player_name_display: display };
+      getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [division], liveNow: [] });
+      getPublicDivisionMock.mockResolvedValue(
+        divisionDetail({ division, entrants: withMembers({ e1: [member({ name: "Sam C.", person_id: "ps" })] }) }),
+      );
+      const [m] = (await load()).teams[0]!.members!;
+      expect({ youth, display, playerHref: m!.playerHref, personId: m!.personId }).toEqual({
+        youth,
+        display,
+        playerHref: links ? "/shared/riverside/autumn-cup/players/ps" : null,
+        personId: links ? "ps" : null,
+      });
+    }
+  });
+
+  it("the Suspended mark is by PERSON, never by name: two 'Sam Carter' on one team and a third on another — only the banned one is marked", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [
+            member({ name: "Sam Carter", squad_number: 4 }),
+            member({ name: "Sam Carter", squad_number: 5 }),
+          ],
+          e2: [member({ name: "Sam Carter" })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      e1: [ref("p-twin", "Sam Carter", 4), ref("p-banned", "Sam Carter", 5)],
+      e2: [ref("p-other", "Sam Carter")],
+    });
+    suspensionEntriesMock.mockResolvedValue([
+      { divisionId: "div-1", personId: "p-banned", entrantId: "e1", name: "Sam Carter", remaining: 2 },
+    ]);
+    const doc = await load();
+    // The banned person is the SECOND row — a name match would mark the first
+    // (or all three).
+    expect(marks(doc)).toEqual([[null, 2], [null], []]);
+    // One internal read, for exactly the entrants that list a squad.
+    expect(memberRefsMock).toHaveBeenCalledTimes(1);
+    expect(memberRefsMock).toHaveBeenCalledWith(["e1", "e2"]);
+  });
+
+  it("a ban holds across the DIVISION (the team-sheet gate is division-scoped): a ban with no entrant marks the person, and two bans mark the longer", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [member({ name: "Sam Carter" })],
+          e2: [member({ name: "Joe Bloggs" })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({ e1: [ref("p1", "Sam Carter")], e2: [ref("p2", "Joe Bloggs")] });
+    suspensionEntriesMock.mockResolvedValue([
+      { divisionId: "div-1", personId: "p1", entrantId: null, name: "Sam Carter", remaining: 1 },
+      // The longer ban FIRST, so "the last one read wins" cannot pass for
+      // "the longest wins".
+      { divisionId: "div-1", personId: "p2", entrantId: "e2", name: "Joe Bloggs", remaining: 3 },
+      { divisionId: "div-1", personId: "p2", entrantId: "e2", name: "Joe Bloggs", remaining: 1 },
+    ]);
+    expect(marks(await load())).toEqual([[1], [3], []]);
+  });
+
+  it("marks NOBODY where the internal rows cannot be trusted to line up: a count that disagrees with the squad, or two rows the view's own sort cannot tell apart", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          // Same full name, same (absent) number: `public_entrants_v` orders
+          // by `squad_number nulls last, full_name`, so their relative order
+          // is Postgres's choice, not a promise — either row could be the ban.
+          e1: [member({ name: "Sam Carter" }), member({ name: "Sam Carter" })],
+          // One member listed, two internal rows: a person joined between the
+          // cached read and this one.
+          e2: [member({ name: "Joe Bloggs" })],
+          e3: [member({ name: "Kim Lee", squad_number: 1 }), member({ name: "Sam Carter" })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      e1: [ref("p-a", "Sam Carter"), ref("p-b", "Sam Carter")],
+      e2: [ref("p-j", "Joe Bloggs"), ref("p-new", "Ann New")],
+      e3: [ref("p-k", "Kim Lee", 1), ref("p-a", "Sam Carter")],
+    });
+    suspensionEntriesMock.mockResolvedValue([
+      { divisionId: "div-1", personId: "p-a", entrantId: "e1", name: "Sam Carter", remaining: 2 },
+      { divisionId: "div-1", personId: "p-j", entrantId: "e2", name: "Joe Bloggs", remaining: 1 },
+    ]);
+    const doc = await load();
+    // e3 is the positive pair: the same banned person, unambiguous there, IS
+    // marked — so the refusals above are the guards, not a dead mapping.
+    expect(marks(doc)).toEqual([[null, null], [null], [null, 2]]);
+    // The bans themselves still list.
+    expect(doc.divisions[0]!.suspensions!.map((s) => s.name)).toEqual(["Joe Bloggs", "Sam Carter"]);
+  });
+
+  // The squad lines come from `getPublicDivision`'s cache (30s); the internal
+  // rows are read fresh, and a roster write does not revalidate that cache. A
+  // same-count edit between the two reads shifts who sits at index i while
+  // the count still agrees — so EVERY row must agree with its line before any
+  // is marked. Each case below carries a positive pair on e3, so the refusal
+  // is the guard, not a dead mapping.
+  it("a same-count RENUMBER marks nobody on that team: Carter went from 4 to 9, so the fresh rows sit one place off the cached lines (a youth division, where the NAME cannot tell them apart)", async () => {
+    const youth: PublicDivision = { ...DIV, youth: true };
+    getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [youth], liveNow: [] });
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        division: youth,
+        entrants: withMembers({
+          // Cached: Carter #4, Cole #7 — both "Sam C." in a youth division.
+          e1: [member({ name: "Sam C.", squad_number: 4 }), member({ name: "Sam C.", squad_number: 7 })],
+          e3: [member({ name: "Kim L.", squad_number: 1 })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      // Fresh: Cole #7, Carter #9.
+      e1: [ref("p-cole", "Sam Cole", 7), ref("p-carter", "Sam Carter", 9)],
+      e3: [ref("p-kim", "Kim Lee", 1)],
+    });
+    suspensionEntriesMock.mockResolvedValue([ban("p-carter", "e1", "Sam C.", 2), ban("p-kim", "e3", "Kim L.", 1)]);
+    // Zipped as-is, Carter's ban would land on line 2 — Cole, shirt 7.
+    expect(marks(await load())).toEqual([[null, null], [], [1]]);
+  });
+
+  it("a same-count SWAP marks nobody on that team: Ann and Bob traded shirts, so the numbers still read 1, 2 down the list but row 2 is Ann while line 2 reads Bob", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [member({ name: "Ann Lee", squad_number: 1 }), member({ name: "Bob Ray", squad_number: 2 })],
+          e3: [member({ name: "Kim Lee", squad_number: 1 })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      e1: [ref("p-bob", "Bob Ray", 1), ref("p-ann", "Ann Lee", 2)],
+      e3: [ref("p-kim", "Kim Lee", 1)],
+    });
+    suspensionEntriesMock.mockResolvedValue([ban("p-ann", "e1", "Ann Lee", 2), ban("p-kim", "e3", "Kim Lee", 1)]);
+    expect(marks(await load())).toEqual([[null, null], [], [1]]);
+  });
+
+  it("a same-count REPLACEMENT marks nobody on that team: a different Sam Carter took the same shirt, and the cached line's published id is still the old one's", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [member({ name: "Sam Carter", person_id: "p-old", squad_number: 5 })],
+          e3: [member({ name: "Kim Lee", person_id: "p-kim", squad_number: 1 })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      e1: [ref("p-new", "Sam Carter", 5, { consent: { public_name: true } })],
+      e3: [ref("p-kim", "Kim Lee", 1, { consent: { public_name: true } })],
+    });
+    suspensionEntriesMock.mockResolvedValue([ban("p-new", "e1", "Sam Carter", 3), ban("p-kim", "e3", "Kim Lee", 1)]);
+    const doc = await load();
+    expect(marks(doc)).toEqual([[null], [], [1]]);
+    // Nor does the new person's ban borrow the old person's player page.
+    const listed = doc.divisions[0]!.suspensions!;
+    expect(listed.find((s) => s.name === "Sam Carter")!.personId).toBeNull();
+    expect(listed.find((s) => s.name === "Kim Lee")!.personId).toBe("p-kim");
+  });
+
+  it("a same-count POSITION edit marks nobody on that team: the card no longer describes the roster", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [member({ name: "Ann Lee", squad_number: 1, position: "GK" })],
+          e3: [member({ name: "Kim Lee", squad_number: 1, position: "FW" })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      e1: [ref("p-ann", "Ann Lee", 1, { positionKey: "DF" })],
+      e3: [ref("p-kim", "Kim Lee", 1, { positionKey: "FW" })],
+    });
+    suspensionEntriesMock.mockResolvedValue([ban("p-ann", "e1", "Ann Lee", 2), ban("p-kim", "e3", "Kim Lee", 1)]);
+    expect(marks(await load())).toEqual([[null], [], [1]]);
+  });
+
+  it("ALL OR NOTHING: one renumbered player voids the whole card — Ann's own row still matches her line, and she is not marked either", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [
+            member({ name: "Ann Lee", squad_number: 1 }),
+            member({ name: "Bob Ray", squad_number: 2 }),
+            member({ name: "Cat Moss", squad_number: 3 }),
+          ],
+          e3: [member({ name: "Kim Lee", squad_number: 1 })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({
+      // Bob went from 2 to 4: rows 2 and 3 have moved, row 1 has not.
+      e1: [ref("p-ann", "Ann Lee", 1), ref("p-cat", "Cat Moss", 3), ref("p-bob", "Bob Ray", 4)],
+      e3: [ref("p-kim", "Kim Lee", 1)],
+    });
+    suspensionEntriesMock.mockResolvedValue([ban("p-ann", "e1", "Ann Lee", 2), ban("p-kim", "e3", "Kim Lee", 1)]);
+    expect(marks(await load())).toEqual([[null, null, null], [], [1]]);
+  });
+
+  it("each division lists its bans: the team's MASKED name, a public id only where the squad row has one, sorted by name", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: withMembers({
+          e1: [member({ name: "Zara Young", person_id: "pz" })],
+          e2: [member({ name: "Adam Old" })],
+        }),
+      }),
+    );
+    memberRefsMock.mockResolvedValue({ e1: [ref("pz", "Zara Young")], e2: [ref("pa", "Adam Old")] });
+    suspensionEntriesMock.mockResolvedValue([
+      { divisionId: "div-1", personId: "pz", entrantId: "e1", name: "Zara Young", remaining: 1 },
+      { divisionId: "div-1", personId: "pa", entrantId: "e2", name: "Adam Old", remaining: 2 },
+      // Off every roster, on an entrant a spectator cannot see (withdrawn):
+      // the ban lists, but neither the internal person nor entrant id does.
+      { divisionId: "div-1", personId: "p-gone", entrantId: "e-withdrawn", name: "Gone Person", remaining: 1 },
+    ]);
+    const doc = await load();
+    expect(doc.divisions[0]!.suspensions).toEqual([
+      { personId: null, name: "Adam Old", entrantId: "e2", entrantName: "Red Rockets", remaining: 2 },
+      { personId: null, name: "Gone Person", entrantId: null, entrantName: null, remaining: 1 },
+      { personId: "pz", name: "Zara Young", entrantId: "e1", entrantName: "Blue Blazers", remaining: 1 },
+    ]);
+    expect(JSON.stringify(doc)).not.toContain("p-gone");
+    expect(JSON.stringify(doc)).not.toContain('"pa"');
+    // The quiet twin of the two failure tests below: reads that succeed log nothing.
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
+  it("ONE discipline read for the whole competition: every division's id in one call, and each ban lists under its OWN division only", async () => {
+    const reserves: PublicDivision = { ...DIV, id: "div-2", slug: "reserves", name: "Reserves", youth: true };
+    getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [DIV, reserves], liveNow: [] });
+    getPublicDivisionMock.mockImplementation(async (_o: string, _c: string, slug: string) =>
+      divisionDetail(slug === "reserves" ? { division: reserves } : {}),
+    );
+    suspensionEntriesMock.mockResolvedValue([ban("p1", null, "Sam C.", 2, "div-2"), ban("p2", null, "Joe Bloggs", 1)]);
+    const doc = await load();
+    expect(suspensionEntriesMock).toHaveBeenCalledTimes(1);
+    expect(suspensionEntriesMock).toHaveBeenCalledWith(["div-1", "div-2"]);
+    expect(doc.divisions.map((d) => [d.slug, d.suspensions!.map((s) => s.name)])).toEqual([
+      ["open", ["Joe Bloggs"]],
+      ["reserves", ["Sam C."]],
+    ]);
+  });
+
+  it("a discipline read that FAILS hides the list and the marks — the hub still builds", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ entrants: withMembers({ e1: [member({ name: "Sam Carter" })] }) }),
+    );
+    memberRefsMock.mockResolvedValue({ e1: [ref("p1", "Sam Carter")] });
+    suspensionEntriesMock.mockRejectedValue(new Error("connection reset"));
+    const doc = await load();
+    expect(doc.divisions[0]!.suspensions).toEqual([]);
+    expect(marks(doc)).toEqual([[null], [], []]);
+    expect(doc.matches.length).toBeGreaterThan(0);
+    // Swallowed, never silent.
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+    expect(logMock.warn).toHaveBeenCalledWith(
+      { competitionId: COMP.id, err: "connection reset" },
+      "competition-hub: the suspension read failed; bans and Suspended marks are absent",
+    );
+  });
+
+  it("an internal member read that FAILS drops the marks but keeps the bans listed", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ entrants: withMembers({ e1: [member({ name: "Sam Carter" })] }) }),
+    );
+    memberRefsMock.mockRejectedValue(new Error("connection reset"));
+    suspensionEntriesMock.mockResolvedValue([{ divisionId: "div-1", personId: "p1", entrantId: "e1", name: "Sam Carter", remaining: 2 }]);
+    const doc = await load();
+    expect(marks(doc)).toEqual([[null], [], []]);
+    expect(doc.divisions[0]!.suspensions).toEqual([
+      { personId: null, name: "Sam Carter", entrantId: "e1", entrantName: "Blue Blazers", remaining: 2 },
+    ]);
+    expect(logMock.warn).toHaveBeenCalledTimes(1);
+    expect(logMock.warn).toHaveBeenCalledWith(
+      { divisionId: "div-1", err: "connection reset" },
+      "competition-hub: the squad member read failed; Suspended marks are absent",
+    );
+  });
+
+  it("division prose is sanitised HTML when there is some, and null when there is none (blank counts as none)", async () => {
+    const second: PublicDivision = {
+      ...DIV,
+      id: "div-2",
+      slug: "reserves",
+      name: "Reserves",
+      description: "Open to **every** club. <script>alert(1)</script>",
+    };
+    const third: PublicDivision = { ...DIV, id: "div-3", slug: "vets", name: "Vets", description: "   " };
+    getPublicCompetitionMock.mockResolvedValue({
+      org: ORG,
+      competition: COMP,
+      divisions: [DIV, second, third],
+      liveNow: [],
+    });
+    getPublicDivisionMock.mockImplementation(async (_o: string, _c: string, slug: string) =>
+      divisionDetail(slug === "reserves" ? { division: second } : slug === "vets" ? { division: third } : {}),
+    );
+    const doc = await load();
+    expect(doc.divisions.map((d) => [d.slug, d.description])).toEqual([
+      ["open", null],
+      // The inline <script> element is dropped (its text survives as text) —
+      // the pipeline's own output, captured, not a hand-typed guess.
+      ["reserves", "<p>Open to <strong>every</strong> club. alert(1)</p>"],
+      ["vets", null],
+    ]);
+    expect(suspensionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("each team's calendar is its division's .ics route with that entrant's filter", async () => {
+    const doc = await load();
+    expect(doc.teams.map((t) => t.calendarHref)).toEqual([
+      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e1",
+      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e2",
+      "/shared/riverside/autumn-cup/open/calendar.ics?entrant=e3",
+    ]);
+    // The card's own link is untouched (the redirect decision owns it).
+    expect(doc.teams[0]!.href).toBe("/shared/riverside/autumn-cup/open?tab=entrants");
   });
 });
 
@@ -2039,7 +2486,7 @@ describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
     // v2 since the Knockout tab (plan R4): the page renders this cached
     // document WITHOUT re-parsing it, so a v1 entry — which has no
     // `knockouts` — must never be served to a renderer that reads one.
-    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v2", "comp-1"]);
+    expect(cacheCalls[0]!.keyParts).toEqual(["pub-hub-v3", "comp-1"]);
     // Derived from the SAME tag helpers the writers use, so the two halves of
     // the invalidation story cannot drift: `fireDivisionRevalidate` fires
     // `divisionTag` and `competitionTag`, and both are declared here.

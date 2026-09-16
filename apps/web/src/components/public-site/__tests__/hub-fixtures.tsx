@@ -24,6 +24,8 @@ import {
   type HubDivisionT,
   type HubInfoT,
   type HubMatchT,
+  type HubMemberT,
+  type HubSuspensionT,
   type KnockoutRoundT,
   type KnockoutViewT,
   type LeaderBoardT,
@@ -143,8 +145,20 @@ export function division(slug: string, over: Partial<HubDivisionT> = {}): HubDiv
     formatLine: null,
     variantKey: "t20",
     href: `/${ORG}/${COMP}/${slug}`,
+    // What the builder emits for a division with no prose and no bans
+    // (division-page parity, 2026-09-16). A test that needs the OLD shape —
+    // a cached document from before these fields — deletes them.
+    description: null,
+    suspensions: [],
     ...over,
   };
+}
+
+/** One active ban in a division's list. Name and count are the two things an
+ *  Info-tab test varies; the rest defaults to a ban with no public person and
+ *  no known team. */
+export function suspension(name: string, remaining: number, over: Partial<HubSuspensionT> = {}): HubSuspensionT {
+  return { personId: null, name, entrantId: null, entrantName: null, remaining, ...over };
 }
 
 /** Every distinct division the given matches and tables belong to, in
@@ -432,8 +446,18 @@ export function team(
     colour,
     seed: null,
     href: `/${ORG}/${COMP}/${divisionSlug}?tab=entrants`,
+    // The builder's squad and calendar (division-page parity, 2026-09-16):
+    // an empty squad, and the division's .ics filtered to this entrant.
+    members: [],
+    calendarHref: `/${ORG}/${COMP}/${divisionSlug}/calendar.ics?entrant=${entrantId}`,
     ...over,
   };
+}
+
+/** One squad line. Positional in the two things every row has — a name and
+ *  (maybe) a number; everything else is an override. */
+export function member(name: string, squadNumber: number | null, over: Partial<HubMemberT> = {}): HubMemberT {
+  return { personId: null, name, squadNumber, position: null, playerHref: null, suspendedRemaining: null, ...over };
 }
 
 /**

@@ -468,14 +468,18 @@ describe("activeTab — which tab wins, and what happens when its data disappear
       // `MatchesTab` and tested there for a whole wave while this arm never
       // passed it, so a shared division link opened on All.
       ["matches", MatchesTab, ["doc", "dict", "locale", "now", "initialDivision"]],
-      ["table", TableTab, ["doc", "dict"]],
+      // Table and Teams FILTER by `?division=` since the division-page parity
+      // ruling (2026-09-16) — the redirect lands a division on
+      // `?tab=table&division={slug}` / `?tab=teams&division={slug}`.
+      ["table", TableTab, ["doc", "dict", "initialDivision"]],
       // The same `initialDivision` the Matches arm gets (plan R7): the future
       // division-page redirect lands a knockout division on
       // `?tab=knockout&division={slug}`, and an arm that dropped it would open
       // that link on every division's bracket.
       ["knockout", KnockoutTab, ["doc", "dict", "locale", "now", "initialDivision"]],
       ["stats", StatsTab, ["doc", "dict"]],
-      ["teams", TeamsTab, ["doc", "dict"]],
+      // `locale` for the squad's member count (a plural category).
+      ["teams", TeamsTab, ["doc", "dict", "locale", "initialDivision"]],
       ["info", InfoTab, ["doc", "dict", "locale", "descriptionSlot", "shareSlot"]],
     ] as const;
     for (const [id, Component, props] of expected) {

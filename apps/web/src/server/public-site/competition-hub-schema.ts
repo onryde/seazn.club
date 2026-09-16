@@ -55,6 +55,51 @@ export const CompetitionHubTabId = z.enum([
   "info",
 ]);
 
+/** An active ban, as the Info tab lists it under its division.
+ *
+ *  Carries WHO — the person and the entrant — so a consumer never has to match
+ *  a masked name against a roster to know which member it means (two "Arun
+ *  K." on two teams are two people). The Teams card does not match at all: the
+ *  builder resolves the tag onto `HubMember.suspendedRemaining` by the internal
+ *  person id, which never enters this document. */
+export const HubSuspension = z.object({
+  /** The person's PUBLIC id — present only where `public_entrants_v` would
+   *  publish it (public-name consent plus the player-profile entitlement) and
+   *  the division's name policy shows the name in full; null otherwise, and
+   *  null for a suspended person who is not on the entrant's current roster.
+   *  A person id beside a masked name is a player page one URL away. */
+  personId: z.string().nullable(),
+  /** Through `resolvePersonDisplayName` (RS008) against the division's policy
+   *  — the same string that person carries in their team's squad. */
+  name: z.string(),
+  /** Null when the ban names no entrant (`suspensions.entrant_id` is
+   *  nullable, and `on delete set null`). */
+  entrantId: z.string().nullable(),
+  /** The entrant's masked display name; null when there is no entrant or it
+   *  is not one a spectator can see. */
+  entrantName: z.string().nullable(),
+  remaining: z.number().int(),
+});
+
+/** One squad member on a Teams card, in the division page's own roster order
+ *  (`public_entrants_v`: squad number, numberless last, then full name). */
+export const HubMember = z.object({
+  /** Same rule as `HubSuspension.personId`: public, or null. */
+  personId: z.string().nullable(),
+  /** Already masked (`maskPublicEntrantNames`). Never blank. */
+  name: z.string(),
+  squadNumber: z.number().nullable(),
+  /** The sport's RAW position key ("GK", "WK") — the division page renders
+   *  it raw too. No position dictionary exists in any locale; the engine's
+   *  `PositionGroup.name` is English-only. */
+  position: z.string().nullable(),
+  /** The player page, ONLY where the name is shown in full and the view
+   *  published the person's id — a masked name never links. */
+  playerHref: z.string().nullable(),
+  /** Matches left on this member's ACTIVE ban in this division, or null. */
+  suspendedRemaining: z.number().int().nullable(),
+});
+
 export const HubDivision = z.object({
   id: z.string(),
   slug: z.string(),
@@ -74,6 +119,19 @@ export const HubDivision = z.object({
   formatLine: Msg.nullable(),
   variantKey: z.string(),
   href: z.string(),
+  /** The division's organiser prose as SANITISED HTML — `renderProse`'s
+   *  output, never raw Markdown, rendered with `CompetitionProse` exactly as
+   *  the division page renders the same column. Null when there is none.
+   *
+   *  OPTIONAL, with `suspensions` below and `TeamCard.members`/`calendarHref`,
+   *  for `byeSides`' reason and a longer window: the hub API answers
+   *  `s-maxage=30, stale-while-revalidate=300` (`PUBLIC_CACHE_CONTROL`), so a
+   *  spectator's new bundle can poll a document built before these fields
+   *  existed for minutes after a deploy. Absent reads as none. */
+  description: z.string().nullable().optional(),
+  /** Active bans in this division, sorted by name. Empty when none — and
+   *  empty, never an error, when the discipline read fails. */
+  suspensions: z.array(HubSuspension).optional(),
 });
 
 export const HubMatch = z.object({
@@ -233,7 +291,17 @@ export const TeamCard = z.object({
   badgeUrl: z.string().nullable(),
   colour: z.string().nullable(),
   seed: z.number().nullable(),
+  /** The division page's Entrants tab. The Teams card no longer LINKS here
+   *  (it opens in place, 2026-09-16); kept because the redirect that retires
+   *  the division page decides where this points, and has not been signed
+   *  off. Optional-shaped fields below: see `HubDivision.description`. */
   href: z.string(),
+  /** The squad, from the same masked entrant read as `name`. */
+  members: z.array(HubMember).optional(),
+  /** This entrant's own calendar: the division `.ics` route with its
+   *  `?entrant=` filter, which also carries every still-unresolved fixture in
+   *  the division (the route's own owner ruling, 2026-08-24). */
+  calendarHref: z.string().optional(),
 });
 
 export const HubInfo = z.object({
@@ -379,6 +447,8 @@ export type KnockoutViewT = z.infer<typeof KnockoutView>;
 export type LeaderBoardT = z.infer<typeof LeaderBoard>;
 export type LeaderRowT = z.infer<typeof LeaderRow>;
 export type TeamCardT = z.infer<typeof TeamCard>;
+export type HubMemberT = z.infer<typeof HubMember>;
+export type HubSuspensionT = z.infer<typeof HubSuspension>;
 export type HubInfoT = z.infer<typeof HubInfo>;
 
 // Re-exported so a W2 consumer building a hub document needs one import, not

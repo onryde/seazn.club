@@ -3,7 +3,7 @@
 // attributed card events into the ledger, and asserts the recompute-on-read
 // fold: accumulation buckets, dismissal, idempotency, void un-count, anonymous
 // exclusion, and the derived serving counter.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 
@@ -20,11 +20,23 @@ vi.mock("@/lib/email", async (importOriginal) => ({
   sendSuspensionServedEmail: emailMock.served,
 }));
 
+// `after` wrapped, not replaced (the `lib/__tests__/deferred.test.ts` pattern):
+// outside a request it still throws and `deferred` runs its task inline, except
+// where one test captures the task to run it LATER, as a request's after-window
+// would.
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return { ...actual, after: vi.fn(actual.after) };
+});
+
+import { after } from "next/server";
 import { sql, withTenant } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
+  activePublicSuspensionEntries,
   activeSuspensionsByEntrant,
   createManualSuspension,
   decideSuspension,
@@ -34,7 +46,7 @@ import {
   publicSuspensions,
   putDisciplineRules,
 } from "../discipline";
-import { scoreEvent } from "../scoring";
+import { refreshDiscipline, scoreEvent } from "../scoring";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -566,6 +578,367 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     expect(emailMock.served).toHaveBeenCalledTimes(1);
   });
 
+  // The division page used to be what served a manual ban in a division whose
+  // auto-discipline is OFF: `refreshDiscipline` returned before folding unless a
+  // rules row was enabled, so the only thing that ever advanced the counter was
+  // a public read. The competition hub reads bans without writing, so the WRITE
+  // path has to serve them itself. Read the row directly: every discipline
+  // reader serves on read and would hide a write path that does not.
+  it("discipline OFF: the score that serves a manual ban flips it on the write path, with one served email", async () => {
+    const ctx = await seedFootballDivision();
+    await sql`update divisions set status = 'active' where id = ${ctx.divisionId}`;
+    const [rulesRow] = await sql`select 1 from discipline_rules where division_id = ${ctx.divisionId}`;
+    expect(rulesRow).toBeUndefined();
+    const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
+    await claimPerson(ctx.personX, email);
+    const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+      personId: ctx.personX,
+      matchesTotal: 1,
+      reason: "violent conduct",
+    });
+    await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+    emailMock.served.mockClear();
+
+    // Team A forfeits a fixture after the ban was decided: that serves A's one match.
+    const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB);
+    await scoreEvent(ctx.auth, fx, {
+      expected_seq: 0,
+      type: "core.forfeit",
+      payload: { by: ctx.entrantA, reason: "walkover" },
+    });
+
+    const [row] = await sql<{ status: string; matches_served: number }[]>`
+      select status, matches_served from suspensions where id = ${manual.id}`;
+    expect(row).toEqual({ status: "served", matches_served: 1 });
+    expect(emailMock.served).toHaveBeenCalledTimes(1);
+    expect(emailMock.served.mock.calls[0]![0]).toBe(email);
+    // Running the write-path fold again finds nothing active: no second email.
+    await refreshDiscipline(ctx.auth, fx);
+    expect(emailMock.served).toHaveBeenCalledTimes(1);
+  });
+
+  // Two serving passes can read ONE active ban at the same time: a decided
+  // score write (`refreshDiscipline`) against a division page read
+  // (`publicSuspensions` still serves on read), or two decided writes in one
+  // division (two courts finishing together). Each computes "served"; only one
+  // may flip the row, and only the flip that COMMITTED may send the email.
+  describe("serving under concurrency — one flip, one served email, sent after commit", () => {
+    /** The holder's grip on the ban row: its transaction id and the row's
+     *  physical address, which is all a waiter on THAT row can be waiting on. */
+    interface Grip {
+      xid: string;
+      page: number;
+      tuple: number;
+    }
+
+    /** Poll `pg_locks` for genuinely blocked waiters — the technique of
+     *  `registration-concurrency.test.ts` — but only waiters on the HOLDER's
+     *  row: the first queues on the holder's transaction id, every later one on
+     *  that row's tuple lock. A cluster-wide count would let blocked locks from
+     *  any other suite on a shared database release the racers early, and a
+     *  race run one after the other still passes. */
+    async function waitForRacersBlocked(grip: Grip, count: number, timeoutMs = 10_000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const [row] = await sql<{ n: number }[]>`
+          select count(*)::int as n from pg_locks l
+          where not l.granted
+            and ((l.locktype = 'transactionid' and l.transactionid::text = ${grip.xid})
+              or (l.locktype = 'tuple' and l.relation = 'suspensions'::regclass
+                  and l.page = ${grip.page} and l.tuple = ${grip.tuple}))`;
+        if (row!.n >= count) return;
+        if (Date.now() > deadline) throw new Error(`only ${row!.n}/${count} blocked racers appeared — race not staged`);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }
+
+    it("the race release counts ONLY waiters on the held ban row — blocked locks elsewhere on the database never release it", async () => {
+      const { personX: personId } = await seedFootballDivision();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let staged!: () => void;
+      const isStaged = new Promise<void>((resolve) => (staged = resolve));
+      // Two waiters blocked on an UNRELATED row (a person), from this very suite.
+      const holder = sql.begin(async (tx) => {
+        await tx`select 1 from persons where id = ${personId} for update`;
+        staged();
+        await held;
+      });
+      holder.catch(() => {});
+      await isStaged;
+      const bystanders = Promise.all([
+        sql`update persons set full_name = full_name where id = ${personId}`,
+        sql`update persons set full_name = full_name where id = ${personId}`,
+      ]);
+      bystanders.catch(() => {});
+      try {
+        // Not vacuous: wait until the database really has both bystanders blocked…
+        for (let i = 0; ; i++) {
+          const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from pg_locks where not granted`;
+          if (n >= 2) break;
+          if (i > 400) throw new Error("the bystanders never blocked");
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        // …and a grip on a transaction and a row nobody is waiting on is not staged.
+        await expect(waitForRacersBlocked({ xid: "0", page: 0, tuple: 0 }, 2, 400)).rejects.toThrow("race not staged");
+      } finally {
+        release();
+        await holder;
+        await bystanders;
+      }
+    });
+
+    /** A claimed player's one-match ban, confirmed, with two decided fixtures
+     *  of their team stamped after it — either one serves it. */
+    async function dueBan() {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+        personId: ctx.personX,
+        matchesTotal: 1,
+        reason: "violent conduct",
+      });
+      await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+      const fixtures: string[] = [];
+      for (const seq of [2, 3]) {
+        const fx = await makeFixture(ctx, seq, ctx.entrantA, ctx.entrantB, "decided");
+        await sql`
+          insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+          values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'core.note', ${sql.json({ text: "d" })},
+                  now() + interval '1 hour')`;
+        fixtures.push(fx);
+      }
+      const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${ctx.orgId}`;
+      const [comp] = await sql<{ slug: string }[]>`select slug from competitions where org_id = ${ctx.orgId}`;
+      const [division] = await sql<{ slug: string }[]>`select slug from divisions where id = ${ctx.divisionId}`;
+      emailMock.served.mockClear();
+      return { ctx, banId: manual.id, fixtures, slugs: [org!.slug, comp!.slug, division!.slug] as const };
+    }
+
+    const statusOf = async (banId: string) =>
+      (await sql<{ status: string; matches_served: number }[]>`
+        select status, matches_served from suspensions where id = ${banId}`)[0];
+
+    /** Park every racer on the ban's row lock — so each has already READ the
+     *  ban as active and computed "served" — then release them together. */
+    async function race<T = unknown>(banId: string, racers: () => Promise<T>[]): Promise<T[]> {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let staged!: () => void;
+      const isStaged = new Promise<void>((resolve) => (staged = resolve));
+      let grip!: Grip;
+      const holder = sql.begin(async (tx) => {
+        const [row] = await tx<{ ctid: string; xid: string }[]>`
+          select ctid::text as ctid, pg_current_xact_id()::text as xid
+          from suspensions where id = ${banId} for update`;
+        const [page, tuple] = row!.ctid.replace(/[()]/g, "").split(",").map(Number);
+        grip = { xid: row!.xid, page: page!, tuple: tuple! };
+        staged();
+        await held;
+      });
+      holder.catch(() => {});
+      await isStaged;
+      const racing = Promise.all(racers());
+      racing.catch(() => {});
+      try {
+        await waitForRacersBlocked(grip, 2);
+      } finally {
+        // Released even when staging fails, so a broken stage reds this test
+        // instead of parking the racers on the holder forever.
+        release();
+        await holder;
+      }
+      return racing;
+    }
+
+    it("a decided score write and a division page read, together: one flip, ONE served email", async () => {
+      const { ctx, banId, fixtures, slugs } = await dueBan();
+      await race<unknown>(banId, () => [refreshDiscipline(ctx.auth, fixtures[0]!), publicSuspensions(...slugs)]);
+      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+
+    it("two decided score writes in one division, together: one flip, ONE served email", async () => {
+      const { ctx, banId, fixtures } = await dueBan();
+      await race(banId, () => [refreshDiscipline(ctx.auth, fixtures[0]!), refreshDiscipline(ctx.auth, fixtures[1]!)]);
+      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+
+    it("exactly ONE of two racing passes reports the flip — the other's guarded update matched nothing", async () => {
+      const { ctx, banId } = await dueBan();
+      const flips = await race(banId, () => [
+        withTenant(ctx.orgId, (tx) => detectSuspensions(tx, ctx.divisionId)),
+        withTenant(ctx.orgId, (tx) => detectSuspensions(tx, ctx.divisionId)),
+      ]);
+      expect(flips.flat().map((flip) => flip.id)).toEqual([banId]);
+      // The pass itself never mails: its caller does, once the flip is committed.
+      expect(emailMock.served).not.toHaveBeenCalled();
+    });
+
+    it("a serving pass whose transaction ROLLS BACK sends nothing; the next committed pass flips it and sends the one email", async () => {
+      const { ctx, banId } = await dueBan();
+      await expect(
+        withTenant(ctx.orgId, async (tx) => {
+          await detectSuspensions(tx, ctx.divisionId);
+          throw new Error("rolled back after serving");
+        }),
+      ).rejects.toThrow("rolled back after serving");
+      expect(await statusOf(banId)).toEqual({ status: "active", matches_served: 0 });
+      expect(emailMock.served).not.toHaveBeenCalled();
+
+      await listSuspensions(ctx.auth, ctx.divisionId);
+      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+
+    // `activeSuspensionsByEntrant` serves inside a transaction its CALLER owns
+    // (the organiser division page), so it cannot send after a commit it
+    // never sees: it hands the flip to a notice that waits for that
+    // transaction to end and mails only a flip that committed.
+    it("the entrant-chip read serves inside its caller's transaction: nothing if that rolls back, one email once it commits", async () => {
+      const { ctx, banId } = await dueBan();
+      await expect(
+        withTenant(ctx.orgId, async (tx) => {
+          await activeSuspensionsByEntrant(tx, ctx.divisionId);
+          throw new Error("caller rolled back");
+        }),
+      ).rejects.toThrow("caller rolled back");
+      await new Promise((r) => setTimeout(r, 500));
+      expect(await statusOf(banId)).toEqual({ status: "active", matches_served: 0 });
+      expect(emailMock.served).not.toHaveBeenCalled();
+
+      await withTenant(ctx.orgId, (tx) => activeSuspensionsByEntrant(tx, ctx.divisionId));
+      await expect.poll(() => emailMock.served.mock.calls.length, { timeout: 5_000 }).toBe(1);
+      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
+      await new Promise((r) => setTimeout(r, 300));
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+
+    // The notice checks THIS pass's flip, not merely that the row is served: a
+    // served row flipped by someone else carries someone else's email.
+    it("an entrant-chip notice that runs after its caller ROLLED BACK and another pass flipped and committed sends nothing — the other pass's own notice is the one email", async () => {
+      const { ctx, banId } = await dueBan();
+      // Capture the tail work instead of running it inline, as a request's
+      // after-window would run it later.
+      let notice: (() => unknown) | undefined;
+      vi.mocked(after).mockImplementationOnce((task) => {
+        notice = task as () => unknown;
+      });
+      await expect(
+        withTenant(ctx.orgId, async (tx) => {
+          await activeSuspensionsByEntrant(tx, ctx.divisionId);
+          throw new Error("caller rolled back");
+        }),
+      ).rejects.toThrow("caller rolled back");
+      expect(notice).toBeTypeOf("function");
+
+      // Another pass flips the ban for real, commits and mails.
+      await listSuspensions(ctx.auth, ctx.divisionId);
+      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+
+      // Now the rolled-back pass's notice runs: the row IS served, but not by it.
+      await notice!();
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // A notice runs after the write committed. If it throws, the write still
+  // stands — so it must not make the write look failed.
+  describe("a served notice that fails never fails the write that committed", () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    });
+    // `log` is a module singleton: an unrestored spy leaks into every later test.
+    afterEach(() => {
+      warn.mockRestore();
+    });
+
+    async function forfeitServesBan() {
+      const ctx = await seedFootballDivision();
+      await sql`update divisions set status = 'active' where id = ${ctx.divisionId}`;
+      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+        personId: ctx.personX,
+        matchesTotal: 1,
+        reason: "violent conduct",
+      });
+      await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+      const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB);
+      return { ctx, banId: manual.id, fx };
+    }
+
+    it("the notifier THROWS after the score committed: scoreEvent still resolves, the result and the flip both stand, and a warning is logged", async () => {
+      const { ctx, banId, fx } = await forfeitServesBan();
+      emailMock.served.mockImplementationOnce(() => {
+        throw new Error("mail client blew up");
+      });
+
+      await expect(
+        scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by: ctx.entrantA, reason: "walkover" } }),
+      ).resolves.toBeDefined();
+
+      const [fixture] = await sql<{ status: string }[]>`select status from fixtures where id = ${fx}`;
+      expect(fixture!.status).toBe("forfeited");
+      const [ban] = await sql<{ status: string }[]>`select status from suspensions where id = ${banId}`;
+      expect(ban!.status).toBe("served");
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ suspensionIds: [banId], err: "mail client blew up" }),
+        "discipline: the served notice failed after commit; the ban stands served",
+      );
+    });
+
+    it("a served email whose send REJECTS is logged, never silently dropped", async () => {
+      const { ctx, banId, fx } = await forfeitServesBan();
+      emailMock.served.mockRejectedValueOnce(new Error("provider 503"));
+      await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by: ctx.entrantA, reason: "walkover" } });
+      await expect
+        .poll(() => warn.mock.calls.some((c: unknown[]) => (c[1] as string) === "discipline: a served email failed to send"))
+        .toBe(true);
+      const call = warn.mock.calls.find((c: unknown[]) => (c[1] as string) === "discipline: a served email failed to send")!;
+      expect(call[0]).toMatchObject({ suspensionId: banId, err: "provider 503" });
+    });
+
+    it("the CONFIRMED notice throwing does not fail the decision that committed, and a warning is logged", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+        personId: ctx.personX,
+        matchesTotal: 1,
+        reason: "violent conduct",
+      });
+      emailMock.confirmed.mockImplementationOnce(() => {
+        throw new Error("mail client blew up");
+      });
+      await expect(decideSuspension(ctx.auth, manual.id, { kind: "confirm" })).resolves.toMatchObject({
+        status: "active",
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ suspensionId: manual.id, err: "mail client blew up" }),
+        "discipline: the confirmed notice failed after commit; the decision stands",
+      );
+    });
+
+    it("a confirmed email whose send REJECTS is logged, never silently dropped", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+        personId: ctx.personX,
+        matchesTotal: 1,
+        reason: "violent conduct",
+      });
+      emailMock.confirmed.mockRejectedValueOnce(new Error("provider 503"));
+      await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+      await expect
+        .poll(() => warn.mock.calls.some((c: unknown[]) => (c[1] as string) === "discipline: a confirmed email failed to send"))
+        .toBe(true);
+      const call = warn.mock.calls.find((c: unknown[]) => (c[1] as string) === "discipline: a confirmed email failed to send")!;
+      expect(call[0]).toMatchObject({ suspensionId: manual.id, err: "provider 503" });
+    });
+  });
+
   it("waive: excluded from activeSuspensionsByEntrant/publicSuspensions; served email never fires", async () => {
     const ctx = await seedFootballDivision();
     const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
@@ -695,5 +1068,132 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     expect(pub[0]!.name).not.toContain("Xavier");
     expect(pub[0]!.name).not.toContain("Smith");
     expect(pub[0]!.name).toBe("X.S."); // "Xavier Smith" initials, per public_person_name
+  });
+
+  // Division-page parity for the competition hub (owner ruling 2026-09-16):
+  // the hub tags the suspended MEMBER on its Teams card and lists the ban under
+  // its division on Info, so it needs WHO — a person and an entrant — not a
+  // masked string it would have to match against a roster by name. And it
+  // reads without writing: a hub rebuild has no single-flight.
+  describe("activePublicSuspensionEntries — who is suspended, for the hub, read-only", () => {
+    async function slugsOf(ctx: Ctx) {
+      const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${ctx.orgId}`;
+      const [comp] = await sql<{ slug: string }[]>`select slug from competitions where org_id = ${ctx.orgId}`;
+      const [division] = await sql<{ slug: string }[]>`select slug from divisions where id = ${ctx.divisionId}`;
+      return [org!.slug, comp!.slug, division!.slug] as const;
+    }
+    async function ban(ctx: Ctx, personId: string, matchesTotal: number): Promise<string> {
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
+        personId,
+        matchesTotal,
+        reason: "violent conduct",
+      });
+      await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+      return manual.id;
+    }
+    it("carries the person and the entrant, so two people with ONE name on two teams are told apart", async () => {
+      const ctx = await seedFootballDivision();
+      // A second "Xavier Smith" — a different person, on the OTHER team. Any
+      // join by name marks both; only the ids can mark one.
+      const [{ id: twin }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name) values (${ctx.orgId}, 'Xavier Smith') returning id`;
+      await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${ctx.entrantB}, ${twin}, ${ctx.orgId})`;
+      await ban(ctx, ctx.personX, 2);
+
+      const entries = await activePublicSuspensionEntries([ctx.divisionId]);
+      expect(entries).toEqual([
+        { divisionId: ctx.divisionId, personId: ctx.personX, entrantId: ctx.entrantA, name: "X.S.", remaining: 2 },
+      ]);
+      expect(entries[0]!.personId).not.toBe(twin);
+    });
+
+    // The hub reader's naming rule for a ban: `public_person_name` (consent — a
+    // never-answered consent reads as initials) with the division's youth/name
+    // policy applied ON TOP through the RS008 resolver (so a consented youth is
+    // masked too), read from the division's own columns. The strip on THIS
+    // branch is `public_person_name` alone; the youth half reaches it with the
+    // privacy hotfix, which applies the same resolver on top. Only the adult
+    // cases are asserted equal to the strip (the parity test below).
+    it("the hub reader names a ban by public_person_name, then the division's youth/name policy: never-answered consent → initials, consented adult → full name, consented youth → masked, opt-out → initials", async () => {
+      const adult = await seedFootballDivision();
+      const youth = await seedFootballDivision();
+      await sql`update divisions set youth = true where id = ${youth.divisionId}`;
+      await ban(adult, adult.personX, 1);
+      await ban(youth, youth.personX, 3);
+      const both = [adult.divisionId, youth.divisionId];
+      const nameIn = async (divisionId: string) =>
+        (await activePublicSuspensionEntries(both)).find((e) => e.divisionId === divisionId)!.name;
+
+      // Never answered, both divisions: initials — the strip's SQL name.
+      expect(await nameIn(adult.divisionId)).toBe("X.S.");
+      expect(await nameIn(youth.divisionId)).toBe("X.S.");
+
+      await sql`update persons set consent = ${sql.json({ public_name: true })} where id in ${sql([adult.personX, youth.personX])}`;
+      // Consented adult: the full name. Consented youth: the division masks it.
+      expect(await nameIn(adult.divisionId)).toBe("Xavier Smith");
+      expect(await nameIn(youth.divisionId)).toBe("Xavier S.");
+
+      await sql`update persons set consent = ${sql.json({ public_name: false })} where id = ${adult.personX}`;
+      expect(await nameIn(adult.divisionId)).toBe("X.S.");
+
+      // A division nobody asked about is not read, and no ids is no query.
+      expect((await activePublicSuspensionEntries([adult.divisionId])).map((e) => e.divisionId)).toEqual([
+        adult.divisionId,
+      ]);
+      expect(await activePublicSuspensionEntries([])).toEqual([]);
+    });
+
+    it("an adult ban reads the same on the hub as on the division strip, for every consent answer", async () => {
+      const ctx = await seedFootballDivision();
+      await ban(ctx, ctx.personX, 2);
+      const [orgSlug, compSlug, divSlug] = await slugsOf(ctx);
+      for (const consent of [{}, { public_name: true }, { public_name: false }]) {
+        await sql`update persons set consent = ${sql.json(consent)} where id = ${ctx.personX}`;
+        const hub = (await activePublicSuspensionEntries([ctx.divisionId])).map((e) => e.name);
+        const strip = (await publicSuspensions(orgSlug, compSlug, divSlug)).map((e) => e.name);
+        expect({ consent, hub }).toEqual({ consent, hub: strip });
+      }
+    });
+
+    it("a competition a spectator cannot see answers nothing, whatever id is passed", async () => {
+      const ctx = await seedFootballDivision();
+      await ban(ctx, ctx.personX, 1);
+      await sql`update competitions set visibility = 'private' where org_id = ${ctx.orgId}`;
+      expect(await activePublicSuspensionEntries([ctx.divisionId])).toEqual([]);
+    });
+
+    it("READ-ONLY: a ban a result has already served stays active in the table, is still listed, and no served email fires — the division page's reader still serves it", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const id = await ban(ctx, ctx.personX, 1);
+      // A decided fixture for A, stamped after the ban — written straight to
+      // the table, so no write path has served the ban yet.
+      const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, "decided");
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'core.note', ${sql.json({ text: "d" })},
+                now() + interval '1 hour')`;
+      const statusOf = async () =>
+        (await sql<{ status: string; matches_served: number }[]>`
+          select status, matches_served from suspensions where id = ${id}`)[0];
+      emailMock.served.mockClear();
+
+      const entries = await activePublicSuspensionEntries([ctx.divisionId]);
+      expect(entries.map((e) => e.personId)).toEqual([ctx.personX]);
+      expect(await statusOf()).toEqual({ status: "active", matches_served: 0 });
+      expect(emailMock.served).not.toHaveBeenCalled();
+
+      // The division page is untouched: its reader still serves on read.
+      const [orgSlug, compSlug, divSlug] = await slugsOf(ctx);
+      expect(await publicSuspensions(orgSlug, compSlug, divSlug)).toEqual([]);
+      expect(await statusOf()).toEqual({ status: "served", matches_served: 1 });
+      expect(emailMock.served).toHaveBeenCalledTimes(1);
+    });
+
+    it("the division page's reader keeps its 404 for a division a spectator cannot see", async () => {
+      const ctx = await seedFootballDivision();
+      const [orgSlug, compSlug] = await slugsOf(ctx);
+      await expect(publicSuspensions(orgSlug, compSlug, "no-such-division")).rejects.toMatchObject({ status: 404 });
+    });
   });
 });

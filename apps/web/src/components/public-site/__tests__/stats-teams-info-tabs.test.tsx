@@ -42,21 +42,33 @@
 //  6. The brief's Teams card says "seed chip when `seed`". Shipped as
 //     `seed !== null`, which keeps the chip for a zero-seeded entrant; the
 //     literal truthiness silently drops it. Tested both ways below.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { autoColour } from "@/components/ui/entity-logo";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { deriveHubTabs } from "@/lib/matches-hub";
-import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
+import type { CompetitionHubDocT, HubDivisionT, TeamCardT } from "@/server/public-site/competition-hub-schema";
 import { InfoTab, calendarSlug, competitionDateLine } from "../matches-hub/info-tab";
 import { StatsTab } from "../matches-hub/stats-tab";
 import { TeamsTab } from "../matches-hub/teams-tab";
-import { board, calendarFor, division, hubDoc, info, leader, m, team } from "./hub-fixtures";
+import {
+  board,
+  calendarFor,
+  division,
+  hubDoc,
+  info,
+  leader,
+  m,
+  member,
+  suspension,
+  team,
+} from "./hub-fixtures";
 
 const dict = en as Dict;
 
@@ -460,14 +472,14 @@ describe("TeamsTab", () => {
   });
 
   const render = (d: CompetitionHubDocT = teamsDoc, dd: Dict = dict) =>
-    renderToStaticMarkup(<TeamsTab doc={d} dict={dd} />);
+    renderToStaticMarkup(<TeamsTab doc={d} dict={dd} locale="en" />);
 
   it("EMPTY: no teams → the mh-teams-empty sentence — and the tab that would show it does not exist", () => {
     const empty = hubDoc({ teams: [] });
     const h = render(empty);
     expect(h).toContain(`data-testid="mh-teams-empty"`);
     expect(h).toContain("No entrants yet");
-    expect(h).not.toContain(`data-testid="mh-teams-division-`);
+    expect(h).not.toContain(`data-testid="mh-teams-heading-`);
     // Review F6, as for Stats: the panel root survives the empty arm.
     expect(rootClasses(h, "mh-teams")).toContain("min-w-0");
     expect(empty.tabs).not.toContain("teams");
@@ -478,7 +490,7 @@ describe("TeamsTab", () => {
 
   it("cards are grouped under ONE heading per division, in first-appearance order, each card scoped to its own group", () => {
     const h = render();
-    expect([...h.matchAll(/data-testid="mh-teams-division-([a-z0-9-]+)"/g)].map((x) => x[1])).toEqual(
+    expect([...h.matchAll(/data-testid="mh-teams-heading-([a-z0-9-]+)"/g)].map((x) => x[1])).toEqual(
       ["sunday-league", "premier"],
     );
     // BOTH headings' text, not just the first — the mutation sweep's T19.
@@ -488,15 +500,15 @@ describe("TeamsTab", () => {
     // document-scoped read happens to get right. Task 9's review F1, in a new
     // file: a per-group derivation needs a MULTI-group witness on the value,
     // not only on the testid.
-    expect(h).toMatch(/<h2[^>]*data-testid="mh-teams-division-sunday-league"[^>]*>Sunday League</);
-    expect(h).toMatch(/<h2[^>]*data-testid="mh-teams-division-premier"[^>]*>Premier</);
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-teams-heading-sunday-league"[^>]*>Sunday League</);
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-teams-heading-premier"[^>]*>Premier</);
     expect([...h.matchAll(/data-testid="(mh-team-e[0-9]+)"/g)].map((x) => x[1])).toEqual([
       "mh-team-e1",
       "mh-team-e2",
       "mh-team-e3",
       "mh-team-e4",
     ]);
-    const premier = h.slice(h.indexOf(`data-testid="mh-teams-division-premier"`));
+    const premier = h.slice(h.indexOf(`data-testid="mh-teams-heading-premier"`));
     expect(premier).toContain(`data-testid="mh-team-e3"`);
     expect(premier).not.toContain(`data-testid="mh-team-e1"`);
   });
@@ -593,24 +605,18 @@ describe("TeamsTab", () => {
     expect(rowHtml(bad, "mh-team-e8")).toContain(">PP<");
   });
 
-  it("every card links to ITS OWN division's entrants tab, and the card is the 44px tap target", () => {
+  it("a card is a DISCLOSURE, not a link: its summary is the 44px tap target, and nothing on it leads back to the division page", () => {
+    // Division-page parity (owner ruling 2026-09-16). The card used to be a
+    // link to `?tab=entrants` on the division page; the squad now opens IN the
+    // card, and the division page is about to redirect to this hub — a link
+    // there would loop. `TeamCard.href` stays in the document for that
+    // decision; this tab no longer renders it.
     const h = render();
-    // Two divisions, two hrefs. An assertion set where all four agreed could
-    // not see a card bound to the first team's href.
-    expect(tagOf(h, "mh-team-e1")).toContain(
-      `href="/riverside/autumn-cup/sunday-league?tab=entrants"`,
-    );
-    expect(tagOf(h, "mh-team-e2")).toContain(
-      `href="/riverside/autumn-cup/sunday-league?tab=entrants"`,
-    );
-    expect(tagOf(h, "mh-team-e3")).toContain(`href="/riverside/autumn-cup/premier?tab=entrants"`);
-    expect(tagOf(h, "mh-team-e4")).toContain(`href="/riverside/autumn-cup/premier?tab=entrants"`);
-    // `?tab=entrants` became a REAL destination in `9150768cd` — the division
-    // page's `Tabs` reads the query parameter now, where it was `useState(0)`
-    // and every one of these links landed the spectator on Schedule (Task 9,
-    // review G1). The href is still all this component is answerable for.
-    for (const id of ["mh-team-e1", "mh-team-e2", "mh-team-e3", "mh-team-e4"]) {
-      expect(tagOf(h, id).match(/class="([^"]*)"/)?.[1]?.split(" "), id).toContain("min-h-11");
+    for (const id of ["e1", "e2", "e3", "e4"]) {
+      expect(tagOf(h, `mh-team-${id}`), id).toMatch(/^<details /);
+      expect(h, id).not.toContain(`?tab=entrants`);
+      const summary = rowHtml(h, `mh-team-${id}`).match(/<summary class="([^"]*)"/)?.[1]?.split(" ");
+      expect(summary, id).toContain("min-h-11");
     }
   });
 
@@ -655,6 +661,284 @@ describe("TeamsTab", () => {
     const empty = render(hubDoc({ teams: [] }), es as Dict);
     expect(empty).toContain("Aún no hay participantes");
     expect(empty).not.toContain("No entrants yet");
+  });
+});
+
+describe("TeamsTab — squads, bans and the team calendar (division-page parity, 2026-09-16)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * One division, two teams, and every arm of a squad line on one render:
+   *
+   *  • `Arun Kumar` #7 — linked (a public player page), position "WK";
+   *  • `Dev P.` #—     — MASKED: no link, no number;
+   *  • `Sam Carter` #9 — SUSPENDED with a position too, so the tag's win over
+   *    the position is visible rather than assumed;
+   *  • `Zed Adams` #12 — linked AND suspended, so the tag does not eat the link.
+   *
+   * `e2` has NO squad — the empty arm, stated first below.
+   */
+  const squadDoc = hubDoc({
+    teams: [
+      team("e1", "Blue Blazers", null, "#123456", {
+        seed: 1,
+        members: [
+          member("Arun Kumar", 7, { personId: "p1", playerHref: "/riverside/autumn-cup/players/p1", position: "WK" }),
+          member("Dev P.", null),
+          member("Sam Carter", 9, { position: "BAT", suspendedRemaining: 2 }),
+          member("Zed Adams", 12, {
+            personId: "p4",
+            playerHref: "/riverside/autumn-cup/players/p4",
+            suspendedRemaining: 1,
+          }),
+        ],
+      }),
+      team("e2", "Red Rockets", null, null),
+    ],
+  });
+  const render = (d: CompetitionHubDocT = squadDoc, dd: Dict = dict, locale: "en" | "es" = "en") =>
+    renderToStaticMarkup(<TeamsTab doc={d} dict={dd} locale={locale} />);
+  /** One squad line, from its testid to its own `</li>` — lines never nest. */
+  const line = (h: string, entrantId: string, i: number) => rowHtml(h, `mh-team-${entrantId}-member-${i}`);
+  /** A whole card, from its `<li>` to the `</details>` that closes it. */
+  const cardHtml = (h: string, entrantId: string) => {
+    const at = h.indexOf(`data-testid="mh-team-${entrantId}"`);
+    expect(at, entrantId).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf("</details>", at));
+  };
+  const classesOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [];
+
+  it("EMPTY SQUAD FIRST: no lines, one muted sentence, '0 members' on the summary — and the calendar is still offered", () => {
+    const h = render();
+    const e2 = cardHtml(h, "e2");
+    expect(e2).not.toContain(`data-testid="mh-team-e2-member-`);
+    expect(e2).toContain(`data-testid="mh-team-e2-squad-empty"`);
+    expect(classesOf(tagOf(h, "mh-team-e2-squad-empty"))).toContain("text-ink-muted");
+    expect(e2).toContain("No squad listed yet");
+    expect(e2).toContain(">0 members<");
+    expect(tagOf(h, "mh-team-e2-calendar")).toContain(
+      `href="/riverside/autumn-cup/sunday-league/calendar.ics?entrant=e2"`,
+    );
+    // The positive pair: a team WITH a squad has no empty sentence.
+    expect(cardHtml(h, "e1")).not.toContain("No squad listed yet");
+  });
+
+  it("a document from BEFORE squads (cached upstream, no `members`, no `calendarHref`) makes NO squad claim — no count, no empty sentence, no calendar link — and never crashes", () => {
+    const old = hubDoc({ teams: [team("e1", "Blue Blazers", null, null)] });
+    delete (old.teams[0] as Partial<TeamCardT>).members;
+    delete (old.teams[0] as Partial<TeamCardT>).calendarHref;
+    const h = render(old);
+    const card = cardHtml(h, "e1");
+    expect(card).toContain(">Blue Blazers<");
+    // The document never said the squad is empty; it said nothing at all.
+    expect(card).not.toContain("No squad listed yet");
+    expect(card).not.toContain(`data-testid="mh-team-e1-squad-empty"`);
+    expect(card).not.toMatch(/>\d+ members?</);
+    expect(card).not.toContain(`data-testid="mh-team-e1-member-`);
+    expect(h).not.toContain(`data-testid="mh-team-e1-calendar"`);
+
+    // The positive pair: the same card with an EMPTY list does say both.
+    const empty = cardHtml(render(hubDoc({ teams: [team("e1", "Blue Blazers", null, null, { members: [] })] })), "e1");
+    expect(empty).toContain("No squad listed yet");
+    expect(empty).toContain(">0 members<");
+  });
+
+  it("the summary: crest, truncated name with its title, a PLURAL member count, a chevron that turns on open — and the card starts CLOSED", () => {
+    const h = render();
+    const e1 = cardHtml(h, "e1");
+    const summary = e1.slice(e1.indexOf("<summary"), e1.indexOf("</summary>"));
+    expect(summary).toContain("h-8 w-8"); // EntityLogo at 32
+    expect(summary).toMatch(/<span class="[^"]*\btruncate\b[^"]*"[^>]*title="Blue Blazers"[^>]*>Blue Blazers</);
+    expect(summary).toMatch(/class="[^"]*text-ink-muted[^"]*"[^>]*>4 members</);
+    expect(summary).toContain("Seed 1"); // the seed chip stays
+    // One member reads singular — the plural key, not a "(s)".
+    const one = render(hubDoc({ teams: [team("e9", "Solo", null, null, { members: [member("Ann Lee", 1)] })] }));
+    expect(one).toContain(">1 member<");
+    // The chevron: decoration, and it turns with the details' own open state.
+    const chevron = summary.match(/<svg[^>]*>/)?.[0] ?? "";
+    // Spec §3's disclosure: the 12px chevron that turns a quarter, on the
+    // surface card with the hairline border (as `scorecard-tab.tsx` draws it).
+    expect(chevron).toContain('aria-hidden="true"');
+    expect(classesOf(chevron)).toEqual(expect.arrayContaining(["h-3", "w-3", "group-open:rotate-90"]));
+    expect(classesOf(chevron)).not.toContain("group-open:rotate-180");
+    expect(classesOf(tagOf(h, "mh-team-e1"))).toEqual(
+      expect.arrayContaining(["group", "rounded-xl", "border", "border-zinc-200/80", "bg-surface"]),
+    );
+    expect(classesOf(tagOf(h, "mh-team-e1"))).not.toContain("bg-white");
+    // Closed on arrival, and NOT an exclusive accordion: a `name` would make
+    // opening one card close the others.
+    expect(tagOf(h, "mh-team-e1")).not.toMatch(/\sopen[\s=>]/);
+    expect(tagOf(h, "mh-team-e1")).not.toMatch(/\sname=/);
+  });
+
+  it("an OPEN card spans the whole grid row — the class is on the GRID ITEM, keyed on its own details being open", () => {
+    const h = render();
+    // React escapes the `&` in a class attribute; the class Tailwind reads is
+    // the unescaped one.
+    const cells = [...h.matchAll(/<li class="([^"]*)"[^>]*>\s*<details/g)].map((x) =>
+      x[1]!.replaceAll("&amp;", "&").split(" "),
+    );
+    expect(cells).toHaveLength(2);
+    for (const cls of cells) {
+      expect(cls).toContain("[&:has(details[open])]:col-span-full");
+      expect(cls).toContain("min-w-0");
+    }
+  });
+
+  it("each line: number (Barlow, tabular, muted; '—' when none), the name, and the position — in the division's order", () => {
+    const h = render();
+    expect([...cardHtml(h, "e1").matchAll(/data-testid="mh-team-e1-member-(\d+)"/g)].map((x) => x[1])).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+    ]);
+    const first = line(h, "e1", 0);
+    expect(classesOf(first)).toEqual(expect.arrayContaining(["grid", "grid-cols-[2rem_minmax(0,1fr)_auto]"]));
+    const number = first.match(/<span class="([^"]*)"[^>]*>7</)?.[1]?.split(" ");
+    expect(number).toEqual(expect.arrayContaining(["font-display", "tabular-nums", "text-ink-muted"]));
+    expect(first).toContain(">WK<");
+    expect(line(h, "e1", 1)).toMatch(/>—</);
+    expect(line(h, "e1", 1)).toContain(">Dev P.<");
+  });
+
+  it("a name links to the player page ONLY where the document gives a href — a masked line is plain text", () => {
+    const h = render();
+    expect(line(h, "e1", 0)).toMatch(/<a [^>]*href="\/riverside\/autumn-cup\/players\/p1"[^>]*>Arun Kumar</);
+    expect(line(h, "e1", 3)).toMatch(/<a [^>]*href="\/riverside\/autumn-cup\/players\/p4"[^>]*>Zed Adams</);
+    expect(line(h, "e1", 1)).not.toContain("<a ");
+    expect(line(h, "e1", 2)).not.toContain("<a ");
+    expect(line(h, "e1", 1)).toContain(">Dev P.<");
+  });
+
+  it("the Suspended tag WINS over the position, never eats the link, and is red-700 on red-50 — and an unsuspended line has none", () => {
+    const h = render();
+    const sam = line(h, "e1", 2);
+    expect(sam).toContain(`data-testid="mh-team-e1-member-2-suspended"`);
+    expect(sam).toContain(">Suspended<");
+    expect(sam).not.toContain(">BAT<");
+    expect(classesOf(tagOf(h, "mh-team-e1-member-2-suspended"))).toEqual(
+      expect.arrayContaining(["rounded-full", "bg-red-50", "text-red-700", "text-[11px]", "font-semibold", "px-2"]),
+    );
+    expect(line(h, "e1", 3)).toContain(">Suspended<");
+    expect(line(h, "e1", 3)).toContain("<a ");
+    // The negative pair, per line.
+    expect(line(h, "e1", 0)).not.toContain("Suspended");
+    expect(line(h, "e1", 1)).not.toContain("Suspended");
+  });
+
+  it("'Add to calendar' is the team's own .ics, a 44px bordered link AFTER the lines, named by the team for a screen reader", () => {
+    const h = render();
+    const tag = tagOf(h, "mh-team-e1-calendar");
+    expect(tag).toContain(`href="/riverside/autumn-cup/sunday-league/calendar.ics?entrant=e1"`);
+    expect(classesOf(tag)).toEqual(
+      expect.arrayContaining(["min-h-11", "rounded-lg", "border", "border-zinc-200/80", "px-3"]),
+    );
+    const e1 = cardHtml(h, "e1");
+    expect(e1.indexOf(`data-testid="mh-team-e1-calendar"`)).toBeGreaterThan(
+      e1.indexOf(`data-testid="mh-team-e1-member-3"`),
+    );
+    expect(h).toMatch(/data-testid="mh-team-e1-calendar"[^>]*>Add to calendar</);
+    // Every card's link says the same three words; `aria-labelledby` appends
+    // the team's name so a screen reader's link list is not four identical
+    // entries (the defect `matchesHub.card.label` shipped in W2 Task 7).
+    const labelledBy = tag.match(/aria-labelledby="([^"]*)"/)?.[1]?.split(" ") ?? [];
+    expect(labelledBy).toHaveLength(2);
+    expect(tag).toContain(`id="${labelledBy[0]}"`);
+    expect(h).toMatch(new RegExp(`id="${labelledBy[1]}"[^>]*>Blue Blazers<`));
+    expect(tagOf(h, "mh-team-e2-calendar")).not.toContain(`aria-labelledby="${labelledBy.join(" ")}"`);
+  });
+
+  it("no photos and no captain: a squad line carries no image", () => {
+    const h = render();
+    for (const i of [0, 1, 2, 3]) expect(line(h, "e1", i)).not.toContain("<img");
+  });
+
+  it("every string the squad owns comes from the dictionary — count, tag, empty sentence and calendar, in Spanish", () => {
+    const h = render(squadDoc, es as Dict, "es");
+    expect(h).toContain(">4 miembros<");
+    expect(h).toContain(">0 miembros<");
+    expect(h).toContain(">Sanción<");
+    expect(h).toContain("Aún no hay plantilla registrada");
+    expect(h).toContain(">Añadir al calendario<");
+    for (const english of ["members<", ">Suspended<", "No squad listed yet", "Add to calendar"]) {
+      expect(h).not.toContain(english);
+    }
+    const one = render(
+      hubDoc({ teams: [team("e9", "Solo", null, null, { members: [member("Ann Lee", 1)] })] }),
+      es as Dict,
+      "es",
+    );
+    expect(one).toContain(">1 miembro<");
+  });
+
+  // ------------------------------------------------------------ ?division=
+
+  /** Two divisions, so there is a choice to make. */
+  const twoDivisions = hubDoc({
+    teams: [
+      team("e1", "Blue Blazers", null, null),
+      team("e2", "Red Rockets", null, null),
+      team("e3", "Ashingdon Athletic", null, null, { divisionSlug: "premier" }),
+    ],
+  });
+  const cardsIn = (h: string) => [...h.matchAll(/data-testid="mh-team-(e\d+)"/g)].map((x) => x[1]);
+  const withDivision = (initialDivision: string | null) =>
+    renderToStaticMarkup(<TeamsTab doc={twoDivisions} dict={dict} locale="en" initialDivision={initialDivision} />);
+
+  it("NO FILTER FIRST: every team, the rail with All pressed; a valid `?division=` shows only that division's cards and heading", () => {
+    const all = withDivision(null);
+    expect(cardsIn(all)).toEqual(["e1", "e2", "e3"]);
+    expect(all).toMatch(/data-testid="mh-teams-division-all"[^>]*aria-pressed="true"/);
+    expect(all).toMatch(/data-testid="mh-teams-divisions"[^>]*role="group"[^>]*tabindex="0"/);
+
+    const premier = withDivision("premier");
+    expect(cardsIn(premier)).toEqual(["e3"]);
+    expect([...premier.matchAll(/data-testid="mh-teams-heading-([a-z-]+)"/g)].map((x) => x[1])).toEqual(["premier"]);
+    expect(premier).toMatch(/data-testid="mh-teams-division-premier"[^>]*aria-pressed="true"/);
+    expect(cardsIn(withDivision("sunday-league"))).toEqual(["e1", "e2"]);
+  });
+
+  it("an unknown or empty `?division=` behaves exactly like no filter; one division has no rail", () => {
+    const unfiltered = withDivision(null);
+    expect(withDivision("ghost")).toBe(unfiltered);
+    expect(withDivision("")).toBe(unfiltered);
+    const single = renderToStaticMarkup(
+      <TeamsTab doc={hubDoc({ teams: [team("e1", "Blue Blazers", null, null)] })} dict={dict} locale="en" initialDivision="sunday-league" />,
+    );
+    expect(single).not.toContain(`data-testid="mh-teams-divisions"`);
+    expect(cardsIn(single)).toEqual(["e1"]);
+  });
+
+  it("a chip tap narrows the cards and writes `division=` back; All takes it out", () => {
+    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup?tab=teams", search: "?tab=teams" };
+    const replaced: string[] = [];
+    vi.stubGlobal("window", {
+      location: loc,
+      history: {
+        replaceState: (_s: unknown, _t: unknown, next: string) => {
+          replaced.push(next);
+          const u = new URL(next);
+          loc.href = u.toString();
+          loc.search = u.search;
+        },
+      },
+    });
+    const island = renderIsland(TeamsTab, { doc: twoDivisions, dict, locale: "en" as const, initialDivision: null });
+    const cards = () =>
+      island
+        .tree()
+        .map((x: ReactElement) => String(propsOf(x)["data-testid"] ?? ""))
+        .filter((id) => /^mh-team-e\d+$/.test(id));
+    const tap = (testid: string) =>
+      (propsOf(island.tree().find((x: ReactElement) => propsOf(x)["data-testid"] === testid)!).onClick as () => void)();
+    expect(cards()).toEqual(["mh-team-e1", "mh-team-e2", "mh-team-e3"]);
+    tap("mh-teams-division-premier");
+    expect(replaced).toEqual(["https://seazn.club/shared/riverside/autumn-cup?tab=teams&division=premier"]);
+    expect(cards()).toEqual(["mh-team-e3"]);
+    tap("mh-teams-division-all");
+    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=teams");
+    expect(cards()).toEqual(["mh-team-e1", "mh-team-e2", "mh-team-e3"]);
   });
 });
 
@@ -707,6 +991,13 @@ describe("InfoTab", () => {
   }>;
   const render = (d: CompetitionHubDocT = infoDoc, slots: Slots = {}) =>
     renderToStaticMarkup(<InfoTab doc={d} dict={dict} locale="en" {...slots} />);
+  /** One division's box, from its testid to its own `</article>` — a box holds
+   *  lists of its own, so `rowHtml`'s first `</li>` is not its end. */
+  const boxHtml = (h: string, slug: string): string => {
+    const at = h.indexOf(`data-testid="mh-info-division-${slug}"`);
+    expect(at, `the ${slug} box`).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf("</article>", at));
+  };
 
   it("the dates are the competition's CALENDAR days, formatted in UTC — not in a division's zone, where the day rolls back", () => {
     const h = render();
@@ -848,7 +1139,7 @@ describe("InfoTab", () => {
     const closed = render();
     const closedRow = closed.slice(
       closed.indexOf(`data-testid="mh-info-registration"`),
-      closed.indexOf(`data-testid="mh-info-calendars"`),
+      closed.indexOf(`data-testid="mh-info-divisions"`),
     );
     expect(closedRow).toContain("Registration closed");
     expect(closedRow).not.toContain("Registration open");
@@ -856,34 +1147,38 @@ describe("InfoTab", () => {
     expect(closed).not.toContain(`data-testid="mh-info-register"`);
   });
 
-  it("one .ics link per division, and its testid comes from the division whose href it IS — never from its position in the array", () => {
+  it("one .ics link per division, INSIDE that division's box, and its testid comes from the division whose href it IS — never from its position in the array", () => {
     const h = render();
     // The calendars are in the opposite order to `doc.divisions`, so index
-    // alignment names each link after the OTHER division. Both the inventory
-    // and the per-link hrefs say so.
+    // alignment names each link after the OTHER division. The links now sit in
+    // the division boxes (division-page parity, 2026-09-16), which follow
+    // `doc.divisions` — so the inventory is premier first, and each href is
+    // checked against its OWN box.
     expect(
       [...h.matchAll(/data-testid="(mh-info-calendar-[a-z0-9_-]+)"/g)].map((x) => x[1]),
-    ).toEqual(["mh-info-calendar-sunday-league", "mh-info-calendar-premier"]);
-    expect(tagOf(h, "mh-info-calendar-sunday-league")).toContain(
-      `href="/riverside/autumn-cup/sunday-league/calendar.ics"`,
-    );
-    expect(tagOf(h, "mh-info-calendar-premier")).toContain(
-      `href="/riverside/autumn-cup/premier/calendar.ics"`,
-    );
-    // Each link is named by its division, under one "Add to calendar" heading —
-    // a link list that repeated the heading's words would read the same four
-    // times to a screen reader.
-    expect(h).toContain("Add to calendar");
-    expect(rowHtml(h, "mh-info-calendar-sunday-league")).toContain("Sunday League");
-    // Review F10 — the heading LEVEL, which nothing pinned: swapping it to
-    // `<h3>` survived the whole suite. It is an `<h2>` at 11px, the same rank
-    // the Stats and Teams tabs give a division heading at `text-xl`, because
-    // rank is not size: this is a top-level section of the panel, and demoting
-    // it would leave this tab with no `<h2>` at all under Task 11's page `<h1>`.
-    expect(h).toMatch(/<h2[^>]*>Add to calendar<\/h2>/);
+    ).toEqual(["mh-info-calendar-premier", "mh-info-calendar-sunday-league"]);
+    for (const slug of ["premier", "sunday-league"]) {
+      const box = boxHtml(h, slug);
+      expect(box, slug).toContain(`data-testid="mh-info-calendar-${slug}"`);
+      expect(tagOf(box, `mh-info-calendar-${slug}`), slug).toContain(
+        `href="/riverside/autumn-cup/${slug}/calendar.ics"`,
+      );
+    }
+    // Every calendar moved, so the old list and its heading are gone.
+    expect(h).not.toContain(`data-testid="mh-info-calendars"`);
+    expect(h).not.toMatch(/<h2[^>]*>Add to calendar<\/h2>/);
+    // The link says "Add to calendar" and is NAMED by its division too:
+    // `aria-labelledby` = the link itself + the box's heading. A link list of
+    // four identical "Add to calendar" entries is the defect
+    // `matchesHub.card.label` shipped in W2 Task 7.
+    const tag = tagOf(h, "mh-info-calendar-sunday-league");
+    expect(h).toMatch(/data-testid="mh-info-calendar-sunday-league"[^>]*>Add to calendar</);
+    const [self, heading] = tag.match(/aria-labelledby="([^"]*)"/)?.[1]?.split(" ") ?? [];
+    expect(tag).toContain(`id="${self}"`);
+    expect(h).toMatch(new RegExp(`<h3[^>]*id="${heading}"[^>]*>Sunday League</h3>`));
 
     const none = render(hubDoc({ divisions: infoDivisions, info: info({ calendars: [] }) }));
-    expect(none).not.toContain(`data-testid="mh-info-calendars"`);
+    expect(none).not.toContain(`data-testid="mh-info-calendar`);
     expect(none).not.toContain("Add to calendar");
   });
 
@@ -943,7 +1238,12 @@ describe("InfoTab", () => {
     const ids = [...filtered.matchAll(/data-testid="(mh-info-calendar-[a-z0-9_-]+)"/g)].map(
       (x) => x[1]!,
     );
-    expect(ids).toEqual(["mh-info-calendar-_0", "mh-info-calendar-premier"]);
+    // premier's own calendar moved into premier's box, ABOVE the list that
+    // keeps the entry no division owns.
+    expect(ids).toEqual(["mh-info-calendar-premier", "mh-info-calendar-_0"]);
+    expect(filtered.indexOf(`data-testid="mh-info-divisions"`)).toBeLessThan(
+      filtered.indexOf(`data-testid="mh-info-calendars"`),
+    );
     expect(new Set(ids).size).toBe(ids.length);
     expect(tagOf(filtered, "mh-info-calendar-_0")).toContain(`href="/moved/premier.ics"`);
     expect(tagOf(filtered, "mh-info-calendar-premier")).toContain(
@@ -1011,7 +1311,7 @@ describe("InfoTab", () => {
       "mh-info-dates",
       "mh-info-venues",
       "mh-info-registration",
-      "mh-info-calendars",
+      "mh-info-divisions",
       "mh-info-share",
       "mh-info-present",
     ].map((id) => h.indexOf(`data-testid="${id}"`));
@@ -1077,6 +1377,7 @@ describe("InfoTab", () => {
     expect(h).toContain("Inscripciones abiertas");
     expect(h).toContain("Inscribirse");
     expect(h).toContain("Añadir al calendario");
+    expect(h).toContain("Divisiones");
     expect(h).toContain("Presentar");
     expect(h).not.toContain("Registration open");
     expect(h).not.toContain("Add to calendar");
@@ -1105,11 +1406,130 @@ describe("InfoTab", () => {
         "info.registration.closed",
         "info.calendar",
         "info.share",
+        "info.divisions",
+        "info.suspensions",
+        "info.toServe.one",
+        "info.toServe.other",
+        "teams.members.one",
+        "teams.members.other",
+        "teams.suspended",
+        "teams.squadEmpty",
         "landing.register",
         "landing.present",
       ]) {
         expect(Object.hasOwn(d, k), `${locale} ${k}`).toBe(true);
       }
+    }
+  });
+});
+
+describe("InfoTab — divisions: prose, calendar and suspensions (division-page parity, 2026-09-16)", () => {
+  const render = (d: CompetitionHubDocT, dd: Dict = dict, locale: "en" | "es" = "en") =>
+    renderToStaticMarkup(<InfoTab doc={d} dict={dd} locale={locale} />);
+  const boxHtml = (h: string, slug: string): string => {
+    const at = h.indexOf(`data-testid="mh-info-division-${slug}"`);
+    expect(at, `the ${slug} box`).toBeGreaterThan(-1);
+    return h.slice(at, h.indexOf("</article>", at));
+  };
+  const classesOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [];
+  const boxes = (h: string) => [...h.matchAll(/<article data-testid="mh-info-division-([a-z0-9-]+)"/g)].map((x) => x[1]);
+
+  /** Premier: prose AND two bans. Sunday League: a calendar only. Vets: nothing
+   *  at all — no prose, no bans, and no calendar entry. */
+  const fullDoc = hubDoc({
+    divisions: [
+      division("premier", {
+        description: "<p>Open to <strong>every</strong> club.</p>",
+        suspensions: [
+          suspension("Arun Kumar", 2, { personId: "p1", entrantId: "e1", entrantName: "Blue Blazers" }),
+          suspension("Dev P.", 1),
+        ],
+      }),
+      division("sunday-league"),
+      division("vets"),
+    ],
+    info: info({ calendars: [calendarFor("premier"), calendarFor("sunday-league")] }),
+  });
+
+  it("EMPTY FIRST: no division with prose, a calendar or a ban → no section and no heading — including a document from before these fields existed", () => {
+    const bare = hubDoc({ divisions: [division("premier"), division("vets")], info: info({ calendars: [] }) });
+    const h = render(bare);
+    expect(h).not.toContain(`data-testid="mh-info-divisions"`);
+    expect(h).not.toContain(`data-testid="mh-info-division-`);
+    expect(h).not.toContain(">Divisions<");
+    // Old shape: `description` and `suspensions` ABSENT, not null/[].
+    const old = hubDoc({ divisions: [division("premier")], info: info({ calendars: [] }) });
+    delete (old.divisions[0] as Partial<HubDivisionT>).description;
+    delete (old.divisions[0] as Partial<HubDivisionT>).suspensions;
+    expect(render(old)).not.toContain(`data-testid="mh-info-divisions"`);
+    // The positive pair: a calendar alone is content.
+    const withCalendar = hubDoc({ divisions: [division("premier")], info: info({ calendars: [calendarFor("premier")] }) });
+    delete (withCalendar.divisions[0] as Partial<HubDivisionT>).description;
+    delete (withCalendar.divisions[0] as Partial<HubDivisionT>).suspensions;
+    expect(boxes(render(withCalendar))).toEqual(["premier"]);
+  });
+
+  it("one box per division WITH content, in document order — a division with nothing gets no box; the section title is the P3 style", () => {
+    const h = render(fullDoc);
+    expect(boxes(h)).toEqual(["premier", "sunday-league"]);
+    const title = h.match(/<h2 class="([^"]*)"[^>]*>Divisions<\/h2>/)?.[1]?.split(" ");
+    expect(title).toEqual(
+      expect.arrayContaining(["font-display", "text-base", "font-semibold", "uppercase", "tracking-wide", "text-ink"]),
+    );
+    expect(h.indexOf(">Divisions</h2>")).toBeGreaterThan(h.indexOf(`data-testid="mh-info-divisions"`));
+    for (const slug of ["premier", "sunday-league"]) {
+      expect(classesOf(tagOf(h, `mh-info-division-${slug}`)), slug).toEqual(
+        expect.arrayContaining(["rounded-xl", "border", "border-zinc-200/80", "bg-surface", "p-3", "min-w-0"]),
+      );
+    }
+    // The division's NAME heads its own box, in the display face.
+    expect(boxHtml(h, "premier")).toMatch(/<h3 class="[^"]*font-display[^"]*"[^>]*>Premier<\/h3>/);
+    expect(boxHtml(h, "sunday-league")).toMatch(/<h3 [^>]*>Sunday League<\/h3>/);
+  });
+
+  it("the division's prose renders ONLY where there is some — as the sanitised HTML the document carries", () => {
+    const h = render(fullDoc);
+    const premier = boxHtml(h, "premier");
+    expect(premier).toContain(`data-testid="mh-info-division-premier-description"`);
+    expect(premier).toContain("<p>Open to <strong>every</strong> club.</p>");
+    expect(premier).toContain("competition-prose");
+    const sunday = boxHtml(h, "sunday-league");
+    expect(sunday).not.toContain(`-description"`);
+    expect(sunday).not.toContain("competition-prose");
+  });
+
+  it("the Suspensions list renders ONLY for a division with a ban: masked name, the team as a muted second line, and '{n} to serve' at the right", () => {
+    const h = render(fullDoc);
+    const premier = boxHtml(h, "premier");
+    expect(premier).toContain(`data-testid="mh-info-suspensions-premier"`);
+    expect(premier).toMatch(/>Suspensions</);
+    const rows = [...premier.matchAll(/data-testid="(mh-info-suspension-premier-\d+)"/g)].map((x) => x[1]!);
+    expect(rows).toEqual(["mh-info-suspension-premier-0", "mh-info-suspension-premier-1"]);
+    const arun = rowHtml(h, rows[0]!);
+    expect(arun).toContain(">Arun Kumar<");
+    expect(arun).toMatch(/<[a-z]+ class="[^"]*text-ink-muted[^"]*"[^>]*>Blue Blazers</);
+    expect(arun).toMatch(/<span class="[^"]*\bshrink-0\b[^"]*"[^>]*>2 to serve</);
+    // A ban whose team is not public carries no second line — not an empty one.
+    const dev = rowHtml(h, rows[1]!);
+    expect(dev).toContain(">Dev P.<");
+    expect(dev).toContain(">1 to serve<");
+    expect(dev).not.toContain("Blue Blazers");
+    expect(dev).not.toContain("text-ink-muted");
+    // The negative pair: Sunday League has no bans, so no list and no word.
+    const sunday = boxHtml(h, "sunday-league");
+    expect(sunday).not.toContain("mh-info-suspensions");
+    expect(sunday).not.toContain("Suspensions");
+  });
+
+  it("every string the section owns comes from the dictionary — in Spanish, with the PLURAL category per count", () => {
+    const h = render(fullDoc, es as Dict, "es");
+    expect(h).toMatch(/>Divisiones<\/h2>/);
+    expect(h).toContain(">Sanciones<");
+    expect(h).toContain(">2 partidos por cumplir<");
+    expect(h).toContain(">1 partido por cumplir<");
+    expect(h).toContain(">Añadir al calendario<");
+    for (const english of [">Divisions<", ">Suspensions<", "to serve", "Add to calendar"]) {
+      expect(h).not.toContain(english);
     }
   });
 });

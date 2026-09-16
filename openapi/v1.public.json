@@ -37083,6 +37083,70 @@
                               },
                               "href": {
                                 "type": "string"
+                              },
+                              "description": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "suspensions": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "personId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "entrantId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "entrantName": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "remaining": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "personId",
+                                    "name",
+                                    "entrantId",
+                                    "entrantName",
+                                    "remaining"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               }
                             },
                             "required": [
@@ -37951,6 +38015,81 @@
                                 ]
                               },
                               "href": {
+                                "type": "string"
+                              },
+                              "members": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "personId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "squadNumber": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "position": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "playerHref": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "suspendedRemaining": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "personId",
+                                    "name",
+                                    "squadNumber",
+                                    "position",
+                                    "playerHref",
+                                    "suspendedRemaining"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "calendarHref": {
                                 "type": "string"
                               }
                             },

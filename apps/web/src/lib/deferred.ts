@@ -1,5 +1,6 @@
 import "server-only";
 import { after } from "next/server";
+import { log } from "@/server/logger";
 
 /**
  * Register non-critical tail work. Registration itself never delays the
@@ -15,7 +16,7 @@ export function deferred(fn: () => Promise<unknown> | unknown): void {
     try {
       await fn();
     } catch (err) {
-      console.warn("[deferred] task failed:", err);
+      log.warn({ err: err instanceof Error ? err.message : String(err) }, "deferred: a tail task failed");
     }
   };
   try {

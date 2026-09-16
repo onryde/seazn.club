@@ -18,23 +18,34 @@
 //    this is the arm a direct render or a stale deep link lands on;
 //  • ONE crown per DIVISION rather than one per table, because that is what a
 //    champion is (see the strip below);
-//  • two-up from `md` only when a division has more than one table.
+//  • two-up from `md` only when a division has more than one table;
+//  • which division is SHOWN — `?division=` (owner ruling 2026-09-16,
+//    division-page parity), with the Knockout tab's rail when there are two or
+//    more divisions to choose between.
 //
-// NO `"use client"`. Nothing here is stateful — the only interactive parts of
-// this subtree are `StandingsTableView`'s own disclosure and its link, and that
-// file carries its own directive. Leaving it off lets Task 11 render the tab in
-// a server component (the whole table arrives in the HTML, which is the point
-// of the phone composition) while the live client tree can import it just the
-// same.
+// `"use client"` since that ruling: the division filter is state. It used to be
+// left off so a server component could render the tab; its only importer is
+// `competition-landing.tsx`, itself a client island, and the whole table still
+// arrives in the server-rendered HTML through it.
+"use client";
+
+import { useState } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { TableViewT } from "@/server/public-site/competition-hub-schema";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
 import { StandingsTableView } from "../standings-table-view";
+import { writeDivisionParam } from "../use-tab-param";
+import { divisionChoices, divisionRail } from "./hub-chip";
 
 export interface TableTabProps {
   doc: CompetitionHubDocT;
   dict: PublicDict;
+  /** `?division=`, read by `CompetitionLanding` and written back by this tab's
+   *  own chips. A SEED, as on the Matches and Knockout tabs: a tap wins over it,
+   *  and a slug with no chip on screen (unknown, empty, or a division with no
+   *  table) reads as All. */
+  initialDivision?: string | null;
 }
 
 /**
@@ -59,7 +70,8 @@ function byDivision(tables: readonly TableViewT[]): TableViewT[][] {
   return [...groups.values()];
 }
 
-export function TableTab({ doc, dict }: TableTabProps) {
+export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
+  const [chosenDivision, setDivision] = useState<string | null>(initialDivision ?? null);
   // Stated first, before any grouping: a competition with no standings has no
   // divisions to head and nothing to lay out. Unreachable through the hub —
   // `deriveHubTabs` (`lib/matches-hub.ts:240`) only emits the `table` tab when
@@ -80,6 +92,15 @@ export function TableTab({ doc, dict }: TableTabProps) {
     );
   }
 
+  // Reconciled against the chips on screen — the Knockout tab's rule.
+  const choices = divisionChoices(doc.tables);
+  const division = choices.some((d) => d.slug === chosenDivision) ? chosenDivision : null;
+  const shown = doc.tables.filter((view) => division === null || view.divisionSlug === division);
+  const chooseDivision = (slug: string | null) => {
+    setDivision(slug);
+    writeDivisionParam(slug);
+  };
+
   return (
     // `min-w-0` on the root for the same reason Task 8's carries one (review
     // P3): everything below here is protected, but Task 11/12 mounts this
@@ -91,7 +112,8 @@ export function TableTab({ doc, dict }: TableTabProps) {
     // `matches-tab.tsx`'s root writes up: the hub root needs a uniform handle
     // for WHICH panel drew, and the three Task 10 tabs already had one.
     <div data-testid="mh-table" className="min-w-0 space-y-6">
-      {byDivision(doc.tables).map((views) => {
+      {divisionRail("mh-table", dict, choices, division, chooseDivision)}
+      {byDivision(shown).map((views) => {
         const first = views[0]!;
         // ONE crown per division, not one per table. `divisionChampion`
         // (`server/public-site/champion.ts`) crowns a DIVISION, and the builder
@@ -119,8 +141,10 @@ export function TableTab({ doc, dict }: TableTabProps) {
                   is the same size as the stage name it contains, and the
                   grouping this tab is built around stops being visible exactly
                   on the phone, where it matters most. */}
+              {/* `mh-table-heading-`, not `-division-`: the rail's chips own
+                  `mh-table-division-{slug}` (the Knockout tab's precedent). */}
               <h2
-                data-testid={`mh-table-division-${first.divisionSlug}`}
+                data-testid={`mh-table-heading-${first.divisionSlug}`}
                 className="font-display text-xl font-semibold tracking-tight text-ink md:text-2xl"
               >
                 {first.divisionName}
