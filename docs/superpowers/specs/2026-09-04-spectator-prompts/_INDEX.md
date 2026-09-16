@@ -943,3 +943,205 @@ So with #782 merged, all three live surfaces update without refresh by push. The
 down after the measurement. Still owed on this branch alone: the post-fix pipeline's `live-push` after the follow-up
 round (I1, M3, C1), which covers the hub; the match centre's push path belongs to #782.
 - **M5 → covered by H2** (the hook header comment is rewritten with the poll change).
+
+## K wave — the kiosk board leaves the org chrome (2026-09-15 → 16)
+
+Commits, in order:
+- `41e16f44d` **k1** — both `/present` boards move into a `(kiosk)` route group with
+  their own bare full-height root layout. New `server/public-site/org-guard.ts`
+  holds ONE copy of the `/shared` org door (`publicOrgOr404`), used by the chrome
+  layout and the kiosk layout alike. New `shared/__tests__/route-inventory.test.ts`
+  walks the app tree on disk and pins the 13-URL page list, so a future move that
+  silently changes a public URL reds.
+- `c376a0dd0` **k2** — name tracks `minmax(0,auto)`, `vs` `max-content`.
+- `0a180a256` **K-2, OWNER RULING A** — a board name too long for its track WRAPS to
+  a second line; it is not cut, and the copy is not shortened. Measured first: at
+  1280 the row is 1152px with tracks `144 | 358.4 | 35.2 | 358.4 | 104`, and the two
+  feeder names need 388px and 393px. The ~85px of apparent slack sits inside the
+  FIXED round (9rem) and status (6.5rem) columns, so no track sizing can hand it to
+  the names. Bracket/ladder/double-elim nodes keep `truncate` — their node height is
+  fixed. Visible cost the owner accepted: `vs` no longer sits on one axis (Q5).
+- `cf1943fbf` **Q4, OWNER RULING A** — no consent banner on either `/present` board.
+  A venue TV has nobody to dismiss it, and below the TV cut-off the banner covered
+  "Open the live page" at 320, the only control on the kiosk card. Nothing is
+  withheld: PostHog inits `opt_out_capturing_by_default` and opts in only on an
+  explicit Accept, so a banner-free page captures nothing. The condition lives in
+  `CookieConsent` (root layout, sibling of `children` — no nested layout can unmount
+  it), matched on the SHAPE of the path so a competition actually slugged "present"
+  keeps its banner.
+- `05b03fc9b` — the stale-slug comment in `[competitionSlug]/page.tsx` rewritten from
+  measurement (see F1 below).
+- `86209f3cb` — `task-6-report.md`, a subagent scratch report, removed from the repo
+  root. It was the only file this branch added there.
+
+### Owner rulings recorded
+- **C1** (2026-09-15): phones get the "made for a TV" card, with "Show the board
+  anyway" showing the board exactly as it is, broken layout included.
+- **K-2 → option A**: wrap, not shorter copy, not accepted truncation.
+- **Q4 → option A**: no banner on any `/present` page.
+- **Q1, Q2, Q3, Q5 → "Ok"**: the slot keeps reading "or"; "Bye" keeps the grey
+  italic; the small grey meta line stays cut on a phone; "vs" stays off the axis.
+  All four are settled, not open questions.
+
+### Visual sign-off
+Contact sheet: https://claude.ai/code/artifact/b56a21da-fcf0-42fa-8991-585fc43750b0
+44 screens (36 capture cells + 8 kiosk), 41 pass / 3 note / 0 fail. The three notes
+are accepted or owned elsewhere: `anyway-390` (the escape hatch shows the board as
+it is, by ruling C1), `tree-32-1024` (D4, open), `overview-waiting-side-320` (Q3,
+accepted). Kiosk screens re-shot after Q4: 8 cells, 0 failed checks, `banner=false`
+on every one, confirmed by eye at 320 and 1280.
+
+### Findings recorded, NOT fixed
+- **F2** — an org-slug rename redirect DROPS THE TAIL:
+  `/shared/<old>/<comp>/present` 308s to `/shared/<new>`, the org hub, not the board.
+  `sharedRenameTarget(orgSlug, compSlug, divSlug)` would preserve them, but
+  `publicOrgOr404` is called from a LAYOUT, which only has its own param. Reading the
+  rest of the path needs `headers()`, which makes these pages dynamic and costs the
+  `revalidate = 30` cache. Pre-existing for the chrome tree; k1 extended it to
+  `/present`, where it is worse — a venue TV on an old URL lands on the org hub with
+  nobody there to navigate back.
+- **F3** — competition-rename asymmetry, measured on FOUR seeded renames:
+  `/shared/<org>/<oldcomp>` 308s to the new slug, `/shared/<org>/<oldcomp>/present`
+  404s, because the board page calls plain `notFound()`. A printed or QR kiosk URL
+  dies on a competition rename while the hub link survives.
+- **ticket.tsx:63** prints `startsOn`/`endsOn` as RAW ISO strings on the public
+  ticket. Not a zone bug; unformatted copy.
+
+### Reviews closed this round (inline, no agents at the time)
+- **k1 review.** One finding fixed: the comment at
+  `shared/[orgSlug]/[competitionSlug]/page.tsx` had priced a stale slug wrongly
+  TWICE — first as "one permanent redirect", then as "both just `notFound()`" with a
+  stale call-site count. k1 falsified the second by routing `/present` through the
+  shared org door. Rewritten from measurement against seeded renames: a stale ORG
+  slug redirects on every `/shared` page including `/present` (308 measured on the
+  competition board, the division board and both chrome pages); a stale COMPETITION
+  slug redirects on the hub and 404s on `/present`. `/register` was NOT measured —
+  the org half covers it by construction, the competition half is untested there.
+- **P8 scoped re-review: APPROVED.** `dc2f7edeb 55cdfa56d 16c776013 45ea64c5c`, all
+  on `server/og/poster-image.ts` and its tests. 17/17 green; six mutants on the four
+  new guards, ALL KILLED (cap 2→999, `sharpHasRoom`→true, in-turn check removed,
+  entry check removed, `poisonReported` short-circuit removed, `VALVE_GRACE_MS`
+  500→0); source restored byte-exact. Verified by reading rather than assumed: a
+  poisoned queue cannot escape as an unhandled rejection (the returned turn is
+  awaited inside a try/catch returning null, and the queue tail carries its own
+  `.catch`); the budget suite counts unsettled ops in the MOCK, so it is an
+  independent witness, not a tautology; `afterEach` asserts `unsettled === 0`.
+  One minor accepted: `__poisonDecodeQueueForTests` is a test-only export in a
+  production module, documented as the only way to reach that path.
+- **review-n1g m-round CLOSED** — m6 (every-minute clock), m2 (`whitespace-pre` /
+  `pre-line` / `nowrap` counted as no-wrap, with `pre-line` correctly treated as
+  WRAPPING) and m3 (no weekday NAME in a round-view heading, per locale via `Intl`)
+  were all already applied in the tree and are tagged with the rulings that owed
+  them; 23/23 green. m1 stays PARKED.
+  **Care: the log holds TWO sets numbered m1/m2/m3/m6.** This is the n1g set. The
+  still-open TZ round is the other one.
+
+### TZ round — re-pinned against the tree; m6 is FIXED, m1/m2/m3 still queued
+Two logged line numbers were stale and one item was REFRAMED; the logged version
+would have produced the wrong fix.
+- **m2 CONFIRMED.** `api-v1/schemas.ts:1729` (logged as 1753) takes
+  `tz: z.string().min(1).max(64).nullish()` — length only, never IANA, while
+  `lib/types.ts:148` and `api/orgs/[id]/route.ts:37` both `.refine(isValidIana)`.
+  `isValidIana` already exists at `lib/tz.ts:15`, so the write-side fix is one
+  refine. The defect is the asymmetry: `resolveVenueTz` VALIDATES, while the loaders
+  mirror only the PRECEDENCE inline as `coalesce(ss.tz, o.timezone, UTC)`
+  (`data.ts:739`, `embed-data.ts:133`). SQL coalesce rescues NULL only, so a stored
+  junk zone flows through the loaders while the match centre degrades to the org
+  zone — one fixture, two times, across pages.
+- **m3 CONFIRMED, narrower than logged.** `public-fixture-venue-tz.test.ts` does
+  cover the division override and a rejected zone, but through `getPublicFixture`.
+  The two loaders carrying the unvalidated coalesce have no such DB test:
+  `competition-hub.test.ts` and `data-standings-timestamp.test.ts` supply `tz` only
+  as a MOCKED row value, and `server/__tests__/embed-data.test.ts` has no zone
+  coverage at all.
+- **m6 CONFIRMED but REFRAMED — pin UTC, do NOT thread the venue zone.**
+  `starts_on`/`ends_on` are pg `date` columns (checked in the DB). A wall-clock DAY
+  has no zone to convert into; the repo already gets this right at
+  `overview-tab.tsx:243-263`. Three live public surfaces passed no zone: the org
+  hub `page.tsx:48`, `opengraph-image.tsx:20`, `poster.pdf/route.ts:67`. DRIVEN:
+  "2026-09-01" renders "31 Aug 2026" under America/New_York and America/Los_Angeles,
+  "1 Sept 2026" under UTC and Pacific/Auckland.
+  **FIXED `6daae8833`.** All three now pass `timeZone: "UTC"`. The poster route KEEPS
+  its own `toLocaleDateString(locale, …)` — `fmtDate` pins `LOCALE = "en-GB"` and
+  takes no locale parameter, so adopting it there would have dropped the org-locale
+  month names that route exists to render. On the org hub the helper is shared with
+  the news strip `publishedAt` (a `timestamptz` instant), so that is pinned to UTC
+  too — deliberate: the route is ISR-cached, one HTML serves every visitor, there is
+  no viewer zone to resolve against, and the alternative is a page whose dates
+  depend on which host filled the cache.
+  **The lesson is the TEST, not the fix.** The obvious test renders the page and
+  compares the printed day — and it CANNOT FAIL IN CI, which runs `ubuntu-latest`
+  with no `TZ`, i.e. UTC, where the zone-less formula produces the correct string.
+  Measured: on this runner (Europe/London) all three day-comparison tests passed
+  against the UNFIXED source; only the mechanism guard reddened. So each file also
+  asserts the MECHANISM — it records the options of every `toLocaleDateString` call
+  the render makes and requires each to carry an explicit UTC zone, which separates
+  the two implementations at ANY runner zone, and it asserts at least one call
+  happened first so deleting the date line cannot pass it. AGENTS #3 with a new
+  face: the guard was not absent, it was inert in the one environment that gates
+  the merge.
+  17/17 across the three files; red-then-green per file (1 of 2, 1 of 2, 1 of 13)
+  with totals unshrunken, so no collection break was read as a survivor.
+- **m1 CONFIRMED and located.** `lib/format.ts:22-31` catches the RangeError and
+  retries in UTC; `format.test.ts:46-49` pins that as
+  `fmtTime("Mars/Phobos", IST_1900) === "13:30"` — a string that reads the same
+  whether the fallback is UTC or the process zone, which is why that mutant lives
+  under CI (`TZ=UTC`) and dies under Tokyo. The case needs to be
+  process-independent.
+m2 and m3 touch `api-v1` schemas and usecases, outside this branch — owner-go work.
+
+### Branch gates
+- Full `apps/web` suite, unsharded, against spectw2: **17730 passed / 0 failed /
+  77 pending, 5023 suites, 0 failed suites, 1306 files.**
+- **`score-revalidate-in-request.test.ts` ran with a real DATABASE_URL and PASSED,
+  11 assertions, 0 pending** — this DISCHARGES the "six DB-backed tests SKIPPED,
+  owed against a DB" item recorded earlier in this index.
+- OpenAPI: regenerated, **zero drift**. i18n parity: **6538 keys, es/fr/nl all in
+  parity with en**; all four locales moved together. `i18n-keys.ts` regenerated,
+  zero drift. Lint: **0 errors**, 145 warnings (pre-existing debt).
+- Removed `task-6-report.md` (see `86209f3cb`).
+
+### Harness hazard worth knowing
+`seazn-env gate` writes its sharded vitest artifacts to the LABEL directory
+(`/private/tmp/seazn-env/<label>/vitest-shard-{1..N}.{json,log}`), not a per-run
+directory, and the summary line it prints carries NO failure body — only the test
+title. So re-running the gate to "see if it reproduces" DESTROYS the evidence of the
+run you were diagnosing. Copy the shard artifacts out first.
+
+### The gate is red, and the red is the machine
+`seazn-env gate` runs turbo lint+typecheck PLUS a 4-way sharded vitest. It reported
+1 failure on the first run and 5 on the second — the second ran HOTTER, not cooler,
+because turbo was fully cached so all four shards started at once.
+**Four of those five carry no assertion body at all** — only vitest s
+`STACK_TRACE_ERROR` placeholder with runner frames — and each landed within 0.3% of
+its exact timeout ceiling (30250 / 30002 / 30101 against a 30s global; help-copy-
+truth at 88430, and 104077 on the first run, against its inline 60s pin). The same
+five tests PASS unsharded against the same database with 3x-7x headroom.
+Cause: load average 38.45 at 15 minutes, and an accumulated spectw2 (14354 orgs,
+10294 subscriptions, 11464 ledger rows) that the unscoped `grantMonthlyForAllWallets()`
+and the weekly-digest sweep walk in full.
+**So: environment, not defect.** The branch verdict rests on the unsharded run —
+17730 passed / 0 failed / 0 failed suites.
+
+Two latent reds this exposed, both pre-existing and NOT fixed here:
+- `help-copy-truth.test.ts` pins a flat `{ timeout: 60_000 }` beside a
+  load-dependent cost. It is the slowest assertion in the suite (25.5s clean), it
+  already failed once at the 30s default, and 60s has now gone too. Derive the
+  budget, or memoise `allAuditedSources()` so its first consumer stops paying the
+  whole walk alone.
+- `credits-monthly-cron.test.ts` "#390 … one statement per wallet, not two" diffs
+  `statementCount()`, which reads a PROCESS-GLOBAL monotonic counter
+  (`lib/db.ts:22`). A neighbour test that timed out kept issuing statements into it,
+  so this test failed with a convincing `expected 31 to be less than or equal to 6`
+  that had nothing to do with its own code. Scope the measurement to a delta.
+
+### Tier-2 branch review — three "removed, did it survive?" questions, all clean
+- `schedule.tsx` still takes `tz` and still formats venue-local (`fmtTime`,
+  `fmtZoneAbbrev`, `dayKey` via `Intl` with `timeZone`); the helpers moved and were
+  exported. Refactor, not regression.
+- `use-tab-param.ts` generalised to `useSearchParam`/`readSearchParam`/
+  `writeSearchParam` over `useSyncExternalStore` + `history.replaceState`, and keeps
+  every original export. No loss.
+- `use-live-competition.ts` keeps the push debounce (`PUSH_DEBOUNCE_MS`, with retry
+  generations) and both poll cadences; a SUBSCRIBED channel now slows to the idle
+  poll instead of stopping, which fixes a freeze after a missed push. Improvement.
