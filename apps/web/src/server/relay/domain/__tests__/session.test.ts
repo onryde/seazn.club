@@ -16,7 +16,7 @@ const T0 = new Date("2026-09-14T10:00:00Z");
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "requested", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, endingAt: null, maxDurationMinutes: 300, ...over,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, ...over,
 });
 const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null };
 
@@ -422,7 +422,8 @@ describe("decide — a composed session's Machine events go through the runner t
     const lost = { ...BOOTING, state: "lost" as const, attempt: 1 };
     // LIVE: the crash path's ONE retry is untouched.
     const live = decide(C({ state: "live", startedAt: T0, runner: lost }), { type: "runner", trigger: { type: "destroy_ok" } }, T1);
-    expect(live.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: T1, runner: { state: "destroyed" } });
+    // I4 (fix round 1): the retry restarts the beat WINDOW (beatWindowAt); heartbeatAt stays "last beat received" (none here)
+    expect(live.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: null, beatWindowAt: T1, runner: { state: "destroyed" } });
     expect(live.effects).toEqual([{ type: "retry_runner" }]);
     // The DEADLINE reaching the same runner ends it THERE — it never reaches destroy_ok's retry.
     const dead = decide(C({ state: "live", startedAt: T0, runner: lost }), { type: "expire", expiry: { kind: "wall_clock" } }, T1);
@@ -536,6 +537,21 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(decide(idle, { type: "expire", expiry: { kind: "ending_timeout" } }, timeout).next).toMatchObject({ state: "completed", endReason: "stopped" });
   });
 
+  // Task 2C review M2 (fix round 1): F19's backstop completed an `ending` session over a LOST runner with nothing re-issued,
+  // leaving the Machine to the orphan sweep. It now routes through `session_stop` like C5 — and the stop it routes through
+  // must never overwrite the reason the session ended for: a deadline's max_duration stays max_duration.
+  it("M2: an ending_timeout over a LOST runner re-issues the teardown and completes with the session's OWN end reason (max_duration is never overwritten by the stop it routes through)", () => {
+    const timeout = new Date(T0.getTime() + ENDING_TIMEOUT_SECONDS * 1000);
+    for (const endReason of ["max_duration", "stopped"] as const) {
+      const lostEnding = C({ state: "ending", desiredState: "ending", endReason, startedAt: T0, endingAt: T0, runner: { ...BOOTING, state: "lost" } });
+      expect(evaluate(lostEnding, timeout), endReason).toEqual({ kind: "ending_timeout" });
+      const d = decide(lostEnding, { type: "expire", expiry: evaluate(lostEnding, timeout) }, timeout);
+      expect(d.next, endReason).toMatchObject({ state: "completed", endReason, endedAt: timeout, runner: { state: "destroyed", machineId: "m1" } });
+      expect(d.effects, endReason).toEqual([FORCE, { type: "fill_replay" }]);
+      expect(d.events, endReason).toEqual([{ type: "RunnerChanged", from: "lost", to: "destroyed", trigger: "session_stop" }, { type: "SessionEnded", reason: "completed" }]);
+    }
+  });
+
   // Task 2C carry C6 (minor, fixed): the shared teardown on the way to `failed` dropped the stop step's SessionEnding but
   // not a SessionEnded — and a LOST runner's session_stop COMPLETES the session (F17), so the row logged two endings.
   it("C6: tearing down a LOST runner on the way to failed reports exactly ONE SessionEnded — warming timeout, credit refusal and provisioning timeout alike", () => {
@@ -543,6 +559,10 @@ describe("decide — a composed session's Machine events go through the runner t
     const cases: [Session, Command, string][] = [
       [C({ runner: lost }), { type: "expire", expiry: { kind: "warming_timeout" } }, "machine_boot_timeout"],
       [C({ runner: lost }), { type: "credit_refused" }, "no_credits"],
+      // NOT a killer for the provision_timeout site's own filter (review M4): a provisioning session ignores the completed
+      // signal the lost runner's session_stop emits (runner()'s `completed` arm), so its teardown carries no SessionEnded and
+      // narrowing THAT site's filter back to SessionEnding-only is equivalent. The row pins the outcome only; the
+      // warming_timeout and credit_refused rows are the killers for their own sites.
       [C({ state: "provisioning", runner: lost }), { type: "expire", expiry: { kind: "provision_timeout" } }, "provision_timeout"],
     ];
     for (const [s, command, reason] of cases) {
@@ -573,10 +593,10 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     }
   });
 
-  it("lost: the teardown is re-issued at most ONCE per STALE_HEARTBEAT_SECONDS (the stale-beat arm restarts the beat window) and never retries; the playing → lost entry restarts it too", () => {
+  it("lost: the teardown is re-issued at most ONCE per STALE_HEARTBEAT_SECONDS (the stale-beat arm restarts the beat window, beatWindowAt) and never retries; the playing → lost entry restarts it too", () => {
     const lost = live({ ...R1, state: "lost" });
     const d = read(lost, stale);
-    expect(d.next).toMatchObject({ state: "live", runnerRetries: 0, heartbeatAt: stale, runner: { state: "lost", attempt: 1 } });
+    expect(d.next).toMatchObject({ state: "live", runnerRetries: 0, heartbeatAt: T0, beatWindowAt: stale, runner: { state: "lost", attempt: 1 } });
     expect(d.effects).toEqual([FORCE]);
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "lost", to: "lost", trigger: "stale_beat" }]);
     // the next 5 s poll does NOT call Fly again, nor does any read inside the new window…
@@ -585,15 +605,16 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     // …one window later it does, once more
     expect(evaluate(d.next, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
     const first = read(live(R1), stale);                                          // playing → lost, force_destroy
-    expect(first.next).toMatchObject({ state: "live", heartbeatAt: stale, runner: { state: "lost" } });
+    expect(first.next).toMatchObject({ state: "live", heartbeatAt: T0, beatWindowAt: stale, runner: { state: "lost" } });
     expect(first.effects).toEqual([FORCE]);
     expect(evaluate(first.next, T(STALE_HEARTBEAT_SECONDS + 5))).toEqual({ kind: "none" });
   });
 
   it("destroyed awaiting its retry (the process died before retry_runner ran): the read re-signals the ONE retry; at the attempt cap it fails", () => {
-    const waiting = live({ ...R1, state: "destroyed" });
+    // The REALISTIC row (review I1): the destroy that first signalled this retry already recorded runnerRetries = 1.
+    const waiting = live({ ...R1, state: "destroyed" }, { runnerRetries: 1 });
     const d = read(waiting, stale);
-    expect(d.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: stale, runner: { state: "destroyed", attempt: 1 } });
+    expect(d.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: T0, beatWindowAt: stale, runner: { state: "destroyed", attempt: 1 } });
     expect(d.effects).toEqual([{ type: "retry_runner" }]);
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "destroyed", to: "destroyed", trigger: "stale_beat" }, { type: "RunnerRetried", attempt: 2 }]);
     const spent = live({ ...R1, state: "destroyed", attempt: RUNNER_MAX_ATTEMPTS, name: "relay-s1-r2" }, { runnerRetries: 1 });
@@ -605,7 +626,7 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
   it("creating (a replacement's create hung): lost with the by-name teardown, still live, no retry yet; the late create_ok is destroyed; its destroy on the last attempt fails the session", () => {
     const creating = live({ ...R1, state: "creating", attempt: RUNNER_MAX_ATTEMPTS, name: "relay-s1-r2", machineId: null }, { runnerRetries: 1 });
     const d = read(creating, stale);
-    expect(d.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: stale, runner: { state: "lost", attempt: RUNNER_MAX_ATTEMPTS, machineId: null } });
+    expect(d.next).toMatchObject({ state: "live", runnerRetries: 1, heartbeatAt: T0, beatWindowAt: stale, runner: { state: "lost", attempt: RUNNER_MAX_ATTEMPTS, machineId: null } });
     expect(d.effects).toEqual([FORCE]);
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "creating", to: "lost", trigger: "stale_beat" }]);
     const late = decide(d.next, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, stale);
@@ -614,6 +635,60 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     const gone = decide(late.next, { type: "runner", trigger: { type: "destroy_ok" } }, stale);
     expect(gone.next).toMatchObject({ state: "failed", failReason: "machine_crash", runnerRetries: 1, runner: { state: "destroyed" } });
     expect(gone.effects).toEqual([]);
+  });
+
+  // Task 2C review I1 (fix round 1): the retry arm ADDED one per signal, and `destroyed × stale_beat` re-signals the retry once
+  // per window while the process that should run `retry_runner` keeps dying — 21 after 30 min, 199 over 5 h. The count is the
+  // runner's attempt (the create calls made, C3), so a re-signal records the same number again.
+  it("I1: runnerRetries is IDEMPOTENT — a destroyed row re-signalled by stale beat after stale beat, window after window, stays at 1 and never reaches the attempt cap", () => {
+    let s = live({ ...R1, state: "destroyed" }, { runnerRetries: 1 });
+    const windows = 5;
+    for (let k = 1; k <= windows; k++) {
+      const now = T(k * STALE_HEARTBEAT_SECONDS);
+      expect(evaluate(s, T(k * STALE_HEARTBEAT_SECONDS - 1)), `window ${k} T−1`).toEqual({ kind: "none" });
+      const d = read(s, now);
+      expect(d.effects, `window ${k}`).toEqual([{ type: "retry_runner" }]);
+      expect(d.next, `window ${k}`).toMatchObject({ state: "live", runnerRetries: 1, beatWindowAt: now, runner: { state: "destroyed", attempt: 1 } });
+      expect(d.next.runnerRetries, `window ${k}`).toBeLessThan(RUNNER_MAX_ATTEMPTS);
+      s = d.next;
+    }
+    // the FIRST retry out of lost, from a row that had none yet, records the same count — and its re-signal keeps it
+    const fromLost = decide(live({ ...R1, state: "lost" }), { type: "runner", trigger: { type: "destroy_ok" } }, stale);
+    expect(fromLost.next).toMatchObject({ runnerRetries: 1, runner: { state: "destroyed", attempt: 1 } });
+    expect(fromLost.effects).toEqual([{ type: "retry_runner" }]);
+    const again = decide(fromLost.next, { type: "expire", expiry: { kind: "stale_beat" } }, T(2 * STALE_HEARTBEAT_SECONDS));
+    expect(again.next).toMatchObject({ runnerRetries: 1 });
+    expect(again.effects).toEqual([{ type: "retry_runner" }]);
+  });
+
+  // Task 2C review I4, orchestrator RULING option A (fix round 1): one authority per fact. `heartbeatAt` is the last beat
+  // RECEIVED — Task 10 serves it as the organiser panel's lastBeatAt — so a decision about a MISSING beat must never write it,
+  // or a dead stream's chip reads "beat 0 s" for half of every window. The window anchor is its own field, `beatWindowAt`.
+  it("I4: a stale-beat decision and a retry move ONLY the beat-window anchor — heartbeatAt (the last beat RECEIVED) is byte-identical; a real beat after the anchor still restarts the window", () => {
+    for (const rs of RUNNER_STATES) {
+      const s = live({ ...R1, state: rs });
+      const d = read(s, stale);
+      expect(d.next.heartbeatAt, rs).toBe(s.heartbeatAt);
+    }
+    const retries: [Runner, RunnerTrigger][] = [
+      [{ ...R1, state: "lost" }, { type: "destroy_ok" }],
+      [{ ...R1, state: "creating", machineId: null }, { type: "create_failed", retryable: true }],
+    ];
+    for (const [runner, trigger] of retries) {
+      const s = live(runner);
+      const d = decide(s, { type: "runner", trigger }, stale);
+      expect(d.effects, trigger.type).toEqual([{ type: "retry_runner" }]);
+      expect(d.next.heartbeatAt, trigger.type).toBe(s.heartbeatAt);
+      expect(d.next.beatWindowAt, trigger.type).toEqual(stale);
+    }
+    // The replacement comes up and BEATS 30 s after the anchor (Task 10 records heartbeatAt on receipt): the window now runs
+    // from that beat. The anchor alone would read stale one window after itself; the beat holds it off for another 30 s.
+    const anchored = read(live({ ...R1, state: "destroyed" }, { runnerRetries: 1 }), stale).next;
+    const beaten: Session = { ...anchored, heartbeatAt: T(STALE_HEARTBEAT_SECONDS + 30), runner: { ...R1, attempt: 2, name: "relay-s1-r2", machineId: "m2" } };
+    expect(evaluate(anchored, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
+    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "none" });
+    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS + 30 - 1))).toEqual({ kind: "none" });
+    expect(evaluate(beaten, T(2 * STALE_HEARTBEAT_SECONDS + 30))).toEqual({ kind: "stale_beat" });
   });
 
   it("none (a corrupt live composed row with no runner): the read FAILS it with machine_crash instead of throwing on every read forever", () => {

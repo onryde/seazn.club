@@ -41,6 +41,13 @@ const SAMPLE: Record<Exclude<RunnerTrigger["type"], "create_started">, RunnerTri
   destroy_ok: { type: "destroy_ok" },
   orphan_listed: { type: "orphan_listed" },
 };
+/** EVERY trigger the table can be fed from a runner: each observed state, both create_failed flavours, the derived
+ *  create_started. The derived invariants walk this, never the one-sample-per-type sweep above. */
+const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
+  t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
+  : t === "create_failed" ? [{ type: "create_failed", retryable: true }, { type: "create_failed", retryable: false }]
+  : t === "create_started" ? [{ type: "create_started", name: machineNameFor("s1", r.attempt + 1), attempt: r.attempt + 1 }]
+  : [SAMPLE[t]]);
 
 describe("RUNNER_TABLE — the parity sweep (every cell, from the exported tables)", () => {
   it("has a cell for every (state × trigger) and nothing else", () => {
@@ -225,6 +232,43 @@ describe("invariants", () => {
     // and a retry past RUNNER_MAX_ATTEMPTS is refused even from destroyed
     expect(() => stepRunner(R({ state: "destroyed", attempt: RUNNER_MAX_ATTEMPTS }), { type: "create_started", name: "relay-s1-r3", attempt: 3 }, T0)).toThrow(InvalidRunnerTransition);
   });
+  // Review I2 (fix round 1): the plan's invariant 1 has a second half — `lost` must pass through destroy_ok / observed
+  // destroyed before the retry — and the test above only checks where create_started is legal. A cell that took a crashed
+  // Machine observed `stopped` (or `suspended`, which Task 5 maps to stopped) as GONE would retry while attempt 1 still
+  // exists: two Machines pushing to one destination key. The parity sweep's oracle accepts any listed destination, so this
+  // is DERIVED from RUNNER_TABLE over every state, every payload a cell branches on, and every trigger.
+  it("invariant 1, the LOST half (derived): a runner reaches destroyed only on a CONFIRMED destroy, a create that made nothing, or a step that itself issues force_destroy; a retry signal lands only on destroyed — and out of lost only on a confirmed destroy", () => {
+    const runners: Runner[] = RUNNER_STATES.flatMap((state): Runner[] => (state === "none" ? [RUNNER_NONE]
+      : [1, RUNNER_MAX_ATTEMPTS].flatMap((attempt) => [null, T0].map((stopRequestedAt): Runner =>
+          ({ ...inState(state), attempt, name: machineNameFor("s1", attempt), stopRequestedAt })))));
+    const confirmed = (t: RunnerTrigger): boolean => t.type === "destroy_ok" || (t.type === "observed" && t.state === "destroyed");
+    let entries = 0, retries = 0, lostRetries = 0;
+    for (const r of runners) {
+      for (const t of triggersFor(r)) {
+        let step: ReturnType<typeof stepRunner>;
+        try { step = stepRunner(r, t, T0); } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); continue; }
+        const label = `${r.state} (attempt ${r.attempt}, ${r.stopRequestedAt ? "marked" : "unmarked"}) × ${JSON.stringify(t)}`;
+        if (r.state !== "destroyed" && step.next.state === "destroyed") {
+          entries++;
+          const madeNothing = t.type === "create_failed" && r.state === "creating";
+          expect(confirmed(t) || madeNothing || step.effects.some((e) => e.type === "force_destroy"), label).toBe(true);
+        }
+        if (step.signal?.type === "retry") {
+          retries++;
+          expect(step.next.state, label).toBe("destroyed");
+          if (r.state === "lost") { lostRetries++; expect(confirmed(t), label).toBe(true); }
+        }
+      }
+    }
+    // not vacuous: destroyed IS entered, retries ARE signalled, and some of them out of lost
+    expect(entries).toBeGreaterThan(0);
+    expect(retries).toBeGreaterThan(lostRetries);
+    expect(lostRetries).toBeGreaterThan(0);
+    // the reviewer's scenario, named: a lost runner observed stopped or failed is NOT gone — it stays lost, no signal
+    for (const state of ["stopped", "failed"] as const) {
+      expect(stepRunner(inState("lost"), { type: "observed", state }, T0), state).toMatchObject({ next: { state: "lost" }, signal: null });
+    }
+  });
   it("invariant 3: MACHINE_MINUTES_BOUND covers the longest timed path the table itself can walk (walked, never re-derived — C12)", () => {
     // The minutes the walk CREDITS a Machine in each state — the timer that forces it out of that state:
     //   booting  — the warming timeout (a replacement booting in a LIVE session is cut shorter, by the stale beat);
@@ -234,7 +278,7 @@ describe("invariants", () => {
     //   exited   — 0: it shares stopping's window (stopRequestedAt is not reset on the way in).
     // NOT credited (0), each a window of minutes against that over-credit:
     //   creating — the provision timeout while the session provisions, the stale beat as a live replacement (C1), and
-    //              the grace once a stop is MARKED; the mark keeps the same (state, attempt), so the walk never re-enters it;
+    //              the grace once a stop is MARKED (a marked creating runner is its own node below, also credited 0);
     //   lost     — its entry issues force_destroy, and a stale beat re-issues it once per STALE_HEARTBEAT_SECONDS until
     //              destroy_ok / observed destroyed moves it on (C1) — no table timer forces it out;
     //   none, destroyed — no Machine of ours (a create returning into destroyed is force-destroyed on arrival).
@@ -242,29 +286,27 @@ describe("invariants", () => {
       none: 0, creating: 0, booting: WARMING_TIMEOUT_MINUTES, playing: MAX_DURATION_MINUTES,
       stopping: (RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS) / 60, exited: 0, lost: 0, destroyed: 0,
     };
-    // Every trigger the table can be fed from a runner: each observed state, both create_failed flavours, the derived create_started.
-    const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
-      t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
-      : t === "create_failed" ? [{ type: "create_failed", retryable: true }, { type: "create_failed", retryable: false }]
-      : t === "create_started" ? [{ type: "create_started", name: machineNameFor("s1", r.attempt + 1), attempt: r.attempt + 1 }]
-      : [SAMPLE[t]]);
-    // Longest simple path over (state, attempt) nodes; a stay never re-enters a node already on the path.
+    // Longest simple path over NODES; a stay never re-enters a node already on the path.
     // Successors are walked once per NODE, not once per trigger: `lost → destroyed` alone is six triggers, and walking
-    // each parallel edge re-walked the whole second attempt beneath it (18 s, and a timeout under load). The dwell is a
-    // function of the state alone, so which trigger reached a node cannot change the longest path through it.
+    // each parallel edge re-walked the whole second attempt beneath it (18 s, and a timeout under load). Deduping is sound
+    // only if every trigger reaching a node leaves a Runner the rest of the walk cannot tell apart — so the node key carries
+    // every payload field a cell BRANCHES on: the state, the attempt (retryLeft, createStarted) and whether a stop is marked
+    // (creating's create_ok / create_failed / observed). A future cell that branches on another field adds it here, or the
+    // walk silently under-walks. The dwell itself is a function of the state alone.
+    const nodeKey = (r: Runner): string => `${r.state}:${r.attempt}:${r.stopRequestedAt !== null ? "marked" : "unmarked"}`;
     const longestFrom = (r: Runner, onPath: ReadonlySet<string>): number => {
       const successors = new Map<string, Runner>();
       for (const t of triggersFor(r)) {
         let next: Runner;
         try { next = stepRunner(r, t, T0).next; } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); continue; }
-        const key = `${next.state}:${next.attempt}`;
+        const key = nodeKey(next);
         if (!onPath.has(key) && !successors.has(key)) successors.set(key, next);
       }
       let best = 0;
       for (const [key, next] of successors) best = Math.max(best, DWELL[next.state] + longestFrom(next, new Set([...onPath, key])));
       return best;
     };
-    const longest = longestFrom(RUNNER_NONE, new Set(["none:0"]));
+    const longest = longestFrom(RUNNER_NONE, new Set([nodeKey(RUNNER_NONE)]));
     expect(longest).toBeGreaterThan(MAX_DURATION_MINUTES);            // not vacuous: the walk reaches playing
     expect(MACHINE_MINUTES_BOUND).toBeGreaterThanOrEqual(longest);
     expect(RUNNER_MAX_ATTEMPTS).toBe(2); // ONE retry (design §6.4) — a third attempt would need this line and the table's `destroyed` row to change together
@@ -273,10 +315,15 @@ describe("invariants", () => {
     const step = stepRunner(inState("none"), { type: "create_started", name: machineNameFor("s1", 1), attempt: 1 }, T0);
     expect(step.effects.map((e) => e.type)).toEqual(["persist_intent", "create_machine"]);
     expect(step.next).toMatchObject({ state: "creating", attempt: 1, name: "relay-s1-r1", machineId: null });
-    // crash-safe reconcile: a creating runner observed pending/running (found by name) becomes booting without a second create
-    const found = stepRunner(step.next, { type: "observed", state: "running" }, T0);
-    expect(found.next.state).toBe("booting");
-    expect(found.effects).toEqual([]);
+    // the HAPPY path (review I3): an UNMARKED create returning its id boots THAT Machine — no effect, no signal. Every other
+    // create_ok row in the suites is marked or lands on lost/destroyed, so without this a create_ok that stayed `creating`
+    // would strand every composed session until provision_timeout, all green.
+    expect(stepRunner(step.next, { type: "create_ok", machineId: "m1" }, T0)).toEqual({ next: { ...step.next, state: "booting", machineId: "m1" }, effects: [], signal: null });
+    // crash-safe reconcile: a creating runner observed pending OR running (found by name) becomes booting without a second
+    // create — both operands of `found`, each exactly
+    for (const state of ["pending", "running"] as const) {
+      expect(stepRunner(step.next, { type: "observed", state }, T0), state).toEqual({ next: { ...step.next, state: "booting" }, effects: [], signal: null });
+    }
   });
   it("machineNameFor carries the attempt so a destroyed name is never reused", () => {
     expect(machineNameFor("s1", 1)).toBe("relay-s1-r1");

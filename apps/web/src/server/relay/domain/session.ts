@@ -27,6 +27,11 @@ export interface Session {
   runner: Runner;
   runnerRetries: number; createdAt: Date; startedAt: Date | null; endedAt: Date | null;
   heartbeatAt: Date | null; endingAt: Date | null; maxDurationMinutes: number;   // endingAt: when ending BEGAN — the ending backstop's anchor (F22), persisted as ending_at
+  // Task 2C review I4 (orchestrator ruling A — one authority per fact). heartbeatAt is the last beat RECEIVED, and only a
+  // beat writes it (Task 10 serves it as the panel's lastBeatAt). beatWindowAt is the stale-beat WINDOW anchor: a decision
+  // that acted on a missing beat (the stale-beat arm) or booted a replacement (the retry arm) restarts the window here.
+  // `evaluate` times the beat from the later of the two. Persisted as beat_window_at (Task 7's V408 amend, Task 10).
+  beatWindowAt: Date | null;
 }
 
 // ---- admission (§6.3 order; E5: storage_exhausted is a refusal, never a state)
@@ -160,7 +165,8 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
     case undefined:
       return { next, events, effects };
     case "went_live":
-      if (s.state === "live") return { next, events, effects };                                   // a replacement reporting playing: the session is already live, no second consume
+      // Only a WARMING session goes live here. A replacement reporting playing on a LIVE session: already live, no second
+      // consume (Task 2C review M3 folded the separate live check into this one — it returned the same decision).
       // F16: the beat can land BEFORE `provisioned` (a process dying between create_ok and provisioned
       // strands the session in provisioning, and `evaluate` has no timer for that state). The carrier is an
       // INTERNAL route the Machine retries, so a throw would 500-loop: record the sample (Task 10 does, before
@@ -176,7 +182,10 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       if (s.state !== "ending" && s.state !== "live" && s.state !== "warming") return { next, events, effects };
       // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown
       // leaves it out and the session keeps the one its `ending` step already stored.
-      const endReason = step.signal.endReason ?? s.endReason;
+      // M2 (Task 2C review): the session's OWN stored reason wins. A session that is already ending chose its reason when
+      // ending began; a stop routed through the runner afterwards (ending_timeout over a lost runner) must never turn
+      // max_duration into "stopped". Only a session with no reason yet (live, warming) takes the signal's.
+      const endReason = s.endReason ?? step.signal.endReason ?? null;
       return { next: { ...next, state: "completed", desiredState: "ending", endReason, endedAt: now }, events: [...events, { type: "SessionEnded", reason: "completed" }], effects: [...effects, ...replayFill(s)] };
     }
     case "retry": {
@@ -189,8 +198,12 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
         const c = complete(next, now);
         return { next: c.next, events: [...events, ...c.events], effects: [...effects, ...c.effects] };
       }
-      // heartbeatAt restarts: the replacement owes its first beat within STALE_HEARTBEAT_SECONDS of NOW, not of the crash.
-      return { next: { ...next, runnerRetries: next.runnerRetries + 1, heartbeatAt: now }, events: [...events, { type: "RunnerRetried", attempt: next.runner.attempt + 1 }], effects: [...effects, { type: "retry_runner" }] };
+      // The beat WINDOW restarts (beatWindowAt, I4 — heartbeatAt stays the last beat received): the replacement owes its
+      // first beat within STALE_HEARTBEAT_SECONDS of NOW, not of the crash.
+      // I1 (Task 2C review): the count is IDEMPOTENT — the destroyed runner's attempt, i.e. the retries this signal asks
+      // for. `destroyed × stale_beat` re-signals the SAME retry once per window while `retry_runner` keeps failing to run;
+      // adding one per signal read 21 after 30 min. The attempt (C3) is the one authority; this mirrors it.
+      return { next: { ...next, runnerRetries: next.runner.attempt, beatWindowAt: now }, events: [...events, { type: "RunnerRetried", attempt: next.runner.attempt + 1 }], effects: [...effects, { type: "retry_runner" }] };
     }
     case "failed": {
       const f = fail(next, step.signal.reason, now);
@@ -301,10 +314,12 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
       if (s.state !== "live" || s.mode !== "composed") throw illegal();
       // C1 (Task 2C): a stale beat that was ACTED ON restarts the beat window. Every stale_beat cell with an effect or a
       // signal — lost's re-issued force_destroy, destroyed's re-signalled retry, the entry into lost — would otherwise
-      // fire again on the very next lazy read (a 5 s poll), because nothing else moves heartbeatAt. The runner has no
+      // fire again on the very next lazy read (a 5 s poll), because no beat arrives to move the window. The runner has no
       // clock of its own to bound it with, and the retry arm already restarts this same window for a replacement.
+      // I4 (ruling A): the window's OWN anchor, beatWindowAt — never heartbeatAt, which the organiser's panel reads as the
+      // last beat received, and which would show a dead stream "beat 0 s" for half of every window.
       const d = runner(s, { type: "stale_beat" }, now, illegal);
-      return { ...d, next: { ...d.next, heartbeatAt: now } };
+      return { ...d, next: { ...d.next, beatWindowAt: now } };
     }
     case "grace_expired":
       if (s.mode !== "composed") throw illegal();
@@ -316,7 +331,9 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
       // C5 (M6, Task 2C): a create still IN FLIGHT counts — completing over an unmarked `creating` runner left the
       // Machine that call later made to the daily orphan sweep. The stop marks it: a late create_ok is destroyed, and
       // if nothing ever returns the grace clock the mark started ends the session on a lazy read (F15).
-      if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing" || s.runner.state === "creating")) return runner(s, { type: "session_stop" }, now, illegal);
+      // M2 (Task 2C review): so does a LOST runner — its teardown has not been seen to land. The stop re-issues the
+      // force_destroy and completes the session in the same decision (F17), keeping the session's own end reason.
+      if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing" || s.runner.state === "creating" || s.runner.state === "lost")) return runner(s, { type: "session_stop" }, now, illegal);
       return complete(s, now);
   }
 }

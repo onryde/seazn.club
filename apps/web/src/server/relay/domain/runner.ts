@@ -247,7 +247,7 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     observed: (r, t) => (t.type === "observed" && t.state === "destroyed" ? afterLostDestroyed(withExit(r, t)) : stay(withExit(r, t))),
     // C1: the teardown this state's entry issued has not been seen to land. Re-issue it — NEVER a retry signal, which
     // waits for destroyed (invariant 1). The once-per-STALE_HEARTBEAT_SECONDS bound is the session's: `decide`'s
-    // stale_beat arm restarts the beat window, since a lost runner's entry never touched heartbeatAt.
+    // stale_beat arm restarts the beat window (the session's beatWindowAt), since no beat arrives from a lost runner.
     stale_beat: (r) => ({ next: r, effects: [FORCE_DESTROY], signal: null }),
     // F17 — a deadline or a stop here ENDS the session; only `grace_expired` (our own teardown timing out)
     // leaves it to `destroy_ok`, which is the crash path's ONE retry.

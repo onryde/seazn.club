@@ -28,6 +28,9 @@ export function deadlineOf(s: Pick<Session, "createdAt" | "startedAt" | "maxDura
   return new Date(from.getTime() + (s.maxDurationMinutes || MAX_DURATION_MINUTES) * 60_000);
 }
 
+/** The later of two optional instants; null only when both are. */
+const laterOf = (a: Date | null, b: Date | null): Date | null => (a === null ? b : b === null ? a : a.getTime() >= b.getTime() ? a : b);
+
 /** ORDER (tested): wall clock > stop grace > warming timeout > stale beat. The
  *  policy names WHAT expired; the runner table (./runner) decides retry vs fail. */
 export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_LIMITS): Expiry {
@@ -69,7 +72,7 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
     return { kind: "none" };
   }
   // A playing runner owes a beat; so does a REPLACEMENT that is still booting
-  // (the retry reset heartbeatAt — a replacement that never plays is lost too).
+  // (the retry restarted the window through beatWindowAt — a replacement that never plays is lost too).
   // I2 (Task 2B review, orchestrator ruling — money/safety): so does every OTHER runner state in a live composed
   // session that still wants to be live and carries NO stop mark — destroyed awaiting its one retry (the process
   // died before `retry_runner` ran), a replacement stuck in `creating`, a `lost` one. Without this the stream is
@@ -78,7 +81,9 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
   const owesBeat = s.runner.state === "playing" || s.runner.state === "booting"
     || (s.desiredState === "live" && s.runner.stopRequestedAt === null);
   if (s.state === "live" && s.mode === "composed" && owesBeat) {
-    const beatAt = s.heartbeatAt ?? s.startedAt ?? s.createdAt;
+    // I4 (Task 2C ruling A): the window runs from the LATER of the last beat received and the window anchor a stale-beat
+    // decision or a retry set — a null on either side ignored — then the started_at ?? created_at fallback as before.
+    const beatAt = laterOf(s.heartbeatAt, s.beatWindowAt) ?? s.startedAt ?? s.createdAt;
     if (now.getTime() - beatAt.getTime() >= limits.staleHeartbeatSeconds * 1000) return { kind: "stale_beat" };
   }
   return { kind: "none" };
