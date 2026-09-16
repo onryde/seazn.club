@@ -790,6 +790,48 @@ describe("the tolerated person value is pinned to the product's own \"named\" ch
 });
 
 // ---------------------------------------------------------------------------
+// T13 (carried item 4) — the tolerated extra-KEY NAME was hardcoded
+// ("person", `GENERIC_TOLERATED_EXTRA_KEYS` in drivers/adapters/generic.ts:212)
+// with nothing pinning it against the product's own stamp site
+// (generic.tsx:327's `...(soleScorer !== undefined ? { person: soleScorer } :
+// {})`). The describe block above pins the tolerated VALUE (what counts as
+// "named") to generic.tsx's source text; the KEY NAME itself was not — a
+// rename there (say, to "scorerId") would still be caught on a LIVE run
+// (comparePayload reds on the now-unexpected key), but only by running the
+// product, never by this unit suite. Same source-text-pin technique: read
+// generic.tsx's own stamp line, extract the key it uses, derive rather than
+// hand-type, so a drift between the two files shows up here too.
+// ---------------------------------------------------------------------------
+describe("the tolerated extra key NAME is pinned to generic.tsx's own sole-scorer stamp (generic.tsx:327)", () => {
+  let stampedKey: string | undefined;
+
+  beforeAll(() => {
+    const genericSource = readFileSync(
+      new URL("../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx", import.meta.url),
+      "utf8",
+    );
+    const match = /soleScorer\s*!==\s*undefined\s*\?\s*\{\s*(\w+)\s*:\s*soleScorer\s*\}\s*:\s*\{\s*\}/.exec(genericSource);
+    stampedKey = match?.[1];
+  });
+
+  it("reads the exact key generic.tsx stamps the sole scorer under, tolerant of reformatting", () => {
+    expect(stampedKey).toBe("person");
+  });
+
+  it("matches the bench's own tolerated-extra-key allowlist for generic.score", () => {
+    if (stampedKey === undefined) {
+      throw new Error(
+        "generic.tsx's sole-scorer stamp no longer matches this regex — re-pin scorer-driver.test.ts (carried item 4)",
+      );
+    }
+    // Derived from the PRODUCT's own source, never a hand-typed copy: a
+    // rename at the stamp site moves this expectation with it, so a drift
+    // between the two shows up here instead of only on a live run.
+    expect(GENERIC_TOLERATED_EXTRA_KEYS.get(SCORE_TYPE)).toEqual([stampedKey]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // I4 / R50(f): no HTTP-capable value is reachable from the driver's own files.
 // A source scan, so an unused import is caught too, not just a call site. The
 // load-bearing check is the VALUE-import allowlist: nothing the bench can POST
