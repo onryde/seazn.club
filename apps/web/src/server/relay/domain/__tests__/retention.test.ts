@@ -35,6 +35,11 @@ describe("retentionPlan", () => {
     // survives this tick — deleting the input now would leak that recording.
     const recording = i("in7");
     expect(retentionPlan([v("rec", daysAgo(5), "in7", true)], [recording], now)).toEqual({ deleteVideos: ["rec"], deleteInputs: [], deferInputs: [recording] });
+    // Fix round 1 (I1): an EXPIRED, FINISHED video that this same plan deletes still holds its input. Task 12 runs the video
+    // deletes and then the input deletes from ONE plan without re-listing, so a video delete that does not land (a
+    // list-then-409 race) would leak its recording. The input waits for the NEXT tick's listing to show the video gone.
+    const sameRun = i("in8");
+    expect(retentionPlan([v("old", daysAgo(RECORDING_RETENTION_DAYS), "in8")], [sameRun], now)).toEqual({ deleteVideos: ["old"], deleteInputs: [], deferInputs: [sameRun] });
   });
   it("a video of ANOTHER input does not hold this one", () => {
     expect(retentionPlan([v("x", daysAgo(1), "other")], [i("in1")], now).deleteInputs).toHaveLength(1);

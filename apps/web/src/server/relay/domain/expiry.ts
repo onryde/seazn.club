@@ -70,7 +70,14 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
   }
   // A playing runner owes a beat; so does a REPLACEMENT that is still booting
   // (the retry reset heartbeatAt — a replacement that never plays is lost too).
-  if (s.state === "live" && s.mode === "composed" && (s.runner.state === "playing" || s.runner.state === "booting")) {
+  // I2 (Task 2B review, orchestrator ruling — money/safety): so does every OTHER runner state in a live composed
+  // session that still wants to be live and carries NO stop mark — destroyed awaiting its one retry (the process
+  // died before `retry_runner` ran), a replacement stuck in `creating`, a `lost` one. Without this the stream is
+  // dead but the session reads live, holding its credit and reservation, until the wall clock. A MARKED runner
+  // stays the grace clause's; what `stale_beat` does to each runner state is the runner table's (Task 2C).
+  const owesBeat = s.runner.state === "playing" || s.runner.state === "booting"
+    || (s.desiredState === "live" && s.runner.stopRequestedAt === null);
+  if (s.state === "live" && s.mode === "composed" && owesBeat) {
     const beatAt = s.heartbeatAt ?? s.startedAt ?? s.createdAt;
     if (now.getTime() - beatAt.getTime() >= limits.staleHeartbeatSeconds * 1000) return { kind: "stale_beat" };
   }

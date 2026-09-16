@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES } from "../../config";
 import { ACTIVE_STATES } from "../session";
 import { DEFAULT_LIMITS, deadlineOf, evaluate, type Expiry } from "../expiry";
-import { RUNNER_NONE, type Runner } from "../runner";
+import { RUNNER_NONE, RUNNER_STATES, type Runner, type RunnerState } from "../runner";
 import { decide, type Session } from "../session";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
@@ -20,7 +20,9 @@ const S = (over: Partial<Session> = {}): Session => ({
 });
 
 describe("evaluate", () => {
-  it("terminal → none: a finished session owns no timer, completed and failed alike", () => {
+  // Fix round 1 (M3): the rows are PASSTHROUGH with RUNNER_NONE, and the title now says so — a COMPOSED terminal row
+  // with a marked runner is not covered here (C27; Task 2C's rows).
+  it("terminal PASSTHROUGH → none: a finished passthrough session owns no timer, completed and failed alike", () => {
     expect(evaluate(S({ state: "completed" }), at(1e6))).toEqual({ kind: "none" });
     expect(evaluate(S({ state: "failed" }), at(1e6))).toEqual({ kind: "none" });
   });
@@ -81,13 +83,14 @@ describe("evaluate", () => {
     // unreachable and the "provisioning block above the grace clause" mutant survived.)
     const marked = S({ state: "provisioning", mode: "composed", runner: { ...PLAYING, state: "creating", machineId: null, stopRequestedAt: T0 } });
     expect(evaluate(marked, at(PROVISION_TIMEOUT_SECONDS))).toEqual({ kind: "grace_expired" });
+    // a passthrough session in provisioning has no Machine to tear down (fix round 1, M1: moved ABOVE the composed decide
+    // for the same reason as `marked` — it needs no runner, and behind the stub call it could not run until Task 2C)
+    expect(decide(p, { type: "expire", expiry: { kind: "provision_timeout" } }, at(PROVISION_TIMEOUT_SECONDS)).effects).toEqual([]);
     // F16's stranded session: the create returned, `provisioned` never landed, and the Machine beats forever.
     const c = S({ state: "provisioning", mode: "composed", runner: { ...PLAYING, state: "booting" } });
     const d = decide(c, { type: "expire", expiry: evaluate(c, at(PROVISION_TIMEOUT_SECONDS)) }, at(PROVISION_TIMEOUT_SECONDS));
     expect(d.next).toMatchObject({ state: "failed", failReason: "provision_timeout", endReason: null });
     expect(d.effects).toEqual([{ type: "runner", effect: { type: "stop_machine", signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }]);
-    // a passthrough session in provisioning has no Machine to tear down
-    expect(decide(p, { type: "expire", expiry: { kind: "provision_timeout" } }, at(PROVISION_TIMEOUT_SECONDS)).effects).toEqual([]);
   });
   it("warming ≥ 10 min → warming_timeout at the threshold, none one second before", () => {
     expect(evaluate(S(), at(WARMING_TIMEOUT_MINUTES * 60 - 1))).toEqual({ kind: "none" });
@@ -97,6 +100,14 @@ describe("evaluate", () => {
     const live = S({ state: "live", startedAt: at(60) });
     expect(evaluate(live, at(60 + MAX_DURATION_MINUTES * 60 - 1))).toEqual({ kind: "none" });
     expect(evaluate(live, at(60 + MAX_DURATION_MINUTES * 60))).toEqual({ kind: "wall_clock" });
+    // Fix round 1 (M3): the warming half of the title had no row. A warming session has no started_at, so the wall clock
+    // runs from created_at. Under the default 10-minute warming timeout it can only be seen OUTRANKING that timeout;
+    // with a long injected warming timeout its own boundary shows on both sides.
+    const warming = S({ state: "warming" });
+    expect(evaluate(warming, at(MAX_DURATION_MINUTES * 60))).toEqual({ kind: "wall_clock" });
+    const LONG_WARMING = { ...DEFAULT_LIMITS, warmingTimeoutMinutes: MAX_DURATION_MINUTES * 2 };
+    expect(evaluate(warming, at(MAX_DURATION_MINUTES * 60 - 1), LONG_WARMING)).toEqual({ kind: "none" });
+    expect(evaluate(warming, at(MAX_DURATION_MINUTES * 60), LONG_WARMING)).toEqual({ kind: "wall_clock" });
   });
   it("live composed with a PLAYING runner and a stale beat → stale_beat regardless of attempt (the table decides retry vs fail); passthrough never (no Machine)", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: T0 });
@@ -109,8 +120,9 @@ describe("evaluate", () => {
     expect(evaluate({ ...c, mode: "passthrough" }, at(STALE_HEARTBEAT_SECONDS * 10))).toEqual({ kind: "none" });
     // a REPLACEMENT still booting in a live session owes a beat too (a replacement that never plays is lost)
     expect(evaluate({ ...c, runner: { ...PLAYING, state: "booting", attempt: 2 } }, at(STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
-    // but a runner in creating/stopping owes none
-    expect(evaluate({ ...c, runner: { ...PLAYING, state: "creating" } }, at(STALE_HEARTBEAT_SECONDS * 10))).toEqual({ kind: "none" });
+    // Fix round 1 (I2 ruling): the brief's row here — "a runner in creating/stopping owes none", an UNMARKED creating
+    // runner in a live session reading `none` at 900 s — froze the defect I2 closes. It is REMOVED, not loosened: the
+    // idle runner states (creating included) now have their own test below, marked and unmarked.
   });
   it("a live composed session with NO beat yet measures staleness from started_at", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: null });
@@ -121,7 +133,9 @@ describe("evaluate", () => {
     expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS - 1))).toEqual({ kind: "none" });
     expect(evaluate(booted, at(60 + STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "stale_beat" });
   });
-  it("grace_expired: a stopping/exited runner — and a CREATING one whose stop was marked (F15) — past grace + observation slack, at the threshold and not one second before; ordered below wall clock, above the warming timeout", () => {
+  // Fix round 1 (M3): retitled to what the rows witness. The brief's title also claimed "ordered below wall clock",
+  // which no row pins (review M2, DEFERRED by the orchestrator) — the claim is dropped here, not tested.
+  it("grace_expired: a MARKED stopping/exited runner — and a MARKED creating one (F15) — past grace + observation slack, at the threshold and not one second before; it outranks the warming timeout", () => {
     const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;
     // `creating` is the F15 case: the process died between marking the stop and the Fly call returning.
     for (const state of ["stopping", "exited", "creating"] as const) {
@@ -131,6 +145,10 @@ describe("evaluate", () => {
     }
     const w = S({ state: "warming", mode: "composed", runner: { ...PLAYING, state: "stopping", stopRequestedAt: T0 } });
     expect(evaluate(w, at(WARMING_TIMEOUT_MINUTES * 60))).toEqual({ kind: "grace_expired" });
+  });
+  // Fix round 1 (M3): split out of the grace test above, whose title did not describe these rows.
+  it("grace_expired needs a COMPOSED session AND a stop MARK: a passthrough twin reads none, and an UNMARKED creating runner never reads grace_expired — none inside ending's window, the F19 ending_timeout past it", () => {
+    const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;
     // The grace is a COMPOSED rule: `decide` refuses grace_expired on a passthrough session, so naming it there would
     // throw on every lazy read. Same marked runner, passthrough row, same instant → none (Task 2B: dropping the mode check survived).
     const passthrough = S({ state: "ending", runner: { ...PLAYING, state: "stopping", stopRequestedAt: T0 }, startedAt: T0 });
@@ -143,6 +161,38 @@ describe("evaluate", () => {
     const unmarked = S({ state: "ending", mode: "composed", runner: { ...PLAYING, state: "creating", machineId: null, stopRequestedAt: null } });
     expect(evaluate({ ...unmarked, endingAt: T0 }, at(ENDING_TIMEOUT_SECONDS - 1))).toEqual({ kind: "none" });
     expect(evaluate(unmarked, at(1e6))).toEqual({ kind: "ending_timeout" });
+  });
+  // Fix round 1 — I2 (Task 2B review; orchestrator ruling, money/safety). A live composed session that still wants to be
+  // live, whose runner is NOT playing/booting and carries NO stop mark — destroyed awaiting its one retry (the process died
+  // before `retry_runner` ran), a replacement stuck in `creating`, a `lost` one — is a dead stream still reading `live`,
+  // holding its credit and its reservation until the 5 h wall clock. It is timed by the SAME stale-beat rule. This test pins
+  // ONLY evaluate's answer: what stale_beat does to each runner state is the runner table's (Task 2C), and 2A's stub throws.
+  it("a LIVE COMPOSED session wanting live whose runner is NOT playing/booting and UNMARKED (destroyed awaiting retry, creating, lost…) owes the beat: stale_beat at (heartbeatAt ?? startedAt) + STALE_HEARTBEAT_SECONDS, none 1 s before; marked / passthrough / desired-ending twins never read stale_beat; wall clock still outranks (I2)", () => {
+    const beat = 60;   // heartbeatAt ≠ startedAt, so the anchor is witnessed (a retry resets heartbeatAt to its own now)
+    const idle = RUNNER_STATES.filter((r) => r !== "playing" && r !== "booting");   // walked, never a typed list
+    expect(idle).toEqual(expect.arrayContaining(["destroyed", "creating", "lost"]));   // not vacuous: the ruled states are in it
+    const GRACE_TIMED: readonly RunnerState[] = ["stopping", "exited", "creating"];
+    for (const state of idle) {
+      const s = S({ state: "live", mode: "composed", startedAt: T0, heartbeatAt: at(beat), runner: { ...PLAYING, state } });
+      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS - 1)), `${state} T−1`).toEqual({ kind: "none" });
+      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} T`).toEqual({ kind: "stale_beat" });
+      // no beat since it went live: measured from started_at, both sides
+      expect(evaluate({ ...s, heartbeatAt: null }, at(STALE_HEARTBEAT_SECONDS - 1)), `${state} from started_at T−1`).toEqual({ kind: "none" });
+      expect(evaluate({ ...s, heartbeatAt: null }, at(STALE_HEARTBEAT_SECONDS)), `${state} from started_at T`).toEqual({ kind: "stale_beat" });
+      // a stop-MARKED twin stays with the grace rule (which times only stopping/exited/creating) — never stale_beat
+      const marked = { ...s, runner: { ...s.runner, stopRequestedAt: at(beat) } };
+      expect(evaluate(marked, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} marked`).toEqual({ kind: GRACE_TIMED.includes(state) ? "grace_expired" : "none" });
+      // a passthrough twin has no Machine; a session that no longer wants to be live is not the beat's business
+      expect(evaluate({ ...s, mode: "passthrough" }, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} passthrough`).toEqual({ kind: "none" });
+      expect(evaluate({ ...s, desiredState: "ending" }, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} desired ending`).toEqual({ kind: "none" });
+      // precedence unchanged: the wall clock still outranks
+      expect(evaluate(s, at(MAX_DURATION_MINUTES * 60)), `${state} wall clock`).toEqual({ kind: "wall_clock" });
+    }
+    // playing/booting are UNCHANGED by the ruling: they owe the beat whatever desiredState says (only the idle states are gated)
+    for (const state of ["playing", "booting"] as const) {
+      const s = S({ state: "live", mode: "composed", desiredState: "ending", startedAt: T0, heartbeatAt: at(beat), runner: { ...PLAYING, state } });
+      expect(evaluate(s, at(beat + STALE_HEARTBEAT_SECONDS)), `${state} desired ending`).toEqual({ kind: "stale_beat" });
+    }
   });
   it("wall clock outranks a stale beat (an over-long session ends, it is not retried)", () => {
     const c = S({ state: "live", mode: "composed", runner: PLAYING, startedAt: T0, heartbeatAt: T0 });
@@ -158,6 +208,13 @@ describe("evaluate", () => {
   it("deadlineOf = (started_at ?? created_at) + max_duration — the ONE hard-stop instant (recommendation B)", () => {
     expect(deadlineOf(S()).toISOString()).toBe(at(MAX_DURATION_MINUTES * 60).toISOString());
     expect(deadlineOf(S({ startedAt: at(30) })).toISOString()).toBe(at(30 + MAX_DURATION_MINUTES * 60).toISOString());
+    // Fix round 1 (M5): the SESSION's own max_duration, never the constant — every fixture above carries the default,
+    // so "always use MAX_DURATION_MINUTES" survived. A 90-minute booking stops at 90 minutes, not at 89 and not at 300.
+    const booked90 = S({ state: "live", startedAt: T0, maxDurationMinutes: 90 });
+    expect(deadlineOf(booked90).toISOString()).toBe(at(90 * 60).toISOString());
+    expect(evaluate(booked90, at(89 * 60))).toEqual({ kind: "none" });
+    expect(evaluate(booked90, at(90 * 60 - 1))).toEqual({ kind: "none" });
+    expect(evaluate(booked90, at(90 * 60))).toEqual({ kind: "wall_clock" });
   });
   it("feeds decide: a passthrough wall clock ends with end_reason max_duration and completes now; none → identity (the composed routes are Task 2C's tests)", () => {
     const p = S({ state: "live", startedAt: T0 });
