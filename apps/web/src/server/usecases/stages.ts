@@ -682,6 +682,15 @@ function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[
 
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
 
+/** The slot label stamped on a bye's PHANTOM side — the seat the bracket pads
+ *  out and nobody ever occupies. One authority, shared by the two generation
+ *  paths (`generateStageFixtures`' own insert and the `timing: "setup"`
+ *  progression path's label pass) and by `awardSeededByes` below, which reads
+ *  it back as the marker that says "this line is a walkover, not a match still
+ *  waiting on an opponent". The public hub already keys its own bye detection
+ *  on the same string (public-site/competition-hub.ts's BYE_SLOT_KEY). */
+const BYE_SLOT_LABEL = { key: "bracket.slot.bye", params: {} } as const;
+
 // Swiss next round (spec 05 §2.2): score groups from prior outcomes (win 1,
 // draw/tie ½, bye 1), history from persisted fixtures, then pairRound.
 //
@@ -1459,7 +1468,7 @@ async function generateStageFixturesWrite(auth: AuthCtx, stageId: string): Promi
     // stages/bracket panels, …) picks it up for free, the same way every
     // other slot label on this row already does.
     const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
-      isBye ? { key: "bracket.slot.bye", params: {} } : null;
+      isBye ? BYE_SLOT_LABEL : null;
 
     // First pass: all new fixtures in one multi-row insert. Ids are generated
     // client-side so the feed/bye passes can reference them without relying
@@ -2186,10 +2195,15 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
     // ONE (last-write-wins, no ORDER BY) silently stranded whichever slot
     // wasn't picked.
     //
-    // The bye-line fixture itself is still not auto-decided the way a
-    // live/registered-entrant bye is (there is no real entrant yet to record
-    // a walkover for) — it stays 'scheduled' until confirmSeedProposal fills
-    // it, same as any other TBD slot.
+    // The bye-line fixture itself cannot be auto-decided HERE the way a
+    // live/registered-entrant bye is: there is no real entrant yet to record
+    // the walkover for. It is written 'scheduled' like any other TBD slot and
+    // decided at the moment its seat is filled — confirmSeedProposal's
+    // `awardSeededByes` call, keyed off the `bracket.slot.bye` label stamped
+    // below. Leaving it 'scheduled' after the fill is what shipped the defect
+    // `progression-bye-is-decided.test.ts` pins: unplayable by construction
+    // (one side is empty forever), so the stage never completes, and `isBye`
+    // reads false, so it renders as an open match awaiting a draw.
     for (const g of gen) {
       if (typeof g.home === "string" && slotOf.has(g.home)) {
         g.homeLabel = { ...descriptorLabel(slotOf.get(g.home)!), seed: seedOfSlotId(g.home) };
@@ -2250,6 +2264,33 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       }
       if (g.awayLabel) {
         await tx`update fixtures set away_slot_label = ${tx.json(g.awayLabel as never)} where id = ${fixtureId}`;
+      }
+      // A bye's phantom side resolves to nobody, ever — padding the bracket
+      // out to a power of two is the entire reason the seat exists. Without a
+      // label there, resolveSlotLabel falls through to a generic TBD, which
+      // tells the organiser to wait for an opponent who is not coming; the
+      // plain (non-progression) path has stored `bracket.slot.bye` there since
+      // the P5 review (`byeSlotLabel` at its own insert) and this is the same
+      // store on the seeded path, so every renderer already going through
+      // resolveSlotLabel picks it up for free.
+      //
+      // It is also the MARKER `awardSeededByes` reads at confirm time to tell
+      // a walkover line apart from a slot still waiting on a feeder — which is
+      // why it is stamped here, at the one place that knows `g.award`, rather
+      // than re-derived later from a row shape that cannot distinguish them.
+      //
+      // Deliberately carries NO `seed`: destinationSlotsBySeed keys on that
+      // field to decide which slots a qualifier fills, and this seat is not a
+      // destination. Both sides are guarded rather than assuming the engine
+      // always lands the award on `home` (buildSingleElim does today), same
+      // symmetry the plain path keeps.
+      if (g.award !== undefined) {
+        if (g.home === null && !g.homeLabel) {
+          await tx`update fixtures set home_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+        }
+        if (g.away === null && !g.awayLabel) {
+          await tx`update fixtures set away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)} where id = ${fixtureId}`;
+        }
       }
     }
 
@@ -2382,6 +2423,49 @@ export async function fillSlot(
     : await tx<{ id: string }[]>`update fixtures set away_entrant_id = ${entrantId}, away_slot_label = null
              where id = ${fixtureId} and away_entrant_id is null returning id`;
   return row?.id ?? null;
+}
+
+/** Decide every bye line in `stageId` whose real side is now occupied, and
+ *  return the fixture ids this call actually changed.
+ *
+ *  A `timing: "setup"` progression draws its bracket before anyone has
+ *  qualified, so the walkover the plain path bakes straight into its INSERT
+ *  (`status: 'forfeited'` + `{kind: 'award', winner}`) cannot be written at
+ *  generation time — there is nobody to award it to yet. It has to be written
+ *  at the moment the seat is filled, and nothing did: the row stayed
+ *  `scheduled` with a null outcome for the whole life of the competition.
+ *  Two things follow from that, and they are the defect this exists to close:
+ *  the line is unplayable by construction (its other side is empty forever),
+ *  so the stage can never complete; and `isBye` (lib/run-sheet-groups — the
+ *  ONE predicate the run sheet row and the bracket panel both gate their bye
+ *  branch on) reads false, so it renders as an ordinary open match "awaiting
+ *  a draw". Every progression-bearing template in the catalogue declares
+ *  `timing: "setup"`, so it reached league_ko, groups_ko, group_stepladder,
+ *  ko_plate, qualifying_main and both swiss composites alike.
+ *
+ *  A bye is identified by the `bracket.slot.bye` label its own generation
+ *  stamped on the phantom side — NEVER by "one side is null", which is also
+ *  every later-round slot still waiting on a feeder, and every half-filled
+ *  final. Idempotent: `status = 'scheduled'` makes a second call a no-op, and
+ *  a line whose real seat has not been filled yet is left alone until it is. */
+async function awardSeededByes(tx: Tx, stageId: string): Promise<string[]> {
+  const rows = await tx<{ id: string }[]>`
+    update fixtures set
+      status = 'forfeited',
+      outcome = jsonb_build_object(
+        'kind', 'award', 'winner', coalesce(home_entrant_id, away_entrant_id))
+    where stage_id = ${stageId}
+      and status = 'scheduled'
+      and outcome is null
+      and (
+        (away_entrant_id is null and home_entrant_id is not null
+           and away_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
+        or
+        (home_entrant_id is null and away_entrant_id is not null
+           and home_slot_label->>'key' = ${BYE_SLOT_LABEL.key})
+      )
+    returning id`;
+  return rows.map((r) => r.id);
 }
 
 // L3/#414 pass 3 — REAL_TABLE_KINDS are the kinds a carry-over may source
@@ -3544,6 +3628,13 @@ export async function confirmSeedProposal(
       const filledId = await fillSlot(tx, fixtureId as string, side === "home" ? 1 : 2, entrantId);
       if (filledId !== null) filledFixtureIds.add(filledId);
     }
+    // A bye seat just became a real entrant's, so the walkover the plain path
+    // bakes at generation time can finally be recorded — see awardSeededByes.
+    // AFTER the fills, in the SAME transaction: it reads the entrant ids they
+    // just wrote. The decided lines join `filledFixtureIds` so the post-commit
+    // publish below drops and re-pushes them too — their match centre now
+    // shows a settled walkover rather than a fixture waiting on a draw.
+    for (const id of await awardSeededByes(tx, stageId)) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;

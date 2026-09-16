@@ -98,12 +98,13 @@ interface FixtureRow {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   status: string;
+  outcome: unknown;
   is_final: boolean;
 }
 
 async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
   return sql<FixtureRow[]>`
-    select id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status, is_final
+    select id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status, outcome, is_final
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
 }
@@ -300,6 +301,16 @@ describe.runIf(HAS_DB)("swiss knockout — the bracket an organiser's Top N actu
     expect(rig.nameOf.get(byes[0]!.home_entrant_id!), "the bye belongs to the swiss winner").toBe(
       "E1",
     );
+    // …and it is SETTLED, not an open match nobody can play. This half was
+    // reported by the walkthrough of this very format and fixed separately:
+    // a `timing: "setup"` progression cannot bake the walkover at generation
+    // time (nobody has qualified yet), so confirmSeedProposal records it when
+    // the seat is filled. Pinned here as well as in
+    // progression-bye-is-decided.test.ts because THIS is the suite that had
+    // the shape in front of it and let the defect through — it asserted where
+    // the bye was and never what state it was in.
+    expect(byes[0]!.status, "a bye is a walkover, never 'scheduled'").toBe("forfeited");
+    expect(byes[0]!.outcome).toEqual({ kind: "award", winner: byes[0]!.home_entrant_id });
 
     // The other is a REAL match, and it is 2nd against 3rd — not 1st against
     // anyone. Byeing the wrong end of the table is the shape this refuses.

@@ -622,18 +622,34 @@ describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554
     // SELECT.
     const fixtures = await sql<{
       id: string;
-      home_slot_label: unknown;
+      home_slot_label: { seed?: number; key?: string } | null;
       home_entrant_id: string | null;
-      away_slot_label: unknown;
+      away_slot_label: { seed?: number; key?: string } | null;
       away_entrant_id: string | null;
     }[]>`select id, home_slot_label, home_entrant_id, away_slot_label, away_entrant_id
          from fixtures where stage_id = ${koStageId}`;
+    // A DESTINATION label is one carrying the internal `seed` that
+    // destinationSlotsBySeed keys on — those, and only those, are slots the
+    // confirm was supposed to fill, so those are the ones that must not be
+    // left behind. The bye's phantom side also holds a label with no entrant,
+    // permanently and on purpose (`bracket.slot.bye`, stamped at generation so
+    // the seat reads "Bye" rather than a TBD nobody is coming to fill); it
+    // carries no seed, is not a destination, and is asserted positively just
+    // below rather than silently excused.
+    const isDestination = (l: { seed?: number } | null): boolean => typeof l?.seed === "number";
     const stranded = fixtures.filter(
       (f) =>
-        (f.home_slot_label !== null && f.home_entrant_id === null) ||
-        (f.away_slot_label !== null && f.away_entrant_id === null),
+        (isDestination(f.home_slot_label) && f.home_entrant_id === null) ||
+        (isDestination(f.away_slot_label) && f.away_entrant_id === null),
     );
     expect(stranded).toEqual([]);
+
+    // The exemption, checked: exactly one line is the bye, its real side is
+    // occupied, and its phantom side still names itself a bye.
+    const byeLines = fixtures.filter((f) => f.away_slot_label?.key === "bracket.slot.bye");
+    expect(byeLines, "a 3-qualifier bracket of 4 holds one bye line").toHaveLength(1);
+    expect(byeLines[0]!.away_entrant_id).toBeNull();
+    expect(byeLines[0]!.home_entrant_id).not.toBeNull();
 
     // Sanity check on the fill count: the bye's seed fills its own bye
     // fixture's slot AND the winner-feed target's slot — 4 slots filled for
