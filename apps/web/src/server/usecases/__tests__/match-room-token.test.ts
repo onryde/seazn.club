@@ -1,0 +1,71 @@
+// Task 5 (chess external-play, spec §12.1): personal match-room link token —
+// round-trip, scheduled_at + 24h expiry (not mint time, with its positive
+// pair one second before the deadline), the typ gate against the QR
+// check-in token family, a missing-claim refusal, and tamper resistance.
+// Pure — no DB. Task 8's room resolver owns the "other pid" / "stale sat"
+// comparisons against a fixture row; this file only proves verify hands
+// claims back verbatim.
+import { describe, expect, it, vi } from "vitest";
+import { SignJWT } from "jose";
+import { mintMatchRoomToken, verifyMatchRoomToken } from "../match-room-token";
+import { mintCheckinToken } from "../checkin-token";
+import { authSecretKey } from "../signing-key";
+import { MATCH_ROOM_TOKEN_TTL_MS } from "@/server/external-play/window";
+
+const claims = { fixtureId: "f1", personId: "p1", scheduledAt: "2026-10-01T19:00:00.000Z" };
+
+describe("match room token", () => {
+  it("round-trips fid/pid/sat", async () => {
+    expect(await verifyMatchRoomToken(await mintMatchRoomToken(claims))).toEqual(claims);
+  });
+
+  it("is still valid one second before scheduled_at + 24h", async () => {
+    vi.useFakeTimers();
+    const token = await mintMatchRoomToken(claims);
+    vi.setSystemTime(Date.parse(claims.scheduledAt) + MATCH_ROOM_TOKEN_TTL_MS - 1000);
+    await expect(verifyMatchRoomToken(token)).resolves.toEqual(claims);
+    vi.useRealTimers();
+  });
+
+  it("expires scheduled_at + 24h (not from mint time)", async () => {
+    vi.useFakeTimers();
+    const token = await mintMatchRoomToken(claims);
+    vi.setSystemTime(Date.parse(claims.scheduledAt) + MATCH_ROOM_TOKEN_TTL_MS + 1000);
+    await expect(verifyMatchRoomToken(token)).rejects.toMatchObject({ status: 401, code: "MATCH_ROOM_EXPIRED" });
+    vi.useRealTimers();
+  });
+
+  it("refuses a QR check-in token (different typ)", async () => {
+    const qr = await mintCheckinToken("f1", new Date(Date.now() + 60_000));
+    await expect(verifyMatchRoomToken(qr)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
+  });
+
+  it("refuses a token with valid fid/pid/sat claims but the wrong typ", async () => {
+    // Isolates the typ guard from the claims-shape guard below: this token's
+    // claims are otherwise perfectly valid, so only a real typ check can
+    // reject it (the QR-token test above coincidentally also fails the
+    // claims-shape check, since QR tokens don't carry pid/sat at all).
+    const wrongTyp = await new SignJWT({ fid: "f1", pid: "p1", sat: claims.scheduledAt })
+      .setProtectedHeader({ alg: "HS256", typ: "seazn-checkin" })
+      .setExpirationTime("1h")
+      .sign(authSecretKey());
+    await expect(verifyMatchRoomToken(wrongTyp)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
+  });
+
+  it("refuses a token missing pid", async () => {
+    const bad = await new SignJWT({ fid: "f1", sat: claims.scheduledAt })
+      .setProtectedHeader({ alg: "HS256", typ: "seazn-match-room" })
+      .setExpirationTime("1h")
+      .sign(authSecretKey());
+    await expect(verifyMatchRoomToken(bad)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
+  });
+
+  it("refuses a token signed with a different secret (tampered)", async () => {
+    const otherKey = new TextEncoder().encode("some-other-secret-entirely");
+    const forged = await new SignJWT({ fid: "f1", pid: "p1", sat: claims.scheduledAt })
+      .setProtectedHeader({ alg: "HS256", typ: "seazn-match-room" })
+      .setExpirationTime("1h")
+      .sign(otherKey);
+    await expect(verifyMatchRoomToken(forged)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
+  });
+});
