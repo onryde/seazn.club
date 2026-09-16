@@ -235,26 +235,33 @@ export function externalPlayLobbyTopic(fixtureId: string): string {
 }
 
 /**
- * Subscriber JWT for the online-play lobby. Same fixture_id claim shape as the
- * score channel so Realtime Authorization can bind the topic. The route only
- * mints this for a player on the fixture — not for the paid realtime add-on.
+ * Subscriber JWT for the online-play lobby (chess Lichess external-play
+ * redesign, Task 8). Carries `lobby_fixture_id` — NEVER `fixture_id`: V403's
+ * paid `fixture:{id}` score-channel policy reads `fixture_id`, and
+ * `external-play:{fixtureId}` (V407) is a private, unpaid channel with its
+ * own policy keyed on `lobby_fixture_id` — sharing the claim name would let a
+ * paid-realtime subscriber JWT also authorize the free lobby topic, or vice
+ * versa. `expiresAt` is the fixture's own deadline (T+20, `windowFor`'s
+ * `deadline`), not a flat TTL — the room's realtime subscription should never
+ * outlive the window it was minted for (spec §12.1: "the realtime subscriber
+ * JWT is issued per room load and expires at T+20").
  */
 export async function mintExternalPlayLobbyToken(
   fixtureId: string,
-  userId: string,
-  ttlSeconds = 3600,
+  subject: string,
+  expiresAt: Date,
 ): Promise<string> {
   const { key, alg, kid } = await resolveRealtimeMintKey();
   const header: { alg: typeof alg; typ: "JWT"; kid?: string } = { alg, typ: "JWT" };
   if (kid) header.kid = kid;
   return new SignJWT({
     role: "authenticated",
-    sub: userId,
-    fixture_id: fixtureId,
+    sub: subject,
+    lobby_fixture_id: fixtureId,
   })
     .setProtectedHeader(header)
     .setIssuedAt()
-    .setExpirationTime(`${ttlSeconds}s`)
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
     .setAudience("authenticated")
     .sign(key);
 }
