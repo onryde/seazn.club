@@ -4,10 +4,12 @@ import "server-only";
 // failed revalidation must never roll back a scoring write, and unit tests
 // call use-cases outside a request scope where revalidateTag would throw.
 import { revalidatePath, revalidateTag } from "next/cache";
+import { sql } from "@/lib/db";
 import { cacheDelPattern } from "@/lib/cache";
 import { broadcastRevalidate } from "@/lib/peer-revalidate";
 import { purgeCdn } from "@/lib/cdn-purge";
-import { divisionTag, competitionTag, orgTag, DISCOVERY_TAG } from "./data";
+import { log } from "@/server/logger";
+import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./data";
 
 export { DISCOVERY_TAG };
 
@@ -22,6 +24,68 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
     // outside a Next request scope (tests, scripts) — nothing to invalidate
   }
   void broadcastRevalidate(tags, "swr");
+  void purgeCdn();
+}
+
+/** A write to what the public pages show about a PERSON: their consent
+ *  (`setMyConsent`, `patchPerson`), name or date of birth (`patchPerson`),
+ *  photo (`setMyPersonPhoto`, `setPersonPhoto`), or a merge and its reversal
+ *  (`mergePersons` / `reverseMerge`, which rewrite consent). Pass every person
+ *  whose public reads the write changed.
+ *
+ *  Two reaches, because a name is baked into DATA entries as well as pages, and
+ *  Next checks a data entry against its OWN tags only — an expired page that
+ *  rebuilds from an unexpired data entry puts the old name straight back:
+ *   - each person's tag (`personTag`), EXPIRED: their card's page and data
+ *     entries at every competition URL, allowed or refused, including a
+ *     competition they are not rostered in (`public_players_v` is org-scoped);
+ *   - the division and competition tags of every division they are rostered
+ *     in, deduped, stale-while-revalidate — the tags the player's consent write
+ *     has always fired: the entries that mask their name for others
+ *     (`pub-div`, `pub-fixture`, and other players' cards through
+ *     `pub-player-v16`), and the pages built on them. One stale read, then the
+ *     background rebuild waits on fresh data.
+ *  Never the org tag: that would expire every page and data entry of the org,
+ *  hubs included, on each of these writes — and `PATCH /api/v1/persons/{id}`
+ *  takes API keys, so a roster sync would be one org-wide expiry per person.
+ *  One broadcast per profile and one CDN purge per write.
+ *
+ *  AWAIT it inside the request, after commit: it reads the rosters before
+ *  firing, and Next flushes a handler's revalidations once, when the handler
+ *  resolves, so a voided call's tags go nowhere. It never rejects — the write
+ *  it follows has committed — so the caller's next after-commit step (the Redis
+ *  retire) always runs. A failed roster read is logged, and the person tags
+ *  still fire. */
+export async function firePersonRevalidate(
+  personIds: readonly string[],
+  context: Record<string, unknown>,
+): Promise<void> {
+  const personTags = [...new Set(personIds)].map(personTag);
+  let scopeTags: string[] = [];
+  try {
+    const memberships = await sql<{ division_id: string; competition_id: string }[]>`
+      select distinct e.division_id, d.competition_id
+      from entrant_members em
+      join entrants e on e.id = em.entrant_id
+      join divisions d on d.id = e.division_id
+      where em.person_id in ${sql([...personIds])}`;
+    scopeTags = [
+      ...new Set(memberships.flatMap((m) => [divisionTag(m.division_id), competitionTag(m.competition_id)])),
+    ];
+  } catch (err) {
+    log.error(
+      { err, personIds, ...context },
+      "public pages: a person's rosters could not be read to revalidate the pages naming them (the write stands)",
+    );
+  }
+  try {
+    for (const tag of personTags) revalidateTag(tag, { expire: 0 });
+    for (const tag of scopeTags) revalidateTag(tag, "max");
+  } catch {
+    // outside a Next request scope (tests, scripts) — nothing to invalidate
+  }
+  void broadcastRevalidate(personTags, "expire");
+  void broadcastRevalidate(scopeTags, "swr");
   void purgeCdn();
 }
 

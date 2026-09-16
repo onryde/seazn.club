@@ -82,7 +82,7 @@ export async function scene(tag: string) {
   const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${fixtures[0]!.id}`;
   expect(status, "premise: the fixture is in play, so both players have a line").toBe("in_play");
   const genKey = `pub:v1:player-matches-gen:${competition.id}`;
-  return { orgId, orgSlug, owner, ownerId, competition, division, ada, ben, genKey };
+  return { orgId, orgSlug, owner, ownerId, competition, division, fixture: fixtures[0]!, ada, ben, genKey };
 }
 
 export type Scene = Awaited<ReturnType<typeof scene>>;

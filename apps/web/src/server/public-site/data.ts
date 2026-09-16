@@ -164,6 +164,10 @@ export const REVALIDATE_SLOW = 300; // entrant / player pages
 export const divisionTag = (divisionId: string) => `division:${divisionId}`;
 export const competitionTag = (competitionId: string) => `competition:${competitionId}`;
 export const orgTag = (orgSlug: string) => `org-public:${orgSlug}`;
+/** One person's public card entries — at every competition URL, allowed or
+ *  refused. Fired by every write to what a card shows about them
+ *  (`firePersonRevalidate`); nothing else carries it. */
+export const personTag = (personId: string) => `pub-person:${personId}`;
 /** One shared tag for every discovery surface (doc 15, PROMPT-19). */
 export const DISCOVERY_TAG = "discovery";
 
@@ -1071,6 +1075,21 @@ export async function publicPlayerGate(
   if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
   const shell = await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
+  // The competition tag goes on the render BEFORE either refusal below can
+  // return. Next adds a cached function's tags to the page entry being
+  // rendered whether the function hits or misses, and a REFUSED card is cached
+  // too (the page's `notFound()`). Task 14 moved the consent read out of the
+  // competition-tagged read below, which left a refusal with the org tag alone
+  // (`getPublicCompetition`'s), which no person write fires. The PERSON tag is
+  // what a write about this person fires (`firePersonRevalidate`), and it
+  // reaches the card at a competition they are not rostered in (the view is
+  // org-scoped); the competition tag is what writers scoped to this
+  // competition or its divisions fire. So a refused card is reached by exactly
+  // what reaches an allowed one. The consent read stays OUT of the cache: this
+  // entry holds nothing but the tags.
+  await unstable_cache(async () => true, ["pub-player-gate-tag", shell.competition.id, personId], {
+    tags: [competitionTag(shell.competition.id), personTag(personId)],
+  })();
   if (!(await hasFeature(shell.org.id, "dashboard.player_profiles", shell.competition.id))) {
     return null;
   }
@@ -1269,7 +1288,9 @@ export async function getPublicPlayer(
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
     ["pub-player-v16", shell.competition.id, personId],
-    { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
+    // The person tag: a write about THIS person must rebuild this entry at a
+    // competition they are not rostered in, which no competition tag reaches.
+    { tags: [competitionTag(shell.competition.id), personTag(personId)], revalidate: REVALIDATE_SLOW },
   )();
 
   // The figures half runs HERE, after the entry above has resolved, because it

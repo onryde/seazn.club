@@ -8,7 +8,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { consentLocked } from "@/lib/guardian";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { firePersonRevalidate } from "@/server/public-site/revalidate";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { publicStorageUrl } from "@/lib/supabase-storage";
 import { uploadPersonPhotoBytes } from "./persons";
@@ -459,8 +459,8 @@ export async function listMyPersons(userId: string): Promise<MyPerson[]> {
 
 /**
  * Player-owned consent flags (doc 06 §4.7 handover): merge into
- * persons.consent, then revalidate every division the person is rostered in
- * so the public card and entrant lists flip immediately. Guardian gate:
+ * persons.consent, then revalidate the person's card (at any competition URL)
+ * and every division page naming them, so both flip immediately. Guardian gate:
  * under-16 by dob → 403, organiser-set values hold.
  */
 export async function setMyConsent(
@@ -482,18 +482,16 @@ export async function setMyConsent(
     update persons set consent = coalesce(consent, '{}'::jsonb) || ${sql.json(clean)}
     where id = ${personId}`;
 
-  const memberships = await sql<{ division_id: string; competition_id: string }[]>`
-    select distinct e.division_id, d.competition_id
-    from entrant_members em
-    join entrants e on e.id = em.entrant_id
-    join divisions d on d.id = e.division_id
-    where em.person_id = ${personId}`;
-  for (const m of memberships) fireDivisionRevalidate(m.division_id, m.competition_id);
+  // The person's card at every competition URL, and every division, fixture
+  // and card entry naming them (`firePersonRevalidate`: scope, cost and failure
+  // there). Awaited inside the request, after the write.
+  await firePersonRevalidate([personId], { person: personId });
 
   // W2 Task 14 — the public player page's POLL document, and every other
   // player's document naming this person as an opponent, is cached in Redis and
-  // gated only on a miss; the ISR revalidation above reaches neither. Retire the
-  // org's documents (`retireOrgPlayerMatches` — scope, cost and failure there).
+  // gated only on a miss; the ISR revalidation above reaches neither, and never
+  // rejects, so this always runs. Retire the org's documents
+  // (`retireOrgPlayerMatches` — scope, cost and failure there).
   await retireOrgPlayerMatches(person.org_id, { person: personId });
 
   const [me] = await listMyPersons(userId).then((all) => all.filter((p) => p.id === personId));
@@ -526,13 +524,10 @@ export async function setMyPersonPhoto(
     await sql`update persons set photo_path = ${path} where id = ${personId}`;
   }
 
-  const memberships = await sql<{ division_id: string; competition_id: string }[]>`
-    select distinct e.division_id, d.competition_id
-    from entrant_members em
-    join entrants e on e.id = em.entrant_id
-    join divisions d on d.id = e.division_id
-    where em.person_id = ${personId}`;
-  for (const m of memberships) fireDivisionRevalidate(m.division_id, m.competition_id);
+  // The person's card at every competition URL, and every division, fixture
+  // and card entry naming them (`firePersonRevalidate`: scope, cost and failure
+  // there). Awaited inside the request, after the write.
+  await firePersonRevalidate([personId], { person: personId });
 
   const [me] = await listMyPersons(userId).then((all) => all.filter((p) => p.id === personId));
   return me;

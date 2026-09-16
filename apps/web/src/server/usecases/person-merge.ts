@@ -17,6 +17,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
+import { firePersonRevalidate } from "@/server/public-site/revalidate";
 import { recomputePlayerStats } from "./player-stats";
 import {
   courtNamesById,
@@ -293,7 +294,10 @@ export async function mergePersons(
 
   // W2 Task 14 — after commit. The survivor's consent is now the stricter of
   // the two (`resolveConsent`), and the public player page's cached match lines
-  // mask names by it only when rebuilt.
+  // mask names by it only when rebuilt. The ISR pages first, awaited so the tag
+  // reaches this request's flush (`firePersonRevalidate`). Neither step
+  // rejects, so one failing never skips the other.
+  await firePersonRevalidate([survivorId, absorbedId], { mergeId: merged.merge_id });
   await retireOrgPlayerMatches(auth.orgId, { person: survivorId, absorbed: absorbedId, mergeId: merged.merge_id });
 
   // 8. Re-verify, AFTER the write has committed. Two people on two courts at
@@ -455,7 +459,7 @@ export async function reverseMerge(
   mergeId: string,
   opts: { confirmedBy: string },
 ): Promise<void> {
-  await withTenant(auth.orgId, async (tx) => {
+  const people = await withTenant(auth.orgId, async (tx) => {
     // `for update` — two concurrent reversals of one merge would otherwise both
     // pass the guard and replay the snapshot twice.
     const [merge] = await tx<MergeLedgerRow[]>`
@@ -594,11 +598,15 @@ export async function reverseMerge(
     await tx`
       update person_merges set reversed_at = now(), reversed_by = ${opts.confirmedBy}
        where id = ${mergeId}`;
+    return ids;
   });
 
   // W2 Task 14 — after commit. Both people's consent is back to its snapshot,
   // and the public player page's cached match lines mask names by it only when
-  // rebuilt.
+  // rebuilt. The ISR pages first, awaited so the tag reaches this request's
+  // flush (`firePersonRevalidate`). Neither step rejects, so one failing never
+  // skips the other.
+  await firePersonRevalidate(people, { mergeId });
   await retireOrgPlayerMatches(auth.orgId, { mergeId });
 }
 

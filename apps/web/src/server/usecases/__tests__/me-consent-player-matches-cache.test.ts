@@ -35,6 +35,7 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
 }));
 vi.mock("@/server/public-site/revalidate", () => ({
   fireDivisionRevalidate: vi.fn(),
+  firePersonRevalidate: vi.fn(async () => {}),
 }));
 const logMock = vi.hoisted(() => ({
   error: vi.fn(),

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { PEER_REVALIDATE_MAX_TAGS } from "@/lib/peer-revalidate";
 import { POST } from "./route";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -23,7 +24,14 @@ describe("POST /api/internal/revalidate", () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
     expect((await POST(req({ tags: "not-an-array", mode: "swr" }, "s3cret"))).status).toBe(400);
     expect((await POST(req({ tags: ["t"], mode: "purge-everything" }, "s3cret"))).status).toBe(400);
-    expect((await POST(req({ tags: Array(21).fill("t"), mode: "swr" }, "s3cret"))).status).toBe(400);
+    expect((await POST(req({ tags: Array(PEER_REVALIDATE_MAX_TAGS + 1).fill("t"), mode: "swr" }, "s3cret"))).status).toBe(
+      400,
+    );
+  });
+
+  it("accepts exactly the shared tag cap the broadcaster batches to", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    expect((await POST(req({ tags: Array(PEER_REVALIDATE_MAX_TAGS).fill("t"), mode: "swr" }, "s3cret"))).status).toBe(200);
   });
 
   it("applies each tag locally and reports ok", async () => {

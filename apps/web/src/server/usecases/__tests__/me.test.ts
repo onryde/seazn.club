@@ -23,8 +23,9 @@ import {
 
 vi.mock("@/server/public-site/revalidate", () => ({
   fireDivisionRevalidate: vi.fn(),
+  firePersonRevalidate: vi.fn(async () => {}),
 }));
-import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { firePersonRevalidate } from "@/server/public-site/revalidate";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -293,19 +294,19 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     expect(await isPlayerOnly(await makeUser("stranger"))).toBe(false); // neither
   });
 
-  it("consent flip persists, revalidates the person's divisions; guardian gate 403s", async () => {
+  it("consent flip persists, revalidates the person's public pages; guardian gate 403s", async () => {
     const { owner } = await seedOrg("g");
     const adult = await rig(owner);
     const player = await makeUser("player");
     await sql`update persons set user_id = ${player} where id = ${adult.persons[0].id}`;
 
-    vi.mocked(fireDivisionRevalidate).mockClear();
+    vi.mocked(firePersonRevalidate).mockClear();
     const updated = await setMyConsent(player, adult.persons[0].id, {
       public_name: true,
     });
     expect(updated.consent.public_name).toBe(true);
     expect(updated.consent_locked).toBe(false);
-    expect(fireDivisionRevalidate).toHaveBeenCalledWith(adult.division.id, adult.competition.id);
+    expect(firePersonRevalidate).toHaveBeenCalledWith([adult.persons[0].id], { person: adult.persons[0].id });
 
     // Under-16: read shows locked, write 403s, organiser values hold.
     const minor = await rig(owner, { dob: "2013-01-01" });

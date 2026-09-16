@@ -30,13 +30,15 @@ primary_region = "lhr"
   # ISR cache exactly as it was, including entries invalidated while it slept.
   #
   # That is acceptable because it is the failure mode this design already
-  # declares and bounds: the broadcast is `Promise.allSettled` + fail-open,
-  # and "a lost broadcast is bounded by the 30s public ISR window
-  # (REVALIDATE_FAST)" — peer-revalidate.ts's own header. A resumed machine is
-  # precisely a lost-broadcast peer, and converges on the same 30s bound.
-  # If that window is ever tightened to where 30s of staleness matters, or if
-  # `expire` mode gains a correctness requirement SWR does not have, revisit
-  # this line first.
+  # declares and bounds: the broadcast is fail-open — tags go out in batches
+  # the peer route accepts, every POST in parallel with its own 2s timeout,
+  # and callers void it, so nothing waits on a peer. A peer that misses one
+  # keeps what it has until its cache entries expire: 30s for competition,
+  # division and fixture pages (REVALIDATE_FAST), 300s for player cards
+  # (REVALIDATE_SLOW). A resumed machine is precisely a lost-broadcast peer,
+  # and converges on the same bounds. If those windows are ever tightened to
+  # where that staleness matters, or if `expire` mode gains a correctness
+  # requirement SWR does not have, revisit this line first.
   auto_stop_machines  = "suspend"
   auto_start_machines = true
   min_machines_running = 2          # deploy overlap + matchday headroom; peers
