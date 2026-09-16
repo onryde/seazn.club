@@ -63,11 +63,18 @@ capture repo.
   tail: the same `V403`. Task 0 therefore reserved V404 — **superseded 2026-09-16, see FT0-1**:
   main landed V404 and an unmerged branch claims V405–V407, so **R1's migration is V408**,
   recorded AS LANDED in `_INDEX.md`.
-- Baseline (`apps/web`, full, fresh DB, placement up): **passed 17064 / total 17141 / failed 0 /
-  pending 77** — 1266 files, 0 failed suites, `outside-worktree 0`, runner `EXIT=0`. JSON at
-  `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/3a628426-b486-4e22-bbd6-008e2676b7d0/scratchpad/r1/baseline-web.json`.
-  No red files (with placement up, `schedule-build-honours-locks.test.ts` is green, unlike the `ovl`
-  baseline).
+- **Baseline — CURRENT FLOOR (re-taken 2026-09-16 @ `b4091834d`, after rebasing onto the spectator hub
+  merge; `rly` recreated from scratch — `/tmp/seazn-env/rly` had been wiped):** fresh DB, placement up
+  (:50257), `apps/web` full run: **passed 17778 / total 17856 / failed 1 / pending 77** — 1312 files,
+  `outside-worktree 0`, runner `EXIT=1`. The one red is ENVIRONMENTAL, proven by re-run:
+  `lib/__tests__/credits-bootstrap-grant.test.ts` › "the daily cron run in the same calendar month is a
+  no-op…" hit `duration 30005` (the skill's wallet-volume/load timeout signature) at load avg ~130;
+  re-run alone on the same DB → `2 0 0`, that test 2.6 s at load 210. **Effective floor: 17856 total,
+  0 real failures.** JSON (durable, gitignored):
+  `.superpowers/sdd/2026-09-13-streaming-r1/authorities/baseline-2026-09-16/baseline-web.json` + `rerun-credits-bootstrap.json`.
+  Compare gates by total and by red-file roster, never by a bare `failed` integer.
+- (SUPERSEDED) Baseline at `453d95cd6`, 2026-09-14: passed 17064 / total 17141 / failed 0 / pending 77,
+  1266 files. Stale since #787 (retire scorer role) and the spectator hub merge.
 - Lint `✖ 143 problems (0 errors, 143 warnings)`, `LINT_EXIT=0` (via `rtk proxy`); tsc `EXIT=0`;
   `openapi:gen` + `i18n:gen-keys` porcelain: no generated diff (only the two Task 0 docs).
 - `stream-overlay.spec.ts` preflight against `http://localhost:3372`: **25 expected / 0 unexpected /
