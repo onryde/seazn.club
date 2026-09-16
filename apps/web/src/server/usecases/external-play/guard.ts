@@ -194,6 +194,7 @@ export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
            url_white = null, url_black = null, white_side = null, white_lichess_id = null,
            black_lichess_id = null, expires_at = null, mint_claimed_at = null,
            white_emailed_at = null, black_emailed_at = null, needs_reason = null,
+           started_at = null, finished_at = null,
            last_error = null, updated_at = now()
      where fixture_id = ${f.fixtureId}
        and status in ('pending', 'ready', 'needs_organiser')

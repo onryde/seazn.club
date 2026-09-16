@@ -334,4 +334,66 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(home.userId).toBe(s.home.userId);
     expect(home.lichess).toBeNull();
   });
+
+  it("loadSides: a member whose person is a merge tombstone resolves no identity, only displayName", async () => {
+    // `merged_into` (V349) marks a person absorbed into another, live person.
+    // `loadSide`'s join excludes tombstoned persons (`p.merged_into is null`)
+    // — the row still carries the entrant's own `display_name`, but no
+    // person/user/lichess identity should resolve through the dead person.
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+
+    await sql`update persons set merged_into = ${s.away.personId} where id = ${s.home.personId}`;
+
+    const { home } = await loadSides(f);
+    expect(home.displayName).toBe("White");
+    expect(home.personId).toBeNull();
+    expect(home.userId).toBeNull();
+    expect(home.lichess).toBeNull();
+  });
+
+  it("resetStaleBridge also clears started_at/finished_at (a reschedule is a new game)", async () => {
+    // Ruling R15 (review fix round 1): a bridge can reach
+    // needs_organiser/aborted AFTER the game went live (started_at stamped,
+    // possibly finished_at too). If that fixture is then rescheduled, the
+    // reset must treat it as a brand-new game — clearing started_at and
+    // finished_at, not just status/needs_reason.
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const oldBasis = new Date(T.getTime() - 60 * 60_000);
+    const startedAt = new Date(oldBasis.getTime() + 5 * 60_000);
+    const finishedAt = new Date(oldBasis.getTime() + 25 * 60_000);
+    await sql`
+      insert into fixture_external_play
+        (fixture_id, org_id, status, scheduled_at_basis, needs_reason, started_at, finished_at)
+      values
+        (${s.fixtureId}, ${s.orgId}, 'needs_organiser', ${oldBasis}, 'aborted', ${startedAt}, ${finishedAt})`;
+
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    if (!f) throw new Error("guard refused a fixture the seed built to pass it");
+    expect(isStale(f)).toBe(true);
+
+    await resetStaleBridge(f);
+
+    const [row] = await sql<
+      { status: string; needs_reason: string | null; started_at: Date | null; finished_at: Date | null }[]
+    >`
+      select status, needs_reason, started_at, finished_at
+        from fixture_external_play where fixture_id = ${s.fixtureId}`;
+    if (!row) throw new Error("row vanished");
+    expect(row.status).toBe("pending");
+    expect(row.needs_reason).toBeNull();
+    expect(row.started_at).toBeNull();
+    expect(row.finished_at).toBeNull();
+  });
 });
