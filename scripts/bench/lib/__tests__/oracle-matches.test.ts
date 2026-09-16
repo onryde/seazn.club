@@ -458,3 +458,44 @@ describe("resolveExpectedOutcome → compareMatches — the real producer into t
     expect(unresolved).toEqual(["ref-nobody"]);
   });
 });
+
+// Final whole-branch review, finding 5 (check 7 mutant #2) — `SETTLED_STATUSES`
+// (oracle.ts:1290) declares "abandoned" a settled status the per-match oracle
+// will compare an outcome against, but nothing anywhere in this file (or the
+// rest of the bench) ever drove `compareMatches` with one: dropping
+// "abandoned" from the set broke 0 of 1869 tests, reproduced twice. It is a
+// real, reachable product status — `core.abandon` folds a fixture straight
+// to it (`fixtureStatusFromFold`, apps/web/src/server/engine-db/
+// append-event.ts:118-121: "Abandon first: cricket abandon folds to a
+// no_result OUTCOME, but the fixture status stays 'abandoned'" — replay
+// policy owns it from there, not a re-run). A pack that ever ships a
+// `core.abandon` fixture needs this oracle to compare its outcome like any
+// other settled fixture, not report it as an unfinished run.
+describe("compareMatches — an abandoned fixture", () => {
+  const noResult = { kind: "no_result" as const };
+
+  it("compares an abandoned fixture's outcome instead of reporting it unfinished — the positive pair", () => {
+    const result = compareMatches(
+      [{ fixtureExtKey: "f1", outcome: noResult }],
+      [{ extKey: "f1", status: "abandoned", roundNo: 0, outcome: noResult }],
+    );
+    expect(result.checked).toBe(1);
+    expect(result.mismatches).toEqual([]);
+  });
+
+  it("still catches a genuinely wrong outcome on an abandoned fixture, not a blanket pass", () => {
+    // The differential case (a right answer that differs from the wrong
+    // answer's constant): if this oracle merely special-cased "abandoned
+    // always passes" instead of treating it as SETTLED and comparing the
+    // real outcome, a pack that expected a decisive win but got an abandoned
+    // no-result would slip through unread. It must report the SAME "outcome"
+    // field a live, non-abandoned kind mismatch reports — not "status",
+    // which is what dropping "abandoned" from `SETTLED_STATUSES` produces
+    // instead (an "abandoned" fixture would read as merely not-yet-decided).
+    const result = compareMatches(
+      [{ fixtureExtKey: "f1", outcome: won("e1", "e2") }],
+      [{ extKey: "f1", status: "abandoned", roundNo: 0, outcome: noResult }],
+    );
+    expect(result.mismatches[0]).toMatchObject({ field: "outcome", expected: "win", actual: "no_result" });
+  });
+});
