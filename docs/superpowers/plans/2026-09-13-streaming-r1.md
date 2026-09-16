@@ -28,7 +28,7 @@
 - **One DOM branched for phone:** `max-md:*` on the same tree, phone-only `md:hidden`; identical control SET at 320 and 1280 (membership, order, repeats); no horizontal page scroll at 320/360/375/390/430/768/834. `/\bmd:hidden\b/` also matches inside `max-md:hidden` — anchor assertions on `\s...hidden"`. `truncate` needs `min-w-0` on the whole ancestor chain.
 - **Owner checklist additions (2026-09-14) bind every task.** Each task's "Checklist rows satisfied" names rows from the 2026-09-07 checklist AND the 2026-09-14 additions (VERIFY-AS-CUSTOMER / PRODUCT-OWNER LENS / TEST-CASE DESIGN — see §"House rules 2026-09-14"); the reviewer checks rows, not prose. Two VERIFY-AS-CUSTOMER runs are steps of this plan (Task 14 Step 8, Task 17 Step 6): a real browser, a fresh signup, no seed, no shortcut; the seeded e2e (Task 15) is automation and does not substitute.
 - **Every subagent dispatch passes `model: opus` explicitly** (owner instruction 2026-09-05; agent frontmatter reads `sonnet`). Every brief carries: exact paths, acceptance bullets, the do-NOT-touch list, the verify command with `cd <relay worktree> &&` and `DATABASE_URL` inline, `RELAY_DRIVERS=fake`, the shell guard, the output cap ("final message under 15 lines — counts, paths, deviations, blockers; no file contents or diffs"). A stopped agent is resumed, never re-dispatched. Reviewer after every lane; **the P3 probe** in every review. It is defined HERE, once, and every later step names it rather than restating it (FT0-2): `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -rn "SUPABASE_JWT_SECRET" apps/web/src --include='*.ts' --include='*.tsx' --exclude-dir=__tests__ | grep -v "lib/realtime.ts"` — production code only (tests name the secret by design: `lib/__tests__/realtime-publish.test.ts` from #782, Task 6's `tokens.test.ts`; the globs are quoted because zsh aborts on a bare one). Expected: ZERO lines naming a file this wave adds or edits; any other line must be one `_STATE.md` FT0-2 lists as pre-existing (not R1's). Never `| wc -l` → `0` on the unfiltered grep — it prints 8 lines on a clean tree.
-- **Do NOT touch:** W1's overlay route, stage, registry, hook, `overlay-model.ts`, `public_fixtures_v`; `lib/realtime.ts` (P2: NO producer mint exists there and R1 builds none — see Non-goals); any `SUPABASE_JWT_SECRET` call site; `stages-panel.tsx`; `run-sheet-row.tsx` beyond the ONE `streamOpen` initialiser line the owner allowed on 2026-09-14 (Task 14 Step 5 — nothing else in that file); other entitlement keys' rows; every pricing surface (`ENTITLEMENT_DOMAINS`, `/pricing`, `lib/pricing-matrix.ts`, `config/stripe-plans.json`); `ai_credit_ledger`, `lib/credits.ts`, `lib/credit-packs.ts` (donors — read, never edited); the engine; `.github/workflows/e2e.yml`; `e2e/visual/capture.spec.ts` / `asserts.ts` (harness — rows and one seed kind only).
+- **Do NOT touch:** W1's overlay route, stage, registry, hook, `overlay-model.ts`, `public_fixtures_v`; `lib/realtime.ts` (P2: NO producer mint exists there and R1 builds none — see Non-goals); any `SUPABASE_JWT_SECRET` call site; `stages-panel.tsx`; `run-sheet-row.tsx` beyond the ONE line the owner allowed on 2026-09-14 — the existing toggle render gaining `fixtureId` (Task 14 Step 5; C19 moved the URL read into the panel module, so the row gains no import and nothing else in that file changes); other entitlement keys' rows; every pricing surface (`ENTITLEMENT_DOMAINS`, `/pricing`, `lib/pricing-matrix.ts`, `config/stripe-plans.json`); `ai_credit_ledger`, `lib/credits.ts`, `lib/credit-packs.ts` (donors — read, never edited); the engine; `.github/workflows/e2e.yml`; `e2e/visual/capture.spec.ts` / `asserts.ts` (harness — rows and one seed kind only).
 - **Layering rule (owner instruction 2026-09-14, and AGENTS.md's anti-abstraction rule):** `server/relay/domain/**` imports nothing from `@/lib/db`, `@/server/logger`, `./ports`' adapters or `fetch` — `enc-boundary.test.ts`'s sibling `domain-purity.test.ts` (Task 2A) greps it. The usecases are the only place SQL and the ports meet; there is NO repository interface, NO event bus, NO command bus — each would be an abstraction with no present caller. A domain event is a typed object in an array the usecase iterates.
 - **Patterns this plan invokes (spec §9a), each with its exemplar:** Pure domain reducer over typed commands (`packages/engine/src/core/events.ts` — I/O-free, `now` passed in; this wave: `domain/session.ts` `decide`); Parse → authorize → delegate (`lib/http.ts` `handler`; `server/api-v1/auth.ts` `requireResourceAuth`; `app/api/v1/fixtures/[id]/stream/route.ts`); Zod schemas in one place (`server/api-v1/schemas.ts` `PutFixtureStream`); Ports and adapters with in-repo fakes (`IngestProvider`/`RunnerProvider` + `server/relay/fakes.ts`; the placement service client); State machines over booleans (`fixture_stream_sessions.state` + `desired_state`; the pad reducer); Money is ledger rows in the same transaction (`ai_credit_ledger` V320 + `lib/credits.ts` `balance`); Cron pair idiom (`app/api/cron/registrations/route.ts` — 503 unset BEFORE 401 mismatch); Deny by default (RLS zero client policies, V366; 404 ≡ missing); The client never decides (`hasFeature` on the division page); One authority per fact (`resolveFixtureCfg`; this wave: `creditBalance` = `sum(delta)`, `STREAM_CREDIT_PACKS`, `server/relay/config.ts`); Registry over branching (`V3_SKINS`; this wave: the fail-reason and create-error copy MAPS); Pure projections, strings via `msg` (`overlayModel`); i18n four dictionaries + generated keys; One DOM branched for phone (`phone-disclosure.tsx`).
 
@@ -91,7 +91,7 @@ Each row of `R0-CORRECTIONS-FOR-R1.md` lands either as a task requirement WITH a
 1. **FS10 — KEEP `balance_after integer not null check (balance_after >= 0)`.** Owner: *"all good"*. Task 1 builds §5.2's DDL verbatim; Task 2B's `debit` mirrors the floor in memory; Task 7 writes the snapshot under the lock.
 2. **Vault — NO.** The AES-256-GCM envelope with `RELAY_KEK` (Task 2) is final. Task 0 no longer reads the Supabase project; §12.4 is closed.
 3. **Sweep schedule — DAILY.** Owner: *"just run every day is fine"*. The `onryde/seazn.club.workflow` workflow runs once a day, not every 5 minutes (P1, Task 12, Task 17). The consequence for money and safety rules is recommendation B below.
-4. **`run-sheet-row.tsx` — ALLOW the one `streamOpen` initialiser line** so a return from checkout reopens the panel on the Phone tab. Task 14 Step 5 makes it a real step with its own test (`run-sheet-row-stream-gate.test.tsx`), not a fallback; the harness rows in Task 17 depend on it and are now unconditional.
+4. **`run-sheet-row.tsx` — ALLOW one line** so a return from checkout reopens the panel on the Phone tab. Re-ruled on C19 (owner, 2026-09-16, "apply rec"): the URL read moved INTO the panel module — `FixtureStreamToggle` takes `fixtureId` and fires the open itself — so the row's one line is that prop on an existing render, with no new import. Task 14 Step 5 makes it a real step, not a fallback; its test lives in `fixture-stream-panel.test.tsx` (the row's gate test is untouched, because the row no longer reads the URL); the harness rows in Task 17 depend on it and are now unconditional.
 5. **Both added columns ACCEPTED:** `org_stream_targets.watch_url text null` (the replay fill's source) and `fixture_stream_sessions.runner_retries smallint not null default 0` (the ONE retry survives a restart).
 6. **`INGEST_TIMEOUT_SECONDS = 180`** — owner: *"3 mins after phone goes away"*. C8 stays: `holdWindowSeconds = 183` for RTMPS only, SRT `null`.
 7. **Sentry — enable it.** The DSN is NOT yet supplied: Task 17 Step 3 stays conditional on the DSN; `_INDEX.md` records "DSN owed by owner".
@@ -347,8 +347,8 @@ stateDiagram-v2
 | `apps/web/src/lib/__tests__/stream-session-view.test.ts` | Create (Task 13) | the two maps are total over their unions; C6 wording; step index per state |
 | `apps/web/src/components/v2/fixture-stream-panel.tsx` | Modify (Task 14) | the Phone tab body (§8a/§8b), `CREDIT_PACKS` deleted, the embedded Checkout `Modal` (the `buy-credits.tsx` shape) |
 | `apps/web/src/components/v2/__tests__/fixture-stream-panel.test.tsx` | Modify (Task 14) | static markup + control-set claims that `environment: "node"` can see |
-| `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (Task 14) | ONE line: `streamOpen` initialised from `?stream=open&fixture=<id>` (owner ruling 4) |
-| `apps/web/src/components/v2/desk/__tests__/run-sheet-row-stream-gate.test.tsx` | Modify (Task 14) | the initialiser opens the panel for THIS fixture's id and not for another's |
+| `apps/web/src/components/v2/desk/run-sheet-row.tsx` | Modify (Task 14) | ONE line: the existing `<FixtureStreamToggle …>` render gains `fixtureId={fixture.id}` (owner ruling 4, as re-ruled on C19 — the URL read lives in the panel module, so the row gains no import and no second line) |
+| `apps/web/src/components/v2/desk/__tests__/run-sheet-row-stream-gate.test.tsx` | NOT modified (C19) | the row no longer reads the URL; the ruling-4 test lives in `fixture-stream-panel.test.tsx`, where the toggle opens the panel for THIS fixture's id and not for another's |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, `apps/web/src/lib/i18n-keys.ts` | Modify (Task 14) | `stream.phone.*`, `stream.fail.*`, `stream.error.*`, `stream.health.*`, `stream.target.*` |
 | `apps/web/e2e/relay-kit.ts` | Create (Task 15) | the rig: org + user + Pro group, both overrides, a hockey fixture, credits by SQL, thaw; `eventsSql(sid)` (the `fixture_stream_events` rows of a session — the walkthrough reads the `stop` action row with the signed-in user id) |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts` | Create (Task 15) | the organiser's walkthrough at 320/768/1280; the Stripe sandbox purchase inside the EMBEDDED iframe (skips loudly) |
@@ -10553,8 +10553,8 @@ export function qrText(qr: CaptureQrV1): string {
 **Files:**
 - Modify: `apps/web/src/components/v2/fixture-stream-panel.tsx` — `CREDIT_PACKS` DELETED (P14); `StreamPanelContext` gains `orgId: string`; the Phone tab body becomes `<PhoneTab>` + the exported pure `<PhoneTabBody>`
 - Modify: `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` — TWO lines inside the `streamPanel` literal (grep `relayEntitled:`): `orgId: auth.orgId,` and `streamBalance: await relayBalance(auth, auth.orgId),` (C1 — the idle tab's only balance source; `relayBalance` from `@/server/usecases/stream-sessions`, a server component calling a usecase, the page's existing shape)
-- Modify: `apps/web/src/components/v2/desk/run-sheet-row.tsx` — ONE line (owner ruling 4): `streamOpen` initialised from `?stream=open&fixture=<this row's id>`
-- Modify: `apps/web/src/components/v2/desk/__tests__/run-sheet-row-stream-gate.test.tsx` — the initialiser's test (opens for THIS id, not another's; `next/navigation` mock gains `useSearchParams`)
+- Modify: `apps/web/src/components/v2/desk/run-sheet-row.tsx` — **EXACTLY ONE line** (owner ruling 4, as re-ruled on C19): the existing `<FixtureStreamToggle open={streamOpen} onToggle={…} />` gains `fixtureId={fixture.id}`. Nothing else in that file — no new import, no `useSearchParams`, no second statement. The URL reading moves into the panel module, which owns the behaviour
+- **NOT modified: `apps/web/src/components/v2/desk/__tests__/run-sheet-row-stream-gate.test.tsx`.** The row no longer reads the URL, so its `vi.mock("next/navigation", …)` stays exactly as W1 left it (`useRouter` only). Adding a `useSearchParams` mock here would mock a hook nothing this file renders ever calls — a mock outliving its reader is how a test comes to assert nothing
 - Modify: `apps/web/src/components/v2/__tests__/fixture-stream-panel.test.tsx` — the W1 "inert" Phone-tab tests are REPLACED (they asserted `stream-buy-soon` and the deleted constant); new state tests over `PhoneTabBody`; the embedded-checkout modal test
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` — new `stream.*` keys; `stream.credits.soon` DELETED from all four (nothing renders it after this task — the vacuous-key rule)
 - Modify (generated): `apps/web/src/lib/i18n-keys.ts` via `pnpm i18n:gen-keys`
@@ -10834,7 +10834,58 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
 - [ ] **Step 4: Rewrite the panel's Phone tab.** In `fixture-stream-panel.tsx`:
   (a) Delete the `CREDIT_PACKS` export and its doc comment (P14). Add `orgId: string;` to `StreamPanelContext` (doc: "the org the fixture belongs to — the stream-targets and relay-checkout routes address it") and `streamBalance: number;` beside it (doc: "C1 — the org's match-credit balance as the SERVER resolved it. The projection's `balance` only exists once a session does, so this is the idle tab's only source; without it a club that has just bought credits reads 0 and is shown the buy card again"). Add imports: `import { useCallback, useRef } from "react"` (extend the existing react import — `useRef` holds the "already counted this session's reveal" marker, De), `import { Smartphone } from "lucide-react"` (extend), `import QRCode from "qrcode"`, `import { useSearchParams } from "next/navigation"`, `import { useConfirm } from "@/components/ui/confirm-provider"`, `import { Modal } from "@/components/modal"`, `import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js"`, `import { stripePromise } from "@/lib/stripe-browser"`, `import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client"`, `import { STREAM_CREDIT_PACKS, formatGbp, perMatchGbp } from "@/lib/stream-credit-packs"`, `import type { StreamTarget } from "@/server/api-v1/schemas"` (TYPE only), and from `@/lib/stream-session-view`: `CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type StreamSessionView, createErrorCode, elapsedLabel, healthChips, phoneTabState, qrText, stepFor`.
-  (b) In `FixtureStreamPanel`, replace `useState<"obs" | "phone">("obs")` with a lazy initialiser that opens on `phone` when the URL says so (the return from checkout; the ROW's own initialiser in Step 5 is what mounts the panel, owner ruling 4): `const searchParams = useSearchParams(); const [tab, setTab] = useState<"obs" | "phone">(() => (searchParams.get("stream") === "open" && searchParams.get("fixture") === fixture.id ? "phone" : "obs"));`
+  (b) **The `?stream=open` reading lives HERE, in the panel module — both halves of it (owner ruling 4, re-ruled on C19).** The row is not the reader; it contributes one prop and nothing else.
+  (b1) In `FixtureStreamPanel`, replace `useState<"obs" | "phone">("obs")` with a lazy initialiser that opens on `phone` when the URL says so: `const searchParams = useSearchParams(); const [tab, setTab] = useState<"obs" | "phone">(() => (searchParams.get("stream") === "open" && searchParams.get("fixture") === fixture.id ? "phone" : "obs"));`
+  (b2) `FixtureStreamToggle` — which already holds BOTH the open state and the setter (`{ open, onToggle }`), and already sits in this module — gains `fixtureId: string` and does the MOUNTING half: when the URL names this fixture and the row is still closed, it fires `onToggle()` exactly once.
+
+```tsx
+export function FixtureStreamToggle({ open, onToggle, fixtureId }: { open: boolean; onToggle: () => void; fixtureId: string }) {
+  const msg = useMsg();
+  // Owner ruling 4 (re-ruled on C19): a return from checkout carries
+  // `?stream=open&fixture=<id>` and must land with THIS row's panel already open.
+  // The read belongs to the panel module, not to `run-sheet-row.tsx` — the row's
+  // whole contribution is the `fixtureId` prop on the line below its toggle.
+  // Fired once per mount and only while CLOSED, so a customer who opens the URL,
+  // reads the panel and shuts it does not have it spring back open under them
+  // (class 13: an idempotency guard must not also swallow the legitimate case —
+  // here the guard is the ref, and `open` is what keeps a manual close sticky).
+  const searchParams = useSearchParams();
+  const auto = useRef(false);
+  useEffect(() => {
+    if (auto.current || open) return;
+    if (searchParams.get("stream") !== "open" || searchParams.get("fixture") !== fixtureId) return;
+    auto.current = true;
+    onToggle();
+  }, [searchParams, fixtureId, open, onToggle]);
+  return (
+    // …the button exactly as W1 shipped it, unchanged…
+  );
+}
+```
+  `useEffect` and `useRef` join this file's react import. **Both of this module's existing `expandWithHooks(FixtureStreamToggle, { open: false, onToggle: () => {} })` call sites in `fixture-stream-panel.test.tsx` gain `fixtureId` or tsc reds** — read them first (they are the toggle's W1 rendering tests, and they are not otherwise this task's business).
+  **`fixture-stream-panel.test.tsx` has NO `next/navigation` mock today** (checked — it mocks `@/lib/client-v1` and `live-score-data` only). It needs one now, because (b1) and (b2) both call `useSearchParams`, and it is the file that renders both readers:
+  `const searchParamsMock = vi.hoisted(() => { let p = new URLSearchParams(""); return { set: (n: URLSearchParams) => { p = n; }, get: () => p }; });` with `vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }), useSearchParams: () => searchParamsMock.get() }));`
+  Then the reader's own test, in that same file:
+
+```tsx
+describe("the checkout return opens the panel (owner ruling 4, re-ruled on C19)", () => {
+  it("?stream=open&fixture=<this id> fires onToggle once; another fixture's id, an absent query, and an already-open row do not", () => {
+    const calls: string[] = [];
+    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f1&stream=open"));
+    walk(expandWithHooks(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("f1") }));
+    expect(calls, "the row this URL names opens itself").toEqual(["f1"]);
+    // The three negatives, each on its own — two guards covering for each other are
+    // each untested (class 3), so `open`, the id and the flag are mutated separately.
+    walk(expandWithHooks(FixtureStreamToggle, { open: false, fixtureId: "f2", onToggle: () => calls.push("f2") }));
+    searchParamsMock.set(new URLSearchParams(""));
+    walk(expandWithHooks(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("bare") }));
+    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f1&stream=open"));
+    walk(expandWithHooks(FixtureStreamToggle, { open: true, fixtureId: "f1", onToggle: () => calls.push("already") }));
+    expect(calls, "no other row, no bare URL, and never a second toggle on an open row").toEqual(["f1"]);
+  });
+});
+```
+  (`walk`/`expandWithHooks` are already imported in this file — line 21. If `expandWithHooks` turns out not to run effects in this harness, do NOT weaken the assertion to a source scan: say so and let Task 15's walkthrough carry it, which it does either way.)
   (c) Replace everything inside `<div data-testid="stream-phone-gate" className="mt-3">` after the `UpgradeGate` branch with `<PhoneTab fixtureId={fixture.id} orgId={stream.orgId} streamBalance={stream.streamBalance} fixtureStatus={fixture.status} />`.
   (d) Append the container and the pure body:
 
@@ -11249,28 +11300,17 @@ function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["onSaveTar
 ```
   Delete `fixtureStatus` from `PhoneTab`'s destructuring if lint flags it unused (the `fixtureDecided` fact comes from the projection — server-resolved, never the row prop).
 
-- [ ] **Step 5: The two one-line edits outside the panel, each with its test.**
+- [ ] **Step 5: The two edits outside the panel body.** (a) is one line in `page.tsx` plus the `streamBalance` line C1 added; (b) is ONE line in `run-sheet-row.tsx`. Neither carries its own test file: (a)'s witness is Task 10's `relayBalance` test and the walkthrough's balance chip, (b)'s is the panel-module test in Step 4 b2 plus Task 15's walkthrough.
   (a) `page.tsx`'s `streamPanel` literal: add `orgId: auth.orgId,` beside `relayEntitled:`. Nothing else in that file.
-  (b) `run-sheet-row.tsx` (owner ruling 4, 2026-09-14 — the ONLY line this wave touches there): `useSearchParams` joins the existing `next/navigation` import, and `const [streamOpen, setStreamOpen] = useState(false);` becomes
-  `const [streamOpen, setStreamOpen] = useState(() => searchParams.get("stream") === "open" && searchParams.get("fixture") === fixture.id);` with `const searchParams = useSearchParams();` on the line above it. A return from checkout (`return_url` carries `stream=open&fixture=<id>`) therefore lands with THIS row's panel open, and the panel's own initialiser (Step 4b) picks the Phone tab.
-  Its test, in `run-sheet-row-stream-gate.test.tsx` — extend the `vi.mock("next/navigation", …)` with a controllable `useSearchParams`, then:
+  (b) `run-sheet-row.tsx` (owner ruling 4, 2026-09-14, re-ruled on C19 — **ONE line, and it is the only line this wave touches in that file**). The row's toggle render becomes:
+  `<FixtureStreamToggle open={streamOpen} onToggle={() => setStreamOpen((v) => !v)} fixtureId={fixture.id} />`
+  That is the whole edit: one existing line gains one prop. `const [streamOpen, setStreamOpen] = useState(false);` is UNCHANGED, `next/navigation` is UNCHANGED (the row keeps importing only `useRouter`, as W1 left it), and no statement is added. C19 was raised because the old shape could not reach one line — the initialiser needed `useSearchParams`, which needed an import, which is three edits to a file the owner ring-fenced. Moving the read into `FixtureStreamToggle` (Step 4 b2) removes the need: the toggle already receives both `open` and the setter, so it can open the row itself, and the panel module ends up owning the URL behaviour on both halves — which tab (b1) and whether the row is open at all (b2).
+  A return from checkout (`return_url` carries `stream=open&fixture=<id>`) therefore still lands with THIS row's panel open on the Phone tab. **Task 15's walkthrough is unchanged and is the end-to-end witness** (it reloads the return URL and expects `stream-phone-gate` visible with no toggle click); the reader's unit test lives with the reader, in `fixture-stream-panel.test.tsx` (Step 4 b2), NOT here.
+  The deleted alternative, for the record:
 
-```ts
-describe("the checkout return reopens the panel (owner ruling 4, 2026-09-14)", () => {
-  it("?stream=open&fixture=<this id> mounts the panel on first render; another fixture's id does not", () => {
-    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f1&stream=open"));
-    const mine = renderRow({ id: "f1" }, ctx({ entitled: true, relayEntitled: true }));
-    expect(mine.tree().find((el) => el.type === FixtureStreamPanel), "panel mounted for f1").toBeDefined();
-    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f2&stream=open"));
-    const other = renderRow({ id: "f1" }, ctx({ entitled: true, relayEntitled: true }));
-    expect(other.tree().find((el) => el.type === FixtureStreamPanel), "not for f2's query").toBeUndefined();
-    searchParamsMock.set(new URLSearchParams(""));
-    const plain = renderRow({ id: "f1" }, ctx({ entitled: true, relayEntitled: true }));
-    expect(plain.tree().find((el) => el.type === FixtureStreamPanel), "closed by default").toBeUndefined();
-  });
-});
-```
-  where `searchParamsMock` is `vi.hoisted(() => { let p = new URLSearchParams(""); return { set: (n: URLSearchParams) => { p = n; }, get: () => p }; })` and the mock returns `useSearchParams: () => searchParamsMock.get()`; `renderRow` is that file's existing row render helper (read it — it already drives the row with `renderIsland`). Mutant: revert the initialiser to `useState(false)` → the first assertion red; drop the `fixture.id` comparison → the second red.
+a `useState(() => searchParams.get("stream") === "open" && …)` initialiser in the row, with `const searchParams = useSearchParams();` above it and `useSearchParams` joining the row's `next/navigation` import. Do NOT build that — it is the three-edit shape C19 rejected, and the owner re-ruled it. If a future wave needs the row to read the URL for some other reason, that is a fresh decision, not this one.
+
+  **The mutant that proves the parameter is actually read** (Step 4 b2 owes it, and it is in Task 17's table): delete the `searchParams.get("stream")` guard's body in `FixtureStreamToggle` — i.e. return early always — and Task 15's walkthrough fails at its post-checkout step (`stream-phone-gate` never becomes visible after the reload, because nothing opens the row), with the panel-module unit test red alongside it. Drop only the `fixtureId` comparison and EVERY row on the fixtures tab springs open — the unit test's `["f1"]` equality is what catches that, which is why it asserts the whole call list rather than "was called".
 
 - [ ] **Step 6: Run the panel test and the view-model test — expect green; then the three generators/gates.**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/components/v2/__tests__/fixture-stream-panel.test.tsx src/lib/__tests__/stream-session-view.test.ts src/lib/__tests__/dictionary-copy-truth.test.ts --reporter=json --outputFile=<scratchpad>/r1/t14.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t14.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.fullName,(a.failureMessages[0]||'').slice(0,200))"` → 0 failed. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && pnpm i18n:gen-keys && /usr/bin/git diff --exit-code apps/web/src/lib/i18n-keys.ts; echo "KEYS_DIFF=$?"` → `0` (already regenerated and staged in Step 1); `npx tsc --noEmit -p apps/web/tsconfig.json; echo "EXIT=$?"` → `0` (a client component importing `@/server/**` at RUNTIME is a build failure — only `type` imports cross that line here); `rtk proxy npm run lint` → `✖ 0 problems`. Then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0 (the served bundle must carry this task before lane E).
@@ -11656,8 +11696,11 @@ test("Stripe sandbox: buy a 1-pack for real, replay the signed completion, balan
   expect(replayed.status()).toBe(200);
   expect(await creditSumSql(rig.orgId)).toBe(1);
 
-  // Owner ruling 4: the return_url lands on the fixtures tab with THIS row's panel
-  // already open on the Phone tab — no toggle click. The balance chip reads 1.
+  // Owner ruling 4 (re-ruled on C19): the return_url lands on the fixtures tab with
+  // THIS row's panel already open on the Phone tab — no toggle click. The opener is
+  // `FixtureStreamToggle`'s own read of `?stream=open&fixture=<id>` (Task 14 Step 4 b2),
+  // so THIS assertion is the end-to-end killer for that read: delete it and the gate
+  // never becomes visible here. The balance chip reads 1.
   await page.reload();
   await expect(page.getByTestId("stream-phone-gate")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("stream-balance")).toContainText("1");
@@ -11833,7 +11876,7 @@ async function streamRelaySuite(): Promise<void> {
 - Consumes: the T1b harness (`capture.spec.ts` walks the manifest — never edited); `relay-kit.ts` (Task 15); every gate command from the Global Constraints.
 - Produces: PR-R1's description body (the orchestrator opens the PR when the owner says so — "never file PRs unprompted"); the `_INDEX.md` record a fresh session judges by.
 
-**Why the rows work:** the harness navigates a ROUTE and awaits a selector; it cannot click the row's camera toggle. The rows use `?tab=fixtures&fixture={fixtureId}&stream=open`, which mounts the panel through the ONE `streamOpen` initialiser line the owner allowed on 2026-09-14 (ruling 4; Task 14 Step 5b and its test). The rows are therefore unconditional; Task 15's PNGs remain the per-state second witness.
+**Why the rows work:** the harness navigates a ROUTE and awaits a selector; it cannot click the row's camera toggle. The rows use `?tab=fixtures&fixture={fixtureId}&stream=open`, which opens the row through `FixtureStreamToggle`'s own read of that query (owner ruling 4, re-ruled on C19: the panel module owns the behaviour, and `run-sheet-row.tsx` contributes exactly one line — the `fixtureId` prop). Task 14 Step 4 b2 builds it and holds its unit test. The rows are therefore unconditional; Task 15's PNGs remain the per-state second witness, and the visual capture is a THIRD consumer of the same read — if it regresses, all three go red together rather than silently photographing a closed row.
 
 **Pattern (§9a):** One authority per fact (the `_INDEX.md` row is where the landed migration number lives — nowhere forward); the visual gate's own vacuous mode (class 10: files exist, hashes DIFFER, the last check runs after the state proven).
 **Checklist rows satisfied:** "Report mutant KILLER LIST, not just count"; "Review findings → written to disk"; "Surface bench/product gaps to owner"; "Verify visually, always"; per-screen sign-off.
@@ -11920,7 +11963,7 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
   - **Driver env**: `RELAY_DRIVERS=fake|live` (unset = fake); live needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_STREAM_TOKEN`, `FLY_API_TOKEN`, `RELAY_IMAGE`, `RELAY_KEK`; `FAKE_INGEST_CONNECT_AFTER_MS` for the fake.
   - **Stripe lookup-key NAMES**: `seazn_stream_pack_1`, `seazn_stream_pack_5`, `seazn_stream_pack_20` (never values); the sandbox product name; `scripts/stripe-stream-packs.ts` is the one-off.
   - **Cross-repo item for the owner (P1)**: `relay-sweep.yml` in `onryde/seazn.club.workflow` — DAILY (owner 2026-09-14), both legs, `PROD_SWEEP_ENABLED`, POST `/api/cron/relay-sweep` with `x-cron-secret`; until it lands the sweep is smoke-driven only. Nothing time-critical depends on it (recommendation B — lazy expiry, inline retry, Machine-side hard stop).
-  - **Owner rulings 2026-09-14, verbatim-short**: 1 FS10 keep (*"all good"*); 2 Vault no — envelope final; 3 sweep daily (*"just run every day is fine"*); 4 the one `streamOpen` line allowed; 5 `watch_url` + `runner_retries` accepted; 6 `INGEST_TIMEOUT_SECONDS = 180` (*"3 mins after phone goes away"*), hold 183 RTMPS / SRT null; 7 Sentry enabled, DSN owed; 8 checkout embedded (*"checkout should be inbuilt as other"*).
+  - **Owner rulings 2026-09-14, verbatim-short**: 1 FS10 keep (*"all good"*); 2 Vault no — envelope final; 3 sweep daily (*"just run every day is fine"*); 4 the one `run-sheet-row.tsx` line allowed — **re-ruled on C19 ("apply rec"): that one line is the `fixtureId` prop on the row's existing `<FixtureStreamToggle>`, NOT a `streamOpen` initialiser.** The `?stream=open` reading lives in the panel module (Task 14 Step 4 b1/b2), which owns the behaviour; the row keeps `useState(false)` and imports no `useSearchParams`. Global Constraints §"Do NOT touch", ruling 4's own paragraph and the File Structure rows still describe the superseded initialiser shape and are owed a correction by the whole-plan owner; 5 `watch_url` + `runner_retries` accepted; 6 `INGEST_TIMEOUT_SECONDS = 180` (*"3 mins after phone goes away"*), hold 183 RTMPS / SRT null; 7 Sentry enabled, DSN owed; 8 checkout embedded (*"checkout should be inbuilt as other"*).
   - **Recommendation B — RULED (ruling 11)**: money/safety rules never wait for the daily tick — `domain/expiry.ts` evaluated lazily on every read/heartbeat/poll/admission; inline retry; `RELAY_DEADLINE_AT` hard stop; the cron keeps retention + backstop + orphans.
   - **Second ruling set 2026-09-14 (owner "all good")**: 9 lifecycle scope accepted; 10 granted state = the real `/admin/orgs/[id]` grant on a fresh org, GA purchase path owed to the GA-flip wave; 11 recommendation B; 12 the second-input sink, YouTube optional on an owner key; 13 capture all data, schema growth pre-approved; 14 `RELAY_KEK` present.
   - **Data captured — the inventory** (Step 5 below): every table, its writer, its row count on the `rly` run, and what it never contains; "admin telemetry view" flagged as possible future scope, NOT built.
@@ -11967,7 +12010,7 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | sweep: delete the backstop `reconcileSession` call (NOT `applyExpiry` — the sweep has never called it); replace it with `applyExpiry`; drop the orphan `TERMINAL_STATES` clause; drop the `continue` that keeps a live Machine; drop the `runner_state = 'creating'` skip; treat a null `machine_id` as unowned; restore the non-terminal-only backstop query; count an `ending_timeout` as a failure; inputs before videos; hard-code `0` for `SAMPLE_RETENTION_DAYS`; drop `s.sample_summary is null`; drop `s.sample_summary is not null`; drop the per-`videoUid` guard; sum durations into `recording_bytes` | `relay-sweep.test.ts` — Task 12 Step 4's fourteen named killers |
 | fly-client: remove the retry; retry on 400; drop `Retry-After`; drop the pre-retry lookup; drop the redaction; treat destroy 404 as an error | `fly-client.test.ts`, one `it` each (Task 5A) |
 | runner-fly: `restart.policy` ≠ `no`; drop `RELAY_DEADLINE_AT`; drop `metadata` | `runner-fly.test.ts` (Task 5) |
-| row: `streamOpen` back to `useState(false)`; drop the `fixture.id` comparison | `run-sheet-row-stream-gate.test.tsx` (Task 14) |
+| toggle: delete `FixtureStreamToggle`'s `?stream=open` read (return early always); drop its `fixtureId` comparison so every row springs open; drop the `open` guard so a manual close springs back; drop the `fixtureId` prop from the row's toggle line | `fixture-stream-panel.test.tsx`'s "the checkout return opens the panel" `it` — it asserts the whole call LIST, not "was called" (Task 14 Step 4 b2); Task 15's walkthrough post-checkout step; Task 17's `stream-phone-*` visual rows, which photograph a closed row if the read dies |
 | lifecycle table: a retry legal while not destroyed; skip SIGINT and destroy directly; unknown Fly state goes live; drop the grace force; drop persist-before-create | `domain/__tests__/runner.test.ts` — "invariant 1", "the stop sequence", "unknown Fly state", "grace_expired", "invariant 4" (Task 2C) |
 | lifecycle wiring: skip `stop_machine`; drop the `creating` reconcile; create before persist; replace `reconcileSession` with `applyExpiry` | `stream-sessions.test.ts` lifecycle cases (Task 10); `relay-sweep.test.ts` stuck-stopping (Task 12) |
 | the stop/deadline shapes with no live Machine: `no-Machine stop`; `stop-while-creating`; `stop-then-create_ok`; `stop-then-create_failed`; `stop-then-found`; `deadline-no-Machine`; `deadline-while-creating`; `grace-creating` | `domain/__tests__/{session,runner}.test.ts` (Tasks 2A, 2C) + `stream-sessions.test.ts` "stop with no Machine completes AT ONCE" and the C27 case (Task 10) |
