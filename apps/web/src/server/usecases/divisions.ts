@@ -32,6 +32,7 @@ import {
   RESERVED_ENTITY_SLUGS,
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
+import { fireDivisionRevalidate, fireOrgRevalidate } from "@/server/public-site/revalidate";
 // D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
@@ -654,7 +655,13 @@ export async function patchDivision(
   }
   let previousSlug: string | null = null;
   let previousCompetitionId: string | null = null;
+  let policyBefore: { youth: boolean; player_name_display: string | null } | undefined;
   const row = await withTenant(auth.orgId, async (tx) => {
+    // The stored name policy BEFORE this write, compared with the returned
+    // row below. Never the patch's own fields: the registration hub re-sends
+    // `age_max` on every Save.
+    [policyBefore] = await tx<{ youth: boolean; player_name_display: string | null }[]>`
+      select youth, player_name_display from divisions where id = ${id}`;
     const effective: Record<string, unknown> = { ...patch };
     // RS004 review finding 1: checkAgeBand (schemas.ts) only compares
     // age_min/age_max when BOTH are present in the SAME patch body — a
@@ -918,6 +925,24 @@ export async function patchDivision(
   // tx, matching the pattern in patchCompetition.
   if (previousSlug) {
     await invalidateSlugCache("division", previousCompetitionId, previousSlug, row.slug);
+  }
+  // Privacy hotfix (2026-09-16): a name-policy change must reach public pages
+  // now, not after their TTL. The player card reads every division the person
+  // plays in across the org, so it is tagged with the org, and only an org tag
+  // reaches it. Only when the STORED policy changed: an org bust rebuilds the
+  // org's whole public tree.
+  //
+  // Fired synchronously before this use-case resolves, never behind a `void`:
+  // Next flushes a request's revalidations once, when the handler resolves,
+  // and drops any that arrive later. Division 'max' first, org expiry second
+  // (different tags; the order mirrors `fireScoreRevalidate`).
+  if (
+    policyBefore &&
+    (policyBefore.youth !== row.youth || policyBefore.player_name_display !== row.player_name_display)
+  ) {
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+    fireDivisionRevalidate(row.id, row.competition_id);
+    if (org) fireOrgRevalidate(org.slug);
   }
   return row;
 }

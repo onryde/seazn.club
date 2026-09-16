@@ -30,8 +30,8 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *  `fireOrgRevalidate` below gives: 'max' serves one more stale read, and the
  *  reads that follow a score are read-your-own-writes (the smoke hub champion
  *  check reads once; a realtime push triggers one refresh). Every spectator
- *  entry a score changes carries the division tag (`pub-div`, `pub-fixture`,
- *  `pub-hub-v2`), and an expired tag beats a stale one on an entry carrying
+ *  entry a score changes carries the division tag (`pub-div-v2`,
+ *  `pub-fixture-v2`, `pub-hub-v2`), and an expired tag beats a stale one on an entry carrying
  *  both. The competition tag keeps SWR. Cost accepted: the first reader after
  *  a score rebuilds instead of getting a stale answer at once.
  *

@@ -26,7 +26,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
-import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
 
@@ -355,8 +355,13 @@ export interface StandingsSnapshotRow {
 
 export interface PublicEntrantMember {
   name: string;
+  /** Null without photo consent — and null whenever the division's name
+   *  policy masks this member (`maskPublicEntrantNames`). */
   photo: string | null;
-  person_id: string | null; // null = no public-name consent, no player card
+  /** Null = no player card: no public-name consent, OR the division's name
+   *  policy masks this member (`maskPublicEntrantNames` withholds the id, which
+   *  is the card's URL — the card would otherwise undo the mask). */
+  person_id: string | null;
   squad_number: number | null;
   position: string | null;
 }
@@ -641,21 +646,41 @@ export async function maskPublicEntrantNames<
     }
   }
 
+  const setting = division.player_name_display ?? null;
+  const youth = division.youth ?? false;
   return entrants.map((e) => {
     const optedOut = e.kind !== "team" && anyOptedOut(consentsByEntrant.get(e.id) ?? []);
     const fresh = e.members ? memberRowsByEntrant.get(e.id) : undefined;
-    const remaskedMembers =
-      e.members && fresh && fresh.length === e.members.length
+    // Privacy hotfix (2026-09-16): a member whose name the policy masks also
+    // loses `person_id` and `photo`. This output is what the division page
+    // renders AND what the anonymous entrants API serves, and the id is the
+    // player card's URL — a masked "Arun K." linked to a card (or an id a
+    // client can build that URL from) is the full name one hop away. No public
+    // surface shows a masked member's photo, so none is served either.
+    const remaskedMembers = !e.members
+      ? undefined
+      : fresh && fresh.length === e.members.length
         ? e.members.map((m, i) => ({
             ...m,
-            name: resolvePersonDisplayName(
-              fresh[i]!.full_name,
-              fresh[i]!.consent,
-              division.player_name_display ?? null,
-              division.youth ?? false,
-            ),
+            name: resolvePersonDisplayName(fresh[i]!.full_name, fresh[i]!.consent, setting, youth),
+            ...(isPersonNameMasked(fresh[i]!.consent, setting, youth) ? { person_id: null, photo: null } : {}),
           }))
-        : undefined;
+        : // The roster moved between the view's read and the fresh one, so
+          // index i no longer names the same person in both. The view's own
+          // names are consent-gated but carry NO youth axis, so they are never
+          // published as they stand: the DIVISION's policy is applied to every
+          // member instead (no per-person consent to hand it — the view's
+          // name already carries that axis, initials without consent).
+          e.members.map((m) =>
+            isPersonNameMasked(null, setting, youth)
+              ? {
+                  ...m,
+                  name: m.name === null ? null : resolvePersonDisplayName(m.name, null, setting, youth),
+                  person_id: null,
+                  photo: null,
+                }
+              : m,
+          );
     return {
       ...e,
       ...(remaskedMembers ? { members: remaskedMembers } : {}),
@@ -666,8 +691,8 @@ export async function maskPublicEntrantNames<
           : resolvePersonDisplayName(
               e.display_name,
               optedOut ? { public_name: false } : null,
-              division.player_name_display ?? null,
-              division.youth ?? false,
+              setting,
+              youth,
             ),
     };
   });
@@ -744,7 +769,9 @@ export async function getPublicDivision(
         where d.id = ${division.id}`;
       return { stages, pools, fixtures, standings, entrants, tz: ss?.tz ?? "UTC" };
     },
-    ["pub-div", division.id],
+    // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
+    // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
+    ["pub-div-v2", division.id],
     {
       tags: [divisionTag(division.id), competitionTag(division.competition_id)],
       revalidate: REVALIDATE_FAST,
@@ -887,7 +914,10 @@ export async function getPublicFixture(
         stageName: stageRow?.name ?? null,
       };
     },
-    ["pub-fixture", fixtureId],
+    // v2 (privacy hotfix, 2026-09-16): the match centre's lineup `masked` flag
+    // is the name policy's decision (readPublicLineups), so a one-word masked
+    // name now gets a surrogate id instead of its real one.
+    ["pub-fixture-v2", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;
@@ -998,24 +1028,105 @@ export async function getPublicPlayer(
 
   const detail = await unstable_cache(
     async () => {
-      const [player] = await sql<PublicPlayer[]>`
+      const [consented] = await sql<PublicPlayer[]>`
         select id, org_id, name, photo from public_players_v
         where id = ${personId} and org_id = ${shell.org.id} limit 1`;
-      if (!player) return null;
+      if (!consented) return null;
+
+      // Privacy hotfix (2026-09-16): `public_players_v.name` is the FULL name,
+      // gated by public-name consent alone — which RS007 grants every
+      // registered player by default. The division's youth/name-display policy
+      // is the other axis, and the division page masks by it; this card did
+      // not, so a youth player's full name reached the h1, <title>, meta
+      // description, and their photo the card. Applied HERE, at the data
+      // layer, so every consumer of this payload reads the masked name.
+      //
+      // A card is a PERSON, not a division, so every division the person is
+      // rostered in across the ORG is asked, and the strictest wins. Not just
+      // this competition's: the card resolves the person by org (see the query
+      // above), so a youth player's id under any sibling competition's URL
+      // would otherwise print the full name. Resolved through the one shared
+      // resolver against the masking division's own policy; a masked card
+      // carries no photo, because no public surface shows a masked person's.
+      //
+      // Freshness. A division POLICY change is immediate: this entry carries
+      // `orgTag`, and `patchDivision` expires it (`fireOrgRevalidate`) when a
+      // division's stored `youth` or `player_name_display` changes. ROSTER
+      // writes (entrants.ts, registrations.ts, stages.ts, imports.ts,
+      // person-merge.ts) stay bounded: busting the org's whole public tree on
+      // every roster edit costs too much, so a new youth roster reaches the
+      // card within REVALIDATE_SLOW plus the page's 300s ISR, plus one stale
+      // hit. That stale entry predates the roster, so it only shows a name
+      // that was already public. Competition visibility is not an input: this
+      // query reads every roster in the org, whatever the visibility.
+      const rosterPolicies = await sql<
+        { youth: boolean; player_name_display: string | null; consent: { public_name?: boolean } | null }[]
+      >`
+        select d.youth, d.player_name_display, p.consent
+        from entrant_members em
+        join entrants e  on e.id = em.entrant_id
+        join divisions d on d.id = e.division_id
+        join persons p   on p.id = em.person_id
+        where em.person_id = ${personId} and d.org_id = ${shell.org.id}`;
+      // Fails CLOSED. `public_players_v` only matches a person with a roster
+      // row, so an empty read here means this query could not see it (a
+      // database role that RLS filters, or a roster removed between the two
+      // reads). With no policy to go on, mask. A read that throws serves no
+      // card at all.
+      const strictest =
+        rosterPolicies.length === 0
+          ? { youth: false, player_name_display: "first_initial", consent: null }
+          : rosterPolicies.find((r) => isPersonNameMasked(r.consent, r.player_name_display, r.youth));
+      const player: PublicPlayer = strictest
+        ? {
+            ...consented,
+            name: resolvePersonDisplayName(consented.name, strictest.consent, strictest.player_name_display, strictest.youth),
+            photo: null,
+          }
+        : consented;
+
       // Memberships within THIS competition, via the consent-filtered members
       // payload (person_id present only with consent — same gate as the card).
-      const memberships = await sql<
-        { division_name: string; division_slug: string; entrant_name: string; squad_number: number | null; position: string | null }[]
+      const membershipRows = await sql<
+        {
+          division_name: string; division_slug: string; entrant_id: string; kind: string;
+          entrant_name: string; squad_number: number | null; position: string | null;
+          youth: boolean; player_name_display: string | null;
+        }[]
       >`
         select d.name as division_name, d.slug as division_slug,
-               e.display_name as entrant_name,
+               e.id as entrant_id, e.kind, e.display_name as entrant_name,
                (m->>'squad_number')::int as squad_number,
-               m->>'position' as position
+               m->>'position' as position,
+               dv.youth, dv.player_name_display
         from public_entrants_v e
         join public_divisions_v d on d.id = e.division_id
+        join divisions dv on dv.id = d.id
         cross join lateral jsonb_array_elements(e.members) m
         where d.competition_id = ${shell.competition.id}
           and m->>'person_id' = ${personId}`;
+      // A non-team entrant's display name IS a person's name — an individual
+      // entrant's is this player's own — so it goes through the same entrant
+      // mask the division page uses, never straight off the view. Under the
+      // division's own policy, or the card's strictest one when the card is
+      // masked: "Arun K." above an "— Arun Kumar" membership line would undo it.
+      const memberships: {
+        division_name: string; division_slug: string; entrant_name: string;
+        squad_number: number | null; position: string | null;
+      }[] = [];
+      for (const r of membershipRows) {
+        const [masked] = await maskPublicEntrantNames(
+          [{ id: r.entrant_id, kind: r.kind, display_name: r.entrant_name }],
+          strictest ?? r,
+        );
+        memberships.push({
+          division_name: r.division_name,
+          division_slug: r.division_slug,
+          entrant_name: masked!.display_name,
+          squad_number: r.squad_number,
+          position: r.position,
+        });
+      }
 
       // PROMPT-65: per-division totals from player_stat_snapshots, labelled
       // by the sport module's declared playerStats model (never hardcoded).
@@ -1104,6 +1215,11 @@ export async function getPublicPlayer(
 
       return { player, memberships, stats, career, careerLabel: statMsg("player.career.title") };
     },
+    // v16 (privacy hotfix, 2026-09-16): `player.name`, `player.photo` and
+    // `memberships[].entrant_name` now follow the division name policy. A live
+    // v15 entry would keep serving a youth player's full name and photo for a
+    // full REVALIDATE_SLOW window after deploy.
+    //
     // v15 (S9/#418): added the `career` rollup to this cached payload. A live
     // v14 entry would keep serving without it for a full REVALIDATE_SLOW
     // window after deploy — same reason v13 → v14 retired its key instead of
@@ -1112,8 +1228,8 @@ export async function getPublicPlayer(
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v15", shell.competition.id, personId],
-    { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
+    ["pub-player-v16", shell.competition.id, personId],
+    { tags: [competitionTag(shell.competition.id), orgTag(shell.org.slug)], revalidate: REVALIDATE_SLOW },
   )();
   if (!detail) return null;
 

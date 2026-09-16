@@ -295,7 +295,10 @@ export default async function DivisionHomePage({ params }: Props) {
                       {m.name}
                     </Link>
                   ) : (
-                    // No public-name consent: initials, no link (doc 06 §4.7).
+                    // No person id, no link: no public-name consent (doc 06
+                    // §4.7), or the division's name policy masks this member —
+                    // `maskPublicEntrantNames` withholds the id, because the
+                    // card behind it would undo the mask.
                     <span>{m.name}</span>
                   )}
                   {m.position ? (
