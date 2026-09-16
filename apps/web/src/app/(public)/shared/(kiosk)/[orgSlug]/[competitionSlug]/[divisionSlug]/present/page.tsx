@@ -4,8 +4,9 @@ export const revalidate = 30;
 // <Slideshow> with slides built from the PUBLIC read models (consent and
 // visibility enforced by the public_* views); a private competition 404s.
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { getPublicDivision } from "@/server/public-site/data";
+import { sharedRenameTarget } from "@/server/slug-resolve";
 import { buildPublicDivisionSlides } from "@/server/slideshow-data";
 import { slideshowLabels } from "@/server/slideshow-labels";
 import { Slideshow } from "@/components/v2/slideshow";
@@ -22,7 +23,16 @@ export default async function PresentDivisionPage({
 }) {
   const { orgSlug, competitionSlug, divisionSlug } = await params;
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
-  if (!data) notFound();
+  if (!data) {
+    // K fix round, F2 + F3 — same rule as the competition board beside this
+    // one, one level deeper: the full path goes in, so a renamed org keeps
+    // `/{comp}/{div}` and a renamed competition keeps `/{div}`, and the
+    // board's own `/present` goes back onto the chrome path that comes out.
+    // Null means nothing in the rename history and a 404 is honest.
+    const renamed = await sharedRenameTarget(orgSlug, competitionSlug, divisionSlug);
+    if (renamed) permanentRedirect(`${renamed}/present`);
+    notFound();
+  }
   // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, not English
   // by construction: the builder has no request scope, and since N1c c3 it
   // loads the org-locale dictionaries itself (async, no database).

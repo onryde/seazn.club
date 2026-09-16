@@ -1,7 +1,15 @@
 // K-1 (2026-09-15): the kiosk's org layout is BARE. The /present board must span
 // a TV, so this layout carries none of the chrome layout's header, <main
 // max-w-5xl> or footer, while keeping what the board needs from the org tree:
-// the org door (404 / renamed redirect), the display face and the org palette.
+// the org door, the display face and the org palette.
+//
+// The door then SPLIT (K fix round, F2): a reserved slug still 404s here, but a
+// missing-or-renamed org is deferred to the board page. A layout holds only
+// `orgSlug`, so any redirect it issues drops `/{comp}/present` and lands a TV on
+// the org hub — measured, and the reason a printed kiosk QR died on a rename.
+// The tail-carrying half is proven in `__tests__/present-rename.test.tsx`; what
+// is proven HERE is that this layout does not pre-empt it, and that the chrome
+// tree's own door is untouched (every assertion below has its chrome pair).
 //
 // Called with its data door mocked and rendered to static markup, the same way
 // `[orgSlug]/__tests__/layout-copy.test.tsx` renders the chrome layout; the two
@@ -77,17 +85,39 @@ describe("(kiosk)/[orgSlug]/layout — the /present board's bare org layout", ()
     expect(styleOf(root)).toBe(chromeStyle);
   });
 
-  it("is the same org door as the chrome layout: a missing org 404s, and neither layout renders", async () => {
+  it("is still the same org door on reserved slugs: neither tree serves /shared/admin, and neither asks the database", async () => {
+    await expect(render(KioskOrgLayout, "admin")).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/);
+    await expect(render(ChromeOrgLayout, "admin")).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/);
+    expect(getPublicOrg, "reserved slugs 404 before the DB is touched").not.toHaveBeenCalled();
+  });
+
+  it("defers a missing org to the board instead of 404ing it here, while the chrome layout still answers itself", async () => {
     getPublicOrg.mockResolvedValue(null);
-    await expect(render(KioskOrgLayout, "no-such-org")).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/);
+    const html = await render(KioskOrgLayout, "no-such-org");
+    expect(html, "the wrapper renders; the board page is what refuses").toContain('data-probe="board"');
+    // The positive pair: the chrome tree's door is unchanged by this split.
     await expect(render(ChromeOrgLayout, "no-such-org")).rejects.toThrow(/NEXT_HTTP_ERROR_FALLBACK;404|NEXT_NOT_FOUND/);
     expect(getPublicOrg).toHaveBeenCalledWith("no-such-org");
   });
 
-  it("a renamed org's old slug redirects permanently from the kiosk too", async () => {
+  it("does not redirect a renamed org from the kiosk layout: a tail-less 308 here would beat the board's correct one", async () => {
     getPublicOrg.mockResolvedValue(null);
     sharedRenameTarget.mockResolvedValue("/shared/new-slug");
-    await expect(render(KioskOrgLayout, "old-slug")).rejects.toThrow(/NEXT_REDIRECT/);
+    const html = await render(KioskOrgLayout, "old-slug");
+    expect(html).toContain('data-probe="board"');
+    // Not merely "it did not redirect": this layout must not even ASK, because
+    // the only question it can pose — `sharedRenameTarget(orgSlug)` — has no
+    // answer that keeps `/{comp}/present` on the end.
+    expect(sharedRenameTarget, "only the board page has the tail to ask with").not.toHaveBeenCalled();
+    // The positive pair: the chrome layout still 308s on exactly these inputs.
+    await expect(render(ChromeOrgLayout, "old-slug")).rejects.toThrow(/NEXT_REDIRECT/);
     expect(sharedRenameTarget).toHaveBeenCalledWith("old-slug");
+  });
+
+  it("an org that IS there still themes the board, so the null path above is not the only path", async () => {
+    const style = styleOf(rootTag(await render(KioskOrgLayout)));
+    expect(style, "a live org's palette reaches the board").toBeTruthy();
+    getPublicOrg.mockResolvedValue(null);
+    expect(styleOf(rootTag(await render(KioskOrgLayout, "no-such-org")))).toBeNull();
   });
 });
