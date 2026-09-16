@@ -62,8 +62,14 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
         MINTED through the real entitlement gate (`scoring.device_links`),
         its QR decodes to the exact minted secret URL and its copy button's
         clipboard content matches byte for byte (both proven in a real
-        browser, not asserted from the mint response alone), and it is
-        revoked after use (B07a T9/T10/T11 — proven live on `_tiny`)
+        browser, not asserted from the mint response alone) (B07a T9/T10/
+        T11 — proven live on `_tiny`). It is **NOT revoked after use** —
+        tap-minted links are unrevoked BY DESIGN, owner-accepted (2026-09-14
+        — throwaway org, day-scoped secrets, no blast radius); this counts
+        as closed because a decision was made, not because revoking was
+        built. (The only revoke in this codebase mints and immediately
+        revokes a *different* link, inside the entitlement-gate's own paywall
+        probe — `dls-gate.ts` — never the tap driver's device link.)
       - coach lanes: **NOT WIRED — deferred, no step exists.** Named here so
         a pack session records the gap rather than assuming it is covered
 - [ ] Entitlement: recorded, not faked. Entitlements v18 W1 deleted the

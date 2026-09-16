@@ -10,8 +10,7 @@ Programme: `bench-prompts/_INDEX.md` (session rows, status log) →
 `2026-09-05-b04-scheduling-layer-design.md`, `2026-09-07-b05-simulation-layer-design.md`,
 `2026-09-09-b06-pack-pilot-design.md`.
 
-Every `file:line` below was re-pinned against `main` on 2026-09-11 (worktree base
-`5e5ced885`, which includes #773).
+Every `file:line` below was re-pinned against `main` on 2026-09-11.
 
 ## 1. What B07 closes, and why it is two waves
 
