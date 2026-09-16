@@ -28,7 +28,7 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** nothing dispatched.
+**In flight at time of writing:** plan sync drafter (opus) — brief `.superpowers/sdd/2026-09-13-streaming-r1/plan-2C-sync-brief.md`, report `plan-2C-sync-report.md` (written incrementally). On return: verify landing lines by grep, commit plan-only. If lost to a compaction/limit: read the report, re-dispatch for items not landed.
 
 **Next, in order:**
 1. Plan drafter pass BEFORE Task 7 (plan text owed): G1 `beat_window_at` — V408 column at Task 7 Step 0c,
