@@ -202,13 +202,13 @@ The runner is a SUB-STATE of the session aggregate (`domain/runner.ts`, Task 2C)
 | State | Meaning |
 |---|---|
 | `none` | no Machine has been asked for (every passthrough session stays here) |
-| `creating` | the intended `runner_name`/attempt is PERSISTED and the create call is in flight — a process dying here is reconciled by name lookup on the next read (invariant 4). An organiser stop here only MARKS `runner_stop_requested_at` (no grace clock: `evaluate` reads it in `stopping`/`exited` only); the call's return is torn down at once (P1-F-a) |
+| `creating` | the intended `runner_name`/attempt is PERSISTED and the create call is in flight — a process dying here is reconciled by name lookup on the next read (invariant 4). An organiser stop or the deadline here only MARKS `runner_stop_requested_at` (the first mark is kept); the call's return is torn down at once (P1-F-a), and the mark starts the F15 grace clock — `evaluate` reads it in `creating` as well as `stopping`/`exited`, so a call that never returns is force-destroyed by name on a lazy read. An `ending_timeout` over an UNMARKED `creating` (or a `lost`) runner routes through `session_stop` rather than completing over it (C5, Task 2C review M2) |
 | `booting` | `machine_id` known; Fly may be `created/starting/started`; the relay page has not reported `playing` |
 | `playing` | the runner's own heartbeat reported `playing` (session `live`) |
 | `stopping` | our stop was sent (SIGINT, grace `RUNNER_STOP_GRACE_SECONDS`); waiting for exit 0 + auto_destroy |
 | `exited` | observed `stopped`/an exit event after OUR stop; auto_destroy not yet observed |
-| `destroyed` | observed `destroyed` (or 404); terminal for the runner |
-| `lost` | observed `failed`/`stopped`/`destroyed`/gone WITHOUT our stop, a non-zero exit, or a stale heartbeat — the crash path |
+| `destroyed` | observed `destroyed` (or 404), a confirmed/forced destroy, or a create that made nothing; terminal for THIS attempt — the ONE retry's `create_started` is legal only from here (invariant 1) |
+| `lost` | observed `failed`/`stopped` or `callback_stopped` WITHOUT our stop, a stale heartbeat, or a create that returned after the runner moved on — the crash path. A Machine may still exist: `lost` is left for `destroyed` only on a CONFIRMED destroy (`destroy_ok` / observed `destroyed`), or by the F17 teardown cells that complete the session. (Observed `destroyed` straight from `booting`/`playing` skips `lost` — the Machine is already confirmed gone.) |
 
 **Fly state → observed input** (`fromFlyState`, Task 5; the ONLY place Fly's spelling is read):
 
@@ -225,27 +225,27 @@ The runner is a SUB-STATE of the session aggregate (`domain/runner.ts`, Task 2C)
 
 **Triggers** (`RunnerTrigger`): `create_started { name, attempt }` · `create_ok { machineId }` · `create_failed { retryable }` · `callback_playing` (heartbeat `playing`) · `callback_stopped` (heartbeat `stopped`) · `observed { state, exit? }` (GET/wait) · `stale_beat` · `deadline` · `session_stop` · `grace_expired` · `destroy_ok` · `orphan_listed` (the sweep found it listed with a terminal/absent session).
 
-**Transition table** (`RUNNER_TABLE`; ✗ = `InvalidTransition`; "retry?" = attempt 1 → `creating` with the next attempt, attempt 2 → session `failed`):
+**Transition table** (`RUNNER_TABLE` in `domain/runner.ts` — this table says what that code does, cell for cell, as of Task 2C's close at `30560cf9a`; ✗ = `InvalidRunnerTransition`; "retry?" = the ONE-retry decision `afterLostDestroyed` makes: `attempt < RUNNER_MAX_ATTEMPTS` → signal `retry` (the session's `retry_runner` effect then sends `create_started` with `attempt + 1`), else signal `failed(<reason from lastExit>)`; an ENDING session completes instead on either signal, with its own end reason — F17 for `retry`, fix round 5 for `failed`):
 
 | Runner \ Trigger | `create_started` | `create_ok` | `create_failed` | `callback_playing` | `callback_stopped` | `observed` | `stale_beat` | `deadline` | `session_stop` | `grace_expired` | `destroy_ok` | `orphan_listed` |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `none` (session provisioning) | → `creating` [persist_intent, create_machine] | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ (nothing to stop — `decide` completes the session itself, P1-F-a) | ✗ | ✗ | ✗ |
-| `creating` (provisioning, or a replacement's create in warming/live) | ✗ | stop requested → `destroyed` [force_destroy the returned id] (session `completed`, P1-F-a) · else → `booting` [persist machine_id] | stop requested → `destroyed` [none] (session `completed` — no retry, no failure, P1-F-a) · retryable → retry? [none] · not → session `failed(machine_create_failed)` | ✗ | ✗ | `pending`/`running`: stop requested → `destroyed` [force_destroy] (session `completed`, P1-F-a) · else → `booting` (crash-safe reconcile by name) · `destroyed`/`unknown` → stay | ✗ | → stay `creating`, stop requested [none] (session `ending(max_duration)`, F14) | → stay `creating`, stop requested (`runner_stop_requested_at`) [none] (session `ending(stopped)`, P1-F-a) | → `destroyed` [force_destroy by name] (session `completed` — the call never came back, F15) | ✗ | ✗ |
-| `booting` (warming, or a replacement in live) | ✗ | ✗ | ✗ | → `playing` (session `live`, consume — only when the session is warming; a replacement's `playing` changes nothing on the session) | → `lost` (booted then stopped) | `running`/`pending` → stay · `stopped`/`failed` → `lost` · `destroyed` → `destroyed` (retry? / failed) · `unknown` → stay | → `lost` [force_destroy] (a replacement that never plays; the policy emits it only for a LIVE session) | → `stopping` [stop_machine SIGINT] (session ending, end `max_duration`) | → `stopping` [stop_machine SIGINT] | ✗ | ✗ | ✗ |
-| `playing` (live) | ✗ | ✗ | ✗ | stay, re-signalling `went_live` (idempotent on a live session; it takes a WARMING one live, so a beat the session had to ignore before `provisioned` is recovered — F16) | → `lost` | `running` → stay · `stopped`/`failed`/`destroyed` → `lost` · `unknown`/`pending` → stay | → `lost` | → `stopping` [stop_machine] (end `max_duration`) | → `stopping` [stop_machine] | ✗ | ✗ | ✗ |
-| `stopping` (ending) | ✗ | ✗ | ✗ | stay | → `exited` | `stopped` → `exited` · `destroyed` → `destroyed` (session `completed`) · `running`/`pending`/`unknown` → stay · `failed` → `exited` (exit was non-zero — recorded, still completed: WE stopped it) | stay (a stopping runner is expected to go quiet) | stay | stay (idempotent) | → `destroyed` [force_destroy] | → `destroyed` | ✗ |
-| `exited` (ending) | ✗ | ✗ | ✗ | ✗ | stay | `destroyed` → `destroyed` (session `completed`) · else stay | stay | stay | stay | → `destroyed` [force_destroy] | → `destroyed` | ✗ |
-| `lost` (live/warming → crash path) | ✗ | ✗ | ✗ | ✗ | stay | `destroyed` → `destroyed` (then retry? or session `failed`) · else stay | stay | → `destroyed` [force_destroy] (session `completed`, end `max_duration` — never the retry, F17) | → `destroyed` [force_destroy] (session `completed`, end `stopped`, F17) | → `destroyed` [force_destroy] | → `destroyed` (then retry? or session `failed`) | → `destroyed` [force_destroy] |
-| `destroyed` (terminal for this attempt) | retry only: attempt 1 → `creating` (attempt 2) | → stay `destroyed` [force_destroy the returned id] (a call that came back after we gave up — F15) | stay | ✗ | ✗ | stay | ✗ | ✗ | stay (idempotent; an organiser stop never steps it — `decide` completes the session, P1-F-a) | ✗ | stay (idempotent) | stay |
+| `none` (session provisioning) | → `creating` [persist_intent, create_machine] | ✗ | ✗ | ✗ | ✗ | ✗ | stay, session `failed(machine_crash)` (C1: a live composed row with no runner is corrupt; a throw would 500 every lazy read of it, and there is no name to tear down) | ✗ | ✗ (nothing to stop — `decide` completes the session itself, P1-F-a) | ✗ | ✗ | ✗ |
+| `creating` (provisioning, or a replacement's create in warming/live) | ✗ | stop marked → `destroyed` [force_destroy the returned id] (session `completed`, P1-F-a) · else → `booting` [persist machine_id] | stop marked → `destroyed` [none] (session `completed` — no retry, no failure, P1-F-a) · retryable and `attempt < RUNNER_MAX_ATTEMPTS` → `destroyed`, signal `retry` · else → `destroyed`, session `failed(machine_create_failed)` | ✗ | ✗ | `pending`/`running`: stop marked → `destroyed` [force_destroy] (session `completed`, P1-F-a) · else → `booting` (crash-safe adopt by name) · any other observed state → stay | → `lost` [force_destroy by name] (C1: a replacement's create that hangs past the beat window may still make a Machine — the retry waits for a CONFIRMED destroy, and a late `create_ok` is `lost`'s to destroy) | → stay `creating`, stop marked (the first mark is kept) [none] (session `ending(max_duration)`, F14) | → stay `creating`, stop marked (`runner_stop_requested_at`, the first mark is kept) [none] (session `ending(stopped)`, P1-F-a) | → `destroyed` [force_destroy by name] (session `completed` — the call never came back, F15) | ✗ | ✗ |
+| `booting` (warming, or a replacement in warming/live) | ✗ | ✗ | ✗ | → `playing`, signal `went_live` (session `live` + consume only when the session is WARMING; any other session state ignores it, F16) | → `lost` [force_destroy] | `stopped`/`failed` → `lost` [force_destroy] (exit recorded) · `destroyed` → `destroyed` (retry?) · `pending`/`running`/`stopping`/`destroying`/`unknown` → stay (exit recorded) | → `lost` [force_destroy] (a replacement that never plays; the policy emits it only for a LIVE session) | → `stopping` [stop_machine SIGINT] (session ending, end `max_duration`) | → `stopping` [stop_machine SIGINT] (session ending, end `stopped`) | ✗ | ✗ | ✗ |
+| `playing` (live) | ✗ | ✗ | ✗ | stay, re-signalling `went_live` (idempotent on a live session; it takes a WARMING one live, so a beat the session had to ignore before `provisioned` is recovered — F16) | → `lost` [force_destroy] | `stopped`/`failed` → `lost` [force_destroy] (exit recorded) · `destroyed` → `destroyed` (retry?) · `pending`/`running`/`stopping`/`destroying`/`unknown` → stay (exit recorded) | → `lost` [force_destroy] | → `stopping` [stop_machine SIGINT] (end `max_duration`) | → `stopping` [stop_machine SIGINT] (end `stopped`) | ✗ | ✗ | ✗ |
+| `stopping` (ending) | ✗ | ✗ | ✗ | stay | → `exited` | `stopped`/`failed` → `exited` (exit recorded — a non-zero exit is still a completion: WE stopped it) · `destroyed` → `destroyed` (session `completed`) · any other → stay | stay (a stopping runner is expected to go quiet) | stay | stay (idempotent) | → `destroyed` [force_destroy], NO signal | → `destroyed` (session `completed`) | ✗ |
+| `exited` (ending) | ✗ | ✗ | ✗ | ✗ | stay | `destroyed` → `destroyed` (session `completed`) · else stay (exit recorded) | stay | stay | stay | → `destroyed` [force_destroy], NO signal | → `destroyed` (session `completed`) | ✗ |
+| `lost` (the crash path — a Machine may still exist) | ✗ | → stay `lost`, `machine_id` := the returned id [force_destroy] (a create call that returns after C1 declared it lost — never a throw on a call we started) | stay | ✗ | stay | `destroyed` → `destroyed` (retry?) · any other → stay (exit recorded) | stay + RE-ISSUE [force_destroy] — NEVER a retry signal; bounded to once per `STALE_HEARTBEAT_SECONDS` by the session's `beatWindowAt` (persisted `beat_window_at`, Task 7 Step 0c / Task 10), because no beat arrives from a lost runner to move the window | → `destroyed` [force_destroy] (session `completed`, end `max_duration` — never the retry, F17) | → `destroyed` [force_destroy] (session `completed`, end `stopped` — F17; a session already ENDING keeps its own end reason, M2) | stay + RE-ISSUE [force_destroy] (our own teardown timing out is NOT a confirmation — fix round 3) | → `destroyed` (retry?) | stay + RE-ISSUE [force_destroy] (the sweep finding it listed is NOT a confirmation — fix round 3) |
+| `destroyed` (terminal for this attempt) | the retry only: `attempt + 1 ≤ RUNNER_MAX_ATTEMPTS` → `creating` [persist_intent, create_machine] | → `lost`, `machine_id` := the returned id [force_destroy] (a create that came back after we gave up — F15 — is a Machine whose destroy is NOT confirmed; fix round 4) | stay | ✗ | ✗ | stay | stay, RE-SIGNAL (retry?) (C1: destroyed and still wanted live — the process died before `retry_runner` ran; `runnerRetries` stays `runner.attempt`, so the re-signal never counts twice) | ✗ | stay (idempotent; an organiser stop never steps it — `decide` completes the session, P1-F-a) | ✗ | stay (idempotent) | stay |
 
-Session consequences (in `decide`): `create_failed` not retryable / second attempt exhausted → `failed(machine_create_failed)`; `booting` for `WARMING_TIMEOUT_MINUTES` → `failed(machine_boot_timeout)`; `lost` → the ONE retry (attempt 2, only after `destroyed` is observed or forced — invariant 1) else `failed(machine_exit_nonzero | machine_oom | machine_crash)` by the exit info seen; `deadline` → `ending`, `end_reason = 'max_duration'`; `session_stop` → `ending`, `end_reason = 'stopped'`; `destroyed` while `ending` → `completed`. **An organiser stop with no running Machine (P1-F-a):** runner `none` or `destroyed` → the session goes straight to `completed`, `end_reason = 'stopped'` (`decide` itself, no runner step); runner `creating` → `ending(stopped)` with the stop marked on the runner, and whatever the create call returns — `create_ok` / found by name → `force_destroy`, `create_failed` → nothing — lands `destroyed` with the session `completed`: no boot wait, no retry, no `machine_boot_timeout`. **The deadline takes the same shape (F14):** no live Machine → `completed` with `end_reason = 'max_duration'`; runner `creating` → `ending(max_duration)` with the stop marked; `booting`/`playing` keep the SIGINT stop. Neither ever throws. **A marked create that never returns (F15)** is ended by the LAZY expiry — `evaluate` reads `runner_stop_requested_at` in `creating` as well as `stopping`/`exited`, so the next READ (never the daily sweep) force-destroys by name and `completed`s the session; a call that comes back afterwards destroys what it made and changes nothing else. **A heartbeat that arrives before `provisioned` (F16)** is recorded as a sample and IGNORED rather than thrown — its carrier is a route the Machine retries — and `playing`'s own `callback_playing` re-signals `went_live`, so the next beat takes the session live with exactly one credit consumed. **A deadline or a stop reaching a LOST runner (F17)** destroys it and COMPLETES the session, carrying `max_duration` / `stopped` on the `completed` signal itself: the retry the crash path still owes belongs only to a session that wants to be live, and `runner()`'s retry arm refuses it outright once the session is ending, so no replacement Machine is ever booted past the wall clock. Passthrough sessions never leave `none`; their deadline/stop complete immediately (Task 2A's table).
+Session consequences (in `decide`): `create_failed` not retryable / second attempt exhausted → `failed(machine_create_failed)`; `booting` for `WARMING_TIMEOUT_MINUTES` → `failed(machine_boot_timeout)`; `lost` → the ONE retry (attempt 2, only after the destroy is CONFIRMED — `destroy_ok` or observed `destroyed`; a force that was merely issued never leads to it — invariant 1) else `failed(machine_exit_nonzero | machine_oom | machine_crash)` by the exit info seen; `deadline` → `ending`, `end_reason = 'max_duration'`; `session_stop` → `ending`, `end_reason = 'stopped'`; `destroyed` while `ending` → `completed` when the step signals it (`destroy_ok` / observed `destroyed` from `stopping`/`exited`). **OPEN (orchestrator ruling owed, found by the post-2C plan sync):** a grace force-destroy from `stopping`/`exited` signals NOTHING in `runner.ts` (`forceDestroyed`), and `destroyed × destroy_ok` stays, so that session stays `ending` until `ending_timeout` (`ENDING_TIMEOUT_SECONDS` from `ending_at`) completes it — while Task 10's "a Machine that never auto-destroys is FORCED after grace + slack" and Task 12's "a session stuck in `stopping` … is FORCED" both expect `completed` on the same read. **The retry count (Task 2C I1):** the retry arm sets `runnerRetries = runner.attempt` — idempotent, so `destroyed × stale_beat`'s re-signal never counts twice; `runner_attempts` stays the ONE authority for the attempt (C3). **The beat window (Task 2C I4, ruling A):** `heartbeatAt` is the last beat RECEIVED — only the beat route writes it, and the panel serves it as `lastBeatAt`; `beatWindowAt` is the stale-beat window's anchor, written by the stale-beat arm and the retry arm and persisted as `beat_window_at`; `evaluate` times the beat from the LATER of the two, so a stale-beat decision is bounded to once per `STALE_HEARTBEAT_SECONDS` without ever freshening the organiser's beat chip. **A runner failure on a session already ENDING (fix round 5, re-review 2 I1)** — e.g. a late `create_ok`'s lost runner confirmed destroyed on the last attempt — COMPLETES the session with its own end reason and the replay-fill rule, never `failed(machine_*)`, exactly as the retry arm does (F17). **An organiser stop on a PROVISIONING session whose runner is `lost`** (reachable per F16: create_ok, then an observation, before `provisioned`) completes it `stopped` with `[force_destroy]` — the `completed` arm accepts `provisioning` (re-review 2 G1); only `requested` still ignores the signal. **An organiser stop with no running Machine (P1-F-a):** runner `none` or `destroyed` → the session goes straight to `completed`, `end_reason = 'stopped'` (`decide` itself, no runner step); runner `creating` → `ending(stopped)` with the stop marked on the runner, and whatever the create call returns — `create_ok` / found by name → `force_destroy`, `create_failed` → nothing — lands `destroyed` with the session `completed`: no boot wait, no retry, no `machine_boot_timeout`. **The deadline takes the same shape (F14):** no live Machine → `completed` with `end_reason = 'max_duration'`; runner `creating` → `ending(max_duration)` with the stop marked; `booting`/`playing` keep the SIGINT stop. Neither ever throws. **A marked create that never returns (F15)** is ended by the LAZY expiry — `evaluate` reads `runner_stop_requested_at` in `creating` as well as `stopping`/`exited`, so the next READ (never the daily sweep) force-destroys by name and `completed`s the session; a call that comes back afterwards destroys what it made — the runner is `lost` until that destroy is confirmed (fix round 4) — and changes nothing on the session (C27). **A heartbeat that arrives before `provisioned` (F16)** is recorded as a sample and IGNORED rather than thrown — its carrier is a route the Machine retries — and `playing`'s own `callback_playing` re-signals `went_live`, so the next beat takes the session live with exactly one credit consumed. **A deadline or a stop reaching a LOST runner (F17)** destroys it and COMPLETES the session, carrying `max_duration` / `stopped` on the `completed` signal itself: the retry the crash path still owes belongs only to a session that wants to be live, and `runner()`'s retry arm refuses it outright once the session is ending, so no replacement Machine is ever booted past the wall clock. Passthrough sessions never leave `none`; their deadline/stop complete immediately (Task 2A's table).
 
 **The stop sequence (a SIGNAL, never a keystroke):** session stop or deadline → `stop_machine { signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS }` (`POST …/stop`, R0 `:279`) → the supervisor flushes and exits 0 (≤ 10 s, §7.2) → `auto_destroy` removes the Machine → the next read/poll observes `destroyed` → `completed`. If `grace_expired` (`RUNNER_STOP_GRACE_SECONDS + observation slack` since `runner_stop_requested_at`) with no `destroyed` seen → `force_destroy` (`DELETE ?force=true`) → `destroyed`. `destroy` 404 → `destroyed`.
 
 **Failure paths and their stored reasons** (`fail_reason`, the panel's map is total over the enum — Task 13): `machine_create_failed` (create not retryable, or two attempts); `machine_boot_timeout` (composed `warming` ≥ `WARMING_TIMEOUT_MINUTES`; passthrough keeps `no_inbound_timeout`); `machine_exit_nonzero` (an exit event with `exit_code ≠ 0` and no `requested_stop`); `machine_oom` (`oom_killed: true`); `machine_crash` (lost with no readable exit info, or a stale heartbeat); `provision_timeout` (`provisioning` ≥ `PROVISION_TIMEOUT_SECONDS`, F16); `admission_timeout` (`requested` ≥ `REQUESTED_TIMEOUT_SECONDS` — inserted and never admitted, F18); plus the existing `target_rejected`, `no_credits`, `no_inbound_timeout`. **Every non-terminal state owns a timed exit** (F16 / F18 / F19), and `expiry.test.ts` walks `ACTIVE_STATES` to prove no state is left untimed; an `ending` that lost its completion COMPLETES (it is not a failure), timed from `ending_at` — when ending BEGAN, written in the same statement as the transition — never from the wall clock (F22). The deadline is NOT a failure: `completed` with `end_reason = 'max_duration'`. **A `failed` session carries NO `end_reason` (P1-F-b):** `fail_reason` carries the cause; `end_reason` belongs to completed sessions (set when ending begins, carried to `completed`). `fail()` nulls it, so a composed boot timeout that tore its Machine down through `session_stop` does not keep that step's `stopped`.
 
 **Invariants — each with its named test:**
-1. **At most ONE non-destroyed Machine per session.** A retry's `create_started` is legal only from `destroyed`; `lost` must pass through `destroy_ok`/observed `destroyed` first. Test: `runner.test.ts` "invariant 1: a retry is refused while the previous Machine is not destroyed" (+ the DB twin in `stream-sessions.test.ts` "inline retry creates the replacement only after the old Machine is destroyed").
+1. **At most ONE non-destroyed Machine per session: no retry create before the prior Machine's destroy is CONFIRMED.** A retry's `create_started` is legal only from `destroyed`; `lost` leaves for `destroyed` only on `destroy_ok` / observed `destroyed` (plus F17's session-ending teardown cells, which complete the session and so owe no retry); a `force_destroy` that was only ISSUED (`lost × grace_expired`, `lost × orphan_listed`, `lost × stale_beat`) keeps the runner `lost`; a late `create_ok` into `destroyed` makes it `lost` again; a marked `creating` runner's force-only `destroyed` is followed by no retry. Proven by a FULL-DEPTH walk, not a one-step check (fix rounds 2–4 found two-step paths a one-step rule passed). Tests, `runner.test.ts`: "invariant 1: a retry is refused while the previous Machine is not destroyed (create_started is legal ONLY from none and destroyed)", "invariant 1, the LOST half (derived): …" and "invariant 1, the TWO-STEP half (walked from none): every path that reaches a retry signal passes a confirmed destroy, or a create that made nothing, since its attempt began"; `session.test.ts`: "R4: a marked creating runner's force-only destroyed can never be followed by retry_runner — walked through decide from every session that can mark a create", "R3 (a), safety: …", "R4, safety: …" (+ the DB twin in `stream-sessions.test.ts` "composed: a Machine that is observed gone WITHOUT our stop is lost → destroyed → the ONE retry (invariant 1: the replacement is created only after destroy_ok); …").
 2. **A Machine never outlives its session — four layers:** `RELAY_DEADLINE_AT` in the guest env (Task 5), `auto_destroy` (C7), lazy expiry + reconcile on every read (Task 10), the daily orphan destroy (Task 12). Tests: `runner-fly.test.ts` (env), `fly-client.live.test.ts` (auto-destroy observed), `stream-sessions.test.ts` "lazy expiry", `relay-sweep.test.ts` "ORPHANS".
 3. **Machine-minutes bound per session** `MACHINE_MINUTES_BOUND = RUNNER_MAX_ATTEMPTS × (WARMING_TIMEOUT_MINUTES + MAX_DURATION_MINUTES + ceil(RUNNER_STOP_GRACE_SECONDS / 60))` — a DERIVED constant (Task 2C), asserted ≥ the longest timed path found by WALKING `RUNNER_TABLE` (test "invariant 3") — never re-computed in the test from its own formula, which would be a tautology (C12).
 4. **Crash-safe app.** `runner_name` + `runner_attempts` (the create-call count — the ONE authority `Runner.attempt` is loaded from, C3) + `runner_state = creating` are persisted BEFORE the create call; `machine_id` right after; a process dying mid-create is reconciled by `listMachines({ metadata.seazn_session })` on the next read or sweep (the client's own idempotency, Task 5A). Effects are idempotent and re-runnable (desired vs observed): `stop_machine` on an already-stopped Machine and `force_destroy` on an absent one are both success. Tests: `runner.test.ts` "invariant 4: create_started persists before create_machine (effect order)", `stream-sessions.test.ts` "a session left in `creating` is reconciled by name on the next read".
@@ -255,24 +255,32 @@ Session consequences (in `decide`): `create_failed` not retryable / second attem
 stateDiagram-v2
     [*] --> none
     none --> creating: create_started [persist_intent, create_machine]
-    creating --> booting: create_ok / observed pending|running (no stop requested)
-    creating --> destroyed: create_failed (not retryable) → session failed(machine_create_failed)
-    creating --> creating: session_stop (marks the stop) → session ending(stopped)
-    creating --> creating: deadline (marks the stop) → session ending(max_duration)
-    creating --> destroyed: stop requested + grace_expired [force_destroy by name] → session completed
-    creating --> destroyed: stop requested + create_ok | observed pending|running [force_destroy] → session completed
-    creating --> destroyed: stop requested + create_failed → session completed
-    booting --> playing: callback_playing → session live (consume)
+    none --> none: stale_beat → session failed(machine_crash) (C1)
+    creating --> booting: create_ok / observed pending|running (no stop marked)
+    creating --> destroyed: create_failed → retry (retryable, attempt left) · else session failed(machine_create_failed)
+    creating --> creating: session_stop | deadline (marks the stop) → session ending(stopped | max_duration)
+    creating --> destroyed: grace_expired [force_destroy by name] → session completed (F15)
+    creating --> destroyed: stop marked + create_ok | observed pending|running [force_destroy] → session completed
+    creating --> destroyed: stop marked + create_failed → session completed
+    creating --> lost: stale_beat [force_destroy by name] (C1)
+    booting --> playing: callback_playing → session live (consume, warming only)
     booting --> stopping: session_stop | deadline [stop_machine SIGINT]
-    booting --> lost: observed stopped|failed|destroyed, callback_stopped
+    booting --> lost: stale_beat | observed stopped|failed | callback_stopped [force_destroy]
+    booting --> destroyed: observed destroyed → retry? (confirmed gone)
     playing --> stopping: session_stop | deadline [stop_machine SIGINT]
-    playing --> lost: stale_beat | observed stopped|failed|destroyed | callback_stopped
-    lost --> destroyed: deadline | session_stop [force_destroy] → session completed (never the retry, F17)
+    playing --> lost: stale_beat | observed stopped|failed | callback_stopped [force_destroy]
+    playing --> destroyed: observed destroyed → retry? (confirmed gone)
     stopping --> exited: callback_stopped | observed stopped|failed
-    stopping --> destroyed: observed destroyed | destroy_ok | grace_expired [force_destroy]
-    exited --> destroyed: observed destroyed | destroy_ok | grace_expired [force_destroy]
-    lost --> destroyed: observed destroyed | destroy_ok | deadline|session_stop|grace_expired|orphan_listed [force_destroy]
-    destroyed --> creating: retry (attempt 1 only) [persist_intent, create_machine]
+    stopping --> destroyed: observed destroyed | destroy_ok → session completed
+    stopping --> destroyed: grace_expired [force_destroy] (no signal — OPEN, see Session consequences)
+    exited --> destroyed: observed destroyed | destroy_ok → session completed
+    exited --> destroyed: grace_expired [force_destroy] (no signal — OPEN)
+    lost --> lost: stale_beat | grace_expired | orphan_listed [force_destroy re-issued] · late create_ok [force_destroy the returned id]
+    lost --> destroyed: observed destroyed | destroy_ok → retry? (the CONFIRMED destroy — invariant 1)
+    lost --> destroyed: deadline | session_stop [force_destroy] → session completed (never the retry, F17)
+    destroyed --> destroyed: stale_beat → re-signal retry? (C1)
+    destroyed --> lost: late create_ok [force_destroy the returned id] (fix round 4)
+    destroyed --> creating: retry (attempt + 1 ≤ RUNNER_MAX_ATTEMPTS) [persist_intent, create_machine]
     destroyed --> [*]
 ```
 
@@ -307,15 +315,15 @@ stateDiagram-v2
 | `apps/web/src/server/relay/ingest-cf.ts` | Create (Task 4) | Cloudflare Stream adapter over `fetch` |
 | `apps/web/src/server/relay/__tests__/ingest-cf.test.ts` | Create (Task 4) | create body (C1, C4, C8), per-input GET (C5), no `webRTC` stored (C10), static greps (C4, C11, C12, C13) |
 | `apps/web/src/server/relay/fly-client.ts` | Create (Task 5A) | typed Machines API client: zod-parsed responses, per-request timeout + overall deadline, bounded retries with full jitter on retryable failures only, `Retry-After`, `FlyApiError`, idempotent create by name + `metadata.seazn_session` lookup, idempotent destroy, `wait`, `list`, redaction |
-| `apps/web/src/server/relay/__tests__/fly-client.test.ts` | Create (Task 5A) | 503→200 retried once; 429 + Retry-After waits (fake clock); 400 not retried; timeout on create → lookup finds the machine → no duplicate; destroy 404 ok; malformed JSON → typed error; redaction; deadline honoured |
+| `apps/web/src/server/relay/__tests__/fly-client.test.ts` | Create (Task 5A) | 503→200 retried once; 429 + Retry-After waits (fake clock); 400 not retried; timeout on create → lookup finds the machine → no duplicate; the lookup matches by NAME (T5-a) and runs before a retryable give-up too, a failed lookup → not retryable (T5-b); destroy 404 ok; malformed JSON → typed error; redaction; deadline honoured |
 | `apps/web/src/server/relay/__tests__/fly-client.live.test.ts` | Create (Task 5A) | opt-in (`FLY_API_TOKEN` + `RELAY_LIVE_FLY=1`): create + destroy one small Machine in org `seazn-club`; skips loudly otherwise |
 | `apps/web/src/server/relay/runner-fly.ts` | Create (Task 5) | Fly Machines adapter over `fly-client.ts`: `cpuClass` mapping, C7 values, `RELAY_DEADLINE_AT` in the guest env (the hard stop), `list` by metadata |
 | `apps/web/src/server/relay/__tests__/runner-fly.test.ts` | Create (Task 5) | create body (C7 + deadline env + name + metadata), `cpuClass` mapping, idempotent destroy, `list` |
 | `apps/web/src/server/relay/drivers.ts` | Create (Task 5) | `relayDrivers()` — `RELAY_DRIVERS=fake\|live` selection, one process-wide instance; `dbRecorder` bound to BOTH adapters in BOTH modes (the one place the recorder meets `sql`) |
 | `apps/web/src/server/relay/tokens.ts` | Create (Task 6) | `mintRelayToken`, `verifyRelayToken` over `AUTH_SECRET` |
 | `apps/web/src/server/relay/__tests__/tokens.test.ts` | Create (Task 6) | valid; tampered/expired/wrong-sid/wrong-scope → 401; `SUPABASE_JWT_SECRET`-signed → 401 with its `AUTH_SECRET` positive pair |
-| `db/migration/deltas/V408__stream_sessions.sql` | Modify (Task 7 Step 0c — an AMEND of the unmerged migration, never a forward delta) | `org_stream_credits` gains `idempotency_key text null` + the TABLE-wide unique index `(idempotency_key) where idempotency_key is not null` (the donor's `V320:37` scope); its reason CHECK gains `'revoke'`; the FS10 header comment (`V408:67-72`) is rewritten to the org advisory money lock in the SAME amend; `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (`V408:122`; `expiry.ts` `deadlineOf` reads a 0 as 300). Flyway's checksum refuses an amended applied migration, so `rly` is dropped and recreated (Step 0c's STOP gate) |
-| `apps/web/src/server/relay/__tests__/migration-shape.test.ts` | Modify (Task 7 Step 0a) | 13 → 16: `'revoke'` accepted / an unknown reason refused (23514); a duplicate key refused (23505) in the same org AND in another org / a different key and two NULL keys accepted; `max_duration_minutes` 0 refused (23514) / 1 accepted, default 300 |
+| `db/migration/deltas/V408__stream_sessions.sql` | Modify (Task 7 Step 0c — an AMEND of the unmerged migration, never a forward delta) | `org_stream_credits` gains `idempotency_key text null` + the TABLE-wide unique index `(idempotency_key) where idempotency_key is not null` (the donor's `V320:37` scope); its reason CHECK gains `'revoke'`; the FS10 header comment (`V408:67-72`) is rewritten to the org advisory money lock in the SAME amend; `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (`V408:122`; `expiry.ts` `deadlineOf` reads a 0 as 300); `fixture_stream_sessions` gains `beat_window_at timestamptz null` directly after `heartbeat_at` (`V408:113`) — the stale-beat WINDOW anchor `Session.beatWindowAt` (Task 2C review I4, ruling A; re-review 1 G1), written on a stale-beat decision and on a retry, while `heartbeat_at` stays "last beat received". Flyway's checksum refuses an amended applied migration, so `rly` is dropped and recreated (Step 0c's STOP gate) |
+| `apps/web/src/server/relay/__tests__/migration-shape.test.ts` | Modify (Task 7 Step 0a) | 13 → 17: `'revoke'` accepted / an unknown reason refused (23514); a duplicate key refused (23505) in the same org AND in another org / a different key and two NULL keys accepted; `max_duration_minutes` 0 refused (23514) / 1 accepted, default 300; `beat_window_at` a nullable `timestamptz` with no default, null on a new row, and written without moving `heartbeat_at` |
 | `apps/web/src/server/usecases/stream-credits.ts` | Create (Task 7) | `creditBalance`, `consumeForSession`, `recordPurchase`, `STREAM_CREDIT_AUDIT_ACTIONS`, `StaffCreditArgs` / `StaffCreditResult`, `grantCredits`, `refundCredits` (session cap, 422), `revokeCredits` (floor, 422), `NoCreditsError`, `lockOrg` / `orgMoneyLockKey` (the org advisory money lock every ledger write takes first); `consumeForSession` takes `fixtureId: string | null`; the staff writers check the idempotency key under the lock (an exact replay → `applied: false`, a different adjustment → 409 `idempotency_key_reused`) and write their `staff_audit_log` row in the same transaction |
 | `apps/web/src/server/usecases/__tests__/stream-credits.test.ts` | Create (Task 7) | 15: empty ledger = 0; sums; purchase replay no-op; no credits 402 / 1 consumed; 24 h vs 25 h differential; the gated-transaction race on the money lock (scoped `pg_locks` probe); an exact staff replay (1 row, 1 audit row); a reused key → 409 (delta, kind, session, org) with the exact replay's pair; first-ever writes on an empty ledger serialise (purchase + same-key grant pair, the hold taken through the upper-case id: one lock key per org); the same key on two orgs at once → 409, not a 23505 (a `transactionid` waiter); a fixture-less session consumes every time; revoke 1 of 1 / 1 of 0 → 422; the linked-refund cap (1 of 1, a second → 422, unlinked OK); a replayed linked refund → `applied: false`, not 422; the purchase's Stripe link |
 | `apps/web/src/server/relay/__tests__/_session-rig.ts` | Create (Task 7; moved from 7A in Revision 1) | `rigUser()` (a real users row) and `streamRig({ fixtures?, createdBy? })` → `{ orgId, createdBy, fixtureIds, session(fixtureId, state?) }` — a non-test module inside the enc boundary (the target's `rtmp_enc` column name may not leave `server/relay/**`) |
@@ -344,7 +352,7 @@ stateDiagram-v2
 | `apps/web/src/server/usecases/stream-targets.ts` | Create (Task 9) | `listStreamTargets`, `createStreamTarget` (seals `rtmp_enc`) |
 | `apps/web/src/app/api/v1/orgs/[id]/stream-targets/route.ts` | Create (Task 9) | GET / POST |
 | `apps/web/src/server/usecases/stream-sessions.ts` | Create (Task 10) | the APPLICATION layer: load under lock → `decide`/`evaluate` → persist + facts + event rows (ONE transaction) → effects through the ports, each effect's result a row (`recordEffect`): `createSession`, `provisionSession`, `currentSession` (poll → sample + observed event), `stopSession` (actor), `heartbeat` (sample, capped), `sessionFactsForJob`, `applyExpiry` (lazy), `storageHeadroomMinutes`, `fillReplayUrl`; the Task 0 data producers — the admission snapshot (Db), `entitlement_via_override` (Dc), `output_uid` (Dg), `ingest_reason` on every sample (Dh), the cost estimate at the terminal transition (Df) |
-| `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` | Create (Task 10) | every transition through the real `decide`; empty case first; M3 slot-0 and the non-zero-slot differential; dual-credential `qr`; C3 differential incl. an expired-but-unread session; C9; 410 on terminal; **lazy expiry with NO sweep call** (timeout, inline retry, wall clock); **data captured**: atomicity, the ordered ledger, the facts, samples + snapshots, composed facts |
+| `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` | Create (Task 10) | every transition through the real `decide`; empty case first; M3 slot-0 and the non-zero-slot differential; dual-credential `qr`; C3 differential incl. an expired-but-unread session; C9; 410 on terminal; **lazy expiry with NO sweep call** (timeout, inline retry, wall clock); **data captured**: atomicity, the ordered ledger, the facts, samples + snapshots, composed facts, M2 machine_seconds re-entry; post-2C sync: G1 `beat_window_at` round-trip, T10-b heartbeat guard, T10-c `lastExit` provenance, M1 `retryRunner` race, T5-a the name gate (54 its) |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/route.ts` | Create (Task 11) | POST → 201 |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/current/route.ts` | Create (Task 11) | GET → projection or `null` |
 | `apps/web/src/app/api/v1/fixtures/[id]/stream-sessions/[sid]/stop/route.ts` | Create (Task 11) | POST |
@@ -3842,7 +3850,7 @@ describe("decide — a composed session's Machine events go through the runner t
 });
 ```
 
-- [ ] **Step 6: Run the whole domain — expect `177 0 0`** (Task 2B Step 4's command): `runner.test.ts` 114 (the cell-set test 1 + 8 × 12 = 96 cells + the not-vacuous test 1 + the stop sequence 5 + the crash path 5 + the invariants 6), `session.test.ts` 37 (Task 2A's 27 + Step 5's 10), `expiry` 15, `credits` 5, `retention` 4, `domain-purity` 2 (green since Task 2B; its five-file list is unchanged — A11). Then the mutants by hand, each reverted with the Write tool: (C12 third-attempt) in `createStarted` change `t.attempt > RUNNER_MAX_ATTEMPTS` to `t.attempt > RUNNER_MAX_ATTEMPTS + 1` → "invariant 3" red (the walk reaches a third attempt; longest > `MACHINE_MINUTES_BOUND`) and "invariant 1"'s past-the-max assertion red; (C27 guard) restore Task 2A's bare `if (isTerminal(s.state)) throw illegal();` → "C27" red at the first `callback_stopped`; (C27 signal) delete the terminal early return in `runner()` → "C27" red on the `lost` → `destroy_ok` case (`retry_runner` on a failed session); (composed-stop, deferred from Task 2A Step 5) replace the `runner(s, { type: "session_stop" }, …)` line in `stop` with `return ending(s, "stopped")` → "a composed stop routes through the runner" red (and "P1-F-a: … CREATING" red); (retry-while-alive) make `create_started` legal from `lost` → "invariant 1" red; (skip-SIGINT) make `session_stop` from `playing` go straight to `destroyed` with `force_destroy` → "the stop sequence" red; (unknown-as-running) treat `unknown` as `running` in `observedFrom` → still green? — no: make `unknown` produce `went_live` → "unknown Fly state" red (the table never goes live on an observation; the test pins that); (drop-grace-force) `grace_expired` → `stay` → "grace_expired" red; (drop-persist) remove `persist_intent` from `createStarted` → "invariant 4" red; **P1-F-a** — (stop-while-creating) restore `creating.session_stop` to `(r) => forceDestroyed(r)` → "P1-F-a: a composed stop while the runner is CREATING" red at its first `toMatchObject` (the session stays `provisioning`, the runner `destroyed` with no signal); (stop-then-create_ok), (stop-then-create_failed), (stop-then-found) — one at a time, delete the `r.stopRequestedAt` line in `creating`'s `create_ok` / `create_failed` / `observed` cell → the same test red at `ok` (runner `booting`, session still `ending`) / at `refused` (a retry: `runnerRetries` 1, `retry_runner`) / at `found` (runner `booting`); (ending-from-provisioning) drop `&& s.state !== "provisioning"` from `runner()`'s `ending` case → the same test red at its first `toMatchObject` (the live row at its end alone would stay green); (cleanup-create_ok), (cleanup-create_failed) — one at a time, drop that member from `RUNNER_CLEANUP_TRIGGERS` → "C27" red at `late` / at the `create_failed` line (`InvalidTransition` on the failed session); **P1-F-b** — (end-reason-on-failure) delete `endReason: null` from `fail()` → "a composed warming timeout …" red (`endReason` reads `"stopped"`) and "C27" red at `midCreate`; (SessionEnding-on-failure) drop the `.filter` in `expire`'s `warming_timeout` → "a composed warming timeout …" red on `events`; **F14** — (deadline-no-Machine) delete the `none`/`destroyed` line in `expire`'s `wall_clock` → "F14: the DEADLINE takes the stop's shape" red on both rows (`none` and `destroyed` reach null `deadline` cells and throw); (deadline-while-creating) set `creating`'s `deadline` cell back to `null` → the same test red at `marked` (`InvalidRunnerTransition`); **F15** — (grace-creating) drop `|| s.runner.state === "creating"` from `evaluate`'s grace clause → "F15: a create that never returns …" red at its first `evaluate` (and `expiry.test.ts`'s grace row); (late-create-throws) set `destroyed`'s `create_ok` cell back to `null` → "F15" red at `stray`; **F16** — (F16-throw) restore `throw illegal()` for a non-warming, non-live `went_live` → "F16: a heartbeat landing BEFORE provisioned" red (it throws); (F16-recovery) revert `playing`'s `callback_playing` to `stay(r)` → the same test red at `live` (the session stays `warming`, no consume); **F17** — (retry-into-overtime) restore `lost`'s `deadline` and `session_stop` cells to `forceDestroyed(r)` → "F17: a LOST runner is retried only while…" red at `dead` (the session stays `live` with no end reason); (retry-while-ending) delete the `s.state === "ending" || s.desiredState === "ending"` guard in `runner()`'s `retry` arm → the same test red at `ending` (`retry_runner` and `runnerRetries` 1 on a session that is ending); (completed-end-reason) drop `step.signal.endReason ??` from `runner()`'s `completed` arm → the same test red at `dead` (`endReason` null), with P1-F-a's test still green (its session carries the reason already — the two cases are why the `??` is there). The F20 sweep is a SECOND killer for both of the first two: `retry-into-overtime` reds its `desiredState` assertion on the `lost` row, and `retry-while-ending` reds its inner sweep. Record the twenty-seven killers.
+- [ ] **Step 6: Run the whole domain — expect `212 0 0`** (Task 2B Step 4's command). **As CLOSED at `30560cf9a` (five fix rounds; re-read from a fresh `cd apps/web && DATABASE_URL= npx vitest run src/server/relay/domain --reporter=json --outputFile=…` in the post-2C plan sync, 212 total / 212 passed / 0 failed / 0 failed suites — the JSON is the gate, never this sentence):** `runner.test.ts` 122 (the parity sweep 98 = the cell-set test 1 + 8 × 12 = 96 cells + the not-vacuous test 1; the `stale_beat` column 4; the stop sequence 5; the crash path 7; the invariants 8), `session.test.ts` 60 (admit 12, legal edges 15, the passthrough cell sweep 1, `eventRowsOf` parity 2, the composed runner-table describe 22, the C1 stale-beat walk 7, fixture deleted 1), `expiry` 19, `credits` 5, `retention` 4, `domain-purity` 2 (green since Task 2B; its five-file list is unchanged — A11). The drafted figure was `177 0 0` (114 / 37 / 15 / 5 / 4 / 2); the review and fix rounds added the C1 column, the invariant-1 LOST and TWO-STEP walks, the R3/R4/I1/G1 session rows and the I4 beat-window rows. Then the mutants by hand, each reverted with the Write tool: (C12 third-attempt) in `createStarted` change `t.attempt > RUNNER_MAX_ATTEMPTS` to `t.attempt > RUNNER_MAX_ATTEMPTS + 1` → "invariant 3" red (the walk reaches a third attempt; longest > `MACHINE_MINUTES_BOUND`) and "invariant 1"'s past-the-max assertion red; (C27 guard) restore Task 2A's bare `if (isTerminal(s.state)) throw illegal();` → "C27" red at the first `callback_stopped`; (C27 signal) delete the terminal early return in `runner()` → "C27" red on the `lost` → `destroy_ok` case (`retry_runner` on a failed session); (composed-stop, deferred from Task 2A Step 5) replace the `runner(s, { type: "session_stop" }, …)` line in `stop` with `return ending(s, "stopped")` → "a composed stop routes through the runner" red (and "P1-F-a: … CREATING" red); (retry-while-alive) make `create_started` legal from `lost` → "invariant 1" red; (skip-SIGINT) make `session_stop` from `playing` go straight to `destroyed` with `force_destroy` → "the stop sequence" red; (unknown-as-running) treat `unknown` as `running` in `observedFrom` → still green? — no: make `unknown` produce `went_live` → "unknown Fly state" red (the table never goes live on an observation; the test pins that); (drop-grace-force) `grace_expired` → `stay` → "grace_expired" red; (drop-persist) remove `persist_intent` from `createStarted` → "invariant 4" red; **P1-F-a** — (stop-while-creating) restore `creating.session_stop` to `(r) => forceDestroyed(r)` → "P1-F-a: a composed stop while the runner is CREATING" red at its first `toMatchObject` (the session stays `provisioning`, the runner `destroyed` with no signal); (stop-then-create_ok), (stop-then-create_failed), (stop-then-found) — one at a time, delete the `r.stopRequestedAt` line in `creating`'s `create_ok` / `create_failed` / `observed` cell → the same test red at `ok` (runner `booting`, session still `ending`) / at `refused` (a retry: `runnerRetries` 1, `retry_runner`) / at `found` (runner `booting`); (ending-from-provisioning) drop `&& s.state !== "provisioning"` from `runner()`'s `ending` case → the same test red at its first `toMatchObject` (the live row at its end alone would stay green); (cleanup-create_ok), (cleanup-create_failed) — one at a time, drop that member from `RUNNER_CLEANUP_TRIGGERS` → "C27" red at `late` / at the `create_failed` line (`InvalidTransition` on the failed session); **P1-F-b** — (end-reason-on-failure) delete `endReason: null` from `fail()` → "a composed warming timeout …" red (`endReason` reads `"stopped"`) and "C27" red at `midCreate`; (SessionEnding-on-failure) drop the `.filter` in `expire`'s `warming_timeout` → "a composed warming timeout …" red on `events`; **F14** — (deadline-no-Machine) delete the `none`/`destroyed` line in `expire`'s `wall_clock` → "F14: the DEADLINE takes the stop's shape" red on both rows (`none` and `destroyed` reach null `deadline` cells and throw); (deadline-while-creating) set `creating`'s `deadline` cell back to `null` → the same test red at `marked` (`InvalidRunnerTransition`); **F15** — (grace-creating) drop `|| s.runner.state === "creating"` from `evaluate`'s grace clause → "F15: a create that never returns …" red at its first `evaluate` (and `expiry.test.ts`'s grace row); (late-create-throws) set `destroyed`'s `create_ok` cell back to `null` → "F15" red at `stray`; **F16** — (F16-throw) restore `throw illegal()` for a non-warming, non-live `went_live` → "F16: a heartbeat landing BEFORE provisioned" red (it throws); (F16-recovery) revert `playing`'s `callback_playing` to `stay(r)` → the same test red at `live` (the session stays `warming`, no consume); **F17** — (retry-into-overtime) restore `lost`'s `deadline` and `session_stop` cells to `forceDestroyed(r)` → "F17: a LOST runner is retried only while…" red at `dead` (the session stays `live` with no end reason); (retry-while-ending) delete the `s.state === "ending" || s.desiredState === "ending"` guard in `runner()`'s `retry` arm → the same test red at `ending` (`retry_runner` and `runnerRetries` 1 on a session that is ending); (completed-end-reason) drop `step.signal.endReason ??` from `runner()`'s `completed` arm → the same test red at `dead` (`endReason` null), with P1-F-a's test still green (its session carries the reason already — the two cases are why the `??` is there). The F20 sweep is a SECOND killer for both of the first two: `retry-into-overtime` reds its `desiredState` assertion on the `lost` row, and `retry-while-ending` reds its inner sweep. Record the twenty-seven killers.
 
 - [ ] **Step 7: Report for commit** (with 2A/2B): `feat(streaming): pure relay domain — the Fly machine lifecycle as a swept transition table`.
 
@@ -3924,7 +3932,10 @@ export type RunnerSpec = {
   deadlineAt: Date;
 };
 export type RunnerHandle = { runnerId: string };
-export interface RunnerListing { runnerId: string; sessionId: string | null; state: "running" | "stopped" | "other" }
+/** `name` is the Machine's own name — `machineNameFor(sessionId, attempt)` for ours, so it carries the ATTEMPT (post-2C plan sync,
+ *  T5-a: Task 10 adopts and force-destroys by session AND name, so an earlier attempt's Machine is never taken for the current
+ *  one). null when the provider holds a Machine with no name. */
+export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; state: "running" | "stopped" | "other" }
 /** The lifecycle's observed input (plan §"Fly machine lifecycle"): the adapter's fromFlyState mapping, never Fly's spelling. */
 export interface RunnerObservation { state: ObservedRunnerState; exit: ExitInfo | null }   // both types from domain/runner.ts
 export interface RunnerProvider {
@@ -3932,7 +3943,7 @@ export interface RunnerProvider {
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
   observe(runnerId: string): Promise<RunnerObservation>;   // GET + events → { state, exit }; absent = { state: "destroyed", exit: null }
   destroy(runnerId: string): Promise<void>;          // force; idempotent: an absent runner is success
-  list(): Promise<RunnerListing[]>;                  // every runner the provider still holds for this app, with the session it was created for — the daily orphan sweep's source
+  list(): Promise<RunnerListing[]>;                  // every runner the provider still holds for this app, with the session it was created for and its name (T5-a) — the daily orphan sweep's source
 }
 /** Ruling 13: every provider call, every attempt, is a row (stream_provider_calls).
  *  Adapters RECORD through this port and never touch SQL; telemetry.ts's
@@ -4107,13 +4118,14 @@ describe("FakeRunner", () => {
     await expect(runner.create({ ...spec, sessionId: "s3" })).rejects.toMatchObject({ retryable: true });
   });
 
-  it("list shows what still exists, with the session each was created for; destroyed ones drop out; an orphan can be planted", async () => {
+  it("list shows what still exists, with the session AND the attempt-carrying name each was created with; destroyed ones drop out; an orphan can be planted, nameless", async () => {
     const runner = new FakeRunner();
     const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const a = await runner.create(spec);
-    const b = await runner.create({ ...spec, sessionId: "s2" });
+    const b = await runner.create({ ...spec, sessionId: "s2", attempt: 2 });
     runner.addOrphan("fake-machine-orphan", null);
-    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId])).toEqual([[a.runnerId, "s1"], [b.runnerId, "s2"], ["fake-machine-orphan", null]]);
+    // T5-a: the NAME is the attempt identity Task 10 matches on — pinned by value (a fake that named every Machine r1 would pass a presence check).
+    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId, r.name])).toEqual([[a.runnerId, "s1", "relay-s1-r1"], [b.runnerId, "s2", "relay-s2-r2"], ["fake-machine-orphan", null, null]]);
     await runner.destroy(a.runnerId);
     expect((await runner.list()).map((r) => r.runnerId)).toEqual([b.runnerId, "fake-machine-orphan"]);
   });
@@ -4155,6 +4167,7 @@ import { randomBytes } from "node:crypto";
 import {
   DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 } from "./config";
+import { machineNameFor } from "./domain/runner";   // T5-a: the fake names a Machine exactly as FlyRunner does
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
@@ -4329,7 +4342,7 @@ export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
   readonly stops: { runnerId: string; signal: string; timeoutSeconds: number }[] = [];
   readonly destroyed: string[] = [];
-  private readonly alive = new Map<string, string | null>(); // runnerId → sessionId
+  private readonly alive = new Map<string, { sessionId: string | null; name: string | null }>(); // runnerId → who it was created for
   private readonly observed = new Map<string, RunnerObservation>();
   private nextCreateFailure: { retryable: boolean } | null = null;
   private n = 0;
@@ -4353,7 +4366,7 @@ export class FakeRunner implements RunnerProvider {
     }
     this.n += 1;
     const runnerId = `fake-machine-${this.n}-${randomBytes(3).toString("hex")}`;
-    this.alive.set(runnerId, spec.sessionId);
+    this.alive.set(runnerId, { sessionId: spec.sessionId, name: machineNameFor(spec.sessionId, spec.attempt) });
     this.observed.set(runnerId, { state: "running", exit: null });
     return { runnerId };
   }
@@ -4388,7 +4401,7 @@ export class FakeRunner implements RunnerProvider {
 
   async list(): Promise<RunnerListing[]> {
     this.record("listMachines", "GET", "/machines", null);
-    return [...this.alive].map(([runnerId, sessionId]) => ({ runnerId, sessionId, state: "running" as const }));
+    return [...this.alive].map(([runnerId, { sessionId, name }]) => ({ runnerId, sessionId, name, state: "running" as const }));
   }
 
   /** Test controls. */
@@ -4399,7 +4412,7 @@ export class FakeRunner implements RunnerProvider {
   failNextCreate(retryable: boolean): void { this.nextCreateFailure = { retryable }; }
   /** A Machine the provider holds that no session row explains. */
   addOrphan(runnerId: string, sessionId: string | null): void {
-    this.alive.set(runnerId, sessionId);
+    this.alive.set(runnerId, { sessionId, name: null });
     this.observed.set(runnerId, { state: "running", exit: null });
   }
 }
@@ -4963,7 +4976,7 @@ export interface FlyClientOptions {
 }
 export class FlyClient {
   constructor(opts: FlyClientOptions);
-  createMachine(input: MachineCreateInput): Promise<Machine>;                       // idempotent: lookup by metadata.seazn_session before ANY retry
+  createMachine(input: MachineCreateInput): Promise<Machine>;                       // idempotent: lookup by metadata.seazn_session, matched by name, before ANY retry AND before a retryable give-up; a failed lookup → retryable false (T5-a/T5-b)
   getMachine(id: string): Promise<Machine | null>;                                  // 404 → null
   listMachines(opts?: { metadata?: Record<string, string>; includeDeleted?: boolean }): Promise<Machine[]>;
   destroyMachine(id: string, opts?: { force?: boolean }): Promise<void>;            // 404 → resolved (C7); force defaults true
@@ -5108,6 +5121,24 @@ describe("FlyClient — retries, timeouts, deadline", () => {
     await expect(r.client.listMachines()).rejects.toMatchObject({ status: 503, attempts: 3 });
     expect(r.calls).toHaveLength(3);
   });
+  it("T5-a: the ambiguous-create lookup returns the Machine with THIS create's name — an earlier attempt's Machine listed under the same session is not taken for it", async () => {
+    const EARLIER = { ...MACHINE, id: "m_0", name: "relay-s1-earlier", state: "started" };
+    const r = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [EARLIER] }, { status: 200, body: MACHINE }]);
+    const m = await r.client.createMachine(CREATE);
+    expect(m.id).toBe("m_1");                                          // `found[0]` would have handed back m_0
+    expect(r.calls.map((c) => c.init.method)).toEqual(["POST", "GET", "POST"]);
+  });
+  it("T5-b: a RETRYABLE create failure means Fly holds no Machine under that name — the LAST attempt is looked up too: found → returned; nothing → the retryable error; the lookup itself failing → NOT retryable", async () => {
+    const found = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [MACHINE] }], { maxAttempts: 1 });
+    expect((await found.client.createMachine(CREATE)).id).toBe("m_1");
+    expect(found.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
+    const none = rig([{ status: 503, body: { error: "unavailable" } }, { status: 200, body: [] }], { maxAttempts: 1 });
+    await expect(none.client.createMachine(CREATE)).rejects.toMatchObject({ status: 503, retryable: true, attempts: 1 });
+    expect(none.calls.map((c) => c.init.method)).toEqual(["POST", "GET"]);
+    // The domain reads `retryable` as permission to create attempt + 1; a lookup that could not answer must not grant it.
+    const blind = rig([{ status: 503, body: { error: "unavailable" } }, { status: 500, body: { error: "list down" } }], { maxAttempts: 1 });
+    await expect(blind.client.createMachine(CREATE)).rejects.toMatchObject({ status: 503, retryable: false });
+  });
 });
 
 describe("FlyClient — the lifecycle endpoints (stop, signal, events)", () => {
@@ -5202,8 +5233,9 @@ describe("FlyClient — boundary parsing, request id, redaction", () => {
 //    — the backoff floor keeps a retry storm under that.
 //  * Create is made idempotent HERE: a deterministic `name` (unique per app)
 //    + `metadata.seazn_session`; after ANY ambiguous failure (timeout,
-//    network, 5xx) the client lists by that metadata before retrying, so a
-//    retry never makes a second Machine.
+//    network, 5xx) the client lists by that metadata and matches the NAME before
+//    retrying — and before giving up on the last attempt — so a retry never makes a
+//    second Machine and a RETRYABLE failure means none exists (T5-a, T5-b).
 //  * Destroy is idempotent (404 = success, C7); `force=true` by default.
 //  * Redaction: the guest env carries the job token (and R2's stream key);
 //    no secret reaches a message, a cause or a log line.
@@ -5380,11 +5412,22 @@ export class FlyClient {
         return await op(attempt);
       } catch (e) {
         const err = e instanceof FlyApiError ? e : new FlyApiError(this.red(String((e as Error)?.message ?? e)), "network", null, true, null, attempt);
-        if (!err.retryable || attempt >= this.o.maxAttempts) throw withAttempts(err, attempt);
+        if (!err.retryable) throw withAttempts(err, attempt);
         if (onAmbiguous) {
-          const found = await onAmbiguous();
+          // T5-b (post-2C plan sync): a RETRYABLE create failure reaches the domain as `create_failed { retryable: true }`, which
+          // lets the runner table schedule attempt + 1 (invariant 1) — so it must MEAN "Fly holds no Machine under this name".
+          // Every ambiguous failure is looked up, the LAST attempt's included (the first draft threw at maxAttempts before
+          // looking, and a create that timed out on its final try reported retryable with its Machine booting); a deadline
+          // below is reached only after this lookup found nothing. A lookup that cannot answer makes the failure NOT retryable.
+          let found: T | null;
+          try {
+            found = await onAmbiguous();
+          } catch (lookupErr) {
+            throw new FlyApiError(`fly: create outcome unknown — the lookup after "${err.message}" failed (${this.red(String((lookupErr as Error)?.message ?? lookupErr))})`, err.code, err.status, false, err.requestId, attempt);
+          }
           if (found !== null) return found;
         }
+        if (attempt >= this.o.maxAttempts) throw withAttempts(err, attempt);
         const retryAfter = err.status === 429 && err.retryAfterSeconds !== null ? err.retryAfterSeconds * 1000 : null;
         const wait = retryAfter ?? Math.floor(Math.min(this.o.maxBackoffMs, this.o.baseBackoffMs * 2 ** (attempt - 1)) * this.o.random());
         if (this.o.clock() - started + wait > this.o.deadlineMs) {
@@ -5402,8 +5445,10 @@ export class FlyClient {
       async (attempt) => (await this.once("POST", "/machines", input, MachineSchema, attempt, meta)).data!,
       async () => {
         if (!sessionKey) return null;
-        const found = await this.listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionKey } }).catch(() => []);
-        return found[0] ?? null;
+        // T5-a: by NAME — the session's metadata also lists an EARLIER attempt's Machine, and `found[0]` handed that one back
+        // as this create's. T5-b: no `.catch(() => [])` — a lookup that failed must never read as "nothing there".
+        const found = await this.listMachines({ metadata: { [SESSION_METADATA_KEY]: sessionKey } });
+        return found.find((m) => m.name === input.name) ?? null;
       },
     );
   }
@@ -5548,7 +5593,7 @@ function withAttempts(err: FlyApiError, attempts: number): FlyApiError {
 
   (It reuses `rig` — the one helper this file defines — rather than a second set of doubles: `rig` already builds the scripted `fetch`, the fake clock, the recording sleeper and the fixed random source, and spreads its second argument over the client's options, so `{ recorder }`, `{ requestTimeoutMs }` and `{ secrets: [] }` all just work. `MACHINE` and `CREATE` are its module-level fixtures. Add `FakeRecorder` to the file's imports from `../fakes`.)
 
-- [ ] **Step 4: Run — expect `19 0`** — 4 in `describe("FlyClient — requests")` + 7 in `describe("… retries, timeouts, deadline")` + 3 in `describe("… the lifecycle endpoints")` + 4 in `describe("… boundary parsing, request id, redaction")` (the fourth being the C25 env-redaction `it`) + the recorder `it` added above. Same command as Step 2. Then the eight mutants by hand, each reverted with the Write tool: (no-retry) `return op(1)` without the loop → "503 then 200" red; (retry-400) add 400 to `isRetryable` → "400 is NOT retried" red; (no-retry-after) always compute backoff → "429 waits EXACTLY" red (`[250]` not `[3000]`); (no-lookup) delete `onAmbiguous` → "TIMES OUT is looked up" red (`["POST","POST"]`); (no-redaction) `red = (s) => s` → "redaction" red; **(no-env-redaction)** `redFor = (_b, s) => this.red(s)` → the C25 env `it` red, with the plain "redaction" `it` still GREEN — which is exactly why both exist; (destroy-404) drop the `404 → return` → "destroy … 404 → resolved" red; (record-success-only) delete the `this.record(...)` in the `!res.ok` branch → the recorder test red (one record, not two). A ninth worth running once, because it is invisible to every assertion above except the recorder's: (attempt-zero) pass a literal `0` to `once` instead of the loop's `attempt` → the recorder test red on both tuples' attempt numbers. Record the killers.
+- [ ] **Step 4: Run — expect `21 0`** — 4 in `describe("FlyClient — requests")` + 9 in `describe("… retries, timeouts, deadline")` (7 + the post-2C plan sync's T5-a and T5-b `it`s) + 3 in `describe("… the lifecycle endpoints")` + 4 in `describe("… boundary parsing, request id, redaction")` (the fourth being the C25 env-redaction `it`) + the recorder `it` added above. Same command as Step 2. Then the eight mutants by hand, each reverted with the Write tool: (no-retry) `return op(1)` without the loop → "503 then 200" red; (retry-400) add 400 to `isRetryable` → "400 is NOT retried" red; (no-retry-after) always compute backoff → "429 waits EXACTLY" red (`[250]` not `[3000]`); (no-lookup) delete `onAmbiguous` → "TIMES OUT is looked up" red (`["POST","POST"]`); (no-redaction) `red = (s) => s` → "redaction" red; **(no-env-redaction)** `redFor = (_b, s) => this.red(s)` → the C25 env `it` red, with the plain "redaction" `it` still GREEN — which is exactly why both exist; (destroy-404) drop the `404 → return` → "destroy … 404 → resolved" red; **(post-2C sync)** (T5-a first-listed) `return found[0] ?? null` → "T5-a" red at `m_0`; (T5-b last-attempt) move `attempt >= maxAttempts` back above the lookup → "T5-b" red at the `found` case (a 503 rejection, one call); (T5-b blind) restore `.catch(() => [])` on the lookup → "T5-b" red at the `blind` case (`retryable: true`); (record-success-only) delete the `this.record(...)` in the `!res.ok` branch → the recorder test red (one record, not two). A ninth worth running once, because it is invisible to every assertion above except the recorder's: (attempt-zero) pass a literal `0` to `once` instead of the loop's `attempt` → the recorder test red on both tuples' attempt numbers. Record the killers (eleven, plus the attempt-zero ninth).
 
 - [ ] **Step 5: The opt-in live test.** Create `apps/web/src/server/relay/__tests__/fly-client.live.test.ts`:
 
@@ -5818,7 +5863,7 @@ describe("FlyRunner", () => {
     await expect(runner.destroy("m_bad")).rejects.toThrow(/503/);
   });
 
-  it("list maps the app's Machines to the port's vocabulary: session id from metadata, state started→running", async () => {
+  it("list maps the app's Machines to the port's vocabulary: session id from metadata, the name (T5-a), state started→running", async () => {
     const s = scripted(() => ({ status: 200, body: [
       { id: "m_a", name: "relay-x", state: "started", config: { metadata: { [SESSION_METADATA_KEY]: "x" } } },
       { id: "m_b", name: "relay-y", state: "stopped", config: { metadata: { [SESSION_METADATA_KEY]: "y" } } },
@@ -5826,9 +5871,9 @@ describe("FlyRunner", () => {
     ] }));
     const runner = new FlyRunner({ client: s.client, image: "img" });
     expect(await runner.list()).toEqual([
-      { runnerId: "m_a", sessionId: "x", state: "running" },
-      { runnerId: "m_b", sessionId: "y", state: "stopped" },
-      { runnerId: "m_c", sessionId: null, state: "running" },
+      { runnerId: "m_a", sessionId: "x", name: "relay-x", state: "running" },
+      { runnerId: "m_b", sessionId: "y", name: "relay-y", state: "stopped" },
+      { runnerId: "m_c", sessionId: null, name: "something-else", state: "running" },
     ]);
   });
 
@@ -5969,6 +6014,7 @@ function listingOf(m: Machine): RunnerListing {
   return {
     runnerId: m.id,
     sessionId: m.config?.metadata?.[SESSION_METADATA_KEY] ?? null,
+    name: m.name || null,   // T5-a: `machineNameFor(sessionId, attempt)` for ours — the attempt identity Task 10 matches on
     state: m.state === "started" ? "running" : m.state === "stopped" ? "stopped" : "other",
   };
 }
@@ -6270,9 +6316,9 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 }
 ```
 
-- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=<scratchpad>/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → **`N 0 3`**: N total, 0 failed, and 3 PENDING — the three `it`s of `fly-client.live.test.ts`, which `describe.skipIf` skips without `RELAY_LIVE_FLY=1`. A pending count of 0 here means that file failed to collect rather than skipping; a total below N means a suite did. **N is baseline + this lane's additions, computed at run time from recorded numbers, never typed here** (Revision 2, review M7): the baseline is the relay tree's total as `_STATE.md` recorded it when Task 2C closed (read it there, or re-run Task 2C's own run step; the T1/T2 fix rounds have already moved it); add this lane's run-step counts, Task 3 `13` + Task 4 `12` + Task 5A `19` (the fake-HTTP file; its live file's 3 are ON TOP, and pending) + `3` + Task 5 `13` + Task 6 `8` = **+68**; and add **+3** if Task 7 has landed before this run (its Step 0a takes `migration-shape.test.ts` from 13 to 16, and lanes A and B interleave). Paste the arithmetic with its sources AND the per-file lines, never a bare total. (For scale only: at plan time the baseline was 214, Task 1 `12` + Task 2 `25` + the domain's `177`, so N read 282. The domain's 177 is far above its count of literal `it(` lines, because `runner.test.ts` writes `it(` INSIDE a `for` over the table, so one line yields 96 cell tests; a literal-line census of that file is a floor, not its total.) Then run **the P3 probe as defined once in the Global Constraints** (do not retype its grep here) and apply the expectation stated there: zero lines naming any file this wave adds or edits — `tokens.ts` included, which is what the guard `it` above pins from the other side. Pre-existing hits listed in `_STATE.md` FT0-2 are not R1's and do not fail this step.
+- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=<scratchpad>/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → **`N 0 3`**: N total, 0 failed, and 3 PENDING — the three `it`s of `fly-client.live.test.ts`, which `describe.skipIf` skips without `RELAY_LIVE_FLY=1`. A pending count of 0 here means that file failed to collect rather than skipping; a total below N means a suite did. **N is baseline + this lane's additions, computed at run time from recorded numbers, never typed here** (Revision 2, review M7): the baseline is the relay tree's total as `_STATE.md` recorded it when Task 2C closed (read it there, or re-run Task 2C's own run step; the T1/T2 fix rounds have already moved it); add this lane's run-step counts, Task 3 `13` + Task 4 `12` + Task 5A `21` (the fake-HTTP file, +2 T5-a/T5-b in the post-2C plan sync; its live file's 3 are ON TOP, and pending) + `3` + Task 5 `13` + Task 6 `8` = **+70**; and add **+4** if Task 7 has landed before this run (its Step 0a takes `migration-shape.test.ts` from 13 to 17, and lanes A and B interleave). Paste the arithmetic with its sources AND the per-file lines, never a bare total. (For scale only: at plan time the baseline was 214, Task 1 `12` + Task 2 `25` + the domain's `177`, so N read 282; the domain CLOSED at `212` (Task 2C Step 6, post-2C plan sync), so the real baseline is higher — read it, never this parenthesis. The domain's count is far above its count of literal `it(` lines, because `runner.test.ts` writes `it(` INSIDE a `for` over the table, so one line yields 96 cell tests; a literal-line census of that file is a floor, not its total.) Then run **the P3 probe as defined once in the Global Constraints** (do not retype its grep here) and apply the expectation stated there: zero lines naming any file this wave adds or edits — `tokens.ts` included, which is what the guard `it` above pins from the other side. Pre-existing hits listed in `_STATE.md` FT0-2 are not R1's and do not fail this step.
 
-- [ ] **Step 5: Lane A review.** Dispatch `reviewer` (`model: opus`) on the lane's diff, handing it every mutant killer this lane recorded rather than a fixed list — by task: Task 2 Step 8h's seven, 2A's five, 2B's twelve, 2C's twenty-seven, Task 3's three, Task 4's six, Task 5A's eight (plus the optional attempt-zero ninth), Task 5's six, and Task 6's five `r4` branches (tamper, expiry, sid, scope, secret). Report for commit: `feat(streaming): relay job/page tokens on AUTH_SECRET`.
+- [ ] **Step 5: Lane A review.** Dispatch `reviewer` (`model: opus`) on the lane's diff, handing it every mutant killer this lane recorded rather than a fixed list — by task: Task 2 Step 8h's seven, 2A's five, 2B's twelve, 2C's twenty-seven, Task 3's three, Task 4's six, Task 5A's eleven (the eight plus the post-2C sync's T5-a first-listed, T5-b last-attempt and T5-b blind; plus the optional attempt-zero ninth), Task 5's six, and Task 6's five `r4` branches (tamper, expiry, sid, scope, secret). Report for commit: `feat(streaming): relay job/page tokens on AUTH_SECRET`.
 
 ---
 
@@ -6291,12 +6337,13 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 - **G2 carry.** `consumeForSession` accepts `fixtureId: string | null` (Task 2A made `Session.fixtureId` nullable; Task 10 passes `before.fixtureId`). A fixture-less session has no reuse window: it consumes every time.
 
 **Files:**
-- Modify: `db/migration/deltas/V408__stream_sessions.sql`. This is an AMEND: the migration is committed on `feat/stream-relay` but is merged nowhere (the branch is unpushed, so no shared database holds V408), and a forward delta would be a second migration for one unshipped table. It makes two changes to `org_stream_credits`, one to `fixture_stream_sessions` and one to the header, all in ONE amend (Step 0c), so every environment is recreated once:
+- Modify: `db/migration/deltas/V408__stream_sessions.sql`. This is an AMEND: the migration is committed on `feat/stream-relay` but is merged nowhere (the branch is unpushed, so no shared database holds V408), and a forward delta would be a second migration for one unshipped table. It makes two changes to `org_stream_credits`, two to `fixture_stream_sessions` and one to the header, all in ONE amend (Step 0c), so every environment is recreated once:
   - `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (Revision 2 addendum; Task 2B review M4: `domain/expiry.ts` `deadlineOf` reads a stored 0 as 300 through `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a 0 silently becomes a five-hour booking)
+  - `fixture_stream_sessions` gains `beat_window_at timestamptz null`, directly after `heartbeat_at` (post-2C plan sync; Task 2C review I4, orchestrator ruling A; re-review 1 G1, IMPORTANT). The committed domain carries `Session.beatWindowAt` — the stale-beat WINDOW anchor, written by `decide`'s stale-beat arm and its retry arm, read by `evaluate` as the later of it and `heartbeatAt` — and `heartbeat_at` stays "the last beat RECEIVED" (the organiser panel's `lastBeatAt`). Without the column Task 10 cannot persist the anchor, the once-per-`STALE_HEARTBEAT_SECONDS` bound on a stale-beat decision collapses to every lazy read (a `force_destroy` / `retry_runner` re-issued on every 5 s poll), and the plan's own retry-then-crash DB tests would green only BECAUSE the anchor is inert (class 1). Task 10 loads, persists and witnesses it.
   - the `reason` CHECK gains `'revoke'`
   - a new `idempotency_key text null` column, with `create unique index org_stream_credits_idempotency_key on org_stream_credits (idempotency_key) where idempotency_key is not null`. It is TABLE-wide, the donor's scope (`V320__ai_credit_ledger.sql:37`), so a key can be compared against its stored org.
   - the header's FS10 paragraph (`V408:67-72`), which says consume rows are written under `select … for update`, is rewritten for the org advisory lock (review I4)
-- Modify (Test): `apps/web/src/server/relay/__tests__/migration-shape.test.ts`. It gains three `it`s, each with its accepted and refused twins, taking it from **13 to 16** (13 was read at `56159fc41`, and Step 0a re-counts it).
+- Modify (Test): `apps/web/src/server/relay/__tests__/migration-shape.test.ts`. It gains four `it`s, each with its accepted and refused twins (or, for `beat_window_at`, its shape and its independence from `heartbeat_at`), taking it from **13 to 17** (13 was read at `56159fc41`, and re-read as 13 at `e32a3a5c2` by the post-2C plan sync; Step 0a re-counts it).
 - Create: `apps/web/src/server/relay/__tests__/_session-rig.ts`. This is a NON-test module (the `_stream-migration.ts` precedent, C20). It gives DB tests OUTSIDE `server/relay/**` a real org, a real users row and real sessions: this task's `stream-credits.test.ts`, then Task 7A's tests. It lives inside the boundary because a session needs a target, `org_stream_targets.rtmp_enc` is NOT NULL, and `enc-boundary.test.ts` claim 2 refuses that column NAME in any file outside `server/relay/**`, tests included (`enc-boundary.test.ts:43-50`). That closes carry G2 (`progress.md`: "Task 7's test names `rtmp_enc` before Task 9's `__tests__` exemption"). It also closes this task's `auth.userId!` rows, since `seedOrg`'s `userId` is null (`_rig.ts:37`) and `staff_audit_log.actor_id` is `not null references users(id)` (`V103__admin.sql:16`). It also fills the NOT NULL session snapshot columns the old inline rig omitted.
 - Create: `apps/web/src/server/usecases/stream-credits.ts`
 - Create (Test): `apps/web/src/server/usecases/__tests__/stream-credits.test.ts`
@@ -6349,7 +6396,7 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 - "Every guard needs a case that DEFEATS it": the lock (per call site: m2, m14, m15), the lock key's case-folding (m21), the key check, each member of the reused-key tuple, the cross-org key race's 23505 → 409 (m22), the floor, the cap and the audit, one mutant each.
 - "New write path — diff it against the nearest existing analogous path": `adminAdjust`'s lock-first, key-before-guard order and audit-only-on-applied are copied, and its table-wide (globally unique, `V320:37`) key scope is kept. It deviates in one respect: a reused key with different values is refused.
 
-- [ ] **Step 0a: Write the three failing shape cases.** Re-count first with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -c "^  it(" apps/web/src/server/relay/__tests__/migration-shape.test.ts`, which should print 13. If it prints a different number, every "16" below is that number + 3. Then append inside the `describe`, after the existing `org_stream_credits purchase link` case, using that file's own `rig()`:
+- [ ] **Step 0a: Write the four failing shape cases.** Re-count first with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -c "^  it(" apps/web/src/server/relay/__tests__/migration-shape.test.ts`, which should print 13. If it prints a different number, every "17" below is that number + 4. Then append inside the `describe`, after the existing `org_stream_credits purchase link` case, using that file's own `rig()`:
 
 ```ts
   it("org_stream_credits reason: 'revoke' (a negative staff row) lands; an unknown reason is still refused (the Task 7A amend)", async () => {
@@ -6391,16 +6438,36 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
     await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
     expect(await minutes()).toBe(1);
   });
+
+  it("beat_window_at: a NULLABLE timestamptz with NO default, separate from heartbeat_at — a new session reads null in both, and writing the window anchor leaves the last beat received untouched (Task 2C review I4, ruling A; the Task 7 amend)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const beats = async () =>
+      (await sql<{ heartbeat_at: Date | null; beat_window_at: Date | null }[]>`
+        select heartbeat_at, beat_window_at from fixture_stream_sessions where id = ${sid}`)[0]!;
+    expect(await beats()).toEqual({ heartbeat_at: null, beat_window_at: null });
+    // The shape itself, pinned: a DEFAULT (now(), say) would read as an anchor on every new row and silently
+    // restart every session's first beat window at insert time.
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'beat_window_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    await sql`update fixture_stream_sessions set beat_window_at = '2026-09-16T10:02:00Z' where id = ${sid}`;
+    const after = await beats();
+    expect(after.beat_window_at?.toISOString()).toBe("2026-09-16T10:02:00.000Z");
+    expect(after.heartbeat_at).toBeNull();   // two facts, two columns: the anchor never writes the panel's last beat
+  });
 ```
 
 - [ ] **Step 0b: Run — expect red for the right reasons (on the UN-amended `rly` schema).**
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-shape-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-shape-red.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title.slice(0,60),'|',(a.failureMessages[0]||'').split('\n')[0].slice(0,140))"`
-  Expect `16 3 0`:
+  Expect `17 4 0`:
   - the `reason` case fails on the `'revoke'` insert with `23514` (`org_stream_credits_reason_check`)
   - the `idempotency_key` case fails with `column "idempotency_key" … does not exist` (`42703`)
   - the `max_duration_minutes` case fails at its `rejects.toMatchObject`: the update to 0 RESOLVES, because there is no CHECK yet
+  - the `beat_window_at` case fails at its first read with `column "beat_window_at" does not exist` (`42703`)
   
-  Any other message, or a total other than 16, means the red is for the wrong reason: stop and read it.
+  Any other message, or a total other than 17, means the red is for the wrong reason: stop and read it.
 
 - [ ] **Step 0c: Amend V408, then RECREATE `rly`'s database.** First, in `db/migration/deltas/V408__stream_sessions.sql`'s `create table fixture_stream_sessions`, replace the line `  max_duration_minutes integer not null default 300,` with the lines below. **Why:** `domain/expiry.ts`'s `deadlineOf` computes `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a stored 0 silently falls back to 300 (a five-hour booking); the column refuses 0 instead (Task 2B review M4, orchestrator ruling 2026-09-16), and it rides this amend so `rly` is recreated once.
 
@@ -6408,6 +6475,18 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
   -- > 0: domain/expiry.ts deadlineOf reads `maxDurationMinutes || MAX_DURATION_MINUTES`,
   -- so a stored 0 would silently become the 300-minute default. Refused here instead.
   max_duration_minutes integer not null default 300 check (max_duration_minutes > 0),
+```
+
+  In the same `create table fixture_stream_sessions`, directly AFTER the line `  heartbeat_at         timestamptz null,`, add the lines below. **Why:** the committed domain (`domain/session.ts` `Session.beatWindowAt`, `domain/expiry.ts` `evaluate`) keeps the stale-beat window's anchor apart from the last beat received (Task 2C review I4, orchestrator ruling A), and Task 10 cannot persist a field with no column — the once-per-window bound would collapse to every lazy read (re-review 1 G1). No default: a default would anchor every new row's first window at insert time.
+
+```sql
+  -- Task 2C review I4 (orchestrator ruling A — one authority per fact): heartbeat_at is the last
+  -- beat RECEIVED (only the beat route writes it; the organiser panel serves it as lastBeatAt).
+  -- beat_window_at is the stale-beat WINDOW anchor, written when a decision acts on a missing beat
+  -- (domain/session.ts's stale-beat arm) and when a retry boots a replacement (its retry arm).
+  -- domain/expiry.ts times the beat from the LATER of the two, so a stale-beat decision is bounded
+  -- to once per STALE_HEARTBEAT_SECONDS and never freshens the panel. Null until the first one.
+  beat_window_at       timestamptz null,
 ```
 
   Then, in the same file's `create table org_stream_credits`:
@@ -6463,7 +6542,7 @@ create unique index org_stream_credits_idempotency_key
   **Why recreate:** Flyway checksums every applied migration, so `db:apply` on a database that already ran the old V408 refuses the edited file. A `flyway repair` would only rewrite the stored checksum and would NOT add the column, so it is not a fix. **STOP gate, before any command:** lane A runs in parallel against `rly`, and dropping its database under a running suite turns that suite red for an environmental reason. Ask the orchestrator to confirm that NO other agent is running a DB-backed command against `rly`, and wait for that confirmation. Then:
   `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label rly` (read the Postgres port out of its `DATABASE_URL`), then `dropdb --force -h 127.0.0.1 -p <rly pg port> -U postgres seazn_rly; echo "EXIT=$?"` → `EXIT=0` (`--force` ends the rly server's pooled connections, which reconnect on next use), then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label rly --server > <scratchpad>/r1/t7-recreate.log 2>&1; echo "EXIT=$?"; grep -a -E "schema ready|sync:sports|already up" <scratchpad>/r1/t7-recreate.log`
   Expect `EXIT=0`, `schema ready: now at version v408`, the `sync:sports` line, and "postgres already up" (same port, same `DATABASE_URL`). Confirm `show data_directory` still names `rly`. The recreated database holds no rows from earlier tasks, and every DB-backed test here seeds its own.
-  Then re-run Step 0b's command to `t7-shape.json` → `16 0 0`. Then run Task 1 Step 5's header guard (`migration-header-truth.test.ts` → `numFailedTests 0`) and `check-rls.ts` (no stream table named as unguarded).
+  Then re-run Step 0b's command to `t7-shape.json` → `17 0 0`. Then run Task 1 Step 5's header guard (`migration-header-truth.test.ts` → `numFailedTests 0`) and `check-rls.ts` (no stream table named as unguarded).
 
 - [ ] **Step 1: Write the rig and the failing test.** Create `apps/web/src/server/relay/__tests__/_session-rig.ts`:
 
@@ -7262,14 +7341,14 @@ export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditR
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/credits-admin-adjust.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-neighbours.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-neighbours.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
   Expect:
   - six files, all under `…/worktrees/relay/`, with 0 failed and 0 pending
-  - `stream-credits` 15 and `migration-shape` 16
+  - `stream-credits` 15 and `migration-shape` 17
   - `enc-boundary` green: `_session-rig.ts` names `rtmp_enc` from inside `server/relay/`, so claim 2 (`enc-boundary.test.ts:40-47`, "no file outside server/relay/**") passes, and it sits in `__tests__`, which claim 3 (`:49-54`, "only secret-columns.ts issues SQL over them") filters out. It is not the only such file: `migration-shape.test.ts`, `secret-columns.test.ts` and `telemetry.test.ts` name the column too.
   - `admin-adjustments-log`, `admin-audit-actor-truth` and `credits-admin-adjust` at their Task 0 baseline counts (`baseline-web.json`) with 0 failed. The per-action loop in `admin-adjustments-log` now also covers the three new actions.
   
   Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json > <scratchpad>/r1/t7-tsc.log 2>&1; echo "EXIT=$?"; tail -3 <scratchpad>/r1/t7-tsc.log` → `EXIT=0`, then `rtk proxy npm run lint` → `✖ 0 problems`.
   **Later callers, amended in this plan (Revision 2, ruling 4):** Task 10 (`stream-sessions.test.ts`'s rig), Task 11 and Task 12 call `grantCredits` in their tests. Each now passes `createdBy: await rigUser()` (a REAL users row, from this task's `_session-rig.ts`) and `idempotencyKey: randomUUID()`, because `seedOrg`'s `userId` is null (`_rig.ts:37`) and the audit row's `actor_id` is NOT NULL with an FK to `users` (`V103__admin.sql:16`). A tsc red naming a `grantCredits` call after those tasks land means a call site the amendment missed.
 
-- [ ] **Step 5: Report for commit.** `feat(streaming): stream credits ledger — balance, every write under the org's money lock, purchase idempotent by Stripe id, staff grant/refund/revoke (idempotent, audited, reused key refused)`. The orchestrator commits `V408__stream_sessions.sql` (the amend: the reason CHECK, column, table-wide index, the `max_duration_minutes > 0` CHECK, FS10 header), `migration-shape.test.ts`, `_session-rig.ts`, `stream-credits.ts` and its test, `admin-adjustments-log.ts` and `adjustment-labels.ts`. The report carries the 16 and 15 counts, the twenty killers, and the recreate log's `schema ready` line.
+- [ ] **Step 5: Report for commit.** `feat(streaming): stream credits ledger — balance, every write under the org's money lock, purchase idempotent by Stripe id, staff grant/refund/revoke (idempotent, audited, reused key refused)`. The orchestrator commits `V408__stream_sessions.sql` (the amend: the reason CHECK, column, table-wide index, the `max_duration_minutes > 0` CHECK, `beat_window_at`, FS10 header), `migration-shape.test.ts`, `_session-rig.ts`, `stream-credits.ts` and its test, `admin-adjustments-log.ts` and `adjustment-labels.ts`. The report carries the 17 and 15 counts, the twenty killers, and the recreate log's `schema ready` line.
 
 ---
 
@@ -9739,9 +9818,10 @@ export async function POST(req: Request, { params }: Ctx) {
 - Produces:
   - `export interface SessionDeps { drivers: RelayDrivers; now: () => Date; appUrl: string }` and `export function defaultDeps(appUrl: string): SessionDeps`
   - `export { ACTIVE_STATES, TERMINAL_STATES }` (re-exported from the domain — one authority)
-  - `export async function apply(sessionId: string, command: Command | ((s: Session) => Command), deps: SessionDeps): Promise<Session | null>` — THE seam: lock the row → `decide` → persist → the `consume_credit` effect INSIDE the transaction (credit refused → re-decide `credit_refused` in the same transaction) → commit → the remaining effects through the ports → the session as persisted. `null` when the row is missing.
+  - `export async function apply(sessionId: string, command: Command | ((s: Session) => Command | null), deps: SessionDeps): Promise<Session | null>` — THE seam: lock the row → `decide` → persist → the `consume_credit` effect INSIDE the transaction (credit refused → re-decide `credit_refused` in the same transaction) → commit → the remaining effects through the ports → the session as persisted. `null` when the row is missing. A command FUNCTION may return `null` (post-2C plan sync, T5-a): it read the LOCKED row and found nothing to decide, so nothing is written and the loaded session comes back — the `create_machine` effect uses it to feed a create outcome only while the row still names the Machine that call asked for (a stale attempt's Machine is destroyed outside the transaction, its failure dropped).
   - `export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise<Session | null>` — `apply(id, (s) => ({ type: "expire", expiry: evaluate(s, deps.now()) }), deps)`: the LAZY path (recommendation B). It hands `decide` WHATEVER `evaluate` returned, so all eight `Expiry` kinds route by construction — including the three F18/F19/F22 exits (`requested_timeout`, `provision_timeout`, `ending_timeout`) this file never names. **That is exactly why tsc cannot protect this seam:** nothing here switches over `Expiry`, so a kind the domain adds and the application never exercises compiles clean and is dead. The witness is one usecase-level test PER KIND (Step 3b), driving the real `createSession`/`currentSession`, never the domain.
-  - `export async function reconcileSession(sessionId: string, deps: SessionDeps): Promise<Session | null>` — `applyExpiry`, then for a composed session whose runner is `creating` … `lost`, ONE observation through the port (`runner.observe`, or for `creating` the crash-safe name lookup via `runner.list`) fed to `decide` as `runner: observed` / `create_ok` — the lifecycle's "observed" trigger, lazily on every read (invariants 2 and 4). Called by `currentSession`, `heartbeat`, `sessionFactsForJob`, `createSession` (for the fixture's own active session) and the sweep's backstop. **A TERMINAL session is not skipped when its runner is still alive (C27):** a composed session that failed with its Machine left `creating`/`stopping`/`exited`/`lost` still owes one observation, because `RUNNER_CLEANUP_TRIGGERS` are accepted on a terminal session (the runner sub-machine advances, the session state does not). Returning early on `isTerminal` is what leaves a failed session's Machine to the daily orphan sweep — the exact leak recommendation B exists to close. The runner's effects (`persist_intent`, `create_machine`, `stop_machine`, `force_destroy`) run in `runEffects` AFTER the row lock's transaction commits and feed their outcome back as the next `runner` command (`create_ok`/`create_failed`, `destroy_ok`) — effects are idempotent and re-runnable (desired vs observed).
+  - `export async function retryRunner(current: Session, deps: SessionDeps): Promise<Session>` — the `retry_runner` effect (post-2C plan sync, re-review 2 M1): `apply`s `create_started` with `current.runner.attempt + 1`, and treats `InvalidRunnerTransition` / `InvalidTransition` — the row moved on after the retry decision committed (a late `create_ok` made the runner `lost`, the retry already ran, the session ended) — as a no-op returning the re-read session. Exported for its race witness only; `runEffects` is its one production caller.
+  - `export async function reconcileSession(sessionId: string, deps: SessionDeps): Promise<Session | null>` — `applyExpiry`, then for a composed session whose runner is `creating` … `lost`, ONE observation through the port (`runner.observe`, or for `creating` the crash-safe name lookup via `runner.list` — matched by session AND `RunnerListing.name` === the row's `runner_name`, T5-a, so an earlier attempt's Machine is never adopted; `force_destroy`'s by-name resolution matches the same way) fed to `decide` as `runner: observed` / `create_ok` — the lifecycle's "observed" trigger, lazily on every read (invariants 2 and 4). Called by `currentSession`, `heartbeat`, `sessionFactsForJob`, `createSession` (for the fixture's own active session) and the sweep's backstop. **A TERMINAL session is not skipped when its runner is still alive (C27):** a composed session that failed with its Machine left `creating`/`stopping`/`exited`/`lost` still owes one observation, because `RUNNER_CLEANUP_TRIGGERS` are accepted on a terminal session (the runner sub-machine advances, the session state does not). Returning early on `isTerminal` is what leaves a failed session's Machine to the daily orphan sweep — the exact leak recommendation B exists to close. The runner's effects (`persist_intent`, `create_machine`, `stop_machine`, `force_destroy`) run in `runEffects` AFTER the row lock's transaction commits and feed their outcome back as the next `runner` command (`create_ok`/`create_failed`, `destroy_ok`) — effects are idempotent and re-runnable (desired vs observed).
   - `export async function storageHeadroomMinutes(exec, usage: StorageUsage, now: Date): Promise<number>` — `headroomAfterReservations(usage, reservations)` where a reservation is every non-terminal session's `max_duration_minutes` EXCEPT sessions `evaluate` already expires at `now` (retry_runner still reserves — the Machine is being replaced, not ended)
   - `export async function createSession(auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps): Promise<{ sessionId: string }>` — `admit` decides, in §6.3 order; refusals map 1:1 to HTTP: `plan_lacks_overlay`/`plan_lacks_relay` → `PaymentRequiredError`, `overlay_required` → 409, `no_credits` → 402 `no_credits`, `target_not_found` → 404, `storage_exhausted` → 503, `active_session` → 409 with `{ sessionId }`; the partial unique index is the RACE backstop (23505 → 409). It also writes the ADMISSION SNAPSHOT in the same transaction as the insert: Db's `sport_key` / `competition_id` (from `divisions`), `division_id` / `fixture_scheduled_at` (from `fixtures`), `venue_id` (`courts.venue_id` via `fixtures.court_id`, null when the fixture has no court), `venue_address` (`venues.address`), `org_timezone` (`organizations.timezone`), and Dc's `entitlement_via_override`. `sport_key`, `competition_id`, `division_id` and `entitlement_via_override` are NOT NULL with **no default**, so a producer that forgets one is an insert failure (23502), never a plausible false — which is the whole point of writing them without a default (G5)
   - `export async function currentSession(auth, fixtureId, deps, opts?: { reveal?: boolean }): Promise<StreamSessionCurrent | null>` — lazy expiry, then the ingest poll (passthrough warming/live), then the projection. `opts.reveal` says the caller is DISCLOSING the credentials to the organiser (the tab showing them for the first time this session, or a tap on Copy) rather than polling; it moves De's reveal counters and nothing else (see the QR block's comment for why a poll must not)
@@ -9780,14 +9860,16 @@ import { mintRelayToken } from "@/server/relay/tokens";
 import {
   ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_OBSERVE_SLACK_SECONDS,
-  RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS,
+  RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
 } from "@/server/relay/config";
+import { machineNameFor } from "@/server/relay/domain/runner";
+import type { RunnerSpec } from "@/server/relay/ports";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits, creditBalance } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import {
-  type SessionDeps, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  reconcileSession, relayBalance, sessionFactsForJob, stopSession,
+  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
+  reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession,
 } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -9818,8 +9900,8 @@ async function rig(opts: { overlay?: boolean; relay?: boolean; credits?: number;
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
-  const row = async (sid: string) => (await sql<{ state: string; fail_reason: string | null; end_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; desired_state: string; ending_at: string | null }[]>`
-    select state, fail_reason, end_reason, machine_id, runner_retries, runner_state, desired_state, ending_at from fixture_stream_sessions where id = ${sid}`)[0]!;
+  const row = async (sid: string) => (await sql<{ state: string; fail_reason: string | null; end_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; desired_state: string; ending_at: string | null; heartbeat_at: string | null; beat_window_at: string | null }[]>`
+    select state, fail_reason, end_reason, machine_id, runner_retries, runner_state, desired_state, ending_at, heartbeat_at, beat_window_at from fixture_stream_sessions where id = ${sid}`)[0]!;
   return { auth, fixtureId: d.fixtureId, fixtureIds: d.fixtureIds, divisionId: d.divisionId, target, ingest, runner, deps, row, tick: (ms: number) => { now += ms; } };
 }
 
@@ -10141,6 +10223,84 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: "machine_create_failed", machine_id: null });
     expect(await r.runner.list()).toEqual([]);
   });
+
+  it("T10-b: a beat reporting `playing` from a runner that is NOT booting/playing (here: lost) is recorded and answered — never fed to the table as callback_playing, which `lost` refuses (mutant: drop the `booting || playing` guard in heartbeat → InvalidRunnerTransition → red)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const jobToken = r.runner.created[0]!.jobToken;
+    await heartbeat(sessionId, jobToken, { state: "playing" }, r.deps);
+    // C1 declared the runner lost; its Machine is still up and still beating (a slow network, not a dead encoder).
+    await sql`update fixture_stream_sessions set runner_state = 'lost' where id = ${sessionId}`;
+    expect(await heartbeat(sessionId, jobToken, { state: "playing", fps: 30 }, r.deps)).toEqual({ desiredState: "live" });
+    expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "lost" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${sessionId} and source = 'heartbeat'`;
+    expect(n).toBe(2);                                                   // the beat itself still landed as a sample
+  });
+
+  it("M1: a retry_runner effect whose row moved on after the retry DECISION committed is a no-op returning the row as it now stands — a late create_ok took it lost, or the session ended — never a second Machine, never a throw out of the organiser's poll (mutants: drop retryRunner's try/catch → red at (1); catch InvalidRunnerTransition only → red at (2))", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    // The snapshot the retry decision committed: attempt 1 destroyed, the session still live. `expire none` is the
+    // identity decision, so this reads the row back as a Session without moving it.
+    await sql`update fixture_stream_sessions set runner_state = 'destroyed', machine_id = null where id = ${sessionId}`;
+    const decided = (await apply(sessionId, { type: "expire", expiry: { kind: "none" } }, r.deps))!;
+    expect(decided.runner).toMatchObject({ state: "destroyed", attempt: 1 });
+
+    // (1) Before the effect ran, a late create_ok took the row destroyed → lost (fix round 4): `lost × create_started` is ✗.
+    await sql`update fixture_stream_sessions set runner_state = 'lost', machine_id = 'fake-machine-late' where id = ${sessionId}`;
+    const moved = await retryRunner(decided, r.deps);
+    expect(moved.runner).toMatchObject({ state: "lost", attempt: 1, machineId: "fake-machine-late" });
+    expect(r.runner.created).toHaveLength(1);
+    expect(await r.row(sessionId)).toMatchObject({ state: "live", runner_state: "lost" });
+
+    // (2) …or the session ended first: a terminal row refuses create_started with the SESSION's InvalidTransition (C27).
+    await sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'machine_crash', ended_at = now(), runner_state = 'destroyed', machine_id = null where id = ${sessionId}`;
+    const ended = await retryRunner(decided, r.deps);
+    expect(ended.state).toBe("failed");
+    expect(r.runner.created).toHaveLength(1);
+  });
+
+  it("T5-a: a Machine made for an EARLIER attempt is never taken as the current attempt's — not when its create call returns after the row moved on (destroyed at once, the row untouched), and not when the crash-safe reconcile or the by-name force_destroy lists it (matched by NAME, never by session alone) (mutants: feed create_ok without the name check in create_machine → red at (1); find by sessionId alone in reconcileSession → red at (2); find by sessionId alone in force_destroy → red at (3))", async () => {
+    // (1) Attempt 1's create call is slow; while it is out, C1 lost the runner, the destroy confirmed and the retry persisted
+    // attempt 2's intent. The call then returns attempt 1's Machine.
+    const r = await rig({ credits: 1 });
+    let m1 = "";
+    const slow = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async create(spec: RunnerSpec) {
+        const handle = await r.runner.create(spec);
+        m1 = handle.runnerId;
+        await sql`update fixture_stream_sessions set runner_state = 'creating', runner_attempts = 2, runner_retries = 1,
+                      runner_name = ${machineNameFor(spec.sessionId, 2)} where id = ${spec.sessionId}`;
+        return handle;
+      },
+    });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), { ...r.deps, drivers: { ...r.deps.drivers, runner: slow } });
+    expect(r.runner.destroyed).toEqual([m1]);                                                       // nobody's Machine: destroyed at once
+    expect(await r.row(sessionId)).toMatchObject({ runner_state: "creating", machine_id: null });   // attempt 2's intent untouched
+
+    // (2) The process died mid-create for attempt 2 while attempt 1's Machine is still listed under the SAME session.
+    const c = await rig({ credits: 1 });
+    const s2 = await createSession(c.auth, c.fixtureId, body(c.target.id, "composed"), c.deps);
+    await sql`update fixture_stream_sessions set runner_state = 'creating', runner_attempts = 2, runner_retries = 1,
+                  runner_name = ${machineNameFor(s2.sessionId, 2)}, machine_id = null where id = ${s2.sessionId}`;
+    await reconcileSession(s2.sessionId, c.deps);
+    expect(await c.row(s2.sessionId)).toMatchObject({ runner_state: "creating", machine_id: null });  // …-r1 is not …-r2
+    const mine = (await c.runner.create({ ...c.runner.created[0]!, attempt: 2 })).runnerId;          // attempt 2's create DID land before the crash
+    await reconcileSession(s2.sessionId, c.deps);
+    expect(await c.row(s2.sessionId)).toMatchObject({ runner_state: "booting", machine_id: mine });   // the positive pair: adopted by its own name
+
+    // (3) force_destroy BY NAME (F15) picks the stop-marked attempt's own Machine when an earlier attempt's is listed first.
+    const g = await rig({ credits: 1 });
+    const s3 = await createSession(g.auth, g.fixtureId, body(g.target.id, "composed"), g.deps);
+    const own = (await g.runner.create({ ...g.runner.created[0]!, attempt: 2 })).runnerId;             // listed AFTER attempt 1's
+    await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = now(),
+                  runner_state = 'creating', runner_attempts = 2, runner_retries = 1, runner_name = ${machineNameFor(s3.sessionId, 2)}, machine_id = null,
+                  runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${s3.sessionId}`;
+    await reconcileSession(s3.sessionId, g.deps);                                                     // grace_expired → force_destroy by name
+    expect(g.runner.destroyed).toEqual([own]);
+    expect((await g.row(s3.sessionId)).state).toBe("completed");
+  });
 });
 
 describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sweep call (recommendation B)", () => {
@@ -10188,10 +10348,61 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
     expect(r.runner.destroyed).toContain(first);
     expect(r.runner.created).toHaveLength(2);
     expect(r.runner.created[1]).toMatchObject({ sessionId, attempt: 2 });
-    await sql`update fixture_stream_sessions set heartbeat_at = now() - interval '2 minutes' where id = ${sessionId}`;
+    expect(row.beat_window_at).not.toBeNull();   // the retry restarted the beat WINDOW (Task 2C I4) — and it was persisted
+    // G1 (Task 2C re-review 1): age BOTH anchors. `evaluate` times the beat from the LATER of heartbeat_at and beat_window_at, so
+    // backdating heartbeat_at alone reads `none` here — and a version of this test that goes green that way is green only
+    // because beat_window_at never round-tripped (the inert-seam shape; "G1: beat_window_at round-trips" is the witness).
+    await sql`update fixture_stream_sessions set heartbeat_at = now() - interval '2 minutes', beat_window_at = now() - interval '2 minutes' where id = ${sessionId}`;
     const crashed = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(crashed).toMatchObject({ state: "failed", failReason: "machine_crash" });
     expect(r.runner.destroyed).toContain(row.machine_id!);
+  });
+
+  it("G1: beat_window_at round-trips — a LOST runner's stale beat re-issues force_destroy and the confirmed destroy's retry restarts the beat WINDOW, so a second organiser read inside that STALE_HEARTBEAT_SECONDS window issues NO second destroy; neither read moves health.lastBeatAt (mutants: drop beat_window_at from persist, from COLS, or from toSession → red at the second read; write heartbeat_at from beatWindowAt → red at lastBeatAt)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    const first = (await r.row(sessionId)).machine_id!;
+    // A runner C1 already declared lost whose destroy never ran (the process died after that commit): its Machine is still
+    // held, the last beat is past the window, and no window anchor was written. No beat arrives from a lost runner, so
+    // beat_window_at is the ONLY thing that can bound the re-issue.
+    await sql`update fixture_stream_sessions set runner_state = 'lost', beat_window_at = null,
+                  heartbeat_at = now() - make_interval(secs => ${STALE_HEARTBEAT_SECONDS + 30}) where id = ${sessionId}`;
+    const beatAt = new Date((await r.row(sessionId)).heartbeat_at!).toISOString();
+
+    const read1 = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(r.runner.destroyed).toEqual([first]);                       // re-issued ONCE; the fake confirms it, so the ONE retry follows
+    expect(r.runner.created).toHaveLength(2);
+    const after1 = await r.row(sessionId);
+    expect(after1).toMatchObject({ state: "live", runner_state: "booting", runner_retries: 1 });
+    expect(after1.beat_window_at).not.toBeNull();
+    expect(read1.health?.lastBeatAt).toBe(beatAt);                     // a stale-beat decision is not a beat
+
+    r.tick(5_000);                                                     // the Phone tab's next poll (STREAM_POLL_MS), well inside the window
+    const read2 = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(r.runner.destroyed).toEqual([first]);                       // no second force_destroy…
+    expect(read2.state).toBe("live");                                  // …so attempt 2 is not burnt for a beat it was never owed
+    expect(read2.health?.lastBeatAt).toBe(beatAt);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' and type = 'stale_beat'`;
+    expect(n).toBe(1);
+  });
+
+  it("T10-c: a replacement lost by a stale beat fails machine_crash — never the PREVIOUS attempt's machine_oom (an exit belongs to the attempt observed making it; mutant: drop the lastExit clear in persistFacts' → creating block → red)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    const first = (await r.row(sessionId)).machine_id!;
+    r.runner.setObserved(first, "failed", { exitCode: 137, oomKilled: true, requestedStop: false });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");  // attempt 1 OOM → lost → destroyed → the ONE retry
+    const [carried] = await sql<{ last_exit: unknown }[]>`select last_heartbeat -> 'lastExit' as last_exit from fixture_stream_sessions where id = ${sessionId}`;
+    expect(carried!.last_exit).toBeNull();                              // attempt 2 starts with no exit of its own
+    const second = (await r.row(sessionId)).machine_id!;
+    // Attempt 2 never beats and is never observed exiting: age BOTH beat anchors (G1) past the window.
+    await sql`update fixture_stream_sessions set heartbeat_at = now() - interval '2 minutes', beat_window_at = now() - interval '2 minutes' where id = ${sessionId}`;
+    const crashed = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(crashed).toMatchObject({ state: "failed", failReason: "machine_crash" });
+    expect(r.runner.destroyed).toEqual([first, second]);
   });
 
   it("live 301 min → the next HEARTBEAT ends it (desiredState ending, SIGINT sent) and the passthrough completes with its replay (mutant: delete applyExpiry in heartbeat → red)", async () => {
@@ -10269,10 +10480,10 @@ import {
   MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SRT_LATENCY_MS,
 } from "@/server/relay/config";
 import {
-  ACTIVE_STATES, TERMINAL_STATES, admit, decide, isTerminal,
+  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, isTerminal,
   type Command, type Decision, type Effect, type Session,
 } from "@/server/relay/domain/session";
-import { machineNameFor, type RunnerEffect } from "@/server/relay/domain/runner";
+import { InvalidRunnerTransition, machineNameFor, type RunnerEffect } from "@/server/relay/domain/runner";
 import { deadlineOf, evaluate } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
@@ -10296,14 +10507,14 @@ export function defaultDeps(appUrl: string): SessionDeps {
 interface Row {
   id: string; fixture_id: string; org_id: string; mode: "passthrough" | "composed"; state: Session["state"];
   desired_state: "live" | "ending"; fail_reason: Session["failReason"]; end_reason: Session["endReason"]; theme_id: string | null; overlay_delay_ms: number;
-  target_id: string; machine_id: string | null; last_heartbeat: Record<string, unknown> | null; heartbeat_at: string | null;
+  target_id: string; machine_id: string | null; last_heartbeat: Record<string, unknown> | null; heartbeat_at: string | null; beat_window_at: string | null;
   started_at: string | null; ended_at: string | null; ending_at: string | null; max_duration_minutes: number; runner_retries: number;
   runner_attempts: number;
   runner_state: Session["runner"]["state"]; runner_name: string | null; runner_stop_requested_at: string | null;
   created_by: string; created_at: string;
 }
 const COLS = sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
-  target_id, machine_id, last_heartbeat, heartbeat_at, started_at, ended_at, ending_at, max_duration_minutes,
+  target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at, created_by, created_at`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
@@ -10313,6 +10524,10 @@ function toSession(r: Row): Session {
     id: r.id, fixtureId: r.fixture_id, orgId: r.org_id, mode: r.mode, state: r.state, desiredState: r.desired_state,
     failReason: r.fail_reason, endReason: r.end_reason, runnerRetries: r.runner_retries, createdAt: new Date(r.created_at),
     startedAt: d(r.started_at), endedAt: d(r.ended_at), heartbeatAt: d(r.heartbeat_at), maxDurationMinutes: r.max_duration_minutes,
+    // G1 (Task 2C re-review 1): the stale-beat WINDOW anchor (Task 2C I4, ruling A). `evaluate` times the beat from the LATER of
+    // heartbeatAt and this. Dropping it here (or from COLS) is silent to tsc — a missing column reads undefined → null — and it
+    // collapses the once-per-window bound to every 5 s poll; "G1: beat_window_at round-trips" is the witness.
+    beatWindowAt: d(r.beat_window_at),
     // F22: when ENDING began. `evaluate` measures the ending backstop from HERE. Forgetting to map it
     // is silent — `endingAt` reads null forever and the policy quietly falls back to the wall clock,
     // which is the exact stranding F22 exists to end. The round-trip test is the only witness.
@@ -10358,8 +10573,13 @@ async function persist(tx: Tx, s: Session): Promise<void> {
            machine_id = ${s.runner.machineId}, runner_retries = ${s.runnerRetries},
            runner_state = ${s.runner.state}, runner_name = ${s.runner.name}, runner_stop_requested_at = ${s.runner.stopRequestedAt},
            last_heartbeat = coalesce(last_heartbeat, '{}'::jsonb) || ${sql.json({ lastExit: s.runner.lastExit })}::jsonb,
-           started_at = ${s.startedAt}, ended_at = ${s.endedAt}, heartbeat_at = ${s.heartbeatAt}
+           started_at = ${s.startedAt}, ended_at = ${s.endedAt}, beat_window_at = ${s.beatWindowAt}
      where id = ${s.id}`;
+  // G1: beat_window_at IS written — the stale-beat arm and the retry arm move it, and nothing else can persist it.
+  // G2 (Task 2C re-review 1): heartbeat_at is NOT written here. The domain never changes heartbeatAt (only a beat
+  // does), so this statement could only ECHO the value it loaded; the beat route (`heartbeat`, its bare UPDATE) is
+  // the SINGLE writer of the last beat received. `lockRow` holds FOR UPDATE from load to this write, so the echo was
+  // harmless today — the single-writer rule is what keeps it harmless if that lock ever narrows.
 }
 
 /** Df: the PROVISIONING-cost estimate, in minor units of EST_COST_CURRENCY.
@@ -10415,7 +10635,8 @@ function logDecision(before: Session, dec: Decision, now: Date): void {
 /** Ruling 13 item 4: the facts a transition just made true, written beside
  *  the state in the same transaction. Each is `coalesce`d so a repeat never
  *  moves a timestamp. machine_seconds is computed from the events table —
- *  the last `booting` runner_transition's occurred_at to NOW on `destroyed`. */
+ *  the last `booting` runner_transition AFTER the last `destroyed` one, its
+ *  occurred_at to NOW on entering `destroyed` (each boot billed once, M2). */
 async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command, now: Date): Promise<void> {
   if (before.state !== "live" && next.state === "live") {
     await tx`update fixture_stream_sessions set live_at = coalesce(live_at, ${now}) where id = ${next.id}`;
@@ -10428,11 +10649,25 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
                 set runner_attempts = runner_attempts + 1, machine_region = ${RUNNER_DEFAULT_REGION},
                     guest_cpus = ${RUNNER_DEFAULT_GUEST.cpus}, guest_memory_mb = ${RUNNER_DEFAULT_GUEST.memoryMb}, guest_cpu_class = ${RUNNER_DEFAULT_GUEST.cpuClass}
               where id = ${next.id}`;
+    // T10-c (Task 2C review, concern 8): an exit belongs to the attempt that was OBSERVED making it. `createStarted` keeps
+    // `lastExit`, and it rides last_heartbeat's JSON, so without this a replacement that is lost WITHOUT an exit of its own
+    // (a stale beat, never a beat) fails with the PREVIOUS attempt's reason — machine_oom where the plan's failure paths say
+    // machine_crash. `persist` above wrote the carried value; the new attempt's intent clears it in the same transaction,
+    // so the next load reads null. Witness: "T10-c: a replacement lost by a stale beat fails machine_crash …".
+    await tx`update fixture_stream_sessions set last_heartbeat = last_heartbeat - 'lastExit' where id = ${next.id}`;
   }
   if (before.runner.state !== "destroyed" && next.runner.state === "destroyed") {
+    // M2 (Task 2C re-review 2): a runner can RE-ENTER destroyed with no new boot — fix round 4 takes a destroyed runner
+    // through lost on a late create_ok and back on its destroy_ok. Anchoring on "the last booting row" alone added that
+    // whole span a second time (and already over-counted an attempt-2 create_failed after attempt 1 booted). Only a boot
+    // AFTER the last recorded entry into destroyed is still unbilled. This decision's own rows are written after
+    // persistFacts, so the max(seq) below is the PREVIOUS destroyed. Witness: "machine_seconds counts each boot ONCE …".
     const [boot] = await tx<{ occurred_at: string }[]>`
-      select occurred_at from fixture_stream_events
-       where session_id = ${next.id} and kind = 'runner_transition' and to_state = 'booting' order by seq desc limit 1`;
+      select b.occurred_at from fixture_stream_events b
+       where b.session_id = ${next.id} and b.kind = 'runner_transition' and b.to_state = 'booting'
+         and b.seq > coalesce((select max(d.seq) from fixture_stream_events d
+                                where d.session_id = ${next.id} and d.kind = 'runner_transition' and d.to_state = 'destroyed'), 0)
+       order by b.seq desc limit 1`;
     if (boot) {
       const seconds = Math.max(0, Math.round((now.getTime() - new Date(boot.occurred_at).getTime()) / 1000));
       await tx`update fixture_stream_sessions set machine_seconds = machine_seconds + ${seconds} where id = ${next.id}`;
@@ -10473,7 +10708,7 @@ export interface Actor { userId: string | null; source: "client" | "admin" }
 // ---------------------------------------------------------------------------
 export async function apply(
   sessionId: string,
-  command: Command | ((s: Session) => Command),
+  command: Command | ((s: Session) => Command | null),
   deps: SessionDeps,
   actor?: Actor,
 ): Promise<Session | null> {
@@ -10483,6 +10718,9 @@ export async function apply(
     if (!row) return null;
     const before = toSession(row);
     const cmd = typeof command === "function" ? command(before) : command;
+    // T5-a: a command function that returns null read the LOCKED row and found nothing to decide (the row moved on) —
+    // write nothing, run nothing. The caller that returned null knows why and acts outside the transaction.
+    if (cmd === null) return { session: before, effects: [] };
     let dec = decide(before, cmd, now);
     let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
@@ -10554,8 +10792,9 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
   // compute for a session that ended minutes ago (and, on a stop-marked `creating` row, a Machine
   // nobody is holding the id of). The terminal guard belongs in `decide`, not in the caller.
   if (r.state === "creating") {
-    // invariant 4: a process died mid-create → find OUR Machine by session metadata and adopt it
-    const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id);
+    // invariant 4: a process died mid-create → find OUR Machine and adopt it. T5-a: by NAME as well as session — an EARLIER
+    // attempt's Machine is listed under the same session, and adopting it as this attempt's is the late cross-attempt adopt.
+    const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id && m.name === r.name);
     return mine ? apply(sessionId, { type: "runner", trigger: { type: "create_ok", machineId: mine.runnerId } }, deps) : s;
   }
   if (!r.machineId) return s;
@@ -10584,13 +10823,9 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
       case "runner":
         current = await runRunnerEffect(current, e.effect, deps);
         break;
-      case "retry_runner": {
-        // the ONE retry: the next attempt's intent is persisted by apply (creating + name) BEFORE its create_machine effect runs
-        const attempt = current.runner.attempt + 1;
-        current = (await apply(current.id, { type: "runner", trigger: { type: "create_started", name: machineNameFor(current.id, attempt), attempt } }, deps)) ?? current;
-        log.warn({ sid: current.id, attempt, transition: "retry", reason: "runner_lost" }, "stream session: replacement Machine requested inline");
+      case "retry_runner":
+        current = await retryRunner(current, deps);
         break;
-      }
       case "complete_now":
         current = (await apply(current.id, { type: "complete" }, deps)) ?? current;
         break;
@@ -10604,6 +10839,28 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
   return current;
 }
 
+/** The ONE retry: the next attempt's intent is persisted by apply (creating + name) BEFORE its create_machine effect runs.
+ *  M1 (Task 2C re-review 2): the retry DECISION committed, but this effect runs after commit, and a concurrent request may
+ *  have moved the row since — a late create_ok took the runner destroyed → lost (`lost × create_started` is not a cell), another
+ *  reader already ran this retry (the attempt moved on), or the session ended. `decide` refuses under the row lock with
+ *  InvalidRunnerTransition / InvalidTransition, and that refusal IS the answer: the retry is still owed by `lost × destroy_ok`,
+ *  was already taken, or is no longer wanted. So it is a no-op that returns the row as it now stands — never a 500 out of the
+ *  organiser's poll. The attempt is `current`'s (the decision's), never re-read, so a moved row cannot be re-retried here.
+ *  Exported for the race witness only ("M1: a retry_runner effect whose runner moved on …"). */
+export async function retryRunner(current: Session, deps: SessionDeps): Promise<Session> {
+  const attempt = current.runner.attempt + 1;
+  try {
+    const next = (await apply(current.id, { type: "runner", trigger: { type: "create_started", name: machineNameFor(current.id, attempt), attempt } }, deps)) ?? current;
+    log.warn({ sid: current.id, attempt, transition: "retry", reason: "runner_lost" }, "stream session: replacement Machine requested inline");
+    return next;
+  } catch (err) {
+    if (!(err instanceof InvalidRunnerTransition) && !(err instanceof InvalidTransition)) throw err;
+    log.info({ sid: current.id, attempt, transition: "retry_skipped", err: String(err) }, "stream session: retry refused under the row lock — the row moved on");
+    const row = await readRow(current.id);
+    return row ? toSession(row) : current;
+  }
+}
+
 /** Runner effects run AFTER the row's transaction committed and feed their
  *  outcome back through `apply` — each is idempotent (desired vs observed). */
 async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): Promise<Session> {
@@ -10611,14 +10868,33 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
     case "persist_intent":
       return s;   // apply already persisted `creating` + name + attempt in its transaction (invariant 4)
     case "create_machine": {
+      // T5-a (Task 2C review concern 3, M5): the trigger carries no attempt, so the OUTCOME is fed to the row only while the
+      // LOCKED row still names the Machine this call asked for. A create is slow; while it is out, C1 can lose the runner, the
+      // destroy confirm and the retry persist attempt + 1 — and `creating × create_ok` would then adopt THIS attempt's Machine as
+      // the next one's (or `booting × create_ok` would throw). Names carry the attempt (machineNameFor), so name equality is
+      // attempt equality. Same name: every cell is designed for it (lost/destroyed × create_ok destroy the returned id).
+      const stillOurs = (cur: Session) => cur.runner.name === s.runner.name;
+      let handle: Awaited<ReturnType<typeof createRunner>>;
       try {
-        const handle = await recordEffect(s, "create_machine", "runner", () => createRunner(s, deps), { attempt: s.runner.attempt, machineName: s.runner.name });
-        return (await apply(s.id, { type: "runner", trigger: { type: "create_ok", machineId: handle.runnerId } }, deps)) ?? s;
+        handle = await recordEffect(s, "create_machine", "runner", () => createRunner(s, deps), { attempt: s.runner.attempt, machineName: s.runner.name });
       } catch (err) {
         const retryable = (err as { retryable?: boolean }).retryable === true;
         log.error({ sid: s.id, attempt: s.runner.attempt, retryable, err: String(err) }, "stream session: Machine create failed");
-        return (await apply(s.id, { type: "runner", trigger: { type: "create_failed", retryable } }, deps)) ?? s;
+        // A stale attempt's failure is not the current attempt's: dropped (T5-b: a retryable failure means Fly holds no Machine).
+        return (await apply(s.id, (cur) => (stillOurs(cur) ? { type: "runner", trigger: { type: "create_failed", retryable } } : null), deps)) ?? s;
       }
+      let foreign = false;
+      const next = await apply(s.id, (cur) => {
+        if (stillOurs(cur)) return { type: "runner", trigger: { type: "create_ok", machineId: handle.runnerId } };
+        foreign = true;
+        return null;
+      }, deps);
+      if (foreign) {
+        // Nobody's Machine: the row never learned it, so no cell will ever destroy it — do it here, recorded like any effect.
+        log.warn({ sid: s.id, attempt: s.runner.attempt, machineId: handle.runnerId, transition: "stale_create" }, "stream session: a create returned after its attempt moved on — destroyed");
+        await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(handle.runnerId), { machineId: handle.runnerId, staleAttempt: s.runner.attempt });
+      }
+      return next ?? s;
     }
     case "stop_machine": {
       const id = s.runner.machineId;
@@ -10633,7 +10909,7 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
       // reconcile does, and only then give up.
       let id = s.runner.machineId;
       if (!id && s.runner.name) {
-        const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id);
+        const mine = (await deps.drivers.runner.list()).find((m) => m.sessionId === s.id && m.name === s.runner.name);   // T5-a: THIS attempt's, by name
         id = mine?.runnerId ?? null;
       }
       if (id) await recordEffect(s, "force_destroy", "runner", () => deps.drivers.runner.destroy(id), { machineId: id });   // 404 = success (C7)
@@ -11079,6 +11355,28 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
       "none-create_started->creating", "creating-create_ok->booting", "booting-callback_playing->playing", "playing-session_stop->stopping", "stopping-observed->exited", "exited-observed->destroyed",
     ]);
   });
+
+  it("M2: machine_seconds counts each boot ONCE — a runner that RE-ENTERS destroyed through a late create_ok (destroyed → lost → destroyed, fix round 4) adds nothing (mutant: anchor on the last booting row alone → 480, not 120)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    r.tick(120_000);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    const seconds = async () => (await sql<{ machine_seconds: number }[]>`select machine_seconds from fixture_stream_sessions where id = ${sessionId}`)[0]!.machine_seconds;
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    expect(await seconds()).toBe(120);
+    r.tick(240_000);
+    // The SAME attempt's create call reporting back late (C27 accepts create_ok on a terminal session): destroyed × create_ok →
+    // lost [force_destroy the returned id] → destroy_ok → destroyed AGAIN, with no boot in between.
+    await apply(sessionId, { type: "runner", trigger: { type: "create_ok", machineId: "fake-machine-late" } }, r.deps);
+    expect(r.runner.destroyed).toContain("fake-machine-late");
+    expect(await r.row(sessionId)).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    const rt = await sql<{ type: string; from_state: string; to_state: string }[]>`
+      select type, from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
+    expect(rt.slice(-2).map((x) => `${x.from_state}-${x.type}->${x.to_state}`)).toEqual(["destroyed-create_ok->lost", "lost-destroy_ok->destroyed"]);
+    expect(await seconds()).toBe(120);                                   // the old anchor re-billed booting → now: 120 + 360
+  });
 });
 ```
 
@@ -11384,9 +11682,9 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
 });
 ```
 
-- [ ] **Step 4: Run — expect `48 0 0`** (17 in the first describe, 7 in the lazy-expiry one, 5 in the data-captured one, 19 in the snapshot/exits one — read the JSON's count, never this sentence: one revision of this line said `30` when the text held 29, the next said `45` when it held 47, which is exactly how a missing test hides).
+- [ ] **Step 4: Run — expect `54 0 0`** (20 in the first describe, 9 in the lazy-expiry one, 6 in the data-captured one, 19 in the snapshot/exits one — read the JSON's count, never this sentence: one revision of this line said `30` when the text held 29, the next said `45` when it held 47, which is exactly how a missing test hides. The post-2C plan sync moved it from 48: +3 first describe — T10-b, M1, T5-a; +2 lazy expiry — G1, T10-c; +1 data captured — M2).
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable RELAY_KEK=<64 hex> AUTH_SECRET=<from .env.local> npx vitest run src/server/usecases/__tests__/stream-sessions.test.ts --reporter=json --outputFile=<scratchpad>/r1/t10.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t10.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status!=='passed')console.log(a.fullName,(a.failureMessages[0]||'').slice(0,300))"`
-  (`RELAY_KEK` is PRESENT in both `.env.local` files — ruling 14; Task 0 confirmed it. Never echo it.) Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. Record the thirteen killers.
+  (`RELAY_KEK` is PRESENT in both `.env.local` files — ruling 14; Task 0 confirmed it. Never echo it.) Then the mutants by hand, each reverted with the Write tool: (r5) — killed in the DOMAIN (Task 2A); here the WIRING mutant: map `overlay_required` to a 402 in `refuse` → test 2 red; (r7) build `qr.cred` from constants instead of `input` → the qr test red on the URL equality; (r8) write `slot: 0` → the qr test red at `toBe(3)`; (m1 wiring) drop the `consume_credit` branch in `apply` → "consuming exactly ONE credit" red at `balance 0`; (C3) drop the `evaluate` filter in `storageHeadroomMinutes` → "expired-but-unread" red; (C9) — killed in the domain; wiring: skip `add_output` in `runEffects` → the M3 test red at `outputsFor … 1`; **(B — the load-bearing lazy calls, one at a time)** delete `reconcileSession` in `currentSession` → the 11-min test, the stale-beat test and the lifecycle "observed destroyed → completed" step red; delete `applyExpiry` in `heartbeat` → the 301-min heartbeat test red; delete it in `createSession` → the "OWN stale warming session" test red (409); delete `reconcileSession` in `jobSession` → the 410 test red; **(lifecycle)** skip `stop_machine` and destroy directly in `runRunnerEffect` → "the stop sequence" red (`stops` empty, `destroyed` non-empty during grace); drop the `creating` lookup in `reconcileSession` → "reconciled by name" red (a second Machine); run `create_machine` BEFORE `apply` persisted `creating` (move the create into the transaction) → "runner_state/runner_name persisted" red. **(post-2C plan sync)** (G1-persist) drop `beat_window_at` from `persist` → "G1: beat_window_at round-trips" red at the second read (`destroyed` gains the replacement, the session fails); (G1-load) drop it from `COLS`, then separately from `toSession` → the same red — tsc is silent on both (a missing column reads undefined → null); (G1-column) write `heartbeat_at = ${s.beatWindowAt}` → the G1 test red at `lastBeatAt`; (M1a) drop `retryRunner`'s try/catch → "M1" red at (1) with InvalidRunnerTransition; (M1b) catch `InvalidRunnerTransition` only → "M1" red at (2) with InvalidTransition; (T10-b) drop the `booting || playing` guard in `heartbeat` → "T10-b" red; (T10-c) drop the `last_heartbeat - 'lastExit'` statement → "T10-c" red at `last_exit` (and at `machine_oom`); (M2) anchor `machine_seconds` on the last `booting` row alone → "M2" red at 480; (T5-a gate) feed `create_ok` without `stillOurs` → "T5-a" red at (1); (T5-a list) find by `sessionId` alone in `reconcileSession` → "T5-a" red at (2); (T5-a destroy) the same in `force_destroy` → "T5-a" red at (3). Record the twenty-five killers (thirteen before the sync, twelve added). **Record as EQUIVALENT, not a killer (G2):** putting `heartbeat_at = ${s.heartbeatAt}` back into `persist` — `lockRow` holds FOR UPDATE from the load to that write and `decide` never changes `heartbeatAt`, so it can only echo; nothing can red it, and the single-writer comment is the guard.
 
 - [ ] **Step 5: Report for commit.** `feat(streaming): relay application layer — apply/decide, lazy expiry with inline retry, create gates through admit, replay fill`.
 
@@ -11738,7 +12036,8 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(after).toMatchObject({ state: "live", runner_retries: 1 });
     expect(after.machine_id).not.toBe(first);
     expect(r.runner.destroyed).toContain(first);
-    await sql`update fixture_stream_sessions set heartbeat_at = now() - interval '2 minutes' where id = ${r.sessionId}`;
+    // G1 (Task 2C re-review 1): the retry wrote beat_window_at; age BOTH anchors, or `evaluate` (the later of the two) reads `none`.
+    await sql`update fixture_stream_sessions set heartbeat_at = now() - interval '2 minutes', beat_window_at = now() - interval '2 minutes' where id = ${r.sessionId}`;
     expect((await sweepStreamSessions(r.deps)).backstop.crashed).toBeGreaterThanOrEqual(1);
     expect(await r.state()).toMatchObject({ state: "failed", fail_reason: "machine_crash" });
     expect(r.runner.destroyed).toContain(after.machine_id!);
@@ -11783,6 +12082,11 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(live.runner.destroyed).toEqual(expect.arrayContaining(["fake-machine-nobody", deadMachine]));
     expect(live.runner.destroyed).not.toContain(liveMachine);
     expect((await live.runner.list()).map((m) => m.runnerId)).toEqual([liveMachine]);
+    // T12-a: the orphan pass never feeds `orphan_listed` to `decide` — least of all for a LIVE row (`lost × orphan_listed` would re-issue
+    // a destroy; `playing × orphan_listed` is ✗). The live row is untouched and no session carries such a transition.
+    expect(await live.state()).toMatchObject({ state: "live", machine_id: liveMachine, runner_retries: 0 });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id in (${live.sessionId}, ${dead.sessionId}) and type = 'orphan_listed'`;
+    expect(n).toBe(0);
   });
 
   it("headroom below one retained match → warned with the number (C3 arithmetic includes reservations)", async () => {
@@ -11874,6 +12178,24 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(await at(prov.sessionId)).toMatchObject({ state: "failed", fail_reason: "provision_timeout" });
     expect(await at(adm.sessionId)).toMatchObject({ state: "failed", fail_reason: "admission_timeout" });
     expect(await at(end.sessionId)).toMatchObject({ state: "completed", fail_reason: null });   // F22: it ended as asked
+  });
+
+  it("G3: `retried` counts a REAL retry — a create call made during the visit — never a change in runner_retries: a destroyed runner whose retry DECISION committed before the process died (runner_retries already 1) is retried by the sweep's re-signal and COUNTED; the next pass inside the new beat window creates nothing and counts nothing (mutant: count by `after.runnerRetries > s.runner_retries` → red at retried 0)", async () => {
+    // Placed after the bucket test on purpose: the counter is asserted EXACTLY, and by here the earlier tests' leftovers are terminal.
+    const r = await rig("composed");
+    await heartbeat(r.sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
+    // I1 made runner_retries = runner.attempt, so the persisted counter is already 1 when retry_runner never ran.
+    await sql`update fixture_stream_sessions set runner_state = 'destroyed', machine_id = null, runner_retries = 1,
+                  heartbeat_at = now() - interval '2 minutes' where id = ${r.sessionId}`;
+    const res = await sweepStreamSessions(r.deps);
+    expect(r.runner.created).toHaveLength(2);                                   // destroyed × stale_beat re-signalled, and the ONE retry ran…
+    expect(res.backstop.retried).toBe(1);                                       // …so it is counted
+    expect(await r.state()).toMatchObject({ state: "live", runner_retries: 1 });
+    const [{ runner_attempts }] = await sql<{ runner_attempts: number }[]>`select runner_attempts from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(runner_attempts).toBe(2);
+    const again = await sweepStreamSessions(r.deps);
+    expect(r.runner.created).toHaveLength(2);
+    expect(again.backstop.retried).toBe(0);
   });
 
   it("C27: a TERMINAL session whose Machine is still alive is visited and cleaned up — the runner advances, the session state does not", async () => {
@@ -12029,8 +12351,8 @@ export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleReten
   //    Machine we are paying for to the orphan pass — which is the belt to `auto_destroy`'s
   //    brace, not a prompt cleanup. `reconcileSession` advances the runner sub-machine and
   //    leaves the session's own state untouched (C27), so visiting a terminal row is safe.
-  const active = await sql<{ id: string; state: string; runner_retries: number }[]>`
-    select id, state, runner_retries from fixture_stream_sessions
+  const active = await sql<{ id: string; state: string; runner_attempts: number }[]>`
+    select id, state, runner_attempts from fixture_stream_sessions
      where state in ${sql([...ACTIVE_STATES])}
         or runner_state in ('creating', 'booting', 'playing', 'stopping', 'exited', 'lost')
      order by created_at`;
@@ -12047,7 +12369,10 @@ export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleReten
       else if (after.state === "failed" && after.failReason === "provision_timeout") out.backstop.provisionTimedOut++;
       else if (after.state === "failed" && after.failReason === "admission_timeout") out.backstop.admissionTimedOut++;
       else if (after.state === "failed" && after.failReason?.startsWith("machine_")) out.backstop.crashed++;
-      else if (after.runnerRetries > s.runner_retries) out.backstop.retried++;
+      // G3 (Task 2C re-review 1): a RETRY is a create call made during this visit — the attempt moved. `runnerRetries` is
+      // `runner.attempt` since I1, so it does not move when a `destroyed × stale_beat` re-signal finally runs the retry a dead
+      // process owed (undercount), and it can move on a decision whose `retry_runner` then no-ops (M1, overcount).
+      else if (after.runner.attempt > s.runner_attempts) out.backstop.retried++;
       else if (after.state === "completed" && s.state === "ending") out.backstop.endingTimedOut++;   // F22: a COMPLETION, not a failure
       else if ((after.state === "ending" || after.state === "completed") && (s.state === "live" || s.state === "warming")) out.backstop.wallClockEnded++;
       return true;
@@ -12069,8 +12394,12 @@ export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleReten
       // booting. Skip those rows: a `creating` runner that is genuinely stuck belongs to the
       // BACKSTOP, which now visits it terminal or not and has the timeout to judge it.
       if (row?.runner_state === "creating") continue;
-      // Ownership is by SESSION, not by Machine name: `RunnerListing` carries `sessionId` — the
-      // same identity as the `metadata.seazn_session` lookup — and no name at all. So a row
+      // T12-a (Task 2C review): this pass DESTROYS directly and never feeds `orphan_listed` to `decide`. If a later wave wires
+      // that trigger, it goes ONLY to a terminal or absent session's row — never a live one, where `lost × orphan_listed` would
+      // re-issue a destroy on a Machine the session is still waiting on and `playing × orphan_listed` throws.
+      // Ownership is by SESSION: `RunnerListing` carries `sessionId` — the same identity as the
+      // `metadata.seazn_session` lookup — and, since T5-a, the Machine's `name`, which the lazy reconcile uses to tell
+      // attempts apart; this daily pass keeps the session-level rule. So a row
       // whose `machine_id` is still null owns the Machine the provider already attributes to
       // it, and only a MISMATCH (the row moved on to a replacement) makes this one an orphan.
       const owned = !!row && (row.machine_id === m.runnerId || row.machine_id === null);
@@ -12274,7 +12603,7 @@ export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleReten
 
   (The imports these need — `vi`, `currentSession`, `stopSession`, `mintRelayToken` — and the rig's `fixtureId` are in Step 1's file as written; nothing here is owed to a later edit. The "lists ONCE" assertion pins that retention and the video facts share one `listVideos` call — a second list per run doubles a paid API call every day.)
 
-- [ ] **Step 4: Run — expect `17 0 0`** (fourteen `it`s in Step 1's describe, three added in Step 3 — read the JSON's count, never this sentence). Same command shape as Task 10 Step 4 with `relay-sweep.test.ts`. Then the mutants by hand, each reverted with the Write tool:
+- [ ] **Step 4: Run — expect `18 0 0`** (fifteen `it`s in Step 1's describe, three added in Step 3 — read the JSON's count, never this sentence; the post-2C plan sync added the G3 `retried` differential, 17 → 18). Same command shape as Task 10 Step 4 with `relay-sweep.test.ts`. Then the mutants by hand, each reverted with the Write tool:
   1. (backstop) delete the `reconcileSession` call → "BACKSTOP: warming … 11 min" red.
   2. (reconcile) replace it with `applyExpiry` → the stuck-stopping case red (expiry alone cannot see a stuck `stopping`).
   3. (orphan) drop the `TERMINAL_STATES` clause → the orphan test red at `orphansDestroyed 2`.
@@ -12289,8 +12618,10 @@ export async function sweepStreamSessions(deps: SessionDeps, opts: { sampleReten
   12. (delete-unsummarised, C15) drop `s.sample_summary is not null` from the delete → the C15 test red: the unsummarised session loses its samples.
   13. (Dd-once) drop the per-`videoUid` guard → the Dd test red on the second sweep with `["v-1","v-1"]`.
   14. (Dd-bytes) sum `durationSeconds` into `recording_bytes`, or drop the `Math.max(0, …)` clamp → the Dd test red at `"1000"`.
+  15. (G3 retried) count by `after.runnerRetries > s.runner_retries` → "G3: `retried` counts a REAL retry" red at `retried 0`.
+  16. (T12-a) feed `{ type: "runner", trigger: { type: "orphan_listed" } }` through `apply` for every listed Machine's row instead of the terminal/absent rule → the ORPHANS test red (the live row's `playing × orphan_listed` throws out of the sweep).
 
-  Record all fourteen killers by NAME in the report — a count alone cannot be checked.
+  Record all sixteen killers by NAME in the report — a count alone cannot be checked.
 
 - [ ] **Step 5: Write the cron route and the workflow-absence test.**
 
@@ -14286,12 +14617,13 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | domain: delete the `overlay_required` line in `admit`; drop the consume effect; add an output for composed; `runnerRetries` check loosened; delete the terminal guard | `domain/__tests__/session.test.ts`, one `it` each (Task 2A) |
 | domain: wall clock below the stale beat; `debit` floor `< -1`; drop the reservations `reduce`; drop the retention defer; `<=` → `<` on the cutoff | `domain/__tests__/{expiry,credits,retention}.test.ts` (Task 2B) |
 | lazy path: delete `applyExpiry` in `currentSession` / `heartbeat` / `createSession` / `jobSession` (one at a time) | `stream-sessions.test.ts` "lazy expiry" describe — a named test per call site (Task 10) |
-| sweep: delete the backstop `reconcileSession` call (NOT `applyExpiry` — the sweep has never called it); replace it with `applyExpiry`; drop the orphan `TERMINAL_STATES` clause; drop the `continue` that keeps a live Machine; drop the `runner_state = 'creating'` skip; treat a null `machine_id` as unowned; restore the non-terminal-only backstop query; count an `ending_timeout` as a failure; inputs before videos; hard-code `0` for `SAMPLE_RETENTION_DAYS`; drop `s.sample_summary is null`; drop `s.sample_summary is not null`; drop the per-`videoUid` guard; sum durations into `recording_bytes` | `relay-sweep.test.ts` — Task 12 Step 4's fourteen named killers |
+| sweep: delete the backstop `reconcileSession` call (NOT `applyExpiry` — the sweep has never called it); replace it with `applyExpiry`; drop the orphan `TERMINAL_STATES` clause; drop the `continue` that keeps a live Machine; drop the `runner_state = 'creating'` skip; treat a null `machine_id` as unowned; restore the non-terminal-only backstop query; count an `ending_timeout` as a failure; inputs before videos; hard-code `0` for `SAMPLE_RETENTION_DAYS`; drop `s.sample_summary is null`; drop `s.sample_summary is not null`; drop the per-`videoUid` guard; sum durations into `recording_bytes`; count `retried` by `runnerRetries` (G3); feed `orphan_listed` for a live row (T12-a) | `relay-sweep.test.ts` — Task 12 Step 4's sixteen named killers |
 | fly-client: remove the retry; retry on 400; drop `Retry-After`; drop the pre-retry lookup; drop the redaction; treat destroy 404 as an error | `fly-client.test.ts`, one `it` each (Task 5A) |
 | runner-fly: `restart.policy` ≠ `no`; drop `RELAY_DEADLINE_AT`; drop `metadata` | `runner-fly.test.ts` (Task 5) |
 | toggle: delete `FixtureStreamToggle`'s `?stream=open` read (return early always); drop its `fixtureId` comparison so every row springs open; drop the `open` guard so a manual close springs back; drop the `fixtureId` prop from the row's toggle line | `fixture-stream-panel.test.tsx`'s "the checkout return opens the panel" `it` — it asserts the whole call LIST, not "was called" (Task 14 Step 4 b2); Task 15's walkthrough post-checkout step; Task 17's `stream-phone-*` visual rows, which photograph a closed row if the read dies |
 | lifecycle table: a retry legal while not destroyed; skip SIGINT and destroy directly; unknown Fly state goes live; drop the grace force; drop persist-before-create | `domain/__tests__/runner.test.ts` — "invariant 1", "the stop sequence", "unknown Fly state", "grace_expired", "invariant 4" (Task 2C) |
 | lifecycle wiring: skip `stop_machine`; drop the `creating` reconcile; create before persist; replace `reconcileSession` with `applyExpiry` | `stream-sessions.test.ts` lifecycle cases (Task 10); `relay-sweep.test.ts` stuck-stopping (Task 12) |
+| post-2C plan sync, Task 10 wiring: drop `beat_window_at` from `persist` / `COLS` / `toSession`; write `heartbeat_at` from `beatWindowAt`; drop `retryRunner`'s catch, or catch `InvalidRunnerTransition` only; drop the heartbeat `booting \|\| playing` guard; drop the `lastExit` clear on → creating; anchor `machine_seconds` on the last booting row alone; drop the create_machine name gate / the name match in `reconcileSession` / in `force_destroy` (G2 — `heartbeat_at` back in `persist` — is EQUIVALENT under `lockRow`, recorded not killed) | `stream-sessions.test.ts` "G1: beat_window_at round-trips", "M1", "T10-b", "T10-c", "M2", "T5-a" (Task 10 Step 4's twenty-five killers) |
 | the stop/deadline shapes with no live Machine: `no-Machine stop`; `stop-while-creating`; `stop-then-create_ok`; `stop-then-create_failed`; `stop-then-found`; `deadline-no-Machine`; `deadline-while-creating`; `grace-creating` | `domain/__tests__/{session,runner}.test.ts` (Tasks 2A, 2C) + `stream-sessions.test.ts` "stop with no Machine completes AT ONCE" and the C27 case (Task 10) |
 | the timed exits: `provision-timeout`; `requested-timeout`; `ending-timeout`; `ending-anchor` (time `ending` from the wall clock instead of `ending_at`) | `domain/__tests__/expiry.test.ts` threshold rows (Task 2B); `stream-sessions.test.ts` Step 3b's one `it` per kind (Task 10); `relay-sweep.test.ts` bucket cases (Task 12) |
 | `ending-from-provisioning`; `cleanup-create_ok`; `cleanup-create_failed`; `late-create-throws` (apply `provisioned` to a row that moved) | `domain/__tests__/runner.test.ts` (Task 2C); `stream-sessions.test.ts` "the late create: `provisioned` is SKIPPED" (Task 10) |
@@ -14363,4 +14695,4 @@ Corrections C1–C14 and pins P1–P22: the ledger at the top maps each; re-chec
 
 **2. Placeholder scan.** Run over this file before handoff: `grep -n -a -E "TBD|TODO|similar to Task|add appropriate|handle edge cases|stream-phone-tab|V40[3-9]__" docs/superpowers/plans/2026-09-13-streaming-r1.md` → the ONLY permitted hits are inside the ledger/self-review text that names the forbidden strings themselves and the two `<paste …>` markers (the checksum in Task 13 Step 2 and the Sentry DSN in Task 17 Step 3), which are values an executor pastes from a command's output, not work left undone. `<next>` / `<tail>` / `<rly url>` / `<64 hex>` are execution-time values the plan is REQUIRED not to pin (and `RELAY_KEK`'s value is never printed anywhere — Task 0 counts a pattern match). **The `V40[3-9]__` alternative in that regex now matches this wave's OWN migration** (FT0-1's 2026-09-16 re-read resolved the all-refs tail to V407 — V404 on main, V405–V407 claimed on an unmerged branch — so Task 1 creates `V408__stream_sessions.sql`): every `V408__stream_sessions.sql` hit is EXPECTED and is not a placeholder. Narrow the scan to `V4(09|[1-9][0-9])__` when running it, or read the hits — do not "fix" the file to make the grep quiet. `V402`–`V407` are landed files referenced as such, and `V408__stream_sessions.sql` is this wave's own; if Task 1 resolved a number above V408 because main moved again, the same exemption follows that number. `V402__streaming_entitlements.sql` is a landed file referenced as such; the older claim that it "appears only as the Task 0 snapshot" is stale and is not a check. Two more greps the executor runs on the TREE at Task 17 Step 1 (ruling 13's guards as text): `grep -rn -a "recordEvent(sql" apps/web/src` → empty (an event is never written outside a transaction — `recordEvent` takes `Tx`); `grep -rln -a -E "insert into (fixture_stream_events|fixture_stream_samples|stream_provider_calls|stream_storage_snapshots)" apps/web/src | grep -v __tests__` → exactly the C14 THREE-writer allowlist: `apps/web/src/server/relay/telemetry.ts`, `apps/web/src/server/usecases/stream-sessions.ts` and `apps/web/src/server/usecases/relay-sweep.ts` (enc-boundary claim 4 pins the same list). It is not one file: the sweep writes its own snapshot and summary statements, and Task 10's facts/reveal writes are its own. The claim is RED if any FOURTH file names a capture table — that is the mutant (add an insert to a new module and watch `enc-boundary.test.ts` go red).
 
-**3. Type and name consistency across tasks (checked by reading each Interfaces block against its consumers).** The lifecycle's names — `RunnerState`, `Runner`, `RUNNER_NONE`, `ObservedRunnerState`, `ExitInfo`, `RunnerTrigger`, `RunnerEffect`, `SessionSignal`, `RUNNER_TABLE`, `stepRunner`, `machineNameFor(sessionId, attempt)`, `failReasonFromExit`, `MACHINE_MINUTES_BOUND` (Task 2A types, Task 2C table) — are what `session.ts`'s `runner()` case, `ports.ts` (`RunnerObservation`, `RunnerSpec.attempt`), `fakes.ts`, `runner-fly.ts` (`FLY_STATE_MAP`, `fromFlyState`), `fly-client.ts` (`exitInfoFrom` returns `ExitInfo`'s shape) and `stream-sessions.ts` (`reconcileSession`, `runRunnerEffect`) use; `Session.runner`/`Session.endReason` are persisted by Task 10's `persist` into the four lifecycle columns Task 1 adds; `Expiry`'s EIGHT kinds (Task 2B — `none`, `requested_timeout`, `provision_timeout`, `warming_timeout`, `wall_clock`, `stale_beat`, `grace_expired`, `ending_timeout`) are exactly the cases `decide`'s `expire` switches over, one per non-terminal state plus the two the runner owns (F16/F18/F19/F22); `applyExpiry` (Task 10) hands `decide` whatever `evaluate` returned and switches over NOTHING, so a kind added to the union and never exercised by the application compiles clean — which is why Task 10 Step 3b owes one usecase-level test per kind; `StreamFailReason`/`StreamEndReason` (Task 9) equal `FailReason`/`Session["endReason"]` (Task 2A) and the two copy maps (Task 13) are total over them. The domain's names — `Session`, `Command`, `Effect`, `DomainEvent`, `Decision`, `decide`, `admit`, `InvalidTransition`, `ACTIVE_STATES`/`TERMINAL_STATES`/`isTerminal` (Task 2A); `Expiry`, `evaluate`, `deadlineOf`, `DEFAULT_LIMITS` (Task 2B); `debit`/`credit`/`withinReuseWindow`/`headroomAfterReservations`/`InsufficientCredits` (Task 2B); `retentionPlan`/`RetainedVideo`/`RetainedInput` (Task 2B) — are the names Tasks 7, 10 and 12 import; `Command` carries `expire: { expiry: Expiry }`, and the real `Effect` union is `consume_credit`, `add_output`, `runner { effect: RunnerEffect }` (the sub-machine's `persist_intent` / `create_machine` / `stop_machine` / `force_destroy`), `retry_runner`, `complete_now` and `fill_replay` — SIX members, which is exactly the set `runEffects` (Task 10) switches over. (The earlier `replace_runner { oldMachineId }` / `destroy_runner { machineId }` spelling in this paragraph named effects that do not exist in any task: the runner's own effects travel inside `runner`, and the replacement create is `retry_runner`.) `RUNNER_CLEANUP_TRIGGERS` (Task 2C) is the SIX-member set a terminal session still accepts — the triggers that let a Machine finish dying without moving the session (C27). `RunnerSpec` gained `deadlineAt: Date` (Task 3) — Task 5's adapter sends it as `RELAY_DEADLINE_AT`, Task 10's `createRunner` computes it with `deadlineOf`, and both fakes tests pass it. `RunnerProvider.list()` → `RunnerListing[]` (Task 3) is what Task 5 implements over `FlyClient.listMachines` and Task 12's orphan pass reads. `FlyClient` / `FlyApiError` / `FLY_MACHINES_BASE` / `isRetryable` / `redact` (Task 5A) are what Task 5 imports; Task 5's test builds URLs from `FLY_MACHINES_BASE` + `/apps/...`. `IngestProvider.storageUsage()` (Task 3) is what Task 10's `createSession` and Task 12's sweep call — never `storageHeadroom`; the arithmetic is `headroomAfterReservations`. `readFirstInput` / `readInputBySlot` / `storeInputCredentials` / `readTargetSecret` / `insertStreamTarget` (Tasks 2, 9) are the names Tasks 9, 10 use; `storeTargetSecret` exists only until Task 9 replaces it. `mintRelayToken` / `verifyRelayToken` / `relayTokenExpiry` (Task 6) are the names Tasks 10, 11 use. `consumeForSession(tx, args, now?)` returns `{ consumed, balance, ledgerId }` (Task 7) and Task 10's `apply` calls it as the `consume_credit` effect inside the transaction, writing `ledgerId` to `credit_ledger_id`. The capture names — `EventRow` / `eventRowsOf(before, decision, command)` (Task 2A) → `recordEvent(tx, EventInput)` / `recordSample` / `recordProviderCall` / `recordStorageSnapshot` and their `*Input` types (Task 2) → `apply`, `recordEffect`, `persistFacts`, `Actor` (Task 10) and the sweep's steps 5–8 (Task 12); `ProviderCallRecord` / `ProviderCallRecorder` / `NOOP_RECORDER` (Task 3) → `FakeRecorder` (Task 3), `CloudflareIngest({ recorder })` (Task 4), `FlyClientOptions.recorder` + `CallMeta` (Task 5A), `FlyRunner({ recorder })` + `dbRecorder` (Task 5); `STREAM_TABLES` / `MIGRATION` live in `apps/web/src/server/relay/__tests__/_stream-migration.ts` — a module, NOT a test file (C20: importing a `.test` file re-registers its tests in every importer) — and are imported by `migration-shape.test.ts`, `telemetry.test.ts`'s scan and `rls-static.test.ts`; `IngestVideo.durationSeconds` (Task 3) → Task 4's `listVideos` mapping, the fake's `addVideo`, Task 12's `recording_seconds`; `PurchaseLink` (Task 7) → Task 8's webhook branch; `RelayHeartbeat`'s four optional fields (Task 9) → Task 10's `heartbeat` sample; `SAMPLES_PER_SESSION_CAP` / `SAMPLE_RETENTION_DAYS` / `EVENT_PAYLOAD_MAX_STRING` (Task 2) → Tasks 10, 12, and the sanitiser — one authority each. `apply` / `applyExpiry` / `reconcileSession` / `estimateCostMinor` / `storageHeadroomMinutes(exec, usage, now)` / `SessionDeps { drivers, now, appUrl }` / `defaultDeps(appUrl)` (Task 10) are what Tasks 11, 12 use — Task 12's backstop calls `reconcileSession` (never `applyExpiry`, which cannot observe a Machine) and recomputes Df through `estimateCostMinor` once it learns `recording_seconds`. `bearerOf` lives in `server/relay/bearer.ts` (C21), imported by BOTH internal routes rather than one route importing the other. `Session.endingAt` ↔ the `ending_at` column (F22) is written by `persist` in the same UPDATE as the transition and mapped back by `toSession`; `Runner.attempt` is derived from `runner_attempts` alone (C3). `APP_BUILD_SHA` / `buildShaOf` and the Df rate constants (`CLOUDFLARE_STORED_MICROS_PER_MINUTE`, `FLY_PERFORMANCE_CPU_MICROS_PER_MONTH`, `FLY_RAM_MICROS_PER_GB_MONTH`, `FLY_BILLING_SECONDS_PER_MONTH`, `EST_COST_CURRENCY`, and the deliberately UNCONSUMED `CLOUDFLARE_DELIVERED_MICROS_PER_MINUTE`) live in `config.ts` (Task 2) and are read by the telemetry writers and `estimateCostMinor` respectively — one authority each. `SweepResult.backstop` carries a bucket per outcome (`warmingTimedOut`, `provisionTimedOut`, `admissionTimedOut`, `endingTimedOut`, `retried`, `crashed`, `wallClockEnded`, plus `visited`/`skippedLocked`), and `FAIL_REASON_KEYS` (Task 13) is total over `StreamFailReason`'s TEN members. `createRelayCheckout({ …, returnUrl })` / `buildRelayCheckoutParams({ …, returnUrl })` / the route's `{ client_secret }` (Task 8) match `fetchRelayCheckoutClientSecret` (Task 8) which Task 14's container calls and Task 15 exercises through the modal. `StreamSessionCurrent`'s fields (Task 9) are exactly what Task 10 builds and Tasks 13, 14 read (`ingest`, `health`, `qr`, `balance`, `replayUrl`, `target`, `fixtureDecided`). `CaptureQrV1` (Task 9) is the type Task 10 builds, Task 13 checksums, Task 14 encodes. `PhoneTabBodyProps` (Task 14) matches the props Task 14's own test passes. `STREAM_CREDIT_PACKS` (Task 8) is the table Tasks 8 and 14 read. Testids in Task 14's list (incl. `stream-checkout-modal`) are the ones Task 15 and Task 17's manifest rows await; `stream-tab-phone` (P13) is the shipped id and appears unchanged. One deliberate rename recorded in the ledger: `slot` is read off the row by `readFirstInput`, so the literal `0` appears only in the INSERT (Task 10) and in tests.
+**3. Type and name consistency across tasks (checked by reading each Interfaces block against its consumers).** The lifecycle's names — `RunnerState`, `Runner`, `RUNNER_NONE`, `ObservedRunnerState`, `ExitInfo`, `RunnerTrigger`, `RunnerEffect`, `SessionSignal`, `RUNNER_TABLE`, `stepRunner`, `machineNameFor(sessionId, attempt)`, `failReasonFromExit`, `MACHINE_MINUTES_BOUND` (Task 2A types, Task 2C table) — are what `session.ts`'s `runner()` case, `ports.ts` (`RunnerObservation`, `RunnerSpec.attempt`), `fakes.ts`, `runner-fly.ts` (`FLY_STATE_MAP`, `fromFlyState`), `fly-client.ts` (`exitInfoFrom` returns `ExitInfo`'s shape) and `stream-sessions.ts` (`reconcileSession`, `runRunnerEffect`) use; `Session.runner`/`Session.endReason` are persisted by Task 10's `persist` into the four lifecycle columns Task 1 adds; `Expiry`'s EIGHT kinds (Task 2B — `none`, `requested_timeout`, `provision_timeout`, `warming_timeout`, `wall_clock`, `stale_beat`, `grace_expired`, `ending_timeout`) are exactly the cases `decide`'s `expire` switches over, one per non-terminal state plus the two the runner owns (F16/F18/F19/F22); `applyExpiry` (Task 10) hands `decide` whatever `evaluate` returned and switches over NOTHING, so a kind added to the union and never exercised by the application compiles clean — which is why Task 10 Step 3b owes one usecase-level test per kind; `StreamFailReason`/`StreamEndReason` (Task 9) equal `FailReason`/`Session["endReason"]` (Task 2A) and the two copy maps (Task 13) are total over them. The domain's names — `Session`, `Command`, `Effect`, `DomainEvent`, `Decision`, `decide`, `admit`, `InvalidTransition`, `ACTIVE_STATES`/`TERMINAL_STATES`/`isTerminal` (Task 2A); `Expiry`, `evaluate`, `deadlineOf`, `DEFAULT_LIMITS` (Task 2B); `debit`/`credit`/`withinReuseWindow`/`headroomAfterReservations`/`InsufficientCredits` (Task 2B); `retentionPlan`/`RetainedVideo`/`RetainedInput` (Task 2B) — are the names Tasks 7, 10 and 12 import; `Command` carries `expire: { expiry: Expiry }`, and the real `Effect` union is `consume_credit`, `add_output`, `runner { effect: RunnerEffect }` (the sub-machine's `persist_intent` / `create_machine` / `stop_machine` / `force_destroy`), `retry_runner`, `complete_now` and `fill_replay` — SIX members, which is exactly the set `runEffects` (Task 10) switches over. (The earlier `replace_runner { oldMachineId }` / `destroy_runner { machineId }` spelling in this paragraph named effects that do not exist in any task: the runner's own effects travel inside `runner`, and the replacement create is `retry_runner`.) `RUNNER_CLEANUP_TRIGGERS` (Task 2C) is the SIX-member set a terminal session still accepts — the triggers that let a Machine finish dying without moving the session (C27). `RunnerSpec` gained `deadlineAt: Date` (Task 3) — Task 5's adapter sends it as `RELAY_DEADLINE_AT`, Task 10's `createRunner` computes it with `deadlineOf`, and both fakes tests pass it. `RunnerProvider.list()` → `RunnerListing[]` (Task 3) is what Task 5 implements over `FlyClient.listMachines` and Task 12's orphan pass reads; its `name` (post-2C plan sync, T5-a) is filled by Task 5's `listingOf` and Task 3's `FakeRunner` from `machineNameFor`, and read by Task 10's `reconcileSession` and `force_destroy`. `FlyClient` / `FlyApiError` / `FLY_MACHINES_BASE` / `isRetryable` / `redact` (Task 5A) are what Task 5 imports; Task 5's test builds URLs from `FLY_MACHINES_BASE` + `/apps/...`. `IngestProvider.storageUsage()` (Task 3) is what Task 10's `createSession` and Task 12's sweep call — never `storageHeadroom`; the arithmetic is `headroomAfterReservations`. `readFirstInput` / `readInputBySlot` / `storeInputCredentials` / `readTargetSecret` / `insertStreamTarget` (Tasks 2, 9) are the names Tasks 9, 10 use; `storeTargetSecret` exists only until Task 9 replaces it. `mintRelayToken` / `verifyRelayToken` / `relayTokenExpiry` (Task 6) are the names Tasks 10, 11 use. `consumeForSession(tx, args, now?)` returns `{ consumed, balance, ledgerId }` (Task 7) and Task 10's `apply` calls it as the `consume_credit` effect inside the transaction, writing `ledgerId` to `credit_ledger_id`. The capture names — `EventRow` / `eventRowsOf(before, decision, command)` (Task 2A) → `recordEvent(tx, EventInput)` / `recordSample` / `recordProviderCall` / `recordStorageSnapshot` and their `*Input` types (Task 2) → `apply`, `recordEffect`, `persistFacts`, `Actor` (Task 10) and the sweep's steps 5–8 (Task 12); `ProviderCallRecord` / `ProviderCallRecorder` / `NOOP_RECORDER` (Task 3) → `FakeRecorder` (Task 3), `CloudflareIngest({ recorder })` (Task 4), `FlyClientOptions.recorder` + `CallMeta` (Task 5A), `FlyRunner({ recorder })` + `dbRecorder` (Task 5); `STREAM_TABLES` / `MIGRATION` live in `apps/web/src/server/relay/__tests__/_stream-migration.ts` — a module, NOT a test file (C20: importing a `.test` file re-registers its tests in every importer) — and are imported by `migration-shape.test.ts`, `telemetry.test.ts`'s scan and `rls-static.test.ts`; `IngestVideo.durationSeconds` (Task 3) → Task 4's `listVideos` mapping, the fake's `addVideo`, Task 12's `recording_seconds`; `PurchaseLink` (Task 7) → Task 8's webhook branch; `RelayHeartbeat`'s four optional fields (Task 9) → Task 10's `heartbeat` sample; `SAMPLES_PER_SESSION_CAP` / `SAMPLE_RETENTION_DAYS` / `EVENT_PAYLOAD_MAX_STRING` (Task 2) → Tasks 10, 12, and the sanitiser — one authority each. `apply` / `applyExpiry` / `reconcileSession` / `estimateCostMinor` / `storageHeadroomMinutes(exec, usage, now)` / `SessionDeps { drivers, now, appUrl }` / `defaultDeps(appUrl)` (Task 10) are what Tasks 11, 12 use — Task 12's backstop calls `reconcileSession` (never `applyExpiry`, which cannot observe a Machine) and recomputes Df through `estimateCostMinor` once it learns `recording_seconds`. `bearerOf` lives in `server/relay/bearer.ts` (C21), imported by BOTH internal routes rather than one route importing the other. `Session.endingAt` ↔ the `ending_at` column (F22) is written by `persist` in the same UPDATE as the transition and mapped back by `toSession`; `Runner.attempt` is derived from `runner_attempts` alone (C3). `APP_BUILD_SHA` / `buildShaOf` and the Df rate constants (`CLOUDFLARE_STORED_MICROS_PER_MINUTE`, `FLY_PERFORMANCE_CPU_MICROS_PER_MONTH`, `FLY_RAM_MICROS_PER_GB_MONTH`, `FLY_BILLING_SECONDS_PER_MONTH`, `EST_COST_CURRENCY`, and the deliberately UNCONSUMED `CLOUDFLARE_DELIVERED_MICROS_PER_MINUTE`) live in `config.ts` (Task 2) and are read by the telemetry writers and `estimateCostMinor` respectively — one authority each. `SweepResult.backstop` carries a bucket per outcome (`warmingTimedOut`, `provisionTimedOut`, `admissionTimedOut`, `endingTimedOut`, `retried`, `crashed`, `wallClockEnded`, plus `visited`/`skippedLocked`), and `FAIL_REASON_KEYS` (Task 13) is total over `StreamFailReason`'s TEN members. `createRelayCheckout({ …, returnUrl })` / `buildRelayCheckoutParams({ …, returnUrl })` / the route's `{ client_secret }` (Task 8) match `fetchRelayCheckoutClientSecret` (Task 8) which Task 14's container calls and Task 15 exercises through the modal. `StreamSessionCurrent`'s fields (Task 9) are exactly what Task 10 builds and Tasks 13, 14 read (`ingest`, `health`, `qr`, `balance`, `replayUrl`, `target`, `fixtureDecided`). `CaptureQrV1` (Task 9) is the type Task 10 builds, Task 13 checksums, Task 14 encodes. `PhoneTabBodyProps` (Task 14) matches the props Task 14's own test passes. `STREAM_CREDIT_PACKS` (Task 8) is the table Tasks 8 and 14 read. Testids in Task 14's list (incl. `stream-checkout-modal`) are the ones Task 15 and Task 17's manifest rows await; `stream-tab-phone` (P13) is the shipped id and appears unchanged. One deliberate rename recorded in the ledger: `slot` is read off the row by `readFirstInput`, so the literal `0` appears only in the INSERT (Task 10) and in tests.
