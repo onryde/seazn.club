@@ -57,6 +57,10 @@ export const STALE_HEARTBEAT_SECONDS = 90;
 export const RUNNER_STOP_GRACE_SECONDS = 10;
 /** How long after the grace we wait to OBSERVE auto_destroy before forcing it. */
 export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
+/** Design §6.4: ONE retry — two attempts, ever. Invariant 3's bound derives from this. */
+export const RUNNER_MAX_ATTEMPTS = 2;
+/** R0-memo.md:346–354: `q` on stdin is discarded under -nostdin; the stop is a SIGNAL. */
+export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */

@@ -125,6 +125,11 @@ function fail(s: Session, reason: FailReason, now: Date): Decision {
   return { next: { ...s, state: "failed", failReason: reason, endReason: null, endedAt: now }, events: [{ type: "SessionEnded", reason }], effects: [] };
 }
 
+/** P1-F-b + C6 (Task 2C): a Machine teardown on the way to `failed` keeps its runner events and drops the teardown's
+ *  own ENDINGS — the stop step's SessionEnding, and the SessionEnded a LOST runner's session_stop emits (F17 completes
+ *  the session there) — so a failed session reports exactly one SessionEnded: its own, with its fail reason. */
+const keptBeforeFailure = (e: DomainEvent): boolean => e.type !== "SessionEnding" && e.type !== "SessionEnded";
+
 /** I3 (Task 2A review, orchestrator ruling): the replay fill belongs ONLY to a session that actually went live.
  *  A session stopped before it ever broadcast (organiser stop while warming, a composed stop before any create)
  *  has no replay, and filling one would publish a link for a match that never aired. The ONE authority for both
@@ -148,6 +153,9 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
   const events: DomainEvent[] = [{ type: "RunnerChanged", from: s.runner.state, to: step.next.state, trigger: trigger.type }];
   const effects: Effect[] = step.effects.map((e) => ({ type: "runner" as const, effect: e }));
   const next: Session = { ...s, runner: step.next };
+  // C27: on a terminal session the runner advances and the session does not — the step's
+  // signal is ignored (no retry, no second SessionEnded, no fill_replay).
+  if (isTerminal(s.state)) return { next, events, effects };
   switch (step.signal?.type) {
     case undefined:
       return { next, events, effects };
@@ -191,9 +199,20 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
   }
 }
 
+/** C27: the runner triggers that only TEAR DOWN — the stop confirmed, the Machine
+ *  observed, destroyed, or forced by the grace window, or (P1-F-a) the create call
+ *  returning after a stop was marked mid-create (a warming timeout can fail the
+ *  session first). A terminal session still owns its Machine until one of these lands. */
+export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["create_ok", "create_failed", "callback_stopped", "observed", "destroy_ok", "grace_expired"];
+
 export function decide(s: Session, c: Command, now: Date): Decision {
   const illegal = () => new InvalidTransition(s.state, c.type);
-  if (isTerminal(s.state)) throw illegal();
+  if (isTerminal(s.state)) {
+    const cleanup =
+      (c.type === "runner" && RUNNER_CLEANUP_TRIGGERS.includes(c.trigger.type)) ||
+      (c.type === "expire" && c.expiry.kind === "grace_expired");
+    if (!cleanup) throw illegal();
+  }
   switch (c.type) {
     case "provision":
       if (s.state !== "requested") throw illegal();
@@ -215,12 +234,11 @@ export function decide(s: Session, c: Command, now: Date): Decision {
       // would leave it pushing to the destination, unpaid, until the 5 h deadline. Tear it down exactly as the
       // composed `warming_timeout` does — the runner's `session_stop` step (its stop effect), then fail, dropping
       // the stop step's SessionEnding (P1-F-b) — and mark desiredState `ending` so nothing re-wants it live.
-      // Passthrough is unchanged. The KILLER TEST is Task 2C's (Step 5, beside "a composed warming timeout…"):
-      // this branch always reaches `stepRunner`, which at Task 2A is the throwing stub, so no pure 2A test can reach it.
+      // Passthrough is unchanged. Killer (Task 2C carry C3): session.test.ts "C3 (I2): a COMPOSED credit refusal…".
       if (s.mode === "composed" && s.runner.state !== "none") {
         const torn = runner(s, { type: "session_stop" }, now, illegal);
         const f = fail({ ...torn.next, desiredState: "ending" }, "no_credits", now);
-        return { next: f.next, events: [...torn.events.filter((e) => e.type !== "SessionEnding"), ...f.events], effects: [...torn.effects, ...f.effects] };
+        return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
       }
       return fail(s, "no_credits", now);
     case "target_rejected":
@@ -253,7 +271,7 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
         const torn = runner(s, { type: "session_stop" }, now, illegal);
         const f = fail(torn.next, "machine_boot_timeout", now);   // fail() nulls the endReason the stop step set (P1-F-b)
         // P1-F-b: the stop step's SessionEnding is dropped — a failed session never reports an end reason, in its row or its events.
-        return { next: f.next, events: [...torn.events.filter((e) => e.type !== "SessionEnding"), ...f.events], effects: [...torn.effects, ...f.effects] };
+        return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
       }
       return fail(s, "no_inbound_timeout", now);
     case "requested_timeout":
@@ -269,7 +287,7 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
       if (s.mode === "composed" && s.runner.state !== "none") {
         const torn = runner(s, { type: "session_stop" }, now, illegal);
         const f = fail(torn.next, "provision_timeout", now);
-        return { next: f.next, events: [...torn.events.filter((e) => e.type !== "SessionEnding"), ...f.events], effects: [...torn.effects, ...f.effects] };
+        return { next: f.next, events: [...torn.events.filter(keptBeforeFailure), ...f.events], effects: [...torn.effects, ...f.effects] };
       }
       return fail(s, "provision_timeout", now);
     case "wall_clock":
@@ -279,9 +297,15 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
       // flight is marked and the session ends; booting/playing take the SIGINT stop. It never throws.
       if (s.runner.state === "none" || s.runner.state === "destroyed") return complete({ ...s, endReason: "max_duration" }, now);
       return runner(s, { type: "deadline" }, now, illegal);
-    case "stale_beat":
+    case "stale_beat": {
       if (s.state !== "live" || s.mode !== "composed") throw illegal();
-      return runner(s, { type: "stale_beat" }, now, illegal);
+      // C1 (Task 2C): a stale beat that was ACTED ON restarts the beat window. Every stale_beat cell with an effect or a
+      // signal — lost's re-issued force_destroy, destroyed's re-signalled retry, the entry into lost — would otherwise
+      // fire again on the very next lazy read (a 5 s poll), because nothing else moves heartbeatAt. The runner has no
+      // clock of its own to bound it with, and the retry arm already restarts this same window for a replacement.
+      const d = runner(s, { type: "stale_beat" }, now, illegal);
+      return { ...d, next: { ...d.next, heartbeatAt: now } };
+    }
     case "grace_expired":
       if (s.mode !== "composed") throw illegal();
       return runner(s, { type: "grace_expired" }, now, illegal);
@@ -289,7 +313,10 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
       if (s.state !== "ending") throw illegal();
       // F19: the completion was lost. If a Machine is still stoppable, send the stop — that marks the runner
       // and the grace finishes it; otherwise there is nothing left to flush and the session completes.
-      if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing")) return runner(s, { type: "session_stop" }, now, illegal);
+      // C5 (M6, Task 2C): a create still IN FLIGHT counts — completing over an unmarked `creating` runner left the
+      // Machine that call later made to the daily orphan sweep. The stop marks it: a late create_ok is destroyed, and
+      // if nothing ever returns the grace clock the mark started ends the session on a lazy read (F15).
+      if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing" || s.runner.state === "creating")) return runner(s, { type: "session_stop" }, now, illegal);
       return complete(s, now);
   }
 }
