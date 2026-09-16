@@ -227,6 +227,28 @@ const DIAGRAMS: Record<string, () => React.ReactNode> = {
       </text>
     </Frame>
   ),
+  // Deliberately GENERIC, unlike every other diagram here: this format's
+  // bracket SHAPE is the organiser's own Top N, so any drawn bracket would
+  // be true of exactly one setting and a lie at the rest. The two footnotes
+  // carry the shapes instead — including the one that is easiest to draw
+  // wrong, a Top 4, which is two SEMI-FINALS and a final. There is no
+  // quarter-final below a field of five (scheduling/bracket.ts pads to
+  // nextPowerOfTwo, so 4 entrants is a 4-slot bracket: 2 rounds, not 3).
+  swiss_knockout: () => (
+    <Frame height={175}>
+      <Node x={14} y={54} w={140} label="Swiss rounds" sub="1v2 · 3v4 · 5v6" />
+      <Arrow x1={156} y1={71} x2={206} y2={71} label="top N" />
+      <Node x={208} y={54} w={160} label="Knockout bracket" sub="sized to your Top N" />
+      <Arrow x1={370} y1={71} x2={412} y2={71} label="winner" />
+      <Node x={414} y={56} w={44} h={30} label="🏆" accent />
+      <text x={14} y={136} className="fill-slate-400 text-[10px]">
+        Top 2 is a single final; Top 4 is two semi-finals, then the final.
+      </text>
+      <text x={14} y={156} className="fill-slate-400 text-[10px]">
+        A Top N that is not a power of two gives the leaders a bye into the next round.
+      </text>
+    </Frame>
+  ),
   americano: () => (
     <Frame height={160}>
       <Node x={16} y={20} w={130} label="Round 1" sub="A+B vs C+D" />
@@ -372,6 +394,36 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
     cannedStages: [
       { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      } },
+    ],
+  },
+  {
+    // Swiss Knockout — the same rank-adjacent swiss qualifying as
+    // swiss_playoff above, then a PLAIN knockout over the organiser's Top N
+    // instead of the fixed four-team Page playoff.
+    //
+    // NO `pro` flag, and that is a product decision rather than an omission:
+    // `swiss` and `knockout` are both free kinds, so usecases/format-gates.ts
+    // refuses nothing here. A Pro badge over an ungated format is a paywall
+    // that does not exist — league_ko is the free precedent this follows.
+    // format-gallery.test.ts asserts the absent flag, and
+    // format-gates.test.ts asserts the two agree.
+    //
+    // `kinds` names both halves; as with swiss_playoff, each is already
+    // claimed by an earlier family and `familyForKind` is a first-match
+    // `.find()` with one (test-only) caller, so this takes nothing away.
+    //
+    // The canned graph uses rankRange(1,4) — the template's DEFAULT Top N.
+    // The real one follows the knob; the preview is 8 canned entrants and
+    // needs one concrete number.
+    slug: "swiss_knockout",
+    kinds: ["swiss", "knockout"],
+    cannedStages: [
+      { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
+      { kind: "knockout", name: "Knockout", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",
         timing: "setup",

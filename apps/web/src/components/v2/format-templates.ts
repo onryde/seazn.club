@@ -213,6 +213,31 @@ export const STAGE_TEMPLATES: {
     ],
   },
   {
+    // Swiss Knockout — the second composite off the same swiss qualifying.
+    // Stage 1 is byte-for-byte swiss_playoff's; the finals half is the PLAIN
+    // knockout kind instead of the fixed four-team Page playoff, so the
+    // bracket size is the organiser's own Top N rather than a constant.
+    //
+    // That is the only real difference, and it is why this one is NOT Pro:
+    // `swiss` and `knockout` are both free kinds (usecases/format-gates.ts
+    // gates `double_elim`/`page_playoff` only), exactly like league_ko.
+    //
+    // The bracket handles any N >= 2 — scheduling/bracket.ts pads to
+    // nextPowerOfTwo(N) and awards the spare lines to the top seeds — so an
+    // odd Top N is a supported shape, not an error. N=3 is one bye (seed 1)
+    // plus a seed2-v-seed3 semifinal; N=4 is TWO rounds (semis + final), not
+    // three — there is no quarterfinal below a field of five.
+    key: "swiss_knockout",
+    build: ({ qualified: q }) => [
+      { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
+      { kind: "knockout", name: "Knockout", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: q }] }],
+        placement: "rank_order",
+        timing: "setup",
+      } },
+    ],
+  },
+  {
     key: "knockout",
     build: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
@@ -314,10 +339,10 @@ export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): 
     // The rounds knob EDITS a template's declared rounds; it does not invent
     // one. `swiss` declares `rounds: 5` and the builder/Settings tab show an
     // input for it, so the knob applies there exactly as it always has.
-    // `swiss_playoff` declares none — its budget scales with the field and is
-    // derived at generation time — and stamping the knob's default 5 on it
-    // would silently pin a 40-entrant event to five rounds with no control
-    // anywhere on screen that says so.
+    // `swiss_playoff` and `swiss_knockout` declare none — their budget scales
+    // with the field and is derived at generation time — and stamping the
+    // knob's default 5 on them would silently pin a 40-entrant event to five
+    // rounds with no control anywhere on screen that says so.
     if (d.kind === "swiss" && "rounds" in d.config) config.rounds = knobs.swissRounds;
     if (d.kind === "league" || d.kind === "group") config.legs = knobs.legs;
     if (d.kind === "group") config.pools = { count: knobs.poolCount };
@@ -349,6 +374,7 @@ export function detectTemplate(
   if (kinds === "league+page_playoff") return "group_playoffs";
   if (kinds === "swiss") return "swiss";
   if (kinds === "swiss+page_playoff") return "swiss_playoff";
+  if (kinds === "swiss+knockout") return "swiss_knockout";
   if (kinds === "knockout") return "knockout";
   if (kinds === "double_elim") return "double_elim";
   if (kinds === "knockout+knockout") {

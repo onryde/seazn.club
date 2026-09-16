@@ -74,6 +74,7 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   group_playoffs: "page_playoff",
   swiss: "swiss",
   swiss_playoff: "swiss_playoff",
+  swiss_knockout: "swiss_knockout",
   knockout: "knockout",
   double_elim: "double_elim",
   triple_rr: "league",
@@ -81,6 +82,23 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   mexicano: "americano",
   ladder: "ladder",
 };
+
+// The Top N values the wizard's qualifier <select> offers, per template.
+// ONE declaration, because the list is read TWICE — to render the options
+// and to decide whether a carried-over `qualified` is still valid when the
+// organiser switches template. The two used to be separate literals; a
+// value offered by one and rejected by the other is how a chosen Top N
+// silently snaps back to 4.
+function qualifierOptionsFor(templateKey: string): readonly number[] {
+  if (templateKey === "group_stepladder") return [3, 4, 5, 6];
+  // Swiss Knockout's finals half is the GENERIC single-elimination bracket
+  // (scheduling/bracket.ts pads to nextPowerOfTwo and byes the leaders), so
+  // an odd Top N is a real shape rather than an error — 3 especially: the
+  // qualifying winner waits while second plays third. The other templates
+  // here feed brackets an organiser expects to be clean powers of two.
+  if (templateKey === "swiss_knockout") return [2, 3, 4, 6, 8, 16];
+  return [2, 4, 8, 16];
+}
 
 // Recommendation slug → wizard template key (strip picks land here).
 const FAMILY_TEMPLATE: Record<string, string> = {
@@ -537,8 +555,18 @@ export function DivisionBuilder({
     setError(null);
     setTab(key);
   }
+  // Templates whose second stage is sized by the `qualified` knob, so the
+  // wizard has to show the Top N control. swiss_knockout is here for the
+  // same reason league_ko is: without it the builder would silently ship
+  // every Swiss Knockout as a Top 4 (the state's default) with no control
+  // on screen saying so — the same "no control anywhere that says so" trap
+  // the swiss rounds knob already avoids in format-templates.ts.
+  // group_playoffs is NOT here: the Page playoff is a fixed four.
   const hasSecondStage =
-    template === "league_ko" || template === "groups_ko" || template === "group_stepladder";
+    template === "league_ko" ||
+    template === "groups_ko" ||
+    template === "group_stepladder" ||
+    template === "swiss_knockout";
   const showStandingsCarry = templateHasProgression(template);
 
   return (
@@ -745,9 +773,7 @@ export function DivisionBuilder({
                   // Keep the qualifier valid for the template's option list.
                   if (t.key === "group_playoffs" && qualified !== 4) {
                     setQualified(4); // the Page system is a fixed 4-team shape
-                  } else if (t.key === "group_stepladder" && ![3, 4, 5, 6].includes(qualified)) {
-                    setQualified(4);
-                  } else if (t.key !== "group_stepladder" && ![2, 4, 8, 16].includes(qualified)) {
+                  } else if (!qualifierOptionsFor(t.key).includes(qualified)) {
                     setQualified(4);
                   }
                 }}
@@ -823,7 +849,7 @@ export function DivisionBuilder({
                 onChange={(e) => setQualified(Number(e.target.value))}
                 className="select"
               >
-                {(template === "group_stepladder" ? [3, 4, 5, 6] : [2, 4, 8, 16]).map((n) => (
+                {qualifierOptionsFor(template).map((n) => (
                   <option key={n} value={n}>
                     {msg("schedule.topN", { n })}
                   </option>

@@ -22,6 +22,7 @@ import {
   buildTemplateStages,
   clampKnob,
   detectTemplate,
+  templateHasProgression,
 } from "../format-templates";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { ProgressionSchema } from "@/server/api-v1/schemas";
@@ -552,6 +553,58 @@ describe("swiss_playoff — the new composite template", () => {
     expect(detectTemplate(buildTemplateStages("swiss_playoff", KNOBS))).toBe("swiss_playoff");
     expect(detectTemplate(buildTemplateStages("swiss", KNOBS))).toBe("swiss");
     expect(detectTemplate(buildTemplateStages("group_playoffs", KNOBS))).toBe("group_playoffs");
+  });
+});
+
+// Swiss Knockout — the second composite: the same rank-adjacent swiss
+// qualifying, then a PLAIN knockout over the organiser's own Top N. Where
+// Swiss Playoff's finals half is a fixed four-team Page playoff, this one's
+// bracket size follows the knob, so the knob has to reach it.
+describe("swiss_knockout — the second composite template", () => {
+  const KNOBS = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+
+  it("is a swiss stage feeding a plain knockout over the top four by default", () => {
+    const stages = buildTemplateStages("swiss_knockout", KNOBS);
+    expect(stages.map((s) => s.kind)).toEqual(["swiss", "knockout"]);
+    expect(stages[0]!.progression).toBeNull();
+    expect(stages[1]!.config).toEqual({});
+    expect(stages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+  });
+
+  it("asks the generator for rank-adjacent pairing — the same qualifying as Swiss Playoff", () => {
+    const stages = buildTemplateStages("swiss_knockout", KNOBS);
+    expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
+  });
+
+  it("declares NO rounds, so the field's own round budget applies", () => {
+    const stages = buildTemplateStages("swiss_knockout", { ...KNOBS, swissRounds: 9 });
+    expect(stages[0]!.config).not.toHaveProperty("rounds");
+  });
+
+  // The knob is the WHOLE difference from Swiss Playoff, whose playoff is a
+  // fixed 4. A template that ignored `qualified` here would look right in
+  // every shape test above and still build a four-team bracket for an
+  // organiser who asked for three — the owner's own trickiest case.
+  it.each([2, 3, 4, 8, 32])("takes the top %i straight from the qualified knob", (n) => {
+    const stages = buildTemplateStages("swiss_knockout", { ...KNOBS, qualified: n });
+    expect(stages[1]!.progression!.sources[0]!.take).toEqual([
+      { kind: "rankRange", from: 1, to: n },
+    ]);
+  });
+
+  it("round-trips through detectTemplate without colliding with swiss or swiss_playoff", () => {
+    expect(detectTemplate(buildTemplateStages("swiss_knockout", KNOBS))).toBe("swiss_knockout");
+    expect(detectTemplate(buildTemplateStages("swiss_playoff", KNOBS))).toBe("swiss_playoff");
+    expect(detectTemplate(buildTemplateStages("swiss", KNOBS))).toBe("swiss");
+    expect(detectTemplate(buildTemplateStages("league_ko", KNOBS))).toBe("league_ko");
+  });
+
+  it("is reported as progression-bearing, so the builder offers the carry control", () => {
+    expect(templateHasProgression("swiss_knockout")).toBe(true);
   });
 });
 

@@ -790,7 +790,9 @@ export function DivisionSettings({
                 </span>
               </label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {["league_ko", "groups_ko", "group_stepladder"].includes(template) && (
+                {["league_ko", "groups_ko", "group_stepladder", "swiss_knockout"].includes(
+                  template,
+                ) && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.topN")}
                     <input type="number" min={2} max={32} disabled={!canEdit} value={qualified}

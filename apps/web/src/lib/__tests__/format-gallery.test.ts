@@ -114,6 +114,31 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
     expect(family.pro).toBe(true);
   });
 
+  it("swiss_knockout's canned graph is a rank-adjacent swiss feeding a plain knockout", () => {
+    const family = formatFamily("swiss_knockout")!;
+    expect(family.cannedStages.map((s) => s.kind)).toEqual(["swiss", "knockout"]);
+    expect(family.cannedStages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
+    expect(family.cannedStages[0]!.progression).toBeNull();
+    expect(family.cannedStages[1]!.config).toEqual({});
+    expect(family.cannedStages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+  });
+
+  // Product decision, not an oversight: both halves are free kinds, so the
+  // badge must not claim otherwise. `league_ko` is the precedent — the
+  // server gate (usecases/format-gates.ts) refuses nothing here, and a
+  // `pro: true` badge over an ungated format is a paywall that does not
+  // exist. Asserted as an explicit `undefined` rather than a falsy check so
+  // that a later `pro: false` (which reads the same to a user and different
+  // to every `f.pro` consumer) has to be a deliberate edit to this line.
+  it("swiss_knockout is NOT Pro — unlike swiss_playoff, neither half is a gated kind", () => {
+    expect(formatFamily("swiss_knockout")!.pro).toBeUndefined();
+    expect(formatFamily("swiss_playoff")!.pro).toBe(true);
+  });
+
   it("every family's cannedStages progression is either null or a schema-valid ProgressionSpec", () => {
     for (const f of FORMAT_FAMILIES) {
       for (const stage of f.cannedStages) {
