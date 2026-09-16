@@ -34,23 +34,23 @@ export type LichessGameSnapshot = {
   };
 };
 
-export type CreateChallengeInput = {
-  whiteAccessToken: string;
-  blackLichessUsername: string;
+export type CreateOpenChallengeInput = {
+  whiteUsername: string;
+  blackUsername: string;
   clock: LichessClock;
-  rated: false;
+  expiresAt: Date;
 };
 
-export type CreateChallengeResult = {
+export type OpenChallenge = {
   challengeId: string;
-  gameId?: string;
-  whitePlayUrl: string;
-  blackPlayUrl: string;
+  urlWhite: string;
+  urlBlack: string;
 };
 
 export interface ExternalPlayAdapter {
-  createChallenge(input: CreateChallengeInput): Promise<CreateChallengeResult>;
-  fetchGame(gameId: string): Promise<LichessGameSnapshot>;
+  createOpenChallenge(input: CreateOpenChallengeInput): Promise<OpenChallenge>;
+  /** null = no such game yet (404 — open challenge not accepted, or game not created). */
+  fetchGame(gameId: string): Promise<LichessGameSnapshot | null>;
 }
 
 export class LichessHttpError extends Error {
