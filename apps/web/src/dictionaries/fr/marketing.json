@@ -118,7 +118,6 @@
   "pricing.matrix.divisions.per_competition.max": "Divisions par compétition",
   "pricing.matrix.entrants.per_division.max": "Participants par division",
   "pricing.matrix.members.max": "Membres de l'équipe",
-  "pricing.matrix.scorers.max": "Sièges marqueurs",
   "pricing.matrix.stages.per_division.max": "Étapes par division",
   "pricing.matrix.dashboard.public.max": "Tableaux de bord publics",
   "pricing.matrix.import.bulk": "Import en masse des participants",

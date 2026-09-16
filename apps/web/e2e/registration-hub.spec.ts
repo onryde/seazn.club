@@ -350,25 +350,19 @@ test.describe("RS004 registration hub", () => {
     }
   });
 
-  // --- 5. Guard: a scorer 404s; a viewer READS ------------------------------
+  // --- 5. Guard: a non-member official 404s; a viewer READS -----------------
   //
   // RS004 made the hub owner/admin-only and this test asserted both roles 404.
   // The owner REVERSED that on 2026-08-25: a viewer gets the hub read-only,
   // because the registration list and CSV export have always been readable by
   // a viewer through the API (`READ_ROLES` = owner, admin, viewer) and the UI
-  // was the only half disagreeing. So the two roles are no longer symmetric
-  // and cannot share a loop: a scorer is excluded by `requireCompetitionPage`
-  // itself (404), while a viewer must reach the page AND see the nav entry
-  // that gets them there.
-  test("guard: a scorer 404s on the hub; a viewer reads it and can navigate to it", async ({ browser }) => {
-    // A FRESH, throwaway org (not the shared Pro org). The original reason was
-    // seat contention: the shared org's `scorers.max` was 1 and scorer.spec.ts
-    // (the SERIAL project) already claimed it, and e2e-parallel / e2e-serial
-    // are independent CI jobs with no `needs:` between them. V395
-    // (entitlements v18 W2 T12) deleted `scorers.max` and the seat now draws on
-    // `members.max` (3 on community, 10 on Pro), so the pool is no longer a
-    // single seat — but a brand-new org still shares NO resource with the
-    // serial job at all, which is the property this test actually wants.
+  // was the only half disagreeing. With the org scorer role retired (#707), the
+  // complementary non-member is an official: `requireOrgPage` 404s anyone who
+  // is not an org member, while a viewer must reach the page AND see the nav
+  // entry that gets them there.
+  test("guard: a non-member official 404s on the hub; a viewer reads it and can navigate to it", async ({
+    browser,
+  }) => {
     const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
     const ownerCtx = await browser.newContext();
     const ownerPage = await ownerCtx.newPage();
@@ -384,81 +378,101 @@ test.describe("RS004 registration hub", () => {
       expect(comp.status).toBeLessThan(300);
       const compSlug = comp.data!.slug;
 
-      for (const role of ["viewer", "scorer"] as const) {
-        const invite = await apiJson<{ token: string }>(
-          ownerPage.request,
-          `/api/orgs/${org.id}/invites`,
-          "POST",
-          { role, max_uses: 1 },
+      const viewerInvite = await apiJson<{ token: string }>(
+        ownerPage.request,
+        `/api/orgs/${org.id}/invites`,
+        "POST",
+        { role: "viewer", max_uses: 1 },
+      );
+      expect(viewerInvite.status, "viewer invite create").toBeLessThan(300);
+
+      const viewerCtx = await browser.newContext();
+      const viewerPage = await viewerCtx.newPage();
+      try {
+        await loginUi(viewerPage, `delivered+e2e-reghub-viewer-${suffix}@resend.dev`);
+        const viewerAccepted = await viewerPage.request.post(
+          `/api/invites/${viewerInvite.data!.token}/accept`,
+          { data: {} },
         );
-        expect(invite.status, `${role} invite create`).toBeLessThan(300);
+        expect(viewerAccepted.ok(), "viewer invite accept").toBe(true);
 
-        const guestCtx = await browser.newContext();
-        const guestPage = await guestCtx.newPage();
-        try {
-          await loginUi(guestPage, `delivered+e2e-reghub-${role}-${suffix}@resend.dev`);
-          const accepted = await guestPage.request.post(`/api/invites/${invite.data!.token}/accept`, {
-            data: {},
-          });
-          expect(accepted.ok(), `${role} invite accept`).toBe(true);
+        const res = await viewerPage.goto(hubPath(org.slug, compSlug));
 
-          const res = await guestPage.goto(hubPath(org.slug, compSlug));
+        // Viewer: reads the hub, and gets there by CLICKING. A viewer who
+        // can only reach it by typing the URL is the same product failure
+        // as not being able to reach it at all.
+        expect(res!.status(), "a viewer should READ the hub (owner ruling 2026-08-25)").toBe(200);
+        await expect(
+          viewerPage.locator("[data-registration-hub-settings-panel], [data-registration-hub-row]").first(),
+        ).toBeVisible();
 
-          if (role === "scorer") {
-            expect(res!.status(), "a scorer should 404 on the hub, not redirect or 403").toBe(404);
-            expect(new URL(guestPage.url()).pathname, "a scorer should not be redirected off the hub URL").toBe(
-              hubPath(org.slug, compSlug),
-            );
-            // RS005: the guard lives in requireCompetitionPage, before `?tab=`
-            // is ever read (registration-hub-tab.ts's own header comment) —
-            // so a scorer must 404 on the Registrants tab too, not just the
-            // Settings tab this block already proved.
-            const regRes = await guestPage.goto(`${hubPath(org.slug, compSlug)}?tab=registrants`);
-            expect(regRes!.status(), "a scorer should 404 on the Registrants tab too").toBe(404);
-            await guestPage.goto(overviewPath(org.slug, compSlug), { waitUntil: "load" });
-            await expect(
-              guestPage.locator("[data-registration-hub-entry]"),
-              "a scorer should not see the Registration nav entry",
-            ).toHaveCount(0);
-            continue;
-          }
+        await viewerPage.goto(overviewPath(org.slug, compSlug), { waitUntil: "load" });
+        await expect(
+          viewerPage.locator("[data-registration-hub-entry]"),
+          "a viewer SHOULD see the Registration nav entry — it is their only path in",
+        ).toHaveCount(1);
 
-          // Viewer: reads the hub, and gets there by CLICKING. A viewer who
-          // can only reach it by typing the URL is the same product failure
-          // as not being able to reach it at all.
-          expect(res!.status(), "a viewer should READ the hub (owner ruling 2026-08-25)").toBe(200);
-          await expect(guestPage.locator("[data-registration-hub-settings-panel], [data-registration-hub-row]").first())
-            .toBeVisible();
+        // Read-only: the Configure control that opens the config panel is
+        // ABSENT, not disabled. Every save behind it 403s a viewer, so a
+        // greyed button would advertise a capability they do not have.
+        await viewerPage.goto(hubPath(org.slug, compSlug), { waitUntil: "load" });
+        await expect(
+          viewerPage.locator("[data-registration-hub-row-configure]"),
+          "a viewer must not see Configure",
+        ).toHaveCount(0);
 
-          await guestPage.goto(overviewPath(org.slug, compSlug), { waitUntil: "load" });
-          await expect(
-            guestPage.locator("[data-registration-hub-entry]"),
-            "a viewer SHOULD see the Registration nav entry — it is their only path in",
-          ).toHaveCount(1);
+        // RS005: the Registrants tab is read-only for a viewer too — the
+        // panel's own root carries `data-can-edit` regardless of row count,
+        // so this holds even for THIS competition (no registrations seeded
+        // here). The CONTENT half of this claim (rows visible, no mutating
+        // controls WITH real data) has its own dedicated test below —
+        // this guard test stays about the boundary, not the content.
+        await viewerPage.goto(`${hubPath(org.slug, compSlug)}?tab=registrants`, { waitUntil: "load" });
+        await expect(
+          viewerPage.locator("[data-registration-hub-registrants-panel]"),
+          "a viewer's Registrants panel must report canEdit=false",
+        ).toHaveAttribute("data-can-edit", "false");
+      } finally {
+        await viewerCtx.close();
+      }
 
-          // Read-only: the Configure control that opens the config panel is
-          // ABSENT, not disabled. Every save behind it 403s a viewer, so a
-          // greyed button would advertise a capability they do not have.
-          await guestPage.goto(hubPath(org.slug, compSlug), { waitUntil: "load" });
-          await expect(
-            guestPage.locator("[data-registration-hub-row-configure]"),
-            "a viewer must not see Configure",
-          ).toHaveCount(0);
+      const officialEmail = `delivered+e2e-reghub-official-${suffix}@resend.dev`;
+      const official = await apiJson<{ id: string }>(ownerPage.request, "/api/v1/officials", "POST", {
+        display_name: `Reg Hub Ref ${suffix}`,
+        role_keys: ["referee"],
+      });
+      expect(official.status, "official create").toBeLessThan(300);
+      const offInvite = await apiJson<{ claim_url: string }>(
+        ownerPage.request,
+        `/api/v1/officials/${official.data!.id}/invite`,
+        "POST",
+        { email: officialEmail },
+      );
+      expect(offInvite.status, "official invite create").toBeLessThan(300);
 
-          // RS005: the Registrants tab is read-only for a viewer too — the
-          // panel's own root carries `data-can-edit` regardless of row count,
-          // so this holds even for THIS competition (no registrations seeded
-          // here). The CONTENT half of this claim (rows visible, no mutating
-          // controls WITH real data) has its own dedicated test below —
-          // this guard test stays about the boundary, not the content.
-          await guestPage.goto(`${hubPath(org.slug, compSlug)}?tab=registrants`, { waitUntil: "load" });
-          await expect(
-            guestPage.locator("[data-registration-hub-registrants-panel]"),
-            "a viewer's Registrants panel must report canEdit=false",
-          ).toHaveAttribute("data-can-edit", "false");
-        } finally {
-          await guestCtx.close();
-        }
+      const offCtx = await browser.newContext();
+      const offPage = await offCtx.newPage();
+      try {
+        await loginUi(offPage, officialEmail);
+        const claimToken = (offInvite.data!.claim_url ?? "").split("/claim/")[1] ?? "";
+        expect(claimToken, "official claim token").toBeTruthy();
+        const claimed = await offPage.request.post(`/api/claims/${claimToken}/accept`, { data: {} });
+        expect(claimed.ok(), "official claim accept").toBe(true);
+
+        const offRes = await offPage.goto(hubPath(org.slug, compSlug));
+        expect(offRes!.status(), "a non-member official should 404 on the hub").toBe(404);
+        expect(new URL(offPage.url()).pathname, "an official should not be redirected off the hub URL").toBe(
+          hubPath(org.slug, compSlug),
+        );
+        const regRes = await offPage.goto(`${hubPath(org.slug, compSlug)}?tab=registrants`);
+        expect(regRes!.status(), "a non-member official should 404 on the Registrants tab too").toBe(404);
+        await offPage.goto(overviewPath(org.slug, compSlug), { waitUntil: "load" });
+        await expect(
+          offPage.locator("[data-registration-hub-entry]"),
+          "a non-member official should not see the Registration nav entry",
+        ).toHaveCount(0);
+      } finally {
+        await offCtx.close();
       }
     } finally {
       await ownerCtx.close();

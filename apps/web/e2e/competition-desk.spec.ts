@@ -8,7 +8,7 @@ import {
   setFixtureStatusSql,
   setFixtureScheduledAtSql,
   setStageStatusSql, setZoneSplitSql,
-  assignScorerSql,
+  assignFixtureOfficialSql,
   backdateFixtureStartSql,
   scoreFixture } from "./helpers";
 import { findBucketSplit, findPrintSplit, sweepZoneSplitFinders } from "./zone-split";
@@ -477,7 +477,7 @@ test.describe("competition desk", () => {
 
     // Assign someone and backdate the kick-off past the grace: the row becomes
     // its amber complement, and the two never appear together.
-    await assignScorerSql(fixtureId);
+    await assignFixtureOfficialSql(fixtureId);
     // The clock is the KICK-OFF (core.start's own recorded_at), so re-dating
     // the fixture would do nothing — which is the whole point of review 7's
     // Minor 8b, and is what this test caught on its first run. Age the start

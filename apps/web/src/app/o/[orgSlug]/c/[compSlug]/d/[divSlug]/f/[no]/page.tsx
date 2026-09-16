@@ -46,9 +46,8 @@ export default async function FixturePage({
   const page = await requireFixturePage(orgSlug, compSlug, divSlug, fixtureNo);
   const { auth, canScore, canEdit } = page;
   const id = page.fixtureId;
-  // Scorer-role members and viewers scoring via assignment share the umpire
-  // chrome (My-matches breadcrumb); editors keep the organiser surface.
-  const isScorer = canScore && !canEdit;
+  // Accepted officials scoring without edit rights get the courtside chrome.
+  const isOfficialScorer = canScore && !canEdit;
   const fixture = await getFixture(auth, id);
   const [division, state, events, recorderNames, availability, schedule] = await Promise.all([
     getDivision(auth, fixture.division_id),
@@ -126,9 +125,9 @@ export default async function FixturePage({
   return (
     <>
       <main className="mx-auto max-w-5xl px-4 py-8">
-        {isScorer && (
+        {isOfficialScorer && (
           <p className="mb-4 text-xs text-slate-400">
-            <Link href="/my-matches" className="hover:text-purple-600">
+            <Link href="/me" className="hover:text-purple-600">
               ← My matches
             </Link>
             <span className="ml-2">
@@ -140,7 +139,7 @@ export default async function FixturePage({
         {/* Player self-check-in QR (PROMPT-53) — top of the match panel, and
             only BEFORE the match starts (owner feedback 2026-07-13): check-in
             is an arrival tool, once play begins it's just noise. */}
-        {!isScorer &&
+        {!isOfficialScorer &&
           canScore &&
           !(competition.frozen ?? false) &&
           fixture.status === "scheduled" && (

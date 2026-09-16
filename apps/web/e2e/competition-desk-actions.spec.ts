@@ -2,7 +2,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 import {
   TAG, apiJson, activeOrg, addEntrantsViaApi, scoreFixture,
   setFixtureStatusSql,
-  assignScorerSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
+  assignFixtureOfficialSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
 } from "./helpers";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -288,7 +288,7 @@ const ROWS: Row[] = [
       // well past NOT_RECORDING_GRACE_MINUTES rather than sitting on it, so
       // this fixture keeps producing the state it is built for if the grace
       // is ever widened.
-      await assignScorerSql(fixtureId);
+      await assignFixtureOfficialSql(fixtureId);
       await setFixtureScheduledAtSql(
         fixtureId,
         new Date(Date.now() - (NOT_RECORDING_GRACE_MINUTES + 45) * 60_000).toISOString(),

@@ -375,7 +375,7 @@ test("team tab: an email invite is really accepted, the new member's role change
   ).toBe("admin");
 
   // ── invite by link, and a double tap must not mint two ───────────────────
-  await page.getByTestId("team-invite-link-role").selectOption("scorer");
+  await page.getByTestId("team-invite-link-role").selectOption("viewer");
   const before = liveLinks(await readInvites());
   const beforeLinks = before.length;
   const beforeTokens = new Set(before.map((i) => i.token));
@@ -398,7 +398,7 @@ test("team tab: an email invite is really accepted, the new member's role change
   expect(doomed, "the link invite the double tap created could not be identified").toBeTruthy();
   // The role the picker was on, not merely the default — a create that ignored
   // the select would still have produced exactly one row.
-  expect(doomed!.role).toBe("scorer");
+  expect(doomed!.role).toBe("viewer");
 
   // A sibling, so the revoke below has a positive pair to survive it.
   await page.getByTestId("team-invite-link-role").selectOption("admin");

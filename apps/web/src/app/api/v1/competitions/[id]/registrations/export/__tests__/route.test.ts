@@ -46,7 +46,7 @@ async function signedInOwner() {
   return { orgId, owner: asOwner(orgId, ownerId) };
 }
 
-async function memberWithRole(orgId: string, role: "admin" | "viewer" | "scorer"): Promise<string> {
+async function memberWithRole(orgId: string, role: "admin" | "viewer"): Promise<string> {
   const userId = await makeUser(role);
   await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, ${role})`;
   return userId;
@@ -112,12 +112,11 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations/export", () => {
     expect(json.error.code).toBe("PAYMENT_REQUIRED");
   });
 
-  it("authz: owner, admin and viewer are let in; scorer is refused", async () => {
+  it("authz: owner, admin and viewer are let in", async () => {
     const { orgId, owner } = await signedInOwner();
     const { competition } = await rig(owner);
     const adminId = await memberWithRole(orgId, "admin");
     const viewerId = await memberWithRole(orgId, "viewer");
-    const scorerId = await memberWithRole(orgId, "scorer");
 
     authState.userId = owner.userId!;
     expect((await GET(exportReq(competition.id), ctx(competition.id))).status).toBe(200);
@@ -127,8 +126,5 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations/export", () => {
 
     authState.userId = viewerId;
     expect((await GET(exportReq(competition.id), ctx(competition.id))).status).toBe(200);
-
-    authState.userId = scorerId;
-    expect((await GET(exportReq(competition.id), ctx(competition.id))).status).toBe(403);
   });
 });

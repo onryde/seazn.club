@@ -19,7 +19,7 @@ export async function GET(
     const { id } = await params;
     await requireOrgRole(id, EDITOR_ROLES);
     return sql<OrgInvite[]>`
-      select id, org_id, role, default_scope, email, token, expires_at, max_uses,
+      select id, org_id, role, email, token, expires_at, max_uses,
              used_count, revoked, created_at
       from org_invites
       where org_id = ${id}
@@ -28,9 +28,7 @@ export async function GET(
 }
 
 /** Create an invite (editors only): a shareable link, or — when `email` is
- *  present — a personal invite emailed to that address. Scorer invites may
- *  carry a default_scope: accepting then creates the assignment too
- *  (doc 13 §4). */
+ *  present — a personal invite emailed to that address. */
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },

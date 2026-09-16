@@ -13,7 +13,7 @@ import { fireDivisionRevalidate } from "../public-site/revalidate";
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
 import { moveFixture, courtNamesById } from "./schedule";
-import { scoresViaAssignment } from "./scorers";
+import { subjectToScorerCapabilityGates } from "./scorers";
 import { gateRosterEligibility } from "./registration-eligibility";
 import { disciplineEnforcedForFixture, gateLineupSuspensions } from "./discipline";
 import { resolveModule } from "@/server/engine-db";
@@ -382,10 +382,9 @@ export async function putLineup(
       from fixtures f join divisions d on d.id = f.division_id
       where f.id = ${fixtureId}`;
     if (!fixture) throw new HttpError(404, "fixture not found");
-    // Doc 13 §2: lineup entry is config-gated for anyone scoring via
-    // assignment (courtside reality default: allowed). Coverage was proven
-    // at the door.
-    if (scoresViaAssignment(auth.role) && !fixture.scorer_can_enter_lineups) {
+    // Lineup entry is config-gated for non-editors (accepted officials).
+    // Coverage was proven at the door.
+    if (subjectToScorerCapabilityGates(auth) && !fixture.scorer_can_enter_lineups) {
       throw new HttpError(403, "Lineup entry is restricted to organisers in this division");
     }
     if (fixture.home_entrant_id !== entrantId && fixture.away_entrant_id !== entrantId) {

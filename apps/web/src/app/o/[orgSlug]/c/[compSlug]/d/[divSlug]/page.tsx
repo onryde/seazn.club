@@ -220,7 +220,7 @@ export default async function DivisionPage({
       // disagreeing with competition-desk.ts.
       matchMinutes,
       // Same reason as `eventCount` above: unread by `resolvePhase`, stubbed
-      // rather than fetched (a scorer_assignments lookup belongs to the
+      // rather than fetched (a fixture_officials lookup belongs to the
       // competition desk's ATTENTION computation, not this page's phase-only
       // one).
       hasScorer: false,

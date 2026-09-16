@@ -6,7 +6,6 @@ const base: InviteRow = {
   org_id: "o1",
   org_name: "Riverside",
   role: "viewer",
-  default_scope: null,
   email: null,
   expires_at: null,
   max_uses: 0,

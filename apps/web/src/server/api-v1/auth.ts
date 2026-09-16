@@ -226,12 +226,11 @@ export async function requireOrgAuth(req: Request, orgId: string, scope: Scope):
 }
 
 /**
- * Fixture-scoped authentication for the scoring surface (doc 13 §2/§3):
- * editors and write-scoped API keys pass outright; a scorer passes iff a
- * covering assignment exists (fixture ⊂ division ⊂ competition); a viewer
- * passes for `read` only; a non-member is only let in by an *accepted*
+ * Fixture-scoped authentication for the scoring surface: editors and
+ * write-scoped API keys pass outright; a viewer passes for `read` only;
+ * scoring requires owner/admin, a write-scoped key, or an *accepted*
  * fixture_officials assignment (design v2 §A2/§A3 — officials are usually
- * non-members, so this branch runs off userId, never role/membership). The
+ * non-members, so that branch runs off userId, never role/membership). The
  * capability config gates (finalize, lineups, void-pre-finalize) stay in the
  * use-cases, which re-check via requireScorable.
  */
@@ -286,19 +285,10 @@ export async function requireFixtureActor(
   const ctx: AuthCtx = recordAuthContext({ orgId, via: "session", userId: user.id, role, keyId: null });
   if (role === "owner" || role === "admin") return ctx;
   if (role === "viewer" && intent === "read") return ctx;
-  if (!role) {
-    // Non-member — the only remaining door is an *accepted* fixture_officials
-    // assignment on this exact fixture (doc 13 §A2/§A3). Covers both read and
-    // score: the officiating rail has no separate read-only tier. Never a
-    // membership-widening grant — `ctx.role` stays null either way.
-    const { acceptedOfficialCovers } = await import("@/server/usecases/scorers");
-    if (await acceptedOfficialCovers(user.id, fixtureId)) return ctx;
-    throw new AuthError("You are not a member of this organization");
-  }
-  const { requireScorable, scoresViaAssignment } = await import("@/server/usecases/scorers");
-  if (scoresViaAssignment(role)) {
-    // Scorers always, viewers when writing (additive umpire invites) — both
-    // need a covering assignment; 403 without one.
+  const { acceptedOfficialCovers, requireScorable } = await import("@/server/usecases/scorers");
+  if (await acceptedOfficialCovers(user.id, fixtureId)) return ctx;
+  if (!role) throw new AuthError("You are not a member of this organization");
+  if (intent === "score") {
     await requireScorable(ctx, fixtureId);
     return ctx;
   }

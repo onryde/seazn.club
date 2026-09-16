@@ -2559,13 +2559,10 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
       headersObjects('const El = () => <code>Authorization: Bearer sc_…</code>;', "probe.tsx"),
     ).toEqual([]);
 
-    // The half that IS enforced everywhere is ADMISSION: an invite or a
-    // promotion past members.max is refused in the same transaction.
+    // The half that IS enforced everywhere is ADMISSION: an invite past
+    // members.max is refused in the same transaction (role changes are not).
     expect(codeOnly(webSource("lib/invites.ts"), "invites.ts")).toContain('"members.max"');
-    expect(
-      codeOnly(webSource("app/api/orgs/[id]/members/[userId]/role/route.ts"), "route.ts"),
-    ).toContain('"members.max"');
-    expect(addOns).toMatch(/invitation or a promotion that would take you past the limit is refused/i);
+    expect(addOns).toMatch(/invitation that would take you past the limit is refused/i);
   });
 
   // CLAIM: "added to your next invoice rather than charged on the spot."
