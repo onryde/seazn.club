@@ -43,10 +43,15 @@
 //     `seed !== null`, which keeps the chip for a zero-seeded entrant; the
 //     literal truthiness silently drops it. Tested both ways below.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { autoColour } from "@/components/ui/entity-logo";
-import type { ReactElement, ReactNode } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { openFace, textWidth } from "./font-advance";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
@@ -939,6 +944,178 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
     tap("mh-teams-division-all");
     expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=teams");
     expect(cards()).toEqual(["mh-team-e1", "mh-team-e2", "mh-team-e3"]);
+  });
+});
+
+// R11 screenshot run (2026-09-16), Chromium: at 390 the two-column grid left a
+// team name 28px wide ("Ki…", "Mil…") and wrapped "7 members" onto two lines; at
+// 1280 four columns cut "Millbrook Ro…"; and a TAP on a name at 320 left it cut
+// mid-letter with no ellipsis. `apps/web` vitest has no layout, so the column
+// arithmetic is done here from the classes the tab and the page actually carry,
+// priced by Tailwind's own theme, against a real name measured in the committed
+// Geist face. The browser measurements that chose the breakpoints live with the
+// fix round's probe; this suite is what keeps them chosen.
+describe("TeamsTab — a card holds a real team name at every width from 320 (R11)", () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const WEB = path.resolve(HERE, "../../../..");
+  const THEME = readFileSync(
+    path.join(path.dirname(createRequire(import.meta.url).resolve("tailwindcss/package.json")), "theme.css"),
+    "utf8",
+  );
+  /** A theme length in px (rem at the 16px root). */
+  const themePx = (name: string): number => {
+    const m = new RegExp(`--${name}:\\s*([0-9.]+)rem;`).exec(THEME);
+    if (!m) throw new Error(`the Tailwind theme declares no --${name} in rem`);
+    return Number(m[1]) * 16;
+  };
+  const spacing = (steps: string) => Number(steps) * themePx("spacing");
+  const classesOfEl = (el: ReactElement) => String(propsOf(el).className ?? "").split(/\s+/).filter(Boolean);
+
+  // The widest realistic 24-character name tried in the browser (W-heavy), and
+  // the 43-character one the phone-composition overflow was found with.
+  const NAME_24 = "West Wimbledon Wanderers";
+  const NAME_43 = "Kingsbridge & Westmoor United Football Club";
+  // Geist BOLD, not the medium the card paints: the committed faces are 400 and
+  // 700, and bold only over-estimates (Chromium painted NAME_24 at 185px in the
+  // medium weight; bold prices it at 198.6px) — the safe side for a "fits" gate.
+  const GEIST_BOLD = openFace(path.join(WEB, "assets/fonts/Geist-Bold.ttf"), "Geist Bold");
+
+  const doc = hubDoc({
+    teams: [
+      team("e1", NAME_24, null, "#123456", { seed: 12, members: [member("Ann Lee", 1)] }),
+      team("e2", NAME_43, null, null, { seed: 3, members: [] }),
+      team("e3", "Red Rockets", null, null),
+    ],
+  });
+  const tree = () => renderIsland(TeamsTab, { doc, dict, locale: "en" as const, initialDivision: null }).tree();
+  const summaries = () => tree().filter((el) => el.type === "summary");
+
+  /** The page's content column: the `<main>` of the org layout the hub renders in. */
+  const contentPx = (viewport: number): number => {
+    const layout = readFileSync(path.join(WEB, "src/app/(public)/shared/[orgSlug]/layout.tsx"), "utf8");
+    const main = /<main className="([^"]*)"/.exec(layout)?.[1]?.split(" ") ?? [];
+    const maxW = main.find((c) => /^max-w-/.test(c));
+    const px = main.find((c) => /^px-\d+$/.test(c));
+    if (!maxW || !px) throw new Error(`the org layout's <main> lost its max-w/px classes: ${main.join(" ")}`);
+    return Math.min(viewport, themePx(`container-${maxW.slice("max-w-".length)}`)) - 2 * spacing(px.slice(3));
+  };
+
+  /** How many columns the card grid lays out at a viewport, from its own classes. */
+  const columnsAt = (ul: ReactElement, viewport: number): number => {
+    let cols = 0;
+    let from = -1;
+    for (const cls of classesOfEl(ul)) {
+      const m = /^(?:(sm|md|lg|xl|2xl|min-\[(\d+)px\]):)?grid-cols-(\d+)$/.exec(cls);
+      if (!m) continue;
+      const at = m[2] ? Number(m[2]) : m[1] ? themePx(`breakpoint-${m[1]}`) : 0;
+      if (viewport >= at && at >= from) {
+        from = at;
+        cols = Number(m[3]);
+      }
+    }
+    if (cols === 0) throw new Error("the card grid declares no grid-cols");
+    return cols;
+  };
+  const gridOf = (els: ReactElement[]) => els.find((el) => el.type === "ul" && classesOfEl(el).some((c) => c.includes("grid-cols-")))!;
+
+  // Where a closed card is narrowest. Inside one column band the card only
+  // widens with the viewport (until the layout's max-w caps it), so the
+  // narrowest card of a band is at its LOWER bound: 320 for the unprefixed
+  // band (the narrowest width supported), and each breakpoint's own width for
+  // the rest — read from the grid's classes, so moving a breakpoint moves the
+  // sample with it. The other widths are the product's screenshot widths.
+  const WIDTHS = (() => {
+    const bounds = classesOfEl(gridOf(tree()))
+      .map((cls) => /^(?:(sm|md|lg|xl|2xl)|min-\[(\d+)px\]):grid-cols-\d+$/.exec(cls))
+      .filter((m): m is RegExpExecArray => m !== null)
+      .map((m) => (m[2] ? Number(m[2]) : themePx(`breakpoint-${m[1]}`)));
+    return [...new Set([320, 390, 768, 1024, 1280, ...bounds])].sort((a, b) => a - b);
+  })();
+
+  it("the card grid's column bands are exactly 1 / sm:2 / lg:3 — every grid-cols token on it, prefixed or not", () => {
+    // Exact tokens, anchored on the token boundary: a `\bmd:` substring probe
+    // also matches `max-md:` (AGENTS.md). A new or moved band is a layout
+    // decision this suite's widths were measured for, so it reds here first.
+    expect(classesOfEl(gridOf(tree())).filter((c) => /(?:^|:)grid-cols-/.test(c))).toEqual([
+      "grid-cols-1",
+      "sm:grid-cols-2",
+      "lg:grid-cols-3",
+    ]);
+    // …and the samples below include each band's lower bound.
+    expect(WIDTHS).toEqual(expect.arrayContaining([320, themePx("breakpoint-sm"), themePx("breakpoint-lg")]));
+  });
+
+  it("the name row is crest, name and chevron only — the seed chip rides the member line, and neither the count nor the chip can wrap", () => {
+    for (const summary of summaries()) {
+      const children = ([] as unknown[]).concat(propsOf(summary).children).filter(isValidElement) as ReactElement[];
+      // EntityLogo, the name column, the chevron: nothing else competes with
+      // the name for the row. A seed chip here cost the name 61px at 320.
+      expect(children.map((c) => (typeof c.type === "string" ? c.type : "EntityLogo"))).toEqual([
+        "EntityLogo",
+        "span",
+        "svg",
+      ]);
+    }
+    const e1 = summaries()[0]!;
+    const column = (([] as unknown[]).concat(propsOf(e1).children).filter(isValidElement) as ReactElement[])[1]!;
+    const inColumn = walk(propsOf(column).children as ReactNode);
+    const count = inColumn.find((el) => textOf(el) === "1 member");
+    const chip = inColumn.find((el) => textOf(el) === "Seed 12");
+    expect(count, "the member count is inside the name column").toBeTruthy();
+    expect(chip, "the seed chip is inside the name column").toBeTruthy();
+    expect(classesOfEl(count!)).toContain("whitespace-nowrap");
+    expect(classesOfEl(chip!)).toContain("whitespace-nowrap");
+  });
+
+  it.each(WIDTHS)("at %ipx a closed card leaves a 24-character name its full width, and a 43-character one still ellipsises", (viewport) => {
+    const ul = gridOf(tree());
+    const cols = columnsAt(ul, viewport);
+    const gap = classesOfEl(ul).find((c) => /^gap-\d+(\.\d+)?$/.test(c));
+    expect(gap, "the grid gap").toBeTruthy();
+    const card = (contentPx(viewport) - (cols - 1) * spacing(gap!.slice(4))) / cols;
+
+    // What the closed card spends on everything BUT the name, priced from the
+    // classes: the details' 1px border, the summary's padding, the crest, the
+    // chevron, and one gap between each pair of the summary's children.
+    const summary = summaries()[0]!;
+    const sumCls = classesOfEl(summary);
+    const padX = sumCls.find((c) => /^px-\d+$/.test(c));
+    const sumGap = sumCls.find((c) => /^gap-\d+$/.test(c));
+    expect(padX && sumGap, "the summary's px/gap").toBeTruthy();
+    const children = ([] as unknown[]).concat(propsOf(summary).children).filter(isValidElement) as ReactElement[];
+    let spend = 2 + 2 * spacing(padX!.slice(3)) + (children.length - 1) * spacing(sumGap!.slice(4));
+    // A child with a width this test cannot price is priced at 0 — the
+    // OPTIMISTIC side, so the room check below reds on arithmetic it can do —
+    // and is then refused outright, because it competes with the name.
+    const unpriced: string[] = [];
+    for (const child of children) {
+      if (typeof child.type !== "string") spend += Number(propsOf(child).size);
+      else if (child.type === "svg") {
+        const w = classesOfEl(child).find((c) => /^w-\d+$/.test(c));
+        expect(w, "the chevron's width").toBeTruthy();
+        spend += spacing(w!.slice(2));
+      } else if (!classesOfEl(child).includes("flex-1")) {
+        unpriced.push(`<${child.type} class="${classesOfEl(child).join(" ")}">`);
+      }
+    }
+    const room = card - spend;
+    const need = textWidth(GEIST_BOLD, NAME_24, 14);
+    expect(room, `${viewport}px: ${cols} column(s), card ${card.toFixed(0)}px, name room ${room.toFixed(0)}px`).toBeGreaterThanOrEqual(need);
+    expect(unpriced, "fixed-width summary children beside the name").toEqual([]);
+    // The positive pair: the long name really is longer than the room, so the
+    // truncate chain is still what shows it — this is not "every name fits".
+    expect(textWidth(GEIST_BOLD, NAME_43, 14)).toBeGreaterThan(room);
+  });
+
+  it("every summary carries select-none — the class that, in Chromium, stops a tap leaving a caret that drops the name's ellipsis (browser-proven in the R11 probe, not here)", () => {
+    // Measured, not assumed (R11 fix probe): a pointer or touch tap on the
+    // truncated name leaves `getSelection().type === "Caret"` inside the text
+    // node, and Chromium lays that line out WITHOUT its ellipsis — cut
+    // mid-letter, open or closed, until the selection moves. Keyboard Enter,
+    // a chevron tap and `details.open = true` place no caret and keep it;
+    // `removeAllRanges()` alone restores it. `user-select: none` on the
+    // control stops the caret being placed at all.
+    for (const summary of summaries()) expect(classesOfEl(summary)).toContain("select-none");
   });
 });
 

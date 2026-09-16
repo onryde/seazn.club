@@ -166,8 +166,10 @@ describe("player page — the Matches section", () => {
     const { html } = await renderPage({ matches: [line("f3"), line("f2", { result: "lost" }), line("f1", { result: "drawn" })] });
     expect(slabId(html)).toBe("f3");
     expect(rowIds(html)).toEqual(["f2", "f1"]);
-    // The slab's figures are the newest line's, not a row's.
-    expect(html).toMatch(/data-testid="mh-player-slab-figures"[^>]*>f3 figures</);
+    // The slab's figures are the newest line's, not a row's. Read as TEXT: the
+    // figures are split into break-safe runs (R11), so the words sit in spans.
+    const figures = html.match(/data-testid="mh-player-slab-figures"[^>]*>([\s\S]*?)<\/p>/)?.[1] ?? "";
+    expect(figures.replace(/<[^>]+>/g, "")).toBe("f3 figures");
   });
 
   it("a LIVE line leads even when a newer line exists — and the slab carries the live pill", async () => {

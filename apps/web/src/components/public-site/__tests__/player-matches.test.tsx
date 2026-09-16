@@ -13,7 +13,10 @@
 // `setInterval`: the island also runs a clock for its "Updated Ns ago" line,
 // and a spy that reads interval lengths cannot tell that clock from the poll.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { builtinModules } from "@seazn/engine/sports";
 import { renderToStaticMarkup } from "react-dom/server";
+import { t as tDict } from "@/lib/i18n-runtime";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -303,5 +306,242 @@ describe("PlayerMatches — dates in the org's locale, day-month for English", (
     expect(html).toContain(`>${fmt("es", MONTH)}<`);
     expect(fmt("es", SLAB)).not.toBe(fmt(intlLocaleFor("en"), SLAB));
     expect(html).not.toContain(`>${fmt(intlLocaleFor("en"), SLAB)}<`);
+  });
+});
+
+// R11 screenshot run (2026-09-16), Chromium at 320: the live slab's score broke
+// as "1 — 0 · 21–17 (11–" / "9)" — Chromium may wrap after an en dash, so a
+// plain text run splits a score inside itself — and on a row the long badminton
+// line "2 — 0 · 21–15, 21–18" took the auto column and squeezed the opponent to
+// "V PRI…" and the division chip to "ME…".
+//
+// No layout exists in this vitest, so what is pinned is the break STRUCTURE the
+// markup hands the browser: every character of a score sits in a `nowrap` run,
+// the only breakable text is a single space between runs, each " · " part is
+// its own inline-block (so a line breaks between parts before it breaks inside
+// one), and no run boundary falls inside a score. The browser measurements —
+// line counts and where each line breaks, at 320/390/768/1024/1280 — are the
+// fix round's probe. The lines are not typed here: they are every headline the
+// engine's own `summary()` produces over its recorded golden states (each sport,
+// in play and decided), plus the cricket figure line built from each locale's
+// dictionary templates.
+describe("PlayerMatches — a score breaks only between its parts (R11)", () => {
+  const sportsDir = new URL("../../../../../../packages/engine/src/sports/", import.meta.url);
+  const headlines = (() => {
+    const byShape = new Map<string, Set<string>>();
+    for (const file of (readdirSync(sportsDir, { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json"))) {
+      const corpus = JSON.parse(readFileSync(new URL(file, sportsDir), "utf8")) as {
+        key: string;
+        streams: { states: string[] }[];
+      };
+      const sport = builtinModules.find((m) => m.key === corpus.key);
+      if (!sport) throw new Error(`no builtin module for the golden corpus "${corpus.key}"`);
+      for (const stream of corpus.streams) {
+        // A state is stored as JSON, or as a `#hash` of one; only JSON folds.
+        for (const state of stream.states.filter((s) => s.startsWith("{"))) {
+          const headline = (sport.summary(JSON.parse(state) as never) as { headline: string }).headline;
+          // One per SHAPE (digits collapsed) keeps the corpus to its distinct
+          // grammars; the shortest and the longest of each are both kept.
+          const shape = headline.replace(/\d+/g, "9");
+          const seen = byShape.get(shape) ?? new Set<string>();
+          seen.add(headline);
+          byShape.set(shape, seen);
+        }
+      }
+    }
+    const out: string[] = [];
+    for (const seen of byShape.values()) {
+      const sorted = [...seen].sort((a, b) => a.length - b.length);
+      out.push(sorted[0]!, sorted.at(-1)!);
+    }
+    return [...new Set(out)];
+  })();
+  const cricketLines = [en, es].flatMap((d) =>
+    [
+      [102, 87, 10, 104],
+      [0, 1, 0, 0],
+    ].map(([runs, balls, wickets, conceded]) =>
+      tDict(d as Dict, "player.line.cricket", {
+        batting: tDict(d as Dict, "player.line.batting", { runs: runs!, balls: balls! }),
+        bowling: tDict(d as Dict, "player.line.bowling", { wickets: wickets!, runs: conceded! }),
+      }),
+    ),
+  );
+  const LINES = [...headlines, ...cricketLines];
+
+  const decode = (s: string) =>
+    s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;/g, "'");
+
+  /** One element's inner markup, by testid, balanced over its own tag name. */
+  const inner = (html: string, testid: string): string => {
+    const at = html.indexOf(`data-testid="${testid}"`);
+    expect(at, `${testid} is in the markup`).toBeGreaterThan(-1);
+    const open = html.lastIndexOf("<", at);
+    const tag = /^<([a-z]+)/.exec(html.slice(open))![1]!;
+    let depth = 0;
+    const re = new RegExp(`<(/?)${tag}\\b[^>]*>`, "g");
+    re.lastIndex = open;
+    for (let m = re.exec(html); m; m = re.exec(html)) {
+      depth += m[1] ? -1 : 1;
+      if (depth === 0) return html.slice(html.indexOf(">", open) + 1, m.index);
+    }
+    throw new Error(`${testid} never closes`);
+  };
+
+  /** The figures markup read the way the line breaker reads it. */
+  function breakStructure(markup: string) {
+    const parts: string[] = []; // each inline-block's text
+    const runs: string[] = []; // each nowrap run's text
+    const loose: string[] = []; // text outside any nowrap run
+    const stack: string[][] = [];
+    let text = "";
+    for (const m of markup.matchAll(/<(\/?)span([^>]*)>|([^<]+)/g)) {
+      if (m[3] !== undefined) {
+        const chunk = decode(m[3]);
+        text += chunk;
+        if (stack.some((cls) => cls.includes("whitespace-nowrap"))) runs[runs.length - 1] += chunk;
+        else loose.push(chunk);
+        if (stack.length > 0 && parts.length > 0) parts[parts.length - 1] += chunk;
+        continue;
+      }
+      if (m[1]) {
+        stack.pop();
+        continue;
+      }
+      const cls = /class="([^"]*)"/.exec(m[2] ?? "")?.[1]?.split(" ") ?? [];
+      if (cls.includes("inline-block") && stack.length === 0) parts.push("");
+      if (cls.includes("whitespace-nowrap")) runs.push("");
+      stack.push(cls);
+    }
+    return { text, parts, runs, loose };
+  }
+
+  /** Why a break between two nowrap runs would split a score, or null. */
+  function illegalBoundary(left: string, right: string, before: string): string | null {
+    const depth = [...before].reduce((d, c) => d + ("([".includes(c) ? 1 : ")]".includes(c) ? -1 : 0), 0);
+    if (depth !== 0) return "inside brackets";
+    if (/[—–-]$/.test(left) || /^[—–-]/.test(right)) return "beside a dash";
+    // A bracket may leave only a whole tally ("12 — 11" | "(10–9 pens)"), and
+    // never as a bare count — that is a cricket innings' overs ("133/6 (9.4)").
+    const tallyQualifier = / — \S+$/.test(left) && !/^\([\d.]+\)$/.test(right);
+    if (/^[([]/.test(right) && !tallyQualifier) return "a bracketed qualifier leaves its score";
+    if (/^&/.test(right)) return "a line starts with the joiner";
+    if (/^[A-Za-z]+$/.test(left.split(" ").at(-1)!)) return "a label leaves the score it names";
+    return null;
+  }
+
+  const render = (figures: string) =>
+    renderToStaticMarkup(
+      <PlayerMatches
+        orgSlug="riverside"
+        competitionSlug="autumn-cup"
+        personId={PERSON}
+        initial={doc([line("f2", figures, { result: "live" }), line("f1", figures, { result: "won" })])}
+        dict={en as Dict}
+        locale="en"
+      />,
+    );
+
+  it("premise: the corpus is the engine's real grammar — set lists, tennis strips with tiebreaks and game points, shoot-outs, labels", () => {
+    expect(LINES.some((l) => /^\d+ — \d+ · \d+–\d+, \d+–\d+, \d+–\d+/.test(l)), "a three-game list").toBe(true);
+    expect(LINES.some((l) => /\d+–\d+\(\d+\)[^·]* · \d+–\d+ \((?:Ad–40|40–Ad|\d+–\d+)\)$/.test(l)), "tennis with a tiebreak and game points").toBe(true);
+    expect(LINES.some((l) => /\(TB \d+–\d+\)$/.test(l)), "a tiebreak game").toBe(true);
+    expect(LINES.some((l) => /· MTB \d+–\d+$/.test(l)), "a match tiebreak label").toBe(true);
+    expect(LINES.some((l) => /\(\d+–\d+ pens\)$/.test(l)), "football pens").toBe(true);
+    expect(LINES).toContain("vs");
+    expect(LINES).toContain("102 (87) & 10/104");
+    expect(LINES.length).toBeGreaterThan(60);
+  });
+
+  it.each(["mh-player-slab-figures", "mh-player-row-figures"])("%s: every line reads back verbatim, and only a single space between nowrap runs can break", (testid) => {
+    const bad: string[] = [];
+    for (const figures of LINES) {
+      const s = breakStructure(inner(render(figures), testid));
+      if (s.text !== figures) bad.push(`${figures}: reads back as "${s.text}"`);
+      const stray = s.loose.filter((chunk) => chunk !== " ");
+      if (stray.length > 0) bad.push(`${figures}: breakable text ${JSON.stringify(stray)}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it.each(["mh-player-slab-figures", "mh-player-row-figures"])("%s: each ' · ' part is its own inline-block, and a part breaks inside itself only between whole scores", (testid) => {
+    const bad: string[] = [];
+    for (const figures of LINES) {
+      const s = breakStructure(inner(render(figures), testid));
+      const expected = figures.split(" · ").map((part, i, all) => (i < all.length - 1 ? `${part} ·` : part));
+      if (JSON.stringify(s.parts) !== JSON.stringify(expected)) bad.push(`${figures}: parts ${JSON.stringify(s.parts)}`);
+      let before = "";
+      for (const [i, run] of s.runs.entries()) {
+        if (i > 0) {
+          const why = illegalBoundary(s.runs[i - 1]!, run, before);
+          if (why) bad.push(`${figures}: "${s.runs[i - 1]}" | "${run}" — ${why}`);
+          before += " ";
+        }
+        before += run;
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it.each(["mh-player-slab-figures", "mh-player-row-figures"])("%s: a shoot-out after a two-digit tally is two runs, split before its bracket ('12 — 11' | '(10–9 pens)'); a cricket innings keeps its overs", (testid) => {
+    // Glued, "12 — 11 (10–9 pens)" was one run 18.5px wider than the 256px
+    // slab at 320 and "10 — 10 (12–11 pens)" 36.4px (Chromium, committed
+    // Barlow Condensed Bold, review r11fix m1); the slab clipped both.
+    const cases: [string, string[]][] = [
+      ["12 — 11 (10–9 pens)", ["12 — 11", "(10–9 pens)"]],
+      ["10 — 10 (12–11 pens)", ["10 — 10", "(12–11 pens)"]],
+      ["3 — 3 (GWS 10–11)", ["3 — 3", "(GWS 10–11)"]],
+      ["61/9 (20) — 35 (5)", ["61/9 (20) — 35 (5)"]],
+      ["99/2 (14.4) — 133/6 (9.4)", ["99/2 (14.4) — 133/6 (9.4)"]],
+    ];
+    for (const [figures, runs] of cases) {
+      const s = breakStructure(inner(render(figures), testid));
+      expect(s.text, figures).toBe(figures);
+      expect(s.runs, figures).toEqual(runs);
+    }
+  });
+
+  it("the positive pair: a game list and a tennis strip keep a break point between each whole score (one nowrap run per score)", () => {
+    const list = LINES.find((l) => /^\d+ — \d+ · \d+–\d+, \d+–\d+, \d+–\d+/.test(l))!;
+    const runs = breakStructure(inner(render(list), "mh-player-slab-figures")).runs;
+    expect(runs.filter((r) => r.endsWith(",")).length, `${list}: ${JSON.stringify(runs)}`).toBeGreaterThanOrEqual(2);
+    const strip = "2 — 2 · 7–6(10) 6–7(12) 6–4 4–6 · 6–6 (TB 10–9)";
+    expect(breakStructure(inner(render(strip), "mh-player-slab-figures")).runs).toEqual([
+      "2 — 2 ·",
+      "7–6(10)",
+      "6–7(12)",
+      "6–4",
+      "4–6 ·",
+      "6–6 (TB 10–9)",
+    ]);
+  });
+
+  it("a row keeps schedule grammar (date | opponent | score) from md, and below md gives the score its own line under the opponent", () => {
+    const html = render("2 — 0 · 21–15, 21–18");
+    const rowTag = html.match(/<a[^>]*data-testid="mh-player-match-f1"[^>]*>/)?.[0] ?? "";
+    const cls = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [];
+    expect(cls(rowTag)).toEqual(
+      expect.arrayContaining(["grid-cols-[3.25rem_minmax(0,1fr)]", "md:grid-cols-[3.25rem_minmax(0,1fr)_auto]"]),
+    );
+    expect(cls(rowTag)).not.toContain("grid-cols-[3.25rem_minmax(0,1fr)_auto]");
+    // The date cell is the row's first in-flow child (f1 is not live, so no
+    // live bar precedes it). Below md it spans both rows — the opponent's and
+    // the score's — so the score line sits under the opponent, not the date.
+    // Exact tokens: a substring probe for "row-span-2" also matches its
+    // `max-md:` form (AGENTS.md).
+    const rowAt = html.indexOf('data-testid="mh-player-match-f1"');
+    const dateAt = html.indexOf("<span", rowAt);
+    const dateTag = html.slice(dateAt, html.indexOf(">", dateAt) + 1);
+    expect(cls(dateTag), dateTag).not.toContain("absolute");
+    expect(html.slice(dateAt, html.indexOf("</span>", dateAt)), "the date cell holds the day").toMatch(/>\d{1,2}$/);
+    expect(cls(dateTag)).toContain("max-md:row-span-2");
+    expect(cls(dateTag)).not.toContain("row-span-2");
+    const at = html.indexOf('data-testid="mh-player-row-figures"');
+    const scoreTag = html.slice(html.lastIndexOf("<", at), html.indexOf(">", at) + 1);
+    // Under the opponent on a phone, full width; the capped right-aligned
+    // column only from md — an unprefixed cap is what squeezed the name.
+    expect(cls(scoreTag)).toEqual(expect.arrayContaining(["max-md:col-start-2", "md:max-w-[10rem]", "md:text-right"]));
+    expect(cls(scoreTag)).not.toContain("max-w-[10rem]");
+    expect(cls(scoreTag)).not.toContain("text-right");
   });
 });

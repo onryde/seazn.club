@@ -20,6 +20,7 @@
 // org's locale and are rendered as they are — splitting "54 (40) & 3/21" into
 // batting and bowling would mean re-parsing a localised template.
 import Link from "next/link";
+import { Fragment } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { intlLocaleFor } from "@/lib/public-date-locale";
@@ -60,6 +61,82 @@ function formatIn(locale: Locale, tz: string, iso: string | null, opts: Intl.Dat
   } catch {
     return new Intl.DateTimeFormat(intlLocaleFor(locale), { timeZone: "UTC", ...opts }).format(ms);
   }
+}
+
+/**
+ * A score line split where a break may fall: its " · " PARTS, each a list of
+ * RUNS no line may break inside (R11). Chromium wraps after an en dash, so a
+ * plain text run broke the slab's "21–17 (11–9)" as "(11–" / "9)" at 320.
+ *
+ * A part is the headline grammar's own unit (`1 — 0`, `21–17, 21–15 (3–2)`,
+ * `6–4 7–6(5)`, `3–2 (30–15)`, `MTB 7–5`); the renderer makes each an
+ * inline-block so a line breaks between parts first. A part wider than a whole
+ * line still has to wrap, so inside it a break may fall at a space — except:
+ * inside brackets (`(4–3 pens)`, `(TB 5–4)`), either side of the tally dash
+ * (`1 — 0`), before a bracketed qualifier (`21–17 (11–9)`, `54 (40)`), before
+ * the cricket joiner (`54 (40) &`), or after a label that names the score after
+ * it (`MTB 7–5`). The strings are the engine's `summary().headline` and the
+ * `player.line.*` templates; `player-matches.test.tsx` walks every headline the
+ * engine's golden states produce.
+ *
+ * One bracket MAY take its own line: a qualifier of a whole tally
+ * (`12 — 11` / `(10–9 pens)`, `2 — 2` / `(GWS 0–1)`). Glued, two-digit tallies
+ * made one run wider than the 256px slab at 320 ("10 — 10 (12–11 pens)" is
+ * 292px in Barlow Condensed Bold), and the slab's `overflow-hidden` clipped it.
+ * A bare count after a cricket innings (`133/6 (9.4)`, `35 (5)`) is that
+ * score's overs, not a qualifier of the tally, and stays with it.
+ */
+function scoreParts(line: string): string[][] {
+  const parts = line.split(" · ");
+  return parts.map((part, p) => {
+    const tokens: string[] = [];
+    let depth = 0;
+    let cur = "";
+    for (const ch of part) {
+      if (ch === " " && depth === 0) {
+        tokens.push(cur);
+        cur = "";
+        continue;
+      }
+      if (ch === "(" || ch === "[") depth += 1;
+      if (ch === ")" || ch === "]") depth = Math.max(0, depth - 1);
+      cur += ch;
+    }
+    tokens.push(cur);
+    const runs: string[] = [tokens[0]!];
+    for (let i = 1; i < tokens.length; i++) {
+      const left = tokens[i - 1]!;
+      const right = tokens[i]!;
+      const qualifiesTally = tokens[i - 2] === "—" && !/^\([\d.]+\)$/.test(right);
+      const glued =
+        left === "—" ||
+        right === "—" ||
+        (/^[([]/.test(right) && !qualifiesTally) ||
+        right === "&" ||
+        /^[A-Za-z]+$/.test(left);
+      if (glued) runs[runs.length - 1] += ` ${right}`;
+      else runs.push(right);
+    }
+    if (p < parts.length - 1) runs[runs.length - 1] += " ·";
+    return runs;
+  });
+}
+
+/** The line as break-safe markup: its text is `line` verbatim. */
+function scoreRuns(line: string) {
+  return scoreParts(line).map((runs, p) => (
+    <Fragment key={p}>
+      {p > 0 ? " " : null}
+      <span className="inline-block">
+        {runs.map((run, r) => (
+          <Fragment key={r}>
+            {r > 0 ? " " : null}
+            <span className="whitespace-nowrap">{run}</span>
+          </Fragment>
+        ))}
+      </span>
+    </Fragment>
+  ));
 }
 
 /** The line that leads: the newest live one, else the newest. */
@@ -123,13 +200,15 @@ function slab(line: PlayerMatchLineT, dict: Dict, locale: Locale, now: number, g
         <p className="truncate font-display text-xl font-semibold uppercase tracking-wide">
           {t(dict, "player.opponent", { opponent: line.opponentName })}
         </p>
+        {/* Breaks only between the score's parts (`scoreRuns`), never
+            inside one: at 320 this line read "1 — 0 · 21–17 (11–" / "9)". */}
         <p
           data-testid="mh-player-slab-figures"
-          className={`mt-1 break-words font-display text-4xl font-bold leading-none tabular-nums md:text-5xl ${
+          className={`mt-1 font-display text-4xl font-bold leading-none tabular-nums md:text-5xl ${
             line.line === NO_FIGURES ? "text-court-muted" : ""
           }`}
         >
-          {line.line}
+          {scoreRuns(line.line)}
         </p>
         {live ? (
           <p
@@ -158,10 +237,14 @@ function row(line: PlayerMatchLineT, dict: Dict, locale: Locale, showDivision: b
       <Link
         href={line.href}
         data-testid={`mh-player-match-${line.fixtureId}`}
-        className="relative grid min-h-11 min-w-0 grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-2.5 rounded-[inherit] px-3.5 py-2.5 transition-colors hover:bg-accent-soft/60"
+        // Schedule grammar — date | opponent | score — from md. Below md the
+        // score takes its own line under the opponent (R11): in the auto
+        // column a badminton "2 — 0 · 21–15, 21–18" took 140px of a 320px row
+        // and left the opponent "V PRI…" and the division chip "ME…".
+        className="relative grid min-h-11 min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2.5 gap-y-1 rounded-[inherit] px-3.5 py-2.5 transition-colors hover:bg-accent-soft/60 md:grid-cols-[3.25rem_minmax(0,1fr)_auto]"
       >
         {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
-        <span className="flex min-w-0 flex-col items-start">
+        <span className="flex min-w-0 flex-col items-start max-md:row-span-2">
           {day !== null ? (
             <>
               <span className="font-display text-[18px] font-semibold leading-tight tabular-nums text-ink">{day}</span>
@@ -200,11 +283,12 @@ function row(line: PlayerMatchLineT, dict: Dict, locale: Locale, showDivision: b
           ) : null}
         </span>
         <span
-          className={`max-w-[10rem] text-right font-display text-lg font-bold tabular-nums ${
+          data-testid="mh-player-row-figures"
+          className={`min-w-0 font-display text-lg font-bold tabular-nums max-md:col-start-2 md:max-w-[10rem] md:text-right ${
             line.line === NO_FIGURES ? "text-ink-muted" : live ? "text-emerald-600" : "text-ink"
           }`}
         >
-          {line.line}
+          {scoreRuns(line.line)}
         </span>
       </Link>
     </li>

@@ -167,12 +167,19 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
             >
               {first.divisionName}
             </h2>
-            {/* One column on the smallest phones and two from 380-ish: a card
-                is a crest, a 30-character name and sometimes a seed chip, and
-                two of those at 320 truncate to nothing. R1's one-DOM rule —
-                the same cards, laid out wider, no control appears or
-                disappears. */}
-            <ul className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" role="list">
+            {/* Columns chosen from MEASURED card widths (R11, Chromium), not
+                from device names. A closed card spends 86px on everything but
+                the name — border, padding, the 32px crest, the chevron and two
+                gaps — and a realistic 24-character name paints up to 185px
+                ("West Wimbledon Wanderers", Geist 14px medium), so a card needs
+                ~280px. In the org layout's `max-w-5xl px-4` column that is one
+                column below `sm` (the old two at 380 left a name 28px), two
+                from `sm` (300px cards at 640) and three from `lg` (325px); four
+                would be 242px even at the 992px cap, which cut "Millbrook Ro…"
+                at 1280. `stats-teams-info-tabs.test.tsx` redoes this arithmetic
+                from these classes. R1's one-DOM rule — the same cards, laid out
+                wider, no control appears or disappears. */}
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3" role="list">
               {teams.map((tm) => {
                 // Absent on a document cached before squads existed — the
                 // schema keeps both fields optional for exactly that hit. Such
@@ -190,7 +197,15 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                       data-testid={`mh-team-${tm.entrantId}`}
                       className="group min-w-0 rounded-xl border border-zinc-200/80 bg-surface"
                     >
-                      <summary className="flex min-h-11 min-w-0 cursor-pointer list-none items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
+                      {/* `select-none`: a pointer or touch tap on the name puts a
+                          collapsed selection (a caret) in its text node, and
+                          Chromium lays out a line holding the caret WITHOUT its
+                          `text-overflow` ellipsis — the name stayed cut
+                          mid-letter, open or closed, until the selection moved
+                          (R11 at 320; keyboard Enter and the chevron place no
+                          caret and kept it). The summary is a control, so no
+                          caret belongs in it; the full name stays in `title`. */}
+                      <summary className="flex min-h-11 min-w-0 cursor-pointer select-none list-none items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
                         {/* 32, the size this card's crest has always been. */}
                         <EntityLogo src={tm.badgeUrl} name={tm.name} colour={tm.colour} size={32} />
                         {/* `truncate` needs `min-w-0` on the whole chain — the
@@ -199,18 +214,28 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                           <span className="block min-w-0 truncate text-sm font-medium text-ink" id={nameId} title={tm.name}>
                             {tm.name}
                           </span>
-                          {members !== undefined ? (
-                            <span className="block text-xs text-ink-muted">
-                              {plural(dict, "teams.members", members.length, locale)}
+                          {/* The seed chip rides this second line, beside the
+                              count, rather than the name's row: beside the name
+                              it took 61px of a 202px column at 320 (more in
+                              Spanish, "Cabeza de serie 1"). Neither can wrap
+                              inside itself; the chip drops below the count
+                              before either would. */}
+                          {members !== undefined || tm.seed !== null ? (
+                            <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                              {members !== undefined ? (
+                                <span className="whitespace-nowrap text-xs text-ink-muted">
+                                  {plural(dict, "teams.members", members.length, locale)}
+                                </span>
+                              ) : null}
+                              {/* `!== null`, never truthiness: seed 0 is a seed. */}
+                              {tm.seed !== null ? (
+                                <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
+                                  {t(dict, "teams.seed", { seed: tm.seed })}
+                                </span>
+                              ) : null}
                             </span>
                           ) : null}
                         </span>
-                        {/* `!== null`, never truthiness: seed 0 is a seed. */}
-                        {tm.seed !== null ? (
-                          <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
-                            {t(dict, "teams.seed", { seed: tm.seed })}
-                          </span>
-                        ) : null}
                         {/* The house disclosure chevron (spec §3,
                             `scorecard-tab.tsx`): points right, turns down. */}
                         <svg
