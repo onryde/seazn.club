@@ -30,6 +30,10 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
   await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
   await expect(page.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
+  // Swiss Playoff. `exact` matters: the plain "Swiss" card sits right beside
+  // it, and a substring match would resolve to whichever came first.
+  await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
+  await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });

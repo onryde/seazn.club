@@ -770,9 +770,7 @@ async function swissGen(
   // Swiss Playoff's pairing rank: the division's REAL standings position.
   // Round 1 has no decided fixture to rank on, so `rankedStageStandings`
   // comes back empty and the seed fallback below carries the opening board —
-  // which is what a Swiss round 1 is. An entrant the table does not know
-  // (reinstated mid-stage, never yet placed on a board) keeps its seed too,
-  // offset past the ranked block so it sorts after everyone who has played.
+  // which is what a Swiss round 1 is.
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.length > 0) {
     const rows = await rankedStageStandings(tx, stageId);
@@ -780,10 +778,19 @@ async function swissGen(
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);
     }
   }
+  // The pre-Swiss-Playoff rank, unchanged: the entrant's seed, or a stable
+  // tail slot for an unseeded one.
+  const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
   const standings: SwissStanding[] = entrants.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
-    rank: cascadeRank.get(e.id) ?? (cascadeRank.size > 0 ? cascadeRank.size + 1 + i : (e.seed ?? 1000 + i)),
+    // An entrant the table does not know — reinstated mid-stage, never yet
+    // placed on a board — falls back to its seed OFFSET past the whole
+    // ranked block, so it sorts after everyone who has actually played
+    // while still ordering sensibly among its fellow late arrivals. When
+    // there is no table at all (round 1, or any fold-pairing stage) the
+    // offset is 0 and this is byte-for-byte the expression it replaced.
+    rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
   const round = pairRound(
     standings,
