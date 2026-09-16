@@ -17,8 +17,19 @@ export default async function Image({ params }: Props) {
   const data = await getPublicCompetition(orgSlug, competitionSlug);
   const theme = ogTheme(data?.competition.branding, data?.org.branding);
 
+  // IN UTC, and that is load-bearing. `starts_on`/`ends_on` are pg `date`
+  // columns — CALENDAR days, not instants — so `new Date("2026-09-01")` is UTC
+  // midnight, and formatting it in any zone behind UTC prints the day before
+  // ("31 Aug 2026" in America/New_York). This card is every WhatsApp/iMessage/X
+  // preview of the link, so the wrong day here reaches spectators who never
+  // open the page. Reasoning in full on matches-hub/info-tab.tsx.
   const fmt = (d: string) =>
-    new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    new Date(d).toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
   const dates = data?.competition.starts_on
     ? `${fmt(data.competition.starts_on)}${
         data.competition.ends_on ? ` – ${fmt(data.competition.ends_on)}` : ""

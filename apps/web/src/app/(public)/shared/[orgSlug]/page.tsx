@@ -45,8 +45,26 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
+// IN UTC, and that is load-bearing. `starts_on`/`ends_on` are pg `date`
+// columns — CALENDAR days, not instants — so `new Date("2026-09-01")` is UTC
+// midnight, and formatting it in any zone behind UTC prints the day before
+// ("31 Aug 2026" in America/New_York). The reasoning is set out at length on
+// matches-hub/info-tab.tsx's `competitionDateLine`, which formats these same
+// two fields for the competition page.
+//
+// The news strip's `publishedAt` (a timestamptz, i.e. a real instant) is
+// formatted through here too and is therefore pinned to UTC as well. That is
+// deliberate, not collateral: this route is ISR-cached, so ONE rendered HTML
+// is served to every visitor worldwide — there is no viewer zone to resolve
+// against, and the alternative is a cached page whose dates depend on which
+// host filled the cache.
 const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 
 /** Spectator-language chip; the status → chip mapping lives in
     lib/public-site.ts (competitionChip) so it unit-tests without JSX. */

@@ -500,6 +500,116 @@ describe("GET .../poster.pdf — page 1 copy resolves through the org's own loca
     expect(text).toContain("septembre");
     expect(text).not.toContain("September");
   });
+
+  // ── THE PRINTED DATES ARE CALENDAR DAYS ─────────────────────────────────
+  // `competition.starts_on`/`ends_on` are pg `date` columns — wall-clock days,
+  // not instants. `new Date("2026-09-01")` is UTC MIDNIGHT, so formatting it
+  // with no `timeZone` formats in whatever zone the Node process runs in, and
+  // every zone behind UTC prints the day before. Measured on COMPETITION's
+  // own start date, in this route's French locale:
+  //
+  //     UTC                  1 septembre 2026
+  //     America/New_York    31 août 2026        <-- wrong day, wrong MONTH
+  //
+  // This is the printed handout, so a US-hosted render puts the wrong date on
+  // paper. The same rule is written out at length on
+  // `components/public-site/matches-hub/info-tab.tsx`. A wall-clock day has no
+  // zone to be converted INTO, so the answer is UTC, never the venue's zone.
+  //
+  // NOTE this route must keep its own `toLocaleDateString(locale, …)` call
+  // rather than adopt `lib/format.ts`'s `fmtDate`: that helper pins
+  // `LOCALE = "en-GB"` internally and takes no locale parameter, so using it
+  // here would silently drop the localised month names the test above pins.
+  it("prints the calendar days the organiser typed, not the day before them", async () => {
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION, // starts_on 2026-09-01, ends_on 2026-09-13
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...NO_FIXTURES_DRAW,
+    });
+
+    const opts: Intl.DateTimeFormatOptions = { day: "numeric", month: "long", year: "numeric" };
+    const dayIn = (tz: string, iso: string) =>
+      new Date(iso).toLocaleDateString("fr", { ...opts, timeZone: tz });
+
+    // The fixture is PROVEN differential rather than assumed: if these two ever
+    // agreed, everything below would pass on a route formatting in the wrong
+    // zone.
+    expect(
+      dayIn("America/New_York", "2026-09-01"),
+      "the premise: this date really does read as a different day in New York",
+    ).not.toBe(dayIn("UTC", "2026-09-01"));
+
+    const { buf } = await get();
+    const text = decodePdfText(buf);
+
+    // Spacing-tolerant: pdfkit may split a drawn line across text operators.
+    const flexible = (s: string) => new RegExp(s.replace(/\s+/g, "\\s*"));
+    expect(text).toMatch(flexible(dayIn("UTC", "2026-09-01")));
+    expect(text).toMatch(flexible(dayIn("UTC", "2026-09-13")));
+
+    // The wrong day lands in a different MONTH here, so this negative is
+    // immune to how pdfkit broke the line up.
+    expect(text).not.toContain("août");
+  });
+
+  // ── THE GUARD THAT WORKS AT EVERY RUNNER ZONE ───────────────────────────
+  // Everything above compares RENDERED DAYS, and a rendered day cannot
+  // distinguish the two implementations on a process at or ahead of UTC.
+  // `ci.yml`'s test job is `ubuntu-latest` with no `TZ`, i.e. UTC, so every
+  // assertion above passes in the broken state there. A guard that only works
+  // when an environment variable happens to be set is a guard someone deletes.
+  //
+  // So assert the MECHANISM instead. This route keeps its own
+  // `toLocaleDateString` call (see the note above on why it cannot use
+  // `fmtDate`), so the contract is not "never called" — it is "never called
+  // WITHOUT an explicit zone", which separates the two implementations at any
+  // runner zone.
+  it("formats the poster's dates in an explicit UTC zone, whatever zone the process runs in", async () => {
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("fr"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...NO_FIXTURES_DRAW,
+    });
+
+    const seen: (Intl.DateTimeFormatOptions | undefined)[] = [];
+    const real = Date.prototype.toLocaleDateString;
+    const spy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockImplementation(function (this: Date, l?: unknown, o?: Intl.DateTimeFormatOptions) {
+        seen.push(o);
+        return real.call(this, l as string | undefined, o);
+      });
+    try {
+      await get();
+    } finally {
+      // Restored in `finally`: a render that throws — or the first assertion
+      // failing — would otherwise leave `Date.prototype` patched for every
+      // test that runs after this one in this file.
+      spy.mockRestore();
+    }
+
+    // Non-vacuous first: a guard that passes because the poster formatted NO
+    // dates would survive deleting the date line altogether.
+    expect(seen.length, "the poster really did format at least one date").toBeGreaterThan(0);
+    expect(
+      seen.filter((o) => o?.timeZone !== "UTC"),
+      "every date this poster prints carries an explicit UTC zone",
+    ).toEqual([]);
+  });
 });
 
 describe("GET .../poster.pdf — a draw spanning 3+ physical pages (pdfkit page-buffer regression)", () => {
