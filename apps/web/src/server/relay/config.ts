@@ -52,6 +52,11 @@ export const REQUESTED_TIMEOUT_SECONDS = 60;
 export const ENDING_TIMEOUT_SECONDS = 300;
 /** §6.4: a live COMPOSED session whose heartbeat is older than this gets ONE retry. */
 export const STALE_HEARTBEAT_SECONDS = 90;
+/** §7.2 + R0-memo.md:279: SIGINT → ffmpeg exit 0 in 114 ms; the supervisor's
+ *  flush budget is ≤ 10 s. Sent as the Fly stop `timeout` (seconds before SIGKILL). */
+export const RUNNER_STOP_GRACE_SECONDS = 10;
+/** How long after the grace we wait to OBSERVE auto_destroy before forcing it. */
+export const RUNNER_OBSERVE_SLACK_SECONDS = 20;
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */
