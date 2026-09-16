@@ -22,6 +22,7 @@ import pino from "pino";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
@@ -231,6 +232,20 @@ function fakeServer(
      *  knockout stage (`d-tiny`/`s-playoff`) — a second one would need this
      *  keyed by stageId. */
     knockoutFixtureExtKeys?: string[];
+    /** Pre-B07b prerequisite P2 — override the round-robin branch's
+     *  hardcoded `rr-r{n}-c1` ext_key scheme for one NAMED table-kind stage
+     *  (`POST /divisions/{id}/stages`'s own `name` field, the same
+     *  discriminator `stageNameById` already uses elsewhere in this fake).
+     *  A two-boundary division needs its own MIDDLE stage to be table-kind
+     *  too (a knockout cannot carry `expected.tables`, the SOURCE side of
+     *  the next boundary — `validate-pack.ts:1693`), and this fake's default
+     *  round-robin generator mints the SAME `rr-r1-c1` for every table-kind
+     *  stage regardless of which one — `PackStream`'s own uniqueness rule is
+     *  per (divisionRef, ext_key), not per stage, so a second table-kind
+     *  stage in the SAME division would collide with the first's stream.
+     *  Unset (default) leaves the `rr-r{n}-c1` scheme exactly as it was;
+     *  every existing test in this file is unaffected. */
+    roundRobinExtKeysByStageName?: Record<string, string[]>;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -549,6 +564,11 @@ function fakeServer(
         // arithmetic — see `kindByStageId`'s own comment. B07a T12 fix
         // round 1: `opts.knockoutFixtureExtKeys` overrides the placeholder
         // list (see its own doc comment above) — default unchanged.
+        // P2 — a NAMED override for the round-robin scheme, checked before
+        // falling back to the default `rr-r{n}-c1` list (see this knob's own
+        // doc comment above).
+        const roundRobinOverride =
+          opts.roundRobinExtKeysByStageName?.[stageNameById.get(stageId) ?? ""];
         const fixtures =
           kindByStageId.get(stageId) === "knockout"
             ? (opts.knockoutFixtureExtKeys ?? ["se-r0-i0"]).map((extKey) => {
@@ -557,21 +577,23 @@ function fakeServer(
                 fixtureExtKeyById.set(id, extKey);
                 return { id, ext_key: extKey };
               })
-            : Array.from(
-                {
-                  length: roundRobinRoundCount(
-                    divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length,
-                    legsByStageId.get(stageId) ?? 1,
-                  ),
-                },
-                (_v, i) => {
-                  const id = `fx-${++fixtureCounter}`;
-                  if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                  const extKey = `rr-r${i + 1}-c1`;
-                  fixtureExtKeyById.set(id, extKey);
-                  return { id, ext_key: extKey };
-                },
-              );
+            : (
+                roundRobinOverride ??
+                Array.from(
+                  {
+                    length: roundRobinRoundCount(
+                      divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length,
+                      legsByStageId.get(stageId) ?? 1,
+                    ),
+                  },
+                  (_v, i) => `rr-r${i + 1}-c1`,
+                )
+              ).map((extKey) => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
@@ -3231,6 +3253,180 @@ describe("Pre-B07b prerequisite P1 — stageIdByRef keyed by division AND stage 
       "advance: d-badminton/s-playoff finalRanks",
     ]);
     expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
+  });
+});
+
+/** `_tiny.json` with `d-badminton` given TWO progression-fed stages, so the
+ *  division carries boundaries at stage index 1 AND 2 — the exact shape P2
+ *  exists for (progress.md Ruling R74, task-6-review.md Minor m6):
+ *  `s-badminton-league` (existing) -> `s-badminton-mid` (NEW, table-kind,
+ *  so it can carry its OWN `expected.tables` and be boundary 2's SOURCE —
+ *  a knockout cannot, `validate-pack.ts:1693`) -> `s-badminton-ko`
+ *  (existing shape, now fed from the mid stage instead of the league).
+ *  `s-badminton-mid`'s own generated fixture needs a DISTINCT ext_key from
+ *  `s-badminton-league`'s `rr-r1-c1` — `fakeServer`'s new
+ *  `roundRobinExtKeysByStageName` knob supplies one; without it the two
+ *  table-kind stages' fixtures would collide (`PackStream`'s ext_key
+ *  uniqueness is per DIVISION, not per stage). */
+async function twoBoundaryDivisionPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    const progression = playoffProgressionOf(raw);
+    // `sources: [{ stage: "previous", ... }]` is INDEX-relative, not by ref
+    // — the SAME progression object seeds both boundaries correctly:
+    // boundary 1 (league -> mid) and boundary 2 (mid -> ko) each read
+    // "previous" as whichever stage precedes them in `seq` order.
+    badminton.stages.push(
+      { ref: "s-badminton-mid", seq: 2, kind: "league", name: "Badminton Mid", config: { legs: 1 }, progression },
+      { ref: "s-badminton-ko", seq: 3, kind: "knockout", name: "Badminton Playoff", config: {}, progression },
+    );
+
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    // The mid stage's own fixture/stream/expected rows — copied from the
+    // league's, same reasoning `twoAdvancingDivisionsPack` gives (a
+    // reconstructed rally this test has no way to check independently).
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "rr-mid-c1", stageRef: "s-badminton-mid" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "rr-mid-c1" });
+    // The knockout's own fixture/stream/expected rows.
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+
+    // The fake reports every stage's qualifiers/finalRanks as this
+    // division's entrants IN CREATION ORDER — [e-cho, e-dahl], the SAME
+    // order `s-badminton-league`'s own committed table already ranks them
+    // in (`rankOrderOf` reads it rather than typing the order in twice).
+    const creationOrder = rankOrderOf(raw, "d-badminton", "s-badminton-league");
+    // `s-badminton-mid` needs its OWN `expected.tables` row: it is boundary
+    // 2's SOURCE, and `run-suite.ts`'s advance step demands one for every
+    // source stage (the exact "no expected.tables row" gate CRUX 1 found).
+    const midTable = raw.expected.tables.find(
+      (t) => t.divisionRef === "d-badminton" && t.stageRef === "s-badminton-league",
+    );
+    if (midTable === undefined) {
+      throw new Error("test fixture assumption broken: no expected.tables row for s-badminton-league");
+    }
+    // `midTable.rows` carries more fields than this file's own loose
+    // `MutablePack` type declares (played/won/drawn/lost/points —
+    // `PackSchema`'s real row shape) — spreading each row (rather than
+    // rebuilding one from just `entrant`/`rank`) keeps them at runtime even
+    // though `MutablePack` does not name them.
+    raw.expected.tables.push({
+      ...midTable,
+      stageRef: "s-badminton-mid",
+      rows: midTable.rows.map((row) => ({ ...row })),
+    });
+    raw.expected.finalRanks.push(
+      { divisionRef: "d-badminton", stageRef: "s-badminton-mid", order: creationOrder },
+      { divisionRef: "d-badminton", stageRef: "s-badminton-ko", order: creationOrder },
+    );
+  });
+}
+
+describe("Pre-B07b prerequisite P2 — a two-boundary division completes its middle stage ONCE (Ruling R74 / Minor m6)", () => {
+  it("/complete is called exactly once per stage id, even though the middle stage is both a target and a source", async () => {
+    const packPath = await twoBoundaryDivisionPack();
+    const { transport, sql, calls } = fakeServer({
+      roundRobinExtKeysByStageName: { "Badminton Mid": ["rr-mid-c1"] },
+    });
+    // A REAL (non-silent) logger whose destination is captured rather than
+    // written to stdout, so the skip's own visibility contract ("a log or
+    // observation line naming the stage — never silent") is proven by
+    // reading an actual emitted line, not inferred from a downstream
+    // effect.
+    const logLines: string[] = [];
+    const captured = pino(
+      { level: "info" },
+      new Writable({
+        write(chunk: Buffer, _enc, cb) {
+          logLines.push(chunk.toString("utf8"));
+          cb();
+        },
+      }),
+    );
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: captured,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // The witness: since the fake's own `/complete` route
+    // (`_advance-routes.ts`) always answers 200 regardless of whether the
+    // stage was already complete, a repeat completion is invisible to
+    // every oracle in this report — the RAW CALL COUNT at this route is the
+    // only thing that can see it (task-6-review.md Minor m6's own point:
+    // "invisible to the fake"). Two boundaries, three stages: the league is
+    // completed once (as boundary 1's source), the mid stage should be
+    // completed ONCE despite being both boundary 1's target AND boundary
+    // 2's source, and the knockout once (as boundary 2's target).
+    const completeCalls = calls.filter((c) => c.method === "POST" && /\/complete$/.test(c.path));
+    const completeCallsByStageId = new Map<string, number>();
+    for (const c of completeCalls) {
+      const stageId = /^\/api\/v1\/stages\/([^/]+)\/complete$/.exec(c.path)![1]!;
+      completeCallsByStageId.set(stageId, (completeCallsByStageId.get(stageId) ?? 0) + 1);
+    }
+    // At least the three d-badminton stages were completed at all.
+    expect(completeCallsByStageId.size).toBeGreaterThanOrEqual(3);
+    for (const [stageId, count] of completeCallsByStageId) {
+      expect(count, `stage "${stageId}" was completed ${count} time(s), expected exactly 1`).toBe(1);
+    }
+
+    // The skip is VISIBLE, never silent — a real log line names the
+    // middle stage's own ref and says it was skipped as a repeat
+    // completion. Without the fix, this line is simply absent (the source
+    // site completes it unconditionally) while the call-count assertion
+    // above is what catches THAT failure; this assertion is the positive
+    // pair — proving the skip, when it happens, actually says so.
+    const skipLine = logLines.find(
+      (l) => l.includes("s-badminton-mid") && l.includes("skip") && l.includes("complete"),
+    );
+    expect(skipLine, `no skip line found among:\n${logLines.join("")}`).toBeDefined();
+
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-badminton-mid finalRanks",
+      "advance: d-badminton/s-badminton-ko finalRanks",
+    ]);
+    // Both of d-badminton's own boundaries captured the RIGHT stage's
+    // response — a wrong/duplicated completion would corrupt at least one.
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true, true]);
+
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-mid seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-ko seed proposal qualifiers",
+    ]);
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true, true]);
   });
 });
 

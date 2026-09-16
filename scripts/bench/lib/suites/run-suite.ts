@@ -3937,6 +3937,19 @@ export async function runPackSuite(
     let advanceImportWallMs = 0;
     let advanceImportRan = false;
 
+    // Pre-B07b prerequisite P2 (progress.md Ruling R74, task-6-review.md
+    // Minor m6) — a division with boundaries at stage index 1 AND 2 would
+    // complete its MIDDLE stage twice: once here as the idx-2 boundary's
+    // SOURCE (below), and once already at the idx-1 boundary's TARGET (this
+    // function's own `completeStageCapture` call further down). Every real
+    // stage id this run has already completed, across every division and
+    // every boundary — real ids are globally unique (the product's own
+    // `/stages` POST mints them), so this needs no per-division scoping.
+    // The bench-side fix ONLY: `POST /stages/{id}/complete`'s own behaviour
+    // on an already-completed stage is a PRODUCT fact this task does not
+    // change (see the report's "Product finding").
+    const completedStageIds = new Set<string>();
+
     const advanceDivision = async (
       division: SeedPlanDivision,
       divisionIndex: number,
@@ -4029,7 +4042,24 @@ export async function runPackSuite(
           // otherwise) — nothing upstream of this block ever completes a
           // stage, so this run does it here, once, immediately before
           // proposing into the stage it feeds.
-          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+          //
+          // P2 — EXCEPT when this exact stage id was already completed as a
+          // PRIOR boundary's TARGET (a division with boundaries at stage
+          // index 1 and 2 reaches its own middle stage as a target first,
+          // then as this call's source next). Calling `/complete` again
+          // would be a second completion of an already-complete stage — a
+          // PRODUCT fact this bench does not change (see the report's
+          // "Product finding") — so the skip is bench-side only, and never
+          // silent.
+          if (completedStageIds.has(sourceStageId)) {
+            log.info(
+              { division: division.ref, stage: sourceStage.ref, stageId: sourceStageId },
+              `${suiteKey}: skipping a repeat /complete — "${sourceStage.ref}" was already completed as a prior boundary's target (P2)`,
+            );
+          } else {
+            await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+            completedStageIds.add(sourceStageId);
+          }
 
           const advanceOutcome = await advanceStageSeeding({
             base,
@@ -4172,12 +4202,20 @@ export async function runPackSuite(
               }
             }
 
+            // P2 — the TARGET-site completion is NEVER skipped: it is the
+            // only call that captures THIS stage's own `finalRanks` (D1 —
+            // the only time they cross the wire), and the finalRanks oracle
+            // just below reads that captured response. Recorded into
+            // `completedStageIds` so a LATER boundary that reaches this same
+            // stage id as its own SOURCE (this division's next iteration,
+            // if it has one) skips the redundant completion above instead.
             const completion = await completeStageCapture(
               base,
               s,
               targetStageId,
               input.advanceTransport,
             );
+            completedStageIds.add(targetStageId);
             // D1 — the finalRanks oracle: the pack's OWN expected order
             // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
             // block that can assert a bracket's placement order) compared
