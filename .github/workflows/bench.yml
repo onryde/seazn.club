@@ -214,6 +214,12 @@ jobs:
       # out once the cause is known.
       - name: Diagnose port visibility
         run: |
+          # `set +e` FIRST: steps run under `bash -e`, and the whole point of
+          # this step is to run commands that FAIL and print their exit codes.
+          # Without this the step aborts at the first failing lsof, before its
+          # own `echo EXIT=$?` — which is exactly what happened on run
+          # 35152435820, killing the diagnostic instead of the diagnosis.
+          set +e
           echo "--- which lsof"; command -v lsof || echo "NO lsof ON PATH"
           echo "--- the probe's exact command"
           lsof -nP -iTCP:3200 -sTCP:LISTEN -t; echo "EXIT=$?"
