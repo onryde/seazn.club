@@ -7,13 +7,16 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition, patchCompetition } from "@/server/usecases/competitions";
-import { createDivision } from "@/server/usecases/divisions";
+import { createDivision, patchDivision } from "@/server/usecases/divisions";
+import { recordSlugHistory } from "@/server/usecases/slugs";
 import {
   orgBySlug,
   compBySlug,
   divBySlug,
   fixtureByNo,
   breadcrumbNames,
+  sharedRenameTarget,
+  invalidateSlugCache,
 } from "@/server/slug-resolve";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -142,6 +145,86 @@ describe.skipIf(!HAS_DB)("slug-resolve (PROMPT-30)", () => {
     const names = await breadcrumbNames(auth.orgId);
     expect(names.comps[comp.slug]).toBe("Crumb Cup");
     expect(names.divs[`${comp.slug}/${div.slug}`]).toBe("U16 Boys");
+  });
+});
+
+// The /present boards (K fix round, F2 + F3) hand `sharedRenameTarget` the WHOLE
+// path and put their own `/present` back on the chrome path it returns, so the
+// TAIL is the whole fix. The board tests
+// (`(kiosk)/[orgSlug]/__tests__/present-rename.test.tsx`) can only pin the
+// ARGUMENTS: their `sharedRenameTarget` is a mock that builds the tail out of
+// the args it is handed, so on its own it proves the fixture. These cases run
+// the real function against real rename rows, one per depth.
+describe.skipIf(!HAS_DB)("sharedRenameTarget keeps the path tail at every depth", () => {
+  /** A live org → competition → division chain. */
+  async function seedChain(name: string) {
+    const { auth, orgSlug } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name,
+      visibility: "private",
+      branding: {},
+    });
+    const div = await createDivision(auth, comp.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    return { auth, orgSlug, comp, div };
+  }
+
+  it("a renamed ORG answers at org depth and keeps /{comp}/{div}", async () => {
+    const { auth, orgSlug, comp, div } = await seedChain("Org Tail Cup");
+    // No usecase renames an org — `PATCH /api/orgs/[id]` does it inline, and
+    // these are that route's own two writes (the same `recordSlugHistory`
+    // helper, then the same cache drop), so the row under test is the row
+    // production writes rather than one shaped by this test.
+    const newOrgSlug = `${orgSlug}-renamed`;
+    await sql`update organizations set slug = ${newOrgSlug} where id = ${auth.orgId}`;
+    await recordSlugHistory(sql, "org", null, orgSlug, auth.orgId);
+    await invalidateSlugCache("org", null, orgSlug, newOrgSlug);
+
+    expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
+      `/shared/${newOrgSlug}/${comp.slug}/${div.slug}`,
+    );
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/shared/${newOrgSlug}/${comp.slug}`);
+    // The tail-less answer is not wrong, it is the only one a LAYOUT can ask
+    // for — which is F2, and why the kiosk decision moved down to the page.
+    expect(await sharedRenameTarget(orgSlug)).toBe(`/shared/${newOrgSlug}`);
+  });
+
+  it("a renamed COMPETITION answers at competition depth and keeps /{div}", async () => {
+    const { auth, orgSlug, comp, div } = await seedChain("Before Tail Cup");
+    const renamed = await patchCompetition(auth, comp.id, { name: "After Tail Cup" });
+    expect(renamed.slug).not.toBe(comp.slug);
+
+    expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
+      `/shared/${orgSlug}/${renamed.slug}/${div.slug}`,
+    );
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBe(`/shared/${orgSlug}/${renamed.slug}`);
+  });
+
+  it("a renamed DIVISION answers at division depth", async () => {
+    const { auth, orgSlug, comp, div } = await seedChain("Div Tail Cup");
+    const renamed = await patchDivision(auth, div.id, { name: "Open B" });
+    expect(renamed.slug).not.toBe(div.slug);
+
+    expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBe(
+      `/shared/${orgSlug}/${comp.slug}/${renamed.slug}`,
+    );
+    // A division rename says nothing about the path above it: the competition
+    // board asks at its own depth and must be told there is nothing to do.
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBeNull();
+  });
+
+  it("answers null for a chain that is entirely live, at every depth", async () => {
+    // The negative pair: without it every assertion above is satisfied by a
+    // function that returns a path for anything it is handed.
+    const { orgSlug, comp, div } = await seedChain("Live Tail Cup");
+    expect(await sharedRenameTarget(orgSlug, comp.slug, div.slug)).toBeNull();
+    expect(await sharedRenameTarget(orgSlug, comp.slug)).toBeNull();
+    expect(await sharedRenameTarget(orgSlug)).toBeNull();
   });
 });
 

@@ -205,32 +205,34 @@ export default async function CompetitionHomePage({ params }: Props) {
   // the shell's, while the document's hrefs are in-product navigation and
   // consistency with the rest of the document is worth more there.
   //
-  // What a stale slug actually costs has now been written here wrongly twice:
-  // first as "one permanent redirect (`sharedRenameTarget`)", then as "both
-  // just `notFound()`". Neither holds. Driven against seeded renames on a live
-  // build (2026-09-16), the answer splits by WHICH slug went stale:
+  // What a stale slug actually costs has now been written here wrongly THREE
+  // times: "one permanent redirect (`sharedRenameTarget`)", then "both just
+  // `notFound()`", then a measured version that the K fix round falsified hours
+  // later. Re-measured 2026-09-16 against a prod build, rename rows seeded in
+  // `slug_history` and every URL curled unfollowed:
   //
-  //   - a stale ORG slug REDIRECTS, on every /shared page including /present.
-  //     Since k1 both the chrome and the kiosk layout enter through
-  //     `publicOrgOr404`, which calls `sharedRenameTarget`. Measured 308 on
-  //     the competition board, the division board, and both chrome pages.
-  //   - a stale COMPETITION slug redirects on the hub (308) but 404s on
-  //     /present, because the board page calls plain `notFound()`. Measured on
-  //     four separate seeded renames, so this is not one lucky sample.
+  //   - a stale ORG slug 308s on both trees, but they land in DIFFERENT places.
+  //     /present keeps the whole tail — /shared/<old>/<comp>/present goes to
+  //     /shared/<new>/<comp>/present, the division board likewise — because the
+  //     kiosk layout now defers (`publicOrgOrNull`) and each board page runs
+  //     the lookup with its full path. THIS tree does not: /shared/<old>/<comp>
+  //     lands on /shared/<new>, the org hub, and /register with it. The chrome
+  //     layout still enters through `publicOrgOr404`, and a layout holds only
+  //     `orgSlug`, so its tail-less redirect wins the response before the
+  //     page-level lookup above — which would keep the tail — ever runs.
+  //   - a stale COMPETITION slug now 308s at its own depth on both trees:
+  //     /shared/<org>/<old> here, /shared/<org>/<old>/present on the board, and
+  //     the division board keeps /{div}. The bare `notFound()` that made the
+  //     board 404 was F3 and is gone. /register is the exception and still
+  //     404s: it consults no rename history at all.
   //
-  // And the org redirect loses the tail: /shared/<old>/<comp>/present lands on
-  // /shared/<new> — the org hub, not the board. `sharedRenameTarget` takes
-  // compSlug/divSlug and would keep them, but a layout only has its own param
-  // to pass. Recorded as a finding rather than fixed here: reading the rest of
-  // the path in a layout means `headers()`, which would make these pages
-  // dynamic and cost the `revalidate = 30` cache.
-  //
-  // (/register was not measured; the ORG half above covers it by construction,
-  // the competition half is untested for that route.)
-  //
-  // So the cost is a redirect to the wrong page, or a 404, depending on which
-  // slug moved. The conclusion survives; the arithmetic is now measured rather
-  // than reasoned, because reasoning it produced two different wrong answers.
+  // So what is left is THIS tree's tail-drop, and it is not fixed here. The
+  // blocker this comment used to claim — "reading the rest of the path in a
+  // layout means `headers()`, which costs the `revalidate = 30` cache" — is not
+  // one. The kiosk fix moved the decision DOWN into the page, which already
+  // holds every param and stays static; that is the shape a fix here takes.
+  // Both halves are driven against real renames in `kiosk-phone-card.spec.ts`,
+  // including the org-hub landing above, so a fix moves a red test.
   const sharePath = `/shared/${org.slug}/${competition.slug}`;
 
   return (

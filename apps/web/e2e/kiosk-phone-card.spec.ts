@@ -1,4 +1,11 @@
-import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type APIResponse,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate, expectNoHorizontalScroll } from "./helpers";
 // A module with no imports of its own, so a spec may load it (a src module
 // whose chain reaches a JSON import fails to COLLECT here).
@@ -359,11 +366,28 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
   test("K-1: a /present link to a competition that does not exist gets the branded /shared 404, not Next's bare page", async ({ page }) => {
     // The page's own notFound() is caught by the nearest not-found.tsx above
     // it. In the `(kiosk)` group that is `(kiosk)/[orgSlug]/not-found.tsx`;
-    // without it the miss falls through to Next's built-in page. (An org-level
-    // miss is thrown by the layout itself and skips its own segment's boundary
-    // in BOTH trees — not what this test covers.)
+    // without it the miss falls through to Next's built-in page. Since the org
+    // door split (K fix round, F2) an ORG-level miss on /present is thrown by
+    // the page too, so it reaches the same branded page — the test below.
     await page.setViewportSize(DESKTOP);
     const response = await page.goto(`/shared/${seeded.orgSlug}/no-such-competition-${TAG.toLowerCase()}/present`);
+    expect(response?.status(), "a 404 status").toBe(404);
+    await expect(page.getByTestId("shared-not-found")).toBeVisible();
+    await expect(page.getByTestId("kiosk-board")).toHaveCount(0);
+  });
+
+  test("F2: a /present link whose ORG no longer exists reaches the same branded 404, which it did not before the door split", async ({ page }) => {
+    // The new state the door split created. The kiosk layout used to 404 a
+    // missing org itself, and a notFound() thrown in a LAYOUT skips its own
+    // segment's boundary — measured on this tree 2026-09-16: the chrome hub's
+    // missing-org 404 still comes back as Next's bare page for exactly that
+    // reason. Now `publicOrgOrNull` defers and the PAGE throws, one segment
+    // lower, where `(kiosk)/[orgSlug]/not-found.tsx` catches it.
+    //
+    // The competition slug is a real, live one, so the ORG is the only missing
+    // half — otherwise this passes on the test above's case.
+    await page.setViewportSize(DESKTOP);
+    const response = await page.goto(`/shared/no-such-org-${TAG.toLowerCase()}/${seeded.compSlug}/present`);
     expect(response?.status(), "a 404 status").toBe(404);
     await expect(page.getByTestId("shared-not-found")).toBeVisible();
     await expect(page.getByTestId("kiosk-board")).toHaveCount(0);
@@ -421,5 +445,149 @@ test.describe("the kiosk on a phone: the 'made for a TV' card (OWNER RULING C1)"
     expect(back, "the board's back link").toMatch(/^\/o\/[^/]+\/c\/[^/]+\/d\//);
     await expect(openLive(page)).toHaveAttribute("href", back!);
     await expectTappable(showBoard(page), "Show the board anyway");
+  });
+});
+
+// A PRINTED or QR'd kiosk URL has to survive a rename (K fix round, F2 + F3).
+// The unit suite (`(kiosk)/[orgSlug]/__tests__/present-rename.test.tsx`) pins
+// the arguments the boards call `sharedRenameTarget` with and what they do with
+// its answer — against a MOCK of it, and a mocked `next/navigation`. Nothing
+// there drives a real rename through a real server, and both defects were found
+// by driving the product rather than by reading it.
+//
+// Each case seeds its own state. The org case creates its OWN org: renaming the
+// shared e2e org would move the ground under every spec running beside this one
+// (playwright.config.ts's `serial` project exists for that class of state).
+// Neither case touches its old URL BEFORE the rename — `revalidate = 30` would
+// otherwise serve the pre-rename page back out of the ISR cache.
+test.describe("a renamed slug still reaches the board (K fix round, F2 + F3)", () => {
+  /** org create, competition create, division create + read, entrants, stage
+   *  create + generate, the rename, plus headroom. */
+  const RENAME_BUDGET_MS = FLOOR_MS + 14 * API_CALL_MS;
+  const rand = () => Math.random().toString(36).slice(2, 6);
+  /** The redirect target's PATH. Two shapes have to be absorbed, both measured
+   *  here: Next sends `location` absolute, and the chrome hub's 308 sends the
+   *  header TWICE — `headers()` joins those with ", ", which reads as a
+   *  mismatch against either value. Read the raw list instead and require the
+   *  values to agree, so a genuinely contradictory pair cannot pass. */
+  const locationPath = (res: APIResponse) => {
+    const values = res
+      .headersArray()
+      .filter((h) => h.name.toLowerCase() === "location")
+      .map((h) => h.value.replace(/^https?:\/\/[^/]+/, ""));
+    expect(new Set(values).size, `exactly one distinct location: ${values.join(" | ")}`).toBe(1);
+    return values[0] ?? "";
+  };
+
+  /** A public competition with one league division, in whatever org the given
+   *  context is active on. */
+  async function seedBoard(request: APIRequestContext, label: string) {
+    const comp = await apiJson<{ id: string; slug: string; visibility: string }>(
+      request,
+      "/api/v1/competitions",
+      "POST",
+      { ends_on: "2030-12-31", name: `${label} ${TAG}-${rand()}`, visibility: "public" },
+    );
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    // Over the public-dashboard cap a create degrades to private with a 201,
+    // and a private competition 404s off /shared/* — every redirect below would
+    // then be asserted against a board that was never served.
+    expect(comp.data!.visibility).toBe("public");
+    const division = await seedLeagueDivision(request, comp.data!.id, "Open");
+    return { id: comp.data!.id, slug: comp.data!.slug, divisionSlug: division.slug };
+  }
+
+  test("a renamed COMPETITION: /present 308s at its own depth, and the division board keeps /{div}", async ({ page }) => {
+    test.setTimeout(RENAME_BUDGET_MS);
+    const orgSlug = await activeOrgSlug(page.request);
+    const board = await seedBoard(page.request, "Kiosk rename comp");
+
+    const renamed = await apiJson<{ slug: string }>(
+      page.request,
+      `/api/v1/competitions/${board.id}`,
+      "PATCH",
+      { name: `Kiosk renamed comp ${TAG}-${rand()}` },
+    );
+    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
+    expect(renamed.data!.slug, "the rename regenerated the slug").not.toBe(board.slug);
+
+    // The hop itself, unfollowed. F3 was a 404 here, and a followed navigation
+    // cannot tell a redirect from a page that simply rendered.
+    const oldBoard = `/shared/${orgSlug}/${board.slug}/present`;
+    const newBoard = `/shared/${orgSlug}/${renamed.data!.slug}/present`;
+    const hop = await page.request.get(oldBoard, { maxRedirects: 0 });
+    expect(hop.status(), "the competition board redirects rather than 404ing").toBe(308);
+    expect(locationPath(hop)).toBe(newBoard);
+
+    // One level deeper — the other board file — where the /{div} tail is what
+    // a tail-less redirect would lose.
+    const oldDiv = `/shared/${orgSlug}/${board.slug}/${board.divisionSlug}/present`;
+    const newDiv = `/shared/${orgSlug}/${renamed.data!.slug}/${board.divisionSlug}/present`;
+    const divHop = await page.request.get(oldDiv, { maxRedirects: 0 });
+    expect(divHop.status(), "the division board redirects too").toBe(308);
+    expect(locationPath(divHop), "the /{div} tail survives").toBe(newDiv);
+
+    // A poster QR is FOLLOWED, not inspected: the old URL has to land on a
+    // working board, not merely carry a Location header.
+    await page.setViewportSize(DESKTOP);
+    await openMounted(page, oldDiv);
+    await expect(page).toHaveURL(new RegExp(`${escapeRegExp(newDiv)}$`));
+    await expect(page.getByTestId("kiosk-board")).toBeVisible();
+    await expect(page.getByTestId("shared-not-found")).toHaveCount(0);
+  });
+
+  test("a renamed ORG: /present keeps /{comp}, while the chrome hub beside it still lands on the org hub", async ({ page }) => {
+    test.setTimeout(RENAME_BUDGET_MS);
+    const created = await apiJson<{ id: string; slug: string }>(page.request, "/api/orgs", "POST", {
+      name: `Kiosk rename org ${TAG}-${rand()}`,
+    });
+    expect(created.data?.id, JSON.stringify(created.error)).toBeTruthy();
+    const oldOrgSlug = created.data!.slug;
+    // Creating an org makes it this context's ACTIVE org, which is where the
+    // competition lands — `POST /api/v1/competitions` carries no org id.
+    const board = await seedBoard(page.request, "Kiosk rename org board");
+
+    const renamed = await apiJson<{ slug: string }>(
+      page.request,
+      `/api/orgs/${created.data!.id}`,
+      "PATCH",
+      { name: `Kiosk renamed org ${TAG}-${rand()}` },
+    );
+    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
+    expect(renamed.data!.slug, "the rename regenerated the slug").not.toBe(oldOrgSlug);
+    const newOrgSlug = renamed.data!.slug;
+
+    // F2: this landed on /shared/<new> — the org hub, not the board — because
+    // the kiosk LAYOUT answered with the only param a layout has.
+    const oldBoard = `/shared/${oldOrgSlug}/${board.slug}/present`;
+    const newBoard = `/shared/${newOrgSlug}/${board.slug}/present`;
+    const hop = await page.request.get(oldBoard, { maxRedirects: 0 });
+    expect(hop.status(), "the board redirects").toBe(308);
+    expect(locationPath(hop), "the /{comp} tail survives an ORG rename").toBe(newBoard);
+
+    const oldDiv = `/shared/${oldOrgSlug}/${board.slug}/${board.divisionSlug}/present`;
+    const divHop = await page.request.get(oldDiv, { maxRedirects: 0 });
+    expect(divHop.status(), "the division board redirects").toBe(308);
+    expect(locationPath(divHop), "…and so does /{comp}/{div}").toBe(
+      `/shared/${newOrgSlug}/${board.slug}/${board.divisionSlug}/present`,
+    );
+
+    await page.setViewportSize(DESKTOP);
+    await openMounted(page, oldBoard);
+    await expect(page).toHaveURL(new RegExp(`${escapeRegExp(newBoard)}$`));
+    await expect(page.getByTestId("kiosk-board")).toBeVisible();
+
+    // TODAY'S behaviour, not the desired one — and the evidence behind the
+    // comment in `(public)/shared/[orgSlug]/[competitionSlug]/page.tsx`: the
+    // chrome tree still drops the tail, because its layout redirects before the
+    // page-level lookup can run. When that is fixed this expectation becomes
+    // `/shared/<new>/<comp>`; it is asserted so the fix cannot be silent.
+    const chromeHop = await page.request.get(`/shared/${oldOrgSlug}/${board.slug}`, {
+      maxRedirects: 0,
+    });
+    expect(chromeHop.status(), "the chrome hub redirects").toBe(308);
+    expect(locationPath(chromeHop), "chrome hub drops the tail (unfixed)").toBe(
+      `/shared/${newOrgSlug}`,
+    );
   });
 });

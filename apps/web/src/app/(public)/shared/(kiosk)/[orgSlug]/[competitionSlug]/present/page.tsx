@@ -30,6 +30,10 @@ export default async function PresentCompetitionPage({
     // IS F2, and it happened because the layout above had no other param to
     // give). Its answer is the CHROME path, so the board's own `/present` goes
     // back on. Null means nothing in the rename history and a 404 is honest.
+    // A renamed PRIVATE competition now 308s where it used to 404 — this reads
+    // the base tables while `public_competitions_v` (V397) filters visibility.
+    // Deliberately CONSISTENT with the chrome page, which already answers that
+    // way on main; a follow-up is owed covering BOTH surfaces at once.
     const renamed = await sharedRenameTarget(orgSlug, competitionSlug);
     if (renamed) permanentRedirect(`${renamed}/present`);
     notFound();
