@@ -1,105 +1,95 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createLichessAdapter } from "../lichess/adapter";
 import { LichessHttpError } from "../types";
+import { LICHESS_TIMEOUT_MS } from "../window";
 
-describe("createLichessAdapter", () => {
-  it("POSTs challenge as white with unrated clock fields", async () => {
-    const fetchMock = vi.fn(async () =>
-      Response.json({
-        id: "chal1",
-        url: "https://lichess.org/chal1",
-        status: "created",
-      }),
-    );
+const raw = (f: string) => readFileSync(join(__dirname, "../__fixtures__/lichess", f), "utf8");
 
-    const adapter = createLichessAdapter({ fetch: fetchMock as unknown as typeof fetch });
-    const result = await adapter.createChallenge({
-      whiteAccessToken: "tok-white",
-      blackLichessUsername: "blackPlayer",
-      clock: { limit: 600, increment: 5 },
-      rated: false,
+describe("createOpenChallenge", () => {
+  it("POSTs /api/challenge/open with users White-first, seconds clock, expiresAt ms, unrated, no auth", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      id: "abcd1234", url: "https://lichess.org/abcd1234",
+      urlWhite: "https://lichess.org/abcd1234?color=white", urlBlack: "https://lichess.org/abcd1234?color=black",
+    }), { status: 200 }));
+    const adapter = createLichessAdapter({ fetch, baseUrl: "https://li.test" });
+    const expiresAt = new Date("2026-10-01T19:20:00.000Z");
+    const out = await adapter.createOpenChallenge({
+      whiteUsername: "Alice", blackUsername: "Bob", clock: { limit: 900, increment: 10 }, expiresAt,
     });
-
-    expect(result).toEqual({
-      challengeId: "chal1",
-      whitePlayUrl: "https://lichess.org/chal1",
-      blackPlayUrl: "https://lichess.org/chal1",
+    expect(out).toEqual({
+      challengeId: "abcd1234",
+      urlWhite: "https://lichess.org/abcd1234?color=white",
+      urlBlack: "https://lichess.org/abcd1234?color=black",
     });
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("https://lichess.org/api/challenge/blackPlayer");
-    expect(init?.method).toBe("POST");
-    expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer tok-white");
-    expect((init?.headers as Record<string, string>)["Content-Type"]).toBe(
-      "application/x-www-form-urlencoded",
-    );
-    const body = new URLSearchParams(String(init?.body));
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://li.test/api/challenge/open");
+    expect(init.method).toBe("POST");
+    expect(new Headers(init.headers).has("authorization")).toBe(false);
+    const body = new URLSearchParams(String(init.body));
+    expect(body.get("users")).toBe("Alice,Bob");
+    expect(body.get("clock.limit")).toBe("900");
+    expect(body.get("clock.increment")).toBe("10");
     expect(body.get("rated")).toBe("false");
-    expect(body.get("color")).toBe("white");
-    expect(body.get("clock.limit")).toBe("600");
-    expect(body.get("clock.increment")).toBe("5");
+    expect(body.get("expiresAt")).toBe(String(expiresAt.getTime()));
+    expect(body.get("rules")).toBe("noRematch");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("throws LichessHttpError on 401", async () => {
-    const fetchMock = vi.fn(async () => new Response("nope", { status: 401 }));
-    const adapter = createLichessAdapter({ fetch: fetchMock as unknown as typeof fetch });
+    const fetch = vi.fn(async () => new Response("nope", { status: 401 }));
+    const adapter = createLichessAdapter({ fetch });
     await expect(
-      adapter.createChallenge({
-        whiteAccessToken: "bad",
-        blackLichessUsername: "x",
+      adapter.createOpenChallenge({
+        whiteUsername: "Alice",
+        blackUsername: "Bob",
         clock: { limit: 60, increment: 0 },
-        rated: false,
+        expiresAt: new Date("2026-10-01T00:00:00.000Z"),
       }),
     ).rejects.toBeInstanceOf(LichessHttpError);
     await expect(
-      adapter.createChallenge({
-        whiteAccessToken: "bad",
-        blackLichessUsername: "x",
+      adapter.createOpenChallenge({
+        whiteUsername: "Alice",
+        blackUsername: "Bob",
         clock: { limit: 60, increment: 0 },
-        rated: false,
+        expiresAt: new Date("2026-10-01T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({ status: 401 });
   });
 
   it("throws LichessHttpError on 429", async () => {
-    const fetchMock = vi.fn(async () => new Response("slow", { status: 429 }));
-    const adapter = createLichessAdapter({ fetch: fetchMock as unknown as typeof fetch });
+    const fetch = vi.fn(async () => new Response("slow", { status: 429 }));
+    const adapter = createLichessAdapter({ fetch });
     await expect(
-      adapter.createChallenge({
-        whiteAccessToken: "tok",
-        blackLichessUsername: "x",
+      adapter.createOpenChallenge({
+        whiteUsername: "Alice",
+        blackUsername: "Bob",
         clock: { limit: 60, increment: 0 },
-        rated: false,
+        expiresAt: new Date("2026-10-01T00:00:00.000Z"),
       }),
     ).rejects.toMatchObject({ status: 429 });
   });
+});
 
-  it("fetchGame maps export JSON to LichessGameSnapshot", async () => {
-    const fetchMock = vi.fn(async () =>
-      Response.json({
-        id: "g1",
-        status: "mate",
-        winner: "white",
-        players: {
-          white: { user: { id: "w1" } },
-          black: { user: { id: "b1" } },
-        },
-      }),
-    );
-    const adapter = createLichessAdapter({ fetch: fetchMock as unknown as typeof fetch });
-    const game = await adapter.fetchGame("g1");
-    expect(game).toEqual({
-      id: "g1",
-      status: "mate",
-      winner: "white",
-      players: {
-        white: { userId: "w1" },
-        black: { userId: "b1" },
-      },
+describe("fetchGame", () => {
+  it("parses the raw export shape (players.*.user.id)", async () => {
+    const fetch = vi.fn(async () => new Response(raw("export-mate-white.json"), { status: 200 }));
+    const g = await createLichessAdapter({ fetch }).fetchGame("q7ZvsdUF");
+    expect(g).toEqual({
+      id: "q7ZvsdUF", status: "mate", winner: "white",
+      players: { white: { userId: "lichess-home" }, black: { userId: "lichess-away" } },
     });
-    const [url] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("/game/export/g1");
-    expect(String(url)).toContain("pgnInJson=true");
+  });
+  it("returns null on 404 (challenge not yet accepted)", async () => {
+    const fetch = vi.fn(async () => new Response("", { status: 404 }));
+    expect(await createLichessAdapter({ fetch }).fetchGame("nope")).toBeNull();
+  });
+  it("uses the shared timeout constant", async () => {
+    const spy = vi.spyOn(AbortSignal, "timeout");
+    const fetch = vi.fn(async () => new Response(raw("export-created.json"), { status: 200 }));
+    await createLichessAdapter({ fetch }).fetchGame("x");
+    expect(spy).toHaveBeenCalledWith(LICHESS_TIMEOUT_MS);
+    spy.mockRestore();
   });
 });
