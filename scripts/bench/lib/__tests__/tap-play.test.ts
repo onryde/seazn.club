@@ -36,7 +36,10 @@
 //     "walkover", trimmed on submit), and the send carries `expected_seq` from
 //     the page's last load — a stale console is refused (SEQ_CONFLICT,
 //     fixture-console.tsx:456-469) and writes nothing. Finalize likewise.
-import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import * as webConsent from "../../../../apps/web/src/lib/consent.ts";
 import type { LedgerTransport } from "../ledger.ts";
 import { newSession } from "../http.ts";
@@ -50,12 +53,16 @@ import {
   COOKIE_POLICY_VERSION,
   DEVICE_HANDOVER_SELECTOR,
   MD_BREAKPOINT_PX,
+  ORGANISER_TRACE_FILE_NAME,
+  ORGANISER_VIDEO_FILE_NAME,
   SCORER_VIEWPORT,
   createTapPlayer,
   devicePadUrl,
   isMintResponse,
   playTapRounds,
   secretFromMintBody,
+  tapTraceFileName,
+  tapVideoFileName,
   type ConsentSeed,
   type TapBrowser,
   type TapContext,
@@ -134,12 +141,23 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     reloads: 0,
     handoverClicks: 0,
     mints: 0,
-    contexts: [] as { viewport: { width: number; height: number }; seeds: ConsentSeed[] }[],
+    contexts: [] as {
+      viewport: { width: number; height: number };
+      seeds: ConsentSeed[];
+      /** R86 — the RAW `recordVideo` option `newContext` was called with;
+       *  `undefined` when the caller passed none (capture off for this
+       *  context). Proves "absent from the newContext call when off". */
+      recordVideo: { dir: string } | undefined;
+    }[],
     closedContexts: 0,
     closedPages: 0,
     browserClosed: false,
     /** `console <selector>` / `pad <selector>` / `blank <selector>`, in order. */
     clicks: [] as string[],
+    /** R86 — one entry per context whose `tracing.start`/`.stop` was
+     *  actually called, in order. */
+    tracingStarts: 0,
+    tracingStops: [] as { path: string }[],
   };
 
   const visibleRows = (): LedgerRowFake[] => {
@@ -191,11 +209,28 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
     readonly scripts: { script: (seed: ConsentSeed) => void; arg: ConsentSeed }[];
     signedIn: boolean;
     readonly seeds: ConsentSeed[];
+    /** R86 — set from `newContext`'s own `recordVideo.dir`; `undefined` when
+     *  the caller passed none. Drives whether pages opened in this context
+     *  get a real backing file for `.video()` to report. */
+    readonly recordVideoDir?: string;
   }
 
+  let pageSerial = 0;
   const makePage = (ctx: FakeContextState): TapPage => {
     let url = "about:blank";
     let viewport = { ...ctx.viewport };
+    // R86 — a REAL file on disk under `ctx.recordVideoDir`, hash-named the
+    // way Playwright actually names one, so production's `rename()` call
+    // does real filesystem work a test can observe (existence, not just a
+    // call count). `undefined` when capture was off for this context —
+    // matches a real Page's `.video()` returning `null` in that case.
+    pageSerial += 1;
+    const videoPath =
+      ctx.recordVideoDir === undefined ? undefined : path.join(ctx.recordVideoDir, `hash-${pageSerial}.webm`);
+    if (videoPath !== undefined) {
+      mkdirSync(ctx.recordVideoDir!, { recursive: true });
+      writeFileSync(videoPath, "FAKE VIDEO");
+    }
     let snapshotStatus = "scheduled";
     let snapshotSeq = 0;
     let handoverOpen = false;
@@ -437,13 +472,34 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
       async close() {
         record.closedPages += 1;
       },
+      // R86 — ALWAYS present (a real Playwright `Page` always has this
+      // method too, returning `null` when recording was off), so production
+      // code's `page.video?.()` exercises the SAME branch regardless of
+      // whether this particular test turned capture on.
+      video: () =>
+        videoPath === undefined
+          ? null
+          : {
+              async path() {
+                return videoPath;
+              },
+              async delete() {
+                rmSync(videoPath, { force: true });
+              },
+            },
     };
   };
 
   const browser: TapBrowser = {
-    async newContext({ viewport }) {
-      const ctx: FakeContextState = { viewport: { ...viewport }, scripts: [], signedIn: false, seeds: [] };
-      record.contexts.push({ viewport: ctx.viewport, seeds: ctx.seeds });
+    async newContext({ viewport, recordVideo }) {
+      const ctx: FakeContextState = {
+        viewport: { ...viewport },
+        scripts: [],
+        signedIn: false,
+        seeds: [],
+        ...(recordVideo === undefined ? {} : { recordVideoDir: recordVideo.dir }),
+      };
+      record.contexts.push({ viewport: ctx.viewport, seeds: ctx.seeds, recordVideo });
       const context: TapContext = {
         async addInitScript(script, arg) {
           ctx.seeds.push(arg);
@@ -454,6 +510,19 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
         },
         async close() {
           record.closedContexts += 1;
+        },
+        // R86 — ALWAYS present, same "matches the real, always-there API"
+        // reasoning as `TapPage.video` above; production code only ever
+        // calls `.start()`/`.stop()` when `--trace` was actually on.
+        tracing: {
+          async start() {
+            record.tracingStarts += 1;
+          },
+          async stop({ path: tracePath }) {
+            record.tracingStops.push({ path: tracePath });
+            mkdirSync(path.dirname(tracePath), { recursive: true });
+            writeFileSync(tracePath, "FAKE TRACE");
+          },
         },
       };
       return context;
@@ -650,6 +719,146 @@ describe("createTapPlayer — hand-over, play, sign-off (B07a T10)", () => {
     expect(result.findings.join("\n")).toContain("PAYMENT_REQUIRED");
     expect(world.record.contexts.filter((c) => c.viewport.width === SCORER_VIEWPORT.width)).toHaveLength(0);
     expect(world.rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R86 (owner: "watch the bench play a match", trace "for troubleshooting") —
+// video/trace capture. Both OFF by default; `createTapPlayer`'s
+// `recordVideoDir`/`traceDir` are what bench.ts's CLI resolves and threads
+// down (bench-cli.test.ts covers that hop; this covers the seam itself).
+// ---------------------------------------------------------------------------
+describe("R86 — video/trace capture", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  function tmpCaptureDir(): string {
+    const dir = mkdtempSync(path.join(tmpdir(), "tap-play-capture-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  it("off by default: newContext gets no recordVideo, tracing is never started, and no artefacts are reported", async () => {
+    const world = fakeWorld();
+    const p = player(world);
+    const result = await p.playFixture(job(FULL_MATCH));
+
+    expect(result.findings).toEqual([]);
+    expect(result.videoPath).toBeUndefined();
+    expect(result.tracePath).toBeUndefined();
+    // The mutant this kills: threading the option unconditionally instead
+    // of gating on `recordVideoDir`/`traceDir` being set.
+    for (const c of world.record.contexts) expect(c.recordVideo).toBeUndefined();
+    expect(world.record.tracingStarts).toBe(0);
+    expect(world.record.tracingStops).toEqual([]);
+
+    await p.close();
+    expect(p.artefacts?.()).toEqual({});
+  });
+
+  it("threads recordVideoDir into every newContext call when set — organiser AND scorer", async () => {
+    const dir = tmpCaptureDir();
+    const world = fakeWorld();
+    const p = createTapPlayer({
+      browser: world.browser,
+      loginUrl: LOGIN_URL,
+      base: ORIGIN,
+      session: newSession(),
+      ledger: world.ledger,
+      sleep: noSleep,
+      ownsBrowser: true,
+      recordVideoDir: dir,
+    });
+    await p.playFixture(job(FULL_MATCH));
+
+    expect(world.record.contexts).toHaveLength(2); // organiser, scorer
+    for (const c of world.record.contexts) expect(c.recordVideo).toEqual({ dir });
+    await p.close();
+  });
+
+  it("renames the fixture's video and trace to a watchable name DERIVED from the job, never a literal", async () => {
+    const dir = tmpCaptureDir();
+    const world = fakeWorld();
+    const p = createTapPlayer({
+      browser: world.browser,
+      loginUrl: LOGIN_URL,
+      base: ORIGIN,
+      session: newSession(),
+      ledger: world.ledger,
+      sleep: noSleep,
+      ownsBrowser: true,
+      recordVideoDir: dir,
+      traceDir: dir,
+    });
+    const theJob = job(FULL_MATCH);
+    const result = await p.playFixture(theJob);
+
+    const expectedVideo = path.join(dir, tapVideoFileName(theJob));
+    const expectedTrace = path.join(dir, tapTraceFileName(theJob));
+    expect(result.videoPath).toBe(expectedVideo);
+    expect(result.tracePath).toBe(expectedTrace);
+    expect(existsSync(expectedVideo)).toBe(true);
+    expect(existsSync(expectedTrace)).toBe(true);
+    // Trace stops BEFORE the scorer context closes (the pairing `TapTracing`
+    // documents) — proven by the recorded call, not just the file.
+    expect(world.record.tracingStops.map((s) => s.path)).toContain(expectedTrace);
+
+    await p.close();
+  });
+
+  it("the organiser side is named flat (organiser.webm/.zip), populated only once close() has finished", async () => {
+    const dir = tmpCaptureDir();
+    const world = fakeWorld();
+    const p = createTapPlayer({
+      browser: world.browser,
+      loginUrl: LOGIN_URL,
+      base: ORIGIN,
+      session: newSession(),
+      ledger: world.ledger,
+      sleep: noSleep,
+      ownsBrowser: true,
+      recordVideoDir: dir,
+      traceDir: dir,
+    });
+    await p.playFixture(job(FULL_MATCH));
+
+    // Before close(): the organiser context is still open, nothing renamed yet.
+    expect(p.artefacts?.()).toEqual({});
+
+    await p.close();
+    const expectedVideo = path.join(dir, ORGANISER_VIDEO_FILE_NAME);
+    const expectedTrace = path.join(dir, ORGANISER_TRACE_FILE_NAME);
+    expect(p.artefacts?.()).toEqual({ videoPath: expectedVideo, tracePath: expectedTrace });
+    expect(existsSync(expectedVideo)).toBe(true);
+    expect(existsSync(expectedTrace)).toBe(true);
+  });
+
+  it("leaves NO hash-named files behind — the throwaway login page's video is deleted, not renamed", async () => {
+    const dir = tmpCaptureDir();
+    const world = fakeWorld();
+    const p = createTapPlayer({
+      browser: world.browser,
+      loginUrl: LOGIN_URL,
+      base: ORIGIN,
+      session: newSession(),
+      ledger: world.ledger,
+      sleep: noSleep,
+      ownsBrowser: true,
+      recordVideoDir: dir,
+      traceDir: dir,
+    });
+    const theJob = job(FULL_MATCH);
+    await p.playFixture(theJob);
+    await p.close();
+
+    // Exactly the four watchable names — a run that also leaves hash-named
+    // files (the login page's own video, or an un-renamed fixture/organiser
+    // one) has NOT met R86's bar.
+    const names = readdirSync(dir).sort();
+    expect(names).toEqual(
+      [ORGANISER_TRACE_FILE_NAME, ORGANISER_VIDEO_FILE_NAME, tapTraceFileName(theJob), tapVideoFileName(theJob)].sort(),
+    );
   });
 });
 

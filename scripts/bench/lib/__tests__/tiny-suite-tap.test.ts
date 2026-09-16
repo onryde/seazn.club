@@ -836,6 +836,87 @@ describe("tap mode — a special's state claim describes the STREAM, never the s
   });
 });
 
+// ---------------------------------------------------------------------------
+// R86 (owner: "watch the bench play a match") — the SUITE-level fold: does
+// `PackSuiteInput.recordVideoDir`/`traceDir` actually reach the tap player
+// FACTORY (never an env var, per the brief's "thread values explicitly"),
+// and does every tapped fixture's OWN artefact plus the run's ONE organiser
+// artefact land in `report.tapPlay.videoPaths`/`tracePaths`? `tap-play.ts`'s
+// own tests (tap-play.test.ts) already prove the rename/tracing mechanics —
+// this proves the ONE HOP further those tests cannot see: the wiring
+// between `run-suite.ts` and the player it constructs.
+// ---------------------------------------------------------------------------
+function withCapture(
+  base: ReturnType<typeof fakeTapPlayer>,
+  opts: {
+    videoPathFor: (job: TapJobLike) => string;
+    tracePathFor: (job: TapJobLike) => string;
+    organiserVideoPath: string;
+    organiserTracePath: string;
+  },
+) {
+  const contexts: { recordVideoDir?: string; traceDir?: string }[] = [];
+  const factory = async (ctx: Parameters<ReturnType<typeof fakeTapPlayer>["factory"]>[0] & { recordVideoDir?: string; traceDir?: string }) => {
+    contexts.push({ recordVideoDir: ctx.recordVideoDir, traceDir: ctx.traceDir });
+    const inner = await base.factory(ctx);
+    let closed = false;
+    return {
+      async playFixture(job: TapJobLike) {
+        const result = await inner.playFixture(job);
+        return { ...result, videoPath: opts.videoPathFor(job), tracePath: opts.tracePathFor(job) };
+      },
+      async close() {
+        await inner.close();
+        closed = true;
+      },
+      artefacts() {
+        return closed ? { videoPath: opts.organiserVideoPath, tracePath: opts.organiserTracePath } : {};
+      },
+    };
+  };
+  return { factory, contexts };
+}
+
+describe("tap mode — video/trace capture threads through the suite and folds into the report (R86)", () => {
+  it("passes recordVideoDir/traceDir into the tap player factory, and folds every fixture's + the organiser's artefacts into tapPlay", async () => {
+    const world = fakeServer({ deviceLinksSold: true });
+    const organiserVideoPath = "/fake-report/run-x/video/organiser.webm";
+    const organiserTracePath = "/fake-report/run-x/trace/organiser.zip";
+    const captured = withCapture(fakeTapPlayer(world), {
+      videoPathFor: (job) => `/fake-report/run-x/video/${job.divisionRef}-${job.fixtureExtKey}.webm`,
+      tracePathFor: (job) => `/fake-report/run-x/trace/${job.divisionRef}-${job.fixtureExtKey}.zip`,
+      organiserVideoPath,
+      organiserTracePath,
+    });
+
+    const input = {
+      ...tapInput(world, captured.factory),
+      recordVideoDir: "/fake-report/run-x/video",
+      traceDir: "/fake-report/run-x/trace",
+    };
+    const report = await runPackSuite(input, { suiteKey: "fixture", packPath: FIXTURE_PACK_PATH, play: TAP_D_TINY });
+
+    expect(report.gate).toBe("green");
+    // Threaded through: the factory saw the SAME dirs the suite input carried
+    // — never an env var, never re-derived.
+    expect(captured.contexts).toEqual([{ recordVideoDir: "/fake-report/run-x/video", traceDir: "/fake-report/run-x/trace" }]);
+
+    const dTiny = (await tinyStreams()).filter((s) => s.divisionRef === "d-tiny");
+    const expectedVideos = dTiny.map((s) => `/fake-report/run-x/video/d-tiny-${s.fixtureExtKey}.webm`);
+    const expectedTraces = dTiny.map((s) => `/fake-report/run-x/trace/d-tiny-${s.fixtureExtKey}.zip`);
+    expect((report.tapPlay?.videoPaths ?? []).slice().sort()).toEqual([...expectedVideos, organiserVideoPath].sort());
+    expect((report.tapPlay?.tracePaths ?? []).slice().sort()).toEqual([...expectedTraces, organiserTracePath].sort());
+  });
+
+  it("carries no videoPaths/tracePaths at all when capture was off — absent, never a present-but-empty array", async () => {
+    const { input } = inputWithTappedDivision();
+    const report = await runPackSuite(input, { suiteKey: "fixture", packPath: FIXTURE_PACK_PATH, play: TAP_D_TINY });
+    expect(report.gate).toBe("green");
+    expect(report.tapPlay?.videoPaths).toBeUndefined();
+    expect(report.tapPlay?.tracePaths).toBeUndefined();
+  });
+});
+
 describe("tap mode — a refused team sheet is a finding that reds (fix round 2, R62)", () => {
   it("names the division, fixture, side and the product's refusal", async () => {
     const world = fakeServer({ deviceLinksSold: true, refuseLineupWrites: true });

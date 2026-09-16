@@ -3,7 +3,7 @@
 // scripts/bench/__tests__) purely so every bench test collects from one
 // glob; it tests ../../bench.ts, one level up from the other lib tests.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseCliArgs, runSuite } from "../../bench.ts";
+import { parseCliArgs, resolveCaptureDirs, runSuite } from "../../bench.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanSql } from "../plan.ts";
 
@@ -107,6 +107,85 @@ describe("parseCliArgs", () => {
     // resolveEntryMode's OUTPUT vocabulary (EntryMode), never a legal CLI
     // input (CliEntryFlag only has "admin"/"registration").
     expect(() => parseCliArgs(["--entry", "registration-api"])).toThrow(/--entry must be one of/);
+  });
+
+  // R86 (owner: "watch the bench play a match") — --record-video/--trace are
+  // node:util parseArgs cannot express on its own: a boolean-or-string flag
+  // (bare = default dir, valued = explicit one). `extractOptionalValueFlag`
+  // pulls both out of argv BEFORE parseArgs ever runs, so these also prove
+  // that extraction never confuses a flag's OWN value with the next flag.
+  describe("--record-video / --trace", () => {
+    it("both absent by default — OFF means off, not present-with-no-dir", () => {
+      const config = parseCliArgs([]);
+      expect(config.recordVideo).toBeUndefined();
+      expect(config.trace).toBeUndefined();
+    });
+
+    it("a bare flag turns capture on with no explicit dir", () => {
+      expect(parseCliArgs(["--record-video"]).recordVideo).toEqual({});
+      expect(parseCliArgs(["--trace"]).trace).toEqual({});
+    });
+
+    it("a space-separated value is the explicit dir", () => {
+      expect(parseCliArgs(["--record-video", "/tmp/my-videos"]).recordVideo).toEqual({ dir: "/tmp/my-videos" });
+      expect(parseCliArgs(["--trace", "/tmp/my-traces"]).trace).toEqual({ dir: "/tmp/my-traces" });
+    });
+
+    it("an --opt=value form is the explicit dir too", () => {
+      expect(parseCliArgs(["--record-video=/tmp/my-videos"]).recordVideo).toEqual({ dir: "/tmp/my-videos" });
+      expect(parseCliArgs(["--trace=/tmp/my-traces"]).trace).toEqual({ dir: "/tmp/my-traces" });
+    });
+
+    it("a bare flag immediately followed by another flag stays bare — it does not eat the next flag as its value", () => {
+      const config = parseCliArgs(["--record-video", "--trace", "--wipe"]);
+      expect(config.recordVideo).toEqual({});
+      expect(config.trace).toEqual({});
+      expect(config.keep).toBe(false);
+    });
+
+    it("both flags together, independently, in either order", () => {
+      const a = parseCliArgs(["--record-video", "/tmp/v", "--trace", "/tmp/t"]);
+      expect(a.recordVideo).toEqual({ dir: "/tmp/v" });
+      expect(a.trace).toEqual({ dir: "/tmp/t" });
+      const b = parseCliArgs(["--trace", "/tmp/t2", "--record-video", "/tmp/v2"]);
+      expect(b.recordVideo).toEqual({ dir: "/tmp/v2" });
+      expect(b.trace).toEqual({ dir: "/tmp/t2" });
+    });
+
+    it("still rejects an actually-unknown flag — extraction did not widen strict mode", () => {
+      expect(() => parseCliArgs(["--record-video", "--not-a-real-flag"])).toThrow();
+    });
+  });
+});
+
+describe("resolveCaptureDirs — R86", () => {
+  const config = (extra: string[] = []): ReturnType<typeof parseCliArgs> =>
+    parseCliArgs(["--base", "http://bench.example", ...extra]);
+
+  it("both absent when neither CLI flag was given — no directory implied at all", () => {
+    expect(resolveCaptureDirs(config(), "run-a")).toEqual({});
+  });
+
+  it("defaults under <report-dir>/<run-id>/{video,trace} when the flag was bare", () => {
+    const c = config(["--record-video", "--trace", "--report-dir", "/tmp/bench-report"]);
+    expect(resolveCaptureDirs(c, "run-a")).toEqual({
+      recordVideoDir: "/tmp/bench-report/run-a/video",
+      traceDir: "/tmp/bench-report/run-a/trace",
+    });
+  });
+
+  it("two different run ids resolve to two different directories — the concurrency guard", () => {
+    const c = config(["--record-video", "--report-dir", "/tmp/bench-report"]);
+    const a = resolveCaptureDirs(c, "leg-a-optimized");
+    const b = resolveCaptureDirs(c, "leg-b-greedy");
+    expect(a.recordVideoDir).not.toBe(b.recordVideoDir);
+    expect(a.recordVideoDir).toBe("/tmp/bench-report/leg-a-optimized/video");
+    expect(b.recordVideoDir).toBe("/tmp/bench-report/leg-b-greedy/video");
+  });
+
+  it("an explicit dir wins outright, ignoring reportDir/runId entirely", () => {
+    const c = config(["--record-video", "/explicit/videos", "--report-dir", "/tmp/bench-report"]);
+    expect(resolveCaptureDirs(c, "run-a")).toEqual({ recordVideoDir: "/explicit/videos" });
   });
 });
 
@@ -249,6 +328,48 @@ describe("runSuite — B04 forwards reportDir and the resolved runId", () => {
     // And the engine assertion travels with them — `--engine` is honoured as
     // an assertion by the scheduling layer, so the value has to arrive.
     expect(seen[0]!.engine).toBe("optimized");
+    // R86 — off means off: no capture flag was passed, so `runSuite` was
+    // never given a recordVideoDir/traceDir, and the key must be ABSENT
+    // from the suite input, not present-with-`undefined`.
+    expect(seen[0]!).not.toHaveProperty("recordVideoDir");
+    expect(seen[0]!).not.toHaveProperty("traceDir");
+
+    vi.doUnmock("../suites/tiny.ts");
+    vi.resetModules();
+  });
+
+  // R86 — the SAME forwarding hop as runId/reportDir above, one step
+  // earlier: bench.ts's `main()` resolves `recordVideoDir`/`traceDir` once
+  // (`resolveCaptureDirs`) and passes them as `runSuite`'s own trailing
+  // params; this proves THAT forward, independent of `main()` itself (which
+  // needs a live preflight to reach the loop at all).
+  it("forwards recordVideoDir/traceDir into the suite input when the caller supplies them", async () => {
+    vi.resetModules();
+    const seen: Record<string, unknown>[] = [];
+    vi.doMock("../suites/tiny.ts", () => ({
+      TINY_PACK_PATH: "/fake/packs/_tiny.json",
+      runTinySuite: async (input: Record<string, unknown>) => {
+        seen.push(input);
+        return { suite: "_tiny", gate: "green" as const, timings: {}, keep: false };
+      },
+    }));
+    const fresh = await import("../../bench.ts");
+    const config = fresh.parseCliArgs(["--suite", "_tiny", "--base", "http://bench.example"]);
+
+    await fresh.runSuite(
+      "_tiny",
+      config,
+      "resolved-sha",
+      {} as PlanSql,
+      undefined,
+      undefined,
+      "/tmp/bench-report/resolved-sha/video",
+      "/tmp/bench-report/resolved-sha/trace",
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.recordVideoDir).toBe("/tmp/bench-report/resolved-sha/video");
+    expect(seen[0]!.traceDir).toBe("/tmp/bench-report/resolved-sha/trace");
 
     vi.doUnmock("../suites/tiny.ts");
     vi.resetModules();

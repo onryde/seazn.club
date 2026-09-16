@@ -414,6 +414,13 @@ export interface PlayMatchResult {
    *  calling this function (`tap-play.ts`'s pre-flight early-exits, before
    *  any scoring starts) — "not measured", never "zero". */
   readonly unreadRowsAfterFinalize?: number;
+  /** R86 — this fixture's own scorer-context capture, renamed to a
+   *  watchable name (`tap-play.ts`'s `tapVideoFileName`/`tapTraceFileName`)
+   *  once the scorer context closes. Set only by `tap-play.ts`'s own
+   *  `createTapPlayer` (this driver never touches a browser context
+   *  directly); absent when capture was off, or before the context closed. */
+  readonly videoPath?: string;
+  readonly tracePath?: string;
 }
 
 // Ref resolution for `stream.home`/`stream.away` — bare refs, no `@` sigil.

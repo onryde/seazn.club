@@ -463,6 +463,73 @@ describe("B07a T10 — tap play", () => {
   });
 });
 
+// R86 (owner: "watch the bench play a match", trace "for troubleshooting") —
+// the report is where a human FINDS the video without hunting through
+// bench-report/ for a hash-named file, so the paths themselves have to be
+// IN it, not just measured.
+describe("R86 — video/trace capture in the report", () => {
+  it("lists the video and trace paths under Tap play, only when capture was on", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          tapPlay: {
+            matches: 1,
+            taps: 3,
+            wallMs: 100,
+            observations: 0,
+            videoPaths: ["bench-report/run-x/video/d-tiny-rr-r1-c1.webm", "bench-report/run-x/video/organiser.webm"],
+            tracePaths: ["bench-report/run-x/trace/d-tiny-rr-r1-c1.zip", "bench-report/run-x/trace/organiser.zip"],
+          },
+        },
+      ],
+    });
+    const lines = md.split("\n");
+    const videoLine = lines.find((l) => l.includes("Videos:"));
+    const traceLine = lines.find((l) => l.includes("Traces:"));
+    expect(videoLine).toContain("bench-report/run-x/video/d-tiny-rr-r1-c1.webm");
+    expect(videoLine).toContain("bench-report/run-x/video/organiser.webm");
+    expect(traceLine).toContain("bench-report/run-x/trace/d-tiny-rr-r1-c1.zip");
+    expect(traceLine).toContain("bench-report/run-x/trace/organiser.zip");
+  });
+
+  it("omits Videos/Traces lines entirely when capture was off", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), tapPlay: { matches: 1, taps: 3, wallMs: 100, observations: 0 } }],
+    });
+    expect(md.split("\n").some((l) => l.includes("Videos:"))).toBe(false);
+    expect(md.split("\n").some((l) => l.includes("Traces:"))).toBe(false);
+  });
+
+  it("the schema carries videoPaths/tracePaths through, absent by default", () => {
+    const base = fullReport();
+    const suite = base.suites[0] as BenchReportType["suites"][number];
+    const withCapture = {
+      ...base,
+      suites: [
+        {
+          ...suite,
+          tapPlay: { matches: 1, taps: 1, wallMs: 1, observations: 0, videoPaths: ["a.webm"], tracePaths: ["a.zip"] },
+        },
+      ],
+    };
+    expect(BenchReport.parse(withCapture).suites[0]?.tapPlay).toEqual({
+      matches: 1,
+      taps: 1,
+      wallMs: 1,
+      observations: 0,
+      videoPaths: ["a.webm"],
+      tracePaths: ["a.zip"],
+    });
+    const withoutCapture = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 1, wallMs: 1, observations: 0 } }] };
+    expect(BenchReport.parse(withoutCapture).suites[0]?.tapPlay?.videoPaths).toBeUndefined();
+  });
+});
+
 describe("B05 T6 — the no-subject oracle verdict", () => {
   it("renders NO SUBJECT — never PASS — for an oracle that compared nothing", () => {
     const md = renderMarkdown(

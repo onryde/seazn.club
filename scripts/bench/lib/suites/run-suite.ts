@@ -893,6 +893,14 @@ export interface PackSuiteInput {
   /** See `reportDir`. Already RESOLVED — never a raw `--run-id` that may be
    *  undefined. */
   runId?: string;
+  /** R86 (owner: "watch the bench play a match") — off unless bench.ts's
+   *  `--record-video`/`--trace` was on for this run; ALREADY resolved and
+   *  namespaced by run-id (`resolveCaptureDirs`), same "one identity, one
+   *  resolution point" reason `runId` above is threaded rather than
+   *  re-derived. Forwarded into the tap player's `TapPlayerContext`; unread
+   *  by anything else. */
+  recordVideoDir?: string;
+  traceDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -3543,6 +3551,8 @@ export async function runPackSuite(
             session: s,
             email,
             ledger: defaultLedgerTransport,
+            ...(input.recordVideoDir === undefined ? {} : { recordVideoDir: input.recordVideoDir }),
+            ...(input.traceDir === undefined ? {} : { traceDir: input.traceDir }),
           }));
       } catch (err) {
         errors.push(`tap: the tap player could not start — ${err instanceof Error ? err.message : String(err)} (${notPlayed})`);
@@ -3625,6 +3635,21 @@ export async function runPackSuite(
       }
 
       const prev = tapState.report;
+      // R86 — each fixture's OWN scorer-side capture (`tap-play.ts`'s
+      // `createTapPlayer`), folded the same way `unreadRowsAfterFinalize` is
+      // across every division this run tapped. Computed OUTSIDE the object
+      // literal below so the field itself can be OMITTED (never a present-
+      // but-empty array) when this run never captured anything — the same
+      // absent-vs-empty rule every other optional field on this report
+      // follows.
+      const videoPaths = [
+        ...(prev?.videoPaths ?? []),
+        ...played.flatMap((p) => (p.result.videoPath === undefined ? [] : [p.result.videoPath])),
+      ];
+      const tracePaths = [
+        ...(prev?.tracePaths ?? []),
+        ...played.flatMap((p) => (p.result.tracePath === undefined ? [] : [p.result.tracePath])),
+      ];
       tapState.report = {
         matches: (prev?.matches ?? 0) + played.length,
         taps: (prev?.taps ?? 0) + played.reduce((n, p) => n + p.result.taps, 0),
@@ -3639,6 +3664,8 @@ export async function runPackSuite(
         unreadRowsAfterFinalize:
           (prev?.unreadRowsAfterFinalize ?? 0) +
           played.reduce((n, p) => n + (p.result.unreadRowsAfterFinalize ?? 0), 0),
+        ...(videoPaths.length === 0 ? {} : { videoPaths }),
+        ...(tracePaths.length === 0 ? {} : { tracePaths }),
       };
     };
 
@@ -5818,6 +5845,24 @@ export async function runPackSuite(
   if (tapState.player !== undefined) {
     try {
       await tapState.player.close();
+      // R86 — the organiser side's own capture artefacts are only known
+      // once `close()` has finished renaming them; called strictly AFTER
+      // the await above, never before. `tapState.report` is only undefined
+      // here if a tap division was created but never actually played a
+      // fixture, which cannot happen (the player is constructed lazily,
+      // right before `playTapRounds` runs) — guarded anyway rather than
+      // asserted, since a report with no `tapPlay` section at all is a
+      // strictly safer failure mode than a crash while closing the browser.
+      const organiserArtefacts = tapState.player.artefacts?.() ?? {};
+      if (tapState.report !== undefined) {
+        const videoPaths = [...(tapState.report.videoPaths ?? []), ...(organiserArtefacts.videoPath === undefined ? [] : [organiserArtefacts.videoPath])];
+        const tracePaths = [...(tapState.report.tracePaths ?? []), ...(organiserArtefacts.tracePath === undefined ? [] : [organiserArtefacts.tracePath])];
+        tapState.report = {
+          ...tapState.report,
+          ...(videoPaths.length === 0 ? {} : { videoPaths }),
+          ...(tracePaths.length === 0 ? {} : { tracePaths }),
+        };
+      }
     } catch (err) {
       warnings.push(`${suiteKey}: closing the tap player failed — ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -13,6 +13,8 @@
 // Strip-types safe (`strip-types-loadable.test.ts` loads every shipped
 // module): no enums, namespaces or parameter properties, and every relative
 // import carries `.ts`.
+import { rename } from "node:fs/promises";
+import path from "node:path";
 import { chromium } from "playwright";
 import { call, newSession, type Session } from "./http.ts";
 import { fetchFixtureLedger, type LedgerTransport } from "./ledger.ts";
@@ -137,6 +139,25 @@ export function isMintResponse(fixtureId: string): (response: TapResponse) => bo
   };
 }
 
+/** Playwright names a video/trace file by hash — unwatchable. Every tapped
+ *  fixture's capture is renamed to this on the scorer context's close (R86,
+ *  owner: "watch the bench play a match"). Derived from the JOB, never
+ *  typed as a literal in a test. */
+export function tapVideoFileName(job: { readonly divisionRef: string; readonly fixtureExtKey: string }): string {
+  return `${job.divisionRef}-${job.fixtureExtKey}.webm`;
+}
+export function tapTraceFileName(job: { readonly divisionRef: string; readonly fixtureExtKey: string }): string {
+  return `${job.divisionRef}-${job.fixtureExtKey}.zip`;
+}
+/** The organiser context is ONE per run (memoized in `createTapPlayer`
+ *  below), so it gets one flat name rather than a per-fixture one — R86's
+ *  own settled design ("a run yields one file per tapped fixture plus one
+ *  organiser file"). For a multi-fixture run the LAST fixture's organiser
+ *  actions are what this file shows — an accepted limitation of one shared
+ *  organiser context, not something this task builds further on. */
+export const ORGANISER_VIDEO_FILE_NAME = "organiser.webm";
+export const ORGANISER_TRACE_FILE_NAME = "organiser.zip";
+
 /** `{ ok, data: { secret } }` — the v1 envelope `apiV1` unwraps in the panel. */
 export function secretFromMintBody(body: unknown): string | undefined {
   const data = (body as { data?: { secret?: unknown } } | null)?.data;
@@ -218,6 +239,52 @@ function messageOf(err: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+// R86 capture helpers — all best-effort: capture is diagnostic tooling for a
+// human to WATCH, never a gate, so a rename/tracing failure must never fail
+// a match that otherwise played cleanly.
+// ---------------------------------------------------------------------------
+
+/** Moves a hash-named capture file to its watchable name. `undefined`/`null`
+ *  `handle`/`dir` both mean "nothing to rename" (recording was off, or this
+ *  page never got a video). */
+async function watchableVideoPath(
+  handle: TapVideoHandle | null | undefined,
+  dir: string | undefined,
+  fileName: string,
+): Promise<string | undefined> {
+  if (handle === null || handle === undefined || dir === undefined) return undefined;
+  try {
+    const hashPath = await handle.path();
+    const target = path.join(dir, fileName);
+    await rename(hashPath, target);
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+/** No-op when `dir` is absent (trace off) or this context declares no
+ *  `tracing` (the structural test fake, unless a test opts in). */
+async function startTracing(context: TapContext, dir: string | undefined): Promise<void> {
+  if (dir === undefined || context.tracing === undefined) return;
+  await context.tracing.start({ screenshots: true, snapshots: true }).catch(() => undefined);
+}
+
+/** Must run BEFORE `context.close()` — the pairing `TapTracing` documents
+ *  ("started and stopped per context"). Returns the path it wrote to, or
+ *  `undefined` on the same "off" conditions as `startTracing`. */
+async function stopTracing(context: TapContext, dir: string | undefined, fileName: string): Promise<string | undefined> {
+  if (dir === undefined || context.tracing === undefined) return undefined;
+  try {
+    const target = path.join(dir, fileName);
+    await context.tracing.stop({ path: target });
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The narrow browser surface. A real Playwright `Browser` is passed to
 // `createTapPlayer` below by `browserTapPlayer` with NO cast, so tsc proves
 // the assignability in production code itself.
@@ -229,12 +296,43 @@ export interface TapResponse {
   json(): Promise<unknown>;
 }
 
+/** A real Playwright `Video` is a strict superset of this (it also has
+ *  `saveAs`) — declared narrowly so the structural test fake only has to
+ *  implement what capture actually reads. */
+export interface TapVideoHandle {
+  path(): Promise<string>;
+  delete?(): Promise<void>;
+}
+
+/** A real Playwright `BrowserContext.tracing` is a strict superset. */
+export interface TapTracing {
+  start(options: { screenshots: boolean; snapshots: boolean }): Promise<void>;
+  stop(options: { path: string }): Promise<void>;
+}
+
+/** What `TapPlayer.artefacts()` reports once capture is on for a run — the
+ *  ORGANISER side's own watchable files. Per-fixture (scorer-side) artefacts
+ *  travel on `PlayMatchResult` instead, one row per tapped match; this is
+ *  run-level because the organiser context is ONE per run. Both fields
+ *  absent when capture was off, or before `close()` has finished renaming
+ *  them. */
+export interface TapPlayerArtefacts {
+  readonly videoPath?: string;
+  readonly tracePath?: string;
+}
+
 export interface TapPage extends PadPage {
   url(): string;
   reload(): Promise<unknown>;
   viewportSize(): { width: number; height: number } | null;
   waitForResponse(predicate: (response: TapResponse) => boolean, options?: { timeout?: number }): Promise<TapResponse>;
   close(): Promise<void>;
+  /** B07a video capture (owner ruling R86 — "watch the bench play a
+   *  match"). OPTIONAL: a real Playwright `Page` always has this (returning
+   *  `null` when `recordVideo` was off), but the structural test fake at
+   *  tap-play.test.ts predates it and must keep compiling without ever
+   *  providing one. */
+  video?(): TapVideoHandle | null;
 }
 
 export interface TapContext {
@@ -243,10 +341,20 @@ export interface TapContext {
    *  `Disposable`, which is not assignable to `void`. */
   addInitScript(script: (seed: ConsentSeed) => void, arg: ConsentSeed): Promise<unknown>;
   close(): Promise<void>;
+  /** R86 — optional, same reasoning as `TapPage.video`. */
+  tracing?: TapTracing;
 }
 
 export interface TapBrowser {
-  newContext(options: { viewport: { width: number; height: number } }): Promise<TapContext>;
+  newContext(options: {
+    viewport: { width: number; height: number };
+    /** R86 — only passed when `--record-video` is on for this run; `dir` is
+     *  ALREADY namespaced by run-id (bench.ts's `resolveCaptureDirs`), so
+     *  this seam never touches env vars or the CLI itself. Optional so the
+     *  structural test fake at tap-play.test.ts:444
+     *  (`async newContext({ viewport })`) keeps compiling untouched. */
+    recordVideo?: { dir: string; size?: { width: number; height: number } };
+  }): Promise<TapContext>;
   close(): Promise<void>;
 }
 
@@ -271,6 +379,11 @@ export interface TapPlayer {
   /** Never rejects: every failure is a finding on the result. */
   playFixture(job: TapFixtureJob): Promise<PlayMatchResult>;
   close(): Promise<void>;
+  /** R86 — the organiser side's own capture artefacts, populated only once
+   *  `close()` has finished renaming them (call it AFTER `close()`
+   *  resolves). Optional: existing fakes, and any run with capture off,
+   *  never need to implement it. */
+  artefacts?(): TapPlayerArtefacts;
 }
 
 export interface TapPlayerContext {
@@ -280,6 +393,10 @@ export interface TapPlayerContext {
   /** The organiser's identity; the browser signs in as it. */
   readonly email: string;
   readonly ledger: LedgerTransport;
+  /** R86 — forwarded straight through from `PackSuiteInput`/bench.ts; see
+   *  `CreateTapPlayerInput`'s own doc comment. */
+  readonly recordVideoDir?: string;
+  readonly traceDir?: string;
 }
 
 export type TapPlayerFactory = (ctx: TapPlayerContext) => Promise<TapPlayer>;
@@ -384,6 +501,12 @@ export interface CreateTapPlayerInput {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Close `browser` when the player closes (the real factory owns it). */
   readonly ownsBrowser?: boolean;
+  /** R86 — off unless bench.ts's `--record-video`/`--trace` was on for this
+   *  run; ALREADY resolved and namespaced by run-id
+   *  (`resolveCaptureDirs`/`PackSuiteInput.recordVideoDir`) — this seam
+   *  never reads an env var or the CLI itself. */
+  readonly recordVideoDir?: string;
+  readonly traceDir?: string;
 }
 
 function realSleep(ms: number): Promise<void> {
@@ -393,7 +516,14 @@ function realSleep(ms: number): Promise<void> {
 export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
   const sleep = input.sleep ?? realSleep;
   const organiserViewport = input.organiserViewport ?? ORGANISER_VIEWPORT;
+  const recordVideoDir = input.recordVideoDir;
+  const traceDir = input.traceDir;
   let organiser: Promise<TapContext> | undefined;
+  // The LAST org page opened — the organiser context is ONE per run, so its
+  // video is named flat (`organiser.webm`); "the last fixture wins" for a
+  // multi-fixture run is R86's own accepted shape, not a bug this task fixes.
+  let organiserVideoPage: TapPage | undefined;
+  let organiserArtefacts: TapPlayerArtefacts = {};
 
   // ONE signed-in organiser context for the whole run, each fixture on its own
   // page in it. Consent is pre-answered here as well: the banner is fixed to
@@ -402,11 +532,18 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
     organiser ??= (async () => {
       const context = await input.browser.newContext({
         viewport: { width: organiserViewport.width, height: organiserViewport.height },
+        ...(recordVideoDir === undefined ? {} : { recordVideo: { dir: recordVideoDir } }),
       });
+      await startTracing(context, traceDir);
       await context.addInitScript(seedConsent, CONSENT_SEED);
       const login = await context.newPage();
       await login.goto(input.loginUrl);
+      const loginVideo = login.video?.() ?? null;
       await login.close();
+      // The throwaway consume page — never renamed, so it must not linger
+      // hash-named beside the watchable files ("a run that leaves ...
+      // hash-named files has NOT met the bar", R86).
+      if (loginVideo !== null) await loginVideo.delete?.().catch(() => undefined);
       return context;
     })();
     return organiser;
@@ -417,17 +554,37 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
       const start = performance.now();
       const findings: string[] = [];
       let taps = 0;
+      let videoPath: string | undefined;
+      let tracePath: string | undefined;
       const early = (): PlayMatchResult => ({
         fixtureId: job.fixtureId,
         taps,
         wallMs: Math.round(performance.now() - start),
         findings,
         observations: [],
+        ...(videoPath === undefined ? {} : { videoPath }),
+        ...(tracePath === undefined ? {} : { tracePath }),
       });
       let orgPage: TapPage | undefined;
       let scorerContext: TapContext | undefined;
+      let scorerPage: TapPage | undefined;
+      let scorerClosed = false;
+      // Trace must STOP before `context.close()`; the video is only
+      // guaranteed WRITTEN once the context is closed (Playwright's own
+      // `Video.path()` doc) — so rename happens after. Idempotent: called
+      // from the happy path AND from `finally`, at most once each.
+      const closeScorer = async (): Promise<void> => {
+        if (scorerContext === undefined || scorerClosed) return;
+        scorerClosed = true;
+        const context = scorerContext;
+        const videoHandle = scorerPage?.video?.() ?? null;
+        tracePath = await stopTracing(context, traceDir, tapTraceFileName(job));
+        await context.close().catch(() => undefined);
+        videoPath = await watchableVideoPath(videoHandle, recordVideoDir, tapVideoFileName(job));
+      };
       try {
         orgPage = await (await organiserContext()).newPage();
+        organiserVideoPage = orgPage;
         const viewport = orgPage.viewportSize();
         if (viewport === null || viewport.width < MD_BREAKPOINT_PX) {
           findings.push(
@@ -471,9 +628,11 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
 
         scorerContext = await input.browser.newContext({
           viewport: { width: SCORER_VIEWPORT.width, height: SCORER_VIEWPORT.height },
+          ...(recordVideoDir === undefined ? {} : { recordVideo: { dir: recordVideoDir } }),
         });
+        await startTracing(scorerContext, traceDir);
         await scorerContext.addInitScript(seedConsent, CONSENT_SEED);
-        const scorerPage = await scorerContext.newPage();
+        scorerPage = await scorerContext.newPage();
 
         const result = await playMatchByTaps({
           scorerPage: gateScoringOnStartRow(scorerPage, () =>
@@ -497,6 +656,11 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
           cfg: job.cfg,
           sleep,
         });
+        // Finalize video/trace BEFORE building the success return, so
+        // `videoPath`/`tracePath` are actually IN it — `finally` below only
+        // needs to run this for the error/early-exit paths (it is a no-op
+        // once `scorerClosed` is true).
+        await closeScorer();
         return {
           fixtureId: job.fixtureId,
           taps: taps + result.taps,
@@ -510,21 +674,40 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
           // `early()` returns. Dropping this line silently reverts to the
           // pre-fix shape: measured, but never forwarded.
           unreadRowsAfterFinalize: result.unreadRowsAfterFinalize,
+          ...(videoPath === undefined ? {} : { videoPath }),
+          ...(tracePath === undefined ? {} : { tracePath }),
         };
       } catch (err) {
         findings.push(`handover: ${job.fixtureExtKey} — ${messageOf(err)}`);
+        // Before `early()`, not after: `early()` snapshots videoPath/
+        // tracePath as they stand AT THAT MOMENT, and `finally` runs too
+        // late to change an already-returned object.
+        await closeScorer();
         return early();
       } finally {
-        await scorerContext?.close().catch(() => undefined);
+        await closeScorer();
         await orgPage?.close().catch(() => undefined);
       }
     },
     async close() {
       try {
-        if (organiser !== undefined) await (await organiser).close();
+        if (organiser !== undefined) {
+          const context = await organiser;
+          const closeTracePath = await stopTracing(context, traceDir, ORGANISER_TRACE_FILE_NAME);
+          const videoHandle = organiserVideoPage?.video?.() ?? null;
+          await context.close();
+          const closeVideoPath = await watchableVideoPath(videoHandle, recordVideoDir, ORGANISER_VIDEO_FILE_NAME);
+          organiserArtefacts = {
+            ...(closeVideoPath === undefined ? {} : { videoPath: closeVideoPath }),
+            ...(closeTracePath === undefined ? {} : { tracePath: closeTracePath }),
+          };
+        }
       } finally {
         if (input.ownsBrowser === true) await input.browser.close();
       }
+    },
+    artefacts() {
+      return organiserArtefacts;
     },
   };
 }
@@ -552,6 +735,8 @@ export const browserTapPlayer: TapPlayerFactory = async (ctx) => {
       session: ctx.session,
       ledger: ctx.ledger,
       ownsBrowser: true,
+      ...(ctx.recordVideoDir === undefined ? {} : { recordVideoDir: ctx.recordVideoDir }),
+      ...(ctx.traceDir === undefined ? {} : { traceDir: ctx.traceDir }),
     });
   } catch (err) {
     await browser.close().catch(() => undefined);

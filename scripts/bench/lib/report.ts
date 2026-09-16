@@ -287,6 +287,13 @@ export const TapPlayReport = z.object({
   wallMs: z.number(),
   observations: z.number().int(),
   unreadRowsAfterFinalize: z.number().int().optional(),
+  /** R86 (owner: "watch the bench play a match") — watchable video/trace
+   *  paths (never Playwright's own hash names), so a human reading the
+   *  report can find them without hunting. Absent unless `--record-video`/
+   *  `--trace` was on for this run; both fold every tapped fixture's own
+   *  artefact together with the run's ONE organiser artefact. */
+  videoPaths: z.array(z.string()).optional(),
+  tracePaths: z.array(z.string()).optional(),
 });
 export type TapPlayReport = z.infer<typeof TapPlayReport>;
 
@@ -1028,6 +1035,15 @@ function renderSuitesSection(report: BenchReport): string {
           (unread === undefined ? "" : `, ${unread} row(s) unread after finalize`) +
           " (report-only)",
       );
+      // R86 — present only when `--record-video`/`--trace` were on; a human
+      // reading this file can open the video without hunting through
+      // bench-report/ for a hash-named one.
+      if (suite.tapPlay.videoPaths !== undefined && suite.tapPlay.videoPaths.length > 0) {
+        lines.push(`  - Videos: ${suite.tapPlay.videoPaths.join(", ")}`);
+      }
+      if (suite.tapPlay.tracePaths !== undefined && suite.tapPlay.tracePaths.length > 0) {
+        lines.push(`  - Traces: ${suite.tapPlay.tracePaths.join(", ")}`);
+      }
     }
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");
