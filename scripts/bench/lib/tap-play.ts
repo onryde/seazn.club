@@ -519,10 +519,19 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
   const recordVideoDir = input.recordVideoDir;
   const traceDir = input.traceDir;
   let organiser: Promise<TapContext> | undefined;
-  // The LAST org page opened — the organiser context is ONE per run, so its
-  // video is named flat (`organiser.webm`); "the last fixture wins" for a
-  // multi-fixture run is R86's own accepted shape, not a bug this task fixes.
-  let organiserVideoPage: TapPage | undefined;
+  // EVERY org page opened, in the order each fixture opened one — rounds run
+  // up to `courtCount` fixtures concurrently (`playTapRounds`), so this is
+  // NOT "one page, reassigned"; it is one entry per fixture, and the array
+  // can hold several still-open entries at once. The organiser context is
+  // ONE per run, so only the LAST entry's video is named flat
+  // (`organiser.webm`) — "the last fixture wins" for a multi-fixture run is
+  // R86's own accepted shape, not a bug this task fixes. Every OTHER entry's
+  // video is deleted in `close()`, once every page is guaranteed closed —
+  // left unhandled, each was a leaked hash-named file (found by this task's
+  // own live proof: a 4-fixture, 2-court `_tiny` run left exactly 3 stray
+  // `page@<hash>.webm` files, one per fixture that was not the last to open
+  // its org page).
+  const organiserVideoPages: TapPage[] = [];
   let organiserArtefacts: TapPlayerArtefacts = {};
 
   // ONE signed-in organiser context for the whole run, each fixture on its own
@@ -584,7 +593,7 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
       };
       try {
         orgPage = await (await organiserContext()).newPage();
-        organiserVideoPage = orgPage;
+        organiserVideoPages.push(orgPage);
         const viewport = orgPage.viewportSize();
         if (viewport === null || viewport.width < MD_BREAKPOINT_PX) {
           findings.push(
@@ -694,8 +703,19 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
         if (organiser !== undefined) {
           const context = await organiser;
           const closeTracePath = await stopTracing(context, traceDir, ORGANISER_TRACE_FILE_NAME);
-          const videoHandle = organiserVideoPage?.video?.() ?? null;
+          // The LAST org page opened is the one that becomes `organiser.webm`;
+          // every earlier one (one per fixture that was not last — see the
+          // comment on `organiserVideoPages`) is superseded and must be
+          // DELETED here, never left hash-named. Read every handle before
+          // `context.close()` so `.video()` still has a page to ask.
+          const lastOrgPage = organiserVideoPages.at(-1);
+          const videoHandle = lastOrgPage?.video?.() ?? null;
+          const supersededVideos = organiserVideoPages
+            .slice(0, -1)
+            .map((page) => page.video?.() ?? null)
+            .filter((v): v is TapVideoHandle => v !== null);
           await context.close();
+          for (const v of supersededVideos) await v.delete?.().catch(() => undefined);
           const closeVideoPath = await watchableVideoPath(videoHandle, recordVideoDir, ORGANISER_VIDEO_FILE_NAME);
           organiserArtefacts = {
             ...(closeVideoPath === undefined ? {} : { videoPath: closeVideoPath }),

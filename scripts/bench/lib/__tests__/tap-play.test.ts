@@ -860,6 +860,47 @@ describe("R86 — video/trace capture", () => {
       [ORGANISER_TRACE_FILE_NAME, ORGANISER_VIDEO_FILE_NAME, tapTraceFileName(theJob), tapVideoFileName(theJob)].sort(),
     );
   });
+
+  // Found by this task's own live proof (a real 4-fixture, 2-court `_tiny`
+  // run): each fixture opens its OWN organiser page in the one shared
+  // organiser context (`organiserContext().newPage()`), so a run of MORE
+  // THAN ONE fixture opens more than one org page. Only the LAST one may
+  // become `organiser.webm`; every earlier one is a leaked hash-named file
+  // unless it is explicitly deleted once closed. A single-fixture test
+  // (above) cannot see this — it never opens a second org page.
+  it("leaves NO hash-named files behind across MULTIPLE fixtures — every organiser page but the last is deleted, not leaked", async () => {
+    const dir = tmpCaptureDir();
+    // A refused mint (402) is enough to open + close an org page without
+    // ever needing a second full match on the shared fake ledger — isolates
+    // the organiser-page bookkeeping from the scorer side entirely.
+    const world = fakeWorld({ mintStatus: 402 });
+    const p = createTapPlayer({
+      browser: world.browser,
+      loginUrl: LOGIN_URL,
+      base: ORIGIN,
+      session: newSession(),
+      ledger: world.ledger,
+      sleep: noSleep,
+      ownsBrowser: true,
+      recordVideoDir: dir,
+      traceDir: dir,
+    });
+    const jobA = job(FULL_MATCH);
+    const jobB = { ...job(FULL_MATCH), fixtureExtKey: "rr-r2-c1" };
+
+    await p.playFixture(jobA);
+    await p.playFixture(jobB);
+    await p.close();
+
+    const names = readdirSync(dir).sort();
+    // The mutant this kills: tracking only the LAST org page (dropping the
+    // array) leaves the FIRST fixture's org page video as a stray
+    // `hash-N.webm` (this harness's stand-in for Playwright's real
+    // `page@<hash>.webm`) once a second fixture opens a second org page.
+    for (const name of names) expect(name).not.toMatch(/^hash-/);
+    expect(names).toContain(ORGANISER_VIDEO_FILE_NAME);
+    expect(names).toContain(ORGANISER_TRACE_FILE_NAME);
+  });
 });
 
 // ---------------------------------------------------------------------------
