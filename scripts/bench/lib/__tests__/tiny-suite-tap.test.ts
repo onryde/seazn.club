@@ -491,6 +491,10 @@ interface FakeTapPlayerOptions {
   skipFinalize?: boolean;
   findingsFor?: Readonly<Record<string, readonly string[]>>;
   observationsFor?: Readonly<Record<string, readonly string[]>>;
+  /** Minors batch B, row (a) (R79) — the driver's own per-match count of
+   *  rows left unread after `core.finalize` was verified. Absent per
+   *  fixture ⇒ 0, the same shape `observationsFor` already uses. */
+  unreadRowsAfterFinalizeFor?: Readonly<Record<string, number>>;
 }
 
 function fakeTapPlayer(world: ReturnType<typeof fakeServer>, opts: FakeTapPlayerOptions = {}) {
@@ -533,6 +537,7 @@ function fakeTapPlayer(world: ReturnType<typeof fakeServer>, opts: FakeTapPlayer
           wallMs: 7,
           findings: [...(opts.findingsFor?.[job.fixtureExtKey] ?? [])],
           observations: [...(opts.observationsFor?.[job.fixtureExtKey] ?? [])],
+          unreadRowsAfterFinalize: opts.unreadRowsAfterFinalizeFor?.[job.fixtureExtKey] ?? 0,
         };
       },
       async close() {
@@ -660,6 +665,31 @@ describe("tap mode — what gates, and what is only reported (B07a T10)", () => 
     expect((report.errors ?? []).join("\n")).toBe("");
     expect(report.gate).toBe("green");
     expect(report.tapPlay?.observations).toBe(3);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors batch B, row (a) (R79) — `unreadRowsAfterFinalize` was set by
+  // `drivers/scorer.ts`, dropped by `tap-play.ts`'s own success path
+  // (`tap-play.test.ts` pins THAT hop directly), and never summed into
+  // `tapState.report` here even if it had crossed. This is the run-suite.ts
+  // half of the same finding: the aggregation across every tapped fixture
+  // this division just played. Same shape as the "observations" test right
+  // above it — two DIFFERENT fixtures, so a fold that only reads
+  // `played[0]` cannot pass by accident.
+  // ---------------------------------------------------------------------------
+  it("counts rows left unread after finalize, summed across every tapped fixture, without gating on them", async () => {
+    const world = fakeServer({ deviceLinksSold: true });
+    const player = fakeTapPlayer(world, {
+      unreadRowsAfterFinalizeFor: { "rr-r1-c1": 2, "se-r0-i0": 1 },
+    });
+    const report = await runPackSuite(tapInput(world, player.factory), {
+      suiteKey: "fixture",
+      packPath: FIXTURE_PACK_PATH,
+      play: TAP_D_TINY,
+    });
+    expect((report.errors ?? []).join("\n")).toBe("");
+    expect(report.gate).toBe("green");
+    expect(report.tapPlay?.unreadRowsAfterFinalize).toBe(3);
   });
 
   it("a plan without scoring.device_links is a loud warning naming every unplayed tap fixture — never silent, never counted", async () => {

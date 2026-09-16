@@ -42,6 +42,12 @@ import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
 // exported entry point (not the extracted `invokeSuiteDefinition` helper
 // alone), against the REAL registry row (see the `vi.mock` below).
 import { invokeSuiteDefinition, parseCliArgs, runSuite } from "../../bench.ts";
+// Minors row 29 — imported directly (not just mocked below) so the guard
+// test at the bottom of this file can read what the MOCKED `lookupSuite`
+// actually returns for `_tiny` after a prior test's `injectedPlay`, proving
+// the `afterEach` at `:127-130` really resets it rather than leaking it into
+// every later lookup in this file's run.
+import { lookupSuite } from "../suites/registry.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -3263,6 +3269,42 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     expect(secondTinyImportIdx).toBeGreaterThan(proposalIdx);
   });
 
+  // ---------------------------------------------------------------------------
+  // Minors row 28 (task-7-review.md m2). The R23 later-stage import fold
+  // above (`d-tiny`'s own second import call) is on the wire — the test
+  // above already proves that — but `run-suite.ts`'s `importSimulation`
+  // report section only ever summed the FIRST-stage loop's own accumulators,
+  // so a reader trusting `report.importSimulation.eventsSent` undercounted
+  // by exactly the later stage's own event total. Derived from the REAL
+  // wire calls (`importCalls`/`eventsInImport`, both already defined above
+  // for the R23 test), not a hand-typed number, so a change to `_tiny.json`
+  // moves this test with it.
+  // ---------------------------------------------------------------------------
+  it("counts the later-stage import fold into the report's import totals too (Minors row 28)", async () => {
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode },
+    });
+
+    const imports = importCalls(calls);
+    // More than one import call must have happened (badminton/tiebreak's
+    // first-stage folds AND d-tiny's own two), or this run cannot witness a
+    // later-stage import moving the total at all.
+    expect(imports.length).toBeGreaterThan(1);
+    const totalEventsSent = imports.reduce((n, c) => n + eventsInImport(c), 0);
+    // The bug: reverting the fix drops `importSimulation.eventsSent` back to
+    // only the first-stage calls' sum — short by exactly `d-tiny`'s own
+    // second (advance) import, `byStage.get("d-tiny/s-playoff")`'s events.
+    expect(report.importSimulation?.eventsSent).toBe(totalEventsSent);
+    // `chunks` is the count of HTTP import calls actually made (this pack is
+    // far under any chunk-size cap, so each call is exactly one chunk) —
+    // the SAME undercount shape as `eventsSent` above, on a different field.
+    expect(report.importSimulation?.chunks).toBe(imports.length);
+  });
+
   it("reaches the tap branch LOUDLY (no device links: a named warning), proving the dispatch is reached and not merely declared", async () => {
     // The proof device. The failure this repo ships most often is a seam that
     // is declared, typed and unit-green while nothing ever drives it. Since
@@ -3289,6 +3331,83 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     // indistinguishable from the dispatch never having run.
     expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
     expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 27 (task-7-review.md m1, `run-suite.ts` ~3721-3728). The guard
+  // that refuses a stageRef-less stream in a MULTI-stage division was added
+  // untested: the `if (true) continue;` mutant (dropping the refusal) leaves
+  // the whole suite green. Proven here by actually mutating `_tiny.json`
+  // (Task 6's `writeMutatedTinyPack` temp-dir pattern) rather than by reading
+  // the guard: `d-tiny` already has TWO real stages, so stripping ONE of its
+  // three league streams' `stageRef` reaches the exact ambiguous shape
+  // (division has >1 stage, stream declares none) with no invented pack
+  // structure.
+  // ---------------------------------------------------------------------------
+  it("refuses a stageRef-less stream in a multi-stage division, while a stageRef-carrying sibling in the SAME division still folds", async () => {
+    const { transport, sql, calls } = fakeServer();
+    // `rr-r2-c1` is the middle of d-tiny's three league legs and the ONLY one
+    // whose events include `generic.score` (the other two are
+    // `[core.start, generic.result]` / `[core.start, core.forfeit]`) — a
+    // signature no other d-tiny stream shares, so its presence/absence on the
+    // wire is checked by EVENT TYPE, not by a fragile total count.
+    const packPath = await writeMutatedTinyPack((raw) => {
+      const stream = raw.streams.find(
+        (st) => st.divisionRef === "d-tiny" && st.fixtureExtKey === "rr-r2-c1",
+      );
+      if (stream === undefined) {
+        throw new Error("test fixture assumption broken: no d-tiny/rr-r2-c1 stream");
+      }
+      delete stream.stageRef;
+    });
+
+    // `runPackSuite`'s own precedence is `input.packPath ?? definitionPackPath`
+    // (`run-suite.ts:1894`) — `playInput()` always sets `input.packPath` to
+    // the COMMITTED `TINY_PACK_PATH`, so overriding only `opts.packPath` below
+    // would silently keep loading the real file and never reach this pack at
+    // all. Both must point at the mutated copy.
+    const report = await runPackSuite(
+      { ...playInput(transport, sql), packPath },
+      { suiteKey: "_tiny", packPath },
+    );
+
+    // The refusal itself: named division, named stream, named stage count.
+    // Deleting the `for (const st of divisionStreamsAll)` block (the row 27
+    // mutant) drops this text while leaving the exclusion below unchanged —
+    // exactly the silent-refusal shape the finding is about.
+    expect((report.errors ?? []).join("\n")).toContain(
+      'stream "rr-r2-c1" names division "d-tiny" with no stage, but that division declares 2 stages',
+    );
+
+    // `d-tiny` is index 0 (positional "api"), and this pack declares no
+    // `play` override — every one of its OWN events, refused or not, can
+    // only reach the wire through the single-event route below, never
+    // through an import call.
+    const postedTypes = packEventPostCalls(calls).map((c) => (c.body as { type: string }).type);
+    // The refused direction: `rr-r2-c1`'s own `generic.score` events (its
+    // only signature among d-tiny's OWN streams — `rr-r1-c1`/`rr-r3-c1`/
+    // `se-r0-i0` carry none) never reached the wire. A silent fold-in (the
+    // pre-Task-7 shape: "folded into the first stage anyway") would leak
+    // them here instead.
+    expect(postedTypes).not.toContain("generic.score");
+    // The legitimate direction, same division, same run: d-tiny's OTHER two
+    // league streams still carry an explicit `stageRef` and still fold
+    // normally through its "api" positional default — `rr-r1-c1`'s
+    // `generic.result` (p1Score 3 / p2Score 1) and `rr-r3-c1`'s
+    // `core.forfeit`, both untouched by this pack's only mutation.
+    expect(postedTypes).toContain("core.forfeit");
+    expect(
+      packEventPostCalls(calls).some(
+        (c) =>
+          (c.body as { type: string }).type === "generic.result" &&
+          (c.body as { payload?: { p1Score?: number; p2Score?: number } }).payload?.p1Score === 3,
+      ),
+    ).toBe(true);
+    // A single-stage division's stageRef-less stream is the ORDINARY shape
+    // (an absent stageRef means the division's only stage) and must keep
+    // working unaffected: `d-badminton` (untouched by the mutation) still
+    // reaches the import route.
+    expect(importedDivisionRefs(calls)).toContain("d-badminton");
   });
 });
 
@@ -3513,5 +3632,37 @@ describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7
     // it is index 0, so its positional default is `"api"`.
     expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
     expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 29 (task-7-re-review.md:343 m4). `injectedPlay`/
+  // `injectedTransports` (`:96-97`) are read by the `registry.ts` mock
+  // (`:105-119`) AT CALL TIME: when `injectedPlay !== undefined` it returns a
+  // SYNTHETIC row whose `run` is a fresh closure over `injectedTransports`;
+  // otherwise it returns `real` UNTOUCHED, same `run` reference. The ONLY
+  // thing that stops the test above from leaking its injected state into
+  // every OTHER `lookupSuite("_tiny")` call for the rest of this file's run
+  // is the top-level `afterEach` (`:127-130`).
+  //
+  // This does NOT compare `row.play`: the REAL `_tiny` row now legitimately
+  // declares `play: { "d-tiny": "tap" }` itself (`registry.ts:18`, Task 10),
+  // which happens to equal exactly what the test above injects — a value
+  // comparison could not tell "reset" apart from "leaked". Comparing the
+  // `run` REFERENCE against the untouched actual module can: it is identity-
+  // equal only when the mock returned `real` unchanged.
+  //
+  // Runs deliberately AFTER the injecting test, in the same file, same
+  // module — vitest executes a file's tests top to bottom by default, which
+  // is the ordering this guards. Deleting the `afterEach` (or narrowing it to
+  // drop `injectedPlay = undefined`) leaves this red.
+  // ---------------------------------------------------------------------------
+  it("a later lookup through the SAME mocked registry returns the row's OWN `run` once the mock resets (guards the afterEach, row 29)", async () => {
+    const actual = await vi.importActual<typeof import("../suites/registry.ts")>(
+      "../suites/registry.ts",
+    );
+    const realRow = actual.lookupSuite("_tiny");
+    const mockedRow = lookupSuite("_tiny");
+    expect(realRow).toBeDefined();
+    expect(mockedRow?.run).toBe(realRow?.run);
   });
 });

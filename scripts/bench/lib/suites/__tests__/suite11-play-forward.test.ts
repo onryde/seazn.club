@@ -145,4 +145,28 @@ describe("bench.ts's REAL runSuite drives the REAL `suite11` registry row (B07a 
       play: { "d-worlds": "tap" },
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 29 (task-7-re-review.md:343 m4). `injectedPlay` (`:62`) is
+  // read by the `registry.ts` mock (`:64-77`) AT CALL TIME, and the ONLY
+  // thing that stops the test above from leaking its `{"d-worlds":"tap"}`
+  // into every OTHER `runSuite("suite11", ...)` call for the rest of this
+  // file's run is the top-level `afterEach` (`:79-81`). The REAL `suite11`
+  // registry row declares NO `play` at all (`registry.ts:21-25`, unlike
+  // `_tiny`'s row), so a leaked injection is directly visible on `seen.opts`
+  // rather than coinciding with a real declared value.
+  //
+  // Runs deliberately AFTER the injecting test, in the same file, same
+  // module — vitest executes a file's tests top to bottom by default, which
+  // is the ordering this guards. Deleting the `afterEach` leaves this red.
+  // ---------------------------------------------------------------------------
+  it("a later run through the SAME registry row carries no injected play once the mock resets (guards the afterEach, row 29)", async () => {
+    const config = parseCliArgs(["--base", "http://bench.example", "--wipe"]);
+    const stubSql = {} as Parameters<typeof runSuite>[3];
+
+    await runSuite("suite11", config, "fix-round-2-i1bc-suite11-guard", stubSql);
+
+    expect(seen.called).toBe(1);
+    expect(seen.opts).not.toHaveProperty("play");
+  });
 });

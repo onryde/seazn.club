@@ -699,6 +699,61 @@ describe("TAP_PACING_MS", () => {
 });
 
 // ---------------------------------------------------------------------------
+// NB2 (minors batch B, item b) — `isPlausibleTolerableValue` (scorer.ts) has
+// no runtime handle to pin against: the pad's "named" check is an inline
+// const inside buildDock, not an exported constant like HUMAN_FASTEST_REPEAT_MS.
+// So the pin reads generic.tsx's OWN source text for the exact expression
+// (first test — mutate THIS literal to prove the pin is real, never the
+// product file), then evaluates that extracted expression directly (never a
+// hand-typed true/false table) to derive each sample's expected outcome, so a
+// change in WHAT counts as "named" reds this test even if nobody edits the
+// two sample values below (AGENTS.md class 19).
+// ---------------------------------------------------------------------------
+describe("the tolerated person value is pinned to the product's own \"named\" check (generic.tsx:701)", () => {
+  const genericSource = readFileSync(
+    new URL("../../../../apps/web/src/components/v2/scorepad/v3/skins/generic.tsx", import.meta.url),
+    "utf8",
+  );
+  const namedMatch = /const named = (.+?);/.exec(genericSource);
+  const namedExpr = namedMatch?.[1];
+
+  it('reads the exact "named" expression buildDock uses today', () => {
+    expect(namedExpr).toBe('typeof payload?.person === "string" && payload.person.length > 0');
+  });
+
+  if (namedExpr === undefined) {
+    throw new Error('generic.tsx\'s "named" check no longer matches this regex — re-pin scorer-driver.test.ts (item b)');
+  }
+  // Test-only: runs the pad's real check straight off its source text, so a
+  // changed rule moves with it instead of a hand-typed copy silently going
+  // stale.
+  const productNamed = new Function("payload", `return ${namedExpr};`) as (payload: { person?: unknown }) => boolean;
+
+  it.each([
+    ["a real name", "p-solo"],
+    ["an empty string", ""],
+    ["a number", 42],
+    ["null", null],
+    ["undefined", undefined],
+  ] as const)("agrees with the product's own check for %s", async (_label, person) => {
+    const expectedNamed = productNamed({ person });
+    const { result } = await play([START, scoreBy(HOME_REF)], SCORE_CFG, {
+      recordedPayloadOverride: new Map([[1, { by: HOME_ID, points: 1, person }]]),
+    });
+
+    if (expectedNamed) {
+      expect(joined(result.findings)).toBe("");
+      expect(result.observations).toEqual([`event 1 (generic.score): tolerated extra key "person" = ${JSON.stringify(person)}`]);
+    } else {
+      expect(result.findings).toContain(
+        `ledger: event 1 (generic.score) — payload key "person" mismatch: the pack meant undefined, the server recorded ${JSON.stringify(person)}`,
+      );
+      expect(result.observations).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // I4 / R50(f): no HTTP-capable value is reachable from the driver's own files.
 // A source scan, so an unused import is caught too, not just a call site. The
 // load-bearing check is the VALUE-import allowlist: nothing the bench can POST

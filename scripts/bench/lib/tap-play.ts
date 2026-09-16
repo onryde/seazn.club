@@ -503,6 +503,13 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
           wallMs: Math.round(performance.now() - start),
           findings: [...findings, ...result.findings],
           observations: result.observations,
+          // Minors batch B, row (a) (R79) — `result` came from actually
+          // calling `playMatchByTaps` (never the `early()` pre-flight exit
+          // above), so its `unreadRowsAfterFinalize` is always a real
+          // measured number (0 or N), never the "not measured" `undefined`
+          // `early()` returns. Dropping this line silently reverts to the
+          // pre-fix shape: measured, but never forwarded.
+          unreadRowsAfterFinalize: result.unreadRowsAfterFinalize,
         };
       } catch (err) {
         findings.push(`handover: ${job.fixtureExtKey} — ${messageOf(err)}`);

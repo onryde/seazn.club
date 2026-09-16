@@ -577,6 +577,15 @@ describe("createTapPlayer — hand-over, play, sign-off (B07a T10)", () => {
     const result = await p.playFixture(job(FULL_MATCH));
 
     expect(result.findings).toEqual([]);
+    // Minors batch B, row (a) (R79) — `playFixture`'s success-path return
+    // used to drop `playMatchByTaps`'s own `unreadRowsAfterFinalize`
+    // entirely, so this always read `undefined` here regardless of what the
+    // driver actually measured. Asserted as the concrete number `0` (never
+    // `toBeUndefined()`): the driver DID measure it on this clean run (0
+    // rows landed after finalize) and this proves that measured value
+    // crossed the wrapper — `drivers/scorer.ts`'s own `finish()` proves the
+    // 0-vs-1 values (`scorer-driver.test.ts`); this proves they REACH here.
+    expect(result.unreadRowsAfterFinalize).toBe(0);
     expect(world.statusNow()).toBe("finalized");
     expect(world.rows.map((r) => r.type)).toEqual(["core.start", "generic.score", "generic.result", "core.finalize"]);
     // hand-over + mint + one tap per event + the pad-send-now that releases

@@ -269,12 +269,24 @@ export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
  *  never gated on: tap counts and wall time describe the run; whether each
  *  tapped fixture was finalized, and every driver finding, gate through
  *  `errors` instead. `observations` counts the driver's non-defect notes
- *  (logged verbatim as `tap_observation`). */
+ *  (logged verbatim as `tap_observation`).
+ *
+ *  Minors batch B, row (a) (R79) — `unreadRowsAfterFinalize` sums
+ *  `drivers/scorer.ts`'s own per-match count (rows that landed on the ledger
+ *  strictly after `core.finalize` was verified, never polled again once its
+ *  FIFO emptied). The FINDING that names a nonzero row already reds the gate
+ *  independently (`errors`, via `driver findings RED the gate`); this field
+ *  is the same rule every other count here follows — report-only, but never
+ *  silent either. Optional for backward compatibility with a report built
+ *  before this field existed (`report.test.ts`'s own fixtures, Batch C, out
+ *  of this task's file set) — the real producer (`run-suite.ts`) always
+ *  sets it once any division taps a fixture. */
 export const TapPlayReport = z.object({
   matches: z.number().int(),
   taps: z.number().int(),
   wallMs: z.number(),
   observations: z.number().int(),
+  unreadRowsAfterFinalize: z.number().int().optional(),
 });
 export type TapPlayReport = z.infer<typeof TapPlayReport>;
 
@@ -1006,9 +1018,15 @@ function renderSuitesSection(report: BenchReport): string {
     // B07a T10 — report-only; the finalized check and driver findings gate
     // through errors, never through these numbers.
     if (suite.tapPlay !== undefined) {
+      const unread = suite.tapPlay.unreadRowsAfterFinalize;
       lines.push(
         `- Tap play: ${suite.tapPlay.matches} matches, ${suite.tapPlay.taps} taps, ${suite.tapPlay.wallMs}ms wall, ` +
-          `${suite.tapPlay.observations} driver observations (report-only)`,
+          `${suite.tapPlay.observations} driver observations` +
+          // `undefined` only for a report built before this field existed
+          // (the absent-vs-empty rule every other section here follows) —
+          // never omitted for a report a live run just produced.
+          (unread === undefined ? "" : `, ${unread} row(s) unread after finalize`) +
+          " (report-only)",
       );
     }
     if (suite.oracles && suite.oracles.length > 0) {

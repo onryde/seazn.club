@@ -3629,6 +3629,15 @@ export async function runPackSuite(
         taps: (prev?.taps ?? 0) + played.reduce((n, p) => n + p.result.taps, 0),
         wallMs: (prev?.wallMs ?? 0) + blockMs,
         observations: (prev?.observations ?? 0) + played.reduce((n, p) => n + p.result.observations.length, 0),
+        // Minors batch B, row (a) (R79) — `unreadRowsAfterFinalize` was set
+        // by `drivers/scorer.ts` and dropped by `tap-play.ts`'s own success
+        // path, so it never reached here to be counted at all. Summed the
+        // same way `observations` is, across every match this division just
+        // played, folded onto whatever an earlier division's tap fold
+        // already counted.
+        unreadRowsAfterFinalize:
+          (prev?.unreadRowsAfterFinalize ?? 0) +
+          played.reduce((n, p) => n + (p.result.unreadRowsAfterFinalize ?? 0), 0),
       };
     };
 
@@ -3912,6 +3921,21 @@ export async function runPackSuite(
     // because every other division in every shipped pack happens to be
     // single-stage. The body is unchanged and now takes its division and its
     // two stages as parameters; the loop below drives it for every division.
+    //
+    // Minors batch B, row 28 — R23 (below) can send a LATER stage's streams
+    // down this same import route, but `importEventsSent`/`importChunks`/
+    // `importWallMs` above are scoped to the `if (input.sql !== undefined)`
+    // block that closes before this closure is even declared, so they cannot
+    // be accumulated into directly. Own accumulators here, folded into
+    // `importSimulation` once every division has advanced (below the
+    // `advanceDivision` loop) rather than left to sit beside it, unread — the
+    // finding's exact shape: "logs `path: 'advance-import'`, but never adds
+    // to `importEventsSent`, `importChunks` or `timings.importMs`".
+    let advanceImportEventsSent = 0;
+    let advanceImportChunks = 0;
+    let advanceImportWallMs = 0;
+    let advanceImportRan = false;
+
     const advanceDivision = async (
       division: SeedPlanDivision,
       divisionIndex: number,
@@ -4103,6 +4127,13 @@ export async function runPackSuite(
                   for (const finding of advImp.findings) {
                     errors.push(`advance: ${describeImportFinding(finding)}`);
                   }
+                  // Minors batch B, row 28 — this log line reported these
+                  // numbers but never fed them anywhere a reader of the
+                  // REPORT (as opposed to the log stream) could see them.
+                  advanceImportRan = true;
+                  advanceImportEventsSent += advImp.eventsSent;
+                  advanceImportChunks += advImp.chunks;
+                  advanceImportWallMs += advImp.wallMs;
                   log.info(
                     {
                       events: advImp.eventsSent,
@@ -4313,6 +4344,28 @@ export async function runPackSuite(
           await advanceDivision(division, divisionIndex, sourceStage, targetStage);
         }
       }
+    }
+
+    // Minors batch B, row 28 — fold the later-stage import fold's own
+    // accumulators (above) into the report's `importSimulation`, once every
+    // division has advanced. Added rather than replaced: a division whose
+    // FIRST stage also imported already has an `importSimulation` from the
+    // block above, and this later fold is on top of that, never instead of
+    // it. `importSimulation` can also still be `undefined` here (a division
+    // with streams ONLY on a later stage, none on its first), so this is the
+    // one place that can create it, not only extend it.
+    if (advanceImportRan) {
+      const eventsSent = (importSimulation?.eventsSent ?? 0) + advanceImportEventsSent;
+      const wallMs = (importSimulation?.wallMs ?? 0) + advanceImportWallMs;
+      const chunks = (importSimulation?.chunks ?? 0) + advanceImportChunks;
+      importSimulation = {
+        eventsSent,
+        wallMs,
+        eventsPerSecond: computeEventsPerSecond(eventsSent, wallMs),
+        chunks,
+        ...(importSimulation?.findings === undefined ? {} : { findings: importSimulation.findings }),
+      };
+      timings.importMs = wallMs;
     }
 
     // B05 T4b — the standings comparator (design doc §3, oracle.ts's
