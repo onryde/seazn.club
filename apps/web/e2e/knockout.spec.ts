@@ -185,6 +185,20 @@ test("public bracket page names each round (Quarter/Semi/Final captions)", async
   await page.goto(`/shared/${orgSlug}/${compData.data!.slug}/${divData.data!.slug}`);
   // The bracket tree lives under the "Standings" tab (Schedule is the default).
   await page.getByRole("tab", { name: "Standings" }).click();
-  await expect(page.getByText("Semi-finals").first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("Final", { exact: true }).first()).toBeVisible();
+  // SCOPED to that panel, and EXACT. `tabs.tsx` server-renders EVERY panel and
+  // hides the inactive ones (`hidden={i !== active}`), so an unscoped
+  // `getByText` keeps resolving inside the hidden Schedule panel — which names
+  // this draw's rounds twice over: as the round view's group headings, and
+  // inside "Winner of Semi-finals, match 1" slot labels. `.first()` then picks
+  // a hidden node and waits out the timeout on a page that is rendering
+  // correctly.
+  // EXACT is the second half, and it is not decoration: that slot text
+  // CONTAINS "Semi-finals" and the bracket prints it too (bracket.tsx), so a
+  // scoped-but-loose locator would pass on a waiting side's label even if the
+  // round CAPTIONS this test is named for disappeared entirely.
+  const standings = page.locator("#panel-standings");
+  await expect(standings.getByText("Semi-finals", { exact: true }).first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(standings.getByText("Final", { exact: true }).first()).toBeVisible();
 });

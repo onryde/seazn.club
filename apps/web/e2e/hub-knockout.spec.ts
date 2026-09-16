@@ -57,7 +57,8 @@ import {
 //   no chip's text crosses the rail's LEFT edge, unless the rail is at its scroll end ↔ premise: the tap's target is not the last chip, so the end's exemption cannot answer for it
 //
 // Fix round N2g (review N2f I-1), WHERE that rail rests, at 320 and 390:
-//   the 32-draw opened on its Semi-finals is short of its end, with Quarter-finals on the padding ↔ premises, same measurement: that boundary is short of the end and shows the Semi-finals whole, and Round of 16's does not
+//   the 32-draw opened on its Semi-finals rests ON a chip's start, short of its end ↔ the same measurement's other arm: a width affording no such start rests AT the end, with the pressed chip's own start past it
+//   (N2h: WHICH chip's start is derived per width, never named — CI's font metrics decide whether 320 affords one at all)
 
 // ---------------------------------------------------------------------------
 // Budget (AGENTS.md 20): derived from what the seeding actually does, so a
@@ -817,58 +818,101 @@ test.describe("competition hub: Knockout tab", () => {
     }
   });
 
-  test("g1 (review N2f I-1) at 320 and 390: a 32-draw opened on its Semi-finals rests with Quarter-finals' start on the rail's padding, short of its scroll end", async ({
+  test("g1 (review N2f I-1, rewritten N2h) at 320 and 390: a 32-draw opened on its Semi-finals rests ON a chip's start short of its scroll end at every width that affords one, and at the documented scroll end where none is afforded", async ({
     page,
   }) => {
     // C-1's cut check cannot see a reveal that lands AT the scroll end (cuts
     // there are exempt) or on the pressed chip's own start (nothing is cut).
     // Both are where the regressions land: the effect passing no scroll end,
     // passing no chip starts, or the gutter branch dropped. This pins WHERE the
-    // rail rests, on the one geometry the spec seeds for it.
+    // rail rests.
+    //
+    // WHICH chip's start that is, is DERIVED from each width's own measurement
+    // and never named here. The chips are text, so their widths follow the
+    // renderer's font metrics: CI's Linux build draws "Quarter-finals" ~7px
+    // wider than macOS does, and at 320 that is the difference between that
+    // chip's start holding the Semi-finals whole and no reachable start holding
+    // them at all — where the rail correctly rests at its end instead
+    // (hub-chip.tsx: "a rail scrolled fully right can still cut its leading
+    // chip … geometry, not a rule this class can express"). Naming a round, or
+    // a pixel, pins one machine's fonts and reds on the other's.
     test.setTimeout(budget(4));
     const view = thirtyTwo.doc.knockouts[0]!;
-    const [, roundOf16, quarters, semis] = view.rounds as [HubRound, HubRound, HubRound, HubRound, HubRound];
+    const semis = view.rounds[3]!;
     const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
-    const idOf = (round: HubRound) => `mh-knockout-round-${view.id}-${round.key}`;
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 });
       await openKnockout(page, hubUrl(orgSlug, thirtyTwo, "?tab=knockout"));
       await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
       const g = await settledRailEdges(page, rail);
       const seen = `load at ${width}: ${JSON.stringify(g)}`;
-      const chipOf = (round: HubRound) => g.chips.find((c) => c.testid === idOf(round));
-      const [r16, qf, sf] = [chipOf(roundOf16), chipOf(quarters), chipOf(semis)];
-      expect(r16 && qf && sf, `the three chips — ${seen}`).toBeTruthy();
-      expect(sf!.pressed, seen).toBe(true);
 
-      // Premises, from the same measurement, in the rail's CONTENT coordinates
-      // (independent of where it rests). `shift(c)` is the scrollLeft that puts
-      // c's start on the padding; `sfEnd` is the Semi-finals' right edge.
-      const shift = (c: { left: number }) => c.left + g.scrollLeft - g.padStart;
-      const sfEnd = sf!.right + g.scrollLeft;
-      expect(shift(qf!), `premise: Quarter-finals on the padding is short of the scroll end — ${seen}`).toBeLessThan(
-        g.max - 1,
-      );
-      expect(
-        sfEnd - shift(qf!),
-        `premise: with Quarter-finals on the padding the Semi-finals are whole — ${seen}`,
-      ).toBeLessThanOrEqual(g.clientWidth);
-      expect(
-        sfEnd - shift(r16!),
-        `premise: Round of 16 on the padding would leave the Semi-finals' end past the right padding — ${seen}`,
-      ).toBeGreaterThan(g.clientWidth - g.padEnd);
-      if (sfEnd - shift(qf!) > g.clientWidth - g.padEnd) {
-        expect(
-          shift(sf!),
-          `premise: Quarter-finals only shows the Semi-finals inside the right padding, so their own start must lie past the end — ${seen}`,
-        ).toBeGreaterThan(g.max);
-      }
+      // Non-vacuous: the rail overflows, the Semi-finals are what is pressed,
+      // and they are not the last chip — so the scroll end's own exemption is
+      // not what the reveal was for.
+      expect(g.max, seen).toBeGreaterThan(0);
+      expect(g.pressed?.testid, seen).toBe(`mh-knockout-round-${view.id}-${semis.key}`);
+      expect(g.chips.at(-1)!.pressed, seen).toBe(false);
 
-      const measured = `at ${width}: scrollLeft ${g.scrollLeft}, scrollWidth-clientWidth ${g.max}, Quarter-finals' chip at ${qf!.left} against padding ${g.padStart}`;
-      expect.soft(g.atEnd, `the rail rests at its scroll end — ${measured} — ${seen}`).toBe(false);
+      // In the rail's CONTENT coordinates, independent of where it rests:
+      // `restAt(c)` is the scrollLeft that puts c's start on the leading
+      // padding — which is also a snap point (HUB_RAIL_CLASS) — and `sfEnd` is
+      // the pressed chip's right edge.
+      const restAt = (c: { left: number }) => c.left + g.scrollLeft - g.padStart;
+      const starts = g.chips.map(restAt);
+      const sfEnd = g.pressed!.right + g.scrollLeft;
+      const own = restAt(g.pressed!);
+      // The least scroll that shows the pressed chip wholly inside the rail...
+      const needInside = sfEnd - g.clientWidth;
+      // ...so THESE are the starts this width can come to rest on and still
+      // show it whole: at or past that, not past the pressed chip's own start,
+      // and within reach of the scroll end. Empty means this viewport cannot
+      // express the scenario at all — the else arm, which still asserts.
+      const affords = starts.filter((s) => s >= needInside - 1 && s <= own + 1 && s <= g.max + 1);
+      const measured = `at ${width}: rests at ${g.scrollLeft} of ${g.max}, chip starts ${JSON.stringify(starts)}, the Semi-finals whole from ${needInside}, their own start ${own}`;
+
+      // C-1's first fact, on BOTH arms — showing this chip is what the reveal is for.
       expect
-        .soft(Math.abs(qf!.left - g.padStart), `Quarter-finals' start is not on the rail's padding (±1px) — ${measured} — ${seen}`)
-        .toBeLessThanOrEqual(1);
+        .soft(g.pressedInside, `the pressed chip is not wholly inside the rail — ${measured} — ${seen}`)
+        .toBe(true);
+
+      if (affords.length > 0) {
+        // It must come to rest on one of them. The scroll end is not one, and
+        // neither is a mid-chip offset: passing no scroll end, passing no chip
+        // starts, or dropping the gutter branch each strands the rail at the
+        // end instead — where C-1 is exempt and only this assertion is looking.
+        expect
+          .soft(
+            affords.some((s) => Math.abs(s - g.scrollLeft) <= 1),
+            `the rail does not rest on a chip start that shows the Semi-finals whole — ${measured} — ${seen}`,
+          )
+          .toBe(true);
+        if (Math.min(...affords) < g.max - 1) {
+          expect
+            .soft(
+              g.atEnd,
+              `the rail rests at its scroll end though a chip start short of it shows the Semi-finals whole — ${measured} — ${seen}`,
+            )
+            .toBe(false);
+        }
+      } else {
+        // The DOCUMENTED end-of-rail geometry: every start that would show the
+        // pressed chip whole lies past the last reachable offset, so the rail
+        // clamps to that offset and may cut its leading chip. Asserted rather
+        // than excused, so the width is still covered.
+        expect
+          .soft(
+            g.atEnd,
+            `no reachable chip start shows the Semi-finals whole, so the rail must rest at its scroll end — ${measured} — ${seen}`,
+          )
+          .toBe(true);
+        expect
+          .soft(
+            own,
+            `the pressed chip's own start is what must lie past the scroll end — ${measured} — ${seen}`,
+          )
+          .toBeGreaterThan(g.max);
+      }
     }
   });
 
