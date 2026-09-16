@@ -68,11 +68,18 @@ export default async function PostPage({ params }: Props) {
   const sides = scoreline && !heroUrl ? await resolvePostSides(post) : null;
   const related = await relatedCompetition(post);
   const bodyHtml = await renderHelpMarkdown(post.bodyMd);
+  // publishedAt is a timestamptz — a real instant, not a calendar day an
+  // organiser typed — so the pinned zone is about DETERMINISM, not
+  // day-correctness. This route is ISR-cached (`revalidate = 30` above): ONE
+  // rendered HTML is served to every visitor worldwide, so there is no viewer
+  // timezone to resolve against, and without the pin the printed date depends on
+  // which host happened to fill the cache.
   const date = post.publishedAt
     ? new Date(post.publishedAt).toLocaleDateString(locale, {
         day: "numeric",
         month: "short",
         year: "numeric",
+        timeZone: "UTC",
       })
     : "";
   const isPublishedResult = post.status === "published" && scoreline !== null;
