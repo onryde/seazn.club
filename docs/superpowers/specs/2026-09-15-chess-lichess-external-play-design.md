@@ -24,8 +24,10 @@ Owner decisions 2026-09-16:
    `/shared/[org]/[comp]/[div]/fixtures/[fixtureId]/play`, beside the public
    match centre. `/me` stays the player home. The public match centre shows
    read-only status only.
-5. Organisers get **no new page**: attention on the Fixture Console row, detail
-   and resolve on the organiser fixture page.
+5. Organisers get **no new page and no new attention kind** (owner decision A):
+   a queued Lichess fixture counts as the existing amber `result_missing` from
+   T+20, carries a reason chip on its Fixture Console row, and is resolved on
+   the organiser fixture page.
 6. Check-in **reuses** the existing `fixture_availability.checked_in_at` and
    `checkInToFixture` — one authority for "who showed up".
 
@@ -124,7 +126,7 @@ Lichess server source (`lichess-org/lila`, `modules/challenge`):
 [Cron poll | poke]   ─► adapter.fetchGame(challengeId) ─► live / finished /
                         needs_organiser ─► scoreEvent(result)
 [Cron deadline]      ─► no game ─► needs_organiser + no-show reason from check-ins
-[Fixture Console]    ─► red attention on the row
+[Fixture Console]    ─► "Needs result" + reason chip on the row
 [Organiser fixture]  ─► reason, check-in times, pre-filled resolve
 ```
 
@@ -270,8 +272,10 @@ Lichess once more if a challenge exists, and if no game started sets
 
 What happens automatically:
 
-- The Fixture Console row shows a red attention ("Black didn't show") within one
-  cron cycle of T+20 (≤ 5 min).
+- Within one cron cycle of T+20 (≤ 5 min) the fixture counts as the existing
+  amber `result_missing`: it appears in the competition page's "Needs you" and
+  in the Fixture Console's "Needs result" filter, and its row carries a reason
+  chip ("Black didn't show").
 - The organiser fixture page shows the reason, both check-in times, and a
   one-tap pre-filled resolve. Nothing is written to standings until the
   organiser taps it.
@@ -337,10 +341,18 @@ the scheduled-workflow repo.
 - **Public match centre (existing, ISR):** read-only status only (e.g. *Live on
   Lichess* + watch link `lichess.org/{challengeId}` once live) and the match-room
   link. No controls, no Play URLs, nothing per-viewer.
-- **Fixture Console (division `?tab=fixtures`):** red attention on rows in
-  `needs_organiser`, using the desk's existing attention rule (red attention
-  outranks the phase pill). Read the competition-desk `_INDEX.md` / `_RULES.md`
-  before touching it. No separate queue banner.
+- **Fixture Console (division `?tab=fixtures`) — owner decision A, no new
+  attention kind.** `isResultMissing` (`lib/division-phase.ts:392`) is the one
+  predicate behind both the competition page's amber `result_missing` and the
+  run sheet's "Needs result" filter. It gains one input: a fixture whose bridge
+  row is `needs_organiser` is result-missing immediately, instead of after
+  `scheduledAt + matchMinutes`. Both callers (`resolveAttention` via
+  `PhaseFixture`, and `run-sheet.tsx` via `RunSheetFixture`) pass it, so the two
+  renderings cannot disagree. The row shows a reason chip (`data-testid=
+  "external-play-reason"`) from `needs_reason`. Read the competition-desk
+  `_RULES.md` before touching it (ladders are order; state the empty case
+  first; counted copy via `plural()`). The PR's separate queue banner is
+  removed.
 - **Organiser fixture page `/o/…/f/[no]`:** a new panel mounted between the
   check-in QR / officials strip and `<FixtureConsole>` (`f/[no]/page.tsx`
   ~:149-157, gated on `canEdit`): Lichess status, reason, **both check-in times**
@@ -436,8 +448,8 @@ chess changes silently.
   check-in disabled before window, first check-in shows on the other screen,
   Play appears for both with their own colour, a signed-in non-player is
   redirected, the match room response is `private, no-store`, the public match
-  centre shows no Play link; organiser sees the attention on the Fixture Console and resolves a
-  no-show. Registered in `WALKTHROUGH_SPECS`.
+  centre shows no Play link; organiser finds the no-show under "Needs result" with its reason chip and
+  resolves it. Registered in `WALKTHROUGH_SPECS`.
 - **Smoke:** cron sweep with a recorded Lichess payload.
 - **Regression:** online play off — pairings + manual/pad result unchanged; QR
   venue check-in unchanged; division settings page renders and saves for a
