@@ -198,7 +198,37 @@ beforeEach(() => {
   withTenant.mockResolvedValue({
     division_id: DIVISION,
     competition_id: COMPETITION,
+    org_id: ORG,
     discoverable: false,
+  });
+});
+
+// Spectator W2, Task 15 — the org home's chip island polls
+// `pub:v1:org-live:{orgId}` (usecases/public.ts `publicOrgLive`, 15 s). A score
+// write is what moves a fixture into and out of `in_play`, so it is what makes
+// that document stale. The key the reader WRITES is pinned through the route
+// (`api/v1/public/orgs/[orgSlug]/live/__tests__/route-cache.test.ts`), with the
+// same literal as here.
+describe("invalidatePublicCache — the org home's live key (Task 15)", () => {
+  const ORG_LIVE_KEY = `pub:v1:org-live:${ORG}`;
+
+  it("drops the org-live key, keyed by the fixture's ORG, in the same one DEL as the literal keys", async () => {
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(deletedKeys()).toContain(ORG_LIVE_KEY);
+    expect(cacheDel, "one round trip for every literal key").toHaveBeenCalledTimes(1);
+    expect(patterns().filter((pattern) => pattern.startsWith("pub:v1:org-live:")), "a literal key sent through a SCAN").toEqual([]);
+  });
+
+  it("is keyed by nothing else: no competition- or division-keyed org-live key", async () => {
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(deletedKeys().filter((key) => key.startsWith("pub:v1:org-live:"))).toEqual([ORG_LIVE_KEY]);
+  });
+
+  it("a fixture with no row drops no org-live key (positive pair: the fixture key still goes)", async () => {
+    withTenant.mockResolvedValue(null);
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(deletedKeys().filter((key) => key.startsWith("pub:v1:org-live:"))).toEqual([]);
+    expect(deletedKeys()).toContain(FIXTURE_KEY);
   });
 });
 

@@ -95,8 +95,8 @@ describe("startTime — one formatter for the court card and the page's subheadi
   });
 
   it("writes an `en` org's date en-GB, not the US form bare 'en' gives Intl", () => {
-    // The whole public surface is en-GB (`lib/format.ts:10`, `schedule.tsx`'s
-    // `dateTagFor`); bare "en" made this one line read "Jul 20, 2026, 2:30 PM"
+    // The whole public surface is en-GB (`lib/format.ts:10`, `intlLocaleFor`
+    // in `lib/public-date-locale.ts`); bare "en" made this one line read "Jul 20, 2026, 2:30 PM"
     // beside neighbours reading "20 Jul 2026, 14:30".
     const doc = buildMatchCentre(input({ locale: "en" }));
     expect(doc.startTime).toBe("20 Jul 2026, 14:30");

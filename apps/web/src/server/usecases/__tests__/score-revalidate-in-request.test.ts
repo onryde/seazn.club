@@ -444,6 +444,8 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     const fixtureKey = `pub:v1:fixture:${fixtureId}`;
     const hubKey = `pub:v1:hub:${competitionId}`;
     const playerMatchesGenKey = `pub:v1:player-matches-gen:${competitionId}`;
+    // Spectator W2 Task 15: the org home's live document rides the same DEL.
+    const orgLiveKey = `pub:v1:org-live:${auth.orgId}`;
     const divisionGlob = `pub:v1:div:${divisionId}:*`;
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
@@ -455,7 +457,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
         inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
       );
       expect(probe.gates.map((g) => g.kind).sort()).toEqual(["del", "scan"]);
-      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey, playerMatchesGenKey].sort());
+      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey, playerMatchesGenKey, orgLiveKey].sort());
       expect(targetsOf("scan")).toEqual([divisionGlob]);
 
       // The SCAN fails first, while the DEL is still in flight.

@@ -624,9 +624,20 @@ export function isoDateTime(value: unknown): string | null {
 }
 
 /** Spectator-language chip over the competition status vocab
-    (draft|published|live|completed|archived). */
+    (draft|published|live|completed|archived), and over what is actually
+    happening: `inPlay` is how many of the competition's public fixtures are
+    `in_play` right now.
+
+    The in-play rung is FIRST (spectator W2, Task 15). A status is an
+    organiser's setting and nothing flips it to `live` when a match starts, so
+    the org home used to read "Upcoming" on a competition with a match being
+    played (W0 block II). A match in play is on now whatever the status says —
+    including `completed`, which an organiser can set before the last match
+    is scored. Defaults to 0 so a caller with no fixture count keeps the
+    status ladder exactly as it was. */
 export type CompetitionChip = "on-now" | "finished" | "upcoming";
-export function competitionChip(status: string): CompetitionChip {
+export function competitionChip(status: string, inPlay = 0): CompetitionChip {
+  if (inPlay > 0) return "on-now";
   if (status === "live") return "on-now";
   if (status === "completed" || status === "archived") return "finished";
   return "upcoming";
@@ -637,8 +648,9 @@ export function competitionChip(status: string): CompetitionChip {
  *  it via t(dict, chipLabelKey(status)). */
 export function chipLabelKey(
   status: string,
+  inPlay = 0,
 ): "chip.onNow" | "chip.finished" | "chip.upcoming" {
-  const chip = competitionChip(status);
+  const chip = competitionChip(status, inPlay);
   return chip === "on-now"
     ? "chip.onNow"
     : chip === "finished"

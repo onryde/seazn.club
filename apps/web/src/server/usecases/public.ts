@@ -30,6 +30,7 @@ import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import {
+  listOrgHomeCompetitions,
   maskPublicEntrantNames,
   publicPlayerGate,
   withCourtVenueName,
@@ -37,6 +38,7 @@ import {
   type PublicEntrantMember,
   type PublicFixture,
 } from "@/server/public-site/data";
+import { PublicOrgLive, type PublicOrgLiveT } from "@/server/api-v1/schemas";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
 import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
@@ -297,6 +299,47 @@ export async function publicPlayerMatches(
       return { matches, generatedAt: new Date().toISOString() };
     },
     (hit) => PublicPlayerMatches.safeParse(hit).success,
+  );
+}
+
+/** How long the org home's live poll may be served stale — the hub's window,
+ *  for the hub's reason: it is what a spectator watching for a match to start
+ *  feels. A scoring write deletes the key outright (`invalidatePublicCache`),
+ *  so this bounds a missed invalidation, not the refresh rate. */
+export const ORG_LIVE_TTL_SECONDS = 15;
+
+/**
+ * The org home's chip island poll (spectator W2, Task 15, R10): for every
+ * competition the org home LISTS, its status and in-play count.
+ *
+ * The list and the counts come from `listOrgHomeCompetitions`, the same query
+ * `getPublicOrg` renders the page from, so the poll can never name a
+ * competition the page does not list (an unlisted or private one) or count a
+ * match the page would not.
+ *
+ * The org lookup runs FIRST and throws its own 404, before the cache is
+ * touched — the same order `publicCompetitionHub` keeps. A Redis hit is
+ * PARSED before it is served (`cachedFor`'s `isValid`): an entry of another
+ * shape, left by an older build, is a miss and is rewritten, never served.
+ */
+export async function publicOrgLive(orgSlug: string): Promise<PublicOrgLiveT> {
+  const [org] = await sql<{ id: string }[]>`
+    select id from organizations where slug = ${orgSlug} limit 1`;
+  if (!org) throw new HttpError(404, "organization not found");
+  return cachedFor(
+    `pub:v1:org-live:${org.id}`,
+    ORG_LIVE_TTL_SECONDS,
+    async () => {
+      const competitions = await listOrgHomeCompetitions(org.id);
+      return {
+        competitions: competitions.map((c) => ({
+          id: c.id,
+          status: c.status as PublicOrgLiveT["competitions"][number]["status"],
+          in_play: c.in_play,
+        })),
+      };
+    },
+    (hit) => PublicOrgLive.safeParse(hit).success,
   );
 }
 

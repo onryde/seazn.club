@@ -3,16 +3,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { ChevronRight } from "lucide-react";
 import { getPublicOrg } from "@/server/public-site/data";
 import { publicPosts } from "@/server/usecases/org-posts";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
-import { competitionChip, chipLabelKey } from "@/lib/public-site";
 import { kindEyebrow, TONE_ON_LIGHT } from "@/lib/news-presentation";
 import { renderProse } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
-import { getDictionary, t, type Dict } from "@/lib/i18n";
+import { OrgLiveChips } from "@/components/public-site/org-live-chips";
+import { orgLiveDict } from "@/lib/hub-dict";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
 
 /** Public pages render in the org's locale for every visitor — a pure function
@@ -58,40 +59,20 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 // is served to every visitor worldwide — there is no viewer zone to resolve
 // against, and the alternative is a cached page whose dates depend on which
 // host filled the cache.
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-GB", {
+//
+// In the ORG's locale (spectator W2, Task 15), like every other string on this
+// page — it was en-GB in all four, so a Spanish club's home printed "1 Sept
+// 2026" under Spanish headings. English stays day-month: `intlLocaleFor` writes
+// "en" as en-GB (owner ruling 2026-09-16), because bare "en" is a US format to
+// `Intl`. Not `lib/format.ts`'s `fmtDate`: that helper pins `LOCALE = "en-GB"`
+// and takes no locale (the poster route says the same).
+const fmtDate = (iso: string, locale: Locale) =>
+  new Date(iso).toLocaleDateString(intlLocaleFor(locale), {
     day: "numeric",
     month: "short",
     year: "numeric",
     timeZone: "UTC",
   });
-
-/** Spectator-language chip; the status → chip mapping lives in
-    lib/public-site.ts (competitionChip) so it unit-tests without JSX. */
-function statusChip(status: string, dict: Dict) {
-  const chip = competitionChip(status);
-  const label = t(dict, chipLabelKey(status));
-  if (chip === "on-now") {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 ring-1 ring-inset ring-emerald-200">
-        <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
-        {label}
-      </span>
-    );
-  }
-  if (chip === "finished") {
-    return (
-      <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-        {label}
-      </span>
-    );
-  }
-  return (
-    <span className="rounded-full bg-accent-soft px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-accent-strong ring-1 ring-inset ring-accent-line">
-      {label}
-    </span>
-  );
-}
 
 export default async function OrgLandingPage({ params }: Props) {
   const { orgSlug } = await params;
@@ -180,7 +161,7 @@ export default async function OrgLandingPage({ params }: Props) {
                       {p.title}
                     </span>
                     {p.publishedAt ? (
-                      <span className="shrink-0 text-xs text-ink-muted">{fmtDate(p.publishedAt)}</span>
+                      <span className="shrink-0 text-xs text-ink-muted">{fmtDate(p.publishedAt, locale)}</span>
                     ) : null}
                   </Link>
                 </li>
@@ -198,35 +179,24 @@ export default async function OrgLandingPage({ params }: Props) {
           {t(dict, "empty")}
         </p>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {competitions.map((c) => (
-            <li key={c.id}>
-              <Link
-                href={`/shared/${org.slug}/${c.slug}`}
-                className="group flex h-full flex-col justify-between rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-accent-line hover:shadow-md"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <p className="font-display text-xl font-semibold leading-tight text-ink">
-                    {c.name}
-                  </p>
-                  <ChevronRight
-                    aria-hidden
-                    className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300 transition group-hover:translate-x-0.5 group-hover:text-accent"
-                  />
-                </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-                  {statusChip(c.status, dict)}
-                  {c.starts_on ? (
-                    <span>
-                      {fmtDate(c.starts_on)}
-                      {c.ends_on ? ` – ${fmtDate(c.ends_on)}` : ""}
-                    </span>
-                  ) : null}
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        // ONE island for the whole list (R10: one subscription per page). It
+        // keeps each chip truthful while the page is open; the first paint is
+        // this render's, from `in_play` as `getPublicOrg` counted it.
+        <OrgLiveChips
+          orgSlug={org.slug}
+          competitions={competitions.map((c) => ({
+            id: c.id,
+            slug: c.slug,
+            name: c.name,
+            status: c.status,
+            in_play: c.in_play,
+            dateLine: c.starts_on
+              ? `${fmtDate(c.starts_on, locale)}${c.ends_on ? ` – ${fmtDate(c.ends_on, locale)}` : ""}`
+              : "",
+          }))}
+          dict={orgLiveDict(dict)}
+          locale={locale}
+        />
       )}
     </div>
   );

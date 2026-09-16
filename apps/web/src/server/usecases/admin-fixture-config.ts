@@ -11,6 +11,8 @@ import {
   resolveFixtureCfg,
 } from "@/server/engine-db";
 import { foldFixture } from "@/server/engine-db/fold";
+import { log } from "@/server/logger";
+import { invalidatePublicCache } from "./scoring";
 
 /**
  * THE ESCAPE HATCH FROM THE V347 CONFIG SNAPSHOT.
@@ -324,5 +326,28 @@ export async function resnapshotFixtureConfig(
   // derived cache — `usecases/scoring.ts` recomputes it after its own append the
   // same way — so a crash here leaves a stale table, not a wrong ledger, and the
   // next scored fixture in the stage repairs it.
-  await recomputeStandings(row.org_id, row.stage_id, row.pool_id ?? undefined);
+  try {
+    await recomputeStandings(row.org_id, row.stage_id, row.pool_id ?? undefined);
+  } finally {
+    // The public copies, through the SAME door a score write uses (spectator W2
+    // Task 15 review, R5). The rewrite above moved `fixtures.status` and
+    // `fixtures.outcome`, which is what the fixture's match centre, the
+    // competition hub's live scores and the org home's in-play count are built
+    // from; without this each served its old answer until its TTL ran out.
+    // `invalidatePublicCache` derives every key from the fixture's own rows, so
+    // the names cannot drift from scoring's.
+    //
+    // In `finally` (scoring's shape, R10 M3): the rewrite has committed whether
+    // or not the standings recompute succeeds. AWAITED — this runs inside a
+    // route handler, and Next drops a revalidation tag fired after the handler
+    // resolves — but a failure is logged, never thrown: the Redis sweeps inside
+    // stay non-blocking, and a cache that could not be dropped must not report
+    // a committed re-snapshot as failed.
+    await invalidatePublicCache(row.org_id, fixtureId).catch((err: unknown) => {
+      log.error(
+        { err, fixture: fixtureId },
+        "admin-fixture-config: public cache invalidation failed (the re-snapshot stands)",
+      );
+    });
+  }
 }

@@ -1,0 +1,28 @@
+// Spectator W2, Task 15 (owner ruling 2026-09-16): public dates are written
+// day-month in English. Bare "en" is a US format to `Intl` ("Sep 1, 2026"), so
+// the one helper maps it to en-GB ("1 Sept 2026"); every other org locale keeps
+// its own Intl format. The org home, the public schedule (`schedule.tsx`) and
+// the match centre's start time (`match-centre.ts`) all format through it.
+import { describe, expect, it } from "vitest";
+import { LOCALES } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+
+const AT = new Date(Date.UTC(2026, 8, 1, 12));
+const fmt = (tag: string) =>
+  AT.toLocaleDateString(tag, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+describe("intlLocaleFor", () => {
+  it("en is written en-GB — and that is not what bare en gives Intl", () => {
+    // Premise: the two English renderings really differ for this date.
+    expect(fmt("en-GB")).not.toBe(fmt("en-US"));
+    expect(fmt("en")).toBe(fmt("en-US"));
+    expect(intlLocaleFor("en")).toBe("en-GB");
+    expect(fmt(intlLocaleFor("en"))).toBe(fmt("en-GB"));
+  });
+
+  it("every other org locale is used as given", () => {
+    const others = LOCALES.filter((l) => l !== "en");
+    expect(others.length, "premise: the repo has non-English locales").toBeGreaterThan(0);
+    for (const locale of others) expect(intlLocaleFor(locale), locale).toBe(locale);
+  });
+});

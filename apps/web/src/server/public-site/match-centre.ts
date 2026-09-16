@@ -77,6 +77,7 @@ import { SHOOTOUT_IS_SKATED, shootoutScoreFromDetail } from "@/lib/scoring-vocab
 // The SAME readers `live-score.tsx` uses for the pair the match centre had
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { PublicFixture } from "./data";
 import type { PublicPerson } from "./public-lineups";
 import { buildSets, buildTimeline } from "./timeline";
@@ -771,8 +772,9 @@ function liveSubLines(setsView: SetsViewT | null): [string | null, string | null
  * And `en` is written `en-GB`. Bare "en" is a US format to `Intl`, so an
  * English org's card read "Jul 20, 2026, 2:30 PM" on a public site whose every
  * other date is "20 Jul 2026, 14:30" — `lib/format.ts:10` pins `en-GB` as THE
- * display locale for this repo, and `schedule.tsx`'s `dateTagFor` and
- * `ai-instruction-describe.ts`'s `DEFAULT_LOCALE` already apply exactly this
+ * display locale for this repo, and `intlLocaleFor` (`lib/public-date-locale.ts`,
+ * shared with `schedule.tsx` and the org home) and
+ * `ai-instruction-describe.ts`'s `DEFAULT_LOCALE` apply exactly this
  * `"en" → "en-GB"` rule for the same reason. Every other locale tag is used as
  * given; only bare "en" is ambiguous.
  */
@@ -782,7 +784,7 @@ export function startTimeText(
   venueTz: string,
 ): string | null {
   if (scheduledAt === null) return null;
-  return new Intl.DateTimeFormat(locale === "en" ? "en-GB" : locale, {
+  return new Intl.DateTimeFormat(intlLocaleFor(locale), {
     timeZone: venueTz,
     dateStyle: "medium",
     timeStyle: "short",

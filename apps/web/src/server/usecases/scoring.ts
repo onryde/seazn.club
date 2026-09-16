@@ -628,9 +628,9 @@ export async function invalidatePublicCache(
 ): Promise<void> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
-      { division_id: string; competition_id: string; discoverable: boolean }[]
+      { division_id: string; competition_id: string; org_id: string; discoverable: boolean }[]
     >`
-      select f.division_id, d.competition_id, c.discoverable
+      select f.division_id, d.competition_id, c.org_id, c.discoverable
       from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -660,6 +660,11 @@ export async function invalidatePublicCache(
   //     person's lines under it; deleting it retires all of them. Those keys
   //     are per PERSON and this write does not know who played, so the only
   //     other door was a second keyspace SCAN on every score write.
+  //   - the org home's live document (`pub:v1:org-live:{orgId}`,
+  //     usecases/public.ts's `publicOrgLive`, spectator W2 Task 15). It counts
+  //     every listed competition's in-play fixtures, and a score write is what
+  //     moves a fixture into and out of `in_play`. Keyed by the fixture's own
+  //     org, read in the lookup above.
   // Only the division's glob still needs a SCAN over the whole keyspace
   // (cache.ts), and no push depends on it. The hub rebuilds through
   // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
@@ -667,10 +672,15 @@ export async function invalidatePublicCache(
   // endpoints.
   const fixtureKey = `pub:v1:fixture:${fixtureId}`;
   // R10h: the advanced-into fixtures' own documents ride the same DEL, after
-  // the three keys every score drops. One round trip, and the pushes below then
+  // the four keys every score drops. One round trip, and the pushes below then
   // wait on the delete that covers all of them.
   const keys = row
-    ? [fixtureKey, `pub:v1:hub:${row.competition_id}`, playerMatchesGenKey(row.competition_id)]
+    ? [
+        fixtureKey,
+        `pub:v1:hub:${row.competition_id}`,
+        playerMatchesGenKey(row.competition_id),
+        `pub:v1:org-live:${row.org_id}`,
+      ]
     : [fixtureKey];
   for (const id of alsoFixtureIds) keys.push(`pub:v1:fixture:${id}`);
   // F4: neither call is ever left to reject unhandled. Both helpers fail open
