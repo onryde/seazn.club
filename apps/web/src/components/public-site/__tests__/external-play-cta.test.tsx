@@ -75,6 +75,24 @@ describe("ExternalPlayCta", () => {
       />,
     );
     expect(html).toContain('data-testid="external-play-needs-organiser"');
+    expect(html).toContain("externalPlay.needsOrganiser");
     expect(html).not.toContain('data-testid="external-play-cta"');
+  });
+
+  it("names delay clocks when that is why the organiser is needed", () => {
+    const html = renderToStaticMarkup(
+      <ExternalPlayCta
+        externalPlay={{
+          status: "needs_organiser",
+          playUrl: null,
+          whitePlayUrl: null,
+          blackPlayUrl: null,
+          lastError: "delay_unsupported",
+        }}
+        scheduledLabel={null}
+        msg={msg}
+      />,
+    );
+    expect(html).toContain("externalPlay.reason.delayUnsupported");
   });
 });

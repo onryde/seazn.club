@@ -48,12 +48,13 @@ export function ExternalPlayCta({
   }
 
   if (externalPlay.status === "needs_organiser") {
+    const delay = externalPlay.lastError === "delay_unsupported";
     return (
       <p
         data-testid="external-play-needs-organiser"
         className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900"
       >
-        {msg("externalPlay.needsOrganiser")}
+        {msg(delay ? "externalPlay.reason.delayUnsupported" : "externalPlay.needsOrganiser")}
       </p>
     );
   }

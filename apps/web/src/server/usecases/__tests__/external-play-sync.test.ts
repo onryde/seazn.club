@@ -235,6 +235,14 @@ describe.skipIf(!HAS_DB)("applyProviderGameUpdate", () => {
     });
     expect(result).toBe("live");
 
+    const [fx] = await sql<{ status: string }[]>`
+      select status from fixtures where id = ${rig.fixtureId}`;
+    expect(fx!.status).toBe("in_play");
+
+    const events = await sql<{ type: string }[]>`
+      select type from score_events where fixture_id = ${rig.fixtureId} order by seq`;
+    expect(events.map((e) => e.type)).toEqual(["core.start"]);
+
     const [ep] = await sql<{ status: string }[]>`
       select status from fixture_external_play where fixture_id = ${rig.fixtureId}`;
     expect(ep!.status).toBe("live");

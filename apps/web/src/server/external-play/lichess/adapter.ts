@@ -54,22 +54,21 @@ export function createLichessAdapter(deps: LichessAdapterDeps): ExternalPlayAdap
         throw new LichessHttpError(res.status, `Lichess challenge create failed: ${detail}`);
       }
 
+      // Lichess ChallengeJson is top-level { id, url }, not { challenge: { id } }.
+      // keepAliveStream is intentionally unset: that flag switches the response
+      // to a held NDJSON stream, which a 5-minute cron cannot keep open.
+      // Realtime challenges expire after 20s; prepare recreates when stale.
       const json = (await res.json()) as {
-        challenge?: {
-          id?: string;
-          url?: string;
-          open?: { url?: string };
-        };
+        id?: string;
         url?: string;
       };
 
-      const challengeId = json.challenge?.id;
+      const challengeId = json.id;
       if (!challengeId) {
         throw new LichessHttpError(502, "Lichess challenge create missing challenge id");
       }
 
-      const playUrl =
-        json.challenge?.url ?? json.challenge?.open?.url ?? json.url ?? `${base}/${challengeId}`;
+      const playUrl = json.url ?? `${base}/${challengeId}`;
 
       return {
         challengeId,

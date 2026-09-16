@@ -8,7 +8,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages } from "../stages";
 import { upsertLichessLink } from "../external-accounts";
-import { prepareExternalPlayWindow } from "../external-play";
+import { markExternalPlayReady, prepareExternalPlayWindow } from "../external-play";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { ExternalPlayAdapter } from "@/server/external-play/types";
@@ -58,7 +58,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
-  it("creates a Lichess challenge, marks ready, emails Seazn fixture URL once", async () => {
+  it("emails the Seazn lobby URL and does not mint a Lichess challenge", async () => {
     const owner = await seedOwner();
     const competition = await createCompetition(owner, {
       name: "Online Cup",
@@ -141,17 +141,10 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
       sendReadyEmail,
       orgId: owner.orgId,
     });
-    expect(first.prepared).toBe(1);
+    expect(first.prepared).toBe(0);
     expect(first.emailed).toBe(1);
     expect(first.failed).toBe(0);
-    expect(createChallenge).toHaveBeenCalledWith(
-      expect.objectContaining({
-        whiteAccessToken: "white-tok",
-        blackLichessUsername: "BlackOnLichess",
-        rated: false,
-        clock: { limit: 600, increment: 5 },
-      }),
-    );
+    expect(createChallenge).not.toHaveBeenCalled();
     expect(sendReadyEmail).toHaveBeenCalledTimes(2);
     for (const call of sendReadyEmail.mock.calls) {
       const args = call[1] as { fixtureUrl: string };
@@ -162,9 +155,9 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
 
     const [row] = await sql<{ status: string; emailed_at: Date | null; play_url: string | null }[]>`
       select status, emailed_at, play_url from fixture_external_play where fixture_id = ${fixture!.id}`;
-    expect(row!.status).toBe("ready");
+    expect(row!.status).toBe("pending");
     expect(row!.emailed_at).toBeTruthy();
-    expect(row!.play_url).toBe("https://lichess.org/ch-1");
+    expect(row!.play_url).toBeNull();
 
     createChallenge.mockClear();
     sendReadyEmail.mockClear();
@@ -178,6 +171,55 @@ describe.skipIf(!HAS_DB)("prepareExternalPlayWindow", () => {
     expect(second.prepared).toBe(0);
     expect(createChallenge).not.toHaveBeenCalled();
     expect(sendReadyEmail).not.toHaveBeenCalled();
+
+    const one = await markExternalPlayReady({
+      userId: white.userId,
+      fixtureId: fixture!.id,
+      now,
+      adapter,
+    });
+    expect(one.phase).toBe("ready_up");
+    expect(createChallenge).not.toHaveBeenCalled();
+
+    const both = await markExternalPlayReady({
+      userId: black.userId,
+      fixtureId: fixture!.id,
+      now,
+      adapter,
+    });
+    expect(both.phase).toBe("countdown");
+    expect(createChallenge).toHaveBeenCalledTimes(1);
+
+    createChallenge.mockClear();
+    const again = await markExternalPlayReady({
+      userId: white.userId,
+      fixtureId: fixture!.id,
+      now,
+      adapter,
+    });
+    expect(again.phase).toBe("countdown");
+    expect(createChallenge).not.toHaveBeenCalled();
+
+    const missedAt = new Date(now.getTime() + 21_000);
+    const afterMiss = await markExternalPlayReady({
+      userId: white.userId,
+      fixtureId: fixture!.id,
+      now: missedAt,
+      adapter,
+    });
+    expect(afterMiss.phase).toBe("ready_up");
+    expect(afterMiss.homeReady).toBe(true);
+    expect(afterMiss.awayReady).toBe(false);
+    expect(createChallenge).not.toHaveBeenCalled();
+
+    const reminted = await markExternalPlayReady({
+      userId: black.userId,
+      fixtureId: fixture!.id,
+      now: missedAt,
+      adapter,
+    });
+    expect(reminted.phase).toBe("countdown");
+    expect(createChallenge).toHaveBeenCalledTimes(1);
   });
 
   it("marks needs_organiser for delay clocks without emailing", async () => {
