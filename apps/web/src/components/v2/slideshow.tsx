@@ -359,7 +359,14 @@ export function Slideshow({
                         {f.roundName ?? fill(labels.round, "round", f.round)}
                       </span>
                       <span className="flex min-w-0 items-center justify-end gap-3 text-right font-display text-4xl font-semibold">
-                        <span className="min-w-0 truncate">{f.home}</span>
+                        {/* OWNER RULING A (2026-09-15): a name too long for its
+                            track WRAPS to a second line rather than being cut.
+                            The final between two unplayed semi-finals ("Winner
+                            of Semi-finals, match 1/2") needs ~390px against a
+                            358px track at 1280, and the room to widen the track
+                            is locked in the fixed round/status columns. Two
+                            lines cost row height, which the board has. */}
+                        <span className="line-clamp-2 min-w-0 break-words">{f.home}</span>
                         {f.homeLogo && (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={f.homeLogo} alt="" aria-hidden className="h-10 w-10 shrink-0 rounded-md bg-white/90 object-contain p-0.5" />
@@ -379,7 +386,7 @@ export function Slideshow({
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={f.awayLogo} alt="" aria-hidden className="h-10 w-10 shrink-0 rounded-md bg-white/90 object-contain p-0.5" />
                         )}
-                        <span className="min-w-0 truncate">{f.away}</span>
+                        <span className="line-clamp-2 min-w-0 break-words">{f.away}</span>
                       </span>
                       <span className="flex items-center justify-end gap-2 font-display text-lg font-semibold uppercase tracking-wide">
                         {live ? (

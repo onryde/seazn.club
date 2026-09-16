@@ -8,6 +8,14 @@
 // the final ("Winner of Semi-finals, match 1" vs "... match 2") was cut with
 // 768px of the TV unused beside the slide.
 //
+// OWNER RULING A (2026-09-15), after the K-1 route-group move widened the
+// board: at 1280 the final's two feeder names need ~390px against a 358px
+// track, and the row's spare room is inside the FIXED round and status columns,
+// so no track sizing can hand it over. The names now WRAP to a second line
+// (`line-clamp-2 break-words`) rather than being cut. This suite prices that
+// allowance from the rendered class, and still treats a name that is short of
+// room BESIDE unused space as the defect — wrapping included.
+//
 // What this suite measures. `apps/web` vitest has no layout, so it prices the
 // row the way a browser would, from the board's OWN rendered classes (tracks,
 // padding, gaps, text sizes, the slide cap and its breakpoint), Tailwind's own
@@ -75,8 +83,9 @@ function lengthPx(raw: string): number {
 const spacingPx = (steps: string) => Number(steps) * themePx("spacing");
 
 // ---- The board's rendered classes -------------------------------------------
-const board = (slide: Slide) =>
-  renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/shared/o/c", labels: slideshowLabels("en") }));
+type Loc = Parameters<typeof slideshowLabels>[0];
+const board = (slide: Slide, locale: Loc = "en") =>
+  renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/shared/o/c", labels: slideshowLabels(locale) }));
 
 /** Class tokens of the first element whose class list satisfies `pick`. */
 function classesWhere(html: string, pick: (tokens: string[]) => boolean, what: string): string[] {
@@ -139,21 +148,25 @@ function slideWidth(html: string, vw: number): number {
 }
 
 interface RowFit {
+  /** The name needs more than its line allowance (`truncate`: one line). */
   homeCut: boolean;
   awayCut: boolean;
+  /** The name does not fit on ONE line, so it wraps (or, at one line, is cut). */
+  homeWraps: boolean;
+  awayWraps: boolean;
   /** Space inside the name tracks that neither name uses. */
   unused: number;
 }
 
 /** One fixtures row at a viewport, priced from the rendered row. */
-function fitRow(html: string, vw: number, home: string, away: string, tracksOverride?: Track[]): RowFit {
+function fitRow(html: string, vw: number, home: string, away: string, tracksOverride?: Track[], locale: Loc = "en"): RowFit {
   const li = classesWhere(html, (tk) => tk.includes("grid") && tk.some((c) => c.startsWith("grid-cols-[")), "row grid");
   const tracks = tracksOverride ?? tracksOf(li);
   if (tracks.length !== 5) throw new Error(`the row grid has ${tracks.length} tracks, not round|home|vs|away|status: re-derive this model`);
   const rowPad = spacingPx(one(li, /^px-(\d+(?:\.\d+)?)$/, "row px")[1]!);
   const gap = spacingPx(one(li, /^gap-x-(\d+)$/, "row gap-x")[1]!);
 
-  const labels = slideshowLabels("en");
+  const labels = slideshowLabels(locale);
   const vsCell = classesAround(html, labels.vs);
   const vsPx =
     textWidth(DISPLAY[weightOf(vsCell)]!, labels.vs, themePx(`text-${one(vsCell, /^text-(\d?xl|lg|base|sm)$/, "vs size")[1]}`)) +
@@ -186,14 +199,37 @@ function fitRow(html: string, vw: number, home: string, away: string, tracksOver
   } else {
     throw new Error(`name tracks ${h.kind}/${a.kind}: this model prices fr/fr and minmax(0,auto) pairs only`);
   }
-  const homeCut = hw > ht + 0.5;
-  const awayCut = aw > at + 0.5;
-  return { homeCut, awayCut, unused: Math.max(0, ht - Math.min(hw, ht)) + Math.max(0, at - Math.min(aw, at)) };
+  // OWNER RULING A: the name span may use `lines` lines before anything is cut.
+  // Two lines hold a name up to twice the track — an over-estimate only where a
+  // break lands badly, and `break-words` (asserted in linesOf) removes the one
+  // case a break cannot happen at all.
+  const lines = linesOf(html, home);
+  const homeWraps = hw > ht + 0.5;
+  const awayWraps = aw > at + 0.5;
+  const homeCut = hw > lines * ht + 0.5;
+  const awayCut = aw > lines * at + 0.5;
+  return { homeCut, awayCut, homeWraps, awayWraps, unused: Math.max(0, ht - Math.min(hw, ht)) + Math.max(0, at - Math.min(aw, at)) };
 }
-/** The name cell: the flex span that wraps the truncating name span. */
-function nameCellOf(html: string, name: string): string[] | null {
-  const m = new RegExp(`<span class="([^"]*)"><span class="[^"]*\\btruncate\\b[^"]*">${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</span>`).exec(html);
-  return m ? m[1]!.split(/\s+/).filter(Boolean) : null;
+/** The name cell and the name span inside it: `<cell><span class=…>NAME</span>`. */
+function nameSpansOf(html: string, name: string): { cell: string[]; span: string[] } | null {
+  const m = new RegExp(`<span class="([^"]*)"><span class="([^"]*)">${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}</span>`).exec(html);
+  if (!m) return null;
+  const span = m[2]!.split(/\s+/).filter(Boolean);
+  if (!span.includes("truncate") && !span.some((c) => /^line-clamp-\d+$/.test(c))) return null;
+  return { cell: m[1]!.split(/\s+/).filter(Boolean), span };
+}
+const nameCellOf = (html: string, name: string): string[] | null => nameSpansOf(html, name)?.cell ?? null;
+
+/** How many lines the name span may use: `truncate` is one, `line-clamp-N` is N. */
+function linesOf(html: string, name: string): number {
+  const span = nameSpansOf(html, name)?.span;
+  if (!span) throw new Error(`no name span wrapping "${name}"`);
+  if (span.includes("truncate")) return 1;
+  const clamp = one(span, /^line-clamp-(\d+)$/, "line-clamp-N").at(1)!;
+  // A wrapped line breaks at a space, so a long single WORD would still be cut
+  // — unless the span may break inside a word, which is what this asserts.
+  expect(span, `a wrapping name span breaks long words ("${name}")`).toContain("break-words");
+  return Number(clamp);
 }
 function weightOf(tokens: string[]): number {
   if (tokens.includes("font-bold")) return 700;
@@ -255,16 +291,17 @@ describe("K-2: the kiosk's Coming up row gives its free space to the names", () 
     ).toEqual([1, 3]);
   });
 
-  it.each(VARIANTS)("$name: at every TV width, a cut name never sits beside unused space in its row", async ({ named }) => {
+  it.each(VARIANTS)("$name: at every TV width, a name never wraps or is cut beside unused space in its row", async ({ named }) => {
     const found: string[] = [];
     for (const [home, away] of await pairs()) {
       const html = board(fixtures(home, away, named));
       for (const vw of tvWidths()) {
         const fit = fitRow(html, vw, home, away);
-        if ((fit.homeCut || fit.awayCut) && fit.unused > 1) found.push(`${vw}: "${home}" | "${away}" cut with ${fit.unused.toFixed(0)}px unused`);
+        const short = fit.homeCut || fit.awayCut || fit.homeWraps || fit.awayWraps;
+        if (short && fit.unused > 1) found.push(`${vw}: "${home}" | "${away}" ${fit.homeCut || fit.awayCut ? "cut" : "wrapped"} with ${fit.unused.toFixed(0)}px unused`);
       }
     }
-    expect(found, `cut beside unused space:\n${found.join("\n")}`).toEqual([]);
+    expect(found, `short of room beside unused space:\n${found.join("\n")}`).toEqual([]);
   });
 
   it("the probe can see K-2: the same public row with equal fr halves cuts North Harbour Rovers beside unused space at lg", () => {
@@ -273,8 +310,50 @@ describe("K-2: the kiosk's Coming up row gives its free space to the names", () 
       classesWhere(html, (tk) => tk.includes("grid") && tk.some((c) => c.startsWith("grid-cols-[")), "row grid"),
     ).map((tr, i) => (i === 1 || i === 3 ? { kind: "fr" } : tr));
     const fit = fitRow(html, themePx("breakpoint-lg"), "North Harbour Rovers", "West", halves);
-    expect(fit.homeCut).toBe(true);
+    expect(fit.homeWraps, "the name does not fit its half").toBe(true);
     expect(fit.unused).toBeGreaterThan(100);
+  });
+
+  it("OWNER RULING A — at 1280 the public row's final between two unplayed semi-finals wraps to its second line instead of being cut", async () => {
+    const [, feeders] = await pairs();
+    const [home, away] = feeders!;
+    const html = board(fixtures(home, away, true));
+    expect(linesOf(html, home), "the name span's line allowance").toBe(2);
+    const fit = fitRow(html, 1280, home, away);
+    // The row is genuinely full at 1280 (the free space is inside the fixed
+    // round and status columns), so the names DO need a second line...
+    expect({ wraps: fit.homeWraps && fit.awayWraps, unused: fit.unused }).toEqual({ wraps: true, unused: 0 });
+    // ...and with that second line nothing is cut. Priced at one line — what
+    // `truncate` gave — both names would be.
+    expect({ homeCut: fit.homeCut, awayCut: fit.awayCut }, "cut with two lines").toEqual({ homeCut: false, awayCut: false });
+    const oneLine = fitRow(html.replace(/line-clamp-2/g, "truncate"), 1280, home, away);
+    expect({ homeCut: oneLine.homeCut, awayCut: oneLine.awayCut }, "cut with one line").toEqual({ homeCut: true, awayCut: true });
+
+    // The organiser board's own row carries a round CODE in a 4rem column
+    // instead of a 9rem round name, and those 80px are enough: the same final
+    // needs no second line there. So the wrap above is this row's shortfall,
+    // not the names being long in themselves.
+    const organiser = fitRow(board(fixtures(home, away, false)), 1280, home, away);
+    expect({ wraps: organiser.homeWraps || organiser.awayWraps, cut: organiser.homeCut || organiser.awayCut }).toEqual({ wraps: false, cut: false });
+  });
+
+  it("OWNER RULING A — the second line holds the feeder final in EVERY locale, not just the English the row failed on", async () => {
+    const needsTwo: string[] = [];
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const [ui, pub] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
+      const round = t(ui, "bracket.round.semi");
+      const feeder = (seq: number) => t(pub, "knockout.feederWinner", { round, seq });
+      expect(feeder(1).startsWith("knockout."), `${locale} resolves the feeder key`).toBe(false);
+      const [home, away] = [feeder(1), feeder(2)];
+      const html = board(fixtures(home, away, true), locale);
+      const fit = fitRow(html, 1280, home, away, undefined, locale);
+      expect({ locale, cut: fit.homeCut || fit.awayCut }).toEqual({ locale, cut: false });
+      if (fit.homeWraps || fit.awayWraps) needsTwo.push(locale);
+    }
+    // Dutch is the longest of the four and English is the one the capture
+    // harness caught: if neither needs the second line, this sweep has stopped
+    // pricing the row that failed.
+    expect(needsTwo, "locales whose feeder final needs the second line").toEqual(expect.arrayContaining(["en", "nl"]));
   });
 
   it("from 2xl the slide widens, so the final between two unplayed semi-finals, and two 43-character names, fit at 1920 and 2560", async () => {
@@ -283,7 +362,9 @@ describe("K-2: the kiosk's Coming up row gives its free space to the names", () 
       const html = board(fixtures(home, away, true));
       for (const vw of [1920, 2560]) {
         const fit = fitRow(html, vw, home, away);
-        expect({ vw, home, homeCut: fit.homeCut, awayCut: fit.awayCut }).toEqual({ vw, home, homeCut: false, awayCut: false });
+        // On one line each: at these widths the row has the room, so the second
+        // line the 1280 row needs is never reached.
+        expect({ vw, home, cut: fit.homeCut || fit.awayCut, wrapped: fit.homeWraps || fit.awayWraps }).toEqual({ vw, home, cut: false, wrapped: false });
       }
     }
   });
