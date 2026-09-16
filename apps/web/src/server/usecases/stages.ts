@@ -53,7 +53,12 @@ import { resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+// Swiss Playoff's round budget. Client-safe on purpose — the format
+// catalogue (config/format-gallery.tsx, components/v2/format-templates.ts)
+// reads the SAME table, so what the picker promises and what this generator
+// produces cannot drift.
+import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
 import { personalPointsLeaderboard } from "./americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages, ProgressionInput } from "@/server/api-v1/schemas";
@@ -679,6 +684,20 @@ const DECIDED = new Set(["decided", "finalized", "forfeited"]);
 
 // Swiss next round (spec 05 §2.2): score groups from prior outcomes (win 1,
 // draw/tie ½, bye 1), history from persisted fixtures, then pairRound.
+//
+// Swiss Playoff (`config.pairing: "rank_adjacent"`) changes two things and
+// nothing else — an omitted `pairing` leaves every byte of the behaviour
+// below as it was, because the live fold-pairing stages must not move:
+//
+//  1. `SwissStanding.rank` stops being the entrant's SEED and becomes the
+//     division's real finishing position, from the same fold + tiebreaker
+//     cascade the standings tab renders (`rankedStageStandings`). The score
+//     GROUPS are still the Swiss score (win 1, draw ½, bye 1) — equals still
+//     meet, as Swiss requires; the cascade decides the order WITHIN a group,
+//     which is exactly what `rank_adjacent` pairs on. Seed order and cascade
+//     order are the same thing only before a ball is struck.
+//  2. A stage that declares no `rounds` gets the field's own round budget
+//     (`swissRoundsForFieldSize`) instead of generating forever.
 async function swissGen(
   tx: Tx,
   stageId: string,
@@ -686,7 +705,16 @@ async function swissGen(
   entrants: ActiveEntrant[],
   existing: { ext_key: string | null; round_no: number; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown }[],
 ): Promise<GenFixture[]> {
-  const rounds = typeof cfg.rounds === "number" ? cfg.rounds : null;
+  // Anything but the literal opt-in is the historical fold — never a
+  // truthiness test, so a stray `pairing: "folded"` cannot silently switch a
+  // live event onto a different pairing model.
+  const rankAdjacent = cfg.pairing === "rank_adjacent";
+  const rounds =
+    typeof cfg.rounds === "number"
+      ? cfg.rounds
+      : rankAdjacent
+        ? swissRoundsForFieldSize(entrants.length)
+        : null;
   const maxRound = existing.reduce((m, f) => Math.max(m, f.round_no), 0);
   if (rounds !== null && maxRound >= rounds) return [];
   const pending = existing.some((f) => !DECIDED.has(f.status));
@@ -739,12 +767,29 @@ async function swissGen(
     }
   }
 
+  // Swiss Playoff's pairing rank: the division's REAL standings position.
+  // Round 1 has no decided fixture to rank on, so `rankedStageStandings`
+  // comes back empty and the seed fallback below carries the opening board —
+  // which is what a Swiss round 1 is. An entrant the table does not know
+  // (reinstated mid-stage, never yet placed on a board) keeps its seed too,
+  // offset past the ranked block so it sorts after everyone who has played.
+  const cascadeRank = new Map<string, number>();
+  if (rankAdjacent && existing.length > 0) {
+    const rows = await rankedStageStandings(tx, stageId);
+    for (const [i, row] of rows.entries()) {
+      cascadeRank.set(row.entrantId, row.rank ?? i + 1);
+    }
+  }
   const standings: SwissStanding[] = entrants.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
-    rank: e.seed ?? 1000 + i,
+    rank: cascadeRank.get(e.id) ?? (cascadeRank.size > 0 ? cascadeRank.size + 1 + i : (e.seed ?? 1000 + i)),
   }));
-  const round = pairRound(standings, { played, colours, byes }, { chess: cfg.chess === true });
+  const round = pairRound(
+    standings,
+    { played, colours, byes },
+    { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+  );
   const roundNo = maxRound + 1;
   const fixtures: GenFixture[] = round.pairings.map((p, i) => ({
     extKey: `sw-r${roundNo}-b${i + 1}`,
