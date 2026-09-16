@@ -28,11 +28,11 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Task 3 REVIEW — implementer done, committed `4a11c1b4a` (ports.ts, fakes.ts, fakes.test.ts; 15/15, 53/53 mutants); reviewer writes `task-3-review.md` (range baeb4c99e..4a11c1b4a). **OWNER HOLD (2026-09-17, "wait after this review"): when the review returns, record it and STOP — no fix round, no Task 4 — until the owner says go.** Fix round, if any, RESUMES the Task 3 implementer. If lost: read the review file; re-dispatch if missing. Verification note: judge vitest by EXIT code as well as JSON (an unhandled rejection exits 1 with JSON success:true).
+**In flight at time of writing:** NOTHING — OWNER HOLD (2026-09-17, "wait after this review"). Task 3 COMPLETE (`4a11c1b4a`, review approved 0 Critical/0 Important; 9 minors + G3/G4/G5 queued for the lane-A close sweep; carries m4/G1/G2 → Task 4, G1 → Task 5, hostname-reject + G6 → Task 10 — all in the ledger). On the owner's "go": dispatch Task 4 (task-brief 4 + carries). Verification rule: judge vitest by EXIT code AND JSON.
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
-2. Lane A: Tasks 3 → 4 → 5A → 5 → 6 (sequential dispatch) → Task 7 Step 0c V408 amend pulled forward (recreate seazn_rly + seazn_rly_t1) → lane-A reviewer → orchestrator full gate (JSON vs floor 17856) → ask owner, push + PR lane A → update this block → owner opens a new session for lane B.
+2. Lane A: Task 3 DONE → 4 → 5A → 5 → 6 (sequential dispatch) → Task 7 Step 0c V408 amend pulled forward (recreate seazn_rly + seazn_rly_t1) → lane-A reviewer → orchestrator full gate (JSON vs floor 17856) → ask owner, push + PR lane A → update this block → owner opens a new session for lane B.
 3. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
 4. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
 
