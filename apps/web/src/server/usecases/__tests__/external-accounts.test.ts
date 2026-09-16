@@ -82,4 +82,45 @@ describe.skipIf(!HAS_DB)("external-accounts", () => {
     });
     expect(await personHasLichessLink(orgId, personId)).toBe(true);
   });
+
+  // Fix round 1 (review): V405's SECOND unique constraint,
+  // (provider, external_user_id) — a Lichess account can only ever be linked
+  // to ONE Seazn user. Without a typed catch this surfaced as a raw,
+  // uncaught 23505 (constraint user_external_accounts_provider_external_user_id_key).
+  it("rejects linking an already-claimed Lichess account to a different user, and leaves the first link unchanged", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: userA }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`lichess-a-${suffix}@test.local`}, 'User A', true) returning id`;
+    const [{ id: userB }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`lichess-b-${suffix}@test.local`}, 'User B', true) returning id`;
+
+    await upsertLichessLink(userA, { externalUserId: `shared-${suffix}`, username: "Shared" });
+
+    await expect(
+      upsertLichessLink(userB, { externalUserId: `shared-${suffix}`, username: "Stolen" }),
+    ).rejects.toMatchObject({ code: "LICHESS_ALREADY_LINKED" });
+
+    // First link untouched by the rejected attempt.
+    expect(await getLinkedAccount(userA, "lichess")).toMatchObject({
+      externalUserId: `shared-${suffix}`,
+      username: "Shared",
+    });
+    expect(await getLinkedAccount(userB, "lichess")).toBeNull();
+  });
+
+  it("re-linking the SAME Lichess account to the SAME user stays idempotent", async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified)
+      values (${`lichess-idem-${suffix}@test.local`}, 'Idem User', true) returning id`;
+
+    await upsertLichessLink(userId, { externalUserId: `same-${suffix}`, username: "Same" });
+    await expect(
+      upsertLichessLink(userId, { externalUserId: `same-${suffix}`, username: "SameRenamed" }),
+    ).resolves.toBeUndefined();
+
+    expect((await getLinkedAccount(userId, "lichess"))?.username).toBe("SameRenamed");
+  });
 });

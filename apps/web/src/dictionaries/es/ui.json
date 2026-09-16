@@ -942,6 +942,7 @@
   "settings.account.lichess.flash.token": "Lichess no aceptó el enlace. Inténtalo de nuevo.",
   "settings.account.lichess.flash.account": "No se pudo leer tu perfil de Lichess. Inténtalo de nuevo.",
   "settings.account.lichess.flash.not_configured": "La vinculación con Lichess aún no está configurada en este servidor.",
+  "settings.account.lichess.flash.already_linked": "Esa cuenta de Lichess ya está vinculada a otra cuenta de Seazn.",
   "settings.account.export": "Exporta tus datos",
   "settings.account.downloadJson": "Descargar JSON",
   "settings.account.exportDesc": "Descarga una copia de tu perfil, organizaciones y torneos.",

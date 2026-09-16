@@ -6,6 +6,10 @@ import "server-only";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 
+/** V405's second unique constraint — a Lichess account can only ever be
+ *  linked to ONE Seazn user. */
+const ALREADY_LINKED_CONSTRAINT = "user_external_accounts_provider_external_user_id_key";
+
 export type ExternalAccountProvider = "lichess";
 
 export type LinkedAccount = {
@@ -35,20 +39,40 @@ export async function getLinkedAccount(
   };
 }
 
+/** Upsert on `(user_id, provider)` — one Lichess row per Seazn user,
+ *  idempotent for the SAME user re-linking the SAME (or a different)
+ *  account. V405 also has a second unique constraint, `(provider,
+ *  external_user_id)`: a given Lichess account can only ever be linked to
+ *  ONE Seazn user. Re-linking the same user to the same account never trips
+ *  it (the row already holds those exact values), but a different user
+ *  claiming an already-linked account does — caught here and surfaced as a
+ *  typed 409 rather than a raw, uncaught 23505. */
 export async function upsertLichessLink(
   userId: string,
   row: { externalUserId: string; username: string },
 ): Promise<void> {
-  await sql`
-    insert into user_external_accounts (
-      user_id, provider, external_user_id, username, updated_at
-    ) values (
-      ${userId}, 'lichess', ${row.externalUserId}, ${row.username}, now()
-    )
-    on conflict (user_id, provider) do update set
-      external_user_id = excluded.external_user_id,
-      username = excluded.username,
-      updated_at = now()`;
+  try {
+    await sql`
+      insert into user_external_accounts (
+        user_id, provider, external_user_id, username, updated_at
+      ) values (
+        ${userId}, 'lichess', ${row.externalUserId}, ${row.username}, now()
+      )
+      on conflict (user_id, provider) do update set
+        external_user_id = excluded.external_user_id,
+        username = excluded.username,
+        updated_at = now()`;
+  } catch (err) {
+    const pg = err as { code?: string; constraint_name?: string };
+    if (pg.code === "23505" && pg.constraint_name === ALREADY_LINKED_CONSTRAINT) {
+      throw new HttpError(
+        409,
+        "That Lichess account is already linked to a different Seazn account.",
+        "LICHESS_ALREADY_LINKED",
+      );
+    }
+    throw err;
+  }
 }
 
 export async function unlinkExternalAccount(
