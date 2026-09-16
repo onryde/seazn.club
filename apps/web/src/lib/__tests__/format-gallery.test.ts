@@ -6,7 +6,7 @@
 //     2 courts / 4 hours.
 import { describe, expect, it } from "vitest";
 import { StageKind, ProgressionSchema } from "@/server/api-v1/schemas";
-import { FORMAT_FAMILIES, familyForKind, formatFamily } from "@/config/format-gallery";
+import { FORMAT_FAMILIES, FormatDiagram, familyForKind, formatFamily } from "@/config/format-gallery";
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { recommendFormats } from "@/lib/format-recommend";
 import { helpUrl } from "@/lib/help";
@@ -23,6 +23,18 @@ describe("format gallery enumeration", () => {
       expect(helpUrl(`formats/${f.slug}`)).toBe(`/help/formats/${f.slug}`);
     }
     expect(helpUrl("formats/overview")).toBe("/help/formats");
+  });
+
+  // The scout finding this closes: DIAGRAMS is a slug→SVG lookup and
+  // FormatDiagram renders `null` for a slug it does not know — so a family
+  // added without one ships a blank panel on /help/formats and
+  // /help/formats/<slug> with every other suite green. Nothing enumerated it
+  // before.
+  it("every family has a hand-authored diagram (a missing one renders blank, silently)", () => {
+    const missing = FORMAT_FAMILIES.filter((f) => FormatDiagram({ slug: f.slug }) === null).map(
+      (f) => f.slug,
+    );
+    expect(missing).toEqual([]);
   });
 
   it("every family's canned stage graph runs through the real engine", () => {
@@ -82,6 +94,24 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
       placement: "rank_order",
       timing: "setup",
     });
+  });
+
+  it("swiss_playoff's canned graph is a rank-adjacent swiss feeding rankRange(1,4), setup", () => {
+    const family = formatFamily("swiss_playoff")!;
+    expect(family.cannedStages.map((s) => s.kind)).toEqual(["swiss", "page_playoff"]);
+    // The pairing model is the format. A canned graph that dropped it would
+    // preview (and document) a format the picker does not actually build.
+    expect(family.cannedStages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
+    expect(family.cannedStages[0]!.progression).toBeNull();
+    expect(family.cannedStages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+    // Pro, like the page_playoff family it composes — and the server gate
+    // (usecases/format-gates.ts) already refuses a page_playoff stage without
+    // `formats.double_elim`, so the badge and the enforcement agree.
+    expect(family.pro).toBe(true);
   });
 
   it("every family's cannedStages progression is either null or a schema-valid ProgressionSpec", () => {

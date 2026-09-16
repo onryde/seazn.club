@@ -203,6 +203,24 @@ const DIAGRAMS: Record<string, () => React.ReactNode> = {
       </text>
     </Frame>
   ),
+  swiss_playoff: () => (
+    <Frame height={190}>
+      <Node x={16} y={20} w={128} label="Swiss rounds" sub="paired on the table" />
+      <Arrow x1={146} y1={37} x2={196} y2={37} />
+      <Node x={198} y={20} w={128} label="1v2 · 3v4 · 5v6" sub="neighbours meet" />
+      <Arrow x1={262} y1={56} x2={262} y2={96} label="top 4" />
+      <Node x={16} y={104} w={118} label="Qualifier 1" sub="1st × 2nd" />
+      <Node x={198} y={104} w={118} label="Eliminator" sub="3rd × 4th" />
+      <Arrow x1={134} y1={121} x2={196} y2={121} label="loser" />
+      <Arrow x1={316} y1={130} x2={352} y2={130} label="winner" />
+      <Node x={354} y={104} w={94} label="Qualifier 2" />
+      <Arrow x1={134} y1={112} x2={400} y2={98} label="winner" />
+      <Node x={354} y={60} w={94} label="Final" accent />
+      <text x={16} y={180} className="fill-slate-400 text-[10px]">
+        Nobody is eliminated until the last four; the top two then get a second life.
+      </text>
+    </Frame>
+  ),
   americano: () => (
     <Frame height={160}>
       <Node x={16} y={20} w={130} label="Round 1" sub="A+B vs C+D" />
@@ -318,6 +336,35 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
     pro: true,
     cannedStages: [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
+      { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      } },
+    ],
+  },
+  {
+    // Swiss Playoff — swiss qualifying paired off the LIVE table, then the
+    // same fixed four-team Page playoff the page_playoff family explains.
+    //
+    // `kinds` names both stage kinds this family explains. Both are already
+    // claimed by an earlier family, and `familyForKind` is a `.find()`
+    // first-match with exactly one caller — format-gallery.test.ts's
+    // "every engine stage kind has an explainer family" coverage check — so
+    // this adds a truthful answer without taking `swiss`/`page_playoff` away
+    // from the families that own them. Nothing in production maps kind →
+    // family; the picker maps the other way (division-builder.tsx's
+    // TEMPLATE_FAMILY).
+    //
+    // The canned swiss stage declares no `rounds` for the same reason
+    // format-templates.ts's does: the budget is the field's, derived at
+    // generation. previewDivisionFixtures renders a swiss phase as an
+    // explanatory note anyway — no static draw exists before results.
+    slug: "swiss_playoff",
+    kinds: ["swiss", "page_playoff"],
+    pro: true,
+    cannedStages: [
+      { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
         sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
         placement: "rank_order",

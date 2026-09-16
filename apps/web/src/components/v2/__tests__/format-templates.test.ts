@@ -509,6 +509,52 @@ describe("clampKnob — guards poolCount/qualified before buildTemplateStages (B
 // contract — every template key resolves BOTH keys, in ALL FOUR locales,
 // non-empty, and es/fr/nl are real translations rather than English left in
 // place under a different key.
+// Swiss Playoff — the composite the picker offers: swiss qualifying rounds
+// paired off the live table, then the existing fixed four-team Page playoff.
+// Both halves are EXISTING engine kinds; this adds no stage kind.
+describe("swiss_playoff — the new composite template", () => {
+  const KNOBS = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+
+  it("is a swiss stage feeding a page_playoff over the top four", () => {
+    const stages = buildTemplateStages("swiss_playoff", KNOBS);
+    expect(stages.map((s) => s.kind)).toEqual(["swiss", "page_playoff"]);
+    expect(stages[0]!.progression).toBeNull();
+    expect(stages[1]!.progression).toEqual({
+      sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+      placement: "rank_order",
+      timing: "setup",
+    });
+  });
+
+  it("asks the generator for rank-adjacent pairing — the whole point of the format", () => {
+    const stages = buildTemplateStages("swiss_playoff", KNOBS);
+    expect(stages[0]!.config).toMatchObject({ pairing: "rank_adjacent" });
+  });
+
+  it("declares NO rounds, so the field's own round budget applies", () => {
+    // The knob is the editor for a template's DECLARED rounds. Swiss Playoff
+    // declares none on purpose: the number scales with the field, which only
+    // the generator knows (server/usecases/stages.ts swissGen), so stamping
+    // the knob's 5 here would silently pin every field size to five rounds.
+    const stages = buildTemplateStages("swiss_playoff", { ...KNOBS, swissRounds: 9 });
+    expect(stages[0]!.config).not.toHaveProperty("rounds");
+  });
+
+  it("the plain swiss template still takes its rounds from the knob", () => {
+    // The other half of the rule above: narrowing the override must not stop
+    // the one template that DOES expose a rounds input from honouring it.
+    expect(buildTemplateStages("swiss", { ...KNOBS, swissRounds: 9 })[0]!.config).toMatchObject({
+      rounds: 9,
+    });
+  });
+
+  it("round-trips through detectTemplate without colliding with plain swiss", () => {
+    expect(detectTemplate(buildTemplateStages("swiss_playoff", KNOBS))).toBe("swiss_playoff");
+    expect(detectTemplate(buildTemplateStages("swiss", KNOBS))).toBe("swiss");
+    expect(detectTemplate(buildTemplateStages("group_playoffs", KNOBS))).toBe("group_playoffs");
+  });
+});
+
 describe("F6 — standings carry on progression stages", () => {
   it("applyStandingsCarry with points sets carry on the finals stage only", () => {
     const stages = buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 });

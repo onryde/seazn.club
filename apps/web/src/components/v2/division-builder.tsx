@@ -73,6 +73,7 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   group_stepladder: "stepladder",
   group_playoffs: "page_playoff",
   swiss: "swiss",
+  swiss_playoff: "swiss_playoff",
   knockout: "knockout",
   double_elim: "double_elim",
   triple_rr: "league",

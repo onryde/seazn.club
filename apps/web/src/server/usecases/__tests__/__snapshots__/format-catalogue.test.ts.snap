@@ -98,6 +98,18 @@ exports[`format catalogue — shape regression (F1 Task 5) > every shipped forma
     "stages": "swiss:-",
   },
   {
+    "key": "swiss_playoff",
+    "rounds": [
+      [],
+      [
+        "Qualifier 1",
+        "Qualifier 2",
+        "Final",
+      ],
+    ],
+    "stages": "swiss:->page_playoff:Q",
+  },
+  {
     "key": "knockout",
     "rounds": [
       [

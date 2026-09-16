@@ -187,6 +187,32 @@ export const STAGE_TEMPLATES: {
     ],
   },
   {
+    // Swiss Playoff. Composes two EXISTING stage kinds — no engine change.
+    //
+    // The swiss stage asks for `pairing: "rank_adjacent"` (the engine's
+    // Hammes preset, scheduling/swiss.ts): after each round the standings are
+    // re-ranked by the division's OWN tiebreaker cascade and neighbours meet,
+    // rather than the top half folding onto the bottom half.
+    //
+    // It deliberately declares NO `rounds`: the budget scales with the field
+    // (lib/swiss-rounds.ts) and only the generator knows how many entrants
+    // actually turned up, so `swissGen` derives it. See buildTemplateStages
+    // below for why the rounds knob then leaves this template alone.
+    //
+    // The finals half is byte-for-byte group_playoffs' — the fixed four-team
+    // Page playoff, rankRange(1,4)/rank_order/setup — so the two formats
+    // cannot drift onto different playoff draws.
+    key: "swiss_playoff",
+    build: () => [
+      { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
+      { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      } },
+    ],
+  },
+  {
     key: "knockout",
     build: () => [{ kind: "knockout", name: "Knockout", config: {}, progression: null }],
   },
@@ -285,7 +311,14 @@ export function buildTemplateStages(templateKey: string, knobs: TemplateKnobs): 
   const t = STAGE_TEMPLATES.find((s) => s.key === templateKey) ?? STAGE_TEMPLATES[0]!;
   return t.build(knobs).map((d) => {
     const config = { ...d.config };
-    if (d.kind === "swiss") config.rounds = knobs.swissRounds;
+    // The rounds knob EDITS a template's declared rounds; it does not invent
+    // one. `swiss` declares `rounds: 5` and the builder/Settings tab show an
+    // input for it, so the knob applies there exactly as it always has.
+    // `swiss_playoff` declares none — its budget scales with the field and is
+    // derived at generation time — and stamping the knob's default 5 on it
+    // would silently pin a 40-entrant event to five rounds with no control
+    // anywhere on screen that says so.
+    if (d.kind === "swiss" && "rounds" in d.config) config.rounds = knobs.swissRounds;
     if (d.kind === "league" || d.kind === "group") config.legs = knobs.legs;
     if (d.kind === "group") config.pools = { count: knobs.poolCount };
     return { ...d, config };
@@ -315,6 +348,7 @@ export function detectTemplate(
   if (kinds === "league+stepladder") return "group_stepladder";
   if (kinds === "league+page_playoff") return "group_playoffs";
   if (kinds === "swiss") return "swiss";
+  if (kinds === "swiss+page_playoff") return "swiss_playoff";
   if (kinds === "knockout") return "knockout";
   if (kinds === "double_elim") return "double_elim";
   if (kinds === "knockout+knockout") {
