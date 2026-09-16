@@ -290,8 +290,10 @@ the scheduled-workflow repo.
     That register route was measured `cf-cache-status: DYNAMIC` through
     Cloudflare on 2026-09-14 while the ISR match centre (`revalidate = 30`) is
     cached — the match room must never inherit the match centre's ISR.
-  - **Access:** signed out → `/login?next=<match room>`; signed in but not one
-    of the two players → redirect to the public match centre; player → room.
+  - **Access** (§12.1): a personal email link token, or a signed-in session
+    whose user is one of the two players. Neither → signed out goes to
+    `/login?next=<match room>`; signed in non-player is redirected to the public
+    match centre.
   - **Entry points:** the T−15 email, and a "Playing this match? Open match
     room" link on the public match centre while online play is on and the
     fixture is not finished (same for every viewer, so it stays cacheable).
@@ -306,6 +308,44 @@ the scheduled-workflow repo.
 - **Organiser fixture page `/o/…/f/[no]`:** Lichess status, reason, check-in
   times (already rendered from `fixture_availability`), pre-filled resolve,
   resend email.
+
+### 12.1 Match room access
+
+Who counts as "one of the two players" is decided by either of:
+
+1. **Session.** Logged-in user → `myPersonOnFixture(userId, fixtureId)`
+   (`server/usecases/me.ts`): fixture → rostered home/away entrant →
+   `entrant_members` → `persons.user_id`. Used when a player arrives from the
+   public match centre link.
+2. **Email link token** (`/play?t=…`), so a player not signed in on that device
+   checks in with one tap. Stateless HS256 JWT signed with `AUTH_SECRET`, the
+   same pattern as the venue QR (`server/usecases/checkin-token.ts`):
+
+   | Claim | Value |
+   |---|---|
+   | header `typ` | `seazn-match-room` — distinct from session and QR tokens |
+   | `fid` | fixture id |
+   | `pid` | that player's person id (White and Black get different links) |
+   | `sat` | fixture `scheduled_at` at send time; a reschedule invalidates it |
+   | `exp` | `scheduled_at + 24h` (owner decision 2026-09-16) |
+
+Rules:
+
+- The token identifies the player; it never widens what they can do. Check-in
+  and the Play link are gated by the server window (T−10 → T+20) and by Lichess
+  expiring the challenge at T+20. After the deadline the room shows status,
+  result or the no-show message only.
+- The token grants that one fixture's room for that one person: no account
+  session, no other fixture, nothing written to a signed-in account.
+- If both are present and disagree, the token decides the identity for this
+  room only.
+- A forwarded link cannot play the game (Lichess admits only the two
+  usernames, colour fixed by username); the worst case is a false check-in.
+- GET never writes. Check-in happens only on the button POST (email scanners
+  prefetch links), as with the QR check-in.
+- The Play link is `rel="noreferrer"` and the room sends
+  `Referrer-Policy: no-referrer`, so the token never reaches lichess.org.
+- The realtime subscriber JWT is issued per room load and expires at T+20.
 
 All strings in en/es/fr/nl; email interpolations HTML-escaped.
 
@@ -335,7 +375,8 @@ All strings in en/es/fr/nl; email interpolations HTML-escaped.
 
 ## 14. Testing
 
-- **Unit:** clock mapping (Lichess wants seconds — pin against the boardgame
+- **Unit:** match-room token — wrong `typ`, other `pid`, stale `sat`, expired
+  `exp` each refused; a valid token after T+20 cannot check in; clock mapping (Lichess wants seconds — pin against the boardgame
   schema's declared unit); window maths at T−10/T+20 boundaries; check-in
   validity vs reschedule; adapter request body (`users` order = White first,
   `expiresAt`, `rated=false`); PKCE parameters and verifier round-trip; lobby JWT
