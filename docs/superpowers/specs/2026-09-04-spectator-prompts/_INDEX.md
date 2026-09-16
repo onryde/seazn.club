@@ -517,3 +517,631 @@ the LEDGER's order faithfully rendered: the seeder posted half time AFTER the bo
 in `seed-showcase.ts`. It leaves a real question: **the timeline orders by SEQUENCE, not by
 `minute`**, and demo football data carries minutes out of order — so a scorer entering events
 late gets a timeline that disagrees with its own minute labels.
+
+## The match poster — the share button gets a picture (2026-09-12)
+
+Owner: *"whenever I go to each match, the share button should load show the og as a option a
+from artifact and also live or end for the same"*, then *"poster doesn't have any extension"*
+and *"can we have a lime floodlight to match our theme"*.
+
+The board's §poster draws **Option A** at 1080 × 1350 in two variants, upcoming and result,
+and its §match-centre header draws **two** actions, `Poster` then `Share`. Both now exist.
+
+### What was built
+
+- `server/og/match-poster.tsx` — Option A as one layout in two shapes: the fixture's OG card
+  (1200 × 630, what unfurls in a chat) and the downloadable poster (1080 × 1350). The pure
+  `matchPosterModel` decides variant, paint and slots; the renderer paints.
+- **Three fills, not two.** The board draws upcoming and result; reading them side by side they
+  are ONE skeleton with two slots swapped, so the third — **live**, the state a spectator
+  actually shares — is the same skeleton again: chip `● LIVE · 3.1 OV`, the chase line as the
+  hero, the batting side lit and the other held back, the rate line in the foot.
+- `…/fixtures/[fixtureId]/poster.png` (new route) and the fixture's `opengraph-image` (rewritten
+  onto the same model). Both read `getPublicFixture`, so the poster cannot disagree with the
+  page it came from — and inherits that loader's masking rather than re-deciding it (the old OG
+  card ran its own `select youth from divisions` and applied its own rule; one authority now).
+- `components/public-site/poster-button.tsx`, mounted beside `ShareButton`.
+
+### Found by RENDERING, which no unit test could have seen
+
+Every one of these was green in the suite and wrong in the picture.
+
+- **Two colourless sides can derive the SAME tile colour.** `autoColour`'s palette has sixteen
+  entries; Northfield CC and Riverside FC both land on `#b7791f`, so a poster whose entire idea
+  is "two crests in two colours" painted one colour twice, about one pair in sixteen. Now the
+  pair is resolved TOGETHER — the same way `disambiguatedShorts` resolves the two short codes —
+  and only DERIVED paint is stepped, never a colour an organiser chose. **The court card and
+  every other tile on the site have the same latent collision and are NOT fixed here.**
+- **Tile figures rendered outside the tile.** Satori neither shrinks type to fit nor clips:
+  a cricket tile's `48/3 (5.1)` painted straight through the rounded rect. Sized down, and the
+  box clips as a backstop.
+- **The performer boxes overlapped each other.** The board's name-left/figure-right row does not
+  survive real data — `Arjun Mehta` + `20 (14)` + `SR 142.9` ran through the border and over the
+  neighbour's name. Stacked instead. The board's own figures (`34 (21)`) are shorter than the
+  ones the builder actually produces.
+- **The landscape card printed its foot ON TOP of the wordmark.** 630px could not hold the
+  first cut; the `og` scale block is now a stated budget (~594 of 630 at the two-line worst
+  case) and the landscape drops the performer boxes rather than overflow.
+- **A live tennis poster shouted "MAIN DRAW"** in 92px, because the hero fell back to the
+  division name when there was no sentence. A headline slot with nothing to say is now empty.
+- **`t20` and `grand-slam`** — the raw `variant_key` — on the share images and on the match
+  page's own header. `sport_variants.name` has had "T20" and "Grand Slam" in it all along;
+  `data.ts` now reads it, scoped to system rows and the org's own (a bare match on
+  `(sport_key, key)` returns a STRANGER's rename — that guard is mutation-killed).
+
+### Two owner corrections, both real
+
+- **A route path ending in `.png` does not name the download.** The browser prefers
+  `Content-Disposition`, and the saved file arrived with no extension. Both ends now say it,
+  through one authority (`lib/poster-file-name.ts`), and the file is named for the two sides:
+  `seazn-southend-queens-v-canvey-crusaders.png`.
+- **The lime floodlight.** `globals.css`'s own rule, verbatim: *"Lime discipline: hairline, LIVE
+  signals, eyebrow ticks, focus-on-night — never lime text on light."* A share card is a night
+  surface, so both permitted uses apply and no third was invented: the hairline that closes the
+  app's gantry now runs along the top of the card, and LIVE is signalled in lime. Lime is a
+  STATUS colour, never an identity one — it does not come from `theme`, so "this match is on"
+  means the same thing on every club's poster while their own colour paints the crests.
+
+### Closed after the first render pass (owner: "Ok fix")
+
+- **A live poster with no rate line had an empty foot** (tennis). The foot now falls
+  `rateLine ?? setLine ?? metaLine`, where `setLine` is the set-by-set score from the Sets view —
+  SETS only, never periods, because an unlabelled "1–0 · 1–1" could be halves or anything else.
+  Rendered: `6–4 · 4–6 · 2–2`.
+- **No side was held back on a live tennis or football poster**, because the dim rule read
+  `battingIndex`, cricket's field. The loader now resolves `activeIndex` — batting index, else
+  `servingSide()` through the timeline's own reader; period sports stay null (nothing tracks
+  possession). Rendered: the returner's tile dims.
+- **The upcoming poster said its stage twice** — "TOURNAMENT · GROUP STAGE" above a 92px
+  "GROUP STAGE". The chip carries the division alone; no stage means no hero, never the division
+  in both slots.
+
+### Open
+- The board's result variant stacks score over overs; the builder packs them into one
+  `scoreLines` string (`48/3 (5.1)`), so the tile prints one line. The data's shape, not the
+  layout's.
+
+## The public division page — deprecate, but NOT YET (2026-09-13)
+
+Owner, on `/shared/{org}/{comp}/{division}?tab=standings`: *"there is confusion when go to
+division page"*, then *"are we going to deprecate? or move into the hub?"*, then *"if you think we
+can deprecate then we can"*. The recommendation put back was: deprecate **by redirect into the
+hub, not by deletion** — and not until the hub can show what only this page shows.
+
+### Why a redirect and never a delete
+
+The division URL is a **route prefix**, not only a page: `fixtures/[fixtureId]`, `calendar.ics`,
+`present/` and the poster route all live under it. Strip the last segment off a match URL and you
+land on it. Deleting `page.tsx` makes that a 404 for a URL the product hands out constantly. The
+end state is a 308 to `/shared/{org}/{comp}?tab=matches&division={slug}`, mapping the page's old
+`?tab=` (`schedule`→`matches`, `standings`→`table`, `entrants`→`teams`).
+
+### Three premises withdrawn, each found by reading rather than by the scout's map
+
+- **"`?tab=` does nothing on either page."** FALSE. It is honoured on the CLIENT on purpose
+  (`tabs.tsx`, `use-tab-param.ts`): reading `searchParams` on the server would make an ISR route
+  dynamic. The claim came from comparing server HTML, which is identical by design.
+- **"The hub's Matches tab already has a URL-backed division filter."** FALSE — an **inert
+  seam** (AGENTS.md class 1). `MatchesTab` declared `initialDivision`, documented as "a
+  `?division=` deep link", with a full unit suite handing it values; nothing read the parameter
+  and `CompetitionLanding` never passed the prop. **Now wired both ways**: the landing reads it
+  (`useDivisionParam`, same popstate store and null server snapshot as `useTabParam`), the
+  division chips write it back with `replaceState`. The filter chips deliberately do not write
+  `?filter=` — live/upcoming/results is a fact about this minute. Mutant (drop the prop on the
+  Matches arm) killed by `competition-landing.test.tsx`. **Proven in Chromium** against a
+  4-division competition: no param → All, 24 cards from 4 divisions; `?division=same-b` → that
+  chip pressed, 6 cards from it only; tap another chip → URL rewrites; Info and back → choice
+  kept; reload the rewritten URL → same view; tap All → parameter removed; 390px → 0px overflow.
+- **"The hub already subsumes the division page."** FALSE. Only the division page renders:
+  | Only on the division page | Where it has to go before the redirect |
+  |---|---|
+  | Knockout **bracket** (`<Bracket>`; the hub skips `BRACKET_KINDS` at `competition-hub.ts`) | design call — see below |
+  | **Results grid** (`<ResultsMatrix>`) | with the bracket decision |
+  | **Champion banner** — on the hub a winner shows only as a crown in a TABLE row, so a pure knockout's winner shows nowhere | with the bracket decision |
+  | **Squads** on entrant cards (numbers, links to player cards) | Teams tab |
+  | **Suspensions** strip (hardcoded English: "Suspensions", "to serve") | Info tab, 4 locales |
+  | Division **description** prose | Info tab |
+  | Division-level **Present** kiosk button | not needed — the hub already has competition Present in the hero and on Info; the division kiosk URL keeps working |
+
+  A redirect today would remove public knockout brackets outright.
+
+### Sequencing put to the owner
+
+1. Knockout view in the hub — **the one design call**. A: bracket inside the Table tab under each
+   division's tables. **B (recommended): its own Knockout tab**, derived by presence like every
+   other tab, grouped by division — a pure cup has no table, so "Table" is the wrong name for its
+   bracket.
+2. Squads on Teams cards.
+3. Suspensions and division descriptions on Info.
+4. Then the 308, plus: repoint the direct links (hub table `fullHref` and team `href`, match
+   centre Info "Division", player card ×2, poster PDF QR, embed, console G9 "view public", division
+   timetable PDF QR `liveUrlFor`, division kiosk `backHref`), drop division URLs from the sitemap,
+   delete `tabs.tsx` (the division page is its only production caller) and the division OG image,
+   and move the e2e/smoke checks that open this page (`discipline`, `journey-pro`,
+   `journey-community`, `knockout`, `mobile` P6 slot labels, `rs010` entrants masking,
+   `stream-overlay` cookie banner, smoke's suspensions strip — smoke must read the hub JSON, since
+   the Info panel is not in the first-paint HTML). Most `?tab=entrants|standings` hits in e2e are
+   the ORGANISER console via `divisionPath()`, not this page, and are unaffected.
+
+### Also found, not yet acted on
+
+- The division page's empty Standings line ("Standings appear after the first results.") is
+  **hardcoded English** and is gated on `!stages.some(BRACKET_KINDS)`, so a division with a
+  knockout stage and nothing to draw yet shows a blank panel — the rectangle the owner saw.
+- A hub cache bump is owed when the document grows fields: `unstable_cache(["pub-hub-v1", …])`
+  in `competition-hub.ts` would serve an old-shaped document to the page for up to
+  `REVALIDATE_FAST`, and the page does not re-parse it. (`usecases/public.ts`'s JSON cache
+  re-parses hits and self-heals.) Any schema change here also regenerates `openapi/v1*.json` —
+  the hub route's response IS `CompetitionHubDoc`.
+
+## The hub Knockout tab — owner decisions (2026-09-13)
+
+Plan of record: `docs/superpowers/plans/2026-09-13-hub-knockout-tab.md`. Mock:
+https://claude.ai/code/artifact/bd05d9de-88b3-49d6-9be9-93cddfdc7ed5 (real seeded 32-draw names,
+illustrative results).
+
+- **"B"** — knockouts get their own hub tab, not a section of Table.
+- **Option A at every width** — a round rail, then that round's matches as cards. The owner's words
+  on the alternative: *"I still want to draw along with A"*, *"show draw only for Desk or Tablet?"*,
+  *"and hide by default?"* Ruled: the one-sided Draw tree exists only at **≥1024px** (`lg`), behind a
+  **Rounds | Draw** switch that **defaults to Rounds**, kept in the URL as `?view=draw`. 1024 is where
+  hub content is 992px and a 32-draw needs 990; at portrait-tablet widths (768/834) it would scroll.
+- **"What happens if we don't have knockout?"** — no Knockout tab; tabs exist by presence. League,
+  groups, Swiss, americano and ladder stay on Table, exactly as the division page draws them today;
+  groups-then-knockout gets both tabs.
+- **Draw only for regular single elimination in this wave** — the engine's `twoSidedBracket` is the
+  authority on that shape. Double elimination, page playoff and stepladder get the Rounds view only.
+- **The build reuses `MatchCard`**, so a card shows what a Matches card shows (`scoreLines`), not the
+  mock's per-game columns: the hub document carries no set rows. Recorded so the difference from the
+  mock is a decision, not a surprise.
+- **Found by the mock and carried into the build:** a rail opened on its last round left the pressed
+  chip off-screen; the rail scrolls itself to the pressed chip.
+
+### Found while building the Knockout document (2026-09-13) — engine, NOT fixed in this wave
+
+- **One champion rule now.** `bracketChampion` (`server/public-site/champion.ts`) follows the
+  engine's rule (latest-round final that is decided / finalized / forfeited, with a winner; "reset
+  owed" read off GF1's result, since `bracket.ts` seats the winners'-bracket champion at home). The
+  Knockout view's `championFixtureId` and `divisionChampion` (division page banner, Table crown) both
+  call it. That moved `divisionChampion` on four shapes, each judged right by review and pinned
+  `CHANGED 2026-09-13` in `champion.test.ts`: a decided final crowns while bronze is unplayed; a
+  stage flagged complete with its final unplayed no longer crowns an earlier round's winner; a
+  bronze match listed before the final no longer takes the crown; an `in_play` final with a winner
+  in its outcome no longer crowns. League/group crowns unchanged.
+- **A double-elimination stage whose grand-final reset is NOT owed can never complete** (reviewer
+  confirmed with `path:line`). `engine-db/competition.ts:517-520` stops treating GF1 as a final
+  because it feeds the reset, so the reset is the only final; nothing in production voids a reset
+  nobody owes (the only voiding code is `packages/engine/src/testkit/simulation.ts:731-738`), so it
+  stays `scheduled`; `isBracketStageComplete` (`stage.ts:134-141`) never passes and `completeStage`
+  (`stages.ts:2383-2384`) does nothing. **Worse:** the organiser's only way out is abandoning the
+  reset, after which `bracketRanks` (`stage.ts:314-319,334-337`) finds no grand final and ranks the
+  unbeaten winners'-bracket champion BELOW every entrant who lost. Owed to its own wave: void the
+  reset when GF1 is won by the home (winners'-bracket) side, and make `bracketRanks` read GF1 when
+  the reset is void. The public Knockout tab already crowns correctly in this case.
+
+### Knockout tab — build status and open fix list (2026-09-13, written before a context compaction)
+
+Built and reviewed clean: Task 1 (document, `d52902106`..`3d43fd0bd`), Task 2 (tab, `5df14f64a`..`61cb2b987`),
+Task 3 (`abad906e6` e2e `apps/web/e2e/hub-knockout.spec.ts` 8/8 twice; `197ddfaf8` smoke suite, 11 pass /
+1 fail — the fail is P1 below). Local env `spectw2` (server :3319, Postgres :54842) serves build `61cb2b987`.
+Capture script (not committed): `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/6262000e-0d12-4731-97e2-7a60369846eb/scratchpad/t3/capture.cjs`
+(+ `capture.sh`, shots in `t3/shots/`) — 22 cells, every state asserted before its picture, all asserted OK.
+
+Per-screen verdicts on the captures looked at so far (controller, by eye):
+- `mid-event-32-390` — pass layout; opens on the live Round of 16 (live rung works), pressed chip visible. D1.
+- `draw-complete-16-1280` — pass; champion banner, Third place chip before Final, opens on Final. D1.
+- `draw-tapped-16-1280` — pass; tree correct, winners bold, third place under the final, long name truncates.
+- `multi-all-1280` — pass with C2 and D1; each division opens on its own first unfinished round.
+- `non-drawable-1280` — pass with C1; double elim has no switch, opens on Winners' final.
+- `walkover-final-320` — FAIL P2 (card prints `matchCentre.status.forfeited`); banner reads "Won the Final by walkover against Arjun Mehta" correctly.
+- Earlier unscored 32-draw at 320/390/768/1024/1280 + draw 768/1024/1280 — pass layout; D1, D2.
+Remaining shots, looked at after the compaction:
+- `mid-event-32-320` — pass; round rail swipes, the pressed live Round of 16 is in view, "next" lines wrap cleanly. D1.
+- `mid-event-32-768` — pass; all five round chips on one row, two-column cards. D1.
+- `mid-event-32-1024`, `mid-event-32-1280` — pass with C2 (one division, so no chip rail: the Rounds|Draw
+  switch sits alone on its own row, a ~70px band between the tab bar and the division heading). D1.
+- `tree-32-1024` — pass with D2; the 32-draw tree fits (final column ends ~984px inside 1008), the live Round
+  of 16 node is outlined, a long name truncates; the italic "Winner of R3·1" placeholders are D2.
+- `draw-complete-16-320` — pass; opens on Final with the rail scrolled so Final is in view (the Semi-finals
+  chip peeks at the left edge — a swipe rail, not clipping). D1.
+- `draw-complete-16-768` — pass; no switch below lg. D1.
+- `draw-link-768` — pass; `?view=draw` below lg renders the Rounds page, identical to `draw-complete-16-768` by design.
+- `draw-tapped-16-1024` — pass; 16-draw tree under the champion banner, third place below the final.
+- `multi-all-320` — pass; division chip rail swipes, each division under its own heading, each opens on its own
+  first unfinished round. D1.
+- `multi-one-320` — pass; Girls U14 only. D1.
+- `multi-one-1280` — pass with C2 (division chips and switch on two rows). D1.
+- `non-drawable-320` — pass with D1, which is worse here: the caption "DOUBLE ELIMINATION · WINNERS' FI…"
+  truncates beside TIME TBD.
+- `walkover-final-1280` — FAIL P2 (same raw key as 320; banner correct).
+- `league-only-320`, `league-only-1280` — pass; a league gets no Knockout tab (Overview, Matches, Table, Teams,
+  Info). Observation O1, NOT this wave: that league's Overview shows only "From 31 December 2030" above an empty
+  page — a thin pre-start Overview, to put to the owner separately.
+
+Open fix list (one fix round, then rebuild, recapture ALL cells, look at every one, publish the contact sheet
+with verdicts for owner sign-off; then a final whole-branch review):
+- **P1 (important, pre-existing, reds the smoke champion check)** — the hub JSON serves the old result for
+  ~30s after a score. The pre-compaction lead ("`"max"` is the cause") was HALF right. Root cause, PROVEN by a
+  read-only investigation (evidence and Next 16.2.9 source lines in scratchpad `t3/p1-rootcause.md`):
+  - `usecases/scoring.ts:147` runs `void invalidatePublicCache(...)`. That function awaits a select and three
+    Redis sweeps, THEN calls `fireDivisionRevalidate`. By then Next has already flushed the request's pending
+    revalidations (`app-route/module.js:494`); a later `revalidateTag` is dropped silently — no throw, 0 cache
+    calls (reproduced by running Next's own flush in node). Reads at +1/+3/+5s stale; fresh when the ENTRY aged
+    out (31.4s after its first read, 18.3s after the score). `event-import.ts:472` has the same `void`.
+  - Killed: "max" ignored by `unstable_cache` (an in-request "max" gave one stale read at +0.3s, fresh at +1.5s —
+    SWR as documented); a tag mismatch (the fired tags do cover the hub's match data); a route/Redis layer locally
+    (no `x-nextjs-cache`, `generatedAt` moves per read, `REDIS_URL` unset).
+  - Same timeline on the competition page, the division page and the hub JSON (all fresh together at +33.4s).
+    The competition page re-reads the hub JSON (15s live / 60s idle poll, none while realtime is subscribed);
+    the division page has no live path (grep, not run) — reload only.
+  - From the code, not run: in prod the late Redis delete does land, the next hub read rebuilds through the
+    unrevalidated division cache and re-caches that stale doc for 15s (worst case ~45s); a multi-machine peer
+    broadcast gets SWR while the writing machine drops the tag.
+  - **Rulings (controller, 2026-09-14):** ship BOTH parts. Part 1 — await the invalidation, fire the tag right after
+    the select, keep the Redis sweeps non-blocking and after the tag. Part 2 — a score-only `fireScoreRevalidate`:
+    division tag `{ expire: 0 }`, competition tag `"max"`. Part 1 alone leaves one stale read per score, which
+    measurably keeps the smoke check red and would leave a realtime-triggered refresh on the old result;
+    `{ expire: 0 }` has precedent in `fireOrgRevalidate`. Cost accepted: the next reader after a score rebuilds.
+    The 25 other `fireDivisionRevalidate` callers keep "max" this round. New DB-backed test through Next's real
+    flush; `scoring-deferred.test.ts` currently polls `vi.waitFor` for the late call — it froze the defect
+    (class 4) and must assert the invalidation is done when `scoreEvent` resolves. Brief: `t3/p1-fix-brief.md`.
+  - **P1b (open, NOT this round, unproven):** the competition shell is `unstable_cache`d on the org tag only, so
+    `divisions[].status` and the live-now list may still lag up to 30s after a match starts or ends. Measure it
+    with the post-fix diag before deciding.
+- **P2 (pre-existing)** — `lib/hub-dict.ts` `HUB_DICT_PREFIXES` lacks the `matchCentre.status.*` keys the hub
+  `MatchCard` prints, so a forfeited match shows the raw key on Matches and Knockout. Add exactly those keys
+  (not the whole `matchCentre.` prefix — the slice exists to keep the page small) and keep `hub-dict.test.tsx` honest.
+- **D1 (minor)** — Knockout cards repeat "STAGE · ROUND" under the stage caption and pressed chip. `MatchCard`
+  gets `showRound` (default true); the Knockout rounds list passes false.
+- **D2 (important — the approved mock)** — unfilled slots print the engine's "Winner of R1·1" in tree nodes and
+  later-round cards. On drawable views a pending side whose feeder (previous round, index 2i / 2i+1) is
+  undecided with both sides known reads `knockout.pendingPair` "{a} / {b}" (4 locales); otherwise the slot label.
+- **C1 (cosmetic)** — at 1280 the double-elim round rail cuts its last chip mid-word with no way to scroll with
+  a mouse. Rails wrap from `lg` (`hub-chip.tsx` rail), phones keep the swipe rail; check the Matches rails too.
+- **C2 (cosmetic)** — at `lg` the Rounds|Draw switch never shares a row: with two divisions it sits under the
+  division chips, with one division it sits alone above the heading. One toolbar row at `lg`: division chips on
+  the left when there is a rail, otherwise the single division's heading; the switch on the right.
+Also owed (separate wave, owner told): double-elim unowed reset never voided / `bracketRanks` ranking.
+
+### Knockout tab — fix round 1 (2026-09-14)
+
+Committed, implementer → controller-checked counts; task review and post-fix gates in progress when written.
+- UI (`34edeb70b` P2, `ecfc6e0b6` D1 MatchCard `showRound`, `b58c3fd8d` C1, `03ba3d914` D2 + D1 caller + C2,
+  `8d0f5db1b` e2e). Unit 970/970 over 39 files, 0 pending, paths confirmed in this worktree (controller read the
+  JSON); tsc 0; 21 mutants all killed — M4 (the "slot already filled" gate) first SURVIVED because every fixture's
+  filled slot had a decided feeder; killed by a corrected-result case (a reopened feeder while its winner still
+  sits in the next slot).
+- Decisions the implementer made, accepted pending review: P2 adds the six called-off status keys by exact key,
+  not the `matchCentre.` prefix. D2's feeder rule (fixture j fed by 2j and 2j+1) checked against 46 slots of two
+  real hub documents, 0 mismatches. **Third place before the semis finish reads a new key
+  `knockout.pendingLoser` "Loser of {a} v {b}"** (4 locales) — a bare "{a} / {b}" there would repeat the final's
+  slot text for the same semi. C2: the old test pinning the switch as a direct child of the root was replaced by
+  structure tests. The e2e double-elim seed grew to 8 entrants so its rail cannot fit one row at 1280.
+- P1 (`168a3ca9e`): both parts per the ruling above; the scoring and import call sites await the invalidation;
+  selects merged (one query fewer per score). Deviations accepted pending review: a logging `.catch` on the awaited
+  call (a failed lookup must not 500 a saved score); `fireScoreRevalidate` fires the competition `"max"` BEFORE the
+  division `{ expire: 0 }` because the tag manifest is last-write-wins inside a request (implementer's reading,
+  reviewer verifying). 33/33 touched, 546/546 across 47 importing files, tsc 0, 8 mutants killed.
+- **P1c (open, found by the P1 implementer, NOT this round):** `void fireStageRevalidate` at `stages.ts:1152`,
+  `:1534`, `:2395` (`completeStage`, reachable from `scoreEvent`) and `:3248` drops its tag the same way. A score
+  that completes a stage is covered by the score's own division expiry; console-driven stage writes are not.
+- **P1 concern, open:** in `event-import.ts` the invalidation now runs last inside its try, so an earlier throw
+  skips it (reviewer judging against the old order).
+
+Post-fix gates (controller, `spectw2` rebuilt at `168a3ca9e`, sequential, logs in scratchpad `t3/`):
+- e2e `hub-knockout.spec.ts` whole file, twice: 11 expected / 0 unexpected / 0 flaky / 0 skipped, both runs.
+- Smoke (hub knockout suite, isolated): 12 passed incl. **"after the final is scored, `championFixtureId` equals
+  the final's id" — red before P1, green now**; the 1 fail is `cleanup … keeps the staff audit trail`, which fails
+  whenever the suite runs isolated (it needs the full run's audit rows).
+- Freshness, through the real producer and consumer: `diag-p1-ab` A fresh at score+1.0s (was stale to +31s), B
+  fresh on its first poll (score+0.0s); `diag-p1-c` competition page, division page and hub JSON all fresh at
+  score+0.1s (were all stale to +33.4s); `diag-refresh` fresh at t+0.0s (was +32.3s).
+- Capture: 23 cells (new: `pending-pair-cards-390`), all script checks OK incl. the new ones (no raw key, no card
+  caption, no clipped chip at lg, switch row, feeder pairs).
+- Controller's per-screen verdicts (in `t3/verdicts.json`): 21 pass, 1 note, 1 FAIL.
+  - **D3 (FAIL, `pending-pair-cards-390`):** a waiting pair's card side gets a coloured crest with initials computed
+    from the pair string — PN, YK, SA, MO — so it reads as one player. Suspected also for engine slot-label sides
+    ("Winner of R3·2" → "WR"); a Semi-finals cell is added to the capture to see it.
+  - **D4 (note, `tree-32-1024`):** the pair truncates in a 184px Draw node ("Zara Ahmed / Mateo Alva…"). Ruling:
+    keep full names and the truncation (surname parsing breaks "van der Berg", "Mei Lin Chen"), add a native `title`
+    with the full text — the Draw exists only at ≥1024 where hover exists.
+  - Brief for round 2: `t3/fix-round-2-brief.md`; dispatched after the round-1 task review so its findings ride along.
+
+Task review of round 1 + P1 (`ef425fded..168a3ca9e`, full text in scratchpad `t3/fix-round-review.md`): **Needs
+fixes** — 0 critical, 2 important, 3 minor. Both P1 deviations judged sound (the last-write-wins manifest reading was
+confirmed in Next's source); P1c not made worse. Controller rulings:
+- **F1 (important) → folded into D3.** The pending pair renders full-ink with a coloured initials crest; the
+  owner-approved mock shows a waiting slot MUTED with a "?" crest. D3 alone would have fixed the crest and left the
+  name reading as a real player. Every non-entrant side (pair, loser sentence, engine slot label) gets both.
+- **F2 (important, production-only) → fix.** The realtime push that makes a spectator refetch is sent before the
+  Redis hub-key sweep finishes; with Redis in front of the hub JSON the one refetch can read the stale copy, and
+  polling is off while subscribed. Ruling: a push whose receivers read Redis-cached public documents goes out only
+  after the sweeps settle, without blocking the scoring response. **Cannot be observed locally** (no `REDIS_URL`) —
+  unit-proven only; the cost if wrong is the P1 symptom returning in production only.
+- **F3 (minor) → fix; amends P1 ruling 2.** The import's invalidation moved inside its try, so a throwing post-commit
+  hook skips it. It runs whether or not the hooks throw (still awaited in the request); the error still propagates.
+  Closes the "P1 concern, open" above.
+- **F4 (minor) → fix.** The voided Redis sweeps get a logging `.catch`.
+- **F5 (owner question) → controller's product call, a change FROM the approved mock, shown on the sign-off sheet.**
+  Doubles entrants are already named "A / B" (`stages.ts:519`), so the pair copy "{a} / {b}" would print "Ana Lee /
+  Bo Kim / Cy Po / Di Wu". `knockout.pendingPair` becomes "{a} or {b}" (es "o", fr "ou", nl "of"). Cost if the owner
+  prefers the slash: a four-string revert.
+- **D4 → a check.** The reviewer found `title={side.name}` already on the Draw slot; round 2 confirms it carries the
+  displayed text for pair and loser sides.
+- Round 2 runs as two implementers in parallel on disjoint files (UI: brief `t3/fix-round-2-brief.md`; P1: brief
+  `t3/p1-round-2-brief.md`), then one task review over both, then the controller's gates and a 24-cell capture.
+  Landed: UI `28625c06f` `e8fbebb93` `0d584bd24`, P1 `584f59d7a`; task review running.
+
+### R10 driven in a browser, with PR #782 (realtime key) in view (2026-09-14)
+
+Owner: "check this as we changed the realtime key (#782) and make sure that updates are there without refresh".
+#782 (OPEN, `feat/overlay-end-of-over`) sends every `fixture:{id}` push twice (private + public), mints spectator
+tokens with an ES256 key (`SUPABASE_JWT_PRIVATE_KEY`, present in the local env), adds V403 (a Realtime policy binding a
+private `fixture:{id}` join to the token's claim), and makes the match centre fetch `no-store` and keep a 60s poll while
+subscribed. It does NOT touch `division:{id}` or `publishDivisionUpdate`. It merges into this branch with no textual
+conflict (`git merge-tree` at `8cec86158`).
+
+Measured on `spectw2` (built at `168a3ca9e`) by `t3/live-push.cjs` — an anonymous 390px browser, scores posted through
+the API, websocket frames and every hub response recorded:
+- **Hub Matches tab:** `division:{id}` join `ok`, push ~60–80ms after the score, card moved in ~460ms, no reload.
+- **Hub Knockout tab, a semi-final result: FROZEN.** Push arrived; the one refetch returned a document built before the
+  write (same `generatedAt` as a response 1.4s earlier, later one 50s old); nothing moved in 40s; polling is off while
+  subscribed. **A/B with the browser HTTP cache disabled over CDP: updated in 462ms, every response fresh.** Cause:
+  `fetchCompetitionHub` refetches without `cache: "no-store"` against `public, s-maxage=30, stale-while-revalidate=300`
+  — the exact defect #782 measured and fixed for the match centre only. The hook shipped on main in #760, so
+  **production hub spectators are affected today**. The Matches tab passing was cache timing, not correctness.
+- **Match centre on this branch:** private join replies `JwtSignatureError: Failed to validate JWT signature`; falls
+  back to its 15s poll (updated at ~6.5s). #782 is the fix; re-measure on a merged build.
+- First two runs were harness-invalid and are recorded so nobody re-derives them: `generic.score` alone never puts a
+  fixture in play (`core.start` does), so the hub had nothing live and never subscribed; and a locator on a card not in
+  the selected round waited 30s per read. A page `load` count stayed 0 in every run.
+
+Rulings (brief `t3/r10-hub-brief.md`): **H1** `no-store` on the hub refetch (CDN header unchanged); **H2** keep a 60s
+poll while subscribed; **H3** a push whose refetch returns a document older than the push's `at` retries at 1s then 3s;
+**H4** (the P1 round-2 implementer's latency concern) literal cache keys are deleted with `DEL`, only the division glob
+stays a SCAN, and pushes wait on the `DEL`s only. `live-score-data.ts` / `use-live-fixture.ts` are left to #782 to avoid a
+conflict. Owed after: a merged (#782 + this branch) build re-measured with the same script, hub AND match centre.
+
+Task review of round 2 (`8cec86158..584f59d7a`, `t3/fix-round-2-review.md`): UI commits approved; P1 **Needs fixes** —
+0 critical, 1 important, 5 minor. Contrast checked: muted name 5.21:1, "?" 4.80:1 (AA); the public site has one light
+palette, so the fixed outline colour is not a dark-theme gap. Controller rulings:
+- **I1 (important) → fix, folded into R10.** Pushes now wait on the Redis sweeps with no bound; ioredis sets no command
+  timeout, so a Redis that stops answering without dropping the connection sends NO push at all while every subscriber
+  has stopped polling. The pushes go out when the awaited deletes settle OR after 1500ms, whichever is first. H2's safety
+  poll is the second line; this is the first.
+- **M1 → already covered by H4** (pushes wait on the literal `DEL`s only, never on the `pub:v1:div:*` glob).
+- **M2 → product-owner call (mine, reversible): a bye is not "to be decided".** A bye's empty side keeps the placeholder
+  box but shows no "?" glyph; the "?" stays for pending sides only. Sent back to the round-2 UI implementer.
+- **M3 → fix inline, folded into R10.** `scoreEvent`'s post-commit hooks (`onDecided`/`refreshDiscipline`/`refreshNews`)
+  throwing skips the public invalidation and the pushes for a score that has already committed — the shape F3 fixed in
+  the importer. Same treatment: invalidation and pushes run regardless; the original error still propagates.
+- **M4 → out of wave.** The match centre's court card (`court-card.tsx:221`) still invents initials for a waiting side.
+- M2 landed `27941e5b4`: the tree marks a bye only by the slot label `bracket.slot.bye` on a forfeited fixture's empty
+  side (`stages.ts:1329`) and `hubSides` used to turn it into the name, so a new optional `HubMatch.byeSides` carries
+  it (OpenAPI regenerated, only that field). Bye → `data-crest="empty"`, no glyph; waiting → `data-crest="pending"`
+  "?". A hub document cached before the deploy lacks the field and shows "?" for up to its TTL — accepted, no key bump.
+  Unit 252/252; 9 mutants killed. The bye name keeps round 2's italic + muted (the owner may prefer plain) — on the sheet.
+
+R10 H1–H4 landed: `a61dc7fd6` (no-store, safety poll, push-vs-`generatedAt` retry), `b8da5ecc3` (literal keys `DEL`,
+pushes wait on those only), `8e3305384` + `5155e1057` (e2e: an anonymous Knockout tab shows a posted result within
+`HUB_POLL_MS + 5s`, no `load`). tsc 0; 22/23 mutants killed, the survivor (`finally`→`then` on a promise with its own
+`.catch`) equivalent. **Controller error recorded:** the R10 brief's verify line blanked `DATABASE_URL`, so the six
+DB-backed tests in `score-revalidate-in-request.test.ts` SKIPPED (58 passed, 6 pending) — they are owed against a DB.
+Behaviour sweep found two more cacheable live refetches (`fetchLiveFixture`, `fetchOverlayFixture`); #782 already adds
+`no-store` to both. Follow-up round dispatched: I1, M3, the bye e2e, **C1** (a refetch response never replaces a NEWER
+document — the implementer's own ordering concern: safety poll, H3 retries and a push refetch can overlap) and **C2**
+(DB-backed suites run against `spectw2`, pending 0, their mutants re-run). `schedule.ts` still SCANs the hub key and
+pushes before its sweep — not this round; the hub's H3 retry covers a schedule push.
+**Merged measurement — this branch at `5155e1057` + #782 at `96f39e086` (merge `47ba600d4`, scratch detached worktree,
+production build on :3391 against the spectw2 database), browser cache ON, same `t3/live-push.cjs`:**
+- Hub Matches tab: `division:{id}` join `ok`, push +72ms, card moved +468ms, no reload.
+- **Hub Knockout tab, a semi-final result: push +335ms, page moved +472ms, no reload** (frozen before H1–H4). Every hub
+  response freshly built (`generatedAt` within ~70ms of the response).
+- **Match centre: private `fixture:{id}` join `ok` with #782's ES256 token** (V403's policy is live on the Supabase
+  project), push +485ms, page moved in under a second instead of on its 15s poll, no reload.
+So with #782 merged, all three live surfaces update without refresh by push. The merged tree is not a branch; it was torn
+down after the measurement. Still owed on this branch alone: the post-fix pipeline's `live-push` after the follow-up
+round (I1, M3, C1), which covers the hub; the match centre's push path belongs to #782.
+- **M5 → covered by H2** (the hook header comment is rewritten with the poll change).
+
+## K wave — the kiosk board leaves the org chrome (2026-09-15 → 16)
+
+Commits, in order:
+- `41e16f44d` **k1** — both `/present` boards move into a `(kiosk)` route group with
+  their own bare full-height root layout. New `server/public-site/org-guard.ts`
+  holds ONE copy of the `/shared` org door (`publicOrgOr404`), used by the chrome
+  layout and the kiosk layout alike. New `shared/__tests__/route-inventory.test.ts`
+  walks the app tree on disk and pins the 13-URL page list, so a future move that
+  silently changes a public URL reds.
+- `c376a0dd0` **k2** — name tracks `minmax(0,auto)`, `vs` `max-content`.
+- `0a180a256` **K-2, OWNER RULING A** — a board name too long for its track WRAPS to
+  a second line; it is not cut, and the copy is not shortened. Measured first: at
+  1280 the row is 1152px with tracks `144 | 358.4 | 35.2 | 358.4 | 104`, and the two
+  feeder names need 388px and 393px. The ~85px of apparent slack sits inside the
+  FIXED round (9rem) and status (6.5rem) columns, so no track sizing can hand it to
+  the names. Bracket/ladder/double-elim nodes keep `truncate` — their node height is
+  fixed. Visible cost the owner accepted: `vs` no longer sits on one axis (Q5).
+- `cf1943fbf` **Q4, OWNER RULING A** — no consent banner on either `/present` board.
+  A venue TV has nobody to dismiss it, and below the TV cut-off the banner covered
+  "Open the live page" at 320, the only control on the kiosk card. Nothing is
+  withheld: PostHog inits `opt_out_capturing_by_default` and opts in only on an
+  explicit Accept, so a banner-free page captures nothing. The condition lives in
+  `CookieConsent` (root layout, sibling of `children` — no nested layout can unmount
+  it), matched on the SHAPE of the path so a competition actually slugged "present"
+  keeps its banner.
+- `05b03fc9b` — the stale-slug comment in `[competitionSlug]/page.tsx` rewritten from
+  measurement (see F1 below).
+- `86209f3cb` — `task-6-report.md`, a subagent scratch report, removed from the repo
+  root. It was the only file this branch added there.
+
+### Owner rulings recorded
+- **C1** (2026-09-15): phones get the "made for a TV" card, with "Show the board
+  anyway" showing the board exactly as it is, broken layout included.
+- **K-2 → option A**: wrap, not shorter copy, not accepted truncation.
+- **Q4 → option A**: no banner on any `/present` page.
+- **Q1, Q2, Q3, Q5 → "Ok"**: the slot keeps reading "or"; "Bye" keeps the grey
+  italic; the small grey meta line stays cut on a phone; "vs" stays off the axis.
+  All four are settled, not open questions.
+
+### Visual sign-off
+Contact sheet: https://claude.ai/code/artifact/b56a21da-fcf0-42fa-8991-585fc43750b0
+44 screens (36 capture cells + 8 kiosk), 41 pass / 3 note / 0 fail. The three notes
+are accepted or owned elsewhere: `anyway-390` (the escape hatch shows the board as
+it is, by ruling C1), `tree-32-1024` (D4, open), `overview-waiting-side-320` (Q3,
+accepted). Kiosk screens re-shot after Q4: 8 cells, 0 failed checks, `banner=false`
+on every one, confirmed by eye at 320 and 1280.
+
+### Findings recorded, NOT fixed
+- **F2** — an org-slug rename redirect DROPS THE TAIL:
+  `/shared/<old>/<comp>/present` 308s to `/shared/<new>`, the org hub, not the board.
+  `sharedRenameTarget(orgSlug, compSlug, divSlug)` would preserve them, but
+  `publicOrgOr404` is called from a LAYOUT, which only has its own param. Reading the
+  rest of the path needs `headers()`, which makes these pages dynamic and costs the
+  `revalidate = 30` cache. Pre-existing for the chrome tree; k1 extended it to
+  `/present`, where it is worse — a venue TV on an old URL lands on the org hub with
+  nobody there to navigate back.
+- **F3** — competition-rename asymmetry, measured on FOUR seeded renames:
+  `/shared/<org>/<oldcomp>` 308s to the new slug, `/shared/<org>/<oldcomp>/present`
+  404s, because the board page calls plain `notFound()`. A printed or QR kiosk URL
+  dies on a competition rename while the hub link survives.
+- **ticket.tsx:63** prints `startsOn`/`endsOn` as RAW ISO strings on the public
+  ticket. Not a zone bug; unformatted copy.
+
+### Reviews closed this round (inline, no agents at the time)
+- **k1 review.** One finding fixed: the comment at
+  `shared/[orgSlug]/[competitionSlug]/page.tsx` had priced a stale slug wrongly
+  TWICE — first as "one permanent redirect", then as "both just `notFound()`" with a
+  stale call-site count. k1 falsified the second by routing `/present` through the
+  shared org door. Rewritten from measurement against seeded renames: a stale ORG
+  slug redirects on every `/shared` page including `/present` (308 measured on the
+  competition board, the division board and both chrome pages); a stale COMPETITION
+  slug redirects on the hub and 404s on `/present`. `/register` was NOT measured —
+  the org half covers it by construction, the competition half is untested there.
+- **P8 scoped re-review: APPROVED.** `dc2f7edeb 55cdfa56d 16c776013 45ea64c5c`, all
+  on `server/og/poster-image.ts` and its tests. 17/17 green; six mutants on the four
+  new guards, ALL KILLED (cap 2→999, `sharpHasRoom`→true, in-turn check removed,
+  entry check removed, `poisonReported` short-circuit removed, `VALVE_GRACE_MS`
+  500→0); source restored byte-exact. Verified by reading rather than assumed: a
+  poisoned queue cannot escape as an unhandled rejection (the returned turn is
+  awaited inside a try/catch returning null, and the queue tail carries its own
+  `.catch`); the budget suite counts unsettled ops in the MOCK, so it is an
+  independent witness, not a tautology; `afterEach` asserts `unsettled === 0`.
+  One minor accepted: `__poisonDecodeQueueForTests` is a test-only export in a
+  production module, documented as the only way to reach that path.
+- **review-n1g m-round CLOSED** — m6 (every-minute clock), m2 (`whitespace-pre` /
+  `pre-line` / `nowrap` counted as no-wrap, with `pre-line` correctly treated as
+  WRAPPING) and m3 (no weekday NAME in a round-view heading, per locale via `Intl`)
+  were all already applied in the tree and are tagged with the rulings that owed
+  them; 23/23 green. m1 stays PARKED.
+  **Care: the log holds TWO sets numbered m1/m2/m3/m6.** This is the n1g set. The
+  still-open TZ round is the other one.
+
+### TZ round — re-pinned against the tree; m6 is FIXED, m1/m2/m3 still queued
+Two logged line numbers were stale and one item was REFRAMED; the logged version
+would have produced the wrong fix.
+- **m2 CONFIRMED.** `api-v1/schemas.ts:1729` (logged as 1753) takes
+  `tz: z.string().min(1).max(64).nullish()` — length only, never IANA, while
+  `lib/types.ts:148` and `api/orgs/[id]/route.ts:37` both `.refine(isValidIana)`.
+  `isValidIana` already exists at `lib/tz.ts:15`, so the write-side fix is one
+  refine. The defect is the asymmetry: `resolveVenueTz` VALIDATES, while the loaders
+  mirror only the PRECEDENCE inline as `coalesce(ss.tz, o.timezone, UTC)`
+  (`data.ts:739`, `embed-data.ts:133`). SQL coalesce rescues NULL only, so a stored
+  junk zone flows through the loaders while the match centre degrades to the org
+  zone — one fixture, two times, across pages.
+- **m3 CONFIRMED, narrower than logged.** `public-fixture-venue-tz.test.ts` does
+  cover the division override and a rejected zone, but through `getPublicFixture`.
+  The two loaders carrying the unvalidated coalesce have no such DB test:
+  `competition-hub.test.ts` and `data-standings-timestamp.test.ts` supply `tz` only
+  as a MOCKED row value, and `server/__tests__/embed-data.test.ts` has no zone
+  coverage at all.
+- **m6 CONFIRMED but REFRAMED — pin UTC, do NOT thread the venue zone.**
+  `starts_on`/`ends_on` are pg `date` columns (checked in the DB). A wall-clock DAY
+  has no zone to convert into; the repo already gets this right at
+  `overview-tab.tsx:243-263`. Three live public surfaces passed no zone: the org
+  hub `page.tsx:48`, `opengraph-image.tsx:20`, `poster.pdf/route.ts:67`. DRIVEN:
+  "2026-09-01" renders "31 Aug 2026" under America/New_York and America/Los_Angeles,
+  "1 Sept 2026" under UTC and Pacific/Auckland.
+  **FIXED `6daae8833`.** All three now pass `timeZone: "UTC"`. The poster route KEEPS
+  its own `toLocaleDateString(locale, …)` — `fmtDate` pins `LOCALE = "en-GB"` and
+  takes no locale parameter, so adopting it there would have dropped the org-locale
+  month names that route exists to render. On the org hub the helper is shared with
+  the news strip `publishedAt` (a `timestamptz` instant), so that is pinned to UTC
+  too — deliberate: the route is ISR-cached, one HTML serves every visitor, there is
+  no viewer zone to resolve against, and the alternative is a page whose dates
+  depend on which host filled the cache.
+  **The lesson is the TEST, not the fix.** The obvious test renders the page and
+  compares the printed day — and it CANNOT FAIL IN CI, which runs `ubuntu-latest`
+  with no `TZ`, i.e. UTC, where the zone-less formula produces the correct string.
+  Measured: on this runner (Europe/London) all three day-comparison tests passed
+  against the UNFIXED source; only the mechanism guard reddened. So each file also
+  asserts the MECHANISM — it records the options of every `toLocaleDateString` call
+  the render makes and requires each to carry an explicit UTC zone, which separates
+  the two implementations at ANY runner zone, and it asserts at least one call
+  happened first so deleting the date line cannot pass it. AGENTS #3 with a new
+  face: the guard was not absent, it was inert in the one environment that gates
+  the merge.
+  17/17 across the three files; red-then-green per file (1 of 2, 1 of 2, 1 of 13)
+  with totals unshrunken, so no collection break was read as a survivor.
+- **m1 CONFIRMED and located.** `lib/format.ts:22-31` catches the RangeError and
+  retries in UTC; `format.test.ts:46-49` pins that as
+  `fmtTime("Mars/Phobos", IST_1900) === "13:30"` — a string that reads the same
+  whether the fallback is UTC or the process zone, which is why that mutant lives
+  under CI (`TZ=UTC`) and dies under Tokyo. The case needs to be
+  process-independent.
+m2 and m3 touch `api-v1` schemas and usecases, outside this branch — owner-go work.
+
+### Branch gates
+- Full `apps/web` suite, unsharded, against spectw2: **17730 passed / 0 failed /
+  77 pending, 5023 suites, 0 failed suites, 1306 files.**
+- **`score-revalidate-in-request.test.ts` ran with a real DATABASE_URL and PASSED,
+  11 assertions, 0 pending** — this DISCHARGES the "six DB-backed tests SKIPPED,
+  owed against a DB" item recorded earlier in this index.
+- OpenAPI: regenerated, **zero drift**. i18n parity: **6538 keys, es/fr/nl all in
+  parity with en**; all four locales moved together. `i18n-keys.ts` regenerated,
+  zero drift. Lint: **0 errors**, 145 warnings (pre-existing debt).
+- Removed `task-6-report.md` (see `86209f3cb`).
+
+### Harness hazard worth knowing
+`seazn-env gate` writes its sharded vitest artifacts to the LABEL directory
+(`/private/tmp/seazn-env/<label>/vitest-shard-{1..N}.{json,log}`), not a per-run
+directory, and the summary line it prints carries NO failure body — only the test
+title. So re-running the gate to "see if it reproduces" DESTROYS the evidence of the
+run you were diagnosing. Copy the shard artifacts out first.
+
+### The gate is red, and the red is the machine
+`seazn-env gate` runs turbo lint+typecheck PLUS a 4-way sharded vitest. It reported
+1 failure on the first run and 5 on the second — the second ran HOTTER, not cooler,
+because turbo was fully cached so all four shards started at once.
+**Four of those five carry no assertion body at all** — only vitest s
+`STACK_TRACE_ERROR` placeholder with runner frames — and each landed within 0.3% of
+its exact timeout ceiling (30250 / 30002 / 30101 against a 30s global; help-copy-
+truth at 88430, and 104077 on the first run, against its inline 60s pin). The same
+five tests PASS unsharded against the same database with 3x-7x headroom.
+Cause: load average 38.45 at 15 minutes, and an accumulated spectw2 (14354 orgs,
+10294 subscriptions, 11464 ledger rows) that the unscoped `grantMonthlyForAllWallets()`
+and the weekly-digest sweep walk in full.
+**So: environment, not defect.** The branch verdict rests on the unsharded run —
+17730 passed / 0 failed / 0 failed suites.
+
+Two latent reds this exposed, both pre-existing and NOT fixed here:
+- `help-copy-truth.test.ts` pins a flat `{ timeout: 60_000 }` beside a
+  load-dependent cost. It is the slowest assertion in the suite (25.5s clean), it
+  already failed once at the 30s default, and 60s has now gone too. Derive the
+  budget, or memoise `allAuditedSources()` so its first consumer stops paying the
+  whole walk alone.
+- `credits-monthly-cron.test.ts` "#390 … one statement per wallet, not two" diffs
+  `statementCount()`, which reads a PROCESS-GLOBAL monotonic counter
+  (`lib/db.ts:22`). A neighbour test that timed out kept issuing statements into it,
+  so this test failed with a convincing `expected 31 to be less than or equal to 6`
+  that had nothing to do with its own code. Scope the measurement to a delta.
+
+### Tier-2 branch review — three "removed, did it survive?" questions, all clean
+- `schedule.tsx` still takes `tz` and still formats venue-local (`fmtTime`,
+  `fmtZoneAbbrev`, `dayKey` via `Intl` with `timeZone`); the helpers moved and were
+  exported. Refactor, not regression.
+- `use-tab-param.ts` generalised to `useSearchParam`/`readSearchParam`/
+  `writeSearchParam` over `useSyncExternalStore` + `history.replaceState`, and keeps
+  every original export. No loss.
+- `use-live-competition.ts` keeps the push debounce (`PUSH_DEBOUNCE_MS`, with retry
+  generations) and both poll cadences; a SUBSCRIBED channel now slows to the idle
+  poll instead of stopping, which fixes a freeze after a missed push. Improvement.

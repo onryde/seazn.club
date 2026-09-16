@@ -12,11 +12,13 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { Schedule } from "@/components/public-site/schedule";
+import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
 
@@ -84,16 +86,54 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const orgLocale = toLocale(org.default_locale);
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
+  // N1 fix round 1, M8: a side still waiting on a match names that match's
+  // round as the public hub's rail does ("Winner of Semi-finals, match 1"),
+  // through the same namer the hub, the match centre and the calendar use; any
+  // other label keeps the board's text (`resolveSlotLabel`, inside the namer).
+  const stageKind = new Map(stages.map((s) => [s.id, s.kind]));
+  const dict = await getDictionary(orgLocale, "public");
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict,
+    fixtures,
+    stageKind: (stageId) => stageKind.get(stageId),
+  });
   const slotLabels: Record<string, string> = {};
   for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
   }
+  // N1d d5: the schedule's round view heads each group with the round's NAME,
+  // the hub rail's own label ("Round {n}" in the org's locale only for a
+  // fixture whose stage the namer does not know). N1e e5: every other word it
+  // shows or announces comes from the same org-locale dictionaries, and its
+  // dates are written in the org's locale.
+  const roundLabels = Object.fromEntries(
+    fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
+  );
+  const scheduleCopy = publicScheduleCopy(dict, lookup);
+  // N1e e1: round_no restarts in every stage, so the round view orders its
+  // groups by each stage's seq first.
+  const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
+  // N1f f2: two stages can name a round the same ("Final" in a knockout and in
+  // its plate); the round view heads those groups with the stage as well.
+  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
 
   let body: React.ReactNode;
   if (widget === "schedule") {
     body = (
-      <Schedule fixtures={fixtures} entrantNames={entrantNames} divisionPath={publicPath} tz={tz} slotLabels={slotLabels} />
+      <Schedule
+        fixtures={fixtures}
+        entrantNames={entrantNames}
+        divisionPath={publicPath}
+        tz={tz}
+        slotLabels={slotLabels}
+        roundLabels={roundLabels}
+        stageOrder={stageOrder}
+        stageNames={stageNames}
+        copy={scheduleCopy}
+        locale={orgLocale}
+      />
     );
   } else if (widget === "bracket") {
     const stage = stages.find((s) => BRACKET_KINDS.has(s.kind));
@@ -105,6 +145,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
         entrantLogos={entrantLogos}
         fixtureHref={(fixtureId) => `${publicPath}/fixtures/${fixtureId}`}
         lookup={lookup}
+        slotText={namer.slot}
+        copy={scheduleCopy}
+        tz={tz}
       />
     ) : (
       <p className="p-2 text-sm text-zinc-500">No bracket stage in this division.</p>

@@ -523,13 +523,16 @@ describe("MatchesTab", () => {
     expect(h).toContain(`data-testid="mh-match-u2"`);
   });
 
-  it("chips are 44px tap targets and the rails bleed to the phone edge (R1)", () => {
+  it("chips are 44px tap targets, the rails bleed to the phone edge (R1), and wrap from lg (Knockout fix round C1)", () => {
     const h = render();
     const filters = h.match(/data-testid="mh-filters"[^>]*class="([^"]*)"/)?.[1];
     expect(filters, "the filter rail's class attribute").toBeTruthy();
-    for (const cls of ["overflow-x-auto", "max-md:-mx-4", "max-md:px-4"]) {
+    for (const cls of ["overflow-x-auto", "max-md:-mx-4", "max-md:px-4", "lg:flex-wrap"]) {
       expect(filters!.split(" "), cls).toContain(cls);
     }
+    // Wrapping is for a mouse at lg, which cannot scroll a rail sideways; a
+    // phone keeps the swipe rail, so there is no bare `flex-wrap`.
+    expect(filters!.split(" ")).not.toContain("flex-wrap");
     const chip = h.match(/data-testid="mh-filter-live"[^>]*class="([^"]*)"/)?.[1];
     expect(chip, "the Live chip's class attribute").toBeTruthy();
     expect(chip!.split(" ")).toContain("min-h-11");

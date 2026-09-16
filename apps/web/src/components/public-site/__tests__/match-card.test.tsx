@@ -15,13 +15,18 @@
 // when present and `t(dict, "matchesHub.round", { round })` when it is null
 // — tested as a positive pair below.
 import { describe, expect, it } from "vitest";
-import { autoColour } from "@/components/ui/entity-logo";
+import { autoColour, initials } from "@/components/ui/entity-logo";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { HubMatchT } from "@/server/public-site/competition-hub-schema";
 import type { MatchCentreHeaderT } from "@/server/public-site/match-centre-schema";
 import { MatchCard } from "../matches-hub/match-card";
+import { getDictionary } from "@/lib/i18n";
+import { t as translate } from "@/lib/i18n-runtime";
+import { msg } from "@/lib/messages";
+import { msgFor } from "@/lib/messages-i18n";
+import { publicSlotLabel } from "@/server/public-site/feeder-slot-label";
 
 const dict = en as Dict;
 const NOW = Date.parse("2026-09-05T12:00:00Z");
@@ -84,7 +89,7 @@ function hubMatch(
 function card(
   m: HubMatchT,
   now: number = NOW,
-  opts: { showDivision?: boolean; crestSize?: 24 | 32 } = {},
+  opts: { showDivision?: boolean; crestSize?: 24 | 32; showRound?: boolean } = {},
 ) {
   return renderToStaticMarkup(
     <MatchCard
@@ -94,6 +99,7 @@ function card(
       now={now}
       showDivision={opts.showDivision}
       crestSize={opts.crestSize}
+      showRound={opts.showRound}
     />,
   );
 }
@@ -345,6 +351,32 @@ describe("MatchCard", () => {
     expect(withoutLabel).not.toContain(" · Round 4");
   });
 
+  it("showRound={false} drops the STAGE · ROUND caption and leaves the status slot where it was; the DEFAULT keeps the caption (positive pair)", () => {
+    // Knockout fix round, D1: under the Knockout tab's stage heading and its
+    // pressed round chip, "PLAYOFFS · SEMI-FINAL" on every card said the same
+    // thing a third time — and at 320 it truncated beside the status. The
+    // helper passes the prop straight through, so `card(match)` is the
+    // component's own default, not a value this file chose.
+    const match = hubMatch({ stageName: "Playoffs", roundLabel: "Semi-final", roundNo: 3 });
+    const shown = card(match);
+    const hidden = card(match, NOW, { showRound: false });
+    expect(shown).toContain(">Playoffs · Semi-final<");
+    expect(hidden).not.toContain("Playoffs");
+    expect(hidden).not.toContain("Semi-final");
+    // The fallback arm goes too: no stage and no label is still a caption.
+    const bare = hubMatch({ stageName: "", roundLabel: null, roundNo: 4 });
+    expect(card(bare, NOW, { showRound: false })).not.toMatch(/>Round 4</);
+    // The status slot is untouched: the same right-aligned span, the same
+    // word, in both renders — "stays where it is" pinned as the element, not
+    // just the text somewhere on the card.
+    const statusSlot = (h: string) => h.match(/<span class="ml-auto shrink-0">([^<]*)<\/span>/)?.[1];
+    const tbd = (en as Record<string, string>)["matchesHub.timeTbd"];
+    expect(statusSlot(shown)).toBe(tbd);
+    expect(statusSlot(hidden)).toBe(tbd);
+    // And the division chip still leads the row it shares with the status.
+    expect(hidden).toContain(`data-testid="mh-match-division"`);
+  });
+
   it("the division chip cannot wrap inside its own pill (class assertion — node vitest cannot measure a line box)", () => {
     // `environment: "node"`: this pins the CLASSES, and cannot see geometry.
     // What it defends is that the chip has any white-space control at all —
@@ -378,13 +410,105 @@ describe("MatchCard", () => {
         },
       }),
     );
-    // Mutant (a), Step 7: drop `min-w-0` from the name span — this regex
-    // reds only if it asserts the CLASS itself, not merely the text.
-    expect(h).toMatch(/class="[^"]*min-w-0[^"]*truncate[^"]*"[^>]*title="Winner of SF1"/);
+    // Mutant (a), Step 7: drop `min-w-0` from the name span — token-exact, so
+    // it reds on the CLASS itself, not merely the text. Pinned on the LONG
+    // ENTRANT, the cell this test is named for. It used to be pinned on the TBD
+    // side's span, and since C-2 that side does not truncate at all (it used to
+    // from `md`, which a substring regex went on reading as `truncate`).
+    const cls = h.match(new RegExp(`<span class="([^"]*)" title="${longName}">`))?.[1];
+    expect(cls, "the long entrant's name span").toBeDefined();
+    expect(cls!.split(" ")).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "truncate"]));
     expect(h).toContain(longName);
     expect(h).toContain("Winner of SF1");
     expect(h).not.toContain('title=""');
   });
+
+  it("C-2 / review N2 I1: a side with nobody in it yet WRAPS at every width, with no clipping token under any variant, so two feeder labels sharing a prefix stay tellable apart; a real entrant keeps its ellipsis", () => {
+    // Visual gate, pending-slot-cards-320: two semi-final cards both read
+    // "Winner of Quarter-finals, matc…", so a spectator could not tell which
+    // quarter-final feeds which semi — the one thing that label is for. The
+    // card has the height for a second line. Review N2 I1: truncating again
+    // from md cut the same two labels identically in the Overview's three-up
+    // Next-up grid and its lg split column, so a waiting side wraps at every
+    // width. A real entrant's name is an identifier that can be genuinely too
+    // long, so it keeps `truncate`.
+    //
+    // A class scan, not a measurement (vitest is `environment: "node"`): the
+    // tokens are read as a SET and each is matched with its variant prefix
+    // stripped, so `md:truncate` is caught as surely as `truncate`. That the
+    // label really takes a second line is a browser's to show.
+    const clipping = (tokens: string[]) =>
+      tokens.filter((token) =>
+        /^(truncate|text-ellipsis|text-clip|whitespace-nowrap|text-nowrap|overflow-hidden|line-clamp-\d+)$/.test(token.split(":").at(-1)!),
+      );
+    const LONG = "Oliver Whitcombe-Harrington of the North Harbour Racquets Club";
+    const labels = ["Winner of Quarter-finals, match 2", "Winner of Quarter-finals, match 3"];
+    const side = (entrantId: string, name: string) => ({ entrantId, name, short: "", colour: null, badgeUrl: null });
+    const h = [
+      card(hubMatch({ fixtureId: "s1", header: { sides: [side("e1", LONG), side("", labels[0]!)] } })),
+      card(hubMatch({ fixtureId: "s2", header: { sides: [side("", labels[1]!), side("e2", "Dev")] } })),
+    ].join("");
+    const nameClass = (title: string) => {
+      const found = h.match(new RegExp(`<span class="([^"]*)" title="${title}">${title}</span>`))?.[1];
+      expect(found, `the name span for "${title}", whole`).toBeDefined();
+      return found!.split(" ");
+    };
+    // The premise: both labels are in the markup IN FULL, and they differ.
+    expect(labels[0]).not.toBe(labels[1]);
+    for (const label of labels) {
+      const tokens = nameClass(label);
+      expect(tokens, label).toEqual(expect.arrayContaining(["min-w-0", "flex-1", "break-words"]));
+      expect(clipping(tokens), `${label}: clipping tokens, any breakpoint`).toEqual([]);
+    }
+    // The positive pair, same markup: a real entrant keeps its ellipsis at every width.
+    for (const name of [LONG, "Dev"]) {
+      const tokens = nameClass(name);
+      expect(tokens, name).toContain("truncate");
+      expect(tokens, name).not.toContain("break-words");
+      expect(tokens, name).not.toContain("md:truncate");
+    }
+  });
+
+  // Review N2 m5: now that a waiting side wraps (C-2), its number must never
+  // start a line on its own. `knockout.feederWinner` and `knockout.feederLoser`
+  // put a NO-BREAK SPACE between the match word and `{seq}`, in every locale.
+  // Driven through the REAL namer with each locale's own dictionary, then
+  // through the card's markup.
+  it.each(["en", "es", "fr", "nl"] as const)(
+    "m5 (%s): a feeder label joins its match word to the number with a no-break space, and the card renders it so",
+    async (locale) => {
+      const NBSP = String.fromCharCode(0xa0);
+      const localeDict = await getDictionary(locale, "public");
+      const round = msgFor(locale, "bracket.round.semi");
+      for (const key of ["slot.winner_match", "slot.loser_match"] as const) {
+        const label = publicSlotLabel(
+          { key, params: { round: 1, seq: 3 } },
+          msg,
+          (phrase, vars) => translate(localeDict, phrase, vars),
+          () => ({ name: round, matches: 4 }),
+        );
+        const seen = `${locale} ${key}: ${JSON.stringify(label)}`;
+        // The premise: the real round-named sentence, its number last.
+        expect(label, seen).toContain(round);
+        expect(label.endsWith("3"), seen).toBe(true);
+        // A no-break space right before the digit, after a word (not a second space).
+        expect(label.at(-2), seen).toBe(NBSP);
+        expect(label.at(-3), seen).toMatch(/\S/);
+        const h = card(
+          hubMatch({
+            fixtureId: `m5-${locale}`,
+            header: {
+              sides: [
+                { entrantId: "", name: label, short: "", colour: null, badgeUrl: null },
+                { entrantId: "e2", name: "Dev", short: "", colour: null, badgeUrl: null },
+              ],
+            },
+          }),
+        );
+        expect(h, `${seen}: the card's waiting side, whole`).toContain(`>${label}</span>`);
+      }
+    },
+  );
 
   it("crest: img when badgeUrl; initials otherwise (never an empty tile)", () => {
     const withBadge = card(
@@ -410,6 +534,154 @@ describe("MatchCard", () => {
       }),
     );
     expect(withoutBadge).toContain(">BB<");
+  });
+
+  // ── D3 + review F1 (Knockout fix round 2) ──────────────────────────────────
+  // A side with NOBODY in it yet (`entrantId === ""`, `hubSides` in
+  // `competition-hub.ts`) used to get a crest like any entrant's: a colour
+  // derived from the NAME and initials from its first and last words. The
+  // Knockout tab's waiting pair "Priya Raman / Freya Nilsen" wore "PN" and read
+  // as one confirmed player; the engine's "Winner of R3·2" wore "WR". Every
+  // initial below is DERIVED from `initials()`, so each case asserts the absence
+  // of the exact letters the old card printed for that name.
+  const REAL = { entrantId: "e1", name: "Blue Blazers", short: "BLZ", colour: null, badgeUrl: null };
+  const waiting = (name: string) => ({ entrantId: "", name, short: "", colour: null, badgeUrl: null });
+  /** The pending crest in one side row — its class tokens and its text — or null. */
+  const pendingCrest = (row: string) => {
+    const found = row.match(/<span aria-hidden="true" data-crest="pending" class="([^"]*)">([^<]*)<\/span>/);
+    return found ? { tokens: found[1]!.split(" "), text: found[2]! } : null;
+  };
+  /** The name span's class tokens: the one span in a side row with a title. */
+  const nameTokens = (row: string) => {
+    const cls = row.match(/<span class="([^"]*)" title="/)?.[1];
+    expect(cls, "the name span").toBeDefined();
+    return cls!.split(" ");
+  };
+  const box = (tokens: readonly string[]) => tokens.filter((x) => /^[hw]-\d+$/.test(x));
+
+  it.each([
+    ["the Knockout tab's waiting pair", "Priya Raman or Freya Nilsen"],
+    ["a waiting pair of DOUBLES entrants", "Ana Lee / Bo Kim or Cy Po / Di Wu"],
+    ["the third-place loser sentence", "Loser of Eli v Hal"],
+    ["the engine's slot label", "Winner of R3·2"],
+    // NOT a bye: a bye is flagged by the producer (`byeSides`, round 2b, below).
+    // A side merely NAMED "Bye" with no flag is still a waiting side — the name
+    // never decides, in any locale.
+    ["a side merely NAMED 'Bye' with no producer flag", "Bye"],
+  ])(
+    "D3: %s is not an entrant — a '?' placeholder crest with no letters and no hue, and a muted name; the real entrant beside it keeps its crest",
+    (_, name) => {
+      const h = card(hubMatch({ header: { sides: [REAL, waiting(name)] } }));
+      const row = sideHtml(h, 1);
+      // The premise: the old crest for this name printed letters.
+      expect(initials(name)).toMatch(/\p{L}/u);
+      const crest = pendingCrest(row);
+      expect(crest, "the waiting side wears the pending crest").not.toBeNull();
+      expect(crest!.text).toBe("?");
+      expect(crest!.text).not.toMatch(/\p{L}/u);
+      expect(row).not.toContain(`>${initials(name)}<`);
+      expect(row, "no colour reaches the placeholder").not.toContain("style=");
+      expect(row).toContain(`>${name}</span>`);
+      expect(nameTokens(row)).toEqual(expect.arrayContaining(["italic", "text-ink-muted"]));
+      // Decorative: the card's own name already says who is waiting.
+      expect(h).toContain(`aria-label="Blue Blazers v ${name}"`);
+
+      // The positive pair, same card: a real entrant's crest is unchanged.
+      const home = sideHtml(h, 0);
+      expect(pendingCrest(home)).toBeNull();
+      expect(home).not.toContain("data-crest");
+      expect(home).toContain(`background:${autoColour("Blue Blazers")}`);
+      expect(home).toContain(`>${initials("Blue Blazers")}<`);
+      expect(nameTokens(home)).not.toContain("italic");
+      expect(nameTokens(home)).not.toContain("text-ink-muted");
+    },
+  );
+
+  it("D3 reads the SIDE, not its position: a waiting HOME side takes the placeholder while a real away side keeps its crest, and two waiting sides both do", () => {
+    const home = card(
+      hubMatch({ header: { sides: [waiting("Winner of SF1"), { ...REAL, entrantId: "e2", name: "Queens" }] } }),
+    );
+    expect(pendingCrest(sideHtml(home, 0))?.text).toBe("?");
+    expect(pendingCrest(sideHtml(home, 1))).toBeNull();
+    expect(sideHtml(home, 1)).toContain(`>${initials("Queens")}<`);
+
+    const both = card(hubMatch({ header: { sides: [waiting("Winner of SF1"), waiting("Winner of SF2")] } }));
+    expect(pendingCrest(sideHtml(both, 0))?.text).toBe("?");
+    expect(pendingCrest(sideHtml(both, 1))?.text).toBe("?");
+  });
+
+  it("D3: the placeholder is the SAME box as a real crest at both card sizes, so a waiting row does not shift", () => {
+    for (const crestSize of [24, 32] as const) {
+      const h = card(hubMatch({ header: { sides: [REAL, waiting("Winner of SF1")] } }), NOW, { crestSize });
+      const real = sideHtml(h, 0).match(/<span aria-hidden="true" class="([^"]*)"/)?.[1]?.split(" ");
+      expect(real, "the real crest").toBeDefined();
+      const placeholder = pendingCrest(sideHtml(h, 1));
+      expect(placeholder, `the placeholder at ${crestSize}`).not.toBeNull();
+      expect(box(placeholder!.tokens)).toEqual(box(real!));
+      expect(box(real!)).toEqual(crestSize === 24 ? ["h-6", "w-6"] : ["h-8", "w-8"]);
+    }
+  });
+
+  // ── Round 2b: a BYE is not "to be decided" (controller ruling) ─────────────
+  // The producer flags it (`HubMatch.byeSides`, from the stored
+  // `bracket.slot.bye` slot label — `competition-hub.test.ts` drives that
+  // through the real builder), and the card draws the SAME placeholder box
+  // with NO glyph and its own marker. "?" stays for sides waiting on a result.
+  /** The empty crest in one side row — its class tokens and its text — or null. */
+  const emptyCrest = (row: string) => {
+    const found = row.match(/<span aria-hidden="true" data-crest="empty" class="([^"]*)">([^<]*)<\/span>/);
+    return found ? { tokens: found[1]!.split(" "), text: found[2]! } : null;
+  };
+
+  it("Round 2b: a BYE side renders the empty box — no text, not the pending crest; the same card without the flag keeps its '?' (positive pair)", () => {
+    const bye = card(hubMatch({ byeSides: [false, true], header: { sides: [REAL, waiting("Bye")] } }));
+    const row = sideHtml(bye, 1);
+    const crest = emptyCrest(row);
+    expect(crest, "the bye side wears the empty crest").not.toBeNull();
+    expect(crest!.text).toBe("");
+    expect(row).not.toContain('data-crest="pending"');
+    expect(row).not.toContain(">?<");
+    expect(row, "no colour reaches the empty box").not.toContain("style=");
+    expect(row).toContain(">Bye</span>");
+    expect(nameTokens(row)).toEqual(expect.arrayContaining(["italic", "text-ink-muted"]));
+    expect(sideHtml(bye, 0)).not.toContain("data-crest");
+    expect(sideHtml(bye, 0)).toContain(`>${initials("Blue Blazers")}<`);
+
+    // The positive pair: the flag OFF, and the flag ABSENT (a document cached
+    // before the field existed) — both are a waiting side, so both say "?".
+    for (const m of [
+      hubMatch({ byeSides: [false, false], header: { sides: [REAL, waiting("Bye")] } }),
+      hubMatch({ header: { sides: [REAL, waiting("Bye")] } }),
+    ]) {
+      const other = sideHtml(card(m), 1);
+      expect(pendingCrest(other)?.text).toBe("?");
+      expect(other).not.toContain('data-crest="empty"');
+    }
+  });
+
+  it("Round 2b: the FLAG decides, never the name or the position — a Spanish 'Descanso' bye on the HOME side is empty, a flagged side with an entrant keeps its crest", () => {
+    const home = card(hubMatch({ byeSides: [true, false], header: { sides: [waiting("Descanso"), REAL] } }));
+    expect(emptyCrest(sideHtml(home, 0))?.text).toBe("");
+    expect(sideHtml(home, 1)).not.toContain("data-crest");
+
+    // A stray flag on a side that has an entrant: the entrant wins.
+    const stray = card(hubMatch({ byeSides: [true, false], header: { sides: [REAL, waiting("Winner of SF1")] } }));
+    expect(sideHtml(stray, 0)).not.toContain("data-crest");
+    expect(sideHtml(stray, 0)).toContain(`>${initials("Blue Blazers")}<`);
+    expect(pendingCrest(sideHtml(stray, 1))?.text).toBe("?");
+  });
+
+  it("Round 2b: the empty box is the SAME box as a real crest at both card sizes", () => {
+    for (const crestSize of [24, 32] as const) {
+      const h = card(hubMatch({ byeSides: [false, true], header: { sides: [REAL, waiting("Bye")] } }), NOW, {
+        crestSize,
+      });
+      const real = sideHtml(h, 0).match(/<span aria-hidden="true" class="([^"]*)"/)?.[1]?.split(" ");
+      expect(real, "the real crest").toBeDefined();
+      const empty = emptyCrest(sideHtml(h, 1));
+      expect(empty, `the empty box at ${crestSize}`).not.toBeNull();
+      expect(box(empty!.tokens)).toEqual(box(real!));
+    }
   });
 
   it("a side's own COLOUR paints its crest, per side — the field crossed the wire and was read by nothing", () => {

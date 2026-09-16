@@ -80,6 +80,16 @@ const REST = [
   // belongs here — and this gate reddened in CI the moment it landed, third
   // wave running, which is the explicit list doing what its comments promise.
   "src/server/public-site/__tests__/public-fixture-venue-tz.test.ts",
+  // Spectator poster/division branch: the match-centre feeder label and its
+  // loader read, the message params, the start time, and the public fixture's
+  // format label. None begins with "c", so all five belong here rather than in
+  // C_GLOBBED — and this gate reddened in CI the moment they landed, fourth
+  // wave running, which is the explicit list doing what its comments promise.
+  "src/server/public-site/__tests__/match-centre-feeder-label.test.ts",
+  "src/server/public-site/__tests__/match-centre-load-feeder-read.test.ts",
+  "src/server/public-site/__tests__/match-centre-msg-params.test.ts",
+  "src/server/public-site/__tests__/match-centre-start-time.test.ts",
+  "src/server/public-site/__tests__/public-fixture-format-label.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

@@ -232,7 +232,7 @@ export function EntityLogo({
   size?: 20 | 24 | 32 | 40;
   className?: string;
 }) {
-  const base = `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md align-middle ${SIZE_CLASS[size]} ${className}`;
+  const base = crestBox(size, className);
 
   if (src) {
     return (
@@ -282,6 +282,59 @@ export function EntityLogo({
       {initials(name)}
     </span>
   );
+}
+
+/**
+ * The crest for a side with NOBODY in it yet: a bracket slot waiting on a
+ * result ("Winner of R3·2"), the pair or loser sentence the Knockout tab puts in
+ * that slot instead, or a bye's empty side (Knockout fix round 2, D3).
+ *
+ * Not an `EntityLogo` arm, because there is no entity. Every arm above stands
+ * for one, and the last derives a colour AND initials from whatever name it is
+ * handed — so a waiting pair "Priya Raman / Freya Nilsen" became a coloured "PN"
+ * tile, one confirmed player to anyone reading the card. This is the
+ * owner-approved mock's waiting crest (`.crest.tbd`): the same box, a neutral
+ * fill, a muted outline and a "?" in muted ink. No `style`, so no hue can reach
+ * it; `aria-hidden` like every arm, because the side's own text already says
+ * who is waiting. `data-crest="pending"` is the handle tests and captures use.
+ */
+export function PendingCrest({ size = 20 }: { size?: 20 | 24 | 32 | 40 }) {
+  return placeholderCrest(size, "pending", "?");
+}
+
+/**
+ * The crest for a BYE's side: a slot the draw left with nobody in it, for good
+ * (Knockout fix round 2b, controller ruling). A bye is not "to be decided", so
+ * it must not say "?" — it keeps `PendingCrest`'s exact box and muted tone and
+ * shows NO glyph. `data-crest="empty"` tells it apart from a waiting side;
+ * `aria-hidden`, so it has no accessible name of its own.
+ *
+ * What makes a side a bye is the producer's decision (`HubMatch.byeSides`, from
+ * the stored `bracket.slot.bye` slot label), never the side's name.
+ */
+export function EmptyCrest({ size = 20 }: { size?: 20 | 24 | 32 | 40 }) {
+  return placeholderCrest(size, "empty", null);
+}
+
+/** The one placeholder box both crests draw, so a bye and a waiting side can
+ *  differ only in their marker and their glyph. */
+function placeholderCrest(size: 20 | 24 | 32 | 40, marker: "pending" | "empty", glyph: "?" | null) {
+  return (
+    <span
+      aria-hidden
+      data-crest={marker}
+      className={`${crestBox(size, "")} border border-zinc-300 bg-canvas font-semibold text-ink-muted`}
+    >
+      {glyph}
+    </span>
+  );
+}
+
+/** The box every crest shares — each `EntityLogo` arm and `PendingCrest` — so a
+ *  waiting row and a filled one line up at every size, and the size table is
+ *  read in one place. */
+function crestBox(size: 20 | 24 | 32 | 40, className: string): string {
+  return `inline-flex shrink-0 items-center justify-center overflow-hidden rounded-md align-middle ${SIZE_CLASS[size]} ${className}`;
 }
 
 export function initials(name: string): string {

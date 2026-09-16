@@ -103,7 +103,12 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
              home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
              scheduled_at, venue, court_label,
              status, outcome, summary, last_seq,
-             lane, is_final, third_place, conditional
+             lane, is_final, third_place, conditional,
+             -- N1 fix round 1, M8: the generator's stable id, which alone tells a
+             -- page playoff's rounds apart for the widget's round namer. The view
+             -- has no such column; read it off the view row's own fixture, as
+             -- getPublicDivision does.
+             (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
       from public_fixtures_v where division_id = ${divisionId}
       order by round_no, seq_in_round`
       .then((rows) => rows.map(iso))

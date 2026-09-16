@@ -6,15 +6,19 @@
 // scoreboard typography (Barlow Condensed, mounted only on this tree), and
 // one accent color driven by the --ps-* vars (lib/public-theme.ts) so an org
 // can re-brand the whole surface later without touching components.
+//
+// The /present kiosk is NOT under this layout (K-1): it lives in the sibling
+// `(kiosk)` group with a bare layout, so a TV board spans the screen instead of
+// sitting in this header and `max-w-5xl` main. Same URLs; both layouts share
+// the org door in `server/public-site/org-guard.ts`.
 import Link from "next/link";
-import { notFound, permanentRedirect } from "next/navigation";
 import Image from "next/image";
 import { Barlow_Condensed } from "next/font/google";
 import { AttributionLink } from "@/components/attribution-link";
-import { isReservedSlug } from "@/lib/public-site";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 import { publicThemeStyle } from "@/lib/public-theme";
-import { getPublicOrg } from "@/server/public-site/data";
-import { sharedRenameTarget } from "@/server/slug-resolve";
+import { publicOrgOr404 } from "@/server/public-site/org-guard";
 
 const displayFont = Barlow_Condensed({
   weight: ["500", "600", "700"],
@@ -41,15 +45,15 @@ export default async function PublicOrgLayout({
   params: Promise<{ orgSlug: string }>;
 }) {
   const { orgSlug } = await params;
-  if (isReservedSlug(orgSlug)) notFound();
-  const data = await getPublicOrg(orgSlug);
-  if (!data) {
-    // Renamed org? The old slug keeps working (v3/01 §2).
-    const renamed = await sharedRenameTarget(orgSlug);
-    if (renamed) permanentRedirect(renamed);
-    notFound();
-  }
-  const { org } = data;
+  const { org } = await publicOrgOr404(orgSlug);
+  // N1e e7: the header strip and the footer in the org's own default_locale,
+  // the same rule as every /shared page (ISR: the page's language is a
+  // function of the org, never of the visitor's request). The brand name
+  // stays literal and keeps its weight, so the footer template is split
+  // around `{brand}` rather than interpolated.
+  const dict = await getDictionary(toLocale(org.default_locale), "public");
+  const tagline = t(dict, "layout.tagline");
+  const [poweredByLead, poweredByTail = ""] = t(dict, "layout.poweredBy").split("{brand}");
 
   return (
     <div
@@ -94,11 +98,11 @@ export default async function PublicOrgLayout({
               `sm`+; below that it moves to its own line instead so it never
               crowds the org name/logo on a narrow header. */}
           <span className="ml-auto hidden shrink-0 text-[11px] font-medium uppercase tracking-[0.18em] text-court-muted sm:block">
-            Live scores · Schedules · Standings
+            {tagline}
           </span>
         </div>
         <div className="border-t border-white/10 px-4 py-1 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-court-muted sm:hidden">
-          Live scores · Schedules · Standings
+          {tagline}
         </div>
         {/* Accent keel — the one line of brand color on the slab. */}
         <div aria-hidden className="h-0.5 bg-accent" />
@@ -109,7 +113,9 @@ export default async function PublicOrgLayout({
             (branding entitlement, resolved server-side). */}
         {org.branded ? null : (
           <p>
-            Powered by <span className="font-medium">Seazn Club</span> ·{" "}
+            {poweredByLead}
+            <span className="font-medium">Seazn Club</span>
+            {poweredByTail} ·{" "}
             <AttributionLink surface="badge" />
           </p>
         )}

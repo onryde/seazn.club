@@ -4,7 +4,8 @@
 // is entitlement-split (doc 09 §4 pattern, same as live-score): Pro orgs
 // subscribe to `division:{id}` realtime broadcasts and refresh on push;
 // everyone else (and any subscription failure) falls back to 45 s polling.
-// Escape returns to the console.
+// Escape returns to `backHref`: the console on an organiser board, the public
+// division or competition page on the /present kiosk.
 //
 // Visual system: "courtside" broadcast package, same as the public pages —
 // the whole board is the dark court slab, themeable per org via the --ps-*
@@ -16,14 +17,15 @@ import type { CSSProperties } from "react";
 import Link from "@/components/ui/console-link";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { KioskPhoneGate } from "@/components/public-site/kiosk-phone-card";
 import type { BracketSlideFixture, Slide } from "@/server/slideshow-data";
 import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
-import { msg } from "@/lib/messages";
-import { resolveSlotLabel } from "@/lib/slot-label";
-// No locale/<DictProvider> plumbing anywhere in this feature's tree (org or
-// public present routes) — client-safe English msg(), consistent with the
-// rest of this component's already-hardcoded-English copy ("In play" etc.,
-// built server-side in slideshow-data.ts).
+// Type-only: every string on the board arrives resolved in ONE locale as the
+// `labels` prop (R10e u1). The page builds it on the server
+// (`slideshowLabels`), so no catalog ships to the browser and there is no
+// English left in this file. Per-slide text (titles, side names and, on the
+// public kiosk, each row's round name — N1d d4) arrives on the slides.
+import type { SlideshowLabels } from "@/server/slideshow-labels";
 // Leaf import, not the barrel — see bracket-panel.tsx's comment: the barrel
 // now drags `build.ts` -> `placement-client.ts` -> `@grpc/grpc-js` (Node-only)
 // into this client component's browser bundle and breaks `next build` outright.
@@ -39,16 +41,9 @@ const SLIDE_MS = 9000;
 const POLL_MS = 45_000;
 const SUBSCRIBED_POLL_MS = 5 * 60_000; // safety net once push is live
 
-const STATUS_LABEL: Record<string, string> = {
-  scheduled: "Scheduled",
-  in_play: "In play",
-  // "Ended", not "Final" — the latter collides with the Final ROUND (F2).
-  decided: "Ended",
-  finalized: "Ended",
-  forfeited: "Forfeit",
-  abandoned: "Abandoned",
-  cancelled: "Cancelled",
-};
+/** Fill a label template's `{name}` placeholder: templates arrive unfilled. */
+const fill = (template: string, name: string, value: number): string =>
+  template.replace(`{${name}}`, String(value));
 
 export function Slideshow({
   title,
@@ -59,6 +54,8 @@ export function Slideshow({
   themeStyle,
   logo = null,
   sponsors = [],
+  labels,
+  liveHref,
 }: {
   title: string;
   slides: Slide[];
@@ -74,6 +71,13 @@ export function Slideshow({
   /** Org sponsor slots (v3/10 #5) — persistent strip above the footer, so
    *  sponsors are on screen the whole session, not one slide in N. */
   sponsors?: { name: string; logo?: string | null }[];
+  /** Every string on the board, in one locale, resolved server-side by
+   *  `slideshowLabels` (the public kiosk passes the org's default_locale). */
+  labels: SlideshowLabels;
+  /** Where a phone should go instead of this board (C1): Open the live page on
+   *  the card shown below lg. The public kiosk passes the hub; an organiser
+   *  board passes its own console page. */
+  liveHref: string;
 }) {
   const router = useRouter();
   // v13 (PROMPT-64): rotation is step-based so the in-play slide can pin —
@@ -176,6 +180,9 @@ export function Slideshow({
   );
 
   return (
+    // C1: below lg a card stands in for the board until the viewer chooses the
+    // board (kiosk-phone-card.tsx). The board below is not re-indented inside it.
+    <KioskPhoneGate liveHref={liveHref} labels={labels.phoneCard} themeStyle={themeStyle}>
     <div
       style={themeStyle}
       className="relative flex min-h-screen flex-col overflow-hidden bg-court text-court-ink"
@@ -192,11 +199,11 @@ export function Slideshow({
         <div className="flex items-center gap-5 px-10 py-4">
           <Link
             href={backHref}
-            aria-label="Exit slideshow"
+            aria-label={labels.exit}
             className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-sm font-medium text-court-muted ring-1 ring-inset ring-white/15 transition hover:bg-white/20 hover:text-court-ink"
           >
             <ArrowLeft className="h-4 w-4" strokeWidth={2} />
-            <span className="hidden sm:inline">Back</span>
+            <span className="hidden sm:inline">{labels.back}</span>
           </Link>
           {logo && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -212,7 +219,7 @@ export function Slideshow({
           {liveCount > 0 && (
             <span className="flex shrink-0 items-center gap-2 rounded-full bg-emerald-400/10 px-3 py-1 font-display text-lg font-semibold uppercase tracking-wide text-emerald-300 ring-1 ring-inset ring-emerald-400/30">
               <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-              Live
+              {labels.live}
             </span>
           )}
           {clock && (
@@ -229,14 +236,18 @@ export function Slideshow({
         {!slide ? (
           <div className="text-center">
             <p className="font-display text-6xl font-bold uppercase tracking-tight">
-              Nothing to show yet
+              {labels.emptyTitle}
             </p>
             <p className="mt-4 text-xl text-court-muted">
-              Generate fixtures and this board comes alive.
+              {labels.emptyBody}
             </p>
           </div>
         ) : (
-          <div key={index} className="animate-slide-in mx-auto w-full max-w-6xl">
+          // K-2: from 2xl the slide widens past max-w-6xl, so a TV's width
+          // goes to the rows. 100rem is the smallest cap that fits the final
+          // between two unplayed semi-finals, and two 43-character names, at
+          // 1920 (measured: slideshow-tv-rows.test.tsx). Below 2xl nothing moves.
+          <div key={index} className="animate-slide-in mx-auto w-full max-w-6xl 2xl:max-w-[100rem]">
             <div className="mb-8">
               <p className="font-display text-xl font-semibold uppercase tracking-[0.28em] text-accent-line">
                 {slide.division}
@@ -248,17 +259,17 @@ export function Slideshow({
             </div>
 
             {slide.kind === "bracket" ? (
-              <BracketSlide fixtures={slide.fixtures} stageKind={slide.stageKind ?? "knockout"} />
+              <BracketSlide fixtures={slide.fixtures} stageKind={slide.stageKind ?? "knockout"} labels={labels} />
             ) : slide.kind === "standings" ? (
               <div>
                 <div className="grid grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem] gap-x-5 px-6 pb-2 font-display text-base font-semibold uppercase tracking-[0.2em] text-court-muted">
                   <span>#</span>
-                  <span>Entrant</span>
-                  <span className="text-right">P</span>
-                  <span className="text-right">W</span>
-                  <span className="text-right">D</span>
-                  <span className="text-right">L</span>
-                  <span className="text-right">Pts</span>
+                  <span>{labels.entrant}</span>
+                  <span className="text-right">{labels.played}</span>
+                  <span className="text-right">{labels.won}</span>
+                  <span className="text-right">{labels.drawn}</span>
+                  <span className="text-right">{labels.lost}</span>
+                  <span className="text-right">{labels.points}</span>
                 </div>
                 <div className="space-y-2">
                   {slide.rows.slice(0, 10).map((r, i) => (
@@ -309,10 +320,26 @@ export function Slideshow({
               <ul className="space-y-2.5">
                 {slide.items.map((f, i) => {
                   const live = f.status === "in_play";
+                  // N1d d4: a public kiosk row carries its round NAME
+                  // ("Losers' round 1") and takes a wider first column that
+                  // may wrap to two lines; an organiser board row carries none
+                  // and keeps its short code in the original 4rem column.
+                  //
+                  // K-2: the name tracks are sized by their names, not equal
+                  // halves, and they are the only tracks that take free space
+                  // (the vs is max-content). A long name beside a short one
+                  // takes the room the short one leaves; a name is cut only
+                  // when the two together overflow the row. The cost: "vs" no
+                  // longer sits on one axis down the list.
+                  const named = f.roundName !== undefined;
                   return (
                     <li
                       key={i}
-                      className={`relative grid grid-cols-[4rem_minmax(0,1fr)_auto_minmax(0,1fr)_6.5rem] items-center gap-x-6 rounded-lg px-7 py-3.5 ring-1 ring-inset ring-white/10 ${
+                      className={`relative grid ${
+                        named
+                          ? "grid-cols-[9rem_minmax(0,auto)_max-content_minmax(0,auto)_6.5rem]"
+                          : "grid-cols-[4rem_minmax(0,auto)_max-content_minmax(0,auto)_6.5rem]"
+                      } items-center gap-x-6 rounded-lg px-7 py-3.5 ring-1 ring-inset ring-white/10 ${
                         live ? "bg-white/[0.09]" : "bg-white/[0.05]"
                       }`}
                     >
@@ -322,11 +349,24 @@ export function Slideshow({
                           className="absolute inset-y-0 left-0 w-1 rounded-l-lg bg-emerald-400"
                         />
                       )}
-                      <span className="font-display text-xl font-semibold uppercase text-court-muted">
-                        R{f.round}
+                      <span
+                        className={
+                          named
+                            ? "line-clamp-2 min-w-0 break-words font-display text-lg font-semibold uppercase leading-tight text-court-muted"
+                            : "font-display text-xl font-semibold uppercase text-court-muted"
+                        }
+                      >
+                        {f.roundName ?? fill(labels.round, "round", f.round)}
                       </span>
                       <span className="flex min-w-0 items-center justify-end gap-3 text-right font-display text-4xl font-semibold">
-                        <span className="min-w-0 truncate">{f.home}</span>
+                        {/* OWNER RULING A (2026-09-15): a name too long for its
+                            track WRAPS to a second line rather than being cut.
+                            The final between two unplayed semi-finals ("Winner
+                            of Semi-finals, match 1/2") needs ~390px against a
+                            358px track at 1280, and the room to widen the track
+                            is locked in the fixed round/status columns. Two
+                            lines cost row height, which the board has. */}
+                        <span className="line-clamp-2 min-w-0 break-words">{f.home}</span>
                         {f.homeLogo && (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={f.homeLogo} alt="" aria-hidden className="h-10 w-10 shrink-0 rounded-md bg-white/90 object-contain p-0.5" />
@@ -339,24 +379,24 @@ export function Slideshow({
                             : "text-2xl font-semibold text-court-muted"
                         }`}
                       >
-                        {f.line ?? "vs"}
+                        {f.line ?? labels.vs}
                       </span>
                       <span className="flex min-w-0 items-center gap-3 font-display text-4xl font-semibold">
                         {f.awayLogo && (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={f.awayLogo} alt="" aria-hidden className="h-10 w-10 shrink-0 rounded-md bg-white/90 object-contain p-0.5" />
                         )}
-                        <span className="min-w-0 truncate">{f.away}</span>
+                        <span className="line-clamp-2 min-w-0 break-words">{f.away}</span>
                       </span>
                       <span className="flex items-center justify-end gap-2 font-display text-lg font-semibold uppercase tracking-wide">
                         {live ? (
                           <>
                             <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-                            <span className="text-emerald-300">Live</span>
+                            <span className="text-emerald-300">{labels.live}</span>
                           </>
                         ) : (
                           <span className="text-court-muted">
-                            {STATUS_LABEL[f.status] ?? f.status}
+                            {(labels.status as Record<string, string | undefined>)[f.status] ?? f.status}
                           </span>
                         )}
                       </span>
@@ -373,7 +413,7 @@ export function Slideshow({
       {sponsors.length > 0 && (
         <div className="relative z-10 flex items-center justify-center gap-8 px-10 pb-3">
           <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-court-muted">
-            Sponsors
+            {labels.sponsors}
           </span>
           {sponsors.slice(0, 6).map((s) => (
             <span key={s.name} className="flex items-center gap-2 text-sm text-court-muted">
@@ -409,7 +449,7 @@ export function Slideshow({
               <button
                 key={i}
                 type="button"
-                aria-label={`Slide ${i + 1}`}
+                aria-label={fill(labels.slide, "n", i + 1)}
                 onClick={() => setIndex(i)}
                 className={`h-2 rounded-full transition-all ${
                   i === index ? "w-6 bg-accent" : "w-2 bg-white/20 hover:bg-white/40"
@@ -420,6 +460,7 @@ export function Slideshow({
         </footer>
       )}
     </div>
+    </KioskPhoneGate>
   );
 }
 
@@ -429,13 +470,15 @@ export function Slideshow({
 function BracketSlide({
   fixtures,
   stageKind,
+  labels,
 }: {
   fixtures: BracketSlideFixture[];
   stageKind: "knockout" | "double_elim" | "stepladder" | "page_playoff";
+  labels: SlideshowLabels;
 }) {
-  if (stageKind === "stepladder") return <LadderSlide fixtures={fixtures} />;
-  if (stageKind === "page_playoff") return <PagePlayoffSlide fixtures={fixtures} />;
-  if (stageKind === "double_elim") return <DoubleElimSlide fixtures={fixtures} />;
+  if (stageKind === "stepladder") return <LadderSlide fixtures={fixtures} labels={labels} />;
+  if (stageKind === "page_playoff") return <PagePlayoffSlide fixtures={fixtures} labels={labels} />;
+  if (stageKind === "double_elim") return <DoubleElimSlide fixtures={fixtures} labels={labels} />;
   const result = twoSidedBracket(fixtures);
   if (!result.ok) return null;
   const layout = result.layout;
@@ -489,11 +532,11 @@ function BracketSlide({
             >
               <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
                 <span className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
+                  <span className="min-w-0 truncate">{f.home ?? labels.tbd}</span>
                   {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                 </span>
                 <span className="flex items-center justify-between gap-2 text-white/80">
-                  <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
+                  <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
                   {f.line !== null && (
                     <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>
                   )}
@@ -508,7 +551,7 @@ function BracketSlide({
 }
 
 // Stepladder on the big screen: summit at the top, climbers below.
-function LadderSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
+function LadderSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[]; labels: SlideshowLabels }) {
   const rungs = [...fixtures].sort((a, b) => b.round_no - a.round_no);
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4">
@@ -517,16 +560,16 @@ function LadderSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
         return (
           <div key={f.id}>
             <p className="mb-1 font-display text-sm font-semibold uppercase tracking-[0.18em] text-white/50">
-              {i === 0 ? "Final" : `Rung ${rungs.length - i}`}
+              {i === 0 ? labels.final : fill(labels.rung, "n", rungs.length - i)}
             </p>
             <div className={`rounded-lg px-5 py-3 ring-1 ring-inset ring-white/10 ${live ? "bg-white/[0.12]" : "bg-white/[0.05]"}`}>
               <div className="flex flex-col gap-1 font-display text-2xl font-semibold leading-tight">
                 <span className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
+                  <span className="min-w-0 truncate">{f.home ?? labels.tbd}</span>
                   {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                 </span>
                 <span className="flex items-center justify-between gap-3 text-white/80">
-                  <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
+                  <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
                   {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
                 </span>
               </div>
@@ -540,7 +583,7 @@ function LadderSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
 
 // Double elimination on the big screen: winners lane over losers lane, grand
 // final (+ reset) joining the lane finals — mirrors the console/public math.
-function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
+function DoubleElimSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[]; labels: SlideshowLabels }) {
   const result = doubleElimBracket(fixtures);
   if (!result.ok) return null;
   const layout = result.layout;
@@ -572,11 +615,11 @@ function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
       >
         <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
           <span className="flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
+            <span className="min-w-0 truncate">{f.home ?? labels.tbd}</span>
             {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
           </span>
           <span className="flex items-center justify-between gap-2 text-white/80">
-            <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
+            <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
             {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
           </span>
         </div>
@@ -586,8 +629,8 @@ function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
   return (
     <div className="overflow-x-auto">
       <div className="relative mx-auto" style={{ width: totalW, height: totalH }}>
-        <span className={label} style={{ left: 0, top: 0 }}>Winners bracket</span>
-        {lbH > 0 && <span className={label} style={{ left: 0, top: wbTop + wbH + LANE_GAP }}>Losers bracket</span>}
+        <span className={label} style={{ left: 0, top: 0 }}>{labels.winnersBracket}</span>
+        {lbH > 0 && <span className={label} style={{ left: 0, top: wbTop + wbH + LANE_GAP }}>{labels.losersBracket}</span>}
         <svg aria-hidden className="absolute inset-0" width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`}>
           {layout.connectors.map((c, i) => {
             const y = c.lane === "WB" ? wbY : lbY;
@@ -612,7 +655,7 @@ function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
             <span key={n.fixtureId} data-lane={n.lane} className="contents">
               {n.lane === "GF" && (
                 <span className={label} style={{ left, top: top - LABEL_H + 6 }}>
-                  {n.col === 0 ? "Grand final" : "Reset"}
+                  {n.col === 0 ? labels.grandFinal : labels.reset}
                 </span>
               )}
               {node(f, left, top)}
@@ -625,7 +668,7 @@ function DoubleElimSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
 }
 
 // Page playoffs (IPL) on the big screen — same card as console/public/poster.
-function PagePlayoffSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
+function PagePlayoffSlide({ fixtures, labels }: { fixtures: BracketSlideFixture[]; labels: SlideshowLabels }) {
   const result = pagePlayoffBracket(fixtures);
   if (!result.ok) return null;
   const byId = new Map(fixtures.map((f) => [f.id, f]));
@@ -639,7 +682,12 @@ function PagePlayoffSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
     q2: { x: COL_W, y: LABEL_H + 132 },
     final: { x: 2 * COL_W, y: LABEL_H + 62 },
   };
-  const LABELS: Record<string, string> = { q1: "Qualifier 1", eliminator: "Eliminator", q2: "Qualifier 2", final: "Final" };
+  const LABELS: Record<string, string> = {
+    q1: labels.qualifier1,
+    eliminator: labels.eliminator,
+    q2: labels.qualifier2,
+    final: labels.final,
+  };
   const totalW = 2 * COL_W + NODE_W;
   const totalH = LABEL_H + 210 + NODE_H + 10;
   const cy = (slot: string) => pos[slot]!.y + NODE_H / 2;
@@ -666,11 +714,11 @@ function PagePlayoffSlide({ fixtures }: { fixtures: BracketSlideFixture[] }) {
               <div className={`absolute rounded-lg px-4 py-2 ring-1 ring-inset ring-white/10 ${live ? "bg-white/[0.12]" : "bg-white/[0.05]"}`} style={{ left: p.x, top: p.y, width: NODE_W, height: NODE_H }}>
                 <div className="flex h-full flex-col justify-center gap-0.5 font-display text-xl font-semibold leading-tight">
                   <span className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate">{f.home ?? resolveSlotLabel(f.home_slot_label, msg, "bracket.tbd")}</span>
+                    <span className="min-w-0 truncate">{f.home ?? labels.tbd}</span>
                     {live && <span className="animate-live-pulse h-2 w-2 shrink-0 rounded-full bg-emerald-400" />}
                   </span>
                   <span className="flex items-center justify-between gap-2 text-white/80">
-                    <span className="min-w-0 truncate">{f.away ?? resolveSlotLabel(f.away_slot_label, msg, "bracket.tbd")}</span>
+                    <span className="min-w-0 truncate">{f.away ?? labels.tbd}</span>
                     {f.line !== null && <span className="shrink-0 font-bold tabular-nums text-accent-line">{f.line}</span>}
                   </span>
                 </div>

@@ -10,7 +10,8 @@ import "server-only";
 // Two caches sit in front of it, and they are different things: `unstable_cache`
 // (below) is Next's tag-based ISR layer for the PAGE, invalidated by
 // `revalidateTag`; `pub:v1:hub:{competitionId}` (usecases/public.ts) is the
-// Redis layer for the API, invalidated by `cacheDelPattern`. Both keys drop on
+// Redis layer for the API, invalidated by one direct DEL of that literal key
+// (`cacheDel`, no keyspace SCAN) from both writers. Both keys drop on
 // a scoring write AND on a schedule write — see `invalidatePublicCache`
 // (usecases/scoring.ts) and `afterScheduleWrite` (usecases/schedule.ts). A hub
 // whose matches go stale on a reschedule is the defect this file exists to
@@ -35,8 +36,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolveSlotLabel } from "@/lib/slot-label";
-import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import {
   bucketFixture,
@@ -48,6 +48,9 @@ import { resolveModule } from "@/server/engine-db";
 import { publicRegistrationInfo } from "@/server/usecases/registrations";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { AnySportModule } from "@seazn/engine/sport";
+// The LEAF, not the `@seazn/engine/scheduling` barrel: `bracket-layout.ts` has
+// zero imports, and the barrel reaches the gRPC placement client.
+import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import {
   competitionTag,
   divisionTag,
@@ -56,18 +59,21 @@ import {
   orgTag,
   REVALIDATE_FAST,
   type PublicFixture,
+  type PublicStage,
 } from "./data";
 import { statusOf } from "./match-centre";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, divisionChampion } from "./champion";
+import { BRACKET_KINDS, BRACKET_SETTLED, bracketChampion, divisionChampion } from "./champion";
 import { describeFormat } from "./describe-format";
 import type {
   CompetitionHubDocT,
   HubDivisionT,
   HubMatchT,
+  KnockoutRoundT,
+  KnockoutViewT,
   LeaderBoardT,
   TableViewT,
   TeamCardT,
@@ -209,6 +215,32 @@ export function hubSides(
   return [side(home, homeShort), side(away, awayShort)];
 }
 
+/** The slot-label key `stages.ts` (`byeSlotLabel`) stores on a bye's phantom
+ *  side. It is the ONLY record of a bye: `hubSides` resolves the label to a
+ *  sentence and drops the key, so this must read the fixture, not the side. */
+const BYE_SLOT_KEY = "bracket.slot.bye";
+
+/**
+ * `HubMatch.byeSides` — `[home, away]`, true where that side is a bye: no
+ * entrant AND the stored bye slot label (Knockout fix round 2b). Never decided
+ * from the side's name, which is locale copy ("Bye", "Descanso", ...). A side
+ * with no entrant and any other label is a slot WAITING on a result, and stays
+ * false; an entrant is never a bye, whatever label rides beside it.
+ */
+export function hubByeSides(
+  fixture: Pick<
+    PublicFixture,
+    "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
+  >,
+): [boolean, boolean] {
+  const bye = (entrantId: string | null, label: SlotLabel | null) =>
+    entrantId === null && label?.key === BYE_SLOT_KEY;
+  return [
+    bye(fixture.home_entrant_id, fixture.home_slot_label),
+    bye(fixture.away_entrant_id, fixture.away_slot_label),
+  ];
+}
+
 // ------------------------------------------------------------------ header
 
 /**
@@ -339,6 +371,151 @@ export function hubHeader(
   };
 }
 
+// --------------------------------------------------------------- knockouts
+
+type KnockoutLane = KnockoutRoundT["lane"];
+
+/** A bracket's lanes in reading order: a single-lane bracket (`null`) or the
+ *  winners' side first, then the losers' side, then the grand final. */
+function laneRank(lane: KnockoutLane): number {
+  return lane === "LB" ? 1 : lane === "GF" ? 2 : 0;
+}
+
+/**
+ * One bracket stage as a knockout view, or null when the stage has no
+ * fixtures yet (an undrawn bracket publishes nothing, and earns no tab).
+ *
+ * ROUNDS group by `(lane, round_no)` and the round's name (see below), ordered
+ * by lane then round, each in
+ * `seq_in_round` order. The bronze match (`third_place`) shares the final's
+ * `round_no` in the engine (`generateSingleElim`), so it is pulled into a
+ * round of its own and placed immediately BEFORE the final round: a spectator
+ * reading down the rail meets the play-off for third before the final itself.
+ *
+ * LABELS are the strings the stage's matches already carry — `labelOf` reads
+ * back what the matches loop resolved, so a round and its cards can never name
+ * the round differently.
+ *
+ * DRAWABLE is `twoSidedBracket`'s verdict, and only for a `knockout`: the one
+ * authority on a regular single-elimination shape. Every other bracket kind
+ * keeps its Rounds view and gets no tree.
+ *
+ * CHAMPION is `bracketChampion` (`./champion.ts`) — the engine's rule, and the
+ * SAME function `divisionChampion` crowns the Table tab and the division page
+ * with. A second rule here disagreed with it (a forfeited final, a reset won
+ * by forfeit, a decided final beside an unplayed bronze), so there is none.
+ */
+function buildKnockoutView(a: {
+  stage: Pick<PublicStage, "id" | "name" | "kind">;
+  division: { id: string; slug: string; name: string };
+  fixtures: readonly PublicFixture[];
+  labelOf: (fixtureId: string) => string | null;
+}): KnockoutViewT | null {
+  if (a.fixtures.length === 0) return null;
+  const bySeq = (x: PublicFixture, y: PublicFixture) => x.seq_in_round - y.seq_in_round;
+
+  // A round is its lane, its `round_no` AND its name. For every bracket kind
+  // but one, the name is the same across a `(lane, round_no)`, so this groups
+  // exactly as `(lane, round_no)` alone did. A page playoff is the exception:
+  // Qualifier 1 and the Eliminator share round one (fix round 1, M3), and one
+  // chip named for whichever match came first would hide the other round.
+  const groups = new Map<string, { key: string; lane: KnockoutLane; roundNo: number; fixtures: PublicFixture[] }>();
+  const bronze: PublicFixture[] = [];
+  for (const f of a.fixtures) {
+    if (f.third_place === true) {
+      bronze.push(f);
+      continue;
+    }
+    const lane = f.lane ?? null;
+    const key = `${lane ?? "main"}-${f.round_no}`;
+    const identity = JSON.stringify([key, a.labelOf(f.id)]);
+    const group = groups.get(identity) ?? { key, lane, roundNo: f.round_no, fixtures: [] };
+    group.fixtures.push(f);
+    groups.set(identity, group);
+  }
+  const ordered = [...groups.values()];
+  for (const group of ordered) group.fixtures.sort(bySeq);
+  ordered.sort(
+    (x, y) =>
+      laneRank(x.lane) - laneRank(y.lane) ||
+      x.roundNo - y.roundNo ||
+      x.fixtures[0]!.seq_in_round - y.fixtures[0]!.seq_in_round,
+  );
+  // Keys stay `{lane}-{round_no}`. Only rounds that SHARE one take their first
+  // match's seq as a suffix, so every other bracket's keys — and the URLs and
+  // test ids built from them — are unchanged.
+  const sharing = new Map<string, number>();
+  for (const group of ordered) sharing.set(group.key, (sharing.get(group.key) ?? 0) + 1);
+  for (const group of ordered) {
+    if ((sharing.get(group.key) ?? 0) > 1) group.key = `${group.key}-${group.fixtures[0]!.seq_in_round}`;
+  }
+
+  const rounds = [...ordered];
+  if (bronze.length > 0) {
+    bronze.sort(bySeq);
+    rounds.splice(Math.max(rounds.length - 1, 0), 0, {
+      key: "third-place",
+      lane: bronze[0]!.lane ?? null,
+      roundNo: bronze[0]!.round_no,
+      fixtures: bronze,
+    });
+  }
+
+  const champion = bracketChampion(a.fixtures);
+
+  // THE RESET NOBODY OWES leaves the rail (Task 2 fix round 1, ruling 2). Once
+  // a champion is crowned, a round made only of CONDITIONAL fixtures that never
+  // settled is a double-elimination reset the result made unnecessary: the
+  // winners' champion took the first grand final, and nothing in production
+  // voids the reset row, so it reads `scheduled` for ever. Left on the rail it
+  // is a "Grand final (reset)" chip nobody will play — the one unfinished round
+  // of a finished bracket. Its MATCH stays in `doc.matches` (a fixture in no
+  // round is valid), so its own page still resolves.
+  //
+  // "The crowning fixture is not the reset" needs no clause of its own:
+  // `bracketChampion` only crowns a SETTLED final, so a reset that crowned is
+  // settled and the settled test below already keeps its round. A separate
+  // clause could never change an answer, and a guard no test can kill is
+  // decoration (AGENTS.md 3).
+  //
+  // A reset that has STARTED stays (Task 2 fix round 2): unowed or not, a live
+  // match dropped from the rail cannot be reached from it, and the tab opens
+  // on a live round first. Liveness is `hubLiveness`'s, the one derivation.
+  const shownRounds = champion
+    ? rounds.filter(
+        (g) =>
+          g.fixtures.some((f) => hubLiveness(f.status).live) ||
+          !g.fixtures.every((f) => f.conditional === true && !BRACKET_SETTLED.has(f.status)),
+      )
+    : rounds;
+
+  return {
+    id: `${a.division.slug}-${a.stage.id}`,
+    divisionId: a.division.id,
+    divisionSlug: a.division.slug,
+    divisionName: a.division.name,
+    stageId: a.stage.id,
+    stageName: a.stage.name,
+    // `BRACKET_KINDS` chose this stage, and `KnockoutKind` restates that set
+    // exactly (pinned by the schema suite).
+    kind: a.stage.kind as KnockoutViewT["kind"],
+    rounds: shownRounds.map((g) => ({
+      key: g.key,
+      // Unreachable fallback: a view only exists for a stage the division
+      // read returned, and every fixture of a known stage got a label.
+      label: a.labelOf(g.fixtures[0]!.id) ?? "",
+      lane: g.lane,
+      fixtureIds: g.fixtures.map((f) => f.id),
+    })),
+    drawable:
+      a.stage.kind === "knockout" &&
+      twoSidedBracket(
+        a.fixtures.map((f) => ({ id: f.id, round_no: f.round_no, seq_in_round: f.seq_in_round })),
+      ).ok,
+    championFixtureId: champion?.fixtureId ?? null,
+  };
+}
+
 // ------------------------------------------------------------ the document
 
 /** `team_display_v.colors.home_primary` — never `.primary`, a key nothing
@@ -415,6 +592,7 @@ export async function loadCompetitionHub(
 
   const matches: HubMatchT[] = [];
   const tables: TableViewT[] = [];
+  const knockouts: KnockoutViewT[] = [];
   const teams: TeamCardT[] = [];
   const hubDivisions: HubDivisionT[] = [];
   const venues = new Set<string>();
@@ -447,7 +625,6 @@ export async function loadCompetitionHub(
       });
       colours[e.id] = primaryColour(e.team_display?.colors);
     }
-    const slot = (label: SlotLabel | null) => resolveSlotLabel(label, ui, "schedule.tbd");
     const divHref = `${base}/${d.slug}`;
 
     hubDivisions.push({
@@ -474,35 +651,27 @@ export async function loadCompetitionHub(
     });
 
     const stageById = new Map(stages.map((s) => [s.id, s]));
-    // PER STAGE, and that is the whole point of this map.
-    //
-    // `laneRoundRank` (`lib/round-role-label.ts`) filters by LANE only, and
-    // `lane` is null for a league AND for a single-elimination bracket
-    // (`data.ts`: "null for single-lane brackets and non-bracket stages"). So a
-    // list pooled across the division puts a league's rounds and a knockout's
-    // rounds in one sorted sequence, and `lastRoundInLane` comes off the union
-    // — a knockout FINAL in a division whose league ran more rounds resolves as
-    // `semi_final` and the page prints "Semi-finals" on the final. `is_final`
-    // does not rescue it: `round-role.ts` never reads `isFinal`, the role is
-    // `lastRoundInLane - roundInLane`. Measured, on the ordinary
-    // league-then-knockout shape.
-    //
-    // Every other caller of this helper in the repo is stage-scoped
-    // (`stages-panel.tsx`'s parameter is literally `stageFixtures`;
-    // `stage-court-tags.ts` selects `where stage_id = $1`; a public bracket IS
-    // one stage). The hub was the only pooling caller.
-    const laneByStage = new Map<string, { round_no: number; lane: "WB" | "LB" | "GF" | null }[]>();
+    // Every fixture's round name and every unfilled side's text, from the ONE
+    // public namer (`feeder-slot-label.ts`). The match centre builds its names
+    // through the same function, so a waiting side cannot read one way on a hub
+    // card and another in the match centre, and its `{round}` is the rail chip's
+    // own string. The namer ranks each fixture within its OWN stage — why that
+    // matters (a league pooled with a knockout printed "Semi-finals" on the
+    // final) is on the function — and keeps each name, so a knockout round
+    // below reuses the exact string its matches carry.
+    const namer = publicRoundNamer({
+      ui,
+      dict,
+      fixtures,
+      stageKind: (stageId) => stageById.get(stageId)?.kind,
+    });
     for (const f of fixtures) {
-      const inStage = laneByStage.get(f.stage_id) ?? [];
-      inStage.push({ round_no: f.round_no, lane: f.lane ?? null });
-      laneByStage.set(f.stage_id, inStage);
-    }
-    for (const f of fixtures) {
-      const sides = hubSides(f, { names, kinds, badges, colours, slot });
+      const sides = hubSides(f, { names, kinds, badges, colours, slot: (label) => namer.slot(f.stage_id, label) });
       const stage = stageById.get(f.stage_id);
       if (f.venue_name) venues.add(f.venue_name);
       const { bucket } = hubLiveness(f.status);
       const winner = f.outcome?.winner ?? null;
+      const roundLabel = namer.roundLabel(f.id);
       matches.push({
         fixtureId: f.id,
         divisionId: d.id,
@@ -511,34 +680,7 @@ export async function loadCompetitionHub(
         sportKey: d.sport_key,
         stageName: stage?.name ?? "",
         roundNo: f.round_no,
-        // `roundRoleFor` answers for EVERY stage kind — a non-bracket stage's
-        // rounds are a dense ordinal sequence and come back as `plain_round`
-        // (`round-role.ts` says so outright: its display consumers "each used
-        // to keep their own copy of this set purely as a GUARD in front of a
-        // call this function could not safely take"). So no BRACKET_KINDS
-        // guard here, and the ordinal is the fixture's rank within its own
-        // lane rather than a raw `round_no` a sparse bracket numbering would
-        // print wrong.
-        //
-        // Dropping that guard does NOT mean dropping the stage scoping: the
-        // ranking list is this fixture's OWN stage. See `laneByStage` above.
-        roundLabel: stage
-          ? roundRoleLabel(
-              ui,
-              roundRoleFor(
-                laneByStage.get(f.stage_id) ?? [],
-                {
-                  round_no: f.round_no,
-                  lane: f.lane ?? null,
-                  is_final: f.is_final === true,
-                  third_place: f.third_place === true,
-                  conditional: f.conditional === true,
-                },
-                stage.kind,
-                null,
-              ),
-            )
-          : null,
+        roundLabel,
         bucket,
         tz,
         scheduledAt: f.scheduled_at,
@@ -546,6 +688,7 @@ export async function loadCompetitionHub(
         courtName: f.court_name,
         href: `${divHref}/fixtures/${f.id}`,
         header: hubHeader(f, sides, d.sport_key, generatedAt),
+        byeSides: hubByeSides(f),
         winnerIndex:
           winner === null
             ? null
@@ -607,6 +750,22 @@ export async function loadCompetitionHub(
       }
     }
 
+    // Knockouts in stage `seq` order — the "relevance" sort above is the
+    // TABLES' reading order; a bracket's place in the programme is its seq.
+    // Division order is this loop's own.
+    const bracketStages = stages
+      .filter((s) => BRACKET_KINDS.has(s.kind))
+      .sort((a, b) => a.seq - b.seq);
+    for (const stage of bracketStages) {
+      const view = buildKnockoutView({
+        stage,
+        division: { id: d.id, slug: d.slug, name: d.name },
+        fixtures: fixtures.filter((f) => f.stage_id === stage.id),
+        labelOf: (id) => namer.roundLabel(id),
+      });
+      if (view) knockouts.push(view);
+    }
+
     for (const e of entrants) {
       teams.push({
         entrantId: e.id,
@@ -664,6 +823,7 @@ export async function loadCompetitionHub(
     divisions: hubDivisions,
     matches: sorted,
     tables,
+    knockouts,
     leaders,
     teams,
     info: {
@@ -683,6 +843,7 @@ export async function loadCompetitionHub(
     tabs: deriveHubTabs({
       matches: sorted.length,
       tables: tables.length,
+      knockouts: knockouts.length,
       leaderRows: leaders.reduce((n, board) => n + board.rows.length, 0),
       teams: teams.length,
     }),
@@ -703,7 +864,12 @@ export async function getPublicCompetitionHub(
 ): Promise<CompetitionHubDocT | null> {
   const shell = await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v1", shell.competition.id], {
+  // v2 since the Knockout tab added `knockouts`: the page renders this cached
+  // document WITHOUT re-parsing it (unlike `usecases/public.ts`, whose Redis
+  // hit goes back through `CompetitionHubDoc.safeParse`), so a v1 entry must
+  // never reach a renderer that reads the new field. Bump again on any shape
+  // change a cached hit cannot satisfy.
+  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v2", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),

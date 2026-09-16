@@ -16,7 +16,18 @@
 // belongs to the post-mount e2e leg.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as React from "react";
-import { readTabParam, subscribeToTabParam, useTabParam } from "../use-tab-param";
+import {
+  readDivisionParam,
+  readSearchParam,
+  readTabParam,
+  subscribeToTabParam,
+  useDivisionParam,
+  useSearchParam,
+  useTabParam,
+  writeDivisionParam,
+  writeSearchParam,
+  writeTabParam,
+} from "../use-tab-param";
 
 type Listener = () => void;
 
@@ -131,5 +142,197 @@ describe("useTabParam", () => {
     // tests above pin, so the hook cannot be wired to a different one.
     stubWindow("?tab=matches");
     expect(seen!.getSnapshot()).toBe("matches");
+  });
+});
+
+/** A `window` with a mutable href and a recording history, for the writer. */
+function stubHistory(href: string) {
+  const replaced: string[] = [];
+  const pushed: string[] = [];
+  vi.stubGlobal("window", {
+    location: { href, search: new URL(href).search },
+    history: {
+      replaceState: (_s: unknown, _t: string, url: string) => replaced.push(url),
+      pushState: (_s: unknown, _t: string, url: string) => pushed.push(url),
+    },
+  });
+  return { replaced, pushed };
+}
+
+describe("readDivisionParam", () => {
+  it("reads the division the URL names, by NAME beside a tab", () => {
+    stubWindow("?tab=matches&division=premier");
+    expect(readDivisionParam()).toBe("premier");
+  });
+
+  it("a bare ?division= is the empty string, which MatchesTab folds to All", () => {
+    stubWindow("?division=");
+    expect(readDivisionParam()).toBe("");
+  });
+
+  it("no ?division= is null — and it is not confused with ?tab=", () => {
+    stubWindow("?tab=premier");
+    expect(readDivisionParam()).toBeNull();
+  });
+});
+
+describe("writeDivisionParam", () => {
+  it("sets the division and KEEPS the tab — a chip tap must not throw the spectator off Matches", () => {
+    const { replaced, pushed } = stubHistory("https://seazn.test/shared/o/c?tab=matches");
+    writeDivisionParam("premier");
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches&division=premier"]);
+    expect(pushed).toEqual([]);
+  });
+
+  it("All REMOVES the parameter rather than writing an empty one", () => {
+    // `?division=` would read back as "" — handled, but a URL a spectator
+    // copies should not carry a parameter that means nothing.
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?tab=matches&division=premier");
+    writeDivisionParam(null);
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=matches"]);
+  });
+
+  it("replaces an existing division rather than appending a second one", () => {
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?division=open&tab=matches");
+    writeDivisionParam("premier");
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?division=premier&tab=matches"]);
+  });
+});
+
+describe("useDivisionParam", () => {
+  it("hands React a null SERVER snapshot and the division reader as the live one", () => {
+    let seen: {
+      subscribe: (fn: () => void) => () => void;
+      getSnapshot: () => string | null;
+      getServerSnapshot?: () => string | null;
+    } | null = null;
+    const internals = (
+      React as unknown as {
+        __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+      }
+    ).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+    const previous = internals.H;
+    internals.H = {
+      useSyncExternalStore(
+        subscribe: (fn: () => void) => () => void,
+        getSnapshot: () => string | null,
+        getServerSnapshot?: () => string | null,
+      ) {
+        seen = { subscribe, getSnapshot, getServerSnapshot };
+        return getServerSnapshot ? getServerSnapshot() : getSnapshot();
+      },
+    };
+    let value: string | null;
+    try {
+      value = useDivisionParam();
+    } finally {
+      internals.H = previous;
+    }
+    expect(value).toBeNull();
+    expect(seen!.subscribe).toBe(subscribeToTabParam);
+    expect(seen!.getServerSnapshot!()).toBeNull();
+    // The live snapshot reads DIVISION, not tab: a hook wired to the tab
+    // reader would answer "matches" here.
+    stubWindow("?tab=matches&division=premier");
+    expect(seen!.getSnapshot()).toBe("premier");
+  });
+});
+
+// ------------------------------------------------ the generic pair (plan R6)
+//
+// The Knockout tab's `?view=` is the third parameter this module serves, so the
+// reader and writer became generic and the named ones above became wrappers.
+// Every test ABOVE this line is unchanged and still green — that is the
+// wrappers' contract. What follows pins the generic functions themselves.
+
+/** Record the three arguments a hook hands React, through React's own
+ *  dispatcher slot — the same technique the two tests above use inline. */
+function captureStore(call: () => string | null) {
+  const seen: {
+    subscribe: (fn: () => void) => () => void;
+    getSnapshot: () => string | null;
+    getServerSnapshot?: () => string | null;
+  }[] = [];
+  const internals = (
+    React as unknown as {
+      __CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: { H: unknown };
+    }
+  ).__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+  const previous = internals.H;
+  internals.H = {
+    useSyncExternalStore(
+      subscribe: (fn: () => void) => () => void,
+      getSnapshot: () => string | null,
+      getServerSnapshot?: () => string | null,
+    ) {
+      seen.push({ subscribe, getSnapshot, getServerSnapshot });
+      return getServerSnapshot ? getServerSnapshot() : getSnapshot();
+    },
+  };
+  let value: string | null;
+  try {
+    value = call();
+  } finally {
+    internals.H = previous;
+  }
+  return { value, seen };
+}
+
+describe("readSearchParam", () => {
+  it("reads ANY parameter by name — a value, a bare one as the empty string, an absent one as null", () => {
+    stubWindow("?tab=knockout&view=draw&division=");
+    expect(readSearchParam("view")).toBe("draw");
+    expect(readSearchParam("tab")).toBe("knockout");
+    expect(readSearchParam("division")).toBe("");
+    expect(readSearchParam("filter")).toBeNull();
+  });
+});
+
+describe("writeSearchParam", () => {
+  it("sets the named parameter with replaceState and KEEPS every other one", () => {
+    const { replaced, pushed } = stubHistory(
+      "https://seazn.test/shared/o/c?tab=knockout&division=premier",
+    );
+    writeSearchParam("view", "draw");
+    expect(replaced).toEqual([
+      "https://seazn.test/shared/o/c?tab=knockout&division=premier&view=draw",
+    ]);
+    expect(pushed).toEqual([]);
+  });
+
+  it("null REMOVES the parameter — Rounds is the default, so a link carries no `view=rounds`", () => {
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?tab=knockout&view=draw");
+    writeSearchParam("view", null);
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?tab=knockout"]);
+  });
+
+  it("the named writers still write their own names through it (the wrapper cannot be pointed at another)", () => {
+    const { replaced } = stubHistory("https://seazn.test/shared/o/c?view=draw");
+    writeTabParam("knockout");
+    expect(replaced).toEqual(["https://seazn.test/shared/o/c?view=draw&tab=knockout"]);
+  });
+});
+
+describe("useSearchParam", () => {
+  it("a null SERVER snapshot, and a live snapshot that reads THAT name", () => {
+    const { value, seen } = captureStore(() => useSearchParam("view"));
+    expect(value).toBeNull();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.subscribe).toBe(subscribeToTabParam);
+    expect(seen[0]!.getServerSnapshot).toBeTypeOf("function");
+    expect(seen[0]!.getServerSnapshot!()).toBeNull();
+    stubWindow("?tab=knockout&view=draw");
+    expect(seen[0]!.getSnapshot()).toBe("draw");
+  });
+
+  it("getSnapshot is the SAME function on every render for one name, and a different one per name", () => {
+    // A fresh `() => readSearchParam(name)` per call hands React a new
+    // `getSnapshot` identity on every render. Cached per name instead, so the
+    // store React sees is stable exactly as the two named hooks' were.
+    const first = captureStore(() => useSearchParam("view")).seen[0]!;
+    const again = captureStore(() => useSearchParam("view")).seen[0]!;
+    const other = captureStore(() => useSearchParam("division")).seen[0]!;
+    expect(again.getSnapshot).toBe(first.getSnapshot);
+    expect(other.getSnapshot).not.toBe(first.getSnapshot);
   });
 });

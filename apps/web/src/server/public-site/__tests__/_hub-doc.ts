@@ -200,6 +200,39 @@ export function validHubDoc(): unknown {
         href: "/riverside/autumn-cup/div-a/teams/e2",
       },
     ],
+    // Two views: the first populated (a champion, a single-lane bracket, two
+    // rounds), the second its null-side twin (no champion, a lane, one round),
+    // so a dropped `.nullable()` on either field has somewhere to fail. Every
+    // id they name is a real `matches[].fixtureId` — the refinement demands it.
+    knockouts: [
+      {
+        id: "div-a-ko1",
+        divisionId: "d1",
+        divisionSlug: "div-a",
+        divisionName: "Division A",
+        stageId: "ko1",
+        stageName: "Knockout",
+        kind: "knockout",
+        rounds: [
+          { key: "main-1", label: "Semi-final", lane: null, fixtureIds: ["f2"] },
+          { key: "main-2", label: "Final", lane: null, fixtureIds: ["f1"] },
+        ],
+        drawable: true,
+        championFixtureId: "f1",
+      },
+      {
+        id: "div-a-de1",
+        divisionId: "d1",
+        divisionSlug: "div-a",
+        divisionName: "Division A",
+        stageId: "de1",
+        stageName: "Double elimination",
+        kind: "double_elim",
+        rounds: [{ key: "WB-1", label: "Round 1", lane: "WB", fixtureIds: ["f1", "f2"] }],
+        drawable: false,
+        championFixtureId: null,
+      },
+    ],
     info: {
       startsOn: "2026-09-01",
       endsOn: null,
@@ -209,7 +242,8 @@ export function validHubDoc(): unknown {
       calendars: [{ divisionName: "Division A", href: "/riverside/autumn-cup/div-a.ics" }],
       presentHref: "/riverside/autumn-cup/present",
     },
-    // 2 matches, 1 table, 2 leader rows, 2 teams — so every derived tab is on.
-    tabs: ["overview", "matches", "table", "stats", "teams", "info"],
+    // 2 matches, 1 table, 2 knockouts, 2 leader rows, 2 teams — so every
+    // derived tab is on.
+    tabs: ["overview", "matches", "table", "knockout", "stats", "teams", "info"],
   };
 }

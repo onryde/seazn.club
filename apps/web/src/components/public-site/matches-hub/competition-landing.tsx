@@ -29,26 +29,47 @@ import type {
   CompetitionHubTabIdT,
 } from "@/server/public-site/competition-hub-schema";
 import { PublicTabRail } from "../tab-rail";
-import { useTabParam, writeTabParam } from "../use-tab-param";
+import { useDivisionParam, useTabParam, writeTabParam } from "../use-tab-param";
 import { useLiveCompetition } from "../use-live-competition";
 import { useNow } from "../match-centre/use-now";
 import { OverviewTab } from "./overview-tab";
 import { MatchesTab } from "./matches-tab";
 import { TableTab } from "./table-tab";
+import { KnockoutTab } from "./knockout-tab";
 import { StatsTab } from "./stats-tab";
 import { TeamsTab } from "./teams-tab";
 import { InfoTab } from "./info-tab";
 
 /**
- * Every tab this root can actually render.
+ * Every tab THIS BUNDLE has a panel for — an ALLOWLIST, and the difference from
+ * a list of exclusions is which way a gap fails.
  *
- * `gallery` is excluded at the TYPE level rather than handled and ignored, and
- * that is what makes the panel switch below exhaustive without a dead case: W4
- * lifts the reservation by teaching `deriveHubTabs` to DERIVE the tab, and on
- * the day it does, this alias stops excluding it and `tsc` points at the one
- * switch that needs a new arm.
+ * An exclusion names the ids known to have no panel, so an id the document
+ * learns AFTER this bundle shipped slips straight through it: a spectator
+ * whose page loaded yesterday's bundle polls today's document, the rail offers
+ * the new tab, and `panelFor` throws. The allowlist names what CAN render, so
+ * anything else — `gallery` (W4's reserved slot), or an id nobody has invented
+ * yet — is simply not offered, and a `?tab=` naming it falls back like any
+ * other unknown id.
+ *
+ * `LandingTabId` is DERIVED from this list, which keeps `panelFor`'s `never`
+ * switch exhaustive over exactly it: add an id here without a panel arm and
+ * `tsc` refuses; add an arm without the id and the tab never shows.
+ * `knockout` is the worked example: the document derived that tab one task
+ * before its panel existed, this list kept it off the rail meanwhile, and
+ * plan 2026-09-13's Task 2 added the id and the arm together.
  */
-export type LandingTabId = Exclude<CompetitionHubTabIdT, "gallery">;
+export const RENDERABLE_TABS = [
+  "overview",
+  "matches",
+  "table",
+  "knockout",
+  "stats",
+  "teams",
+  "info",
+] as const satisfies readonly CompetitionHubTabIdT[];
+export type LandingTabId = (typeof RENDERABLE_TABS)[number];
+const RENDERABLE: ReadonlySet<string> = new Set(RENDERABLE_TABS);
 
 /**
  * Which tab is showing: the spectator's tap, else the `?tab=` deep link, else
@@ -205,6 +226,11 @@ export function CompetitionLanding({
   });
   const now = useNow(NOW_TICK_MS);
   const deepLinked = useTabParam();
+  // The division a shared link names. Read here, at the root that owns the
+  // URL, rather than inside `MatchesTab`, so the tab stays a component its
+  // tests can hand a value to — which is how `initialDivision` was tested
+  // for a whole wave while nothing in production ever passed it.
+  const deepLinkedDivision = useDivisionParam();
 
   // Only an explicit TAP is stored. Which tab is actually active is a plain
   // derivation every render (`activeTab`), never synced through an effect —
@@ -233,7 +259,7 @@ export function CompetitionLanding({
 
   // Derived from THIS render's document, so a competition that publishes its
   // first standings table between ticks grows a Table tab without a reload.
-  const tabs = doc.tabs.filter((id): id is LandingTabId => id !== "gallery");
+  const tabs = doc.tabs.filter((id): id is LandingTabId => RENDERABLE.has(id));
   const active = activeTab(tabs, manualTab, arrivalTab(deepLinked, selfWritten));
 
   // FORGET a choice that has stopped being renderable, rather than merely
@@ -299,6 +325,7 @@ export function CompetitionLanding({
           now,
           descriptionSlot,
           shareSlot,
+          initialDivision: deepLinkedDivision,
         })}
       </div>
     </div>
@@ -312,6 +339,10 @@ export interface PanelArgs {
   now: number;
   descriptionSlot?: ReactNode;
   shareSlot?: ReactNode;
+  /** `?division=` — the seed for the two tabs that FILTER by division,
+   *  Matches and Knockout. The Table and Teams tabs group by division
+   *  rather than filtering, so there is nothing for them to seed. */
+  initialDivision?: string | null;
 }
 
 /**
@@ -344,9 +375,27 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
         />
       );
     case "matches":
-      return <MatchesTab doc={a.doc} dict={a.dict} locale={a.locale} now={a.now} />;
+      return (
+        <MatchesTab
+          doc={a.doc}
+          dict={a.dict}
+          locale={a.locale}
+          now={a.now}
+          initialDivision={a.initialDivision}
+        />
+      );
     case "table":
       return <TableTab doc={a.doc} dict={a.dict} />;
+    case "knockout":
+      return (
+        <KnockoutTab
+          doc={a.doc}
+          dict={a.dict}
+          locale={a.locale}
+          now={a.now}
+          initialDivision={a.initialDivision}
+        />
+      );
     case "stats":
       return <StatsTab doc={a.doc} dict={a.dict} />;
     case "teams":

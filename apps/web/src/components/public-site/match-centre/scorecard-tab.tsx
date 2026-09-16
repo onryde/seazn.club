@@ -142,8 +142,15 @@ function anyNonNull<T>(rows: readonly T[], pick: (row: T) => number | string | n
 // test failing for a reason it has nothing to do with. It now derives its
 // expectation from this constant, so the styling can move without dragging the
 // rule's test with it.
-export const NUM_CELL = "px-0.5 text-right font-mono tabular-nums";
-const HEAD_CELL = "px-0.5 text-right font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted";
+// VERTICAL padding only, and it scales with the width. The horizontal budget
+// above is fixed by the `w-*` columns and cannot move — but the figures had NO
+// vertical padding at all, so a row's height came entirely from the NAME cell's
+// two lines and the numbers sat in it with no rhythm of their own. Measured at
+// 1280 before this: every numeric cell `0px/0px`, the name cell `4px/4px`.
+// `md:` and up is where the room is (the panel is 492px at 1280 and the table
+// needs 466px), so the phone keeps its density and the desktop breathes.
+export const NUM_CELL = "px-0.5 py-1 md:py-2 text-right font-mono tabular-nums";
+const HEAD_CELL = "px-0.5 pb-1 text-right font-mono text-[10px] font-medium uppercase tracking-wide text-ink-muted";
 /** The NAME column's header — batting and bowling both use it. Kept as ONE
  *  constant because they were two identical literals and the first pass of
  *  this round changed only the batting one, leaving the bowling table's
@@ -335,7 +342,7 @@ function BattingTable({
                   and this is a name, not a heading a reader is meant to weigh
                   differently; `sets-tab.tsx`'s row header carries the same two
                   for the same reason. */}
-              <th scope="row" className="px-1 py-1 text-left font-normal">
+              <th scope="row" className="px-1 py-1 md:py-2 text-left font-normal">
                 <span className={NAME_CELL}>{row.person.name}</span>
                 {/* The dismissal is a Msg, resolved here in the viewer's own
                     locale — the document never carries pre-rendered copy. */}
@@ -413,7 +420,7 @@ function BowlingTable({
               className="border-b border-zinc-200/60"
             >
               {/* `<th scope="row">` — see the batting table and note 6. */}
-              <th scope="row" className="px-1 py-1 text-left font-normal">
+              <th scope="row" className="px-1 py-1 md:py-2 text-left font-normal">
                 <span className={NAME_CELL}>{row.person.name}</span>
                 {extrasSubLine(row) === null ? null : (
                   <span
@@ -525,7 +532,12 @@ function Innings({
           (the grid on the root below) — measured at 1280 the old arrangement
           was two 477px tables inside one 992px panel, with the second innings
           pushed below the fold. */}
-      <div className="grid gap-3 px-3 pb-3">
+      {/* The panel's own gutter widens with the viewport for the same reason the
+          cells' vertical padding does: at 1280 the panel is 492px and the table
+          needs 466px, so 12px a side left the strike-rate column 13px from the
+          border and the whole card read as crammed. The phone keeps 12px, where
+          every pixel is owed to the name column. */}
+      <div className="grid gap-3 px-3 pb-3 md:gap-4 md:px-4 md:pb-4 lg:px-5 lg:pb-5">
         <div className="grid gap-2">
           <BattingTable
             rows={innings.batting}

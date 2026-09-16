@@ -39,9 +39,9 @@ vi.mock("../competition-hub-data", () => ({
 const rt = vi.hoisted(() => {
   interface FakeChannel {
     name: string;
-    handlers: Record<string, () => void>;
+    handlers: Record<string, (message?: unknown) => void>;
     unsubscribed: number;
-    on: (kind: string, opts: { event: string }, fn: () => void) => FakeChannel;
+    on: (kind: string, opts: { event: string }, fn: (message?: unknown) => void) => FakeChannel;
     subscribe: (cb: (status: string) => void) => FakeChannel;
     unsubscribe: () => void;
   }
@@ -94,6 +94,7 @@ import { fetchCompetitionHub } from "../competition-hub-data";
 import {
   HUB_IDLE_POLL_MS,
   HUB_POLL_MS,
+  HUB_PUSH_RETRY_MS,
   useLiveCompetition,
   type UseLiveCompetitionResult,
 } from "../use-live-competition";
@@ -193,6 +194,7 @@ function docWith(
         fullHref: "/riverside/autumn-cup/div-a?tab=table",
       },
     ],
+    knockouts: [],
     leaders: [],
     teams: [],
     info: {
@@ -317,6 +319,86 @@ describe("useLiveCompetition", () => {
     expect(spy.mock.calls.at(-1)?.[1]).toBe(HUB_POLL_MS);
 
     spy.mockRestore();
+  });
+
+  // R10 C1: a refetch response never replaces a NEWER document. Refetches
+  // overlap: the safety poll, a push's refetch and its H3 retries each fetch on
+  // their own clock. Whichever response lands LAST used to win, so a slow
+  // response built before a faster one put the older scores back on the page.
+  describe("a refetch never replaces a NEWER document (R10 C1)", () => {
+    const HELD_AT = "2026-09-05T12:00:00.000Z"; // docWith's own generatedAt
+    const OLDER_AT = "2026-09-05T12:00:10.000Z";
+    const NEWER_AT = "2026-09-05T12:00:20.000Z";
+    const BEFORE_HELD_AT = "2026-09-05T11:59:59.999Z";
+
+    const builtAt = (generatedAt: string, live: string): CompetitionHubDocT => ({
+      ...docWith({ live }),
+      generatedAt,
+    });
+
+    function deferred() {
+      let resolve!: (doc: CompetitionHubDocT) => void;
+      const promise = new Promise<CompetitionHubDocT>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    /** Two poll ticks whose fetches are both still in flight: they overlap. */
+    async function twoOverlappingRefetches() {
+      const first = deferred();
+      const second = deferred();
+      vi.mocked(fetchCompetitionHub)
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise)
+        .mockReturnValue(new Promise<CompetitionHubDocT>(() => {}));
+      const hook = mount("o", "c", builtAt(HELD_AT, "1-0"), false);
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(fetchCompetitionHub, "two refetches in flight at once").toHaveBeenCalledTimes(2);
+      return { hook, first, second };
+    }
+
+    it("the OLDER response landing LAST is dropped: the page keeps the newer document", async () => {
+      const { hook, first, second } = await twoOverlappingRefetches();
+
+      second.resolve(builtAt(NEWER_AT, "3-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text()).toContain("3-0");
+
+      first.resolve(builtAt(OLDER_AT, "2-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text(), "an older response replaced the newer document").toContain("3-0");
+      expect(hook.text()).not.toContain("2-0");
+      expect(hook.current.doc.generatedAt).toBe(NEWER_AT);
+    });
+
+    it("positive pair: the NEWER response landing LAST is applied", async () => {
+      const { hook, first, second } = await twoOverlappingRefetches();
+
+      first.resolve(builtAt(OLDER_AT, "2-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text(), "a response newer than the held document was dropped").toContain("2-0");
+
+      second.resolve(builtAt(NEWER_AT, "3-0"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.text()).toContain("3-0");
+      expect(hook.current.doc.generatedAt).toBe(NEWER_AT);
+    });
+
+    it("a document built at the SAME instant as the one held is applied; one built before the SERVER-RENDERED document is not", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(HELD_AT, "4-4"))
+        .mockResolvedValueOnce(builtAt(BEFORE_HELD_AT, "0-9"));
+      const hook = mount("o", "c", builtAt(HELD_AT, "1-0"), false);
+
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(hook.text(), "an equally new document was dropped").toContain("4-4");
+
+      await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+      expect(hook.text(), "a document older than the page's own replaced it").toContain("4-4");
+      expect(hook.text()).not.toContain("0-9");
+    });
   });
 });
 
@@ -446,20 +528,33 @@ describe("useLiveCompetition realtime", () => {
     expect(hook.current.transport).toBe("realtime");
   });
 
-  // And the guard that stops the poll once realtime is up had NO test that
-  // could kill it: inside this describe the only timer advances were 0 and
-  // 250, and the two `HUB_POLL_MS` advances live in the poll describe where
-  // `realtime={false}` and nothing ever subscribes. Deleting
-  // `if (subscribed) return` left all 421 lines green while the hook polled
-  // every 15s ON TOP of realtime — double load on `/hub` for every spectator
-  // on a busy competition.
-  it("and STOPS polling — a full poll interval passes with no fetch at all", async () => {
-    mount("o", "c", twoLiveDivisions(), true);
+  // The cadence once realtime is up. It used to STOP polling here
+  // (`if (subscribed) return`). R10 H2 keeps a safety-net poll at
+  // HUB_IDLE_POLL_MS instead: a subscribed channel that misses ONE push, or
+  // whose refetch reads a stale copy (measured on spectw2), otherwise leaves the
+  // page frozen until the spectator reloads. `use-live-fixture.ts` learned the
+  // same lesson in PR #782.
+  //
+  // Both halves are pinned, because each kills a different mutant:
+  // - nothing at HUB_POLL_MS: the live 15s cadence must not run ON TOP of
+  //   realtime, which is double load on `/hub` for every spectator on a busy
+  //   competition;
+  // - exactly one fetch by HUB_IDLE_POLL_MS: the poll has not stopped.
+  // The document HAS live matches, so the slower cadence comes from the
+  // subscription, not from `hasLive`.
+  it("keeps a SAFETY-NET poll: no fetch at HUB_POLL_MS, exactly one by HUB_IDLE_POLL_MS", async () => {
+    vi.mocked(fetchCompetitionHub).mockResolvedValue(twoLiveDivisions());
+    const hook = mount("o", "c", twoLiveDivisions(), true);
     await vi.advanceTimersByTimeAsync(0);
+    expect(hook.current.transport).toBe("realtime");
     expect(fetchCompetitionHub).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
-    expect(fetchCompetitionHub).not.toHaveBeenCalled();
+    expect(fetchCompetitionHub, "the live cadence ran on top of realtime").not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(HUB_IDLE_POLL_MS - HUB_POLL_MS);
+    expect(fetchCompetitionHub, "no safety-net poll while subscribed").toHaveBeenCalledTimes(1);
+    expect(fetchCompetitionHub).toHaveBeenCalledWith("o", "c");
   });
 
   // MIXED outcomes — the case a single shared `subscribed` boolean cannot
@@ -495,6 +590,270 @@ describe("useLiveCompetition realtime", () => {
       expect(fetchCompetitionHub).toHaveBeenCalledWith("o", "c");
     });
   }
+
+  // R10 H3: a push is not satisfied by an OLDER document. Each division
+  // broadcast carries `at`, the server's clock at publish (`lib/realtime.ts`
+  // `publishDivisionUpdate`), and the hub document carries `generatedAt`.
+  // Measured on spectw2: the push arrived, its one debounced refetch came back
+  // with a `generatedAt` from BEFORE the write, and the Knockout tab never
+  // moved. `no-store` (H1) removes the browser's copy. A Redis or CDN copy that
+  // outlives the write is an ordering no local test can produce, so the hook
+  // itself refuses to treat such a document as the answer.
+  describe("a push is not satisfied by an OLDER document (R10 H3)", () => {
+    const SEEDED_AT = "2026-09-05T12:00:00.000Z";
+    const PUSH_AT = "2026-09-05T12:00:05.000Z";
+    const BEFORE_PUSH = "2026-09-05T12:00:04.999Z";
+    const AFTER_PUSH = "2026-09-05T12:00:05.001Z";
+    const LATER_PUSH = "2026-09-05T12:00:06.000Z";
+    const AFTER_LATER_PUSH = "2026-09-05T12:00:06.001Z";
+
+    /** What supabase-js hands an `on("broadcast")` callback: the whole
+     *  broadcast, with the producer's own fields under `payload` (phoenix
+     *  `bind.callback(handledPayload)`; realtime-js passes a broadcast through
+     *  its payload transform unchanged). */
+    const broadcast = (payload: Record<string, unknown>) => ({ type: "broadcast", event: "state_changed", payload });
+    const pushAt = (at: string) => broadcast({ v: 1, reason: "score", at });
+
+    /** The same two live divisions every time (so the channels never churn),
+     *  built at `generatedAt`, with d1's score line set to `score`. */
+    const builtAt = (generatedAt: string, score = "1-0"): CompetitionHubDocT => ({
+      ...docWith({
+        matches: [
+          matchWith("live", score, "d1", "f1"),
+          matchWith("live", "0-0", "d2", "f2"),
+          matchWith("upcoming", "", "d3", "f3"),
+        ],
+      }),
+      generatedAt,
+    });
+
+    const fetches = () => vi.mocked(fetchCompetitionHub).mock.calls.length;
+
+    /** Run the clock to 1ms short of the safety-net poll, which is armed at
+     *  subscription (t=0, H2) and is a fetch of its own. `elapsed` is the time
+     *  the test has already advanced since subscribing. */
+    const toJustBeforeSafetyPoll = (elapsed: number) => vi.advanceTimersByTimeAsync(HUB_IDLE_POLL_MS - elapsed - 1);
+
+    async function subscribedHub() {
+      const hook = mount("o", "c", builtAt(SEEDED_AT), true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hook.current.transport).toBe("realtime");
+      expect(fetches()).toBe(0);
+      return { hook, channel: rt.channels[0]! };
+    }
+
+    // R10c m2: the third delay outlives the hub's Redis TTL. A cache-aside
+    // rebuild that read the DB before the write, and finished after its DEL,
+    // puts the pre-write document back for HUB_TTL_SECONDS (15s), which both of
+    // the first two retries land inside. `hub-push-retry-ttl.test.ts` pins the
+    // last delay above the TTL itself.
+    it("the retry delays are the rulings': 1s, then 3s, then 17s", () => {
+      expect(HUB_PUSH_RETRY_MS).toEqual([1_000, 3_000, 17_000]);
+    });
+
+    it("an older document refetches after 1s, 3s after that, 17s after that, then STOPS: three retries at most", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches(), "the debounced refetch").toBe(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fetches(), "retried before 1s had passed").toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetches(), "no first retry 1s after the refetch").toBe(2);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(fetches(), "retried again before 3s had passed").toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetches(), "no second retry 3s after the first").toBe(3);
+      await vi.advanceTimersByTimeAsync(16_999); // t=21_249
+      expect(fetches(), "retried a third time before 17s had passed").toBe(3);
+      await vi.advanceTimersByTimeAsync(1); // t=21_250
+      expect(fetches(), "no third retry 17s after the second").toBe(4);
+
+      await toJustBeforeSafetyPoll(21_250);
+      expect(fetches(), "a fourth retry").toBe(4);
+    });
+
+    it("a document STILL older at +4.25s is retried at +21.25s, and the newer document it gets is what the page shows", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(AFTER_PUSH, "2-0"))
+        .mockResolvedValue(builtAt(AFTER_PUSH, "9-9"));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT)); // t=0
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches(), "the refetch and both earlier retries").toBe(3);
+      expect(hook.text()).not.toContain("2-0");
+
+      await vi.advanceTimersByTimeAsync(17_000); // t=21_250
+      expect(fetches(), "the third retry").toBe(4);
+      expect(hook.text(), "the third retry's newer document was not applied").toContain("2-0");
+
+      await toJustBeforeSafetyPoll(21_250);
+      expect(fetches(), "retried after a document as new as the push").toBe(4);
+      expect(hook.text()).toContain("2-0");
+    });
+
+    it("a document that satisfies the push at the SECOND retry ends the sequence: the 17s retry never fires", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValue(builtAt(AFTER_PUSH, "2-0"));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches()).toBe(3);
+      expect(hook.text()).toContain("2-0");
+
+      await toJustBeforeSafetyPoll(4_250);
+      expect(fetches(), "retried after the second retry's document satisfied the push").toBe(3);
+    });
+
+    it("the retry's NEWER document is what the page shows, and it ends the sequence", async () => {
+      vi.mocked(fetchCompetitionHub)
+        .mockResolvedValueOnce(builtAt(BEFORE_PUSH, "1-0"))
+        .mockResolvedValueOnce(builtAt(AFTER_PUSH, "2-0"))
+        .mockResolvedValue(builtAt(AFTER_PUSH, "9-9"));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches()).toBe(1);
+      expect(hook.text()).not.toContain("2-0");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fetches()).toBe(2);
+      expect(hook.text()).toContain("2-0");
+
+      await toJustBeforeSafetyPoll(1_250);
+      expect(fetches(), "retried after a document as new as the push").toBe(2);
+      expect(hook.text()).toContain("2-0");
+    });
+
+    it.each([
+      ["built AFTER the push", AFTER_PUSH],
+      ["built AT the push's own instant", PUSH_AT],
+    ])("a document %s satisfies it: one refetch, no retry", async (_label, generatedAt) => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(generatedAt));
+      const { channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches()).toBe(1);
+      await toJustBeforeSafetyPoll(250);
+      expect(fetches()).toBe(1);
+    });
+
+    it.each([
+      ["no message at all", undefined],
+      ["a payload with no `at`", broadcast({ v: 1, reason: "score" })],
+      ["an unparseable `at`", broadcast({ v: 1, reason: "score", at: "not a date" })],
+      ["an `at` that is not an ISO string", broadcast({ v: 1, reason: "score", at: Date.parse(PUSH_AT) })],
+    ])("%s: today's single refetch, even though the document is older than the push", async (_label, message) => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(message);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches()).toBe(1);
+      await toJustBeforeSafetyPoll(250);
+      expect(fetches()).toBe(1);
+    });
+
+    it("unmount cancels a pending retry", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches()).toBe(1);
+
+      hook.unmount();
+      await vi.advanceTimersByTimeAsync(HUB_PUSH_RETRY_MS.reduce((sum, delay) => sum + delay, 0) + 1_000);
+      expect(fetches(), "a retry fired after unmount").toBe(1);
+    });
+
+    it("unmount cancels the pending THIRD retry", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 3_000); // t=4_250
+      expect(fetches(), "the refetch and both earlier retries").toBe(3);
+
+      hook.unmount();
+      await vi.advanceTimersByTimeAsync(17_000 + 1_000);
+      expect(fetches(), "the third retry fired after unmount").toBe(3);
+    });
+
+    it("unmount inside the debounce window fetches nothing", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { hook, channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      hook.unmount();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fetches(), "the debounced refetch fired after unmount").toBe(0);
+    });
+
+    it("a newer push restarts the sequence: the earlier push's pending retry never fires", async () => {
+      vi.mocked(fetchCompetitionHub).mockResolvedValue(builtAt(BEFORE_PUSH));
+      const { channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT)); // t=0
+      await vi.advanceTimersByTimeAsync(250); // t=250
+      expect(fetches(), "the first push's refetch; its retry is due at t=1250").toBe(1);
+
+      await vi.advanceTimersByTimeAsync(500); // t=750
+      channel.handlers.state_changed!(pushAt(LATER_PUSH));
+      await vi.advanceTimersByTimeAsync(250); // t=1000
+      expect(fetches(), "the newer push's own refetch").toBe(2);
+
+      await vi.advanceTimersByTimeAsync(250); // t=1250
+      expect(fetches(), "the FIRST push's retry still fired").toBe(2);
+
+      await vi.advanceTimersByTimeAsync(750); // t=2000
+      expect(fetches(), "the newer push's first retry").toBe(3);
+      await vi.advanceTimersByTimeAsync(3_000); // t=5000
+      expect(fetches(), "the newer push's second retry").toBe(4);
+      await vi.advanceTimersByTimeAsync(17_000); // t=22000
+      expect(fetches(), "the newer push's third retry").toBe(5);
+
+      await toJustBeforeSafetyPoll(22_000);
+      expect(fetches()).toBe(5);
+    });
+
+    it("a newer push while the previous refetch is IN FLIGHT: that response, older when it lands, schedules no retry", async () => {
+      let answerFirst: ((doc: CompetitionHubDocT) => void) | undefined;
+      vi.mocked(fetchCompetitionHub)
+        .mockImplementationOnce(
+          () =>
+            new Promise<CompetitionHubDocT>((resolve) => {
+              answerFirst = resolve;
+            }),
+        )
+        .mockResolvedValue(builtAt(AFTER_LATER_PUSH));
+      const { channel } = await subscribedHub();
+
+      channel.handlers.state_changed!(pushAt(PUSH_AT));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches(), "the first refetch, still in flight").toBe(1);
+
+      channel.handlers.state_changed!(pushAt(LATER_PUSH));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetches(), "the newer push's refetch, which satisfies it").toBe(2);
+
+      // The superseded answer lands last, older than the push it was fetched for.
+      answerFirst!(builtAt(BEFORE_PUSH));
+      await toJustBeforeSafetyPoll(500);
+      expect(fetches(), "the superseded refetch scheduled a retry").toBe(2);
+    });
+  });
 
   // W1's `use-live-fixture.ts:23-28` rules that freshness derives from the
   // DOCUMENT's own timestamp, never a hook-side clock: a `Date.now()`

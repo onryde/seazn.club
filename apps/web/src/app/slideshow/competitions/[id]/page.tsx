@@ -12,6 +12,8 @@ import { hasFeature } from "@/lib/entitlements";
 import { publicThemeStyleChain } from "@/lib/public-theme";
 import { resolveSponsors } from "@/server/usecases/sponsors";
 import { Slideshow } from "@/components/v2/slideshow";
+import { slideshowLabels } from "@/server/slideshow-labels";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 
 export default async function CompetitionSlideshowPage({
   params,
@@ -50,6 +52,10 @@ export default async function CompetitionSlideshowPage({
       title={competition.name}
       slides={slides}
       backHref={routes.competition(org.slug, competition.slug)}
+      // C1: a phone gets the same "made for a TV" card as the public kiosk.
+      // Its Open the live page goes where the back link goes: this
+      // competition's console page, which the viewer can always open.
+      liveHref={routes.competition(org.slug, competition.slug)}
       divisionIds={ordered.map((d) => d.id)}
       realtime={realtime}
       // Same gate as the division board: console reads don't empty branding,
@@ -61,6 +67,10 @@ export default async function CompetitionSlideshowPage({
       logo={chrome.logo}
       // v10: resolver rows (competition scope first), blob shim fallback.
       sponsors={await resolveSponsors(auth.orgId, id)}
+      // R10e u1 moved the board's strings into `labels`; the organiser board
+      // keeps the English it always showed (which locale it should speak is
+      // not settled by that round).
+      labels={slideshowLabels(DEFAULT_LOCALE)}
     />
   );
 }

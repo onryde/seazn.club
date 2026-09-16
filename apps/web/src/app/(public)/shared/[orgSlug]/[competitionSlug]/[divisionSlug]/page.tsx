@@ -17,6 +17,7 @@ import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareButton } from "@/components/share-button";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
+import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -26,7 +27,7 @@ import type { MetricSpecLike } from "@/lib/public-site";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
-import { resolveSlotLabel } from "@/lib/slot-label";
+import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 
 export const revalidate = 30;
 
@@ -103,15 +104,40 @@ export default async function DivisionHomePage({ params }: Props) {
   const dict = await getDictionary(orgLocale, "public");
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
+  // R10d n4: the Bracket names a side still waiting on a match through the
+  // public round namer ("Winner of Semi-finals, match 1"), as the hub, the
+  // match centre and the embed widgets do.
+  const namer = publicRoundNamer({
+    ui: lookup,
+    dict,
+    fixtures,
+    stageKind: (stageId) => stageById.get(stageId)?.kind,
+  });
   // <Schedule> is a Client Component — it cannot call msgFor() itself
   // (server-only), so every unfilled slot's text is pre-resolved HERE and
   // handed down as a plain Record<string,string>, same shape as
-  // `entrantNames` above.
+  // `entrantNames` above. N1c c5: through the SAME namer as the Bracket, so the
+  // schedule tab and the bracket name one waiting side with one text.
   const slotLabels: Record<string, string> = {};
   for (const f of fixtures) {
-    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = resolveSlotLabel(f.home_slot_label, lookup, "schedule.tbd");
-    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = resolveSlotLabel(f.away_slot_label, lookup, "schedule.tbd");
+    if (!f.home_entrant_id) slotLabels[`${f.id}:home`] = namer.slot(f.stage_id, f.home_slot_label);
+    if (!f.away_entrant_id) slotLabels[`${f.id}:away`] = namer.slot(f.stage_id, f.away_slot_label);
   }
+  // N1d d5: the schedule tab's round view heads each group with the round's
+  // NAME from the same namer ("Round {n}" in the org's locale only for a
+  // fixture whose stage the namer does not know). N1e e5: every other word it
+  // shows or announces comes from the page's org-locale dictionaries, and its
+  // dates are written in the org's locale, as the embed schedule widget does.
+  const roundLabels = Object.fromEntries(
+    fixtures.map((f) => [f.id, namer.roundLabel(f.id) ?? lookup("schedule.round", { n: f.round_no })]),
+  );
+  const scheduleCopy = publicScheduleCopy(dict, lookup);
+  // N1e e1: round_no restarts in every stage, so the round view orders its
+  // groups by each stage's seq first, as the embed schedule widget does.
+  const stageOrder = Object.fromEntries(stages.map((s) => [s.id, s.seq]));
+  // N1f f2: two stages can name a round the same ("Final" in a knockout and in
+  // its plate); the round view heads those groups with the stage as well.
+  const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
 
   // SPEC-1: active suspensions under the standings (consent-gated names). Public
   // read; a published ban is public information. Never throws the page down.
@@ -124,13 +150,15 @@ export default async function DivisionHomePage({ params }: Props) {
       (a.status === "complete" ? 1 : 0) - (b.status === "complete" ? 1 : 0) || a.seq - b.seq,
   );
 
-  // Champion (v1 parity): once the decisive stage is done, crown the winner
-  // above the table. Bracket → winner of the last-round fixture; league/group
-  // → rank 1 of the final overall standings.
+  // Champion (v1 parity): crown the winner above the table. A bracket is
+  // crowned by `bracketChampion` (`server/public-site/champion.ts`) — its final,
+  // settled with a winner, on the engine's rule: a forfeit counts, and an
+  // unplayed bronze match does not hold the crown back. A league/group crowns
+  // rank 1 of the final overall standings once its decisive stage is done.
   //
-  // The rule itself lives in `server/public-site/champion.ts` — the competition
-  // hub crowns the same entrant on every table it publishes, and two copies of
-  // this ladder would be two crowns that agree only until one of them moves.
+  // Both rules live in that file — the competition hub crowns the same entrant
+  // on every table and in its knockout view, and two copies would be two
+  // crowns that agree only until one of them moves.
   const championId: string | null = divisionChampion(stages, fixtures, standings);
 
   // Rendered at the very top of the division page (above the tabs) so the
@@ -169,6 +197,9 @@ export default async function DivisionHomePage({ params }: Props) {
                 entrantLogos={entrantLogos}
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
                 lookup={lookup}
+                slotText={namer.slot}
+                copy={scheduleCopy}
+                tz={tz}
               />
             </section>
           );
@@ -306,7 +337,8 @@ export default async function DivisionHomePage({ params }: Props) {
             href={`/shared/${org.slug}/${competition.slug}/${division.slug}/present`}
             className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink"
           >
-            Present ▸
+            {/* N1e e7: the label in the org's locale; the ▸ is decoration. */}
+            {t(dict, "division.present")} <span aria-hidden="true">▸</span>
           </Link>
           {/* Standings share (v3/10 #2) — the link unfurls into the OG card. */}
           <ShareButton
@@ -369,6 +401,11 @@ export default async function DivisionHomePage({ params }: Props) {
             divisionPath={basePath}
             tz={tz}
             slotLabels={slotLabels}
+            roundLabels={roundLabels}
+            stageOrder={stageOrder}
+            stageNames={stageNames}
+            copy={scheduleCopy}
+            locale={orgLocale}
           />,
           standingsPanel,
           entrantsPanel,

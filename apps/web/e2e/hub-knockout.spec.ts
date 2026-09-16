@@ -1,0 +1,1404 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import {
+  TAG,
+  apiJson,
+  addEntrantsViaApi,
+  createStageAndGenerate,
+  scoreFixture,
+  expectNoHorizontalScroll,
+} from "./helpers";
+
+// The competition hub's Knockout tab in a real browser (plan
+// docs/superpowers/plans/2026-09-13-hub-knockout-tab.md, Task 3).
+//
+// What the unit suite cannot see, and this file exists for: CSS folds (the
+// Rounds|Draw switch is `max-lg:hidden`, the tree `hidden lg:block`), a URL
+// that a tap writes and a reload reads back, the layout effect that scrolls
+// the pressed round chip into its rail, and the tree's real width. Every
+// bracket is seeded through the product's own API — results go in as
+// `generic.result` events and later rounds fill through the engine's own
+// `onDecided`, never by SQL — and every expected round, view id and champion
+// is read back out of the PUBLIC hub document the page itself renders from,
+// so the test moves with the document rather than asserting a table typed in
+// here.
+//
+// Each assertion that something is SHOWN has its opposite somewhere in this
+// file, so none of them passes on an element that is simply always there, or
+// never there:
+//   switch visible at 1280            ↔ attached-but-hidden at 390/768, absent for double elim
+//   tree visible after the Draw tap   ↔ absent in Rounds, attached-but-hidden at 390/768
+//   rail opens on the semi-finals     ↔ quarter-finals and final chips not pressed
+//   both division headings under All  ↔ one heading after a division chip
+//   `mh-tab-knockout` on a knockout   ↔ absent on a league-only competition
+//   pressed chip inside the rail      ↔ the same chip is clipped at scrollLeft 0
+//
+// Fix round (P2, D1, D2, C1, C2) added three, each non-vacuous against the
+// build before it:
+//   D2 the final's empty slot names the undecided semi's pair ↔ "Winner of" gone from that slot only
+//   C2 the switch's y-centre equals the heading's / chips'    ↔ the ~70px band it sat in before
+//   C1 the last chip of a rail too long for one row is hit    ↔ one-row width asserted > the rail's
+//
+// Fix round 2 (D3, F5) extended D2's case:
+//   D3 the waiting side's crest is the "?" placeholder, no letters ↔ the filled side on the same card is not one
+//   F5 the pair reads "{a} or {b}"                             ↔ the decided semi's node carries no " or "
+//
+// Fix round 2b (R10 follow-up):
+//   2b a bye's side is the EMPTY box, no glyph, not "pending" ↔ the same draw's waiting side keeps "?", not "empty"
+//
+// Fix round N1:
+//   N1 a waiting double-elimination card names its feeder's round with the rail's label ↔ no "R1·1" code anywhere in the panel
+//   M6 (fix round 1) a LOSERS' card names the winners' round its sides drop from ↔ the same panel, still no R·code
+//   M5 (fix round 1) a DRAWABLE slot whose feeder still waits names the feeder's round, on the Draw node and the card ↔ no R·code in either view
+//
+// Fix round N2f (review N2 I2), C-1's round rail at 320 and 390, on load and after one tap:
+//   the pressed chip is wholly inside the rail                                ↔ premise: it lay past the rail's right edge before the reveal moved it
+//   no chip's text crosses the rail's LEFT edge, unless the rail is at its scroll end ↔ premise: the tap's target is not the last chip, so the end's exemption cannot answer for it
+//
+// Fix round N2g (review N2f I-1), WHERE that rail rests, at 320 and 390:
+//   the 32-draw opened on its Semi-finals rests ON a chip's start, short of its end ↔ the same measurement's other arm: a width affording no such start rests AT the end, with the pressed chip's own start past it
+//   (N2h: WHICH chip's start is derived per width, never named — CI's font metrics decide whether 320 affords one at all)
+
+// ---------------------------------------------------------------------------
+// Budget (AGENTS.md 20): derived from what the seeding actually does, so a
+// bigger bracket raises the ceiling with it instead of timing out and
+// reporting itself as a data defect.
+// ---------------------------------------------------------------------------
+
+/** One API round trip against a local production build, with headroom for a
+ *  machine other sessions are also loading. */
+const API_CALL_MS = 1_500;
+/** One navigation or tap plus the web-first assertions that follow it — the
+ *  config's own `expect` timeout, because one slow assertion may use all of
+ *  it. */
+const STEP_MS = 15_000;
+const FLOOR_MS = 60_000;
+/** A fill poll's own ceiling: a decided match fills the next round's slot
+ *  inside the scoring write, so this only waits out a slow response. */
+const FILL_POLL_MS = 20_000;
+
+/** How many fixtures to score in each bracket round, in seq order. */
+const EIGHT_SCORED = [4, 1] as const; // every quarter-final, one semi-final
+const SIXTEEN_SCORED = [8, 4, 2, 1] as const; // the whole draw
+/** Every round through the quarter-finals, so the rail opens on the Semi-finals,
+ *  its fourth chip of five (fix round N2f). */
+const THIRTY_TWO_SCORED = [16, 8, 4] as const;
+const FIRST_DIVISION_SCORED = [2] as const;
+const SECOND_DIVISION_SCORED = [1] as const;
+
+/** API calls one knockout division costs: division create + read, entrants,
+ *  stage create + generate, start; then per scored round one fixtures read
+ *  (a fill poll's first try) and two per score (`scoreFixture` reads the seq
+ *  before it posts). */
+const divisionCalls = (scored: readonly number[]) =>
+  6 + scored.reduce((calls, n) => calls + 1 + 2 * n, 0);
+/** Competition create + hub document read, around each competition's divisions. */
+const COMPETITION_CALLS = 2;
+/** The live competition's semi-finals are STARTED before any spectator opens
+ *  it: one fixtures read, then a state read and a `core.start` per semi. */
+const LIVE_START_CALLS = 1 + 2 * 2;
+const SEED_CALLS =
+  1 + // the active org's slug
+  COMPETITION_CALLS + divisionCalls(EIGHT_SCORED) +
+  COMPETITION_CALLS + divisionCalls(SIXTEEN_SCORED) +
+  COMPETITION_CALLS + divisionCalls(THIRTY_TWO_SCORED) +
+  COMPETITION_CALLS + divisionCalls(FIRST_DIVISION_SCORED) + divisionCalls(SECOND_DIVISION_SCORED) +
+  COMPETITION_CALLS + divisionCalls([]) + // double elimination, unplayed
+  COMPETITION_CALLS + 5 + // league: division create + read, entrants, stage create + generate
+  COMPETITION_CALLS + divisionCalls([]) + LIVE_START_CALLS + // live: a 4-draw, both semis in play
+  COMPETITION_CALLS + divisionCalls([]) + // bye: a 3-draw, unplayed
+  COMPETITION_CALLS + divisionCalls([]); // unplayed: an 8-draw, nothing scored (fix round 1, M5)
+const SEED_BUDGET_MS = FLOOR_MS + SEED_CALLS * API_CALL_MS;
+
+const budget = (steps: number) => Math.max(FLOOR_MS, steps * STEP_MS);
+
+/**
+ * The hub's poll cadence while a match is live, read out of the hook's SOURCE
+ * rather than typed in here, so moving the constant moves the live test's
+ * budget with it (AGENTS.md 20).
+ *
+ * Why source text and not an import: the hook's module graph reaches
+ * `@/lib/client`, and a spec that loads a src module whose chain hits an
+ * unattributed JSON import fails to COLLECT ("No tests found").
+ *
+ * Why null and not a throw: a module-scope throw collects zero tests, so the
+ * live test asserts on the value instead.
+ */
+function hubPollMs(): number | null {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/components/public-site/use-live-competition.ts", import.meta.url)),
+    "utf8",
+  );
+  const match = /export const HUB_POLL_MS = ([\d_]+);/.exec(source);
+  return match ? Number(match[1]!.replaceAll("_", "")) : null;
+}
+/** On top of one poll interval: the refetch, React's render, and a machine
+ *  other sessions are also loading. */
+const LAND_SLACK_MS = 5_000;
+
+// ---------------------------------------------------------------------------
+// The document's shapes, as far as this file reads them
+// (`server/public-site/competition-hub-schema.ts`).
+// ---------------------------------------------------------------------------
+
+interface FixtureRow {
+  id: string;
+  round_no: number;
+  seq_in_round: number;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  status: string;
+  lane?: string | null;
+  third_place?: boolean;
+}
+interface HubRound {
+  key: string;
+  label: string;
+  lane: string | null;
+  fixtureIds: string[];
+}
+interface HubView {
+  id: string;
+  divisionSlug: string;
+  stageId: string;
+  kind: string;
+  rounds: HubRound[];
+  drawable: boolean;
+  championFixtureId: string | null;
+}
+interface HubMatch {
+  fixtureId: string;
+  bucket: string;
+  header: { sides: { entrantId: string; name: string }[] };
+  /** `[home, away]`, true where that side is a bye (fix round 2b). Absent on
+   *  a document built before the field existed. */
+  byeSides?: [boolean, boolean];
+}
+interface HubDoc {
+  tabs: string[];
+  knockouts: HubView[];
+  matches: HubMatch[];
+}
+interface Seeded {
+  compSlug: string;
+  divisionSlugs: string[];
+  doc: HubDoc;
+}
+
+// ---------------------------------------------------------------------------
+// Seeding, through the real API
+// ---------------------------------------------------------------------------
+
+async function publicCompetition(request: APIRequestContext, label: string) {
+  const res = await apiJson<{ id: string; slug: string; visibility: string }>(
+    request,
+    "/api/v1/competitions",
+    "POST",
+    {
+      ends_on: "2030-12-31",
+      name: `${label} ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+      visibility: "public",
+    },
+  );
+  expect(res.status, JSON.stringify(res.error)).toBe(201);
+  // A create over the public-dashboard cap degrades to private with a 201
+  // rather than refusing, and a private competition 404s off /shared/*.
+  expect(res.data!.visibility).toBe("public");
+  return res.data!;
+}
+
+async function genericDivision(request: APIRequestContext, competitionId: string, name: string) {
+  const created = await apiJson<{ id: string }>(
+    request,
+    `/api/v1/competitions/${competitionId}/divisions`,
+    "POST",
+    {
+      name,
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    },
+  );
+  expect(created.status, JSON.stringify(created.error)).toBe(201);
+  const read = await apiJson<{ id: string; slug: string }>(
+    request,
+    `/api/v1/divisions/${created.data!.id}`,
+  );
+  expect(read.status).toBe(200);
+  return read.data!;
+}
+
+async function divisionFixtures(request: APIRequestContext, divisionId: string) {
+  const res = await apiJson<FixtureRow[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(res.status, JSON.stringify(res.error)).toBe(200);
+  return res.data!;
+}
+
+/** A single-elimination stage's rounds in bracket order, each in seq order,
+ *  third-place match left out. */
+function bracketRounds(rows: readonly FixtureRow[]): FixtureRow[][] {
+  const byRound = new Map<number, FixtureRow[]>();
+  for (const row of rows) {
+    if (row.third_place === true) continue;
+    byRound.set(row.round_no, [...(byRound.get(row.round_no) ?? []), row]);
+  }
+  return [...byRound.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, round]) => round.sort((a, b) => a.seq_in_round - b.seq_in_round));
+}
+
+/**
+ * Score the first `scored[r]` fixtures of each round r, home side winning.
+ * Round r+1's slots fill from round r's winners, so each round waits until the
+ * fixtures it is about to score have both sides.
+ */
+async function playRounds(
+  request: APIRequestContext,
+  divisionId: string,
+  scored: readonly number[],
+) {
+  for (const [r, count] of scored.entries()) {
+    if (count === 0) continue;
+    let targets: FixtureRow[] = [];
+    await expect
+      .poll(
+        async () => {
+          const round = bracketRounds(await divisionFixtures(request, divisionId))[r] ?? [];
+          targets = round.slice(0, count);
+          return (
+            targets.length === count &&
+            targets.every((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)
+          );
+        },
+        { timeout: FILL_POLL_MS, message: `round ${r} never filled ${count} fixtures` },
+      )
+      .toBe(true);
+    for (const fixture of targets) await scoreFixture(request, fixture.id, 2, 1);
+  }
+}
+
+async function bracketDivision(
+  request: APIRequestContext,
+  competitionId: string,
+  name: string,
+  size: number,
+  kind: "knockout" | "double_elim",
+  scored: readonly number[],
+) {
+  const division = await genericDivision(request, competitionId, name);
+  const names = Array.from({ length: size }, (_, i) => `${name} ${String(i + 1).padStart(2, "0")}`);
+  const added = await addEntrantsViaApi(request, division.id, names);
+  expect(added.ids).toHaveLength(size);
+  const { fixtureIds } = await createStageAndGenerate(request, division.id, { kind, name: "Cup" });
+  expect(fixtureIds.length).toBeGreaterThan(0);
+  const started = await apiJson(request, `/api/v1/divisions/${division.id}/start`, "POST");
+  expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  await playRounds(request, division.id, scored);
+  return division;
+}
+
+async function hubDoc(request: APIRequestContext, orgSlug: string, compSlug: string) {
+  const res = await apiJson<HubDoc>(
+    request,
+    `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/hub`,
+  );
+  expect(res.status, JSON.stringify(res.error)).toBe(200);
+  return res.data!;
+}
+
+async function activeOrgSlug(request: APIRequestContext) {
+  const orgs = await apiJson<{ id: string; slug: string }[]>(request, "/api/orgs");
+  const active = (await request.storageState()).cookies.find((c) => c.name === "seazn_org")?.value;
+  const org = orgs.data?.find((o) => o.id === active) ?? orgs.data?.[0];
+  if (!org) throw new Error("no org for the e2e session");
+  return org.slug;
+}
+
+// ---------------------------------------------------------------------------
+// Page handles
+// ---------------------------------------------------------------------------
+
+const hubUrl = (orgSlug: string, seeded: Seeded, query: string) =>
+  `/shared/${orgSlug}/${seeded.compSlug}${query}`;
+
+const roundChip = (page: Page, view: HubView, round: HubRound) =>
+  page.getByTestId(`mh-knockout-round-${view.id}-${round.key}`);
+
+/** The panel mounts only after the client has read `?tab=` — the first paint
+ *  is the document's first tab — so every visit waits for it. */
+async function openKnockout(page: Page, url: string) {
+  await page.goto(url);
+  await expect(page.getByTestId("mh-knockout")).toBeVisible();
+  await expect(page.getByTestId("mh-tab-panel-knockout")).toBeVisible();
+}
+
+/** A rail's pressed and first chips, relative to the rail's own visible box. */
+function railGeometry(rail: Locator) {
+  return rail.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const relative = (chip: Element | null) => {
+      if (chip === null) return null;
+      const r = chip.getBoundingClientRect();
+      return { left: r.left - box.left, right: r.right - box.left };
+    };
+    return {
+      scrollLeft: el.scrollLeft,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+      pressed: relative(el.querySelector('[aria-pressed="true"]')),
+      first: relative(el.querySelector("button")),
+    };
+  });
+}
+type RailGeometry = Awaited<ReturnType<typeof railGeometry>>;
+const insideRail = (g: RailGeometry, chip: { left: number; right: number } | null) =>
+  chip !== null && chip.left >= -0.5 && chip.right <= g.clientWidth + 0.5;
+
+/**
+ * C-1's two browser facts about a round rail (review N2 I2), measured as the N2
+ * harness's `__measure` did: each chip's box and its TEXT extent (a Range over
+ * the chip's contents), relative to the rail's own box.
+ *  - `leadingCut`: chips whose text straddles the rail's LEFT edge. The trailing
+ *    edge is not measured: a chip cut there is a scroller's "more this way" cue.
+ *  - `atEnd`: the rail is at its scroll end (within 1px), where no snap position
+ *    can cure a leading cut, as on a finished draw opened on its Final.
+ */
+function railEdges(rail: Locator) {
+  return rail.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const at = (x: number) => Math.round((x - box.left) * 10) / 10;
+    const chips = [...el.querySelectorAll("button")].map((chip) => {
+      const r = chip.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(chip);
+      const text = range.getBoundingClientRect();
+      return {
+        testid: chip.getAttribute("data-testid") ?? "",
+        pressed: chip.getAttribute("aria-pressed") === "true",
+        left: at(r.left),
+        right: at(r.right),
+        textLeft: at(text.left),
+        textRight: at(text.right),
+      };
+    });
+    const pressed = chips.find((c) => c.pressed) ?? null;
+    const max = el.scrollWidth - el.clientWidth;
+    const style = getComputedStyle(el);
+    return {
+      scrollLeft: el.scrollLeft,
+      max,
+      clientWidth: el.clientWidth,
+      /** The rail's own paddings, which equal its scroll padding (fix round N2g). */
+      padStart: Number.parseFloat(style.paddingLeft) || 0,
+      padEnd: Number.parseFloat(style.paddingRight) || 0,
+      atEnd: el.scrollLeft >= max - 1,
+      pressed,
+      pressedInside: pressed !== null && pressed.left >= -0.5 && pressed.right <= el.clientWidth + 0.5,
+      leadingCut: chips.filter((c) => c.textLeft < -0.5 && c.textRight > 0.5).map((c) => c.testid),
+      chips,
+    };
+  });
+}
+type RailEdges = Awaited<ReturnType<typeof railEdges>>;
+
+/** The rail once it has stopped: fonts loaded and two frames drawn, then the
+ *  same `scrollLeft` on two reads 150ms apart (a snap settling is a scroll too).
+ *  After ~3s it returns the last read, so a rail that never stops is printed by
+ *  the assertions rather than timed out on. */
+async function settledRailEdges(page: Page, rail: Locator): Promise<RailEdges> {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  let last = await railEdges(rail);
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(150);
+    const now = await railEdges(rail);
+    if (now.scrollLeft === last.scrollLeft) return now;
+    last = now;
+  }
+  return last;
+}
+
+/** Both C-1 facts; each failure carries everything that was measured. SOFT, so
+ *  a red at 320 still measures 390. */
+function expectC1(g: RailEdges, where: string) {
+  const seen = `${where}: ${JSON.stringify(g)}`;
+  expect.soft(g.pressedInside, `the pressed chip is not wholly inside the rail — ${seen}`).toBe(true);
+  expect.soft(
+    g.atEnd ? [] : g.leadingCut,
+    `a chip's text is cut at the rail's leading edge, away from its scroll end — ${seen}`,
+  ).toEqual([]);
+}
+
+// ---------------------------------------------------------------------------
+
+test.describe("competition hub: Knockout tab", () => {
+  // One seeding for the whole file, so the tests run in order in one worker —
+  // but NOT serial: a red here must not skip the tests after it (AGENTS.md
+  // 21). A failure restarts the worker, which seeds again.
+  test.describe.configure({ mode: "default" });
+
+  let orgSlug = "";
+  let eight: Seeded;
+  let sixteen: Seeded;
+  /** Fix round N2f (review N2 I2): a 32-draw scored through its quarter-finals,
+   *  so a phone rail opens on the Semi-finals, the fourth chip of five. */
+  let thirtyTwo: Seeded;
+  let twoDivisions: Seeded;
+  let doubleElim: Seeded;
+  let leagueOnly: Seeded;
+  /** R10: both semi-finals in play when the page opens; the live test posts one result. */
+  let live: Seeded & { semis: [string, string] };
+  /** Fix round 2b: a 3-draw, so one first-round slot is a bye. */
+  let byeDraw: Seeded;
+  /** Fix round 1, M5: an 8-draw with nothing scored, so the final waits on
+   *  semi-finals that themselves still wait — no pair to name. */
+  let unplayed: Seeded;
+
+  test.beforeAll(async ({ playwright }, testInfo) => {
+    // A hook has its own clock; the test's `setTimeout` does not reach it.
+    testInfo.setTimeout(SEED_BUDGET_MS);
+    const request = await playwright.request.newContext({
+      baseURL: testInfo.project.use.baseURL,
+      storageState: testInfo.project.use.storageState,
+    });
+    try {
+      orgSlug = await activeOrgSlug(request);
+
+      {
+        const comp = await publicCompetition(request, "Hub KO Eight");
+        const div = await bracketDivision(request, comp.id, "Cup", 8, "knockout", EIGHT_SCORED);
+        eight = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub KO Sixteen");
+        const div = await bracketDivision(request, comp.id, "Open", 16, "knockout", SIXTEEN_SCORED);
+        sixteen = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub KO ThirtyTwo");
+        const div = await bracketDivision(request, comp.id, "Grand", 32, "knockout", THIRTY_TWO_SCORED);
+        thirtyTwo = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub KO Two");
+        const a = await bracketDivision(request, comp.id, "Mens Cup", 4, "knockout", FIRST_DIVISION_SCORED);
+        const b = await bracketDivision(request, comp.id, "Womens Cup", 4, "knockout", SECOND_DIVISION_SCORED);
+        twoDivisions = {
+          compSlug: comp.slug,
+          divisionSlugs: [a.slug, b.slug],
+          doc: await hubDoc(request, orgSlug, comp.slug),
+        };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub KO Double");
+        // EIGHT entrants (was four): its round rail is the long rail the C1
+        // test needs — nine rounds, too wide for one row at 1280.
+        const div = await bracketDivision(request, comp.id, "Double", 8, "double_elim", []);
+        doubleElim = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        const comp = await publicCompetition(request, "Hub League Only");
+        const div = await genericDivision(request, comp.id, "League");
+        const added = await addEntrantsViaApi(request, div.id, ["L1", "L2", "L3", "L4"]);
+        expect(added.ids).toHaveLength(4);
+        const { fixtureIds } = await createStageAndGenerate(request, div.id);
+        expect(fixtureIds.length).toBeGreaterThan(0);
+        leagueOnly = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        // R10: a 4-draw with BOTH semi-finals in play. The live division gives
+        // the page its HUB_POLL_MS cadence, plus a `division:{id}` channel when
+        // the build has realtime. The live test posts the result.
+        const comp = await publicCompetition(request, "Hub KO Live");
+        const div = await bracketDivision(request, comp.id, "Live Cup", 4, "knockout", []);
+        const semis = bracketRounds(await divisionFixtures(request, div.id))[0] ?? [];
+        expect(semis, "the 4-draw's semi-finals").toHaveLength(2);
+        for (const semi of semis) {
+          const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${semi.id}/state`);
+          expect(state.status, JSON.stringify(state.error)).toBe(200);
+          const started = await apiJson(request, `/api/v1/fixtures/${semi.id}/events`, "POST", {
+            expected_seq: state.data!.last_seq,
+            type: "core.start",
+            payload: {},
+          });
+          expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+        }
+        live = {
+          compSlug: comp.slug,
+          divisionSlugs: [div.slug],
+          doc: await hubDoc(request, orgSlug, comp.slug),
+          semis: [semis[0]!.id, semis[1]!.id],
+        };
+      }
+      {
+        // Fix round 2b: THREE entrants in a knockout. The draw is padded to
+        // four, so one first-round fixture is a bye (`stages.ts`,
+        // `byeSlotLabel`). Unplayed: the final still has a side waiting on
+        // the real semi-final, which is the positive pair's '?'.
+        const comp = await publicCompetition(request, "Hub KO Bye");
+        const div = await bracketDivision(request, comp.id, "Bye Cup", 3, "knockout", []);
+        byeDraw = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+      {
+        // Fix round 1, M5: an EIGHT-draw knockout, unplayed. Its quarter-finals
+        // hold entrants, so each semi-final's slots name a pair (F5); the final's
+        // slots wait on semi-finals with no entrants yet, so no pair exists and
+        // the document's own round-named sentence is what the page shows. No
+        // other seed here has that case: every drawable one leaves its waiting
+        // slots fed by matches whose two sides are known.
+        const comp = await publicCompetition(request, "Hub KO Unplayed");
+        const div = await bracketDivision(request, comp.id, "Unplayed Cup", 8, "knockout", []);
+        unplayed = { compSlug: comp.slug, divisionSlugs: [div.slug], doc: await hubDoc(request, orgSlug, comp.slug) };
+      }
+    } finally {
+      await request.dispose();
+    }
+
+    // The documents the page will render, checked BEFORE any test leans on
+    // them — a wrong seed must fail here, by name, not as a missing chip.
+    const [eightView] = eight.doc.knockouts;
+    expect(eight.doc.knockouts).toHaveLength(1);
+    expect(eight.doc.tabs).toContain("knockout");
+    expect(eightView!.id.startsWith(`${eight.divisionSlugs[0]}-`)).toBe(true);
+    expect(eightView!.rounds.map((r) => r.fixtureIds.length)).toEqual([4, 2, 1]);
+    expect(eightView!.drawable).toBe(true);
+    expect(eightView!.championFixtureId).toBeNull();
+
+    const [sixteenView] = sixteen.doc.knockouts;
+    expect(sixteenView!.rounds.map((r) => r.fixtureIds.length)).toEqual([8, 4, 2, 1]);
+    expect(sixteenView!.championFixtureId).toBe(sixteenView!.rounds[3]!.fixtureIds[0]);
+
+    expect(thirtyTwo.doc.knockouts).toHaveLength(1);
+    const [thirtyTwoView] = thirtyTwo.doc.knockouts;
+    expect(thirtyTwoView!.rounds.map((r) => r.fixtureIds.length)).toEqual([16, 8, 4, 2, 1]);
+    expect(thirtyTwoView!.championFixtureId).toBeNull();
+
+    expect(twoDivisions.doc.knockouts.map((v) => v.divisionSlug)).toEqual(twoDivisions.divisionSlugs);
+
+    expect(doubleElim.doc.knockouts).toHaveLength(1);
+    expect(doubleElim.doc.knockouts[0]!.kind).toBe("double_elim");
+    expect(doubleElim.doc.knockouts[0]!.drawable).toBe(false);
+
+    expect(unplayed.doc.knockouts).toHaveLength(1);
+    expect(unplayed.doc.knockouts[0]!.drawable).toBe(true);
+    expect(unplayed.doc.knockouts[0]!.rounds.map((r) => r.fixtureIds.length)).toEqual([4, 2, 1]);
+
+    expect(leagueOnly.doc.knockouts).toHaveLength(0);
+    expect(leagueOnly.doc.tabs).not.toContain("knockout");
+
+    // The live competition: one drawable 4-draw with both semi-finals in play.
+    // A live match is what puts the page on the HUB_POLL_MS cadence.
+    expect(live.doc.knockouts).toHaveLength(1);
+    const [liveView] = live.doc.knockouts;
+    expect(liveView!.drawable).toBe(true);
+    expect(liveView!.rounds.map((r) => r.fixtureIds.length)).toEqual([2, 1]);
+    expect([...liveView!.rounds[0]!.fixtureIds].sort()).toEqual([...live.semis].sort());
+    expect(
+      live.doc.matches.filter((m) => live.semis.includes(m.fixtureId)).map((m) => m.bucket),
+      "both semi-finals in play",
+    ).toEqual(["live", "live"]);
+
+    // The bye draw: one knockout; exactly one match flagged as a bye BY THE
+    // PRODUCER (`byeSides`, never the side's name), in the first round, on a
+    // side with no entrant; and a final with a side still waiting that is
+    // not a bye.
+    expect(byeDraw.doc.knockouts).toHaveLength(1);
+    const byeView = byeDraw.doc.knockouts[0]!;
+    expect(byeView.rounds.length, "a 3-draw has a first round and a final").toBeGreaterThanOrEqual(2);
+    const flagged = byeDraw.doc.matches.filter((m) => m.byeSides?.includes(true));
+    expect(flagged, "exactly one bye in a 3-draw").toHaveLength(1);
+    const [byeMatch] = flagged;
+    expect(byeView.rounds[0]!.fixtureIds).toContain(byeMatch!.fixtureId);
+    expect(byeMatch!.header.sides[byeMatch!.byeSides!.indexOf(true)]!.entrantId).toBe("");
+    const byeFinal = byeDraw.doc.matches.find((m) => m.fixtureId === byeView.rounds.at(-1)!.fixtureIds[0])!;
+    expect(
+      byeFinal.header.sides.some((s, i) => s.entrantId === "" && byeFinal.byeSides?.[i] !== true),
+      JSON.stringify(byeFinal),
+    ).toBe(true);
+  });
+
+  test("an 8-draw mid-event at 1280: opens on the first unfinished round; Draw writes view=draw, shows the tree, survives a reload", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const view = eight.doc.knockouts[0]!;
+    const [quarters, semis, final] = view.rounds as [HubRound, HubRound, HubRound];
+
+    await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout"));
+    await expect(page.getByTestId("mh-tab-knockout")).toBeVisible();
+
+    // Every quarter-final is decided and one semi-final is: the rail opens on
+    // the semi-finals — neither the first round nor the last.
+    await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+    await expect(roundChip(page, view, quarters)).toHaveAttribute("aria-pressed", "false");
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "false");
+
+    // That round's cards, and only that round's.
+    const rounds = page.getByTestId(`mh-knockout-rounds-${view.id}`);
+    await expect(rounds).toBeVisible();
+    for (const id of semis.fixtureIds) await expect(rounds.getByTestId(`mh-match-${id}`)).toBeVisible();
+    for (const id of [...quarters.fixtureIds, ...final.fixtureIds]) {
+      await expect(page.getByTestId(`mh-match-${id}`)).toHaveCount(0);
+    }
+    // The decided semi's winner goes through; its undecided partner's winner
+    // meets them — both naming the round after it, from the document.
+    await expect(page.getByTestId(`mh-knockout-next-${semis.fixtureIds[0]}`)).toContainText(
+      `goes through to the ${final.label}`,
+    );
+    await expect(page.getByTestId(`mh-knockout-next-${semis.fixtureIds[1]}`)).toContainText(
+      `Winner meets `,
+    );
+
+    // Rounds is the default: no tree in the DOM at all.
+    const tree = page.getByTestId(`mh-knockout-draw-${view.id}`);
+    await expect(tree).toHaveCount(0);
+
+    const drawChip = page.getByTestId("mh-knockout-view-draw");
+    const roundsChip = page.getByTestId("mh-knockout-view-rounds");
+    await expect(page.getByTestId("mh-knockout-view")).toBeVisible();
+    await expect(roundsChip).toHaveAttribute("aria-pressed", "true");
+
+    await drawChip.click();
+    await expect(drawChip).toHaveAttribute("aria-pressed", "true");
+    await expect(page).toHaveURL(/[?&]view=draw(&|$)/);
+    await expect(page).toHaveURL(/[?&]tab=knockout(&|$)/);
+    await expect(tree).toBeVisible();
+    await expect(rounds).toBeHidden();
+    const finalColumn = page.getByTestId(`mh-knockout-col-${view.id}-${final.key}`);
+    await expect(finalColumn).toBeVisible();
+    await expect(finalColumn).toContainText(final.label);
+    for (const round of view.rounds) {
+      for (const id of round.fixtureIds) await expect(page.getByTestId(`mh-knockout-node-${id}`)).toBeVisible();
+    }
+
+    // An 8-draw fits: nothing to scroll inside the tree's region, nor on the page.
+    const region = page.getByTestId(`mh-knockout-draw-region-${view.id}`);
+    const fit = await region.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+    expect(fit.clientWidth).toBeGreaterThan(0);
+    expect(fit.scrollWidth, JSON.stringify(fit)).toBeLessThanOrEqual(fit.clientWidth);
+    await expectNoHorizontalScroll(page);
+
+    // The URL is the state: a reload opens on the Draw.
+    await page.reload();
+    await expect(page.getByTestId("mh-knockout")).toBeVisible();
+    await expect(tree).toBeVisible();
+    await expect(drawChip).toHaveAttribute("aria-pressed", "true");
+
+    // And Rounds takes the parameter out again.
+    await roundsChip.click();
+    await expect(roundsChip).toHaveAttribute("aria-pressed", "true");
+    await expect(page).not.toHaveURL(/[?&]view=/);
+    await expect(rounds).toBeVisible();
+    await expect(tree).toHaveCount(0);
+  });
+
+  test("an 8-draw at 390 and 768: no switch and no tree even with view=draw, Rounds shown, no page scroll", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(2));
+    const view = eight.doc.knockouts[0]!;
+    const semis = view.rounds[1]!;
+    for (const width of [390, 768]) {
+      await test.step(`${width}px`, async () => {
+        await page.setViewportSize({ width, height: 900 });
+        await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout&view=draw"));
+        // In the DOM — the bracket IS drawable — and folded away by CSS: the
+        // negative of the 1280 test, not an element that never rendered.
+        await expect(page.getByTestId("mh-knockout-view")).toBeAttached();
+        await expect(page.getByTestId("mh-knockout-view")).toBeHidden();
+        const tree = page.getByTestId(`mh-knockout-draw-${view.id}`);
+        await expect(tree).toBeAttached();
+        await expect(tree).toBeHidden();
+        await expect(page.getByTestId(`mh-knockout-rounds-${view.id}`)).toBeVisible();
+        await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+        for (const id of semis.fixtureIds) await expect(page.getByTestId(`mh-match-${id}`)).toBeVisible();
+        await expectNoHorizontalScroll(page);
+      });
+    }
+  });
+
+  test("a finished 16-draw at 390: opens on the Final under the champion, with the pressed chip scrolled into its rail", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(3));
+    await page.setViewportSize({ width: 390, height: 844 });
+    const view = sixteen.doc.knockouts[0]!;
+    const first = view.rounds[0]!;
+    const final = view.rounds[view.rounds.length - 1]!;
+
+    await openKnockout(page, hubUrl(orgSlug, sixteen, "?tab=knockout"));
+    await expect(page.getByTestId(`mh-knockout-champion-${view.id}`)).toBeVisible();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    await expect(roundChip(page, view, first)).toHaveAttribute("aria-pressed", "false");
+
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    // Non-vacuous: the rail really overflows, and the Final chip sits past its
+    // right edge when the rail is at rest — so seeing it means it was moved.
+    let geometry = await railGeometry(rail);
+    expect(geometry.scrollWidth, JSON.stringify(geometry)).toBeGreaterThan(geometry.clientWidth);
+    expect(geometry.pressed!.right + geometry.scrollLeft, JSON.stringify(geometry)).toBeGreaterThan(
+      geometry.clientWidth,
+    );
+    await expect
+      .poll(async () => {
+        geometry = await railGeometry(rail);
+        return geometry.scrollLeft > 0 && insideRail(geometry, geometry.pressed);
+      })
+      .toBe(true);
+    await expectNoHorizontalScroll(page);
+
+    // On CHANGE too. The first chip is now clipped on the left; a DISPATCHED
+    // click presses it without Playwright scrolling it into view first, so
+    // only the tab's own effect can bring it back.
+    geometry = await railGeometry(rail);
+    expect(insideRail(geometry, geometry.first), JSON.stringify(geometry)).toBe(false);
+    await roundChip(page, view, first).dispatchEvent("click");
+    await expect(roundChip(page, view, first)).toHaveAttribute("aria-pressed", "true");
+    await expect
+      .poll(async () => {
+        const g = await railGeometry(rail);
+        return insideRail(g, g.first) && g.scrollLeft < geometry.scrollLeft;
+      })
+      .toBe(true);
+    for (const id of first.fixtureIds) await expect(page.getByTestId(`mh-match-${id}`)).toBeVisible();
+  });
+
+  test("C-1 (review N2 I2) at 320 and 390, on load: a mid-event 32-draw opened on its Semi-finals shows that chip whole and cuts no chip's text at the rail's leading edge", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    const view = thirtyTwo.doc.knockouts[0]!;
+    const semis = view.rounds[3]!;
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, thirtyTwo, "?tab=knockout"));
+      await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+      const g = await settledRailEdges(page, rail);
+      const seen = `load at ${width}: ${JSON.stringify(g)}`;
+      // Non-vacuous: the rail overflows, the Semi-finals lie past its right edge
+      // at rest (so the reveal had to move the rail), and they are not the last
+      // chip (so the scroll end's exemption is not what the reveal was for).
+      expect(g.max, seen).toBeGreaterThan(0);
+      expect(g.pressed!.right + g.scrollLeft, seen).toBeGreaterThan(g.clientWidth);
+      expect(g.chips.at(-1)!.pressed, seen).toBe(false);
+      expectC1(g, `load at ${width}`);
+      await expectNoHorizontalScroll(page);
+    }
+  });
+
+  test("C-1 (review N2 I2) at 320 and 390, after one tap: pressing the first chip past a double-elimination rail's right edge shows it whole and cuts no chip's text at the leading edge", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    const view = doubleElim.doc.knockouts[0]!;
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+      const before = await settledRailEdges(page, rail);
+      const seen = `before the tap at ${width}: ${JSON.stringify(before)}`;
+      // Non-vacuous: the rail overflows, the target lies past its right edge,
+      // and it is not the last chip, so the scroll end's exemption cannot answer
+      // for it. A DISPATCHED click, so Playwright does not scroll it in first.
+      expect(before.max, seen).toBeGreaterThan(0);
+      const target = before.chips.findIndex((c) => !c.pressed && c.right > before.clientWidth + 0.5);
+      expect(target, seen).toBeGreaterThan(-1);
+      expect(target, seen).toBeLessThan(before.chips.length - 1);
+      const testid = before.chips[target]!.testid;
+      expect(testid, seen).not.toBe("");
+      await page.getByTestId(testid).dispatchEvent("click");
+      await expect(page.getByTestId(testid)).toHaveAttribute("aria-pressed", "true");
+      expectC1(await settledRailEdges(page, rail), `tap on ${testid} at ${width}`);
+      await expectNoHorizontalScroll(page);
+    }
+  });
+
+  test("g1 (review N2f I-1, rewritten N2h) at 320 and 390: a 32-draw opened on its Semi-finals rests ON a chip's start short of its scroll end at every width that affords one, and at the documented scroll end where none is afforded", async ({
+    page,
+  }) => {
+    // C-1's cut check cannot see a reveal that lands AT the scroll end (cuts
+    // there are exempt) or on the pressed chip's own start (nothing is cut).
+    // Both are where the regressions land: the effect passing no scroll end,
+    // passing no chip starts, or the gutter branch dropped. This pins WHERE the
+    // rail rests.
+    //
+    // WHICH chip's start that is, is DERIVED from each width's own measurement
+    // and never named here. The chips are text, so their widths follow the
+    // renderer's font metrics: CI's Linux build draws "Quarter-finals" ~7px
+    // wider than macOS does, and at 320 that is the difference between that
+    // chip's start holding the Semi-finals whole and no reachable start holding
+    // them at all — where the rail correctly rests at its end instead
+    // (hub-chip.tsx: "a rail scrolled fully right can still cut its leading
+    // chip … geometry, not a rule this class can express"). Naming a round, or
+    // a pixel, pins one machine's fonts and reds on the other's.
+    test.setTimeout(budget(4));
+    const view = thirtyTwo.doc.knockouts[0]!;
+    const semis = view.rounds[3]!;
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await openKnockout(page, hubUrl(orgSlug, thirtyTwo, "?tab=knockout"));
+      await expect(roundChip(page, view, semis)).toHaveAttribute("aria-pressed", "true");
+      const g = await settledRailEdges(page, rail);
+      const seen = `load at ${width}: ${JSON.stringify(g)}`;
+
+      // Non-vacuous: the rail overflows, the Semi-finals are what is pressed,
+      // and they are not the last chip — so the scroll end's own exemption is
+      // not what the reveal was for.
+      expect(g.max, seen).toBeGreaterThan(0);
+      expect(g.pressed?.testid, seen).toBe(`mh-knockout-round-${view.id}-${semis.key}`);
+      expect(g.chips.at(-1)!.pressed, seen).toBe(false);
+
+      // In the rail's CONTENT coordinates, independent of where it rests:
+      // `restAt(c)` is the scrollLeft that puts c's start on the leading
+      // padding — which is also a snap point (HUB_RAIL_CLASS) — and `sfEnd` is
+      // the pressed chip's right edge.
+      const restAt = (c: { left: number }) => c.left + g.scrollLeft - g.padStart;
+      const starts = g.chips.map(restAt);
+      const sfEnd = g.pressed!.right + g.scrollLeft;
+      const own = restAt(g.pressed!);
+      // The least scroll that shows the pressed chip wholly inside the rail...
+      const needInside = sfEnd - g.clientWidth;
+      // ...so THESE are the starts this width can come to rest on and still
+      // show it whole: at or past that, not past the pressed chip's own start,
+      // and within reach of the scroll end. Empty means this viewport cannot
+      // express the scenario at all — the else arm, which still asserts.
+      const affords = starts.filter((s) => s >= needInside - 1 && s <= own + 1 && s <= g.max + 1);
+      const measured = `at ${width}: rests at ${g.scrollLeft} of ${g.max}, chip starts ${JSON.stringify(starts)}, the Semi-finals whole from ${needInside}, their own start ${own}`;
+
+      // C-1's first fact, on BOTH arms — showing this chip is what the reveal is for.
+      expect
+        .soft(g.pressedInside, `the pressed chip is not wholly inside the rail — ${measured} — ${seen}`)
+        .toBe(true);
+
+      if (affords.length > 0) {
+        // It must come to rest on one of them. The scroll end is not one, and
+        // neither is a mid-chip offset: passing no scroll end, passing no chip
+        // starts, or dropping the gutter branch each strands the rail at the
+        // end instead — where C-1 is exempt and only this assertion is looking.
+        expect
+          .soft(
+            affords.some((s) => Math.abs(s - g.scrollLeft) <= 1),
+            `the rail does not rest on a chip start that shows the Semi-finals whole — ${measured} — ${seen}`,
+          )
+          .toBe(true);
+        if (Math.min(...affords) < g.max - 1) {
+          expect
+            .soft(
+              g.atEnd,
+              `the rail rests at its scroll end though a chip start short of it shows the Semi-finals whole — ${measured} — ${seen}`,
+            )
+            .toBe(false);
+        }
+      } else {
+        // The DOCUMENTED end-of-rail geometry: every start that would show the
+        // pressed chip whole lies past the last reachable offset, so the rail
+        // clamps to that offset and may cut its leading chip. Asserted rather
+        // than excused, so the width is still covered.
+        expect
+          .soft(
+            g.atEnd,
+            `no reachable chip start shows the Semi-finals whole, so the rail must rest at its scroll end — ${measured} — ${seen}`,
+          )
+          .toBe(true);
+        expect
+          .soft(
+            own,
+            `the pressed chip's own start is what must lie past the scroll end — ${measured} — ${seen}`,
+          )
+          .toBeGreaterThan(g.max);
+      }
+    }
+  });
+
+  test("two knockout divisions: All shows both; a division chip shows one and writes division=; a division= link opens on it", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const [a, b] = twoDivisions.divisionSlugs as [string, string];
+    const headings = page.locator('[data-testid^="mh-knockout-heading-"]');
+    const allChip = page.getByTestId("mh-knockout-division-all");
+
+    await openKnockout(page, hubUrl(orgSlug, twoDivisions, "?tab=knockout"));
+    await expect(allChip).toHaveAttribute("aria-pressed", "true");
+    await expect(headings).toHaveCount(2);
+    await expect(page.getByTestId(`mh-knockout-heading-${a}`)).toBeVisible();
+    await expect(page.getByTestId(`mh-knockout-heading-${b}`)).toBeVisible();
+
+    await page.getByTestId(`mh-knockout-division-${b}`).click();
+    await expect(page.getByTestId(`mh-knockout-division-${b}`)).toHaveAttribute("aria-pressed", "true");
+    await expect(allChip).toHaveAttribute("aria-pressed", "false");
+    await expect(page).toHaveURL(new RegExp(`[?&]division=${b}(&|$)`));
+    await expect(headings).toHaveCount(1);
+    await expect(page.getByTestId(`mh-knockout-heading-${b}`)).toBeVisible();
+    await expect(page.getByTestId(`mh-knockout-heading-${a}`)).toHaveCount(0);
+
+    await allChip.click();
+    await expect(allChip).toHaveAttribute("aria-pressed", "true");
+    await expect(page).not.toHaveURL(/[?&]division=/);
+    await expect(headings).toHaveCount(2);
+
+    // The link a division page will one day redirect to.
+    await openKnockout(page, hubUrl(orgSlug, twoDivisions, `?tab=knockout&division=${a}`));
+    await expect(page.getByTestId(`mh-knockout-division-${a}`)).toHaveAttribute("aria-pressed", "true");
+    await expect(headings).toHaveCount(1);
+    await expect(page.getByTestId(`mh-knockout-heading-${a}`)).toBeVisible();
+  });
+
+  test("a double-elimination bracket at 1280: no Draw switch and no tree, even with view=draw", async ({ page }) => {
+    test.setTimeout(budget(1));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const view = doubleElim.doc.knockouts[0]!;
+    await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout&view=draw"));
+    await expect(page.getByTestId(`mh-knockout-rounds-${view.id}`)).toBeVisible();
+    await expect(page.getByTestId(`mh-knockout-rail-${view.id}`)).toBeVisible();
+    await expect(page.getByTestId("mh-knockout-view")).toHaveCount(0);
+    await expect(page.getByTestId(`mh-knockout-draw-${view.id}`)).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("D2 at 1280: the final's empty slot names the undecided semi-final's pair — in the Draw node and on its card in Rounds", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(4));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = eight.doc.knockouts[0]!;
+    const [, semis, final] = view.rounds as [HubRound, HubRound, HubRound];
+    const byId = new Map(eight.doc.matches.map((m) => [m.fixtureId, m]));
+    const decidedSemi = byId.get(semis.fixtureIds[0]!)!;
+    const feeder = byId.get(semis.fixtureIds[1]!)!;
+    const finalId = final.fixtureIds[0]!;
+    const finalMatch = byId.get(finalId)!;
+
+    // The premise, read from the document the page renders: the second semi
+    // (the final's AWAY feeder) is unplayed with both sides known, and the
+    // final's home slot is filled while its away slot waits on that semi.
+    expect(decidedSemi.bucket).toBe("completed");
+    expect(feeder.bucket, JSON.stringify(feeder)).not.toBe("completed");
+    expect(feeder.header.sides.map((s) => s.entrantId).every((id) => id !== "")).toBe(true);
+    expect(finalMatch.header.sides[0]!.entrantId).not.toBe("");
+    expect(finalMatch.header.sides[1]!.entrantId).toBe("");
+    // `knockout.pendingPair`, en "{a} or {b}" (fix round 2, F5). Literal rather
+    // than read from the dictionary: a spec cannot import a JSON-backed module.
+    const pair = `${feeder.header.sides[0]!.name} or ${feeder.header.sides[1]!.name}`;
+
+    await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout&view=draw"));
+    const node = page.getByTestId(`mh-knockout-node-${finalId}`);
+    await expect(node).toBeVisible();
+    await expect(node).toContainText(pair);
+    await expect(node).toContainText(finalMatch.header.sides[0]!.name);
+    await expect(node).not.toContainText("Winner of");
+    // The decided semi's own node is two real names, no pair.
+    await expect(page.getByTestId(`mh-knockout-node-${decidedSemi.fixtureId}`)).not.toContainText(" or ");
+
+    await page.getByTestId("mh-knockout-view-rounds").click();
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${finalId}`);
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(pair);
+    await expect(card).not.toContainText("Winner of");
+
+    // D3 (fix round 2): the waiting side is not an entrant, so its crest is the
+    // neutral "?" placeholder with no letters in it — never initials computed
+    // from the pair, which read as one confirmed player.
+    const waitingCrest = card.getByTestId("mh-match-side-1").locator('[data-crest="pending"]');
+    await expect(waitingCrest).toHaveCount(1);
+    await expect(waitingCrest).toBeVisible();
+    await expect(waitingCrest).toHaveText("?");
+    expect(await waitingCrest.textContent()).not.toMatch(/\p{L}/u);
+    // The positive pair, same card: the filled home side keeps the entrant's own crest.
+    await expect(card.getByTestId("mh-match-side-0").locator('[data-crest="pending"]')).toHaveCount(0);
+    await expect(card.getByTestId("mh-match-side-0").locator('span[aria-hidden="true"]').first()).toHaveText(
+      /\p{L}/u,
+    );
+  });
+
+  // Fix round 2b (27941e5b4): a bye is not "to be decided", so its side
+  // keeps the placeholder box but shows NO glyph (`data-crest="empty"`). A
+  // side waiting on a result keeps the "?" (`data-crest="pending"`). Both
+  // are read from the producer's `byeSides`, so this drives the real stored
+  // bye label through the real card.
+  test("2b at 1280: a bye's side is the EMPTY box with no text and not the waiting '?'; the final's waiting side on the same draw keeps '?'", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(5));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = byeDraw.doc.knockouts[0]!;
+    const byId = new Map(byeDraw.doc.matches.map((m) => [m.fixtureId, m]));
+    const firstRound = view.rounds[0]!;
+    const final = view.rounds.at(-1)!;
+    const byeMatch = firstRound.fixtureIds.map((id) => byId.get(id)!).find((m) => m.byeSides?.includes(true))!;
+    const byeSide = byeMatch.byeSides!.indexOf(true);
+    const filledSide = 1 - byeSide;
+    const finalMatch = byId.get(final.fixtureIds[0]!)!;
+    const waitingSide = finalMatch.header.sides.findIndex(
+      (s, i) => s.entrantId === "" && finalMatch.byeSides?.[i] !== true,
+    );
+
+    // The premise, from the document the page renders.
+    expect(byeMatch.header.sides[filledSide]!.entrantId, "the bye's other side is the entrant it advances").not.toBe("");
+    expect(waitingSide, JSON.stringify(finalMatch)).toBeGreaterThanOrEqual(0);
+
+    await openKnockout(page, hubUrl(orgSlug, byeDraw, "?tab=knockout"));
+    await roundChip(page, view, firstRound).click();
+    await expect(roundChip(page, view, firstRound)).toHaveAttribute("aria-pressed", "true");
+    const byeCard = page.getByTestId(`mh-match-${byeMatch.fixtureId}`);
+    await expect(byeCard).toBeVisible();
+    const byeSideBox = byeCard.getByTestId(`mh-match-side-${byeSide}`);
+    const emptyCrest = byeSideBox.locator('[data-crest="empty"]');
+    await expect(emptyCrest).toHaveCount(1);
+    await expect(emptyCrest).toBeVisible();
+    await expect(emptyCrest).toHaveText("");
+    expect(await emptyCrest.textContent(), "a bye's crest carries a glyph").toBe("");
+    await expect(byeSideBox.locator('[data-crest="pending"]'), "a bye drawn as the waiting '?'").toHaveCount(0);
+    // The same card's entrant side is neither placeholder.
+    await expect(byeCard.getByTestId(`mh-match-side-${filledSide}`).locator("[data-crest]")).toHaveCount(0);
+
+    // The positive pair, same draw: a side WAITING on a result keeps the "?"
+    // and is not the empty box.
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const finalCard = page.getByTestId(`mh-match-${finalMatch.fixtureId}`);
+    await expect(finalCard).toBeVisible();
+    const waitingSideBox = finalCard.getByTestId(`mh-match-side-${waitingSide}`);
+    const waitingCrest = waitingSideBox.locator('[data-crest="pending"]');
+    await expect(waitingCrest).toHaveCount(1);
+    await expect(waitingCrest).toHaveText("?");
+    await expect(waitingSideBox.locator('[data-crest="empty"]'), "a waiting side drawn as a bye").toHaveCount(0);
+  });
+
+  // Fix round N1: a slot waiting on a match with no pair to name reads that
+  // match's ROUND as the rail names it, plus its place in the round — "Winner
+  // of Semi-finals, match 1" — never the organiser board's short code "R1·1".
+  // The double-elimination draw is where that text shows: it is not drawable,
+  // so no waiting slot there becomes a pair (F5), and it is unplayed, so every
+  // slot past its first round waits. The winners' second round is fed by the
+  // first round's matches 2j-1 and 2j (`buildSingleElim`), so its first match
+  // waits on matches 1 and 2.
+  test("N1 at 1280: a double-elimination card waiting on a match names that match's round with the rail's own label, and no R·code is anywhere in the panel", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(5));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = doubleElim.doc.knockouts[0]!;
+    const byId = new Map(doubleElim.doc.matches.map((m) => [m.fixtureId, m]));
+    const winners = view.rounds.filter((round) => round.lane === "WB");
+    expect(winners.length, JSON.stringify(view.rounds.map((r) => [r.key, r.lane]))).toBeGreaterThanOrEqual(2);
+    const [first, second] = winners as [HubRound, HubRound];
+    const targetId = second.fixtureIds[0]!;
+    const target = byId.get(targetId)!;
+    // The premise, read from the document the page renders: both sides wait.
+    expect(target.header.sides.map((s) => s.entrantId), JSON.stringify(target)).toEqual(["", ""]);
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}" with a NO-BREAK
+    // space before {seq} (fix round N2f, m5). The words are
+    // literal (a spec cannot import a JSON-backed module); the round is the
+    // rail's own label, out of the same document.
+    const expected = [`Winner of ${first.label}, match\u00a01`, `Winner of ${first.label}, match\u00a02`];
+    expect(target.header.sides.map((s) => s.name)).toEqual(expected);
+
+    await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+    await roundChip(page, view, second).click();
+    await expect(roundChip(page, view, second)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${targetId}`);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("mh-match-side-0")).toContainText(expected[0]!);
+    await expect(card.getByTestId("mh-match-side-1")).toContainText(expected[1]!);
+    // The chip the round's name comes from says the same words on the rail.
+    await expect(roundChip(page, view, first)).toContainText(first.label);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+
+    // Fix round 1, M6: a LOSERS' bracket card names the winners' round its
+    // sides drop from. The first losers' round's first match takes the losers
+    // of the winners' first round's matches 1 and 2 (`generateDoubleElim`, LB
+    // round 0, emitted in index order, so `bracketToGen` numbers them seq 1 and
+    // 2). That winners' round holds four matches, so each side keeps its number.
+    const losers = view.rounds.filter((round) => round.lane === "LB");
+    expect(losers.length, JSON.stringify(view.rounds.map((r) => [r.key, r.lane]))).toBeGreaterThanOrEqual(1);
+    const lbFirst = losers[0]!;
+    const lbTargetId = lbFirst.fixtureIds[0]!;
+    const lbTarget = byId.get(lbTargetId)!;
+    expect(first.fixtureIds, "the winners' first round of an 8-draw").toHaveLength(4);
+    expect(lbTarget.header.sides.map((s) => s.entrantId), JSON.stringify(lbTarget)).toEqual(["", ""]);
+    // `knockout.feederLoser`, en "Loser of {round}, match {seq}", a NO-BREAK space
+    // before {seq} (fix round N2f, m5) — literal words,
+    // the round read from the same document.
+    const lbExpected = [`Loser of ${first.label}, match\u00a01`, `Loser of ${first.label}, match\u00a02`];
+    expect(lbTarget.header.sides.map((s) => s.name)).toEqual(lbExpected);
+
+    await roundChip(page, view, lbFirst).click();
+    await expect(roundChip(page, view, lbFirst)).toHaveAttribute("aria-pressed", "true");
+    const lbCard = page.getByTestId(`mh-match-${lbTargetId}`);
+    await expect(lbCard).toBeVisible();
+    await expect(lbCard.getByTestId("mh-match-side-0")).toContainText(lbExpected[0]!);
+    await expect(lbCard.getByTestId("mh-match-side-1")).toContainText(lbExpected[1]!);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+  });
+
+  // Fix round 1, M5: on a DRAWABLE bracket a waiting slot names its feeder's
+  // pair (F5) only when both of that feeder's sides are known. A slot whose
+  // feeder still waits itself falls through to the document's sentence, which
+  // since N1 names the feeder's round as the rail does ("Winner of
+  // Semi-finals, match 1"), never the board's "R2·1". The final of an unplayed
+  // 8-draw is that slot: its semi-finals have no entrants yet. The semi-finals
+  // are fed by matches 2j-1 and 2j (`buildSingleElim`), so the final's sides wait
+  // on semi-finals 1 and 2, a round of two, so each keeps its number (M2).
+  test("M5 at 1280: a drawable slot whose feeder still waits names that feeder's round — on the Draw node and on the Rounds card — and no R·code is in either view", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(5));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = unplayed.doc.knockouts[0]!;
+    const [, semis, final] = view.rounds as [HubRound, HubRound, HubRound];
+    const byId = new Map(unplayed.doc.matches.map((m) => [m.fixtureId, m]));
+    const finalId = final.fixtureIds[0]!;
+    const finalMatch = byId.get(finalId)!;
+    // The premise, read from the document the page renders: both of the final's
+    // sides wait, and so do both sides of each semi-final feeding them — so F5
+    // has no pair to name and the sentence is what shows.
+    expect(finalMatch.header.sides.map((s) => s.entrantId), JSON.stringify(finalMatch)).toEqual(["", ""]);
+    for (const semiId of semis.fixtureIds) {
+      const semi = byId.get(semiId)!;
+      expect(semi.header.sides.map((s) => s.entrantId), JSON.stringify(semi)).toEqual(["", ""]);
+    }
+    // `knockout.feederWinner`, en "Winner of {round}, match {seq}" with a NO-BREAK
+    // space before {seq} (fix round N2f, m5). The words are
+    // literal (a spec cannot import a JSON-backed module); the round is the
+    // rail's own label, out of the same document.
+    const expected = [`Winner of ${semis.label}, match\u00a01`, `Winner of ${semis.label}, match\u00a02`];
+    expect(finalMatch.header.sides.map((s) => s.name)).toEqual(expected);
+
+    await openKnockout(page, hubUrl(orgSlug, unplayed, "?tab=knockout&view=draw"));
+    const node = page.getByTestId(`mh-knockout-node-${finalId}`);
+    await expect(node).toBeVisible();
+    await expect(node).toContainText(expected[0]!);
+    await expect(node).toContainText(expected[1]!);
+    await expect(node).not.toContainText(" or ");
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+
+    await page.getByTestId("mh-knockout-view-rounds").click();
+    await roundChip(page, view, final).click();
+    await expect(roundChip(page, view, final)).toHaveAttribute("aria-pressed", "true");
+    const card = page.getByTestId(`mh-match-${finalId}`);
+    await expect(card).toBeVisible();
+    await expect(card.getByTestId("mh-match-side-0")).toContainText(expected[0]!);
+    await expect(card.getByTestId("mh-match-side-1")).toContainText(expected[1]!);
+    await expect(page.getByTestId("mh-tab-panel-knockout")).not.toContainText(/R\d+·\d+/);
+  });
+
+  test("C2 at 1280: the Rounds|Draw switch shares ONE row — with the heading for one division, with the division chips for two", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(3));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const centreY = (box: { y: number; height: number }) => box.y + box.height / 2;
+    const viewSwitch = page.getByTestId("mh-knockout-view");
+
+    // One division: no chip rail, so the heading is what the switch sits beside.
+    await openKnockout(page, hubUrl(orgSlug, eight, "?tab=knockout"));
+    await expect(viewSwitch).toBeVisible();
+    const heading = page.getByTestId(`mh-knockout-heading-${eight.divisionSlugs[0]}`);
+    await expect(heading).toBeVisible();
+    const switchBox = await viewSwitch.boundingBox();
+    const headingBox = await heading.boundingBox();
+    const one = JSON.stringify({ switchBox, headingBox });
+    expect(switchBox, one).not.toBeNull();
+    expect(headingBox, one).not.toBeNull();
+    expect(Math.abs(centreY(switchBox!) - centreY(headingBox!)), one).toBeLessThanOrEqual(2);
+    expect(switchBox!.x, one).toBeGreaterThan(headingBox!.x + headingBox!.width);
+    await expect(page.getByTestId("mh-knockout-toolbar")).toHaveCount(0);
+
+    // Two divisions: the chip rail leads the row, the switch follows it.
+    await openKnockout(page, hubUrl(orgSlug, twoDivisions, "?tab=knockout"));
+    const rail = page.getByTestId("mh-knockout-divisions");
+    await expect(rail).toBeVisible();
+    await expect(viewSwitch).toBeVisible();
+    const switchBox2 = await viewSwitch.boundingBox();
+    const railBox = await rail.boundingBox();
+    const two = JSON.stringify({ switchBox2, railBox });
+    expect(switchBox2, two).not.toBeNull();
+    expect(railBox, two).not.toBeNull();
+    expect(Math.abs(centreY(switchBox2!) - centreY(railBox!)), two).toBeLessThanOrEqual(2);
+    expect(switchBox2!.x, two).toBeGreaterThanOrEqual(railBox!.x + railBox!.width);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("C1 at 1280: a round rail too long for one row wraps — its last chip is hit-testable, nothing scrolls sideways, and pressing it moves nothing", async ({
+    page,
+  }) => {
+    test.setTimeout(budget(2));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const view = doubleElim.doc.knockouts[0]!;
+    const last = view.rounds[view.rounds.length - 1]!;
+    await openKnockout(page, hubUrl(orgSlug, doubleElim, "?tab=knockout"));
+    const rail = page.getByTestId(`mh-knockout-rail-${view.id}`);
+    await expect(rail).toBeVisible();
+    await rail.scrollIntoViewIfNeeded();
+
+    const g = await rail.evaluate((el) => {
+      const chips = [...el.querySelectorAll("button")];
+      const gap = Number.parseFloat(getComputedStyle(el).columnGap) || 0;
+      const lastChip = chips[chips.length - 1]!;
+      const box = lastChip.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return {
+        chips: chips.length,
+        oneRowWidth: chips.reduce((w, c) => w + c.getBoundingClientRect().width, 0) + gap * (chips.length - 1),
+        clientWidth: el.clientWidth,
+        scrollWidth: el.scrollWidth,
+        scrollLeft: el.scrollLeft,
+        railRight: el.getBoundingClientRect().right,
+        firstTop: chips[0]!.getBoundingClientRect().top,
+        lastTop: box.top,
+        lastRight: box.right,
+        lastTestid: lastChip.getAttribute("data-testid"),
+        hitIsLast: hit !== null && lastChip.contains(hit),
+      };
+    });
+    const seen = JSON.stringify(g);
+    // Non-vacuous: laid out in one row these chips would not fit the rail.
+    expect(g.oneRowWidth, seen).toBeGreaterThan(g.clientWidth);
+    expect(g.lastTestid, seen).toBe(`mh-knockout-round-${view.id}-${last.key}`);
+    expect(g.lastTop, seen).toBeGreaterThan(g.firstTop);
+    expect(g.scrollWidth, seen).toBeLessThanOrEqual(g.clientWidth + 1);
+    expect(g.lastRight, seen).toBeLessThanOrEqual(g.railRight + 0.5);
+    expect(g.hitIsLast, seen).toBe(true);
+
+    await roundChip(page, view, last).click();
+    await expect(roundChip(page, view, last)).toHaveAttribute("aria-pressed", "true");
+    expect(await rail.evaluate((el) => el.scrollLeft)).toBe(0);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("a league-only competition has no Knockout tab, and a knockout link falls back", async ({ page }) => {
+    test.setTimeout(budget(2));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const firstTab = leagueOnly.doc.tabs[0]!;
+
+    await page.goto(hubUrl(orgSlug, leagueOnly, ""));
+    await expect(page.getByTestId(`mh-tab-${firstTab}`)).toBeVisible();
+    await expect(page.getByTestId("mh-tab-knockout")).toHaveCount(0);
+
+    await page.goto(hubUrl(orgSlug, leagueOnly, "?tab=knockout"));
+    await expect(page.getByTestId(`mh-tab-panel-${firstTab}`)).toBeVisible();
+    await expect(page.getByTestId("mh-tab-knockout")).toHaveCount(0);
+    await expect(page.getByTestId("mh-knockout")).toHaveCount(0);
+  });
+
+  // R10: the open page moves with NO reload. The controller measured the
+  // freeze in a real browser on spectw2 (built at 168a3ca9e):
+  //   - a semi-final result was posted with this tab open;
+  //   - the push arrived and the hook refetched once;
+  //   - the browser answered that refetch from its HTTP cache
+  //     (stale-while-revalidate), with a document built BEFORE the write;
+  //   - with the cache disabled over CDP, the tab updated in under a second.
+  // Polling was also off while subscribed, so nothing corrected it.
+  // The budget is one poll interval plus slack. That covers a build with
+  // realtime (a push lands in well under a second) and one without it (the
+  // HUB_POLL_MS poll).
+  //
+  // Built to be red against that build in both modes (reasoned from the code,
+  // not yet run):
+  //   - realtime up: the cached refetch plus the stopped poll froze the tab.
+  //   - polling only: the post is lined up right after a poll tick, so the next
+  //     tick (the first that could show the result) is answered from the cache
+  //     with the pre-result copy, and the result lands a whole interval later,
+  //     past the budget.
+  // The cache is primed first, because a fresh context has no entry to answer
+  // from. A spectator who has had the page open for a tick, or has another tab
+  // on the same hub, has one.
+  test("live: an anonymous spectator on the Knockout tab sees a semi-final result land within one poll interval, with no reload", async ({
+    browser,
+    request,
+  }, testInfo) => {
+    const pollMs = hubPollMs();
+    expect(pollMs, "HUB_POLL_MS read out of use-live-competition.ts").not.toBeNull();
+    const landMs = pollMs! + LAND_SLACK_MS;
+    // Long enough for either a realtime subscription or one poll tick to line up on.
+    const lineUpMs = pollMs! + STEP_MS;
+    test.setTimeout(Math.max(FLOOR_MS, 3 * STEP_MS + lineUpMs + 3 * API_CALL_MS + landMs));
+
+    const [semiA, semiB] = live.semis;
+    const hubApi = `/api/v1/public/orgs/${orgSlug}/competitions/${live.compSlug}/hub`;
+
+    // A spectator: no session cookie and no storage from the organiser's state.
+    const context = await browser.newContext({
+      baseURL: testInfo.project.use.baseURL,
+      storageState: { cookies: [], origins: [] },
+      viewport: { width: 390, height: 844 },
+    });
+    try {
+      const page = await context.newPage();
+      await openKnockout(page, hubUrl(orgSlug, live, "?tab=knockout"));
+      const pathname = new URL(page.url()).pathname;
+      let loads = 0;
+      page.on("load", () => {
+        loads += 1;
+      });
+      // Survives anything short of a reload or a hard navigation.
+      await page.evaluate(() => {
+        (window as unknown as { __r10SamePage?: boolean }).__r10SamePage = true;
+      });
+
+      // The premise, on screen: both semis are in play, so semi A's next line
+      // still names semi B's pair. That line is what the result changes.
+      const nextA = page.getByTestId(`mh-knockout-next-${semiA}`);
+      const nextB = page.getByTestId(`mh-knockout-next-${semiB}`);
+      await expect(nextA).toBeVisible();
+      await expect(nextA).toContainText("Winner meets the winner of");
+      await expect(nextA).not.toContainText("goes through to the");
+      await expect(nextB).toContainText("Winner meets the winner of");
+
+      // Line the post up on the transport: at once once realtime is up, or
+      // just after a poll tick's document has come back.
+      const lined = await Promise.race([
+        page
+          .locator('[data-testid="mh-root"][data-transport="realtime"]')
+          .waitFor({ timeout: lineUpMs })
+          .then(
+            () => "realtime",
+            () => null,
+          ),
+        page
+          .waitForResponse((res) => new URL(res.url()).pathname === hubApi, { timeout: lineUpMs })
+          .then(
+            () => "a poll tick",
+            () => null,
+          ),
+      ]);
+      expect(lined, "neither a realtime subscription nor a poll tick").not.toBeNull();
+
+      // A pre-result copy in THIS browser's HTTP cache, fetched and stored
+      // before the write.
+      const primed = await page.evaluate(async (url) => (await fetch(url, { cache: "reload" })).status, hubApi);
+      expect(primed).toBe(200);
+
+      await scoreFixture(request, semiA, 2, 1);
+
+      await expect(nextA, `the result never reached the page (lined up on ${lined})`).toContainText(
+        "goes through to the",
+        { timeout: landMs },
+      );
+      // Semi B now names who it meets, not a pair.
+      await expect(nextB).toContainText("Winner meets ");
+      await expect(nextB).not.toContainText("Winner meets the winner of");
+
+      // All of it on the same page: no load event, the in-page marker survived,
+      // the same path.
+      expect(loads, "a load event fired: the page reloaded").toBe(0);
+      expect(
+        await page.evaluate(() => (window as unknown as { __r10SamePage?: boolean }).__r10SamePage),
+        "the in-page marker is gone: the document was replaced",
+      ).toBe(true);
+      expect(new URL(page.url()).pathname).toBe(pathname);
+    } finally {
+      await context.close();
+    }
+  });
+});

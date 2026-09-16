@@ -43,7 +43,7 @@ import { DEFAULT_LOCALE, getDictionary, t } from "@/lib/i18n";
 export default async function SharedOrgNotFound() {
   const ui = await getDictionary(DEFAULT_LOCALE, "ui");
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 py-16 text-center">
+    <div data-testid="shared-not-found" className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 py-16 text-center">
       <div aria-hidden className="mb-6 h-0.5 w-10 bg-accent" />
       <h1 className="font-display text-2xl font-semibold text-ink">{t(ui, "shared.notFound.heading")}</h1>
       <p className="mt-2 max-w-sm text-sm text-ink-muted">{t(ui, "shared.notFound.body")}</p>

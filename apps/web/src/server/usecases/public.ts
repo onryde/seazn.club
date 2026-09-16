@@ -147,8 +147,10 @@ export async function publicCompetition(orgSlug: string, slug: string): Promise<
  *  competition, so it is the one public document whose staleness a spectator
  *  watching a match actually feels. Both write paths delete the key outright
  *  (`invalidatePublicCache`, `afterScheduleWrite`), so this is a ceiling on
- *  how wrong a MISSED invalidation can leave the page, not the refresh rate. */
-const HUB_TTL_SECONDS = 15;
+ *  how wrong a MISSED invalidation can leave the page, not the refresh rate.
+ *  Exported for `hub-push-retry-ttl.test.ts`, which pins the client hook's
+ *  last push retry above it (R10c m2); the hook cannot import this file. */
+export const HUB_TTL_SECONDS = 15;
 
 /**
  * The competition hub document (spectator W2) — the API half of the same

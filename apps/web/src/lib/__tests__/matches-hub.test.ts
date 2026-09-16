@@ -362,71 +362,79 @@ describe("sortHubMatches", () => {
 
 describe("deriveHubTabs — tabs by PRESENCE, gallery never (W4's slot)", () => {
   it("EMPTY: nothing → overview + info only", () => {
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 0 })).toEqual([
-      "overview",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 0 }),
+    ).toEqual(["overview", "info"]);
   });
   it("full: every tab in the spec's order, gallery absent", () => {
-    expect(deriveHubTabs({ matches: 3, tables: 1, leaderRows: 2, teams: 4 })).toEqual([
-      "overview",
-      "matches",
-      "table",
-      "stats",
-      "teams",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 3, tables: 1, knockouts: 2, leaderRows: 2, teams: 4 }),
+    ).toEqual(["overview", "matches", "table", "knockout", "stats", "teams", "info"]);
   });
   it("a board list with zero rows does not earn a Stats tab", () => {
-    expect(deriveHubTabs({ matches: 1, tables: 0, leaderRows: 0, teams: 2 })).toEqual([
-      "overview",
-      "matches",
-      "teams",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 1, tables: 0, knockouts: 0, leaderRows: 0, teams: 2 }),
+    ).toEqual(["overview", "matches", "teams", "info"]);
   });
-  // ONE of a thing is the boundary each of these four gates is really about,
-  // and it is the value that never appears in the cases above. `> 0` mutated to
-  // `> 1` survives every count of 0, 2, 3, 4 or 9 — so a competition with a
-  // single leader row, a single entrant, a single fixture or a single table
-  // would silently lose its tab. One case per gate, each with everything else
-  // at zero so nothing can cover for it.
+  // ONE of a thing is the boundary each of these gates is really about, and it
+  // is the value that never appears in the cases above. `> 0` mutated to `> 1`
+  // survives every count of 0, 2, 3, 4 or 9 — so a competition with a single
+  // leader row, a single entrant, a single fixture, a single table or a single
+  // bracket would silently lose its tab. One case per gate, each with
+  // everything else at zero so nothing can cover for it.
   it("exactly ONE leader row earns the Stats tab", () => {
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 1, teams: 0 })).toEqual([
-      "overview",
-      "stats",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 1, teams: 0 }),
+    ).toEqual(["overview", "stats", "info"]);
   });
   it("exactly ONE team earns the Teams tab", () => {
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 1 })).toEqual([
-      "overview",
-      "teams",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 1 }),
+    ).toEqual(["overview", "teams", "info"]);
   });
   it("exactly ONE fixture earns the Matches tab", () => {
-    expect(deriveHubTabs({ matches: 1, tables: 0, leaderRows: 0, teams: 0 })).toEqual([
-      "overview",
-      "matches",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 1, tables: 0, knockouts: 0, leaderRows: 0, teams: 0 }),
+    ).toEqual(["overview", "matches", "info"]);
   });
   it("exactly ONE table earns the Table tab", () => {
-    expect(deriveHubTabs({ matches: 0, tables: 1, leaderRows: 0, teams: 0 })).toEqual([
-      "overview",
-      "table",
-      "info",
-    ]);
+    expect(
+      deriveHubTabs({ matches: 0, tables: 1, knockouts: 0, leaderRows: 0, teams: 0 }),
+    ).toEqual(["overview", "table", "info"]);
+  });
+  it("exactly ONE knockout view earns the Knockout tab", () => {
+    expect(
+      deriveHubTabs({ matches: 0, tables: 0, knockouts: 1, leaderRows: 0, teams: 0 }),
+    ).toEqual(["overview", "knockout", "info"]);
+  });
+  // ORDER, not membership (hub Knockout tab plan, R1/R2): Knockout sits
+  // directly after Table and before Stats. The "full" case above holds every
+  // tab at once; this one isolates the two neighbours so a push moved one slot
+  // either way reds on its own.
+  it("Knockout sits between Table and Stats — both neighbours present, nothing else", () => {
+    expect(
+      deriveHubTabs({ matches: 0, tables: 1, knockouts: 1, leaderRows: 1, teams: 0 }),
+    ).toEqual(["overview", "table", "knockout", "stats", "info"]);
+  });
+  it("a league-only competition has NO Knockout tab (the negative pair)", () => {
+    expect(
+      deriveHubTabs({ matches: 4, tables: 1, knockouts: 0, leaderRows: 0, teams: 4 }),
+    ).toEqual(["overview", "matches", "table", "teams", "info"]);
   });
   it("gallery is a RESERVED id — in the union, never derived (positive pair for the negative)", () => {
     expect(HUB_TAB_IDS).toContain("gallery");
-    expect(deriveHubTabs({ matches: 9, tables: 9, leaderRows: 9, teams: 9 })).not.toContain(
-      "gallery",
-    );
+    expect(
+      deriveHubTabs({ matches: 9, tables: 9, knockouts: 9, leaderRows: 9, teams: 9 }),
+    ).not.toContain("gallery");
   });
   it("everything it emits is a declared tab id", () => {
-    for (const id of deriveHubTabs({ matches: 1, tables: 1, leaderRows: 1, teams: 1 })) {
+    for (const id of deriveHubTabs({
+      matches: 1,
+      tables: 1,
+      knockouts: 1,
+      leaderRows: 1,
+      teams: 1,
+    })) {
       expect(HUB_TAB_IDS).toContain(id);
     }
   });
@@ -655,6 +663,14 @@ describe("landingStatus — the Overview status line ladder (empty → live → 
 describe("the client-safe union and the zod enum cannot drift apart", () => {
   it("HUB_TAB_IDS and CompetitionHubTabId declare the same ids in the same order", () => {
     expect([...HUB_TAB_IDS]).toEqual(CompetitionHubTabId.options);
+  });
+  it("both put `knockout` DIRECTLY after `table` (R1) — the rail reads in this order", () => {
+    // The equality above holds for any order the two agree on; this pins the
+    // one the plan rules, on both declarations.
+    for (const ids of [[...HUB_TAB_IDS], CompetitionHubTabId.options] as string[][]) {
+      expect(ids.indexOf("knockout")).toBeGreaterThan(0);
+      expect(ids.indexOf("knockout")).toBe(ids.indexOf("table") + 1);
+    }
   });
   it("MATCH_BUCKETS and MatchBucketSchema declare the same buckets in the same order", () => {
     expect([...MATCH_BUCKETS]).toEqual(MatchBucketSchema.options);

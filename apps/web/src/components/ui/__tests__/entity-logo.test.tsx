@@ -27,7 +27,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { contrastRatio } from "@/lib/contrast";
-import { autoColour, EntityLogo, initials, monogramInk } from "../entity-logo";
+import { autoColour, EmptyCrest, EntityLogo, initials, monogramInk, PendingCrest } from "../entity-logo";
 
 const html = (node: ReactElement) => renderToStaticMarkup(node);
 
@@ -225,6 +225,51 @@ describe("EntityLogo — size 32", () => {
       (s) => html(<EntityLogo src={null} name="Blue Blazers" size={s} />).match(/h-\d+ w-\d+/)![0],
     );
     expect(new Set(boxes).size).toBe(4);
+  });
+});
+
+describe("PendingCrest — the crest of a side with nobody in it yet (Knockout fix round 2, D3)", () => {
+  // A waiting bracket slot has no entity to take a colour or initials from, and
+  // `EntityLogo`'s last arm derives both from whatever NAME it is handed — so
+  // "Winner of R3·2" became a coloured "WR" tile and a waiting pair a "PN" one,
+  // each reading as a confirmed entrant. Pinned as the LITERAL string, like
+  // every arm above: `EntityLogo`'s own box at every size, then a neutral fill,
+  // a muted outline and a "?" in muted ink. No `style`, so no hue can reach it;
+  // `aria-hidden`, so it has no accessible name of its own.
+  for (const size of [20, 24, 32, 40] as const) {
+    it(`size ${size}: the same box as every EntityLogo arm, a neutral '?', aria-hidden, marked data-crest="pending"`, () => {
+      expect(html(<PendingCrest size={size} />)).toBe(
+        `<span aria-hidden="true" data-crest="pending" class="${base(SIZE_TOKENS[size])} border border-zinc-300 bg-canvas font-semibold text-ink-muted">?</span>`,
+      );
+    });
+  }
+
+  it("size defaults to 20, as EntityLogo's does", () => {
+    expect(html(<PendingCrest />)).toBe(html(<PendingCrest size={20} />));
+  });
+});
+
+describe("EmptyCrest — a bye's side: the SAME placeholder box, with no glyph (Knockout fix round 2b)", () => {
+  // Controller ruling: a bye is not "to be decided", so its crest must not say
+  // "?". Same box and muted tone as `PendingCrest`; only the marker and the
+  // glyph differ, and that is asserted as a derivation from the pending crest's
+  // own markup so the two cannot drift apart.
+  for (const size of [20, 24, 32, 40] as const) {
+    it(`size ${size}: PendingCrest's exact box and tone, marked data-crest="empty", with nothing inside`, () => {
+      const empty = html(<EmptyCrest size={size} />);
+      expect(empty).toBe(
+        `<span aria-hidden="true" data-crest="empty" class="${base(SIZE_TOKENS[size])} border border-zinc-300 bg-canvas font-semibold text-ink-muted"></span>`,
+      );
+      expect(empty).toBe(
+        html(<PendingCrest size={size} />)
+          .replace('data-crest="pending"', 'data-crest="empty"')
+          .replace(">?</span>", "></span>"),
+      );
+    });
+  }
+
+  it("size defaults to 20", () => {
+    expect(html(<EmptyCrest />)).toBe(html(<EmptyCrest size={20} />));
   });
 });
 

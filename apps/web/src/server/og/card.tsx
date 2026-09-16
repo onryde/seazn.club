@@ -3,6 +3,7 @@ import "server-only";
 // keel, org masthead, seazn.club footer. ImageResponse supports flexbox
 // only — every div declares display:flex.
 import type { OgTheme } from "./model";
+import { drawableImage } from "./drawable";
 
 export const OG_SIZE = { width: 1200, height: 630 };
 
@@ -14,9 +15,16 @@ export function CardFrame({
 }: {
   theme: OgTheme;
   orgName: string;
+  /**
+   * The org crest as bytes — a `data:` URI from `server/og/poster-image.ts`.
+   * A remote URL is DROPPED, not drawn: satori would fetch it server-side from
+   * a public route. The masthead then carries the org name alone, which is
+   * exactly what every logo-less org already sees.
+   */
   logo: string | null;
   children: React.ReactNode;
 }) {
+  const crest = drawableImage(logo);
   return (
     <div
       style={{
@@ -39,10 +47,10 @@ export function CardFrame({
           padding: "28px 56px 0",
         }}
       >
-        {logo ? (
+        {crest ? (
           // eslint-disable-next-line @next/next/no-img-element -- satori
           <img
-            src={logo}
+            src={crest}
             alt=""
             width={52}
             height={52}

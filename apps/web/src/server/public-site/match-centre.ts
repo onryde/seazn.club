@@ -755,6 +755,40 @@ function liveSubLines(setsView: SetsViewT | null): [string | null, string | null
   return [home === null || home === undefined ? null : `(${home})`, away === null || away === undefined ? null : `(${away})`];
 }
 
+/**
+ * M1 k2 — the one place a fixture's start time becomes text. Both the court
+ * card's "Starts {time}" sentence and `header.startTime` (the fixture page's
+ * subheading) read this, so a spectator can never be shown two different
+ * clocks for one kick-off.
+ *
+ * `timeZone: venueTz` is not optional: a start time means the time AT THE
+ * VENUE, and the fixture page's own `new Date(iso).toLocaleString(locale, …)`
+ * had no zone, so it printed whatever zone the rendering server happened to be
+ * in. `dateStyle: "medium"` + `timeStyle: "short"` is the court card's
+ * existing format, kept as the one the page now adopts rather than the other
+ * way round — the card is the surface that already updates live.
+ *
+ * And `en` is written `en-GB`. Bare "en" is a US format to `Intl`, so an
+ * English org's card read "Jul 20, 2026, 2:30 PM" on a public site whose every
+ * other date is "20 Jul 2026, 14:30" — `lib/format.ts:10` pins `en-GB` as THE
+ * display locale for this repo, and `schedule.tsx`'s `dateTagFor` and
+ * `ai-instruction-describe.ts`'s `DEFAULT_LOCALE` already apply exactly this
+ * `"en" → "en-GB"` rule for the same reason. Every other locale tag is used as
+ * given; only bare "en" is ambiguous.
+ */
+export function startTimeText(
+  scheduledAt: string | null,
+  locale: string,
+  venueTz: string,
+): string | null {
+  if (scheduledAt === null) return null;
+  return new Intl.DateTimeFormat(locale === "en" ? "en-GB" : locale, {
+    timeZone: venueTz,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(scheduledAt));
+}
+
 function buildHeader(
   fixture: PublicFixture,
   sides: [SideT, SideT],
@@ -790,17 +824,31 @@ function buildHeader(
           ? 1
           : null;
 
+  // M1 k2 — ONE formatted start time per document, computed once here and used
+  // BOTH for the court card's "Starts …" sentence below and for
+  // `header.startTime`, which is what the page's subheading line now renders.
+  // Two call sites with the same options would have been two things to keep in
+  // step; the live read found them already out of step (the page formatted
+  // with no `timeZone` at all, so it printed the server's zone, and with a
+  // different date/time style).
+  const startTime = startTimeText(fixture.scheduled_at, locale, venueTz);
+
   let statusLine: MsgT | null = null;
   let rateLine: string | null = null;
 
   if (status === "scheduled") {
-    if (fixture.scheduled_at !== null) {
-      const when = new Intl.DateTimeFormat(locale, {
-        timeZone: venueTz,
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(fixture.scheduled_at));
-      statusLine = { key: "matchCentre.status.startsAt", params: { when } };
+    if (startTime !== null) {
+      const when = startTime;
+      // `time`, not `when`: the param name is the DICTIONARY's placeholder
+      // name. All four locales write "Starts {time}" / "Begint {time}", and
+      // `t()` prints an unsupplied brace verbatim (`lib/i18n-runtime.ts:24`) —
+      // so `{ when }` shipped the literal text "Starts {time}" to every
+      // spectator looking at an upcoming match, on main since 544697031 (W1).
+      // `match-centre-msg-params.test.ts` now walks every Msg this builder can
+      // emit and renders it against all four dictionaries, which is the only
+      // comparison that can see this (the existing dictionary gate compares
+      // locales with each other, and they agreed).
+      statusLine = { key: "matchCentre.status.startsAt", params: { time: when } };
     }
   } else if (status === "decided") {
     // The margin has TWO sources, because the two win vocabularies do. Cricket's
@@ -831,8 +879,19 @@ function buildHeader(
   } else if (status === "in_play" && card?.live) {
     const live = card.live;
     if (live.target !== null && live.needRuns !== null && live.ballsLeft !== null) {
+      // `needFrom`, not `need` — the SECOND mismatch M1's class guard found.
+      // This branch only runs with `ballsLeft` known, and it has always passed
+      // that number as a param; `matchCentre.chase.need` is "{side} need
+      // {runs} to win" in all four locales and simply drops it, so the balls
+      // remaining never reached a reader. `matchCentre.chase.needFrom` is the
+      // translated sibling that names `{balls}` ("{side} need {runs} from
+      // {balls} balls"), it is the sentence `match-centre-schema.ts:21`'s own
+      // doc comment documents ("Queens need 34 from 21"), and it is the same
+      // pair the overlay already chooses between correctly
+      // (`lib/overlay-model.ts:703-704`, `overlay.chase.need` vs
+      // `overlay.chase.needBalls`).
       statusLine = {
-        key: "matchCentre.chase.need",
+        key: "matchCentre.chase.needFrom",
         params: { side: sideNameOf(sides, live.battingSide), runs: live.needRuns, balls: live.ballsLeft },
       };
     }
@@ -1167,6 +1226,14 @@ export function buildMatchCentre(input: MatchCentreInput): MatchCentreDocT {
     fixtureId: fixture.id,
     sportKey,
     header,
+    // M1 k2 — the fixture page's subheading line, carried on the live document
+    // so it moves with a reschedule instead of freezing at page load. The same
+    // `startTimeText` fills the court card's "Starts …" sentence, so the two
+    // cannot read differently; `venue_name`/`court_name` are the derived
+    // join-backed names, never the frozen `venue`/`court_label` columns.
+    startTime: startTimeText(fixture.scheduled_at, locale, venueTz),
+    venueName: fixture.venue_name,
+    courtName: fixture.court_name,
     tabs: ["summary", ...extraTabs, "info"],
     cricket: cricketView,
     timeline: timelineLines,

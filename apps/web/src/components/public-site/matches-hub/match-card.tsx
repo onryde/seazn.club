@@ -25,7 +25,7 @@
 //
 // W3's poster icon has no DOM in W2 (design ruling R4: no "coming soon").
 import Link from "next/link";
-import { EntityLogo } from "@/components/ui/entity-logo";
+import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { fmtDate, fmtTime } from "@/lib/format";
@@ -64,6 +64,19 @@ export interface MatchCardProps {
    * — and `match-card.test.tsx` renders both values and asserts they differ.
    */
   crestSize?: 24 | 32;
+  /**
+   * The "STAGE · ROUND" caption in the meta row. Defaults to TRUE, stated here
+   * and in the destructure below, so every caller that does not pass it keeps
+   * the caption it always had — the Matches tab and the Overview mix stages
+   * and rounds in one list, and the caption is how a card says which.
+   *
+   * The Knockout tab passes `false` (fix round, D1): its cards sit under the
+   * stage's own heading and the pressed round chip, so the caption said the
+   * same thing a third time — and on a 320px phone it truncated beside the
+   * status ("DOUBLE ELIMINATION · WINNERS' FI…"). Only the caption goes; the
+   * status slot keeps its place at the end of the row.
+   */
+  showRound?: boolean;
 }
 
 export function MatchCard({
@@ -73,6 +86,7 @@ export function MatchCard({
   now,
   showDivision = true,
   crestSize = 24,
+  showRound = true,
 }: MatchCardProps) {
   const s0 = m.header.sides[0];
   const s1 = m.header.sides[1];
@@ -130,6 +144,21 @@ export function MatchCard({
   function sideRow(i: 0 | 1) {
     const side = m.header.sides[i];
     const isWinner = m.winnerIndex === i;
+    // A side with nobody in it yet (`entrantId === ""`, `hubSides` in
+    // `competition-hub.ts`): the engine's "Winner of R3·2", a bye, or the pair
+    // and loser sentences the Knockout tab puts in a waiting slot. It gets the
+    // owner-approved mock's waiting look — a "?" placeholder crest and a muted
+    // italic name — instead of a crest computed from its NAME, which gave a
+    // waiting pair a coloured "PN" and made it read as one confirmed player
+    // (Knockout fix round 2, D3). Decided here, where every tab's card is
+    // drawn, so the Matches and Overview tabs get the same rule for free.
+    const entrant = side.entrantId !== "";
+    // A BYE is not "to be decided" (Knockout fix round 2b, controller ruling):
+    // the draw left that slot empty for good, so it keeps the same placeholder
+    // box and muted name but shows no "?". Only the producer knows — it reads
+    // the stored bye slot label (`hubByeSides`); the name is locale copy and
+    // never decides. A doc cached before `byeSides` existed reads as no bye.
+    const bye = m.byeSides?.[i] === true;
     return (
       <div
         key={side.entrantId || i}
@@ -144,16 +173,41 @@ export function MatchCard({
             badge-less club was a coloured tile on the Teams tab and a grey one
             on every card of the same page. `EntityLogo` owns what a colour is
             allowed to be; this card only forwards it. */}
-        <EntityLogo
-          src={side.badgeUrl}
-          name={side.name}
-          colour={side.colour}
-          size={crestSize}
-        />
+        {entrant ? (
+          <EntityLogo
+            src={side.badgeUrl}
+            name={side.name}
+            colour={side.colour}
+            size={crestSize}
+          />
+        ) : bye ? (
+          <EmptyCrest size={crestSize} />
+        ) : (
+          <PendingCrest size={crestSize} />
+        )}
         {/* `min-w-0` is what lets `truncate` engage on a flex item — see
             AGENTS.md, "`truncate` needs `min-w-0` on the whole ancestor
-            chain". */}
-        <span className="min-w-0 flex-1 truncate text-[15px]" title={side.name}>
+            chain".
+
+            A side with nobody in it WRAPS instead, at every width (visual gate
+            C-2, review N2 I1). Its name is a feeder label, "Winner of
+            Quarter-finals, match 2", and at 320 two such labels truncated to
+            the same "Winner of Quarter-finals, matc…", so a spectator could not
+            tell which match feeds which: the one thing the label is for. The
+            card has the height for a second line. It used to truncate again
+            from md, where the Knockout tab's two-up cards have room; the
+            Overview's Next up does not (three-up from md, the split main column
+            from lg), and the same two labels read identically there at
+            768-1280. A real entrant keeps `truncate` at every width, because a
+            name is an identifier that can be genuinely too long. */}
+        <span
+          className={
+            entrant
+              ? "min-w-0 flex-1 truncate text-[15px]"
+              : "min-w-0 flex-1 break-words text-[15px] italic text-ink-muted"
+          }
+          title={side.name}
+        >
           {side.name}
         </span>
         <span className="shrink-0 font-display text-lg tabular-nums">
@@ -203,11 +257,13 @@ export function MatchCard({
             {m.divisionName}
           </span>
         ) : null}
-        <span className="min-w-0 truncate">
-          {[m.stageName, m.roundLabel ?? t(dict, "matchesHub.round", { round: m.roundNo })]
-            .filter(Boolean)
-            .join(" · ")}
-        </span>
+        {showRound ? (
+          <span className="min-w-0 truncate">
+            {[m.stageName, m.roundLabel ?? t(dict, "matchesHub.round", { round: m.roundNo })]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        ) : null}
         <span className="ml-auto shrink-0">
           {m.bucket === "live" ? (
             <span data-testid="mh-match-live" className="flex items-center gap-1 font-bold text-emerald-600">

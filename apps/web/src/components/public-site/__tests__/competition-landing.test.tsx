@@ -88,6 +88,7 @@ import { TableTab } from "../matches-hub/table-tab";
 import { StatsTab } from "../matches-hub/stats-tab";
 import { TeamsTab } from "../matches-hub/teams-tab";
 import { InfoTab } from "../matches-hub/info-tab";
+import { KnockoutTab } from "../matches-hub/knockout-tab";
 import {
   CompetitionLanding,
   activeTab,
@@ -132,7 +133,7 @@ const railTabs = (h: string): string[] =>
  *  `mh-tab-panel-<id>` cannot, because that names the tab the rail selected,
  *  not the component that rendered. */
 const panelRoots = (h: string): string[] =>
-  ["overview", "matches", "table", "stats", "teams", "info"].filter((id) =>
+  ["overview", "matches", "table", "knockout", "stats", "teams", "info"].filter((id) =>
     h.includes(`data-testid="mh-${id}"`),
   );
 
@@ -307,6 +308,86 @@ describe("CompetitionLanding — the gallery slot", () => {
   });
 });
 
+describe("CompetitionLanding — only the tabs THIS bundle has a panel for", () => {
+  // The allowlist's two directions. Until Task 2 of plan 2026-09-13 this block
+  // used `knockout` as its no-panel case — the document derived the tab one
+  // task before the panel landed. It has a panel now, so `knockout` is the
+  // POSITIVE case (offered, and it opens), and an id NO bundle knows
+  // (`leaderboard`) is the negative one. Both directions are needed: a
+  // containment check on the knockout tab alone passes on a root with no
+  // filter at all, and the leaderboard check alone passes on a root that
+  // filtered `knockout` out along with it.
+  const withKnockout = hubDoc({
+    matches: [
+      m("l1", "live", "2026-09-05T10:00:00.000Z", "premier"),
+      m("k1", "upcoming", "2026-09-06T10:00:00.000Z", "premier"),
+    ],
+    tables: [tableView("t8-s1-overall", "premier")],
+    knockouts: [
+      {
+        id: "premier-ko",
+        divisionId: "d-premier",
+        divisionSlug: "premier",
+        divisionName: "Premier",
+        stageId: "ko",
+        stageName: "Cup",
+        kind: "knockout",
+        rounds: [{ key: "main-1", label: "Final", lane: null, fixtureIds: ["k1"] }],
+        drawable: false,
+        championFixtureId: null,
+      },
+    ],
+    leaders: [board("premier", "runs", [leader("p1", "Arjun Mehta", null)])],
+    teams: [team("e1", "Riverside Rovers", null, null)],
+  });
+
+  /** Every tab a W2 document with a knockout view can offer, in rail order. */
+  const ALL_SEVEN = ["overview", "matches", "table", "knockout", "stats", "teams", "info"];
+
+  /** The same document as polled by a bundle OLDER than a tab it now derives.
+   *  It reaches the page for real — `competition-hub-data.ts` hands the polled
+   *  JSON on with a cast, never a parse. */
+  const newer = {
+    ...withKnockout,
+    tabs: [...withKnockout.tabs, "leaderboard"],
+  } as unknown as CompetitionHubDocT;
+
+  it("a document with a knockout view offers the Knockout tab, directly after Table", () => {
+    expect(withKnockout.tabs).toContain("knockout"); // the premise, asserted
+    expect(railTabs(render(withKnockout))).toEqual(ALL_SEVEN);
+  });
+
+  it("?tab=knockout opens the Knockout panel — and it is the ONLY panel that draws", () => {
+    tabParam.value = "knockout";
+    try {
+      const h = render(withKnockout);
+      expect(h).toContain(`data-testid="mh-tab-panel-knockout"`);
+      expect(tagOf(h, "mh-tab-knockout")).toContain(`aria-selected="true"`);
+      expect(panelRoots(h)).toEqual(["knockout"]);
+    } finally {
+      tabParam.value = null;
+    }
+  });
+
+  it("a tab with no panel in this bundle (`leaderboard`) is not in the rail and draws no panel", () => {
+    const h = render(newer);
+    expect(railTabs(h)).toEqual(ALL_SEVEN);
+    expect(h).not.toContain(`data-testid="mh-tab-leaderboard"`);
+    expect(h).not.toContain(`data-testid="mh-tab-panel-leaderboard"`);
+  });
+
+  it("?tab=leaderboard falls back to the first tab instead of throwing out of panelFor — only an allowlist can drop an id no bundle knows", () => {
+    tabParam.value = "leaderboard";
+    try {
+      const h = render(newer);
+      expect(h).toContain(`data-testid="mh-tab-panel-overview"`);
+      expect(panelRoots(h)).toEqual(["overview"]);
+    } finally {
+      tabParam.value = null;
+    }
+  });
+});
+
 describe("activeTab — which tab wins, and what happens when its data disappears", () => {
   // Extracted and unit-tested rather than left inline, for the reason Task 8's
   // review found: the deep-link arm is unreachable from every render in this
@@ -376,14 +457,23 @@ describe("activeTab — which tab wins, and what happens when its data disappear
       now: Date.parse("2026-09-05T12:00:00.000Z"),
       descriptionSlot: <p>ABOUT THIS CUP</p>,
       shareSlot: <p>SHARE BAR</p>,
+      initialDivision: "sunday-league",
     };
     // Which props each arm owes. The lists differ, which is the reason this is
     // a switch and not a uniform `TAB_PANELS` table — and pinning them here is
     // what makes the difference a contract rather than an accident.
     const expected = [
       ["overview", OverviewTab, ["doc", "dict", "locale", "now", "descriptionSlot"]],
-      ["matches", MatchesTab, ["doc", "dict", "locale", "now"]],
+      // `initialDivision` is the `?division=` deep link. It was declared on
+      // `MatchesTab` and tested there for a whole wave while this arm never
+      // passed it, so a shared division link opened on All.
+      ["matches", MatchesTab, ["doc", "dict", "locale", "now", "initialDivision"]],
       ["table", TableTab, ["doc", "dict"]],
+      // The same `initialDivision` the Matches arm gets (plan R7): the future
+      // division-page redirect lands a knockout division on
+      // `?tab=knockout&division={slug}`, and an arm that dropped it would open
+      // that link on every division's bracket.
+      ["knockout", KnockoutTab, ["doc", "dict", "locale", "now", "initialDivision"]],
       ["stats", StatsTab, ["doc", "dict"]],
       ["teams", TeamsTab, ["doc", "dict"]],
       ["info", InfoTab, ["doc", "dict", "locale", "descriptionSlot", "shareSlot"]],

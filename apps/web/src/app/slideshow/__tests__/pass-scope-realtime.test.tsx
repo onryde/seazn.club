@@ -123,6 +123,12 @@ describe.skipIf(!HAS_DB)("noticeboard slideshows resolve `realtime` against thei
     expect(passed.props.realtime).toBe(true);
     // The pass lifts ONE competition — a sibling board must stay static.
     expect(plain.props.realtime).toBe(false);
+    // C1 (OWNER RULING 2026-09-15): an organiser board opened on a phone shows
+    // the same "made for a TV" card as the public kiosk. Its Open the live
+    // page goes to the board's own console page, where its back link goes.
+    expect(passed.props.liveHref).toMatch(/^\/o\/[^/]+\/c\//);
+    expect(passed.props.liveHref).toBe(passed.props.backHref);
+    expect(plain.props.liveHref).toBe(plain.props.backHref);
   });
 
   it("division board: live under the passed competition, static under an unpassed one", async () => {
@@ -142,5 +148,11 @@ describe.skipIf(!HAS_DB)("noticeboard slideshows resolve `realtime` against thei
 
     expect(passed.props.realtime).toBe(true);
     expect(plain.props.realtime).toBe(false);
+    // C1 (OWNER RULING 2026-09-15): an organiser board opened on a phone shows
+    // the same "made for a TV" card as the public kiosk. Its Open the live
+    // page goes to the board's own console page, where its back link goes.
+    expect(passed.props.liveHref).toMatch(/^\/o\/[^/]+\/c\//);
+    expect(passed.props.liveHref).toBe(passed.props.backHref);
+    expect(plain.props.liveHref).toBe(plain.props.backHref);
   });
 });

@@ -13,14 +13,20 @@ import { describe, expect, it, vi } from "vitest";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MatchCentreDoc, type MatchCentreDocT } from "@/server/public-site/match-centre-schema";
+import { startTimeText } from "@/server/public-site/match-centre";
 import publicEn from "@/dictionaries/en/public.json";
 import publicEs from "@/dictionaries/es/public.json";
 import publicFr from "@/dictionaries/fr/public.json";
 import publicNl from "@/dictionaries/nl/public.json";
 import uiEn from "@/dictionaries/en/ui.json";
+import { posterFileName } from "@/lib/poster-file-name";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
+import { msgFor } from "@/lib/messages-i18n";
+import { resolveSlotLabel } from "@/lib/slot-label";
+import { toLocale } from "@/lib/i18n-constants";
+import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 // Real dictionaries, not a table typed into this test (rule 19/reference_
 // html_grep_for_dictionary_copy...): Dutch's own `matchCentre.status.live`
@@ -51,20 +57,76 @@ const baseData = (
   locale: string,
   fixtureOver: Record<string, unknown> = {},
   entrantNamesOver: Record<string, string> = {},
-) => ({
-  org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
-  competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
-  division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
-  fixture: {
+) => {
+  const fixture = {
     id: "f1", division_id: "d1", stage_id: "s1", pool_id: null, round_no: 1, seq_in_round: 1,
     home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
     scheduled_at: null, venue: null, court_label: null, venue_name: null, court_name: null,
     status: "scheduled", outcome: null, summary: null, last_seq: null,
     ...fixtureOver,
+  };
+  return {
+    org: { id: "o1", name: "Test Org", slug: "test-org", branded: false, branding: {}, logo: null, about: null, default_locale: locale, card_payments: false },
+    competition: { id: "c1", org_id: "o1", name: "Test Comp", slug: "test-comp", description: null, starts_on: null, ends_on: null, branding: {}, status: "active", visibility: "public" },
+    division: { id: "d1", competition_id: "c1", name: "Open", slug: "open", description: null, sport_key: "generic", variant_key: "score", status: "active", module_version: "1.0.0", tiebreakers: null, sport_name: null, entrant_count: 2 },
+    fixture,
+    entrantNames: entrantNamesOver,
+    realtime: false,
+    // N1 fix round 1 (I1): `getPublicFixture` always returns `matchCentre`,
+    // and the page names a WAITING side from it rather than resolving the slot
+    // label a second time. See `docNaming` below.
+    matchCentre: docNaming(locale, fixture),
+  };
+};
+
+/**
+ * The match-centre document a bare `baseData()` fixture comes with:
+ * `cricketDocFor`'s, with each side named the way `loadMatchCentre` names it —
+ * the entrant's side as is, a waiting side by its stored slot label. The labels
+ * these tests store are group-finish labels, not feeder labels, and for those
+ * `publicSlotLabel` is exactly `resolveSlotLabel` in the org's locale. The
+ * fixture page's own real-loader case is `page-waiting-side.test.ts`.
+ */
+function docNaming(
+  locale: string,
+  fixture: {
+    home_entrant_id: unknown;
+    away_entrant_id: unknown;
+    home_slot_label: unknown;
+    away_slot_label: unknown;
+    scheduled_at: unknown;
+    venue_name: unknown;
+    court_name: unknown;
   },
-  entrantNames: entrantNamesOver,
-  realtime: false,
-});
+): MatchCentreDocT {
+  const doc = cricketDocFor("in_play");
+  const inLocale = (key: Parameters<typeof msgFor>[1], vars?: Record<string, string | number>) =>
+    msgFor(toLocale(locale), key, vars);
+  const waiting = (side: MatchCentreDocT["header"]["sides"][0], label: unknown) => ({
+    ...side,
+    entrantId: "",
+    name: resolveSlotLabel(label as SlotLabel | null, inLocale, "schedule.tbd"),
+  });
+  const [home, away] = doc.header.sides;
+  return {
+    ...doc,
+    // M1 k2 — `loadMatchCentre` carries the fixture's start time and its
+    // DERIVED venue/court names onto the document (that is what lets the
+    // page's subheading line move when a match is rescheduled), so this
+    // fixture carries them too — from the same row, through the same
+    // `startTimeText`, rather than as a second hand-typed idea of the format.
+    startTime: startTimeText((fixture.scheduled_at as string | null) ?? null, locale, "UTC"),
+    venueName: (fixture.venue_name as string | null) ?? null,
+    courtName: (fixture.court_name as string | null) ?? null,
+    header: {
+      ...doc.header,
+      sides: [
+        fixture.home_entrant_id ? home : waiting(home, fixture.home_slot_label),
+        fixture.away_entrant_id ? away : waiting(away, fixture.away_slot_label),
+      ],
+    },
+  };
+}
 
 // Task 14 — `getPublicFixture` now also returns `matchCentre` (Task 9); a
 // full band-3 cricket document exercises the REAL `<MatchCentre>` tree (tab
@@ -217,16 +279,12 @@ describe("FixturePage generateMetadata — score + result in the title (Task 14)
 // P9 pass 3c-3: fixture.venue/court_label are frozen since pass 3a — this
 // page's default export (subheading text + SportsEvent JSON-LD) must render
 // venue_name/court_name (data.ts's derived, join-backed fields) instead.
-// No jsdom: walk the returned element tree, same convention as
-// officials-fixture-locale.test.tsx / server-component-page-test memory.
-function collectText(node: unknown): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(collectText).join("");
-  if (isValidElement(node)) {
-    return collectText((node.props as { children?: unknown }).children);
-  }
-  return "";
-}
+//
+// M1 k2 — the element-tree walk that used to live here (`collectText`) has no
+// caller left: the subheading is now a client island, and a tree walk only
+// goes one level into a component, so that test renders real HTML like the
+// `<MatchCentre>` describes below already do. `findScript` stays — the JSON-LD
+// tag IS on the page's own tree.
 
 function findScript(node: unknown): { props: Record<string, unknown> } | null {
   if (!isValidElement(node)) return null;
@@ -272,6 +330,15 @@ const render = async (
 };
 
 describe("FixturePage default export — derived court/venue name (P9 cutover)", () => {
+  // M1 k2 — real HTML, not `collectText`. The subheading is no longer a `<p>`
+  // the page composes: it is a client island fed from the LIVE document
+  // (`<MatchCentreSubheading>`), so that the line moves with a reschedule
+  // instead of freezing at page load, and `collectText` only walks one level
+  // into a component. The ASSERTION is unchanged in substance — the derived,
+  // join-backed names must reach the reader and the frozen columns must not —
+  // and it is now pinned to the line's own testid rather than to the whole
+  // page's text, so a venue name that reached some other element could not
+  // satisfy it.
   it("subheading shows venue_name/court_name, never the stale venue/court_label", async () => {
     const tree = await render({
       venue: "Stale Building",
@@ -279,11 +346,13 @@ describe("FixturePage default export — derived court/venue name (P9 cutover)",
       venue_name: "Riverside Sports Hall",
       court_name: "Court 3",
     });
-    const text = collectText(tree);
-    expect(text).toContain("Riverside Sports Hall");
-    expect(text).toContain("Court 3");
-    expect(text).not.toContain("Stale Building");
-    expect(text).not.toContain("Stale Court");
+    const html = renderToStaticMarkup(tree);
+    const line = /<p data-testid="mc-subheading"[^>]*>(.*?)<\/p>/.exec(html)?.[1] ?? "";
+    expect(line, "the subheading line is rendered at all").not.toBe("");
+    expect(line).toContain("Riverside Sports Hall");
+    expect(line).toContain("Court 3");
+    expect(html).not.toContain("Stale Building");
+    expect(html).not.toContain("Stale Court");
   });
 
   it("SportsEvent JSON-LD location is the derived venue_name, not the stale venue", async () => {
@@ -508,6 +577,50 @@ describe("FixturePage — the public stream link (stream overlay W1, §3.9)", ()
       expect(ended).toContain(`>${dict["overlay.replay"]}</a>`);
       expect(live).not.toContain(`>${publicEn["overlay.watchLive"]}</a>`);
       expect(ended).not.toContain(`>${publicEn["overlay.replay"]}</a>`);
+    });
+  }
+});
+
+
+describe("FixturePage — the Poster button (Spectator Surface Boards §match-centre)", () => {
+  // The board draws TWO actions in this row, `Poster` then `Share`. A MOUNT
+  // test, because the button itself cannot see whether anything mounts it —
+  // the inert-seam class this repo keeps paying for.
+  const posterHtml = (fixtureOver: Record<string, unknown> = {}, locale = "en") =>
+    streamHtml({ status: "decided", ...fixtureOver }, locale);
+
+  it("renders beside Share, pointing at this fixture's own poster.png", async () => {
+    const html = await posterHtml();
+    expect(html).toContain('data-testid="match-poster-download"');
+    // The VALUE, not the attribute: React serialises an omitted prop as
+    // `"$undefined"`, so a bare `href` probe passes in both states.
+    expect(html).toContain('href="/shared/test-org/test-comp/open/fixtures/f1/poster.png"');
+    // Beside, not instead of — the share action is still there.
+    expect(html).toContain(uiEn["share.whatsapp"] as string);
+  });
+
+  it("names the saved file, so a download arrives with an extension", async () => {
+    // The route path already ends in `poster.png` and that is NOT enough: the
+    // browser names the file from the download attribute / the disposition.
+    const html = await posterHtml();
+    expect(html).toContain(`download="${posterFileName("Home XI", "Away XI")}"`);
+  });
+
+  it("is offered for a fixture nobody has played yet, not only a finished one", async () => {
+    // A poster of an upcoming match is the one a club posts to fill a ground.
+    expect(await posterHtml({ status: "scheduled" })).toContain(
+      'data-testid="match-poster-download"',
+    );
+  });
+
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`locale=${locale} labels the button from ITS OWN dictionary, not English`, async () => {
+      // A key-existence check passes whether the label is wired or hardcoded
+      // English; only a locale differential can tell the two apart.
+      const dict = UI_DICTS[locale]!;
+      const html = await posterHtml({}, locale);
+      expect(html).toContain(dict["matchPoster.downloadAria"] as string);
+      expect(html).not.toContain(uiEn["matchPoster.downloadAria"] as string);
     });
   }
 });

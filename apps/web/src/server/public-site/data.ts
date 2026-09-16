@@ -24,6 +24,8 @@ import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
+import type { z } from "zod";
+import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
@@ -298,6 +300,12 @@ export interface PublicFixture {
   is_final?: boolean;
   third_place?: boolean;
   conditional?: boolean;
+  /** The generator's stable id (`fixtures.ext_key`, e.g. "pp-q1"). `roundRole`
+   *  reads it to tell a page playoff's Qualifier 1 from its Eliminator, which
+   *  share a round and a match count (fix round 1, M3). NOT a column of
+   *  `public_fixtures_v`: `getPublicDivision` selects it as a subquery on the
+   *  view row's own id. Optional, same convention as the four fields above. */
+  ext_key?: string | null;
   /** The club's own broadcast link (V401). Null unless an organiser saved one,
    *  and null for a `setup` division — the view redacts it alongside the
    *  schedule. Rendered ONLY as an `<a href target="_blank" rel="noopener">`
@@ -315,7 +323,11 @@ export interface PublicStage {
   id: string;
   division_id: string;
   seq: number;
-  kind: "league" | "group" | "swiss" | "knockout" | "double_elim" | "stepladder";
+  /** Every stage kind a division can generate, from the API's own `StageKind`
+   *  enum (N1e e4). It was a hand-written list of six that missed
+   *  `page_playoff`, `americano` and `ladder`: the kind is a database string
+   *  with no parse, so runtime was right while every reader needed a cast. */
+  kind: z.infer<typeof StageKind>;
   name: string;
   status: string;
 }
@@ -693,12 +705,17 @@ export async function getPublicDivision(
         from public_pools_v p
         join public_stages_v s on s.id = p.stage_id
         where s.division_id = ${division.id} order by p.key`;
+      // `ext_key` is the generator's stable id, which `roundRole` needs to tell a
+      // page playoff's Qualifier 1 from its Eliminator (fix round 1, M3). The
+      // view does not expose it, so it is read off `fixtures` by the VIEW row's
+      // own id: the view still decides which rows exist.
       const rawFixtures = await sql<PublicFixture[]>`
         select id, division_id, stage_id, pool_id, round_no, seq_in_round,
                home_entrant_id, away_entrant_id, home_slot_label, away_slot_label,
                scheduled_at, venue, court_label,
                status, outcome, summary, last_seq,
-               lane, is_final, third_place, conditional
+               lane, is_final, third_place, conditional,
+               (select x.ext_key from fixtures x where x.id = public_fixtures_v.id) as ext_key
         from public_fixtures_v where division_id = ${division.id}
         order by round_no, seq_in_round`.then((rows) => rows.map(normalizeFixture));
       const fixtures = await withCourtVenueNames(rawFixtures);
@@ -817,6 +834,23 @@ export async function getPublicFixture(
       const tzRow = await venueTzRow(division.id);
       const [stageRow] = await sql<{ name: string }[]>`
         select name from stages where id = ${fixture.stage_id}`;
+      // The FORMAT's name, not its key. `formatLabel` fed the header's
+      // `metaLine` straight from `division.variant_key`, so the match centre
+      // — and, once the share images started carrying that line, a poster a
+      // spectator posts to Instagram — read "t20" and "grand-slam" where the
+      // catalog has "T20" and "Grand Slam" sitting in `sport_variants.name`.
+      //
+      // Scoped to system rows and this org's own: variants are org-scoped, and
+      // a bare match on (sport_key, key) would happily return ANOTHER org's
+      // renamed variant. The org's own row wins where both exist, which is what
+      // renaming a variant is for; the key remains the fallback, so a division
+      // pointing at a variant the catalog no longer has still says something.
+      const [variantRow] = await sql<{ name: string }[]>`
+        select name from sport_variants
+        where sport_key = ${division.sport_key} and key = ${division.variant_key}
+          and (org_id is null or org_id = ${shell.org.id})
+        order by org_id nulls last
+        limit 1`;
       const locale = toLocale(shell.org.default_locale);
       const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
       const matchCentre = await loadMatchCentre(sql, fixture, {
@@ -824,7 +858,7 @@ export async function getPublicFixture(
         division: {
           sportKey: division.sport_key,
           moduleVersion: division.module_version,
-          formatLabel: division.variant_key,
+          formatLabel: variantRow?.name ?? division.variant_key,
           tz: tzRow?.division_tz ?? null,
           youth: division.youth ?? false,
           playerNameDisplay: division.player_name_display ?? null,

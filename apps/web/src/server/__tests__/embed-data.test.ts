@@ -11,6 +11,10 @@ import { sql } from "@/lib/db";
 import { embedDivisionData, type EmbedPayload } from "@/server/embed-data";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createEntrants } from "@/server/usecases/entrants";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -176,5 +180,48 @@ describe.skipIf(!HAS_DB)("embedDivisionData — consent masking (RS008 review fi
     const res = await embedDivisionData(divId);
     const names = (res as { ok: true; data: EmbedPayload }).data.entrants.map((e) => e.display_name);
     expect(names).toContain("Thunder Strikers");
+  });
+});
+
+// N1 fix round 1, M8 — the embed schedule widget names a waiting side by its
+// feeder's round with `publicRoundNamer`, which tells a page playoff's rounds
+// apart only by the generator's stable id, `fixtures.ext_key` (M3: Qualifier 1
+// and the Eliminator share round one and a match count). `public_fixtures_v`
+// has no such column, so the embed door reads it the way `getPublicDivision`
+// does; without it the widget names Qualifier 2's sides "Quarter-finals".
+describe.skipIf(!HAS_DB)("embedDivisionData — a page playoff's fixtures carry the generator's ext_key (N1 fix round 1, M8)", () => {
+  it("each of the four generated playoff matches carries its stored pp-* ext_key", async () => {
+    const { auth } = await seedOrg("pro");
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "M8 Embed Playoff",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Playoffs",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    await createEntrants(
+      auth,
+      division.id,
+      ["P1", "P2", "P3", "P4"].map((name, i) => ({ kind: "individual" as const, display_name: name, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "page_playoff", name: "Playoffs", config: {} });
+    await generateStageFixtures(auth, stage!.id);
+    const stored = await sql<{ id: string; ext_key: string | null }[]>`
+      select id, ext_key from fixtures where stage_id = ${stage!.id}`;
+    // The premise, from the stored rows: the engine's four playoff ids.
+    expect(stored.map((r) => r.ext_key).sort()).toEqual(["pp-elim", "pp-final", "pp-q1", "pp-q2"]);
+
+    const res = await embedDivisionData(division.id);
+
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const { fixtures } = (res as { ok: true; data: EmbedPayload }).data;
+    expect(Object.fromEntries(fixtures.map((f) => [f.id, f.ext_key]))).toEqual(
+      Object.fromEntries(stored.map((r) => [r.id, r.ext_key])),
+    );
   });
 });

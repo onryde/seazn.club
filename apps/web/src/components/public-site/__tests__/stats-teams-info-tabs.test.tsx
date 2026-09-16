@@ -192,8 +192,8 @@ describe("StatsTab", () => {
     // `?tab=stats` deep link that outlived its data.
     expect(empty.tabs).not.toContain("stats");
     expect(statsDoc.tabs).toContain("stats"); // the positive pair
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 0 })).not.toContain("stats");
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 1, teams: 0 })).toContain("stats");
+    expect(deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 0 })).not.toContain("stats");
+    expect(deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 1, teams: 0 })).toContain("stats");
   });
 
   it("boards are grouped under ONE heading per division, in first-appearance order, and each board is its own `mh-leaders-<slug>-<key>` section", () => {
@@ -472,8 +472,8 @@ describe("TeamsTab", () => {
     expect(rootClasses(h, "mh-teams")).toContain("min-w-0");
     expect(empty.tabs).not.toContain("teams");
     expect(teamsDoc.tabs).toContain("teams"); // the positive pair
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 0 })).not.toContain("teams");
-    expect(deriveHubTabs({ matches: 0, tables: 0, leaderRows: 0, teams: 1 })).toContain("teams");
+    expect(deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 0 })).not.toContain("teams");
+    expect(deriveHubTabs({ matches: 0, tables: 0, knockouts: 0, leaderRows: 0, teams: 1 })).toContain("teams");
   });
 
   it("cards are grouped under ONE heading per division, in first-appearance order, each card scoped to its own group", () => {

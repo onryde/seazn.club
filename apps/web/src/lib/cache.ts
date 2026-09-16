@@ -59,6 +59,64 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
   }
 }
 
+/**
+ * Delete keys by their full names with ONE direct DEL, and no SCAN. When the
+ * names are already known, `cacheDelPattern` below walks the whole keyspace to
+ * find them. No-op on error, and when handed no keys (a bare DEL is an arity
+ * error).
+ */
+export async function cacheDel(...keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const c = client();
+  if (!c) return;
+  try {
+    await c.del(...keys);
+  } catch {
+    /* fail open */
+  }
+}
+
+/**
+ * R10 I1: the longest a public-cache writer waits on its literal-key DEL before
+ * sending its realtime pushes anyway. ioredis has no command timeout (`client()`
+ * above sets none), so a Redis that stops answering without dropping the
+ * connection would never settle the DEL. Every push would then be lost while
+ * every subscribed page polls only as a slow safety net.
+ */
+export const PUSH_AFTER_DELETE_BOUND_MS = 1_500;
+
+/**
+ * Run `send` EXACTLY ONCE: when `deleted` settles, or after
+ * PUSH_AFTER_DELETE_BOUND_MS, whichever comes first (R10 I1). Not awaited, so it
+ * never holds the caller's response. Whichever of the two comes first sends; the
+ * other finds `sent` and does nothing, so a DEL that settles after the bound
+ * never sends twice. A DEL that settles first clears the timer, so nothing stays
+ * armed after it.
+ *
+ * Both public-cache writers send through here, so the two cannot drift: a score
+ * write (`invalidatePublicCache`, usecases/scoring.ts) and a schedule write
+ * (`afterScheduleWrite`, usecases/schedule.ts, R10c m1). Each caller still
+ * attaches its own logging `.catch` first (F4), so a failed delete is logged
+ * with the keys it was for. `send` must not throw.
+ *
+ * A `deleted` that REJECTS still sends, and leaves nothing unhandled (R10d n1).
+ * `.then(once, once)` handles both outcomes. `.finally(once)` would pass the
+ * rejection on to a derived promise nobody holds, which is an unhandled
+ * rejection. A bare `cacheDel(key)` can reject: `client()` sits outside its try,
+ * and ioredis throws synchronously on a REDIS_URL it cannot parse.
+ */
+export function sendAfterDeleteOrBound(deleted: Promise<unknown>, send: () => void): void {
+  let sent = false;
+  const once = () => {
+    if (sent) return;
+    sent = true;
+    clearTimeout(bound);
+    send();
+  };
+  const bound = setTimeout(once, PUSH_AFTER_DELETE_BOUND_MS);
+  void deleted.then(once, once);
+}
+
 /** Delete keys matching a glob pattern (e.g. "ent:{org}:*"). No-op on error. */
 export async function cacheDelPattern(pattern: string): Promise<void> {
   const c = client();

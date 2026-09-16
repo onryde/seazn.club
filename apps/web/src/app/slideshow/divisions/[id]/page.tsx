@@ -11,6 +11,8 @@ import { hasFeature } from "@/lib/entitlements";
 import { publicThemeStyleChain } from "@/lib/public-theme";
 import { resolveSponsors } from "@/server/usecases/sponsors";
 import { Slideshow } from "@/components/v2/slideshow";
+import { slideshowLabels } from "@/server/slideshow-labels";
+import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 
 export default async function DivisionSlideshowPage({
   params,
@@ -36,6 +38,11 @@ export default async function DivisionSlideshowPage({
       title={`${competition.name} · ${division.name}`}
       slides={slides}
       backHref={routes.division(org.slug, competition.slug, division.slug)}
+      // C1: a phone gets the same "made for a TV" card as the public kiosk.
+      // Its Open the live page goes where the back link goes: this division's
+      // console page, which the viewer can always open (a private
+      // competition's public hub would 404).
+      liveHref={routes.division(org.slug, competition.slug, division.slug)}
       divisionIds={[id]}
       realtime={realtime}
       // competition.branding comes off the console read model (NOT emptied
@@ -50,6 +57,10 @@ export default async function DivisionSlideshowPage({
       // v10: resolver rows scoped to this division's competition, blob shim
       // fallback for un-backfilled orgs.
       sponsors={await resolveSponsors(auth.orgId, division.competition_id)}
+      // R10e u1 moved the board's strings into `labels`; the organiser board
+      // keeps the English it always showed (which locale it should speak is
+      // not settled by that round).
+      labels={slideshowLabels(DEFAULT_LOCALE)}
     />
   );
 }

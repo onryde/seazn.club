@@ -6,7 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { cacheGet, cacheSet, cacheDelPattern } from "@/lib/cache";
+import { cacheGet, cacheSet, cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
@@ -18,7 +18,7 @@ import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import {
-  fireDivisionRevalidate,
+  fireScoreRevalidate,
   fireDiscoveryRevalidate,
   invalidateDiscoveryCache,
 } from "@/server/public-site/revalidate";
@@ -125,27 +125,102 @@ export async function scoreEvent(
     status: result.status,
   };
 
-  // A decision (or a void that may have erased one) moves brackets/standings.
-  if (result.outcome !== null || input.type === "core.void") {
-    await onDecided(auth, fixtureId, result.outcome);
-    await refreshDiscipline(auth, fixtureId);
-    await refreshNews(auth, fixtureId);
-  }
+  // R10 M3: everything from here on runs AFTER the event committed, so the
+  // invalidation and the pushes sit in `finally`. A post-commit hook that
+  // throws (`onDecided` and `refreshDiscipline` do not swallow their own
+  // failures) used to skip both, and the public pages kept serving the old
+  // document for a score that already stood: the shape F3 fixed in
+  // event-import.ts. The hook's error still propagates unchanged: `finally`
+  // rethrows it once the awaited invalidation is done, and the invalidation's
+  // own `.catch` means its failure can never replace it.
+  // R10h: the fixtures this score named a winner (or loser) INTO, from the
+  // advance's own write. The `finally` below reads it as it stands when it
+  // runs, so a throw from a LATER hook (discipline, news) still publishes
+  // them. A throw from inside `onDecided` itself, after its fill committed,
+  // does not — that path leaves the next fixture on its own 30s TTL, which is
+  // what every score did before this change.
+  let advanced: readonly string[] = [];
+  try {
+    // A decision (or a void that may have erased one) moves brackets/standings.
+    if (result.outcome !== null || input.type === "core.void") {
+      advanced = await onDecided(auth, fixtureId, result.outcome);
+      await refreshDiscipline(auth, fixtureId);
+      await refreshNews(auth, fixtureId);
+    }
 
-  if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
-  // After commit (doc 08 §4): realtime + public cache, both fire-and-forget.
-  // Discovery surfaces refresh on decided/void/start writes only — and only
-  // when the competition is discoverable (doc 15 §2, checked inside).
+    if (cacheKey) await cacheSet(cacheKey, out, IDEM_TTL_SECONDS);
+  } finally {
+    await invalidateAndPush(auth, fixtureId, input, result, advanced);
+  }
+  return out;
+}
+
+/** scoreEvent's post-commit invalidation and realtime pushes (R10 M3: run from
+ *  its `finally`). Never rejects. */
+async function invalidateAndPush(
+  auth: AuthCtx,
+  fixtureId: string,
+  input: AppendEventRequest,
+  result: { outcome: unknown },
+  /** R10h: the fixtures this score advanced a name into (`onDecided`'s own
+   *  write). Empty for every score that advances nobody. */
+  advanced: readonly string[] = [],
+): Promise<void> {
+  // After commit (doc 08 §4): realtime fire-and-forget, the public cache
+  // awaited. Discovery surfaces refresh on decided/void/start writes only — and
+  // only when the competition is discoverable (doc 15 §2, checked inside).
   const movesDiscovery =
     result.outcome !== null || input.type === "core.void" || input.type === "core.start";
-  void publishFixtureUpdate(fixtureId, "event");
-  // Division-wide state_changed so multi-fixture listeners (slideshow) get
-  // one channel per division instead of one per fixture.
-  void sql<{ division_id: string }[]>`select division_id from fixtures where id = ${fixtureId}`
-    .then(([row]) => row && publishDivisionUpdate(row.division_id, "score"))
-    .catch(() => null);
-  void invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery);
-  return out;
+  // P1 — AWAITED, never `void`. Next applies a route handler's revalidation
+  // tags in ONE flush the moment the handler resolves and silently drops any
+  // tag fired later. The voided call fired its tag after a DB lookup, so after
+  // every score the hub, the competition page and the division page kept
+  // serving the pre-score document until their 30s TTL ran out
+  // (`__tests__/score-revalidate-in-request.test.ts`). The Redis sweeps inside
+  // stay non-blocking. A failure is logged, not thrown: the score has already
+  // committed, and this must not report it as failed.
+  //
+  // P1 round 2 (F2) — the realtime pushes go out only once the public Redis
+  // copies they send a spectator back to have been DELETED (the delete
+  // settled, whichever way it went), never before, and without holding this
+  // response. Both channels have public receivers that refetch a Redis-cached
+  // document on a push: `fixture:{id}` → the match centre and overlay
+  // (`pub:v1:fixture:{id}`), `division:{id}` → the hub
+  // (`pub:v1:hub:{competitionId}`). A refetch that beat the delete read the old
+  // copy, and a subscribed page only polls as a slow safety net.
+  //
+  // R10 H4: both of those keys are literal, so the pushes wait on one direct
+  // DEL, not on a full-keyspace SCAN; the division's glob sweep is not waited
+  // on at all. The division push is addressed from the invalidation's own
+  // lookup rather than a second query.
+  //
+  // R10 I1: and never longer than PUSH_AFTER_DELETE_BOUND_MS. A DEL that
+  // never answers sends the pushes at the bound instead of never, once.
+  //
+  // R10h: a score that advances a winner (or a loser) into the next fixture
+  // changes THAT fixture's public document too — the slot label it showed
+  // becomes a name. Its key joins the one DEL above, and its push goes out
+  // from this same callback, so it waits on that DEL exactly as the decided
+  // fixture's does. Without it a spectator already watching the next round
+  // (the final, opened while the semis play) sat on "TBD" until the 30s TTL
+  // expired and the next poll landed. The reason is "schedule", the same one
+  // every other slot-fill sends (`afterScheduleWrite`): what changed is who
+  // is playing, not this fixture's score.
+  await invalidatePublicCache(auth.orgId, fixtureId, movesDiscovery, (scope) => {
+    void publishFixtureUpdate(fixtureId, "event");
+    if (scope) void publishDivisionUpdate(scope.divisionId, "score");
+    for (const id of advanced) void publishFixtureUpdate(id, "schedule");
+  }, advanced).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
+    // It failed before any sweep started (the lookup, or the tag call), so
+    // there is nothing to wait for. The scorer's other devices read the
+    // ledger, not Redis, and still need their ping.
+    //
+    // R10h: and only that one. No DEL went out, so a push for a fixture this
+    // score advanced a name into would send its spectators straight back to
+    // the stale copy they are already showing; they keep their own poll.
+    void publishFixtureUpdate(fixtureId, "event");
+  });
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -379,9 +454,16 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 
 // A decided fixture feeds brackets (winner_to/loser_to slots) and refreshes
 // the table-stage standings snapshot.
-export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<void> {
+//
+// R10h: returns the fixtures it named an entrant INTO, taken from the fill's
+// own `returning id` — never from a re-read or a scan of the bracket, so a
+// slot that was already filled (the update touches no row) is not reported as
+// changed. `scoreEvent` DELs and pushes them beside the decided fixture; the
+// batch importer ignores them, as it ignores its own pushes.
+export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unknown): Promise<string[]> {
   // outcome may be null here (a void erased the decision) — recompute only.
   const o = (outcome ?? {}) as { kind?: string; winner?: string; loser?: string };
+  const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<
       {
@@ -406,10 +488,12 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
     const winner = o.kind === "win" || o.kind === "award" ? o.winner : undefined;
     const loser = o.kind === "win" ? o.loser : undefined;
     if (winner && fixture.winner_to_fixture && fixture.winner_to_slot) {
-      await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      const filled = await fillSlot(tx, fixture.winner_to_fixture, fixture.winner_to_slot, winner);
+      if (filled !== null) advanced.push(filled);
     }
     if (loser && fixture.loser_to_fixture && fixture.loser_to_slot) {
-      await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+      const filled = await fillSlot(tx, fixture.loser_to_fixture, fixture.loser_to_slot, loser);
+      if (filled !== null) advanced.push(filled);
     }
     // Placement games (Jul3/08 §4, 3 Jun/17 May): "winner of game X = 15th" —
     // the decided fixture writes rank locks via the Jul3/05 mechanism, never
@@ -457,6 +541,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
   if (context && o.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
+  // Only ever reached once the transaction above COMMITTED: a rollback throws
+  // out of `withTenant`, so the ids of a fill that was undone never leave.
+  return advanced;
 }
 
 async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
@@ -475,7 +562,7 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
   if (!ready) return;
   const { completeStage } = await import("./stages");
   try {
-    await completeStage(auth, stageId);
+    await completeStage(auth, stageId, { publish: false });
     await withTenant(auth.orgId, async (tx) => {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
@@ -515,10 +602,28 @@ export async function finalizeFixture(
 // keeps the two paths from drifting. An import that skipped it left the public
 // pages, the public API and discovery serving pre-import content — on a
 // feature whose whole point is filling those pages (design doc §1/§2.1).
+//
+// P1 — every caller AWAITS this inside its request (`scoreEvent`,
+// `importEvents`): the tag call below reaches Next's per-request flush only if
+// it happens before the route handler resolves.
 export async function invalidatePublicCache(
   orgId: string,
   fixtureId: string,
   movesDiscovery = false,
+  /** Runs EXACTLY ONCE: when the literal-key DEL below settles (resolved or
+   *  rejected), or after PUSH_AFTER_DELETE_BOUND_MS, whichever comes first
+   *  (R10 I1). Never awaited by this function, so it never holds the caller's
+   *  response. It does NOT wait for the division glob's SCAN (R10 H4). Handed
+   *  the fixture's division and competition, or null when the fixture no
+   *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
+   *  F2). Must not throw. */
+  afterDeletes?: (scope: { divisionId: string; competitionId: string } | null) => void,
+  /** R10h: other fixtures this same write changed — the ones a bracket advance
+   *  named a winner or loser INTO. Their public documents are stale for the
+   *  same reason the decided fixture's is, so their keys join the ONE DEL
+   *  below instead of a second one. Caller-supplied, and already the product
+   *  of its own write: this function never derives or re-reads them. */
+  alsoFixtureIds: readonly string[] = [],
 ): Promise<void> {
   const row = await withTenant(orgId, async (tx) => {
     const [r] = await tx<
@@ -531,24 +636,62 @@ export async function invalidatePublicCache(
       where f.id = ${fixtureId}`;
     return r ?? null;
   });
-  await cacheDelPattern(`pub:v1:fixture:${fixtureId}`);
+  // The ISR tag FIRST, straight after the one awaited lookup. `fireScoreRevalidate`
+  // expires the division tag outright instead of marking it stale
+  // (revalidate.ts); `getPublicCompetitionHub` tags every division it read, so
+  // this also drops the hub page's ISR entry.
+  if (row) fireScoreRevalidate(row.division_id, row.competition_id);
+  // The Redis deletes AFTER the tag, and not awaited. A delete that finished
+  // before the tag would let a hub read in between rebuild from the
+  // still-cached division and put the stale document back.
+  //
+  // R10 H4: two doors. The LITERAL keys, whose names are known, go out in ONE
+  // direct DEL (`cacheDel`):
+  //   - the fixture's own document;
+  //   - W2's competition HUB document (usecases/public.ts's
+  //     `pub:v1:hub:{competitionId}`). It carries every division's live
+  //     scores, so a write to any fixture in the competition makes it stale.
+  //     It is competition-keyed, not division-keyed, because one document
+  //     spans the whole competition.
+  // Only the division's glob still needs a SCAN over the whole keyspace
+  // (cache.ts), and no push depends on it. The hub rebuilds through
+  // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
+  // `pub:v1:div:{id}:*` backs only the public schedule, standings and entrants
+  // endpoints.
+  const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+  // R10h: the advanced-into fixtures' own documents ride the same DEL, after
+  // the two keys every score drops. One round trip, and the pushes below then
+  // wait on the delete that covers all of them.
+  const keys = row ? [fixtureKey, `pub:v1:hub:${row.competition_id}`] : [fixtureKey];
+  for (const id of alsoFixtureIds) keys.push(`pub:v1:fixture:${id}`);
+  // F4: neither call is ever left to reject unhandled. Both helpers fail open
+  // inside their try, but `client()` sits outside it (cache.ts). ioredis's
+  // constructor throws synchronously on a REDIS_URL it cannot parse, so every
+  // call would then reject.
+  const deleted = cacheDel(...keys).catch((err: unknown) => {
+    log.error({ err, fixture: fixtureId, keys }, "scoring: a public Redis delete failed (the write stands)");
+  });
   if (row) {
-    await cacheDelPattern(`pub:v1:div:${row.division_id}:*`);
-    // W2 — the competition HUB document (usecases/public.ts's
-    // `pub:v1:hub:{competitionId}`) carries every division's live scores, so a
-    // write to any fixture in the competition makes it stale. Competition-
-    // keyed, not division-keyed: one document spans the whole competition.
-    // Its ISR twin drops on the `division:{id}` tag `fireDivisionRevalidate`
-    // fires below — `getPublicCompetitionHub` tags every division it read.
-    await cacheDelPattern(`pub:v1:hub:${row.competition_id}`);
-    fireDivisionRevalidate(row.division_id, row.competition_id);
-    // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
-    // fires only for discoverable competitions.
-    if (movesDiscovery && row.discoverable) {
-      deferred(async () => {
-        await invalidateDiscoveryCache();
-        fireDiscoveryRevalidate();
-      });
-    }
+    const pattern = `pub:v1:div:${row.division_id}:*`;
+    void cacheDelPattern(pattern).catch((err: unknown) => {
+      log.error({ err, fixture: fixtureId, pattern }, "scoring: a public Redis sweep failed (the write stands)");
+    });
+  }
+  // F2: the catch above means this cannot reject, so it settles exactly when
+  // the DEL has, whichever way that went. It does not wait for the SCAN.
+  //
+  // R10 I1: nor longer than PUSH_AFTER_DELETE_BOUND_MS, and exactly once.
+  // `sendAfterDeleteOrBound` (cache.ts) owns that, and the schedule path sends
+  // through the same helper (R10c m1).
+  const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;
+  if (afterDeletes) sendAfterDeleteOrBound(deleted, () => afterDeletes(scope));
+  if (!row) return;
+  // Cheap by design (doc 15 §2 / PROMPT-19 item 4): the `discovery` tag
+  // fires only for discoverable competitions.
+  if (movesDiscovery && row.discoverable) {
+    deferred(async () => {
+      await invalidateDiscoveryCache();
+      fireDiscoveryRevalidate();
+    });
   }
 }

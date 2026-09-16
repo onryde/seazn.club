@@ -853,13 +853,14 @@ export async function applyCompetitionSchedule(
       conflicts: conflicts
         .filter((c) => !allSiblingIds.has(c.fixtureId))
         .map((c) => withLegacyDetail(withJointCourtNames(c))),
-      divisionIds: order.map((d) => d.id),
+      // R10d n2: each written division, with the fixtures its input assigned.
+      written: order.map((d) => ({ divisionId: d.id, fixtureIds: d.input.assignments.map((a) => a.fixture_id) })),
     };
   });
 
   // Cache invalidation + realtime, once per written division, AFTER the commit.
-  for (const divisionId of out.divisionIds) {
-    afterScheduleWrite(divisionId, competitionId, "schedule");
+  for (const { divisionId, fixtureIds } of out.written) {
+    afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
   }
   return { applied: out.applied, conflicts: out.conflicts };
 }

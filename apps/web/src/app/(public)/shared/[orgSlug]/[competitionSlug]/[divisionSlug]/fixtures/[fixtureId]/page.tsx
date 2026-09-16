@@ -16,14 +16,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { getPublicFixture } from "@/server/public-site/data";
+import { getPublicFixture, type PublicFixture } from "@/server/public-site/data";
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
+import { PosterButton } from "@/components/public-site/poster-button";
+import { posterFileName } from "@/lib/poster-file-name";
+import { statusOf } from "@/server/public-site/match-centre";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { fixtureSubheading } from "./fixture-subheading";
+import { MatchCentreSubheading } from "./subheading";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -100,6 +103,33 @@ function scoreAndResultFor(matchCentre: MatchCentreDocT, dict: Dict): string | n
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/**
+ * The two side names this page prints: its h1, `<title>` and description, the
+ * share text, the poster's file name and the JSON-LD teams.
+ *
+ * A side with an entrant is that entrant's (masked) name. A side still WAITING
+ * is the match centre's own name for it — `matchCentre.header.sides`, built by
+ * `loadMatchCentre` beside this fixture in `getPublicFixture` — so the headline
+ * and the court card directly below it say the same words ("Winner of
+ * Semi-finals, match 1"). Resolving the stored slot label a second time here
+ * printed the organiser board's "Winner of R1·1" above a court card that said
+ * otherwise (N1 fix round 1, I1): one authority, already loaded, no extra query.
+ */
+function sideNamesFor(
+  data: {
+    fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id">;
+    entrantNames: Record<string, string>;
+    matchCentre: MatchCentreDocT;
+  },
+  msgFn: ReturnType<typeof lookup>,
+): [string, string] {
+  const nameOf = (entrantId: string | null, side: 0 | 1): string =>
+    entrantId
+      ? (data.entrantNames[entrantId] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
+      : data.matchCentre.header.sides[side].name;
+  return [nameOf(data.fixture.home_entrant_id, 0), nameOf(data.fixture.away_entrant_id, 1)];
+}
+
 export const revalidate = 30;
 
 // ISR (task-8): empty-array generateStaticParams is required for on-demand
@@ -133,12 +163,7 @@ export async function generateMetadata({ params }: Pick<Props, "params">): Promi
   const msgFn = lookup(locale);
   const dict = await getDictionary(locale, "public");
   const ui = await getDictionary(locale, "ui");
-  const home = data.fixture.home_entrant_id
-    ? (data.entrantNames[data.fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.home_slot_label, msgFn, "schedule.tbd");
-  const away = data.fixture.away_entrant_id
-    ? (data.entrantNames[data.fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(data.fixture.away_slot_label, msgFn, "schedule.tbd");
+  const [home, away] = sideNamesFor(data, msgFn);
   const decidedLine = decidedLineFor(data.fixture, data.entrantNames, msgFn, data.division.sport_key);
   const decided = data.fixture.status === "decided" || data.fixture.status === "finalized";
   // Task 14 acceptance (a) — a decided fixture's title carries both the raw
@@ -178,12 +203,7 @@ export default async function FixturePage({ params }: Props) {
   const dict = await getDictionary(locale, "public");
   const ui = await getDictionary(locale, "ui");
 
-  const home = fixture.home_entrant_id
-    ? (entrantNames[fixture.home_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(fixture.home_slot_label, msgFn, "schedule.tbd");
-  const away = fixture.away_entrant_id
-    ? (entrantNames[fixture.away_entrant_id] ?? resolveSlotLabel(null, msgFn, "schedule.tbd"))
-    : resolveSlotLabel(fixture.away_slot_label, msgFn, "schedule.tbd");
+  const [home, away] = sideNamesFor(data, msgFn);
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key);
 
@@ -259,6 +279,23 @@ export default async function FixturePage({ params }: Props) {
               `text` is `shareTextFor` (`./share-text.ts`), localised via
               `fixture.share.decided`/`fixture.share.live`/
               `fixture.share.fullTime`. */}
+          {/* Spectator boards §match-centre: the header row carries TWO
+              actions, `Poster` then `Share`. The poster is a picture of this
+              match (1080x1350, cut server-side at `poster.png`); the share is
+              the link. They sit together because they answer the same
+              question — "send this to the group" — with the two things people
+              actually send. */}
+          <div className="flex flex-wrap items-center gap-2">
+          <PosterButton
+            href={`${basePath}/fixtures/${fixture.id}/poster.png`}
+            fileName={posterFileName(home, away)}
+            // `statusOf`, not `data.matchCentre.header.status`: the same
+            // function the header itself derives that field with, applied to
+            // the status this component already holds. Reaching back through
+            // the whole match-centre document for a value one call away made
+            // the page depend on a field it never otherwise reads.
+            variant={statusOf(fixture.status)}
+          />
           <ShareButton
             title={`${home} ${msgFn("schedule.vs")} ${away}`}
             text={shareTextFor(
@@ -272,30 +309,20 @@ export default async function FixturePage({ params }: Props) {
             )}
             url={`${basePath}/fixtures/${fixture.id}`}
           />
+          </div>
         </div>
-        {/* R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play
-            fixture with no scheduled time (the court card right below
-            already carries the LIVE chip); joining through `filter(Boolean)`
-            rather than string concatenation means that empty case doesn't
-            leave a stray leading " · " in front of the venue/court name, and
-            the whole line disappears rather than rendering blank when there
-            is neither a subheading nor a venue/court to show. */}
-        {(() => {
-          const subheadingParts = [
-            fixtureSubheading(
-              fixture.status,
-              fixture.scheduled_at,
-              t(dict, "matchCentre.status.timeTbd"),
-              t(dict, "matchCentre.status.timeNotRecorded"),
-              locale,
-            ),
-            fixture.venue_name,
-            fixture.court_name,
-          ].filter((part): part is string => Boolean(part));
-          return subheadingParts.length > 0 ? (
-            <p className="mb-4 text-sm text-ink-muted">{subheadingParts.join(" · ")}</p>
-          ) : null;
-        })()}
+        {/* M1 k2 — a client island, not a server-rendered `<p>`. This line was
+            composed here once per request from the fixture row, so after a
+            rain-delay reschedule the court card below showed the new kick-off
+            (its document refetched at 895 ms) and this still showed the old
+            one — one page, two times, until the reader reloaded (rule R10).
+            It now renders from the SAME live snapshot `<MatchCentre>` does,
+            published to `live-fixture-channel` rather than fetched a second
+            time, and off the same `startTimeText` output the court card's
+            "Starts …" sentence renders — one kick-off, one wording, one
+            timezone. `initial` is this request's own document, so first paint
+            is byte-identical to a server render. */}
+        <MatchCentreSubheading fixtureId={fixture.id} initial={initial} dict={dict} />
 
         {/* Stream overlay W1 (design §3.9) — the club's own broadcast, under
             the headline block and above the match centre. PLACEMENT ONLY:

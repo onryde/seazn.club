@@ -64,8 +64,23 @@ export async function GET(req: Request, { params }: Ctx) {
   const url = `https://seazn.club${path}`;
   const qr = await QRCode.toBuffer(url, { width: 900, margin: 1 });
 
+  // IN UTC, and that is load-bearing. `starts_on`/`ends_on` are pg `date`
+  // columns — CALENDAR days, not instants — so `new Date("2026-09-01")` is UTC
+  // midnight, and formatting it in any zone behind UTC prints the day before
+  // (in this route's French locale, "31 août 2026" — wrong day AND wrong
+  // month). This is the printed handout. Reasoning in full on
+  // matches-hub/info-tab.tsx.
+  //
+  // NOT `lib/format.ts`'s `fmtDate`: that helper pins `LOCALE = "en-GB"`
+  // internally and takes no locale parameter, so adopting it here would
+  // silently drop the org-locale month names this route exists to render.
   const fmt = (d: string) =>
-    new Date(d).toLocaleDateString(locale, { day: "numeric", month: "long", year: "numeric" });
+    new Date(d).toLocaleDateString(locale, {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
   const dates = [
     competition.starts_on ? fmt(competition.starts_on) : null,
     competition.ends_on ? fmt(competition.ends_on) : null,

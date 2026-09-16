@@ -34,7 +34,7 @@ import { LEADER_SPECS } from "../leaders";
 
 export const W2_KEYS = [
   // landing shell
-  "landing.tabsLabel", "landing.tab.overview", "landing.tab.matches", "landing.tab.table", "landing.tab.stats", "landing.tab.teams", "landing.tab.gallery", "landing.tab.info",
+  "landing.tabsLabel", "landing.tab.overview", "landing.tab.matches", "landing.tab.table", "landing.tab.knockout", "landing.tab.stats", "landing.tab.teams", "landing.tab.gallery", "landing.tab.info",
   // One key per RUNG of `landingStatus`'s ladder (`lib/matches-hub.ts:270`):
   // empty → live → next → match_day → finished → dates. `matchDay` was missing
   // from all four locales until PR 2's pre-flight scan for Task 8 found it, and
@@ -88,6 +88,21 @@ export const W2_KEYS = [
   // `fmtTime` for the clock. Deleted from all four locales with this line.
   "matchesHub.startsIn", "matchesHub.timeTbd", "matchesHub.unscheduled", "matchesHub.empty", "matchesHub.emptyFilter", "matchesHub.live", "matchesHub.ended",
   "matchesHub.round", "matchesHub.timesIn", "matchesHub.card.label",
+  // The Knockout tab (plan 2026-09-13, Task 2). Its division chips REUSE
+  // `matchesHub.division.all` / `matchesHub.divisionsLabel` above rather than
+  // owning a second copy of the same two strings.
+  "knockout.champion", "knockout.championLine", "knockout.championLineWalkover", "knockout.roundsLabel", "knockout.liveRound",
+  "knockout.next.through", "knockout.next.meets", "knockout.next.meetsWinnerOf", "knockout.next.advances",
+  "knockout.view.label", "knockout.view.rounds", "knockout.view.draw", "knockout.drawLabel",
+  // A bracket slot still waiting on its feeder (Knockout fix round, D2).
+  "knockout.pendingPair", "knockout.pendingLoser",
+  // A slot waiting on a match with no pair to name (fix round N1): the feeder's
+  // ROUND, as the rail names it, and its place in that round — never the
+  // organiser board's "R1·2" short code.
+  "knockout.feederWinner", "knockout.feederLoser",
+  // The same, when the feeder's round holds ONE match (N1 fix round 1, M2):
+  // "Winner of Grand final", never "Winner of Grand final, match 1".
+  "knockout.feederWinnerOnly", "knockout.feederLoserOnly",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
@@ -95,7 +110,9 @@ export const W2_KEYS = [
   "teams.title", "teams.seed", "teams.division", "info.title", "info.dates", "info.venues", "info.registration.open", "info.registration.closed", "info.calendar", "info.share",
   // division page
   "division.tab.schedule", "division.tab.standings", "division.tab.entrants", "division.tabsLabel", "division.champion", "division.resultsGrid", "division.standingsEmpty", "division.entrantsEmpty",
-  "division.seed", "division.filter.label", "division.filter.all", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
+  "division.seed", "division.filter.label", "division.filter.all", "division.filter.allEntrants", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
+  // the schedule's zone caption and the division page's kiosk link (N1e e5, e7)
+  "division.timesIn", "division.present", "division.filter.showFor",
   // player page
   "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling", "player.line.result",
   "player.result.won", "player.result.lost", "player.result.drawn", "player.result.live",
@@ -154,6 +171,33 @@ describe("W2 public dictionary coverage", () => {
       // both, so a locale that drops one ships a sentence with a hole in it
       // straight into every link preview and search result.
       "landing.metaDescription": ["competition", "org"],
+      // knockout-tab.tsx — the champion banner's line and the four "next"
+      // sentences under a round's cards. `{round}` is the NEXT round's
+      // pre-resolved label; a locale that drops it tells a spectator a winner
+      // goes through to nowhere.
+      "knockout.championLine": ["name", "round"],
+      // The same banner line for a final won by forfeit (fix round 1).
+      "knockout.championLineWalkover": ["name", "round"],
+      "knockout.next.through": ["name", "round"],
+      "knockout.next.meets": ["name", "round"],
+      "knockout.next.meetsWinnerOf": ["a", "b", "round"],
+      "knockout.next.advances": ["round"],
+      // A bracket slot still waiting on its feeder (fix round, D2): the two
+      // entrants of the undecided match that feeds it — as a pair in a winner's
+      // slot, as "the loser of" in the bronze match's. A locale that drops
+      // either name tells a spectator only half of who could be there.
+      "knockout.pendingPair": ["a", "b"],
+      "knockout.pendingLoser": ["a", "b"],
+      // A waiting slot with no pair to name (fix round N1): the builders
+      // (`competition-hub.ts`, `match-centre-load.ts`) pass the feeder's round
+      // name and its place in that round. A locale that drops `{seq}` names a
+      // round of eight matches without saying which.
+      "knockout.feederWinner": ["round", "seq"],
+      "knockout.feederLoser": ["round", "seq"],
+      // A feeder round of one match (M2): the round name alone. A locale that
+      // drops `{round}` says "Winner of" and stops.
+      "knockout.feederWinnerOnly": ["round"],
+      "knockout.feederLoserOnly": ["round"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -274,4 +318,74 @@ describe("the round label reads the same whether the builder or the card supplie
       expect(dict["division.view.round"]!.toLowerCase(), `${locale} view switcher`).toContain(noun);
     });
   }
+});
+
+// N1 fix round 1, M1 — a feeder slot's sentence reads naturally in es/fr/nl.
+//
+// `{round}` is a capitalised round name ("Cuartos de final", "Quarts de
+// finale", "Kwartfinales") that wants an article mid-sentence, so "Ganador de
+// Cuartos de final, partido 2" reads as a machine wrote it. nl writes
+// "de {round}", as its `knockout.next.*` sentences do; es and fr avoid the
+// article with a colon.
+//
+// N1c (review-n1f m2) — the ROLE word comes first in every locale. M1 had es
+// and fr put the round first and the role last ("… match 1 : vainqueur"), and a
+// waiting side's name sits in a `truncate` box: on a 320px losers'-round card
+// the ellipsis ate "vainqueur"/"perdant", the one word that says which result
+// fills the slot. So the text before `{round}` must already name the role, and
+// name it differently for a winner and a loser. Read out of each dictionary,
+// never a table of words typed in here.
+describe("feeder-slot phrases name the role BEFORE the round, in every locale (N1c m2)", () => {
+  const FEEDER = [
+    "knockout.feederWinner",
+    "knockout.feederLoser",
+    "knockout.feederWinnerOnly",
+    "knockout.feederLoserOnly",
+  ] as const;
+  /** Everything a phrase says before its round name. */
+  const lead = (dict: Record<string, string>, k: (typeof FEEDER)[number]) => {
+    const at = dict[k]!.indexOf("{round}");
+    expect(at, `${k} has a {round}: ${dict[k]}`).toBeGreaterThanOrEqual(0);
+    return dict[k]!.slice(0, at);
+  };
+
+  for (const [locale, dict] of Object.entries({ en, es, fr, nl }) as [string, Record<string, string>][]) {
+    it(`${locale}: each phrase opens with its role word, the winner's differs from the loser's, and "Only" keeps the same opening`, () => {
+      for (const k of FEEDER) expect(lead(dict, k).trim(), `${k}: ${dict[k]}`).not.toBe("");
+      expect(lead(dict, "knockout.feederWinner"), `${locale} winner vs loser opening`).not.toBe(
+        lead(dict, "knockout.feederLoser"),
+      );
+      expect(lead(dict, "knockout.feederWinnerOnly"), `${locale} winner opening`).toBe(lead(dict, "knockout.feederWinner"));
+      expect(lead(dict, "knockout.feederLoserOnly"), `${locale} loser opening`).toBe(lead(dict, "knockout.feederLoser"));
+    });
+
+    // N1d d1 (review-n1c m1) — "the winner's opening differs from the loser's"
+    // is just as true of a SWAPPED pair: "Perdant : {round}" on the winner key
+    // still differs from "Vainqueur : {round}" on the loser key, and a fr
+    // bracket would then tell spectators the semi's LOSER plays the final. So
+    // the role word itself is pinned, against the word each dictionary already
+    // uses for that role in an unrelated sentence: `matchCentre.winner`
+    // ("Winner:") and `knockout.pendingLoser` ("Loser of {a} v {b}"). Nothing
+    // typed in here: a locale that renames its winner renames it in both places.
+    it(`${locale}: the winner phrases open with the dictionary's own word for a winner, the loser phrases with its word for a loser`, () => {
+      const firstWord = (s: string) => /^\p{L}+/u.exec(s.trim())?.[0] ?? "";
+      const winnerWord = firstWord(dict["matchCentre.winner"]!);
+      const loserWord = firstWord(dict["knockout.pendingLoser"]!);
+      expect(winnerWord, `${locale} matchCentre.winner: ${dict["matchCentre.winner"]}`).not.toBe("");
+      expect(loserWord, `${locale} knockout.pendingLoser: ${dict["knockout.pendingLoser"]}`).not.toBe("");
+      expect(winnerWord, `${locale}: the two role words must differ to witness a swap`).not.toBe(loserWord);
+      for (const k of ["knockout.feederWinner", "knockout.feederWinnerOnly"] as const) {
+        expect(firstWord(lead(dict, k)), `${locale} ${k}: ${dict[k]}`).toBe(winnerWord);
+      }
+      for (const k of ["knockout.feederLoser", "knockout.feederLoserOnly"] as const) {
+        expect(firstWord(lead(dict, k)), `${locale} ${k}: ${dict[k]}`).toBe(loserWord);
+      }
+    });
+  }
+
+  it("nl gives the round its article, 'van de {round}', the way its knockout.next.* sentences say 'de {round}'", () => {
+    const dict = nl as Record<string, string>;
+    expect(dict["knockout.next.advances"]).toContain("de {round}");
+    for (const k of FEEDER) expect(dict[k], k).toContain("van de {round}");
+  });
 });

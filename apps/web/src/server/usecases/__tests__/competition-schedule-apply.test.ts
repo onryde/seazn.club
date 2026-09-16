@@ -57,14 +57,24 @@ import { seedCourts, seedOrg } from "./_seed";
  * happens to invalidate it — and `for (const id of out.divisionIds)` narrowed to
  * `.slice(0, 1)` left this suite at 21/0.
  */
-const sched = vi.hoisted(() => ({ afterWrite: [] as [string, string, string][] }));
+const sched = vi.hoisted(() => ({
+  afterWrite: [] as [string, string, string][],
+  // R10d n2: the fixture ids each call named, in call order.
+  fixtureIds: [] as string[][],
+}));
 vi.mock("../schedule", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../schedule")>();
   return {
     ...actual,
-    afterScheduleWrite: (divisionId: string, competitionId: string, reason: "schedule") => {
+    afterScheduleWrite: (
+      divisionId: string,
+      competitionId: string,
+      reason: "schedule",
+      fixtureIds: readonly string[],
+    ) => {
       sched.afterWrite.push([divisionId, competitionId, reason]);
-      return actual.afterScheduleWrite(divisionId, competitionId, reason);
+      sched.fixtureIds.push([...fixtureIds]);
+      return actual.afterScheduleWrite(divisionId, competitionId, reason, fixtureIds);
     },
   };
 });
@@ -1250,6 +1260,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
 
     const { alpha, bravo } = await clean();
     sched.afterWrite.length = 0;
+    sched.fixtureIds.length = 0;
     await applyCompetitionSchedule(auth, board.competitionId, {
       divisions: [alpha, bravo],
       source: "ai",
@@ -1264,6 +1275,14 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     expect(sched.afterWrite).not.toEqual(
       [...domainOrder].sort().map((id) => [id, board.competitionId, "schedule"]),
     );
+    // R10d n2: each call names exactly the fixtures that division's input
+    // assigned, so their public documents (`pub:v1:fixture:{id}`) drop with the
+    // hub key and each gets its push.
+    const assigned = new Map(
+      [alpha, bravo].map((d) => [d.division_id, d.assignments.map((a) => a.fixture_id)] as const),
+    );
+    expect(assigned.get(domainOrder[0]!)!.length, "the premise: each division assigns fixtures").toBeGreaterThan(0);
+    expect(sched.fixtureIds).toEqual(domainOrder.map((id) => assigned.get(id)));
   }, 60_000);
 
   it("invalidates nothing when the transaction rolls back", async () => {
@@ -1273,6 +1292,7 @@ describe.skipIf(!HAS_DB)("applyCompetitionSchedule (#350)", () => {
     // write that never landed.
     const { alpha, bravo } = await clean();
     sched.afterWrite.length = 0;
+    sched.fixtureIds.length = 0;
     await expect(
       applyCompetitionSchedule(auth, board.competitionId, {
         divisions: [alpha, { ...bravo, expected_seq: bravo.expected_seq + 7 }],

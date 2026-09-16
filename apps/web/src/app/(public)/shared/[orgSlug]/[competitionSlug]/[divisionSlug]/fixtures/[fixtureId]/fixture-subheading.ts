@@ -1,5 +1,6 @@
 // Sibling of page.tsx: Next only tolerates its own fixed export set on a
 // page module, so a helper the page needs lives here instead.
+import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 
 /** The fixture statuses that mean the match is OVER — the two `statusOf`
  *  (`server/public-site/match-centre.ts`) folds into `"decided"`. Everything
@@ -7,12 +8,17 @@
  *  future match whose time genuinely is still to be set, and the default
  *  branch (abandoned / forfeited / cancelled, plus any status this module does
  *  not yet know) is exactly where a confident guess would be wrong, so it is
- *  left alone rather than swept in. */
+ *  left alone rather than swept in.
+ *
+ *  Both the RAW fixture status and the document's FOLDED one (`statusOf`'s
+ *  four-value enum, which is what the live document carries) are read by the
+ *  same set — `decided` is a member of both vocabularies, and `finalized`
+ *  only of the raw one, so the pair covers either caller. */
 const PLAYED_STATUSES = new Set(["decided", "finalized"]);
 
 /**
  * "Time TBD" only makes sense pre-match — a live fixture with no
- * scheduled_at (started ad hoc) should say so instead of implying it
+ * scheduled time (started ad hoc) should say so instead of implying it
  * hasn't started, which contradicts the LIVE scorebug right below it.
  *
  * Task 14b — `timeTbdLabel` localises "Time TBD" (task-14-review.md OWED
@@ -24,7 +30,7 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * R11 fix round, C3 — this page ALWAYS renders `<MatchCentre>` directly
  * below this subheading, and `CourtCard`'s own status chip already carries
  * the word "Live" (`mc-live-pill`, `matchCentre.status.live`) for `in_play`
- * — so an `in_play` fixture with no `scheduledAt` used to print the bare
+ * — so an `in_play` fixture with no scheduled time used to print the bare
  * word "Live" here too, immediately above a court card already announcing
  * it. The `in_play` branch now returns `""` (the caller drops the whole
  * line rather than render a bullet-only fragment) — this is NOT "drop the
@@ -32,8 +38,7 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * `scheduled` never returned their chip's word from this function in the
  * first place (only `timeTbdLabel`, a different fact — no time has been
  * announced — not a restatement of "Ended"/"Scheduled"), so nothing else
- * here duplicates the card. Removed the `liveLabel` parameter entirely
- * (it has no caller once the word it carried is never rendered).
+ * here duplicates the card.
  *
  * R11 phone read — a FINISHED match said "Time TBD" (seen on
  * `match-b-tab-scorecard-320.png`, above a scorebug already reading ENDED).
@@ -44,36 +49,61 @@ const PLAYED_STATUSES = new Set(["decided", "finalized"]);
  * spectator looking at a fixture list wants to know which matches are still
  * waiting on a time (something an organiser can fix) versus which are simply
  * missing one after the fact (something nobody needs to act on).
+ *
+ * M1 k2 — this takes the ALREADY-FORMATTED start time, not an ISO string and
+ * a locale. It used to run its own `new Date(iso).toLocaleString(locale, …)`,
+ * which was wrong twice over: it passed NO `timeZone`, so it printed the
+ * rendering server's zone rather than the venue's, and it used a long
+ * weekday style the court card immediately below does not, so one page showed
+ * one kick-off in two wordings and two zones. The single formatter is now
+ * `startTimeText` (`server/public-site/match-centre.ts`), whose output arrives
+ * on the live document as `MatchCentreDoc.startTime` — which is also what
+ * makes the line move when a match is rescheduled (rule R10) instead of
+ * freezing at page load.
  */
 export function fixtureSubheading(
   status: string,
-  scheduledAt: string | null | undefined,
+  startTime: string | null | undefined,
   timeTbdLabel: string = "Time TBD",
   timeNotRecordedLabel: string = "Time not recorded",
-  locale: string = "en-GB",
 ): string {
-  if (scheduledAt) {
-    // `locale`, not a hardcoded "en-GB". The whole-branch review found this
-    // branch rendering "Monday 20 July, 14:30" on fr/es/nl orgs — the ONLY
-    // part of this function that had not been localised, while the two labels
-    // beside it were localised in the same session. The page already had the
-    // locale in hand (`page.tsx`'s `toLocale(org.default_locale)`); it was
-    // simply never passed.
-    //
-    // Two tests should have caught it and structurally could not, which is the
-    // more useful half: `page.test.ts`'s describe is titled "no hardcoded
-    // English leaks outside lang=en" but renders only fixtures with
-    // `scheduled_at: null`, so it never reaches this line; and this function's
-    // own test asserted the date branch with three NEGATIVES ("not Time TBD",
-    // "not empty"), which every locale satisfies equally.
-    return new Date(scheduledAt).toLocaleString(locale, {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
+  if (startTime) return startTime;
   if (status === "in_play") return "";
   return PLAYED_STATUSES.has(status) ? timeNotRecordedLabel : timeTbdLabel;
+}
+
+/**
+ * The whole line under the fixture title: "20 Jul 2026, 14:30 · Riverside
+ * Sports Hall · Court 3".
+ *
+ * R11 fix round, C3 — `fixtureSubheading` returns "" for an in-play fixture
+ * with no start time (the court card right below already carries the LIVE
+ * chip); joining through `filter(Boolean)` rather than string concatenation
+ * means that empty case does not leave a stray leading " · " in front of the
+ * venue, and `null` (rather than an empty paragraph) is returned when there is
+ * neither a time nor a venue/court to show.
+ *
+ * M1 k2 — EVERY part comes off the live match-centre document, so a poll or a
+ * realtime push re-renders the line in place: a rain-delay reschedule moves
+ * this and the court card together. `fallbackStatus` is read ONLY when there
+ * is no document at all (`MatchCentre`'s own `mc-fallback` path, which the
+ * page's `baseData()`-style tests also exercise) — a document, when present,
+ * is the single authority for all four facts.
+ */
+export function fixtureSubheadingLine(
+  doc: MatchCentreDocT | undefined,
+  fallbackStatus: string,
+  labels: { timeTbd: string; timeNotRecorded: string },
+): string | null {
+  const parts = [
+    fixtureSubheading(
+      doc?.header.status ?? fallbackStatus,
+      doc?.startTime,
+      labels.timeTbd,
+      labels.timeNotRecorded,
+    ),
+    doc?.venueName ?? null,
+    doc?.courtName ?? null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
