@@ -130,8 +130,9 @@ Lichess server source (`lichess-org/lila`, `modules/challenge`):
 
 Every entry point (match room read, check-in, mint, cron sweeps, poke, resolve)
 goes through one guard, `loadOnlinePlayFixture`: division `onlinePlay =
-lichess`, sport `boardgame`, fixture has `scheduled_at` and both entrants,
-fixture not finalized or cancelled. Anything else is refused (page: 404; API:
+lichess`, sport `boardgame`, division started (not `setup`/`scheduled` —
+`scoreEvent` refuses those, `scoring.ts:224`), fixture has `scheduled_at` and
+both entrants, fixture not finalized or cancelled. Anything else is refused (page: 404; API:
 404/409; cron: skipped).
 
 ## 7. Data model
@@ -153,7 +154,9 @@ updated_at`; unique `(user_id, provider)` and `(provider, external_user_id)`.
 | `status` | `pending` → `ready` → `live` → `finished` \| `needs_organiser` |
 | `challenge_id` | Lichess challenge id = game id (unique where not null) |
 | `url_white` / `url_black` | Per-colour Play links |
+| `white_side` | `home` \| `away` — which entrant plays White, read from the fixture's fold state (`colorOfHome`) at mint; a `boardgame.pairing` event can make home Black (`boardgame.ts:292-302`), so "home = White" is never assumed |
 | `white_lichess_id` / `black_lichess_id` | Identities the challenge was built with |
+| `scheduled_at_basis` | The fixture `scheduled_at` this row's challenge, emails and window were computed from |
 | `expires_at` | Deadline sent to Lichess |
 | `mint_claimed_at` | Short claim so only one caller talks to Lichess |
 | `white_emailed_at` / `black_emailed_at` | Per-recipient email-once |
@@ -166,6 +169,20 @@ Check-in is **not** stored here: it is `fixture_availability.checked_in_at`
 (existing), read per side through the entrant's claimed person. A check-in
 counts only if `checked_in_at >= T−10` for the fixture's current `scheduled_at`,
 so a stamp from before a reschedule is ignored without clearing shared data.
+
+`checkInToFixture` (`server/usecases/me.ts:251`) has no window and resolves the
+person from a user id only. Its insert/upsert is extracted into an exported
+`stampFixtureCheckIn(personId, fixtureId, orgId)` that both it and the match
+room call; the match room applies the window and resolves the side first. The
+QR path's behaviour is unchanged.
+
+**Reschedule without hooks.** Six code paths write `fixtures.scheduled_at`
+(`moveFixture`, `applySchedule`, `startDivision`, `shiftDivisionSchedule`,
+history undo/redo/restore, schedule clear), so no per-writer hook is added.
+Every guarded entry point compares `scheduled_at_basis` with the fixture's
+current `scheduled_at`; if they differ and the row is not `live`/`finished`, the
+row is reset to `pending` (challenge, urls, identities, email stamps, claim,
+reason cleared) before anything else happens.
 
 The bridge row is created lazily by the first guarded entry point.
 
@@ -199,8 +216,9 @@ relative to `fixtures.scheduled_at`, defined once and imported by code and tests
 5. Success: `update … set status='ready', challenge_id, url_white, url_black,
    white/black_lichess_id, expires_at, mint_claimed_at = null where fixture_id =
    $1 and status = 'pending'`; broadcast ping. Failure: clear `mint_claimed_at`,
-   record `last_error`; the next match-room read or cron retries the mint (both
-   check-ins still stand).
+   record `last_error`. The mint is retried by the cron, or by the room client
+   sending a POST `mint` when its view shows both checked in and no challenge
+   (both check-ins still stand). A GET never mints or writes.
 
 A started game never re-mints: mint requires `status = 'pending'`. Check-ins are
 never cleared.
@@ -223,9 +241,18 @@ never cleared.
 ### 8.4 Leaving `needs_organiser`
 
 - Organiser enters a result (existing path, pre-filled per §9) → `finished`.
-- Organiser reschedules → bridge reset to `pending` (challenge, urls,
-  identities, email stamps, claim, reason cleared). Old check-ins no longer
-  count because they predate the new window.
+- Organiser reschedules (any path) → lazy reset per §7.2 on the next guarded
+  read or cron pass. Old check-ins no longer count because they predate the new
+  window.
+
+### 8.5 Result authorship
+
+No system `AuthCtx` exists in the codebase; every construction is session,
+API-key or device-link based. Provider results and `core.start` are appended
+through `scoreEvent` under an org-owner auth context built by the cron path, so
+`score_events.recorded_by` is the org owner. The bridge row
+(`challenge_id`, `finished_at`) is the provenance record. A dedicated system
+actor is a follow-up, not v1.
 
 ## 9. No-shows — detected automatically
 
@@ -273,7 +300,12 @@ the scheduled-workflow repo.
 
 ## 12. UI surfaces
 
-- **Profile:** link / unlink Lichess.
+- **Link / unlink Lichess:** on the org settings account tab (as built) **and on
+  `/me`**, the player home — a player with no org of their own is sent to
+  `/orgs/new` by `/settings` (`app/settings/page.tsx:54`), so `/settings` alone
+  cannot serve them. The OAuth start takes a validated `next` (same rule as
+  Google: starts with `/`, not `//`) and the callback returns there, so linking
+  from registration or the match room comes back to it.
 - **Enrollment:** block with a link CTA when the division is online-Lichess and
   the user has no link.
 - **Division settings:** online play Off / Lichess; Lichess requires a clock
@@ -285,6 +317,10 @@ the scheduled-workflow repo.
   didn't show — organiser will confirm*, *Window closed*. Realtime ping plus a
   15s re-read fallback. At least two layout options shown to the owner before
   building; verified at 320 / 768 / 1280.
+  - **First session-reading page under `(public)`.** No page in that tree reads
+    the session today; the parent layout exports `revalidate = 30`. The e2e and
+    smoke assert the room's response `cache-control` contains `private` and
+    `no-store` on a production build, so layout ISR can never leak into it.
   - **Rendering / cache:** `export const dynamic = "force-dynamic"`, the same
     as `/shared/[org]/[comp]/register`, so it is sent `private, no-store`.
     That register route was measured `cf-cache-status: DYNAMIC` through
@@ -305,9 +341,11 @@ the scheduled-workflow repo.
   `needs_organiser`, using the desk's existing attention rule (red attention
   outranks the phase pill). Read the competition-desk `_INDEX.md` / `_RULES.md`
   before touching it. No separate queue banner.
-- **Organiser fixture page `/o/…/f/[no]`:** Lichess status, reason, check-in
-  times (already rendered from `fixture_availability`), pre-filled resolve,
-  resend email.
+- **Organiser fixture page `/o/…/f/[no]`:** a new panel mounted between the
+  check-in QR / officials strip and `<FixtureConsole>` (`f/[no]/page.tsx`
+  ~:149-157, gated on `canEdit`): Lichess status, reason, **both check-in times**
+  (the page today shows only a presence dot, `lineup-editor.tsx:94-101`),
+  pre-filled resolve, resend email.
 
 ### 12.1 Match room access
 
@@ -348,6 +386,14 @@ Rules:
 - The realtime subscriber JWT is issued per room load and expires at T+20.
 
 All strings in en/es/fr/nl; email interpolations HTML-escaped.
+
+### 12.2 Scope hygiene
+
+PR #788 also changed non-chess behaviour: `createDivision` copies
+`config.entrants` for every sport (`divisions.ts:277-280`) and `entrants.ts`
+defaults `is_captain` / `roles` (`:217-218`). Each is either reverted or kept
+with a regression test proving other sports are unchanged; nothing outside
+chess changes silently.
 
 ## 13. Failure matrix
 
