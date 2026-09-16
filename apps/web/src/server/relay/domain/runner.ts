@@ -2,81 +2,38 @@
 // of the session aggregate (plan §"Fly machine lifecycle"). PURE, like
 // session.ts: no I/O, no clock — `now` is an argument.
 //
-// Task 2A: TYPES ONLY, plus a `stepRunner` that refuses every input. The session's
-// `runner` command is wired against these names in session.ts; the lifecycle's
-// TABLE (and the final member lists of the unions below) is Task 2C's. The members
-// here are exactly the ones Task 2A's session.ts and its brief name — Task 2C
-// reconciles them against its own brief, it does not have to preserve extras.
+// Task 2A: TYPES plus a `stepRunner` stub that refuses every input. The type block
+// below is Task 2C's Interfaces block copied VERBATIM (orchestrator ruling I1 on the
+// Task 2A review), so Task 2B — which lands between 2A and 2C and builds typed
+// `Runner` literals — compiles against the final shapes. The TABLE (`RunnerCell`,
+// `RUNNER_TABLE`, `machineNameFor`, `failReasonFromExit`, `MACHINE_MINUTES_BOUND`)
+// and `stepRunner`'s real body are Task 2C's.
 
-/** Mirrors V408's `runner_state` CHECK exactly. */
-export type RunnerState = "none" | "creating" | "booting" | "playing" | "stopping" | "exited" | "destroyed" | "lost";
-
-/** The runner as the aggregate carries it. `attempt` is loaded from `runner_attempts` (the create calls
- *  made); `name` is the intended Machine name, persisted BEFORE the create call (`runner_name`);
- *  `machineId` persists as `machine_id`; `stopRequestedAt` starts the stop grace clock
- *  (`runner_stop_requested_at`). */
-export interface Runner {
-  state: RunnerState;
-  attempt: number;
-  name: string | null;
-  machineId: string | null;
-  stopRequestedAt: Date | null;
-}
-
-/** A passthrough session's runner, and a composed session's before any create. */
-export const RUNNER_NONE: Runner = { state: "none", attempt: 0, name: null, machineId: null, stopRequestedAt: null };
-
-/** What a poll of the provider reported, in the PORT's vocabulary (the provider's own spelling stays in its adapter). Task 2C owns the member list. */
-export type ObservedRunnerState = "starting" | "running" | "stopped" | "destroyed" | "not_found";
-
-/** How a Machine's process exited, when the provider says. Task 2C owns the shape. */
-export interface ExitInfo {
-  code: number | null;
-  oomKilled: boolean;
-  requestedStop: boolean;
-}
-
-/** Every Machine event. Composed sessions never carry machine_playing/machine_stopped commands: the relay
- *  page's heartbeat arrives as callback_playing/callback_stopped, and a composed stop, deadline or stale
- *  beat routes through session_stop/deadline/stale_beat so the teardown is always the table's. */
+export const RUNNER_STATES = ["none", "creating", "booting", "playing", "stopping", "exited", "destroyed", "lost"] as const;
+export type RunnerState = (typeof RUNNER_STATES)[number];
+export const OBSERVED_STATES = ["pending", "running", "stopping", "stopped", "failed", "destroying", "destroyed", "unknown"] as const;
+export type ObservedRunnerState = (typeof OBSERVED_STATES)[number];
+export interface ExitInfo { exitCode: number | null; oomKilled: boolean | null; requestedStop: boolean | null }
+export interface Runner { state: RunnerState; attempt: number /* create calls made — Task 10 loads it from the persisted runner_attempts, the ONE authority (C3) */; name: string | null; machineId: string | null; stopRequestedAt: Date | null; lastExit: ExitInfo | null }
+export const RUNNER_NONE: Runner = { state: "none", attempt: 0, name: null, machineId: null, stopRequestedAt: null, lastExit: null };
+export const RUNNER_TRIGGER_TYPES = ["create_started", "create_ok", "create_failed", "callback_playing", "callback_stopped", "observed", "stale_beat", "deadline", "session_stop", "grace_expired", "destroy_ok", "orphan_listed"] as const;
 export type RunnerTrigger =
-  | { type: "create_started" }
-  | { type: "create_ok"; machineId: string }
-  | { type: "callback_playing" }
-  | { type: "callback_stopped" }
-  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo }
-  | { type: "session_stop" }
-  | { type: "deadline" }
-  | { type: "stale_beat" }
-  | { type: "grace_expired" };
-
-/** The side effects a runner step asks the application to perform through the runner port. */
+  | { type: "create_started"; name: string; attempt: number } | { type: "create_ok"; machineId: string }
+  | { type: "create_failed"; retryable: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }
+  | { type: "observed"; state: ObservedRunnerState; exit?: ExitInfo | null } | { type: "stale_beat" } | { type: "deadline" }
+  | { type: "session_stop" } | { type: "grace_expired" } | { type: "destroy_ok" } | { type: "orphan_listed" };
 export type RunnerEffect =
-  | { type: "persist_intent" }
-  | { type: "create_machine" }
-  | { type: "stop_machine" }
-  | { type: "force_destroy" };
-
-/** Why the runner failed the session (joins the session's FailReason). Task 2C owns the member list. */
-export type RunnerFailReason = "machine_boot_timeout";
-
-/** What a runner step tells the session (session.ts's `runner()` switches on it). */
+  | { type: "persist_intent" } | { type: "create_machine" }
+  | { type: "stop_machine"; signal: "SIGINT"; timeoutSeconds: number } | { type: "force_destroy" };
+export type RunnerFailReason = "machine_create_failed" | "machine_boot_timeout" | "machine_exit_nonzero" | "machine_oom" | "machine_crash";
 export type SessionSignal =
-  | { type: "went_live" }
-  | { type: "ending"; endReason: "stopped" | "max_duration" }
-  | { type: "completed"; endReason?: "stopped" | "max_duration" }
-  | { type: "retry" }
-  | { type: "failed"; reason: RunnerFailReason };
-
-export interface RunnerStep {
-  next: Runner;
-  effects: RunnerEffect[];
-  signal: SessionSignal | null;
-}
-
+  | { type: "went_live" } | { type: "ending"; endReason: "stopped" | "max_duration" }
+  | { type: "completed"; endReason?: "stopped" | "max_duration" }   // F17 carries it when the completion IS the ending (a lost runner torn down by the deadline or the stop)
+  | { type: "retry" } | { type: "failed"; reason: RunnerFailReason };
+export interface RunnerStep { next: Runner; effects: RunnerEffect[]; signal: SessionSignal | null }
 export class InvalidRunnerTransition extends Error {
   constructor(readonly from: RunnerState, readonly trigger: RunnerTrigger["type"]) {
-    super(`stream runner: ${trigger} is not legal from ${from}`);
+    super(`relay runner: ${trigger} is not legal from ${from}`);
   }
 }
 

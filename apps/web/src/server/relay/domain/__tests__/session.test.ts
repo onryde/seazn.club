@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
-  type Command, type Session, type SessionState,
+  type Command, type Effect, type Session, type SessionState,
 } from "../session";
 import { RUNNER_NONE } from "../runner";
 
@@ -104,15 +104,16 @@ describe("decide — legal edges", () => {
     expect(decide(S({ state: "warming" }), { type: "stop" }, T0).next.state).toBe("ending");
   });
   it("stop: a composed session with NO live Machine — runner none (stopped before any create) or destroyed (between attempts) — completes NOW with end_reason stopped, no runner step (P1-F-a; mutant: delete the no-Machine branch → red)", () => {
-    const cases: [string, Session][] = [
-      ["none", S({ state: "provisioning", mode: "composed" })],
-      ["destroyed", S({ state: "live", mode: "composed", startedAt: T0, runner: { ...RUNNER_NONE, state: "destroyed", attempt: 1, name: "relay-s1-r1", machineId: "m1" } })],
+    // The third column is the replay fill: only a session that went live (startedAt set) has a broadcast to replay (I3).
+    const cases: [string, Session, Effect[]][] = [
+      ["none", S({ state: "provisioning", mode: "composed" }), []],
+      ["destroyed", S({ state: "live", mode: "composed", startedAt: T0, runner: { ...RUNNER_NONE, state: "destroyed", attempt: 1, name: "relay-s1-r1", machineId: "m1", lastExit: { exitCode: 1, oomKilled: false, requestedStop: false } } }), [{ type: "fill_replay" }]],
     ];
-    for (const [label, s] of cases) {
+    for (const [label, s, effects] of cases) {
       const d = decide(s, { type: "stop" }, T0);
       expect(d.next, label).toMatchObject({ state: "completed", desiredState: "ending", endReason: "stopped", failReason: null, endedAt: T0, runner: { state: s.runner.state } });
       expect(d.events, label).toEqual([{ type: "SessionEnded", reason: "completed" }]);
-      expect(d.effects, label).toEqual([{ type: "fill_replay" }]);
+      expect(d.effects, label).toEqual(effects);
     }
   });
   it("stop on ending is a benign repeat (identity, no events); stop on completed is illegal", () => {
@@ -122,10 +123,22 @@ describe("decide — legal edges", () => {
     expect(() => decide(S({ state: "completed" }), { type: "stop" }, T0)).toThrow(InvalidTransition);
   });
   it("ending → completed on complete: ended_at, SessionEnded, the replay-fill effect", () => {
-    const d = decide(S({ state: "ending", desiredState: "ending", endReason: "stopped" }), { type: "complete" }, T0);
+    const d = decide(S({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0 }), { type: "complete" }, T0);
     expect(d.next).toMatchObject({ state: "completed", endedAt: T0, endReason: "stopped" });
     expect(d.events).toEqual([{ type: "SessionEnded", reason: "completed" }]);
     expect(d.effects).toEqual([{ type: "fill_replay" }]);
+  });
+  it("fill_replay only for a session that actually WENT LIVE (I3): a passthrough stop → complete from requested, provisioning or warming emits none; from live emits exactly one", () => {
+    const replaysAcrossStopAndComplete = (from: Session): number => {
+      const e = decide(from, { type: "stop" }, T0);
+      const c = decide(e.next, { type: "complete" }, T0);
+      expect(c.next.state, from.state).toBe("completed");
+      return [...e.effects, ...c.effects].filter((x) => x.type === "fill_replay").length;
+    };
+    for (const state of ["requested", "provisioning", "warming"] as const) {
+      expect(replaysAcrossStopAndComplete(S({ state })), `${state}: never went live`).toBe(0);
+    }
+    expect(replaysAcrossStopAndComplete(S({ state: "live", startedAt: T0 })), "live").toBe(1);
   });
   it("a terminal session accepts no command (both terminal states, every command)", () => {
     const commands: Command[] = [{ type: "provision" }, { type: "ingest_connected" }, { type: "stop" }, { type: "complete" }, { type: "target_rejected" }];

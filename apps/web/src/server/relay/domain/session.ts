@@ -125,8 +125,14 @@ function fail(s: Session, reason: FailReason, now: Date): Decision {
   return { next: { ...s, state: "failed", failReason: reason, endReason: null, endedAt: now }, events: [{ type: "SessionEnded", reason }], effects: [] };
 }
 
+/** I3 (Task 2A review, orchestrator ruling): the replay fill belongs ONLY to a session that actually went live.
+ *  A session stopped before it ever broadcast (organiser stop while warming, a composed stop before any create)
+ *  has no replay, and filling one would publish a link for a match that never aired. The ONE authority for both
+ *  completion paths — `complete()` and the runner's `completed` signal — so Task 10 persists the effect as given. */
+const replayFill = (s: Session): Effect[] => (s.startedAt !== null ? [{ type: "fill_replay" }] : []);
+
 function complete(s: Session, now: Date): Decision {
-  return { next: { ...s, state: "completed", desiredState: "ending", endedAt: now }, events: [{ type: "SessionEnded", reason: "completed" }], effects: [{ type: "fill_replay" }] };
+  return { next: { ...s, state: "completed", desiredState: "ending", endedAt: now }, events: [{ type: "SessionEnded", reason: "completed" }], effects: replayFill(s) };
 }
 
 /** Passthrough only: nothing to flush, so ending completes NOW. A composed
@@ -163,7 +169,7 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown
       // leaves it out and the session keeps the one its `ending` step already stored.
       const endReason = step.signal.endReason ?? s.endReason;
-      return { next: { ...next, state: "completed", desiredState: "ending", endReason, endedAt: now }, events: [...events, { type: "SessionEnded", reason: "completed" }], effects: [...effects, { type: "fill_replay" }] };
+      return { next: { ...next, state: "completed", desiredState: "ending", endReason, endedAt: now }, events: [...events, { type: "SessionEnded", reason: "completed" }], effects: [...effects, ...replayFill(s)] };
     }
     case "retry": {
       // F17: a retry belongs ONLY to a session that still wants to be live. Once the session is ending — its
@@ -204,6 +210,18 @@ export function decide(s: Session, c: Command, now: Date): Decision {
       return { next: { ...s, state: "live", startedAt: now }, events: [{ type: "SessionWentLive" }], effects: [{ type: "consume_credit" }] };
     case "credit_refused":
       if (s.state !== "warming") throw illegal();
+      // I2 (Task 2A review, orchestrator ruling — money/safety): Task 10 re-decides `credit_refused` after
+      // NoCreditsError. A COMPOSED session's Machine is already up and broadcasting, so failing the row alone
+      // would leave it pushing to the destination, unpaid, until the 5 h deadline. Tear it down exactly as the
+      // composed `warming_timeout` does — the runner's `session_stop` step (its stop effect), then fail, dropping
+      // the stop step's SessionEnding (P1-F-b) — and mark desiredState `ending` so nothing re-wants it live.
+      // Passthrough is unchanged. The KILLER TEST is Task 2C's (Step 5, beside "a composed warming timeout…"):
+      // this branch always reaches `stepRunner`, which at Task 2A is the throwing stub, so no pure 2A test can reach it.
+      if (s.mode === "composed" && s.runner.state !== "none") {
+        const torn = runner(s, { type: "session_stop" }, now, illegal);
+        const f = fail({ ...torn.next, desiredState: "ending" }, "no_credits", now);
+        return { next: f.next, events: [...torn.events.filter((e) => e.type !== "SessionEnding"), ...f.events], effects: [...torn.effects, ...f.effects] };
+      }
       return fail(s, "no_credits", now);
     case "target_rejected":
       if (s.state !== "warming" && s.state !== "live") throw illegal();
