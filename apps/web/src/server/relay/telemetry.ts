@@ -36,7 +36,15 @@ export interface EventInput {
 
 /** Appends one row and returns its seq. The seq is `max + 1` under the
  *  caller's row lock on fixture_stream_sessions — two writers on one session
- *  cannot race because they cannot both hold the lock. */
+ *  cannot race because they cannot both hold the lock.
+ *
+ *  ROOT transaction only: call it inside `sql.begin`, never inside `withTenant`.
+ *  `withTenant` runs `set local role app_user`, and V408 grants app_user nothing
+ *  on the relay tables — under that role this insert fails with `permission
+ *  denied for table fixture_stream_events` (measured 2026-09-16 on the V408
+ *  schema). If a grant is ever added, FORCE row level security with ZERO
+ *  policies still denies app_user every row. `Tx` types both transactions
+ *  alike, so this sentence is the only thing that tells them apart. */
 export async function recordEvent(tx: Tx, e: EventInput): Promise<number> {
   const [row] = await tx<{ seq: number }[]>`
     insert into fixture_stream_events

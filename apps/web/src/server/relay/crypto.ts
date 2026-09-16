@@ -21,12 +21,16 @@ const TAG_LEN = 16;
 const KEY_LEN = 32;
 const HEADER_LEN = 1 + IV_LEN + KEY_LEN + TAG_LEN + IV_LEN + TAG_LEN; // 89
 
+/** RELAY_KEK is 32 bytes written as exactly 64 hex characters, matched WHOLE before decoding: Buffer.from(hex, "hex")
+ *  stops at the first non-hex character, so a length check on the decoded key accepted 65 characters, a junk suffix
+ *  or a pasted trailing newline. Neither message echoes the value. */
+const KEK_HEX = /^[0-9a-f]{64}$/i;
+
 function kek(): Buffer {
   const hex = process.env.RELAY_KEK;
   if (!hex) throw new Error("RELAY_KEK is not set (32 bytes as 64 hex chars; a Fly secret in prod)");
-  const key = Buffer.from(hex, "hex");
-  if (key.length !== KEY_LEN) throw new Error("RELAY_KEK must be exactly 32 bytes of hex");
-  return key;
+  if (!KEK_HEX.test(hex)) throw new Error("RELAY_KEK must be exactly 64 hex characters (32 bytes)");
+  return Buffer.from(hex, "hex");
 }
 
 export function seal(plain: string): Buffer {
