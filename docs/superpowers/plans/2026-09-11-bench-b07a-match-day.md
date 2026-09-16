@@ -36,7 +36,7 @@ Record these in the PR body; each was read in the tree, not assumed.
 1. **There is no GET helper for a fixture's ledger anywhere in `scripts/bench`.** The only `/events` uses are POSTs (`lib/simulate.ts:254`, `lib/dls-gate.ts:530`) and the import route (`lib/import.ts:371`). State reads live in `lib/oracle.ts` (`fetchFixtureSideLines:1403`, `fetchFixtureModuleState:1572`), both hitting `GET /api/v1/fixtures/{id}/state`. Task 1 adds the ledger reader the tap driver needs.
 2. **`SETTLED_STATUSES` already accepts `finalized`** (`lib/oracle.ts:1273`: decided, finalized, forfeited, abandoned). So `compareMatches` cannot express "this fixture must be finalized" — a tapped fixture that stops at `decided` passes it. Task 10 adds a separate check rather than narrowing that set, which the API paths still need.
 3. **The expected qualifier list is built from the one table with no `poolKey`** (`lib/suites/run-suite.ts:3249-3258`), taking every row sorted by rank. A pooled stage declares one table PER POOL, so that lookup finds nothing and the advancement oracle silently compares an empty list. Task 5 replaces it.
-4. **Stage 0 skips any pooled table outright** with `standings.pool_unbindable` (`lib/validate-pack.ts:1656-1665`), and `deriveStandings` returns only `pools[0]` (`:2161-2166`). Task 4 fixes both halves; they are one defect seen from two ends.
+4. **Stage 0 skips any pooled table outright** with `standings.pool_unbindable` (`lib/validate-pack.ts:1656-1665`), and `deriveStandings` returns only `pools[0]` (`:2161-2166`). Task 4 fixes both halves; they are one defect seen from two ends. **[Task 13 documentation-drift correction: Task 4 shipped this — `pool_unbindable` no longer appears anywhere in `validate-pack.ts`, and `deriveStandings` takes an optional `poolKey`. This bullet describes the PRE-Task-4 state, kept for the record of what was found; do not read it as current behaviour.]**
 5. **Advancement is hard-wired to the first division.** The block is gated on `division0`/`stage0`/`stage1` (`run-suite.ts:3231-3234`), and every other division is batch-imported with no stage step (`:3116-3160`). Task 6 loops.
 6. **News publishes every streamed fixture of the first division's last stage** (`run-suite.ts:4694-4723`), which B06's D6 defined as "the two semis and the final published, the rest asserted still draft". Task 12 narrows it.
 7. **`adaptations` is declared in `SuiteReport` (`lib/report.ts:674`) and written by nothing.** `provenancePct` is written in the return literal at `:4833-4856`; the adaptations writer belongs beside it.
@@ -470,6 +470,13 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/bench-b07a
 ---
 
 ### Task 4: Stage 0 derives a table per pool
+
+**[Task 13 documentation-drift correction: DONE, this wave.** `pool_unbindable`
+is gone from `validate-pack.ts` and `deriveStandings` takes the `poolKey?`
+parameter this task specified. The brief below is left as written — it is
+the task's own instructions, not a claim about current behaviour — but a
+reader landing here after Task 4 merged should not take "today every one of
+them is skipped" (below) as still true.]**
 
 **Files:**
 - Modify: `scripts/bench/lib/validate-pack.ts:1656-1665` (the `standings.pool_unbindable` skip) and `:2032-2166` (`deriveStandings`)

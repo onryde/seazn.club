@@ -113,9 +113,15 @@ Also missing framework-side, all found at re-pin:
 - **`compareMatches` never compares the loser, and ignores `method` on an award**
   (`lib/oracle.ts:1318-1358`). With unknown opponents this matters: a wrong pairing that
   keeps the same winner passes.
-- **Stage 0 cannot check group tables.** A table with a `poolKey` is skipped with
+- ~~**Stage 0 cannot check group tables.** A table with a `poolKey` is skipped with
   `standings.pool_unbindable` (`lib/validate-pack.ts:1656-1664`) and `deriveStandings`
-  returns only the first pool's rows (`:2032-2166`).
+  returns only the first pool's rows (`:2032-2166`).~~ **FIXED, this wave (Task 4,
+  documentation-drift correction by Task 13):** `deriveStandings` now takes an
+  optional `poolKey` and folds only that pool's fixtures into its own table; the
+  `pool_unbindable` skip no longer exists anywhere in `validate-pack.ts`. Kept
+  struck through rather than deleted so a session that reads only the design's
+  gap list does not rebuild this. B07b (carrom, four pools per division) is the
+  first pack session that exercises it for real.
 - **The qualifier expectation cannot express group ranks.** It takes every row of a
   no-`poolKey` table, sorted by rank (`run-suite.ts:3249-3258`), and `compareQualifiers`
   requires the same ids in the same order (`lib/advance.ts:148-156`).
