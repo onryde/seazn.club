@@ -57,6 +57,12 @@ export function validHubDoc(): unknown {
         formatLine: { key: "format.league.rounds", params: { rounds: 7 } },
         variantKey: "t20",
         href: "/riverside/autumn-cup/div-a",
+        // Division-page parity (2026-09-16): sanitised prose, and a ban that
+        // names its person AND its entrant.
+        description: "<p>Open to every club in the county.</p>",
+        suspensions: [
+          { personId: "p1", name: "Arun Kumar", entrantId: "e1", entrantName: "Blue Blazers", remaining: 2 },
+        ],
       },
       {
         // the null-side twin: every nullable field on this row is null
@@ -71,6 +77,10 @@ export function validHubDoc(): unknown {
         formatLine: null,
         variantKey: "t20",
         href: "/riverside/autumn-cup/div-b",
+        // …and the null side: no prose, and a ban whose person has no public
+        // id and whose entrant is gone.
+        description: null,
+        suspensions: [{ personId: null, name: "Dev P.", entrantId: null, entrantName: null, remaining: 1 }],
       },
     ],
     matches: [
@@ -187,6 +197,18 @@ export function validHubDoc(): unknown {
         colour: "#1d4ed8",
         seed: 1,
         href: "/riverside/autumn-cup/div-a/teams/e1",
+        members: [
+          {
+            personId: "p1",
+            name: "Arun Kumar",
+            squadNumber: 7,
+            position: "WK",
+            playerHref: "/riverside/autumn-cup/players/p1",
+            suspendedRemaining: 2,
+          },
+          { personId: null, name: "Dev P.", squadNumber: null, position: null, playerHref: null, suspendedRemaining: null },
+        ],
+        calendarHref: "/riverside/autumn-cup/div-a/calendar.ics?entrant=e1",
       },
       {
         entrantId: "e2",
@@ -198,6 +220,8 @@ export function validHubDoc(): unknown {
         colour: null,
         seed: null,
         href: "/riverside/autumn-cup/div-a/teams/e2",
+        members: [],
+        calendarHref: "/riverside/autumn-cup/div-a/calendar.ics?entrant=e2",
       },
     ],
     // Two views: the first populated (a champion, a single-lane bracket, two

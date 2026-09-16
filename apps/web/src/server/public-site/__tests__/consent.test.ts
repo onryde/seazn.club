@@ -23,7 +23,7 @@ import { createCompetition, patchCompetition } from "@/server/usecases/competiti
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
-import { getPublicDivision, getPublicFixture } from "../data";
+import { getPublicDivision, getPublicFixture, maskPublicEntrantNames } from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -415,6 +415,78 @@ describe.skipIf(!HAS_DB)("getPublicDivision / getPublicFixture — entrant displ
     const names = team.members.map((m) => m.name);
     expect(names).toContain("Quiet Consent"); // {} consent never masks
     expect(names).toContain("Opted O."); // explicit opt-out still does
+  });
+
+  // The re-mask zips fresh rows onto the view's members by position, so it
+  // only runs when the two counts agree. When they do not (a member joined or
+  // left between the two reads), the view's own `public_person_name` is NOT a
+  // safe fallback: it ignores youth, so a consented minor would print in
+  // full. Every member gets the strictest mask instead, whatever the policy.
+  it("maskPublicEntrantNames: when the fresh roster count disagrees with the view's, EVERY member falls back to first name + initial — youth or not", async () => {
+    const { auth, orgId } = await seedOrg();
+    const comp = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Mismatch Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const [{ id: patId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Pat Public', ${sql.json({ public_name: true })})
+      returning id`;
+    const [{ id: robId }] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, consent)
+      values (${orgId}, 'Rob Rowe', ${sql.json({ public_name: true })})
+      returning id`;
+    const [entrant] = await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Roster Team",
+        seed: 1,
+        members: [
+          { person_id: patId, squad_number: 1, default_position_key: null, is_captain: false, roles: [] },
+          { person_id: robId, squad_number: 2, default_position_key: null, is_captain: false, roles: [] },
+        ],
+      },
+    ]);
+    // What a view read taken BEFORE Rob joined would hold: one member, named
+    // by `public_person_name` — in full, because Pat consented.
+    const stale = [
+      {
+        id: entrant!.id,
+        kind: "team",
+        display_name: "Roster Team",
+        members: [{ name: "Pat Public", person_id: patId, photo: null, squad_number: 1, position: null }],
+      },
+    ];
+
+    const [youth] = await maskPublicEntrantNames(stale, { youth: true, player_name_display: null });
+    expect(youth!.members!.map((m) => m.name)).toEqual(["Pat P."]);
+    const [open] = await maskPublicEntrantNames(stale, { youth: false, player_name_display: null });
+    expect(open!.members!.map((m) => m.name)).toEqual(["Pat P."]);
+    // Everything but the name is the view's, untouched.
+    expect(open!.members![0]).toEqual({ ...stale[0]!.members[0], name: "Pat P." });
+
+    // The positive pair: once the counts agree, the resolver's answer stands —
+    // a consented adult in an open division reads in full.
+    const agreed = [
+      {
+        ...stale[0]!,
+        members: [
+          { name: "Pat Public", person_id: patId, photo: null, squad_number: 1, position: null },
+          { name: "Rob Rowe", person_id: robId, photo: null, squad_number: 2, position: null },
+        ],
+      },
+    ];
+    const [fresh] = await maskPublicEntrantNames(agreed, { youth: false, player_name_display: null });
+    expect(fresh!.members!.map((m) => m.name)).toEqual(["Pat Public", "Rob Rowe"]);
   });
 
   it("getPublicFixture's entrantNames mask a non-team entrant the same way, on the individual fixture page", async () => {

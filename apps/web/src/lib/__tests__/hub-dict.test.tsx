@@ -22,13 +22,17 @@ import { TableTab } from "@/components/public-site/matches-hub/table-tab";
 import { TeamsTab } from "@/components/public-site/matches-hub/teams-tab";
 import {
   board,
+  calendarFor,
   division,
   hubDoc,
+  info,
   knockoutView,
   koRound,
   koSide,
   leader,
   m,
+  member,
+  suspension,
   tableRow,
   tableView,
   team,
@@ -41,7 +45,17 @@ const NOW = Date.parse("2026-09-05T12:00:00.000Z");
 /** A document that reaches as much copy as one document can: two divisions,
  *  every bucket, tables, leaders, teams and a full info block. */
 const doc = hubDoc({
-  divisions: [division("premier"), division("sunday-league")],
+  // A division with prose, a ban and a calendar, and a squad with a suspended
+  // and a positioned line — so the Info tab's Divisions section and the Teams
+  // tab's squad reach their copy too (division-page parity, 2026-09-16).
+  divisions: [
+    division("premier", {
+      description: "<p>Prose</p>",
+      suspensions: [suspension("Arjun Mehta", 2, { entrantName: "Riverside FC" }), suspension("Dev P.", 1)],
+    }),
+    division("sunday-league"),
+  ],
+  info: info({ calendars: [calendarFor("premier")] }),
   matches: [
     m("live-1", "live", "2026-09-05T11:00:00.000Z", "premier"),
     m("up-1", "upcoming", "2026-09-06T13:00:00.000Z", "sunday-league"),
@@ -53,7 +67,12 @@ const doc = hubDoc({
     tableView("t2", "sunday-league", { rows: [tableRow("e3", 1)] }),
   ],
   leaders: [board("premier", "runs", [leader("p1", "Arjun Mehta", "/o/c/players/p1")])],
-  teams: [team("e1", "Riverside FC", null, "#1d6b4f"), team("e2", "Summit FC", null, null)],
+  teams: [
+    team("e1", "Riverside FC", null, "#1d6b4f", {
+      members: [member("Arjun Mehta", 7, { suspendedRemaining: 2 }), member("Dev P.", null, { position: "WK" })],
+    }),
+    team("e2", "Summit FC", null, null),
+  ],
 });
 
 /**
@@ -189,9 +208,9 @@ const TABS: [string, (d: Dict) => string][] = [
   [
     "Teams",
     (d) =>
-      renderToStaticMarkup(<TeamsTab doc={doc} dict={d} />) +
-      renderToStaticMarkup(<TeamsTab doc={bare} dict={d} />) +
-      renderToStaticMarkup(<TeamsTab doc={seeded} dict={d} />),
+      renderToStaticMarkup(<TeamsTab doc={doc} dict={d} locale="en" />) +
+      renderToStaticMarkup(<TeamsTab doc={bare} dict={d} locale="en" />) +
+      renderToStaticMarkup(<TeamsTab doc={seeded} dict={d} locale="en" />),
   ],
   [
     "Info",

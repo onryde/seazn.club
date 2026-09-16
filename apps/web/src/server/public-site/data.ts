@@ -26,7 +26,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
-import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { anyOptedOut, maskDisplayName, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine } from "./public-player-matches";
@@ -677,8 +677,9 @@ export async function maskPublicEntrantNames<
   return entrants.map((e) => {
     const optedOut = e.kind !== "team" && anyOptedOut(consentsByEntrant.get(e.id) ?? []);
     const fresh = e.members ? memberRowsByEntrant.get(e.id) : undefined;
-    const remaskedMembers =
-      e.members && fresh && fresh.length === e.members.length
+    const remaskedMembers = !e.members
+      ? undefined
+      : fresh && fresh.length === e.members.length
         ? e.members.map((m, i) => ({
             ...m,
             name: resolvePersonDisplayName(
@@ -688,7 +689,12 @@ export async function maskPublicEntrantNames<
               division.youth ?? false,
             ),
           }))
-        : undefined;
+        : // The fresh rows cannot be zipped onto the view's (a member joined or
+          // left between the two reads, or the read found none). The view's
+          // own `public_person_name` ignores youth and unmasks absent consent,
+          // so it is never the fallback: every member gets the strictest mask
+          // RS008 has — first name plus initial — until the two agree again.
+          e.members.map((m) => ({ ...m, name: m.name === null ? null : maskDisplayName(m.name, "first_initial") }));
     return {
       ...e,
       ...(remaskedMembers ? { members: remaskedMembers } : {}),
@@ -704,6 +710,59 @@ export async function maskPublicEntrantNames<
             ),
     };
   });
+}
+
+/** One squad line's INTERNAL identity — see `readEntrantMemberRefs`. */
+export interface EntrantMemberRef {
+  personId: string;
+  fullName: string;
+  consent: { public_name?: boolean } | null;
+  squadNumber: number | null;
+  /** `entrant_members.default_position_key` — the view's `position`. */
+  positionKey: string | null;
+}
+
+/**
+ * The person behind each line of `public_entrants_v`'s `members`, per entrant,
+ * in the view's own order (`squad_number nulls last, full_name`, V350) — the
+ * same positional zip `maskPublicEntrantNames` relies on, so index i names the
+ * same person in both (callers still guard on length).
+ *
+ * SERVER-ONLY JOIN KEY. The ids here are every member's, consented or not, and
+ * the full names are unmasked: nothing returned may reach a document. It exists
+ * so the competition hub can mark a suspended player by PERSON rather than by
+ * display name, and it is deliberately NOT folded into
+ * `maskPublicEntrantNames`'s output, which the public entrants API
+ * (`usecases/public.ts`) serves as-is.
+ */
+export async function readEntrantMemberRefs(entrantIds: string[]): Promise<Record<string, EntrantMemberRef[]>> {
+  if (entrantIds.length === 0) return {};
+  const rows = await sql<
+    {
+      entrant_id: string;
+      person_id: string;
+      full_name: string;
+      consent: { public_name?: boolean } | null;
+      squad_number: number | null;
+      default_position_key: string | null;
+    }[]
+  >`
+    select em.entrant_id, p.id as person_id, p.full_name, p.consent, em.squad_number, em.default_position_key
+    from entrant_members em
+    join persons p on p.id = em.person_id
+    where em.entrant_id in ${sql(entrantIds)} and p.merged_into is null
+    order by em.entrant_id, em.squad_number nulls last, p.full_name`;
+  const out: Record<string, EntrantMemberRef[]> = {};
+  for (const r of rows) {
+    (out[r.entrant_id] ??= []).push({
+      personId: r.person_id,
+      fullName: r.full_name,
+      consent: r.consent,
+      squadNumber: r.squad_number,
+      positionKey: r.default_position_key,
+    });
+  }
+  return out;
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */

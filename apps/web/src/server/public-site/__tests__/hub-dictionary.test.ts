@@ -108,6 +108,13 @@ export const W2_KEYS = [
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
   "leaders.title", "leaders.empty",
   "teams.title", "teams.seed", "teams.division", "info.title", "info.dates", "info.venues", "info.registration.open", "info.registration.closed", "info.calendar", "info.share",
+  // Division-page parity (owner ruling 2026-09-16, before any redirect): the
+  // Teams card opens in place onto its squad, and Info gains a box per
+  // division. The division page said "to serve", "Seed" and "Suspensions" in
+  // hardcoded English; none of that carries over — every word the hub adds
+  // for it is one of these, in four locales.
+  "teams.members.one", "teams.members.other", "teams.suspended", "teams.squadEmpty",
+  "info.divisions", "info.suspensions", "info.toServe.one", "info.toServe.other",
   // division page
   "division.tab.schedule", "division.tab.standings", "division.tab.entrants", "division.tabsLabel", "division.champion", "division.resultsGrid", "division.standingsEmpty", "division.entrantsEmpty",
   "division.seed", "division.filter.label", "division.filter.all", "division.filter.allEntrants", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
@@ -228,6 +235,13 @@ describe("W2 public dictionary coverage", () => {
       "news.card.liveOn": ["brand"],
       "og.standings.youth": ["brand"],
       "og.standings.empty": ["brand"],
+      // teams-tab.tsx / info-tab.tsx — `plural()` always passes `{count}`; a
+      // locale that drops it tells a spectator "members" with no number, or
+      // "to serve" with no matches.
+      "teams.members.one": ["count"],
+      "teams.members.other": ["count"],
+      "info.toServe.one": ["count"],
+      "info.toServe.other": ["count"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 

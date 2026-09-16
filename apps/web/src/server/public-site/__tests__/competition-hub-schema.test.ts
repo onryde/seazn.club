@@ -238,3 +238,54 @@ describe("CompetitionHubDoc — knockouts", () => {
     expect(KnockoutKind.options).toEqual([...BRACKET_KINDS]);
   });
 });
+
+describe("CompetitionHubDoc — squads, suspensions, division prose (division-page parity, 2026-09-16)", () => {
+  it("the complete fixture really exercises both sides: a squad with a suspended, linked member and a masked one; a division with prose and one without", () => {
+    // A round-trip over a fixture that never populated these fields proves
+    // nothing about them — so the fixture's own coverage is asserted first.
+    const doc = CompetitionHubDoc.parse(validDoc());
+    expect(doc.teams[0]!.members!.map((m) => [m.playerHref !== null, m.suspendedRemaining])).toEqual([
+      [true, 2],
+      [false, null],
+    ]);
+    expect(doc.teams[1]!.members).toEqual([]);
+    expect(doc.divisions.map((d) => d.description)).toEqual(["<p>Open to every club in the county.</p>", null]);
+    expect(doc.divisions.map((d) => d.suspensions!.map((s) => s.personId))).toEqual([["p1"], [null]]);
+  });
+
+  it("a document built BEFORE these fields existed still parses — a CDN or Redis copy of the old shape is not a broken hub", () => {
+    // The API answers with `s-maxage=30, stale-while-revalidate=300`
+    // (`PUBLIC_CACHE_CONTROL`), so a spectator's new bundle can poll an old
+    // document for minutes after a deploy. `byeSides` set the precedent.
+    const old = structuredClone(validDoc() as CompetitionHubDocT);
+    for (const d of old.divisions) {
+      delete d.description;
+      delete d.suspensions;
+    }
+    for (const team of old.teams) {
+      delete team.members;
+      delete team.calendarHref;
+    }
+    // Really the old shape — absent, not null — or this proves nothing.
+    expect(old.divisions.some((d) => "description" in d || "suspensions" in d)).toBe(false);
+    expect(old.teams.some((team) => "members" in team || "calendarHref" in team)).toBe(false);
+    expect(old.teams.length).toBeGreaterThan(0);
+    expect(issuesOf(old)).toEqual([]);
+  });
+
+  it("matches left to serve are whole numbers, on the ban AND on the member's tag — '1.5 to serve' is refused", () => {
+    const doc = validDoc() as CompetitionHubDocT;
+    const d0 = doc.divisions[0]!;
+    const brokenBan = {
+      ...doc,
+      divisions: [{ ...d0, suspensions: [{ ...d0.suspensions![0]!, remaining: 1.5 }] }, doc.divisions[1]!],
+    };
+    expect(issuesOf(brokenBan)).toContainEqual({ path: "divisions.0.suspensions.0.remaining", code: "invalid_type" });
+    const t0 = doc.teams[0]!;
+    const brokenMember = {
+      ...doc,
+      teams: [{ ...t0, members: [{ ...t0.members![0]!, suspendedRemaining: 0.5 }] }, doc.teams[1]!],
+    };
+    expect(issuesOf(brokenMember)).toContainEqual({ path: "teams.0.members.0.suspendedRemaining", code: "invalid_type" });
+  });
+});
