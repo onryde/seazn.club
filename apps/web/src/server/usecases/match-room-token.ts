@@ -15,6 +15,11 @@ export type MatchRoomClaims = { fixtureId: string; personId: string; scheduledAt
 
 export async function mintMatchRoomToken(c: MatchRoomClaims): Promise<string> {
   const exp = Math.floor((Date.parse(c.scheduledAt) + MATCH_ROOM_TOKEN_TTL_MS) / 1000);
+  // Explicit, not incidental: jose's setExpirationTime happens to reject NaN
+  // too, but with its own generic message — pin ours so the failure names
+  // the real cause (an unparseable scheduledAt) instead of an implementation
+  // detail of the JWT library.
+  if (!Number.isFinite(exp)) throw new Error("mintMatchRoomToken: invalid scheduledAt");
   return new SignJWT({ fid: c.fixtureId, pid: c.personId, sat: c.scheduledAt })
     .setProtectedHeader({ alg: "HS256", typ: TYP })
     .setIssuedAt()
@@ -27,7 +32,10 @@ export async function mintMatchRoomToken(c: MatchRoomClaims): Promise<string> {
  *  comparison does NOT belong here. */
 export async function verifyMatchRoomToken(token: string): Promise<MatchRoomClaims> {
   try {
-    const { payload, protectedHeader } = await jwtVerify(token, authSecretKey(), { typ: TYP });
+    const { payload, protectedHeader } = await jwtVerify(token, authSecretKey(), {
+      typ: TYP,
+      algorithms: ["HS256"],
+    });
     if (protectedHeader.typ !== TYP) throw new Error("typ");
     const { fid, pid, sat } = payload as Record<string, unknown>;
     if (typeof fid !== "string" || typeof pid !== "string" || typeof sat !== "string") throw new Error("claims");

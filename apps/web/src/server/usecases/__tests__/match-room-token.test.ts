@@ -68,4 +68,18 @@ describe("match room token", () => {
       .sign(otherKey);
     await expect(verifyMatchRoomToken(forged)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
   });
+
+  it("refuses a token with valid typ and claims but signed HS384 with the real secret (algorithm confusion)", async () => {
+    const hs384 = await new SignJWT({ fid: "f1", pid: "p1", sat: claims.scheduledAt })
+      .setProtectedHeader({ alg: "HS384", typ: "seazn-match-room" })
+      .setExpirationTime("1h")
+      .sign(authSecretKey());
+    await expect(verifyMatchRoomToken(hs384)).rejects.toMatchObject({ code: "MATCH_ROOM_INVALID" });
+  });
+
+  it("mintMatchRoomToken rejects an unparseable scheduledAt", async () => {
+    await expect(mintMatchRoomToken({ ...claims, scheduledAt: "not-a-date" })).rejects.toThrow(
+      "mintMatchRoomToken: invalid scheduledAt",
+    );
+  });
 });
