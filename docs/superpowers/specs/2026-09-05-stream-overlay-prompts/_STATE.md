@@ -39,6 +39,12 @@ orchestrator commits (implementers never commit).
 **FLY_API_TOKEN:** present (non-empty) in BOTH root `.env.local` and `apps/web/.env.local` (key-name check 2026-09-16; the worktree symlinks apps/web/.env.local to main). Nothing owed by the owner for Task 5A. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
 
 **Owner decisions this session (owner's words):**
+- "No fine" (2026-09-16) — keep lane order: lane A (3→4→5A→5→6) before lane B.
+- "Can we create the PR for each Lane, after each lane finish, we can start a new session and start a new lane?" —
+  YES. At each lane close: lane reviewer + orchestrator full gate (JSON vs floor 17856) → PR for that lane (ask
+  owner before push / gh pr create) → update this block → owner starts a NEW session for the next lane, which
+  reads this block first. Lane A PR must include Task 7 Step 0c's V408 amend pulled forward (V408 must be
+  complete before it can merge; after merge an amend is a forward migration).
 - "FLY_API_TOKEN -Ok" — the env var is named `FLY_API_TOKEN` (not FLY_IO_TOKEN).
 - "yes" to "Are we planning to build a new page in /admin?" follow-up — the staff Match credits panel goes on the
   EXISTING `/admin/orgs/[id]` page (plan owner ruling 15, Task 7A); no new admin page.
