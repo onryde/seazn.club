@@ -60,7 +60,8 @@ capture repo.
   echo the secret.
 - `show data_directory` → `/tmp/seazn-env/rly/pg` (contains `rly`; the script also printed "data_directory verified").
 - Deltas tail on this branch at Task 0: `V403__realtime_fixture_broadcast_policy.sql`; all-refs `V4*`
-  tail: the same `V403`. **Task 1 takes V404** and records it AS LANDED in `_INDEX.md`.
+  tail: the same `V403`. Task 0 therefore reserved V404 — **superseded 2026-09-16, see FT0-1**:
+  main has since landed V404–V407, so **R1's migration is V408**, recorded AS LANDED in `_INDEX.md`.
 - Baseline (`apps/web`, full, fresh DB, placement up): **passed 17064 / total 17141 / failed 0 /
   pending 77** — 1266 files, 0 failed suites, `outside-worktree 0`, runner `EXIT=0`. JSON at
   `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/3a628426-b486-4e22-bbd6-008e2676b7d0/scratchpad/r1/baseline-web.json`.
@@ -128,8 +129,15 @@ the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `bil
 `credit-packs.ts` or `server/api-v1/**` changed. What did, and what it does to the plan:
 
 - **FT0-1 — the migration tail is `V403__realtime_fixture_broadcast_policy.sql`, not V402.** It
-  was ADDED by #782 itself, so the plan's "unchanged at `9a7393cf4`" is false. The all-refs scan
-  shows nothing past V403. **Task 1 takes V404** — re-read both commands when Task 1 starts.
+  was ADDED by #782 itself, so the plan's "unchanged at `9a7393cf4`" is false. At Task 0 the
+  all-refs scan showed nothing past V403, so Task 0 reserved V404.
+  **Re-checked 2026-09-16 and CHANGED: R1's migration is `V408`.** `origin/main` is now
+  `ea5b7027a`, four commits ahead of this branch, and landed `V404__retire_scorer_role.sql`,
+  `V405__lichess_external_play.sql`, `V406__lichess_challenge_identity.sql` and
+  `V407__lichess_lobby_ready.sql`. A duplicate Flyway version survives a clean rebase, so the
+  number is fixed BEFORE rebasing, never after. Re-read `ls db/migration/deltas | sort -V | tail -1`
+  AND the all-refs `git log --all --diff-filter=A -- 'db/migration/deltas/V4*'` when Task 1 starts:
+  that pair, not this line, is the authority — main moves under long waves.
 - **FT0-2 — the plan's P3 review grep reds on a clean tree.** `grep -a -rn "SUPABASE_JWT_SECRET"
   apps/web/src --include=*.ts | grep -v "lib/realtime.ts"` prints 8 lines, all in
   `lib/__tests__/realtime-publish.test.ts` (added by #782). Task 6's own `tokens.test.ts` will
@@ -155,18 +163,31 @@ the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `bil
   authority (6 references), but it existed only in the plan session's `/tmp` scratchpad. It is now
   committed beside this file.
 
-**Owner data rulings at Task 0 (2026-09-14), folded into Task 1's migration (V404):**
+**Owner data rulings at Task 0 (2026-09-14), folded into Task 1's migration (V408 — see FT0-1):**
 - **Telemetry retention — "2 is ok":** `fixture_stream_events` and `stream_provider_calls` kept
   indefinitely; raw `fixture_stream_samples` deleted after 90 days by the daily sweep
   (`SAMPLE_RETENTION_DAYS = 90`); the per-session `sample_summary` kept regardless.
 - **Non-personal additions — "all":** (a) app build sha on every event and sample; (b) sport,
   competition, division, scheduled start, venue (via `fixtures.court_id` → `courts.venue_id`,
   null when no court) and org timezone snapshotted on the session; (c) entitlement source at
-  admission; (d) recording facts after finalise (size, resolution, codecs, duration — only fields
-  Task 4 sees in the live Cloudflare API); (e) QR shown / credentials revealed, first-at and count;
-  (f) per-session cost estimate; (g) destination output uid and output error codes; (h) Cloudflare
-  ingest edge location (verified in Task 4). Still never stored: raw IP, user agent, device ids,
-  credentials.
+  admission; (d) recording facts after finalise; (e) QR shown / credentials revealed, first-at and
+  count; (f) per-session cost estimate; (g) destination output uid and output error codes; (h)
+  Cloudflare ingest edge location. Still never stored: raw IP, user agent, device ids, credentials.
+- **Narrowed by a read-only Cloudflare probe, 2026-09-14** (field shapes only, no values; orchestrator
+  rulings, each recorded in the SDD ledger with its cost if wrong):
+  - **(h) dropped.** `GET /live_inputs/{uid}` returns no colo, location or region field. Its
+    `status.current.reason` is captured instead.
+  - **(d) narrowed.** A video carries `size`, `duration`, `input.width`, `input.height`,
+    `status.state` and `status.errorReasonCode`, but no codec field. Values read -1 or 0 while
+    `live-inprogress`, so they are written only after finalise.
+  - **(c) narrowed to "granted by override: yes/no" at admission,** read through the existing
+    `overrideRow`. The resolver (`resolveFromDb`) returns no source, and in R1 every granted org is
+    an override anyway.
+  - **(a) reads the image tag.** Fly's docs list `FLY_IMAGE_REF` as a runtime env var, and
+    `prod.yml` / `stg.yml` deploy with `--image registry.fly.io/<app>:${{ github.sha }}`, so its
+    tag should be the commit sha. `config.ts` takes the tag only when it is 40 hex characters,
+    otherwise null (locally, in CI, or for a builder-tagged `deployment-…` image). One staging
+    read confirms it.
 - **Device GPS — owner wants it ("GPS").** Recommendation, not an owner ruling: it lands in
   **R3**, not R1. In R1 the phone streams straight to Cloudflare and no phone→app call exists, so
   an R1 column would have no writer. **Owed to R3's plan:** GPS from the capture app to our API,
