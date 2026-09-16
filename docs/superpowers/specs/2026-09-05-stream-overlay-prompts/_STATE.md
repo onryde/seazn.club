@@ -41,9 +41,7 @@ orchestrator commits (implementers never commit).
 3. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
 4. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
 
-**FLY_API_TOKEN:** owner says "Added already" (2026-09-16). Key-name check (names only): present in ROOT
-`.env.local`, ABSENT in `apps/web/.env.local`. Task 5A must confirm which file its live test loads; if it reads
-apps/web's, ask the owner to add it there too. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
+**FLY_API_TOKEN:** present (non-empty) in BOTH root `.env.local` and `apps/web/.env.local` (key-name check 2026-09-16; the worktree symlinks apps/web/.env.local to main). Nothing owed by the owner for Task 5A. Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
 
 **Owner decisions this session (owner's words):**
 - "FLY_API_TOKEN -Ok" — the env var is named `FLY_API_TOKEN` (not FLY_IO_TOKEN).
