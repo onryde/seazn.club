@@ -406,6 +406,14 @@ export interface PlayMatchResult {
    *  adapter's allowlist tolerated (R50(d)), a status rule a burst made
    *  unjudgeable, a hold that released itself before `pad-send-now`. */
   readonly observations: readonly string[];
+  /** Rows still on the server strictly after `core.finalize` was verified —
+   *  never judged (nothing past finalize is asserted), but never SILENT
+   *  either (NB4): once the finalize row lands, nothing else polls, so
+   *  without this a trailing row is simply never read again. `undefined`
+   *  only for a caller that builds a `PlayMatchResult` itself without ever
+   *  calling this function (`tap-play.ts`'s pre-flight early-exits, before
+   *  any scoring starts) — "not measured", never "zero". */
+  readonly unreadRowsAfterFinalize?: number;
 }
 
 // Ref resolution for `stream.home`/`stream.away` — bare refs, no `@` sigil.
@@ -448,6 +456,19 @@ interface PayloadComparison {
   readonly observations: readonly string[];
 }
 
+/** A tolerated extra key still opens at ONE derived shape, never any value:
+ *  every entry in `TapAdapter.tolerableExtraKeys` names a person id the pad
+ *  itself stamps, and the pad's own "named" check
+ *  (`generic.tsx:701`, `typeof payload?.person === "string" && payload.person
+ *  .length > 0`) treats a person as present only for a non-empty string. A
+ *  numeric, empty, or object value at a tolerated key is not a plausible id
+ *  the pad could have stamped, so it must red rather than pass as a silent
+ *  observation (AGENTS.md class 19 — pin what a tolerated key opens AT, not
+ *  just that the name is on the allowlist). */
+function isPlausibleTolerableValue(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
 /** R50(d): exact in BOTH directions — see the header. */
 function comparePayload(expected: unknown, actual: unknown, tolerable: readonly string[]): PayloadComparison {
   const expectedRecord = normalizeToRecord(expected);
@@ -458,7 +479,7 @@ function comparePayload(expected: unknown, actual: unknown, tolerable: readonly 
   }
   for (const key of Object.keys(actualRecord)) {
     if (Object.hasOwn(expectedRecord, key)) continue;
-    if (tolerable.includes(key)) {
+    if (tolerable.includes(key) && isPlausibleTolerableValue(actualRecord[key])) {
       observations.push(`tolerated extra key "${key}" = ${JSON.stringify(actualRecord[key])}`);
       continue;
     }
@@ -619,6 +640,7 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
   const start = performance.now();
   let taps = 0;
   let tappedBefore = false;
+  let unreadRowsAfterFinalize = 0;
 
   async function tap(page: PadPage, steps: readonly TapStep[], releaseHoldFirstOn?: PadPage): Promise<void> {
     // R39 — pace every tap after the first like a deliberate human repeat.
@@ -630,7 +652,14 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
   }
 
   function finish(): PlayMatchResult {
-    return { fixtureId: input.fixtureId, taps, wallMs: Math.round(performance.now() - start), findings, observations };
+    return {
+      fixtureId: input.fixtureId,
+      taps,
+      wallMs: Math.round(performance.now() - start),
+      findings,
+      observations,
+      unreadRowsAfterFinalize,
+    };
   }
 
   try {
@@ -736,6 +765,21 @@ export async function playMatchByTaps(input: PlayMatchInput): Promise<PlayMatchR
     await drainPending(input, v, FINAL_POLL_ATTEMPTS, sleep);
     if (v.pending.length > 0) {
       findings.push(`ledger: expected a "core.finalize" row after tapping score-finalize, none landed`);
+    }
+
+    // NB4 — `drainPending` stops reading the instant its FIFO empties, so once
+    // `core.finalize` lands nothing ever polls again: a row that lands after
+    // it would otherwise be swallowed with no finding and no observation,
+    // ever. One bounded read past the current anchor closes that — never
+    // judged (nothing past finalize is asserted), but never silent either.
+    const trailing = await fetchFixtureLedger(input.base, input.session, input.fixtureId, v.seq, input.ledger);
+    unreadRowsAfterFinalize = trailing.length;
+    if (trailing.length > 0) {
+      const first = trailing[0];
+      findings.push(
+        `ledger: ${trailing.length} row(s) landed after core.finalize was verified and were never read — the bench stops ` +
+          `polling once finalize lands (first unread: type "${first.type}", seq ${first.seq})`,
+      );
     }
 
     return finish();

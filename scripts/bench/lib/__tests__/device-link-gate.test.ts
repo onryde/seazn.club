@@ -491,6 +491,41 @@ describe("proveDeviceLinkGate", () => {
 });
 
 // ---------------------------------------------------------------------------
+// n2 — the pre-flip mint goes through the SAME revoking wrapper as every
+// other mint, even when the gate is open before the flip (an Event Pass, a
+// catalog/code divergence, a stale entitlement cache). `mint()` wraps every
+// call `proveDeviceLinkGate` makes, including the "before" one — this is the
+// mirror of the "FAILS when the product refuses a mint the catalog says is
+// free" case above (:569): there, the catalog says free and the probe is
+// told paywalled; here the catalog ALREADY grants the key on `community` (a
+// real 201, not a scripted one, so the fake server's own link ledger tracks
+// it) while the probe is still told `onFreePlan: "paywalled"`.
+// ---------------------------------------------------------------------------
+
+describe("proveDeviceLinkGate — the pre-flip mint is revoked like any other (n2)", () => {
+  it("a catalog that already grants the key before the flip answers the pre-flip mint 201 — the refusal cell reports it, and the link is still revoked through the wrapper", async () => {
+    const catalog: Catalog = { ...LIVE_CATALOG, [DEVICE_LINKS]: soldOnPro({ community: true }) };
+    const { transport, links, billing, fixtureId } = fakeTransportRefusingThenAllowing(catalog);
+
+    const result = await proveDeviceLinkGate(gateInput(transport, billing, fixtureId, { onFreePlan: "paywalled" }));
+
+    // The refusal cell correctly reports the mismatch: a 201 is not the
+    // payment_refusal it expected, so it is NOT waved through as ok.
+    const refused = result.cells[0]!;
+    expect(refused.cell).toBe("device_link_refused_before_plan");
+    expect(refused.ok).toBe(false);
+    expect(refused.status).toBe(201);
+
+    // Both mints (before AND after the flip) created a live scoring
+    // credential, and `mint()`'s revoking wrapper — which every mint in this
+    // function runs through, including the pre-flip one — must have cleaned
+    // up both, not just the one after the flip.
+    expect(links.minted.length).toBe(2);
+    expect(links.revoked).toEqual(links.minted);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The refusal cell can FAIL — every pre-flip answer that is not the paywall
 // ---------------------------------------------------------------------------
 
@@ -816,5 +851,37 @@ describe("runDlsGateProbe — the device-link cells", () => {
     expect(result.unsatisfiedCapabilities).toEqual([]);
     expect(result.deviceLinksGranted).toBe(true);
     expect(result.cells.find((c) => c.cell === "device_link_minted_after_plan")?.ok).toBe(true);
+  });
+
+  // n3 — `candidatePlanKeys` (dls-gate.ts:960-962) is a union over FIVE rows,
+  // `deviceLinkRows` among them. The test above (`zzz_links_plus`, "the
+  // chooser traded them away") also grants that plan `cricket.dls` and
+  // `officials.auto`, so it does not isolate the `deviceLinkRows` member's
+  // own contribution — dropping it from the union would still leave
+  // `zzz_links_plus` reachable through the other four rows, and would not be
+  // caught. Here `zzz_links_plus` has NO row at all in the other four
+  // catalog entries, so it can only ever reach `candidates` (and therefore
+  // `publicPlansSelling`) through `deviceLinkRows` itself.
+  it("n3: a plan visible ONLY via its device-link row still becomes a named public seller — isolating deviceLinkRows' own contribution to candidatePlanKeys", async () => {
+    const catalog: Catalog = {
+      "cricket.dls": soldOnPro({ community: true }),
+      "officials.auto": soldOnPro(),
+      "stats.player": soldOnPro(),
+      "news.auto": soldOnPro(),
+      [DEVICE_LINKS]: [
+        { plan_key: "community", bool_value: false },
+        { plan_key: "pro", bool_value: false },
+        { plan_key: "zzz_links_plus", bool_value: true },
+      ],
+    };
+    const { result, httpCalls } = await probe(catalog);
+
+    expect(result.provisionedPlan).toBe("pro");
+    expect(result.deviceLinksGranted).toBe(false);
+    // Named: the plan a customer can buy — reachable only via deviceLinkRows.
+    expect(result.deviceLinkWarnings.filter((w) => w.includes('"zzz_links_plus"'))).toHaveLength(1);
+    expect(result.cells.filter((c) => !c.ok)).toEqual([]);
+    expect(result.cells.map((c) => c.cell)).not.toContain("device_link_minted_after_plan");
+    expect(deviceLinkCalls(httpCalls)).toHaveLength(1);
   });
 });

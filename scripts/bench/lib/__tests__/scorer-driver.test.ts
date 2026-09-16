@@ -157,6 +157,10 @@ interface BuildFakePadOpts {
   /** Whether an ORGANISER-page finalize writes a row. Defaults to true. */
   finalizeCommits?: boolean;
   finalizeLag?: number;
+  /** A row the server writes strictly AFTER `core.finalize` has already
+   *  landed (`land`'s `behind` clause guarantees the ordering) — never
+   *  tapped for, and (before NB4's fix) never read either. */
+  extraRowAfterFinalizeLag?: number;
   /** Selectors that never attach. */
   neverAttached?: ReadonlySet<string>;
   gotoThrows?: string;
@@ -252,6 +256,12 @@ function buildFakePad(opts: BuildFakePadOpts): FakePad {
         if (sel === FINALIZE_SEL) {
           if (pageName === "organiser" && opts.finalizeCommits !== false) {
             land(opts.finalizeLag, () => writeRow("core.finalize", {}, "finalized"));
+            if (opts.extraRowAfterFinalizeLag !== undefined) {
+              // Queued right after finalize's own `land()` call: `behind`
+              // forces it to settle no earlier than finalize's own row, so it
+              // never lands ahead of (or bundled into the same read as) it.
+              land(opts.extraRowAfterFinalizeLag, () => writeRow("core.finalize", {}, "finalized"));
+            }
           }
           return;
         }
@@ -403,6 +413,25 @@ describe("playMatchByTaps — commits on main, held or immediate (C1, C2)", () =
     expect(joined(result.findings)).toBe("");
   });
 
+  // NB1 — the per-tap poll budget (`PER_TAP_POLL_ATTEMPTS`) has no killer: a
+  // shrunk budget doesn't turn into a false red (FINAL_POLL_ATTEMPTS still
+  // catches a trailing row eventually), it silently turns a JUDGED row into
+  // an unjudged OBSERVATION instead — because the row then lands bundled
+  // with the NEXT tap's commit (the fake's commits settle strictly in order,
+  // `land`'s `behind` clause), and one bundled snapshot can judge only the
+  // LATER row. An intermediate event (never the stream's last, which
+  // `FINAL_POLL_ATTEMPTS`'s huge budget always rescues) lagged exactly 2
+  // reads lands ALONE, on its own dedicated snapshot, within its own
+  // per-tap drain call — but only if that call gets at least 2 read
+  // attempts. Shrinking the real per-tap budget below that reds this.
+  it("an intermediate row lagged 2 reads is judged on its OWN snapshot within its own per-tap poll — findings: [], observations: []", async () => {
+    const events = [START, winBy(HOME_REF), winBy(AWAY_REF)];
+    const { result } = await play(events, WIN_LOSS_CFG, { lagReads: new Map([[1, 1]]) });
+
+    expect(joined(result.findings)).toBe("");
+    expect(result.observations).toEqual([]);
+  });
+
   it("reds when the server records an extra row nothing tapped for — and says the last event's \"decided\" could not be judged", async () => {
     const { result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG, { extraRowAfter: 1 });
 
@@ -522,6 +551,25 @@ describe("playMatchByTaps — payload equality, exact in both directions (I2, m3
     expect(result.observations).toEqual(['event 1 (generic.score): tolerated extra key "person" = "p-solo"']);
   });
 
+  // NB2 — the allowlist tolerates `person` by NAME only; any value used to
+  // pass as an observation. The pad's own "named" check (generic.tsx:701,
+  // `typeof payload?.person === "string" && payload.person.length > 0`) is
+  // what a plausible person id opens at — pinned here, not typed into the
+  // test as a table.
+  it.each([
+    ["a number, not a person id", 42],
+    ["an empty string", ""],
+  ] as const)("reds an allowlisted key whose recorded value is not a plausible person id (%s)", async (_label, badPerson) => {
+    const { result } = await play([START, scoreBy(HOME_REF)], SCORE_CFG, {
+      recordedPayloadOverride: new Map([[1, { by: HOME_ID, points: 1, person: badPerson }]]),
+    });
+
+    expect(result.findings).toContain(
+      `ledger: event 1 (generic.score) — payload key "person" mismatch: the pack meant undefined, the server recorded ${JSON.stringify(badPerson)}`,
+    );
+    expect(result.observations).toEqual([]);
+  });
+
   it("reds the same person key on an event type the allowlist does not name (generic.result)", async () => {
     const { result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG, {
       recordedPayloadOverride: new Map([[1, { winnerId: AWAY_ID, person: "p-solo" }]]),
@@ -583,6 +631,32 @@ describe("playMatchByTaps — finalize on the organiser page, verified (I5, I6, 
     const { result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG, { finalizeCommits: false });
 
     expect(result.findings).toEqual(['ledger: expected a "core.finalize" row after tapping score-finalize, none landed']);
+  });
+
+  // NB4 — `drainPending` stops reading the instant its FIFO empties, so once
+  // core.finalize is verified nothing ever polls again. Before the fix a row
+  // landing strictly AFTER that point was pure silence: no finding, no
+  // observation, no count. `unreadRowsAfterFinalize` and the one bounded
+  // read past the anchor make it visible either way — never judged, never
+  // silent.
+  it("counts and reports a row landing strictly after core.finalize was verified, once drainPending has already stopped polling", async () => {
+    const { result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG, {
+      finalizeLag: 1,
+      extraRowAfterFinalizeLag: 2,
+    });
+
+    expect(joined(result.findings.filter((f) => !f.startsWith("ledger: 1 row(s) landed after core.finalize")))).toBe("");
+    expect(result.unreadRowsAfterFinalize).toBe(1);
+    expect(result.findings).toContain(
+      'ledger: 1 row(s) landed after core.finalize was verified and were never read — the bench stops polling once finalize lands (first unread: type "core.finalize", seq 4)',
+    );
+  });
+
+  it("reports zero unread rows when nothing lands after core.finalize", async () => {
+    const { result } = await play([START, winBy(AWAY_REF)], WIN_LOSS_CFG);
+
+    expect(result.unreadRowsAfterFinalize).toBe(0);
+    expect(joined(result.findings)).toBe("");
   });
 
   it("reds, and still resolves, when score-finalize never attaches", async () => {
