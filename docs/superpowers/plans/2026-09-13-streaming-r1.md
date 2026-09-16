@@ -66,7 +66,7 @@ Each row of `R0-CORRECTIONS-FOR-R1.md` lands either as a task requirement WITH a
 | P14 two `CREDIT_PACKS` | Task 8, Task 14 | ONE authority: `lib/stream-credit-packs.ts` `STREAM_CREDIT_PACKS`; the panel's own constant is DELETED |
 | P15 `ui.stream.*` | Task 14 | extends the 31 existing keys (FT0-4: #782 removed `stream.tab.slate` and `stream.preview.slate`; re-counted 31 on 2026-09-16 — main changed no `stream.` key); 30 once Task 14 deletes `stream.credits.soon`. Task 14 recounts before it writes: the base is whatever `en/ui.json` holds that day, and the new fail reasons (`provision_timeout`, `admission_timeout`) add two keys on top |
 | P16–P17 `hasFeature`, `UpgradeGate` | Task 11, Task 14 | by symbol |
-| P18 gated-transaction harness | Task 7 | `registration-concurrency.test.ts` §5's `releaseBoth`/`bothStarted` idiom, adapted to a `for update` lock |
+| P18 gated-transaction harness | Task 7 | `registration-concurrency.test.ts` §5's `releaseBoth`/`bothStarted` idiom, adapted to the org's advisory money lock (Revision 2; waiters read from `pg_locks`, scoped to the holder's pid) |
 | P19 Sentry `fly.toml` | Task 17 | owner OK'd enabling it 2026-09-14; the DSN is OWED by the owner — the line is uncommented only when the DSN arrives |
 | P20 `jose` | Task 6 | already a dependency |
 | P21 division gate | Task 14 | `relayEntitled` is already threaded; nothing to add |
@@ -102,6 +102,7 @@ Each row of `R0-CORRECTIONS-FOR-R1.md` lands either as a task requirement WITH a
 12. **The verify destination — RULED:** a second Cloudflare live input as the sink; a YouTube pass is optional on an owner-supplied unlisted key (owed; never committed or echoed).
 13. **Data capture — RULED:** *"no issues in expanding the database, make sure that we capture all data as possible"*. Every fact the relay produces is captured (§"Data captured"); schema growth is PRE-APPROVED. Its two sub-questions are now settled (`_STATE.md` "Owner data rulings at Task 0"): telemetry retention is RULED by the owner ("2 is ok" — raw samples deleted after 90 days); PII is settled by an ORCHESTRATOR ruling, not the owner's (`actor_user_id` stays — §"Data captured"). At Task 0 the owner also ruled the non-personal additions ("all"); the orchestrator narrowed their shapes from a read-only Cloudflare probe, and Task 1's DDL carries them.
 14. **`RELAY_KEK` is PRESENT** in both `.env.local` files (64 hex). It is no longer owed: Task 0 CONFIRMS it (a length check, never an echo); every later "add RELAY_KEK" note is retired.
+15. **Staff "Match credits" panel — ADD, in R1 (owner, 2026-09-16, "yes").** A staff-only panel on the EXISTING `/admin/orgs/[id]` shows the org's match-credit balance and its recent `org_stream_credits` rows, with grant and refund actions that call Task 7's `grantCredits` / `refundCredits` (Task 7A). The reason: without it those two money functions have no production caller (AGENTS.md class 1), and refunding a failed stream would be a hand-typed SQL write. `/admin` is held to a functional bar. The admin TELEMETRY view stays future scope. *(Not part of the owner's ruling: the orchestrator's Revision 1 rulings on the Task 7A draft, 2026-09-16, add a REVOKE action, a required idempotency key, an in-transaction staff audit row and a linked-refund cap. They are recorded in Task 7A's Revision 1 preamble and implemented in Task 7.)*
 
 ## Recommendation B — no money or safety rule may wait for a daily tick (RULED, owner "all good" 2026-09-14 — ruling 11)
 
@@ -143,8 +144,8 @@ Separate from the seeded e2e (Task 15 stays automation). A REAL browser against 
 
 | Irreversible action | Where | Guard / sign-off |
 |---|---|---|
-| Money captured (a match-credit purchase) | Task 8 route + Stripe sandbox | sandbox-only until the GA flip; 402 `plan_lacks_relay` before Stripe; the ledger row is idempotent by `stripe_event_id`; refunds are admin `refundCredits` rows (Task 7) |
-| A credit consumed at `live` | Task 10 `consume_credit` inside the row lock | the 24 h same-fixture reuse rule; FS10's floor; `grant`/`refund` rows are the only remedy — recorded, never deleted |
+| Money captured (a match-credit purchase) | Task 8 route + Stripe sandbox | sandbox-only until the GA flip; 402 `plan_lacks_relay` before Stripe; the ledger row is idempotent by `stripe_event_id`; refunds are staff `refundCredits` rows (Task 7), written through the Task 7A panel |
+| A credit consumed at `live` | Task 10 `consume_credit` inside the row lock | the 24 h same-fixture reuse rule; FS10's floor; grant, refund and revoke rows, written by staff through the Task 7A "Match credits" panel on `/admin/orgs/[id]` (`POST /api/admin/orgs/[id]/stream-credits`, idempotency key required, audited in the same transaction), are the only remedy — recorded, never deleted |
 | Cloudflare recording DELETED (3-day retention) | Task 12 through `retentionPlan` | videos before inputs; a 409 defers a day; the OWNER accepted the 3-day promise (2026-09-12); no undo — flagged |
 | Cloudflare live input DELETED | Task 12 | only after its videos are gone and the session has been terminal ≥ 3 days |
 | Fly Machine destroyed (force) | Tasks 10/12 through the lifecycle table | only from `stopping`/`exited` after grace, `lost`, or an orphan; `auto_destroy` is the normal path; idempotent |
@@ -159,7 +160,8 @@ Every new write path is diffed against its nearest analogue for a missed guard, 
 
 | New write path | Nearest analogue | Guards the analogue has → present here? |
 |---|---|---|
-| `consumeForSession` / `recordPurchase` / `grantCredits` / `refundCredits` (Task 7) | `lib/credits.ts` `reserve`/`recordPackPurchase` over `ai_credit_ledger` (V320) | `for update` on the wallet → yes (`lockOrg`); `balance_after >= 0` CHECK → yes (FS10 kept); idempotency key on purchase → yes (`stripe_event_id` unique); positive-integer delta → yes (`credit`/`debit` refuse); compensating rows never UPDATE/DELETE → yes; `spent_by_org_id` per-org reporting → N/A (one org per ledger) |
+| `consumeForSession` / `recordPurchase` / `grantCredits` / `refundCredits` / `revokeCredits` (Task 7) | `lib/credits.ts` `reserve`/`recordPackPurchase`/`adminAdjust` over `ai_credit_ledger` (V320) | the wallet's advisory lock first in the transaction (`pg_advisory_xact_lock(hashtext('ai-credit-wallet:' …))`, `lib/credits.ts:1482`) → yes: `lockOrg` takes `pg_advisory_xact_lock(hashtext('stream-credits-org:' || orgId))` first in EVERY ledger write, so the first writes to an EMPTY ledger serialise too; `balance_after >= 0` CHECK → yes (FS10 kept); idempotency key on purchase → yes (`stripe_event_id` unique); the staff idempotency key checked under the lock, table-wide (`V320:37` scope) → yes, before the floor and the cap, plus a DEVIATION: a key reused with a different org/kind/amount/session → 409 `idempotency_key_reused` (the donor silently answers `applied: false`); the audit row in the same transaction → yes (`staff_audit_log`, applied writes only); the revoke floor → yes (422 `insufficient_credits`, the donor's status); the linked-refund cap → 422 `refund_exceeds_consumed` (the donor has no sessions); positive-integer delta → yes (`credit`/`debit` refuse); compensating rows never UPDATE/DELETE → yes; `spent_by_org_id` per-org reporting → N/A (one org per ledger) |
+| `POST /api/admin/orgs/[id]/stream-credits` (Task 7A) | `api/admin/orgs/[id]/credits/route.ts` | staff guard before the body is parsed → yes (`requireStaff`, 401); `.strict()` body → yes; required `idempotency_key` 8–200 → yes (the donor's bounds); per-adjustment cap → yes (`STREAM_CREDIT_ADJUST_MAX` 50, every role, no superadmin bypass); refusals → 422 (parity), reused key → 409 (deviation, Task 7); a refund's session must be THIS org's → 404 (the donor has no sessions); the audit row → Task 7's, in the ledger transaction (the route writes no SQL of its own beyond the org and session lookups). Task 7A's own diff table is the source. |
 | `POST /api/billing/relay-checkout` (Task 8) | `credit-pack-checkout/route.ts` | `requireBillingOwner` → yes; locked currency → yes (`preferredCurrency`); 30 s idempotency bucket → yes; `metadata.credits` snapshot → yes; `.strict()` body → yes; **plus** the `orgId` equality check and the 402-before-Stripe gate the analogue does not need |
 | the `stream_credits` webhook branch (Task 8) | the `credit_pack` branch in `handleCheckoutCompleted` | `payment_status === "paid"` → yes; snapshot-else-catalogue-else-log → yes; replay-safe by id → yes; `linkStripeCustomer`/`pinBillingCurrency` → yes; staff alert email on ungranted → **no** (recorded as a follow-up; the log.error is present) |
 | `createSession` insert (Task 10) | `createRegistrationCheckout` / `confirmPaidRegistration` (row lock + CAS in `registrations.ts`) | the partial unique index as the race backstop (23505 → 409) → yes; the 23505 catch re-reads the winner → yes; gates BEFORE the insert in one transaction → yes; network calls OUTSIDE the transaction → yes |
@@ -312,8 +314,21 @@ stateDiagram-v2
 | `apps/web/src/server/relay/drivers.ts` | Create (Task 5) | `relayDrivers()` — `RELAY_DRIVERS=fake\|live` selection, one process-wide instance; `dbRecorder` bound to BOTH adapters in BOTH modes (the one place the recorder meets `sql`) |
 | `apps/web/src/server/relay/tokens.ts` | Create (Task 6) | `mintRelayToken`, `verifyRelayToken` over `AUTH_SECRET` |
 | `apps/web/src/server/relay/__tests__/tokens.test.ts` | Create (Task 6) | valid; tampered/expired/wrong-sid/wrong-scope → 401; `SUPABASE_JWT_SECRET`-signed → 401 with its `AUTH_SECRET` positive pair |
-| `apps/web/src/server/usecases/stream-credits.ts` | Create (Task 7) | `creditBalance`, `consumeForSession`, `recordPurchase`, `grantCredits`, `refundCredits`, `NoCreditsError` |
-| `apps/web/src/server/usecases/__tests__/stream-credits.test.ts` | Create (Task 7) | empty ledger = 0; sums; replay no-op; 24 h vs 25 h differential; the gated-transaction race |
+| `db/migration/deltas/V408__stream_sessions.sql` | Modify (Task 7 Step 0c — an AMEND of the unmerged migration, never a forward delta) | `org_stream_credits` gains `idempotency_key text null` + the TABLE-wide unique index `(idempotency_key) where idempotency_key is not null` (the donor's `V320:37` scope); its reason CHECK gains `'revoke'`; the FS10 header comment (`V408:67-72`) is rewritten to the org advisory money lock in the SAME amend; `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (`V408:122`; `expiry.ts` `deadlineOf` reads a 0 as 300). Flyway's checksum refuses an amended applied migration, so `rly` is dropped and recreated (Step 0c's STOP gate) |
+| `apps/web/src/server/relay/__tests__/migration-shape.test.ts` | Modify (Task 7 Step 0a) | 13 → 16: `'revoke'` accepted / an unknown reason refused (23514); a duplicate key refused (23505) in the same org AND in another org / a different key and two NULL keys accepted; `max_duration_minutes` 0 refused (23514) / 1 accepted, default 300 |
+| `apps/web/src/server/usecases/stream-credits.ts` | Create (Task 7) | `creditBalance`, `consumeForSession`, `recordPurchase`, `STREAM_CREDIT_AUDIT_ACTIONS`, `StaffCreditArgs` / `StaffCreditResult`, `grantCredits`, `refundCredits` (session cap, 422), `revokeCredits` (floor, 422), `NoCreditsError`, `lockOrg` / `orgMoneyLockKey` (the org advisory money lock every ledger write takes first); `consumeForSession` takes `fixtureId: string | null`; the staff writers check the idempotency key under the lock (an exact replay → `applied: false`, a different adjustment → 409 `idempotency_key_reused`) and write their `staff_audit_log` row in the same transaction |
+| `apps/web/src/server/usecases/__tests__/stream-credits.test.ts` | Create (Task 7) | 15: empty ledger = 0; sums; purchase replay no-op; no credits 402 / 1 consumed; 24 h vs 25 h differential; the gated-transaction race on the money lock (scoped `pg_locks` probe); an exact staff replay (1 row, 1 audit row); a reused key → 409 (delta, kind, session, org) with the exact replay's pair; first-ever writes on an empty ledger serialise (purchase + same-key grant pair, the hold taken through the upper-case id: one lock key per org); the same key on two orgs at once → 409, not a 23505 (a `transactionid` waiter); a fixture-less session consumes every time; revoke 1 of 1 / 1 of 0 → 422; the linked-refund cap (1 of 1, a second → 422, unlinked OK); a replayed linked refund → `applied: false`, not 422; the purchase's Stripe link |
+| `apps/web/src/server/relay/__tests__/_session-rig.ts` | Create (Task 7; moved from 7A in Revision 1) | `rigUser()` (a real users row) and `streamRig({ fixtures?, createdBy? })` → `{ orgId, createdBy, fixtureIds, session(fixtureId, state?) }` — a non-test module inside the enc boundary (the target's `rtmp_enc` column name may not leave `server/relay/**`) |
+| `apps/web/src/server/usecases/admin-adjustments-log.ts` | Modify (Task 7) | `ADJUSTMENT_ACTIONS` spreads `STREAM_CREDIT_AUDIT_ACTIONS` (the `PASS_CREDIT_RESOLVE_ACTION` precedent), with category `"credits"` and reversibility grant/refund true, revoke false |
+| `apps/web/src/app/admin/orgs/[id]/adjustment-labels.ts` | Modify (Task 7) | "Match credits granted" / "Match credits refunded" / "Match credits revoked" (English-only, per the file's header) |
+| `apps/web/src/server/usecases/admin-stream-credits.ts` | Create (Task 7A) | `streamCreditsForOrg` — the staff panel's read (balance via `creditBalance`, the newest `STREAM_CREDIT_LEDGER_LIMIT` rows); `STREAM_CREDIT_ADJUST_MAX` |
+| `apps/web/src/server/usecases/__tests__/admin-stream-credits.test.ts` | Create (Task 7A) | 5: empty set; every field + null author + a signed revoke row; org scope; newest-N with the balance over ALL rows; balance ≠ snapshot |
+| `apps/web/src/app/api/admin/orgs/[id]/stream-credits/route.ts` | Create (Task 7A) | staff `POST` grant / refund / revoke with a REQUIRED `idempotency_key` (8–200) → Task 7's writers; their 422 refusals and 409 `idempotency_key_reused` forwarded with their codes; outside the v1 OpenAPI spec |
+| `apps/web/src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts` | Create (Task 7A) | 13, DB-backed: non-staff 401 before parse; staff grant + its audit row; support may grant; note required (×3 kinds); delta bounds; strict body; key bounds; exact replay (1 row, 1 audit) and a reused key with a different amount → 409 with its code; org 404, and an UPPER-case URL id of a real org writes under the org's stored id; unlinked refund adds; own consumed session 200 / foreign 404 / second 422; nonexistent session 404; revoke 1 of 1 / 1 of 0 → 422 |
+| `apps/web/src/components/admin-stream-credits-panel.tsx` | Create (Task 7A) | the staff "Match credits" panel (English-only `/admin`): balance, grant + refund + revoke cards, one idempotency key per submission kept across a failed attempt and dropped (card reset, page re-read, explained) on a 409 `idempotency_key_reused`, the replay notice, the ledger rail with the author's email or id |
+| `apps/web/src/components/__tests__/admin-stream-credits-panel.test.tsx` | Create (Task 7A) | 4: empty set; rows (the author falls back to the user id); controls' opening values + disabled gate (×3 kinds); the rail's tabindex/role/name |
+| `apps/web/src/app/admin/orgs/[id]/page.tsx` | Modify (Task 7A) | one read + one mount under `AdminCreditsPanel`; nothing else on the page |
+| `apps/web/e2e/walkthrough/stream-credits-admin.spec.ts` | Create (Task 7A) | 5: a grant the server applied but the browser lost, retried by double-click (same key, one row, replay notice) → a refund the server applied but the browser lost, EDITED and resubmitted (409 reused key: card reset, page re-read, explained) → a new refund under a new key → revoke 1 → revoke 5 refused (422) on screen; bodies + keys pinned; rows + audit rows + the page's Adjustments log; 320/768/1280 no-scroll; non-staff refused |
 | `apps/web/src/lib/stream-credit-packs.ts` | Create (Task 8) | `STREAM_CREDIT_PACKS` — the ONE pack catalogue (client-safe: no `server-only`, no Stripe import) |
 | `apps/web/src/lib/relay-checkout.ts` | Create (Task 8) | `buildRelayCheckoutParams` (pure, `ui_mode: "embedded_page"` + `return_url` — the `credit-packs.ts` shape) + `createRelayCheckout` (Stripe) |
 | `apps/web/src/lib/__tests__/relay-checkout.test.ts` | Create (Task 8) | params shape (embedded), metadata `kind: "stream_credits"`, idempotency bucket |
@@ -352,8 +367,8 @@ stateDiagram-v2
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, `apps/web/src/lib/i18n-keys.ts` | Modify (Task 14) | `stream.phone.*`, `stream.fail.*`, `stream.error.*`, `stream.health.*`, `stream.target.*` |
 | `apps/web/e2e/relay-kit.ts` | Create (Task 15) | the rig: org + user + Pro group, both overrides, a hockey fixture, credits by SQL, thaw; `eventsSql(sid)` (the `fixture_stream_events` rows of a session — the walkthrough reads the `stop` action row with the signed-in user id) |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts` | Create (Task 15) | the organiser's walkthrough at 320/768/1280; the Stripe sandbox purchase inside the EMBEDDED iframe (skips loudly) |
-| `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | Modify (Task 15) | `WALKTHROUGH_SPECS` gains `stream-relay.spec.ts` |
-| `scripts/smoke.ts` | Modify (Task 16) | `streamRelaySuite` |
+| `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | Modify (Task 7A; Task 15) | `WALKTHROUGH_SPECS` gains `stream-credits-admin.spec.ts` (7A) and `stream-relay.spec.ts` (15), in one `// Streaming R1` block APPENDED at the END of the literal (wave order, class 18) |
+| `scripts/smoke.ts` | Modify (Task 7A; Task 16) | `streamCreditsAdminSuite` (7A, after `platformRevenueSuite`); `streamRelaySuite` (16) |
 | `apps/web/e2e/visual/manifest.json`, `manifest.ts`, `seeds.ts` | Modify (Task 17) | `stream-phone` seed kind; Phone-tab rows at 320 / 768 / 1280 / 320 @ 125 % |
 | `fly.toml` | Modify (Task 17, only once the owner supplies the DSN) | `NEXT_PUBLIC_SENTRY_DSN` uncommented |
 | `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_INDEX.md` | Modify (Task 17) | wave row, migration number AS LANDED, M3 invariant, FS10 outcome, RP9, driver env, lookup-key NAMES, mutant killer table, the cross-repo cron item, the data inventory + the Task 0 data decisions as settled — retention RULED by the owner, PII an ORCHESTRATOR ruling, never relabelled (Step 4b) |
@@ -366,7 +381,7 @@ Prompt lanes A–E in the prompt's order. **Task 1 (the migration) heads lane A 
 |---|---|---|
 | — | 0 | first, alone |
 | A | 1, 2, 2A, 2B, 2C, 3, 4, 5A, 5, 6 | 1 first; 2 next (the constants); then **2A → 2B → 2C** (the pure domain — aggregate, policies, the lifecycle table — before anything that consumes `decide`/`evaluate`/`stepRunner`); 3 after 2C (the fake honours the domain's types); then 4 ∥ 5A (disjoint: `ingest-cf.ts` vs `fly-client.ts`); 5 after 5A; 6 after 2 (∥ 3–5) |
-| B | 7, 8 | ∥ lane A after Tasks 1 and 2B (7 consumes `domain/credits.ts`); 7 then 8 (8's webhook branch calls 7's `recordPurchase`); B touches `billing-events.ts` and `billing-checkout-client.ts`, which A never touches |
+| B | 7 → 7A → 8 | ∥ lane A after Tasks 1 and 2B (7 consumes `domain/credits.ts`); **sequential within the lane: 7, then 7A, then 8** (orchestrator ruling on review I1, 2026-09-16: 8's webhook branch calls 7's `recordPurchase`, and the lane-B review at the END of Task 8 must see 7A landed). The file-disjointness recorded below still holds; it is no longer used to run 7A beside 8. **Task 7 (Revision 1) also AMENDS two lane-A files, `V408__stream_sessions.sql` and `migration-shape.test.ts`, and recreates the `rly` database** (Flyway's checksum refuses an amended applied migration): it therefore runs only after Task 1 is committed AND at a lane-A quiet point the orchestrator confirms at Task 7 Step 0c's STOP gate, because a drop under a running lane-A suite reds that suite for an environmental reason. Task 7 also owns `relay/__tests__/_session-rig.ts`, `admin-adjustments-log.ts` and `adjustment-labels.ts`. **7A after 7** (it calls `creditBalance` / `grantCredits` / `refundCredits` / `revokeCredits` and needs the amended schema) **and BEFORE 8 (Revision 2; formerly ∥ 8). The two are file-disjoint**: 7A owns the `api/admin/orgs/[id]/stream-credits/**` route + test, `admin-stream-credits.ts` + test, the panel + test, `admin/orgs/[id]/page.tsx`, `walkthrough/stream-credits-admin.spec.ts`, `e2e-ci-wiring.test.ts` and `scripts/smoke.ts`; 8 owns the pack catalogue, relay checkout, its billing route, `billing-checkout-client.ts`, `billing-events.ts`, the Stripe script and their tests (`relay-checkout.test.ts`, `billing-checkout-client.test.ts`, `stream-credits-webhook.test.ts`) — no shared path. 7A's e2e/smoke steps rebuild `rly`, which 8's steps do not use, so the two do not share a running server either; 7A's two shared-literal files (`e2e-ci-wiring.test.ts`, `smoke.ts`) are next touched by 15/16, which run lanes later. B touches `billing-events.ts` and `billing-checkout-client.ts`, which A never touches |
 | C | 9, 10, 11, 12 | after A and B; sequential (10 imports 9's schemas and 2A/2B's domain; 11 imports 10; 12 imports 10 and 2B's `retentionPlan`) |
 | D | 13, 14 | after C; 13 then 14 (14 imports 13's view model) |
 | E | 15, 16, 17 | after D; 15 ∥ 16 (disjoint: `e2e/**` vs `scripts/smoke.ts`); 17 last |
@@ -6255,7 +6270,7 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 }
 ```
 
-- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=<scratchpad>/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → **`282 0 3`**: 282 total, 0 failed, and 3 PENDING — the three `it`s of `fly-client.live.test.ts`, which `describe.skipIf` skips without `RELAY_LIVE_FLY=1`. A pending count of 0 here means that file failed to collect rather than skipping; a total below 282 means a suite did. The 282 is the sum of what each task's own run step states: the relay tree stood at **214** after Task 2C (Task 1 `12` + Task 2 `25` + the domain's `177` — and note the domain's 177 is far above its count of literal `it(` lines, because `runner.test.ts` writes `it(` INSIDE a `for` over the table, so one line yields 96 cell tests; a literal-line census of that file is a floor, not its total). This lane then adds Task 3 `13`, Task 4 `12`, Task 5A `19` (the fake-HTTP file; its live file's 3 are ON TOP, and pending), Task 5 `13` and Task 6 `8` — 214 + 13 + 12 + 19 + 3 + 13 + 8. Paste the per-file lines, never a bare total. Then run **the P3 probe as defined once in the Global Constraints** (do not retype its grep here) and apply the expectation stated there: zero lines naming any file this wave adds or edits — `tokens.ts` included, which is what the guard `it` above pins from the other side. Pre-existing hits listed in `_STATE.md` FT0-2 are not R1's and do not fail this step.
+- [ ] **Step 4: Run — expect `8 0`.** Then the whole relay directory with the DB URL: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay --reporter=json --outputFile=<scratchpad>/r1/laneA.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/laneA.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests)"` → **`N 0 3`**: N total, 0 failed, and 3 PENDING — the three `it`s of `fly-client.live.test.ts`, which `describe.skipIf` skips without `RELAY_LIVE_FLY=1`. A pending count of 0 here means that file failed to collect rather than skipping; a total below N means a suite did. **N is baseline + this lane's additions, computed at run time from recorded numbers, never typed here** (Revision 2, review M7): the baseline is the relay tree's total as `_STATE.md` recorded it when Task 2C closed (read it there, or re-run Task 2C's own run step; the T1/T2 fix rounds have already moved it); add this lane's run-step counts, Task 3 `13` + Task 4 `12` + Task 5A `19` (the fake-HTTP file; its live file's 3 are ON TOP, and pending) + `3` + Task 5 `13` + Task 6 `8` = **+68**; and add **+3** if Task 7 has landed before this run (its Step 0a takes `migration-shape.test.ts` from 13 to 16, and lanes A and B interleave). Paste the arithmetic with its sources AND the per-file lines, never a bare total. (For scale only: at plan time the baseline was 214, Task 1 `12` + Task 2 `25` + the domain's `177`, so N read 282. The domain's 177 is far above its count of literal `it(` lines, because `runner.test.ts` writes `it(` INSIDE a `for` over the table, so one line yields 96 cell tests; a literal-line census of that file is a floor, not its total.) Then run **the P3 probe as defined once in the Global Constraints** (do not retype its grep here) and apply the expectation stated there: zero lines naming any file this wave adds or edits — `tokens.ts` included, which is what the guard `it` above pins from the other side. Pre-existing hits listed in `_STATE.md` FT0-2 are not R1's and do not fail this step.
 
 - [ ] **Step 5: Lane A review.** Dispatch `reviewer` (`model: opus`) on the lane's diff, handing it every mutant killer this lane recorded rather than a fixed list — by task: Task 2 Step 8h's seven, 2A's five, 2B's twelve, 2C's twenty-seven, Task 3's three, Task 4's six, Task 5A's eight (plus the optional attempt-zero ninth), Task 5's six, and Task 6's five `r4` branches (tamper, expiry, sid, scope, secret). Report for commit: `feat(streaming): relay job/page tokens on AUTH_SECRET`.
 
@@ -6263,58 +6278,334 @@ export function relayTokenExpiry(from: Date, maxDurationMinutes: number): Date {
 
 ### Task 7: The credits ledger usecases (lane B)
 
+**Revision for Task 7A (the orchestrator's rulings, 2026-09-16, recorded in `progress.md`). This task has not run yet, so its files produce what 7A consumes.**
+- **Idempotency and audit: parity with the donor, both REQUIRED.** Staff writes require an `idempotencyKey`. A replay returns `applied: false` and writes no second ledger row and no second audit row. The audit row goes into `staff_audit_log` inside the ledger transaction.
+- **Reversal: a new REVOKE action.** It writes a negative row. A revoke larger than the balance is a **422** `insufficient_credits` and writes no row.
+- **Double refund: a session-linked refund is capped.** Refunds linked to a session may not exceed that session's consumed count; an over-cap refund is a **422** `refund_exceeds_consumed` and writes no row. An unlinked (goodwill) refund stays allowed.
+- **Schema: an AMEND to the unmerged V408, never a forward delta.**
+
+**Revision 2 (the orchestrator's rulings on the plan review, 2026-09-16, `progress.md` "PLAN 7/7A REVIEW"; review `plan-7A-review.md`):**
+- **Refusal status 422, matching the donor** (`api/admin/orgs/[id]/credits/route.ts:70-72`, `InsufficientBalanceError` → 422): both `insufficient_credits` and `refund_exceeds_consumed`. 409 is kept for the reused key alone.
+- **The MONEY lock.** Every ledger writer here (purchase, consume, grant, refund, revoke) takes `pg_advisory_xact_lock(hashtext('stream-credits-org:' || orgId))` as the first statement of its own work. This is `adminAdjust`'s idiom (`lib/credits.ts:1482`) in a relay namespace. It replaces `select … for update` over the org's rows, which locks NOTHING on an empty ledger, so the empty-ledger gap Revision 1 recorded is CLOSED rather than recorded.
+- **A reused key.** A key whose stored row differs from the request in any of (org, reason, signed delta, session) is a **409 `idempotency_key_reused`**, writes no row and reveals nothing about the stored row. Only an EXACT replay answers `applied: false`. The comparison runs under the lock and BEFORE the floor and the cap. **Deliberate deviation from the donor**, which answers `applied: false` to any replay of a key: a silent `applied: false` on a DIFFERENT request hides a staff mistake (a retyped amount reads as "done" when nothing matching was written). For the org to be part of the tuple the key has to be looked up table-wide, so the V408 index is table-wide too, which is the donor's own scope (`ai_credit_ledger.idempotency_key text unique`, `V320__ai_credit_ledger.sql:37`).
+- **G2 carry.** `consumeForSession` accepts `fixtureId: string | null` (Task 2A made `Session.fixtureId` nullable; Task 10 passes `before.fixtureId`). A fixture-less session has no reuse window: it consumes every time.
+
 **Files:**
+- Modify: `db/migration/deltas/V408__stream_sessions.sql`. This is an AMEND: the migration is committed on `feat/stream-relay` but is merged nowhere (the branch is unpushed, so no shared database holds V408), and a forward delta would be a second migration for one unshipped table. It makes two changes to `org_stream_credits`, one to `fixture_stream_sessions` and one to the header, all in ONE amend (Step 0c), so every environment is recreated once:
+  - `fixture_stream_sessions.max_duration_minutes` gains `check (max_duration_minutes > 0)` (Revision 2 addendum; Task 2B review M4: `domain/expiry.ts` `deadlineOf` reads a stored 0 as 300 through `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a 0 silently becomes a five-hour booking)
+  - the `reason` CHECK gains `'revoke'`
+  - a new `idempotency_key text null` column, with `create unique index org_stream_credits_idempotency_key on org_stream_credits (idempotency_key) where idempotency_key is not null`. It is TABLE-wide, the donor's scope (`V320__ai_credit_ledger.sql:37`), so a key can be compared against its stored org.
+  - the header's FS10 paragraph (`V408:67-72`), which says consume rows are written under `select … for update`, is rewritten for the org advisory lock (review I4)
+- Modify (Test): `apps/web/src/server/relay/__tests__/migration-shape.test.ts`. It gains three `it`s, each with its accepted and refused twins, taking it from **13 to 16** (13 was read at `56159fc41`, and Step 0a re-counts it).
+- Create: `apps/web/src/server/relay/__tests__/_session-rig.ts`. This is a NON-test module (the `_stream-migration.ts` precedent, C20). It gives DB tests OUTSIDE `server/relay/**` a real org, a real users row and real sessions: this task's `stream-credits.test.ts`, then Task 7A's tests. It lives inside the boundary because a session needs a target, `org_stream_targets.rtmp_enc` is NOT NULL, and `enc-boundary.test.ts` claim 2 refuses that column NAME in any file outside `server/relay/**`, tests included (`enc-boundary.test.ts:43-50`). That closes carry G2 (`progress.md`: "Task 7's test names `rtmp_enc` before Task 9's `__tests__` exemption"). It also closes this task's `auth.userId!` rows, since `seedOrg`'s `userId` is null (`_rig.ts:37`) and `staff_audit_log.actor_id` is `not null references users(id)` (`V103__admin.sql:16`). It also fills the NOT NULL session snapshot columns the old inline rig omitted.
 - Create: `apps/web/src/server/usecases/stream-credits.ts`
 - Create (Test): `apps/web/src/server/usecases/__tests__/stream-credits.test.ts`
+- Modify: `apps/web/src/server/usecases/admin-adjustments-log.ts`. `ADJUSTMENT_ACTIONS` gains `...STREAM_CREDIT_AUDIT_ACTIONS`, spread the way `PASS_CREDIT_RESOLVE_ACTION` is. `ADJUSTMENT_CATEGORY` gains `"credits"` ×3. `ADJUSTMENT_REVERSIBLE` gains grant `true`, refund `true` (a revoke compensates both) and revoke `false` (the compensating action, like `addon_revoke`). Why it is needed: `adminAdjust` types its audit action as `AdjustmentAction` because "an action outside the /admin allowlist produces an adjustment that is audited and unreadable" (`lib/credits.ts:1466-1474`).
+- Modify: `apps/web/src/app/admin/orgs/[id]/adjustment-labels.ts`: three labels, "Match credits granted" / "Match credits refunded" / "Match credits revoked" (English-only, per that file's own header).
 
 **Interfaces:**
-- Consumes: `sql`, `Tx` from `@/lib/db`; `HttpError` from `@/lib/errors`; `debit`, `credit`, `withinReuseWindow`, `InsufficientCredits` from `@/server/relay/domain/credits` (Task 2B — the arithmetic and the FS10 floor live there; this file owns the SQL and the lock); Task 1's tables. Donor READ, never edited: `lib/credits.ts` `balance` (= `sum(delta)`).
+- Consumes:
+  - `sql` and `Tx` from `@/lib/db`; `HttpError` from `@/lib/errors`.
+  - `debit`, `credit`, `withinReuseWindow` and `InsufficientCredits` from `@/server/relay/domain/credits` (Task 2B). The arithmetic and the FS10 floor live there; this file owns the SQL and the lock.
+  - Task 1's tables, as amended in Step 0c.
+  - `import type { AdjustmentAction }` from `@/server/usecases/admin-adjustments-log`. The import is TYPE-ONLY, which is `lib/credits.ts:29-34`'s reason: a value import from that module would be a runtime cycle, because it spreads this file's constant.
+  - Donors are READ and never edited: `lib/credits.ts` `balance` (= `sum(delta)`), and `adminAdjust` (`lib/credits.ts:1457-1544`). From `adminAdjust` this task copies four things: its advisory transaction lock taken first (`:1482`, `pg_advisory_xact_lock(hashtext('ai-credit-wallet:' || walletId))`, here in a `stream-credits-org:` namespace), its idempotency key checked under the lock before anything else (`:1484-1489`, table-wide), its in-transaction audit statement (the closure `auditApplied`, `:1490-1497`), and its "audit only on an applied write" rule. It departs from `adminAdjust` in one respect: a reused key with different values is a 409 (Revision 2).
+  - **There is no reusable audit helper.** `auditApplied` is a closure local to `adminAdjust`, and `adminAdjust` itself is bound to `ai_credit_ledger` and a wallet advisory lock, which Global Constraints forbids editing. `logStaffAction` (`lib/admin.ts:95-107`) runs on its own `sql` connection, OUTSIDE any transaction. So this file writes `auditApplied`'s exact statement inside its own `sql.begin`.
 - Produces:
   - `export class NoCreditsError extends HttpError` — `status 402`, `code "no_credits"`, `extra { featureKey: "streaming.relay" }`
   - `export async function creditBalance(exec: Tx | typeof sql, orgId: string): Promise<number>`
-  - `export async function consumeForSession(tx: Tx, args: { orgId: string; fixtureId: string; sessionId: string }, now?: Date): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }>` — called ONLY inside the `live` transition's transaction (Task 10, as the `consume_credit` effect); `now` is injected so the 24 h rule is the pure `withinReuseWindow`. `ledgerId` is the consume row's id, which Task 10 writes to `fixture_stream_sessions.credit_ledger_id`; it is **null exactly when `consumed` is false**, because the 24 h reuse rule wrote no row
+  - `export function orgMoneyLockKey(orgId: string): string` → `"stream-credits-org:" + orgId.toLowerCase()` (Revision 3, N1: one lock per org whatever the case of the id; `z.uuid()` accepts upper case), and `export async function lockOrg(tx: Tx, orgId: string): Promise<void>` → `select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(orgId)}))`. Every writer below calls `lockOrg` before any read. Both are exported so the concurrency tests can HOLD the lock and make writers queue. `hashtext` is 32-bit, so two keys can collide; a collision only serialises two unrelated writers, which is safe (N4).
+    - **Lock order (Revision 3, N2).** Two locks are taken AFTER the org lock:
+      - V111's audit-chain lock (`hashtext('audit_log_chain')`, the `staff_audit_log` insert trigger). Nothing takes it before an org lock.
+      - A linked refund's insert takes FOR KEY SHARE on its `fixture_stream_sessions` row (the `session_id` FK). Task 10's live transition takes the OPPOSITE order: it holds that row FOR UPDATE, then `consumeForSession` takes the org lock.
+    - **Why that opposite order is safe:** a credit is consumed ONCE, at warming → live (`domain/session.ts` emits `consume_credit` only on that transition, at `:162` and `:210`, and a live session never re-enters warming). A session inside that transaction therefore has no committed consume row, and the refund cap refuses a refund linked to it BEFORE the insert. Moving the cap after the insert, or adding a second consume path, would make it a reachable 40P01. The `staffRow` cap comment says so.
+    - `consumeForSession` runs inside Task 10's transaction, whose own earlier statements are Task 10's; within `consumeForSession` the lock precedes every read.
+  - `export async function consumeForSession(tx: Tx, args: { orgId: string; fixtureId: string | null; sessionId: string }, now?: Date): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }>`
+    - Called ONLY inside the `live` transition's transaction (Task 10, as the `consume_credit` effect).
+    - `fixtureId` is NULLABLE (G2): Task 2A's `Session.fixtureId` is `string | null`, because V408's `fixture_stream_sessions.fixture_id` is `on delete set null`, and Task 10 passes `before.fixtureId`. With `null` there is no fixture to reuse a window on, so the 24 h lookup is skipped and the session consumes.
+    - `now` is injected so the 24 h rule is the pure `withinReuseWindow`.
+    - `ledgerId` is the consume row's id, which Task 10 writes to `fixture_stream_sessions.credit_ledger_id`. It is **null exactly when `consumed` is false**, because the 24 h reuse rule wrote no row.
   - `export async function recordPurchase(args: { orgId: string; delta: number; stripeEventId: string; note?: string; link?: PurchaseLink }): Promise<{ id: string; applied: boolean; balance: number }>` — `link` is ruling 13 item 6's Stripe link (ids and amounts, never card data); Task 8's webhook branch passes it
   - `export interface PurchaseLink { checkoutSessionId: string | null; paymentIntentId: string | null; pack: string | null; amountMinor: number | null; currency: string | null }` — `pack` carries the pack's Stripe **lookup key** and is stored in the `pack_key` column
-  - `export async function grantCredits(args: { orgId: string; delta: number; createdBy: string; note: string }): Promise<{ id: string; balance: number }>` (NEW — P9: `admin-addons.ts` has no refund neighbour)
-  - `export async function refundCredits(args: { orgId: string; delta: number; sessionId: string | null; createdBy: string; note: string }): Promise<{ id: string; balance: number }>`
+  - `export const STREAM_CREDIT_AUDIT_ACTIONS = ["stream_credit_grant", "stream_credit_refund", "stream_credit_revoke"] as const` — the `staff_audit_log.action` values, underscored and never dotted (`admin-audit-actor-truth.test.ts` reads a dotted literal beside a direct insert as a customer self-service action)
+  - `export interface StaffCreditArgs { orgId: string; delta: number; createdBy: string; note: string; idempotencyKey: string }` — `delta` is a positive integer for all three kinds; `createdBy` is the staff user and becomes BOTH `org_stream_credits.created_by` and `staff_audit_log.actor_id`
+  - `export interface StaffCreditResult { id: string; balance: number; applied: boolean }` — on an EXACT replay (the stored row's org, reason, signed delta and session all equal the request's; the note is not compared): the ORIGINAL row's `id`, the current balance, `applied: false`. A key whose stored row differs in any of the four throws `HttpError(409, …, "idempotency_key_reused")`, writes nothing, and the message names nothing about the stored row.
+  - `export async function grantCredits(args: StaffCreditArgs): Promise<StaffCreditResult>` (NEW — P9: `admin-addons.ts` has no refund neighbour)
+  - `export async function refundCredits(args: StaffCreditArgs & { sessionId: string | null }): Promise<StaffCreditResult>`. With a `sessionId`, the refunds already linked to that session plus `delta` may not exceed the session's consumed count (`-sum(delta)` of its `consume` rows in THIS org), checked under the org lock. Otherwise it throws `HttpError(422, …, "refund_exceeds_consumed")`. With `null`, the refund is uncapped (goodwill).
+  - `export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditResult>`. Writes `delta = -args.delta` and `reason = 'revoke'`. The floor is `debit` (FS10 in memory), backed by the `balance_after >= 0` CHECK. A revoke above the balance throws `HttpError(422, …, "insufficient_credits")`, and no row is written.
+  - **Order inside every staff write:** `lockOrg` → balance → the KEY (exact replay → `applied: false`; different → 409) → the revoke floor or the refund cap (422) → ONE row → ONE audit row. Outside the transaction (Revision 3, N3): a `23505` on `org_stream_credits_idempotency_key` → the same 409 `idempotency_key_reused`. The lock is per org and the index is table-wide, so one key racing on two DIFFERENT orgs is not serialised; its loser reaches the insert and the index refuses it.
+  - **Audit, on every applied staff write, inside the ledger transaction:**
+    - `insert into staff_audit_log (actor_id, action, target_type, target_id, detail)` with `actor_id = createdBy`, the kind's action, `target_type 'org'` and `target_id = orgId`. `target_id` is TEXT, so a caller passes the org's STORED (lower-case) id — Task 7A's route passes `org.id` from its own lookup, never the URL's spelling (Revision 3, N1).
+    - `detail` is `{ delta (signed), reason: note, session_id, ledger_id, balance_after }`. `reason` is the key `adjustmentsForOrg`'s `toEntry` renders as the log's subject.
+    - A replay and every refusal write none.
+    - **Deviation, recorded:** the functions take NO caller-supplied `audit` object, unlike the donor's optional `opts.audit` (`lib/credits.ts:1474`). The donor needs one because it cannot know `reason_code` or the org behind a group wallet. Here every audit field is already an argument, and a caller-supplied `action` is the one way a grant could be audited as a revoke. The audit is therefore unconditional, which is stricter than "required".
 
-**Pattern (§9a):** Money is ledger rows in the same transaction (`org_stream_credits`; `ai_credit_ledger` + `lib/credits.ts`); One authority per fact (`creditBalance` is the only balance; `balance_after` is a snapshot and the guard, never read as the balance).
-**Checklist rows satisfied:** "Empty-set case must be checked explicitly" (first test); "Include ≥ 1 differential case" (24 h vs 25 h); "Mutate the MONEY path specifically" (m2, m3, m5 each with a named killer here); "Negative assertion needs its positive pair" (balance 0 refused beside balance 1 consumed).
+**Pattern (§9a):** Money is ledger rows in the same transaction (`org_stream_credits`; `ai_credit_ledger` + `lib/credits.ts`); One authority per fact (`creditBalance` is the only balance; `balance_after` is a snapshot and the guard, never read as the balance); an advisory transaction lock per money owner, taken first (`lib/credits.ts:1482`); Idempotency key checked under the lock before any guard (`lib/credits.ts` `adminAdjust`).
+**Checklist rows satisfied:**
+- "Empty-set case must be checked explicitly": the first test, and the first-writes race runs on an EMPTY ledger by construction.
+- "Include ≥ 1 differential case": 24 h vs 25 h; a replayed linked refund, where the right answer (`applied: false`) differs from the refused one (422); an exact replay (`applied: false`) beside a reused key (409); a fixture-less session consuming twice where a fixture's second start consumes nothing.
+- "Mutate the MONEY path specifically" and "Report mutant KILLER LIST": m2, m3, m5–m22, each with a named killer here.
+- "Negative assertion needs its positive pair": balance 0 refused beside balance 1 consumed; revoke 1 of 0 refused beside revoke 1 of 1; a second linked refund refused beside the first accepted and an unlinked one accepted; each reused-key row refused beside the exact replay accepted (and a different NOTE alone is still the same adjustment).
+- "Every guard needs a case that DEFEATS it": the lock (per call site: m2, m14, m15), the lock key's case-folding (m21), the key check, each member of the reused-key tuple, the cross-org key race's 23505 → 409 (m22), the floor, the cap and the audit, one mutant each.
+- "New write path — diff it against the nearest existing analogous path": `adminAdjust`'s lock-first, key-before-guard order and audit-only-on-applied are copied, and its table-wide (globally unique, `V320:37`) key scope is kept. It deviates in one respect: a reused key with different values is refused.
 
-- [ ] **Step 1: Write the failing test.** Create `apps/web/src/server/usecases/__tests__/stream-credits.test.ts`:
+- [ ] **Step 0a: Write the three failing shape cases.** Re-count first with `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -c "^  it(" apps/web/src/server/relay/__tests__/migration-shape.test.ts`, which should print 13. If it prints a different number, every "16" below is that number + 3. Then append inside the `describe`, after the existing `org_stream_credits purchase link` case, using that file's own `rig()`:
 
 ```ts
-// The money ledger (design §5.2, §5.4). Real Postgres; skipped without
-// DATABASE_URL. Killers recorded for the PR's mutant table:
-//   m2 delete `for update`     → "two concurrent consumers" below
-//   m3 drop stripe_event_id unique (or the on-conflict) → "replayed purchase"
-//   m5 delete the 24 h reuse rule → "restart within 24 h" (and its 25 h twin)
-// The race uses the registration-concurrency.test.ts §5 idiom: two REAL
-// calls, the first parked on a promise the test controls AFTER it holds the
-// lock, the second started only then and observed BLOCKED in pg_stat_activity
-// before the first is released — no sleep-guessed timing.
+  it("org_stream_credits reason: 'revoke' (a negative staff row) lands; an unknown reason is still refused (the Task 7A amend)", async () => {
+    const r = await rig();
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, 3, 'grant', 3)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'revoke', 2)`;
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.orgId}, -1, 'reverse', 1)`,
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("org_stream_credits idempotency_key: unique across the TABLE (the donor's V320 scope) — a second row with one key is refused in the same org AND in another org; a different key, and any number of NULL keys, land (the Task 7A amend)", async () => {
+    const a = await rig();
+    const b = await rig();
+    const key = `idem-shape-${a.orgId}`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 1, ${key})`;
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${a.orgId}, 1, 'grant', 2, ${key})`,
+    ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key})`,
+    ).rejects.toMatchObject({ code: "23505" });
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key) values (${b.orgId}, 1, 'grant', 1, ${key + "-b"})`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 2)`;
+    await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${a.orgId}, 1, 'grant', 3)`;
+  });
+
+  it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const minutes = async () =>
+      (await sql<{ max_duration_minutes: number }[]>`
+        select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
+    expect(await minutes()).toBe(300);
+    await expect(
+      sql`update fixture_stream_sessions set max_duration_minutes = 0 where id = ${sid}`,
+    ).rejects.toMatchObject({ code: "23514" });
+    expect(await minutes()).toBe(300);
+    await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
+    expect(await minutes()).toBe(1);
+  });
+```
+
+- [ ] **Step 0b: Run — expect red for the right reasons (on the UN-amended `rly` schema).**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/relay/__tests__/migration-shape.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-shape-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-shape-red.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title.slice(0,60),'|',(a.failureMessages[0]||'').split('\n')[0].slice(0,140))"`
+  Expect `16 3 0`:
+  - the `reason` case fails on the `'revoke'` insert with `23514` (`org_stream_credits_reason_check`)
+  - the `idempotency_key` case fails with `column "idempotency_key" … does not exist` (`42703`)
+  - the `max_duration_minutes` case fails at its `rejects.toMatchObject`: the update to 0 RESOLVES, because there is no CHECK yet
+  
+  Any other message, or a total other than 16, means the red is for the wrong reason: stop and read it.
+
+- [ ] **Step 0c: Amend V408, then RECREATE `rly`'s database.** First, in `db/migration/deltas/V408__stream_sessions.sql`'s `create table fixture_stream_sessions`, replace the line `  max_duration_minutes integer not null default 300,` with the lines below. **Why:** `domain/expiry.ts`'s `deadlineOf` computes `s.maxDurationMinutes || MAX_DURATION_MINUTES`, so a stored 0 silently falls back to 300 (a five-hour booking); the column refuses 0 instead (Task 2B review M4, orchestrator ruling 2026-09-16), and it rides this amend so `rly` is recreated once.
+
+```sql
+  -- > 0: domain/expiry.ts deadlineOf reads `maxDurationMinutes || MAX_DURATION_MINUTES`,
+  -- so a stored 0 would silently become the 300-minute default. Refused here instead.
+  max_duration_minutes integer not null default 300 check (max_duration_minutes > 0),
+```
+
+  Then, in the same file's `create table org_stream_credits`:
+  - change `check (reason in ('purchase','consume','refund','grant','expire'))` to `check (reason in ('purchase','consume','refund','grant','revoke','expire'))`
+  - add, after `created_by      uuid null,`:
+
+```sql
+  -- Staff adjustments (Task 7A, orchestrator rulings 2026-09-16 — donor parity with
+  -- ai_credit_ledger.idempotency_key): the /admin panel mints one key per submission
+  -- and keeps it across retries; stream-credits.ts looks it up under the org's money
+  -- lock. An EXACT replay writes nothing; the same key with a different org, reason,
+  -- delta or session is refused (409 idempotency_key_reused). Null on purchase
+  -- (stripe_event_id is that row's key) and consume rows.
+  idempotency_key text null,
+```
+
+  and, directly after `create index on org_stream_credits (stripe_checkout_session_id) where stripe_checkout_session_id is not null;`:
+
+```sql
+-- One key per TABLE, the donor's scope (V320: ai_credit_ledger.idempotency_key text
+-- unique): the writer compares a stored row's org with the request's, which needs the
+-- key to name at most one row anywhere. A NULL key (every non-staff row) is outside the index.
+create unique index org_stream_credits_idempotency_key
+  on org_stream_credits (idempotency_key) where idempotency_key is not null;
+```
+
+  and, in the same amend, replace the header's FS10 paragraph (review I4; it names the `for update` lock this revision removes, and a second amend later would force a second recreate everywhere). Replace these six lines:
+
+```sql
+-- FS10 — RULED 2026-09-14 ("all good"): balance_after with its `>= 0` CHECK is
+-- §5.2's own DDL, built verbatim and KEPT. Consume rows are written under
+-- `select … for update` (stream-credits.ts) after the pure `debit` in
+-- server/relay/domain/credits.ts refused a negative in memory, so the CHECK is
+-- the third floor under the same lock — the one a bug in the other two cannot
+-- talk past.
+```
+
+  with:
+
+```sql
+-- FS10 — RULED 2026-09-14 ("all good"): balance_after with its `>= 0` CHECK is
+-- §5.2's own DDL, built verbatim and KEPT. Every org_stream_credits write
+-- (purchase, consume, grant, refund, revoke) first takes the org's MONEY lock,
+-- pg_advisory_xact_lock(hashtext('stream-credits-org:' || org_id))
+-- (stream-credits.ts lockOrg), which also serialises an EMPTY ledger's first
+-- writes, where `select … for update` over the org's rows would lock nothing.
+-- A debit (consume, revoke) runs the pure `debit` in
+-- server/relay/domain/credits.ts, which refuses a negative in memory, so the
+-- CHECK is the third floor under the same lock — the one a bug in the other two
+-- cannot talk past.
+```
+
+  **Why recreate:** Flyway checksums every applied migration, so `db:apply` on a database that already ran the old V408 refuses the edited file. A `flyway repair` would only rewrite the stored checksum and would NOT add the column, so it is not a fix. **STOP gate, before any command:** lane A runs in parallel against `rly`, and dropping its database under a running suite turns that suite red for an environmental reason. Ask the orchestrator to confirm that NO other agent is running a DB-backed command against `rly`, and wait for that confirmation. Then:
+  `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh env --label rly` (read the Postgres port out of its `DATABASE_URL`), then `dropdb --force -h 127.0.0.1 -p <rly pg port> -U postgres seazn_rly; echo "EXIT=$?"` → `EXIT=0` (`--force` ends the rly server's pooled connections, which reconnect on next use), then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label rly --server > <scratchpad>/r1/t7-recreate.log 2>&1; echo "EXIT=$?"; grep -a -E "schema ready|sync:sports|already up" <scratchpad>/r1/t7-recreate.log`
+  Expect `EXIT=0`, `schema ready: now at version v408`, the `sync:sports` line, and "postgres already up" (same port, same `DATABASE_URL`). Confirm `show data_directory` still names `rly`. The recreated database holds no rows from earlier tasks, and every DB-backed test here seeds its own.
+  Then re-run Step 0b's command to `t7-shape.json` → `16 0 0`. Then run Task 1 Step 5's header guard (`migration-header-truth.test.ts` → `numFailedTests 0`) and `check-rls.ts` (no stream table named as unguarded).
+
+- [ ] **Step 1: Write the rig and the failing test.** Create `apps/web/src/server/relay/__tests__/_session-rig.ts`:
+
+```ts
+// server/relay/__tests__/_session-rig.ts — a REAL org, a REAL users row and REAL stream
+// sessions for DB-backed tests OUTSIDE server/relay/** (Task 7's stream-credits.test.ts,
+// Task 7A's admin read and route tests). NOT a test file (the _stream-migration.ts
+// precedent: importing a .test file re-registers its tests, C20).
+// Why it lives INSIDE the boundary: a session needs a target, org_stream_targets.rtmp_enc is
+// NOT NULL, and enc-boundary.test.ts claim 2 refuses that column's NAME in any file outside
+// server/relay/** — tests included. Session shape: migration-shape.test.ts's insertSession —
+// the snapshot columns read from the fixture's own rows, never typed.
+import { randomUUID } from "node:crypto";
+import { sql } from "@/lib/db";
+import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+
+/** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
+ *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
+export async function rigUser(): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`stream-rig-${randomUUID().slice(0, 8)}@test.local`}, 'Stream Rig', true)
+    returning id`;
+  return id;
+}
+
+export interface StreamRig {
+  orgId: string;
+  /** The users row that authors staff writes and sessions. */
+  createdBy: string;
+  fixtureIds: string[];
+  /** A session on `fixtureId` in `state` (default `warming`), returning its id. */
+  session(fixtureId: string, state?: string): Promise<string>;
+}
+
+export async function streamRig(opts: { fixtures?: 1 | 2; createdBy?: string } = {}): Promise<StreamRig> {
+  const { auth } = await seedOrg();
+  const { fixtureIds } = await startedDivisionWithFixture(auth, opts.fixtures === 2 ? { fixtures: 2 } : {});
+  const createdBy = opts.createdBy ?? (await rigUser());
+  const [target] = await sql<{ id: string }[]>`
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc)
+    values (${auth.orgId}, 'youtube', 'Rig', ${Buffer.from("not-a-real-envelope")}) returning id`;
+  const session = async (fixtureId: string, state = "warming") => {
+    const [s] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select f.id, ${auth.orgId}, 'passthrough', ${state}, ${target!.id}, ${createdBy},
+             d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id
+       where f.id = ${fixtureId}
+      returning id`;
+    return s!.id;
+  };
+  return { orgId: auth.orgId, createdBy, fixtureIds, session };
+}
+```
+
+  Then create `apps/web/src/server/usecases/__tests__/stream-credits.test.ts`:
+
+```ts
+// The money ledger (design §5.2, §5.4) and the staff writers (Task 7A rulings). Real
+// Postgres; skipped without DATABASE_URL. Killers recorded for the PR's mutant table:
+//   m2  delete `await lockOrg(tx, args.orgId)` in consumeForSession → "two concurrent consumers"
+//   m3  drop stripe_event_id unique (or the on-conflict)      → "a replayed purchase"
+//   m5  delete the 24 h reuse rule                            → "a restart on the same fixture within 24 h" (and its 25 h half)
+//   m6  delete the whole `if (prior) { … }` block (THE key check) → "a replayed grant" (the unique index's 23505, answered as 409)
+//   m7  revoke: `debit(balance, args.delta)` → `{ balanceAfter: balance - args.delta }` → "revoke" (23514, not 422)
+//   m8  delete the linked-refund cap `if … throw`             → "a session-linked refund is capped"
+//   m9  cap ignores prior refunds: `s!.refunded + args.delta > s!.consumed` → `args.delta > s!.consumed` → the same test
+//   m10 move the key lookup and its `if (prior) { … }` BELOW the guard block → "a replayed session-linked refund"
+//   m11 delete the staff_audit_log insert                     → "a replayed grant" (audit count) and the read-back in "revoke"
+//   m12 write an audit row on the replay path too             → "a replayed grant" (2 audit rows)
+//   m13 drop `prior.org_id === args.orgId.toLowerCase() &&` from `same` → "a key reused for a DIFFERENT adjustment" (another org's row answers applied false)
+//   m14 delete `await lockOrg(tx, args.orgId)` in staffRow    → "first-ever writes on an EMPTY ledger" (1 waiter, not 3; the same-key pair both miss the key, one rejects)
+//   m15 delete `await lockOrg(tx, args.orgId)` in recordPurchase → "first-ever writes on an EMPTY ledger" (2 waiters, not 3)
+//   m16 delete `if (!same) throw …` (the reused-key refusal)  → "a key reused for a DIFFERENT adjustment" (every row answers applied false)
+//   m17 drop `prior.delta === delta &&` from `same`           → "a key reused for a DIFFERENT adjustment" (the different-delta row)
+//   m18 drop `prior.reason === kind &&` from `same`           → "a key reused for a DIFFERENT adjustment" (the different-kind row)
+//   m19 drop `&& prior.session_id === sessionId` from `same`  → "a key reused for a DIFFERENT adjustment" (the different-session row)
+//   m20 the null-fixture skip → `s.fixture_id is not distinct from ${args.fixtureId}` → "a session whose fixture is GONE"
+//   m21 drop `.toLowerCase()` in orgMoneyLockKey             → "first-ever writes on an EMPTY ledger" (the upper/lower key assertion; the upper-case hold queues nobody)
+//   m22 delete staffRow's `.catch` (23505 on the key index → 409) → "the same key on two DIFFERENT orgs at once" (a raw 23505)
+// The races use the registration-concurrency.test.ts idiom: REAL calls, the lock held by
+// a transaction the test controls, and every waiter observed BLOCKED before release —
+// here in pg_locks (not granted), scoped to waiters blocked BY the holder's own backend
+// pid (pg_blocking_pids), so no parallel worker's lock is ever counted and no sleep
+// guesses the timing. The money-lock races wait on an `advisory` lock; the cross-org key
+// race waits on the other writer's `transactionid` (a unique-index insert conflict).
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { adjustmentsForOrg } from "../admin-adjustments-log";
 import {
-  NoCreditsError, consumeForSession, creditBalance, grantCredits, recordPurchase, refundCredits,
+  NoCreditsError, consumeForSession, creditBalance, grantCredits, lockOrg, orgMoneyLockKey, recordPurchase, refundCredits, revokeCredits,
 } from "../stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
 async function rig(fixtures: 1 | 2 = 1) {
-  const { auth } = await seedOrg();
-  const d = await startedDivisionWithFixture(auth, fixtures === 2 ? { fixtures: 2 } : {});
-  const [target] = await sql<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-    values (${auth.orgId}, 'youtube', 'T', ${Buffer.from("x")}) returning id`;
-  const session = async (fixtureId: string, state = "warming") => {
-    const [s] = await sql<{ id: string }[]>`
-      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by)
-      values (${fixtureId}, ${auth.orgId}, 'passthrough', ${state}, ${target!.id}, ${auth.userId!}) returning id`;
-    return s!.id;
-  };
-  return { orgId: auth.orgId, userId: auth.userId!, fixtureIds: d.fixtureIds, session };
+  const r = await streamRig({ fixtures });
+  return { orgId: r.orgId, userId: r.createdBy, fixtureIds: r.fixtureIds, session: r.session };
+}
+
+/** A fresh key per staff write — what the panel mints per submission. */
+const key = () => `idem-${randomUUID()}`;
+
+const auditRows = (orgId: string) =>
+  sql<{ actor_id: string; action: string; target_type: string; detail: Record<string, unknown> }[]>`
+    select actor_id, action, target_type, detail from staff_audit_log where target_id = ${orgId} order by created_at`;
+
+/** Advisory-lock waiters blocked BY one backend (the holder's pid): pg_locks, never
+ *  pg_stat_activity's query text (an advisory wait's text names no table). Bounded poll
+ *  that returns what it last saw: on a mutant fewer writers queue, the poll times out, and
+ *  the caller's exact-count assertion is what goes red. */
+async function advisoryWaitersBehind(holderPid: number, want: number, timeoutMs = 5000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let seen = 0;
+  for (;;) {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks
+       where locktype = 'advisory' and not granted and ${holderPid} = any(pg_blocking_pids(pid))`;
+    seen = row!.n;
+    if (seen >= want || Date.now() >= deadline) return seen;
+    await new Promise((res) => setTimeout(res, 25));
+  }
+}
+
+/** The same bounded poll for a waiter on another transaction's uncommitted row: an insert that
+ *  conflicts with an uncommitted unique-index entry waits on that transaction's id
+ *  (`locktype = 'transactionid'`), blocked BY the holder's pid. */
+async function keyWaitersBehind(holderPid: number, want: number, timeoutMs = 5000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  let seen = 0;
+  for (;;) {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks
+       where locktype = 'transactionid' and not granted and ${holderPid} = any(pg_blocking_pids(pid))`;
+    seen = row!.n;
+    if (seen >= want || Date.now() >= deadline) return seen;
+    await new Promise((res) => setTimeout(res, 25));
+  }
 }
 
 describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
@@ -6331,10 +6622,10 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
     const sid = await r.session(r.fixtureIds[0]!);
     const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
     expect(c).toEqual({ consumed: true, balance: 4, ledgerId: expect.any(String) });
-    const rf = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "test" });
-    expect(rf.balance).toBe(5);
-    const g = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "pilot" });
-    expect(g.balance).toBe(7);
+    const rf = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "test", idempotencyKey: key() });
+    expect(rf).toEqual({ id: expect.any(String), balance: 5, applied: true });
+    const g = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "pilot", idempotencyKey: key() });
+    expect(g).toEqual({ id: expect.any(String), balance: 7, applied: true });
     expect(await creditBalance(sql, r.orgId)).toBe(7);
     const rows = await sql<{ delta: number; balance_after: number; reason: string }[]>`
       select delta, balance_after, reason from org_stream_credits where org_id = ${r.orgId} order by created_at`;
@@ -6362,14 +6653,14 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
     await expect(
       sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid })),
     ).rejects.toMatchObject({ status: 402, code: "no_credits" });
-    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "one" });
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "one", idempotencyKey: key() });
     const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
     expect(c).toEqual({ consumed: true, balance: 0, ledgerId: expect.any(String) });
   });
 
   it("a restart on the same fixture within 24 h consumes nothing; at 25 h it consumes again (m5, differential)", async () => {
     const r = await rig();
-    await grantCredits({ orgId: r.orgId, delta: 3, createdBy: r.userId, note: "three" });
+    await grantCredits({ orgId: r.orgId, delta: 3, createdBy: r.userId, note: "three", idempotencyKey: key() });
     const first = await r.session(r.fixtureIds[0]!, "failed");
     await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: first }));
     const second = await r.session(r.fixtureIds[0]!);
@@ -6384,42 +6675,35 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
 
   it("two concurrent consumers on two fixtures with balance 1: exactly one consumes, one gets no_credits (m2)", async () => {
     const r = await rig(2);
-    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "one" });
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "one", idempotencyKey: key() });
     const sidA = await r.session(r.fixtureIds[0]!);
     const sidB = await r.session(r.fixtureIds[1]!);
 
     let releaseA!: () => void;
     const aMayCommit = new Promise<void>((res) => (releaseA = res));
-    let signalALocked!: () => void;
-    const aLocked = new Promise<void>((res) => (signalALocked = res));
+    let signalALocked!: (pid: number) => void;
+    const aLocked = new Promise<number>((res) => (signalALocked = res));
 
     const a = sql.begin(async (tx) => {
       const out = await consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sidA });
-      signalALocked();          // A holds the org's rows under `for update` now
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      signalALocked(pid);       // A holds the org's money lock now, on THIS backend
       await aMayCommit;         // …and parks until the test has seen B block
       return out;
     });
-    await aLocked;
+    const aPid = await aLocked;
     const b = sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[1]!, sessionId: sidB }));
 
-    // B must be a REAL blocked waiter before A is released. Bounded poll — on
-    // the m2 mutant nothing blocks, the poll simply times out, and the
-    // OUTCOME assertions below are what turn red.
-    const deadline = Date.now() + 2000;
-    let blocked = 0;
-    while (Date.now() < deadline && blocked === 0) {
-      const [{ n }] = await sql<{ n: number }[]>`
-        select count(*)::int as n from pg_stat_activity
-        where wait_event_type = 'Lock' and query ilike '%org_stream_credits%'`;
-      blocked = n;
-      if (blocked === 0) await new Promise((res) => setTimeout(res, 25));
-    }
+    // B must be a REAL waiter blocked by A's backend before A is released (pg_locks, scoped
+    // to A's pid). On the m2 mutant nothing blocks, the poll times out at 0, and both this
+    // count and the OUTCOME assertions below turn red.
+    const blocked = await advisoryWaitersBehind(aPid, 1, 2000);
     releaseA();
 
     const results = await Promise.allSettled([a, b]);
     const ok = results.filter((x): x is PromiseFulfilledResult<{ consumed: boolean; balance: number; ledgerId: string | null }> => x.status === "fulfilled");
     const bad = results.filter((x): x is PromiseRejectedResult => x.status === "rejected");
-    expect(blocked, "B never blocked on A's lock — is `for update` gone?").toBe(1);
+    expect(blocked, "B never queued behind A's backend on the org's money lock (pg_locks: advisory, not granted, blocked by A's pid)").toBe(1);
     expect(ok).toHaveLength(1);
     expect(ok[0]!.value).toEqual({ consumed: true, balance: 0, ledgerId: expect.any(String) });
     expect(bad).toHaveLength(1);
@@ -6429,10 +6713,214 @@ describe.skipIf(!HAS_DB)("stream credits — the ledger", () => {
       select count(*)::int as n from org_stream_credits where org_id = ${r.orgId} and reason = 'consume'`;
     expect(n).toBe(1);
   });
+
+  // ---- The staff writers (Task 7A rulings, 2026-09-16) --------------------------------
+
+  it("a replayed grant (same key, same values) writes no second ledger row and no second audit row — the ORIGINAL id, applied false, balance unchanged; a NEW key applies (m6, m11, m12)", async () => {
+    const r = await rig();
+    const k = key();
+    const first = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "pilot league", idempotencyKey: k });
+    expect(first).toEqual({ id: expect.any(String), balance: 2, applied: true });
+    const replay = await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "pilot league", idempotencyKey: k });
+    expect(replay).toEqual({ id: first.id, balance: 2, applied: false });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.orgId}`;
+    expect(n).toBe(1);
+    expect([...(await auditRows(r.orgId))]).toEqual([
+      { actor_id: r.userId, action: "stream_credit_grant", target_type: "org",
+        detail: { delta: 2, reason: "pilot league", session_id: null, ledger_id: first.id, balance_after: 2 } },
+    ]);
+    // The positive pair: a new key is a new submission.
+    expect(await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "second", idempotencyKey: key() }))
+      .toMatchObject({ balance: 3, applied: true });
+    expect(await auditRows(r.orgId)).toHaveLength(2);
+  });
+
+  it("a key reused for a DIFFERENT adjustment → 409 idempotency_key_reused with no row and no audit row anywhere — a different delta, a different kind, a different session, another org — while the EXACT replay (a retyped note included: the note is not in the tuple) answers applied false with the original id (m13, m16–m19)", async () => {
+    const r = await rig();
+    const other = await rig();
+    const sid = await r.session(r.fixtureIds[0]!);
+    const k = key();
+    const first = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: null, createdBy: r.userId, note: "goodwill", idempotencyKey: k });
+    expect(first).toEqual({ id: expect.any(String), balance: 1, applied: true });
+    // Each row differs from the stored (org, reason, delta 1, session null) in exactly ONE member,
+    // so each member's comparison has its own killer.
+    const reused: [string, () => Promise<unknown>][] = [
+      ["a different delta (m17)", () => refundCredits({ orgId: r.orgId, delta: 2, sessionId: null, createdBy: r.userId, note: "goodwill", idempotencyKey: k })],
+      ["a different kind (m18)", () => grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "goodwill", idempotencyKey: k })],
+      ["a different session (m19)", () => refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "goodwill", idempotencyKey: k })],
+      ["another org (m13)", () => refundCredits({ orgId: other.orgId, delta: 1, sessionId: null, createdBy: other.userId, note: "goodwill", idempotencyKey: k })],
+    ];
+    for (const [label, call] of reused) {
+      await expect(call(), label).rejects.toMatchObject({ status: 409, code: "idempotency_key_reused" });
+    }
+    // The positive pair: the exact replay, with a retyped note.
+    expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: null, createdBy: r.userId, note: "goodwill, retyped", idempotencyKey: k }))
+      .toEqual({ id: first.id, balance: 1, applied: false });
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where org_id in (${r.orgId}, ${other.orgId})`;
+    expect(n).toBe(1);
+    expect((await auditRows(r.orgId)).map((a) => a.action)).toEqual(["stream_credit_refund"]);
+    expect(await auditRows(other.orgId)).toHaveLength(0);
+  });
+
+  it("first-ever writes on an EMPTY ledger serialise on the org's money lock: a purchase and a same-key grant pair queue behind the test's own hold (3 waiters), then land with running balance_after snapshots, one grant applied and its twin applied false — never a 23505; the hold is taken with the org id UPPER-cased, and it is still the same lock (m14, m15, m21)", async () => {
+    const r = await rig();
+    expect(await creditBalance(sql, r.orgId)).toBe(0);   // the empty ledger IS the case: `for update` would lock nothing here
+    // N1: ONE key per org whatever the case of the id. The /admin route's URL is z.uuid(), which
+    // accepts upper case; Task 10's consume and Task 8's purchase pass the DB's lower-case id.
+    expect(orgMoneyLockKey(r.orgId.toUpperCase())).toBe(orgMoneyLockKey(r.orgId));
+    const k = key();
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    // The TEST holds the org's money lock, so every writer below must queue behind this backend.
+    // Held through the UPPER-case spelling: the writers below pass the lower-case id (m21 witness).
+    const holder = sql.begin(async (tx) => {
+      await lockOrg(tx, r.orgId.toUpperCase());
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      signalHeld(pid);
+      await released;
+    });
+    const holderPid = await held;
+    const writes = [
+      recordPurchase({ orgId: r.orgId, delta: 5, stripeEventId: `evt_first_${r.orgId}` }),
+      grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "first grant", idempotencyKey: k }),
+      grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "first grant", idempotencyKey: k }),
+    ];
+    const blocked = await advisoryWaitersBehind(holderPid, writes.length);
+    release();
+    await holder;
+    const settled = await Promise.allSettled(writes);
+
+    expect(blocked, "every first writer queues behind the holder's backend (m14: the grants do not; m15: the purchase does not)").toBe(3);
+    expect(settled.map((s) => s.status), JSON.stringify(settled.map((s) => (s.status === "rejected" ? String(s.reason) : "")))).toEqual([
+      "fulfilled", "fulfilled", "fulfilled",
+    ]);
+    const [p, g1, g2] = settled.map((s) => (s as PromiseFulfilledResult<{ id: string; applied: boolean; balance: number }>).value);
+    expect(p!.applied).toBe(true);
+    expect([g1!.applied, g2!.applied].sort()).toEqual([false, true]);
+    expect(g1!.id).toBe(g2!.id);
+    // Serialised, so each snapshot is the running sum: the second writer read the first one's row.
+    const snapshots = (await sql<{ balance_after: number }[]>`
+      select balance_after from org_stream_credits where org_id = ${r.orgId}`).map((x) => x.balance_after).sort((a, b) => a - b);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[1]).toBe(7);
+    expect([2, 5]).toContain(snapshots[0]);
+    expect(await creditBalance(sql, r.orgId)).toBe(7);
+  });
+
+  it("the same key on two DIFFERENT orgs at once: the money locks differ, so the second writer misses the first's uncommitted row, waits on it at the TABLE-wide key index, and answers 409 idempotency_key_reused — never a raw 23505 (a 500) — with no row and no audit row; a new key then applies (N3, m22)", async () => {
+    const r = await rig();
+    const other = await rig();
+    const k = key();
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    // OTHER's writer parked between its insert and its commit: it holds OTHER's money lock and an
+    // UNCOMMITTED row carrying k — where a real grant sits just before sql.begin commits.
+    const holder = sql.begin(async (tx) => {
+      await lockOrg(tx, other.orgId);
+      await tx`insert into org_stream_credits (org_id, delta, reason, balance_after, idempotency_key)
+               values (${other.orgId}, 1, 'grant', 1, ${k})`;
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      signalHeld(pid);
+      await released;
+    });
+    const holderPid = await held;
+    // R's grant takes R's lock (a DIFFERENT lock — nothing queues it behind the holder), its key
+    // lookup cannot see the uncommitted row, and its insert waits on the holder's transaction.
+    const write = grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "same key, other org", idempotencyKey: k })
+      .catch((e: unknown) => e);   // settled here, so the rejection is never unhandled while the test polls
+    const blocked = await keyWaitersBehind(holderPid, 1);
+    release();
+    await holder;
+    const out = await write;
+
+    expect(blocked, "R's insert never waited on the holder's uncommitted key (pg_locks: transactionid, not granted, blocked by the holder's pid)").toBe(1);
+    // m22: the rejection is the raw PostgresError (code 23505, no status), which the route answers 500.
+    expect(out, JSON.stringify(out)).toMatchObject({ status: 409, code: "idempotency_key_reused" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.orgId}`;
+    expect(n).toBe(0);
+    expect(await auditRows(r.orgId)).toHaveLength(0);
+    expect(await creditBalance(sql, other.orgId)).toBe(1);   // the holder's row committed; only R's write was refused
+    // The positive pair: R's writer is not wedged — a NEW key applies.
+    expect(await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "new key", idempotencyKey: key() }))
+      .toMatchObject({ balance: 2, applied: true });
+  });
+
+  it("a session whose fixture is GONE (fixtureId null — V408 `on delete set null`, Task 2A's nullable Session.fixtureId) consumes every time: the 24 h reuse rule is per fixture, and no fixture is never a match (G2, m20)", async () => {
+    const r = await rig();
+    await grantCredits({ orgId: r.orgId, delta: 2, createdBy: r.userId, note: "two", idempotencyKey: key() });
+    const sid = await r.session(r.fixtureIds[0]!, "failed");
+    await sql`update fixture_stream_sessions set fixture_id = null where id = ${sid}`;
+    const first = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId: sid }));
+    const second = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId: sid }));
+    expect([first.consumed, first.balance, second.consumed, second.balance]).toEqual([true, 1, true, 0]);
+  });
+
+  it("revoke writes a NEGATIVE 'revoke' row: 1 of 1 → balance 0, audited, and readable in the Adjustments log; 1 of 0 → 422 insufficient_credits with no row and no audit row (m7, m11)", async () => {
+    const r = await rig();
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "mistaken grant", idempotencyKey: key() });
+    expect(await revokeCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "reverse the mistaken grant", idempotencyKey: key() }))
+      .toEqual({ id: expect.any(String), balance: 0, applied: true });
+    await expect(
+      revokeCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "nothing left", idempotencyKey: key() }),
+    ).rejects.toMatchObject({ status: 422, code: "insufficient_credits" });
+    const rows = await sql<{ reason: string; delta: number; balance_after: number; created_by: string }[]>`
+      select reason, delta, balance_after, created_by from org_stream_credits where org_id = ${r.orgId} order by created_at`;
+    expect(rows.map((x) => [x.reason, x.delta, x.balance_after, x.created_by])).toEqual([
+      ["grant", 1, 1, r.userId], ["revoke", -1, 0, r.userId],
+    ]);
+    // The audit's REAL consumer: the unified Adjustments log an operator reads on /admin/orgs/[id]
+    // (newest first). An action missing from ADJUSTMENT_ACTIONS would be absent here.
+    expect((await adjustmentsForOrg(r.orgId)).map((e) => [e.action, e.category, e.reason, e.actorId])).toEqual([
+      ["stream_credit_revoke", "credits", "reverse the mistaken grant", r.userId],
+      ["stream_credit_grant", "credits", "mistaken grant", r.userId],
+    ]);
+  });
+
+  it("a session-linked refund is capped at what that session consumed: 1 of 1 → applied; a second → 422 refund_exceeds_consumed, no row, no audit row; an UNLINKED (goodwill) refund still applies; a session that consumed nothing refuses any linked refund (m8, m9)", async () => {
+    const r = await rig();
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "fund", idempotencyKey: key() });
+    const sid = await r.session(r.fixtureIds[0]!);
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
+    expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: key() }))
+      .toMatchObject({ balance: 1, applied: true });
+    await expect(
+      refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "again", idempotencyKey: key() }),
+    ).rejects.toMatchObject({ status: 422, code: "refund_exceeds_consumed" });
+    expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: null, createdBy: r.userId, note: "goodwill", idempotencyKey: key() }))
+      .toMatchObject({ balance: 2, applied: true });
+    const idle = await r.session(r.fixtureIds[0]!, "failed");   // terminal, so the one-active index admits it beside `sid`
+    await expect(
+      refundCredits({ orgId: r.orgId, delta: 1, sessionId: idle, createdBy: r.userId, note: "never consumed", idempotencyKey: key() }),
+    ).rejects.toMatchObject({ status: 422, code: "refund_exceeds_consumed" });
+    const rows = await sql<{ reason: string; delta: number; session_id: string | null }[]>`
+      select reason, delta, session_id from org_stream_credits where org_id = ${r.orgId} order by created_at`;
+    expect(rows.map((x) => [x.reason, x.delta, x.session_id])).toEqual([
+      ["grant", 1, null], ["consume", -1, sid], ["refund", 1, sid], ["refund", 1, null],
+    ]);
+    expect((await auditRows(r.orgId)).map((a) => a.action)).toEqual([
+      "stream_credit_grant", "stream_credit_refund", "stream_credit_refund",
+    ]);
+  });
+
+  it("a REPLAYED session-linked refund answers applied false, not 422 — the key check runs BEFORE the cap the original call used up (m10, the ordering differential)", async () => {
+    const r = await rig();
+    await grantCredits({ orgId: r.orgId, delta: 1, createdBy: r.userId, note: "fund", idempotencyKey: key() });
+    const sid = await r.session(r.fixtureIds[0]!);
+    await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId: sid }));
+    const k = key();
+    const first = await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: k });
+    expect(await refundCredits({ orgId: r.orgId, delta: 1, sessionId: sid, createdBy: r.userId, note: "failed stream", idempotencyKey: k }))
+      .toEqual({ id: first.id, balance: 1, applied: false });
+  });
 });
 ```
 
-- [ ] **Step 2: Run — expect a collection failure naming `../stream-credits`.**
+- [ ] **Step 2: Run — expect a collection failure naming `../stream-credits`.** It must name `stream-credits`, NOT `_session-rig` and NOT `admin-adjustments-log`: both of those exist by now, so a message naming either one is the wrong red.
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-red.json');console.log(r.numTotalTests,(r.testResults[0]&&r.testResults[0].message||'').slice(0,100))"`
 
 - [ ] **Step 3: Write `stream-credits.ts`.**
@@ -6443,19 +6931,34 @@ import "server-only";
 // One currency, one table, rows only (never UPDATE/DELETE — it is money).
 //  * Balance = sum(delta) through creditBalance(); balance_after is a per-row
 //    snapshot and the schema's oversell floor, never read as the balance.
+//  * THE MONEY LOCK: every writer here (purchase, consume, grant, refund, revoke) takes
+//    lockOrg — pg_advisory_xact_lock on a relay-namespaced org key, adminAdjust's idiom
+//    (lib/credits.ts) — before it reads anything. An advisory lock, not `select … for
+//    update` over the org's rows: row locks lock NOTHING on an empty ledger, so two
+//    first-ever writes to an org would read the same balance and write the same snapshot
+//    (and a same-key pair IN THAT ORG would both miss the key and 23505). The lock is per
+//    ORG and the key index is TABLE-wide, so the lock cannot stop one key racing on two
+//    DIFFERENT orgs: both miss the lookup and the second insert still raises 23505 on
+//    org_stream_credits_idempotency_key. staffRow answers that 23505 as the 409 it is.
 //  * consumeForSession runs INSIDE the transaction that makes the stream live
-//    (stream-sessions.ts): `select … for update` on the org's rows serialises
-//    concurrent consumers (a positive balance implies ≥ 1 row to lock; a
-//    zero-row ledger is refused before any race can matter), then the 24 h
-//    same-fixture reuse rule, then balance < 1 → NoCreditsError.
+//    (stream-sessions.ts): the lock, then the 24 h same-fixture reuse rule (skipped
+//    when the session has no fixture), then balance < 1 → NoCreditsError.
 //  * recordPurchase is replay-safe by the stripe_event_id unique constraint:
 //    `on conflict do nothing` and the existing row is returned.
-//  * grant/refund are the admin tools' rows (one row, created_by = the admin).
-//    admin-addons.ts has no refund neighbour (P9) — these are new.
+//  * grant/refund/revoke are the /admin panel's rows (Task 7A). Each is ONE row with
+//    created_by = the staff user, an idempotency key checked under the lock BEFORE any
+//    guard, and ONE staff_audit_log row in the same transaction (lib/credits.ts adminAdjust's
+//    shape, which cannot be called here: it is bound to ai_credit_ledger). An EXACT replay
+//    writes neither row; the same key with a different org, reason, delta or session is a
+//    409 (a deliberate departure from adminAdjust, which answers applied:false to any replay).
+//    Refusals are 422, as the donor route's are. admin-addons.ts has no refund neighbour (P9).
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { InsufficientCredits, credit, debit, withinReuseWindow } from "@/server/relay/domain/credits";
 import { log } from "@/server/logger";
+// TYPE-ONLY, as lib/credits.ts:29-34 does: admin-adjustments-log.ts VALUE-imports
+// STREAM_CREDIT_AUDIT_ACTIONS from here, so a value import back would be a runtime cycle.
+import type { AdjustmentAction } from "@/server/usecases/admin-adjustments-log";
 
 type Executor = Tx | typeof sql;
 
@@ -6471,17 +6974,35 @@ export async function creditBalance(exec: Executor, orgId: string): Promise<numb
   return Number(row?.bal ?? 0);
 }
 
-async function lockOrg(tx: Tx, orgId: string): Promise<void> {
-  await tx`select id from org_stream_credits where org_id = ${orgId} for update`;
+/** The org's money-lock key — ONE authority for its spelling. Lower-cased (N1): Postgres
+ *  returns uuids lower-case, so Task 10's consume and Task 8's purchase pass a lower-case id,
+ *  while z.uuid() accepts an upper-case one in a hand-built /admin URL; without this, the two
+ *  spellings of one org would take two DIFFERENT locks and a revoke could race a consume.
+ *  Namespaced (`stream-credits-org:`) apart from lib/credits.ts's `ai-credit-wallet:` strings.
+ *  hashtext is 32-bit, so two different keys CAN hash equal; a collision only serialises two
+ *  unrelated writers (a spurious wait), never lets two writers of one org run together. */
+export function orgMoneyLockKey(orgId: string): string {
+  return `stream-credits-org:${orgId.toLowerCase()}`;
+}
+
+/** Serialise every money write to one org, until the transaction ends. Taken FIRST, before
+ *  any read, by every writer in this file. Exported for the concurrency tests, which hold it
+ *  from a transaction of their own to make writers queue. */
+export async function lockOrg(tx: Tx, orgId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(orgId)}))`;
 }
 
 export async function consumeForSession(
   tx: Tx,
-  args: { orgId: string; fixtureId: string; sessionId: string },
+  args: { orgId: string; fixtureId: string | null; sessionId: string },
   now: Date = new Date(),
 ): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }> {
   await lockOrg(tx, args.orgId);
-  const [last] = await tx<{ created_at: string }[]>`
+  // The 24 h reuse rule is per FIXTURE. A session whose fixture is gone (fixture_id is
+  // `on delete set null`) has none to match, so it has no window and consumes; comparing
+  // `= null` would say the same thing by accident, and `is not distinct from` would wrongly
+  // make every fixture-less session one fixture.
+  const [last] = args.fixtureId === null ? [] : await tx<{ created_at: string }[]>`
     select c.created_at from org_stream_credits c
       join fixture_stream_sessions s on s.id = c.session_id
      where c.org_id = ${args.orgId} and c.reason = 'consume' and s.fixture_id = ${args.fixtureId}
@@ -6543,31 +7064,147 @@ export async function recordPurchase(args: {
   }) as Promise<{ id: string; applied: boolean; balance: number }>;
 }
 
-async function adminRow(
-  reason: "grant" | "refund",
-  args: { orgId: string; delta: number; sessionId?: string | null; createdBy: string; note: string },
-): Promise<{ id: string; balance: number }> {
-  if (!Number.isInteger(args.delta) || args.delta <= 0) throw new HttpError(422, `${reason} delta must be a positive integer`);
+/** The staff_audit_log actions of the three staff writers. Spread into admin-adjustments-log.ts's
+ *  ADJUSTMENT_ACTIONS (the PASS_CREDIT_RESOLVE_ACTION precedent): an org-targeted action outside
+ *  that allowlist is audited and unreadable. Underscored, never dotted — admin-audit-actor-truth
+ *  .test.ts reads a dotted literal beside a direct insert as a CUSTOMER self-service action. */
+export const STREAM_CREDIT_AUDIT_ACTIONS = ["stream_credit_grant", "stream_credit_refund", "stream_credit_revoke"] as const;
+
+type StaffKind = "grant" | "refund" | "revoke";
+const AUDIT_ACTION: Record<StaffKind, AdjustmentAction> = {
+  grant: "stream_credit_grant",
+  refund: "stream_credit_refund",
+  revoke: "stream_credit_revoke",
+};
+
+export interface StaffCreditArgs {
+  orgId: string;
+  /** A positive integer for all three kinds; a revoke writes its negation. */
+  delta: number;
+  /** The staff user — org_stream_credits.created_by AND staff_audit_log.actor_id. */
+  createdBy: string;
+  note: string;
+  /** One per panel submission, kept across retries (Task 7A). */
+  idempotencyKey: string;
+}
+
+export interface StaffCreditResult { id: string; balance: number; applied: boolean }
+
+async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: string | null }): Promise<StaffCreditResult> {
+  if (!Number.isInteger(args.delta) || args.delta <= 0) throw new HttpError(422, `${kind} delta must be a positive integer`);
+  // Lower-cased: Postgres returns uuids lower-case, and z.uuid() accepts upper-case, so an exact
+  // replay of a pasted upper-case id must still compare equal below.
+  const sessionId = args.sessionId ? args.sessionId.toLowerCase() : null;
+  const delta = kind === "revoke" ? -args.delta : args.delta;   // the SIGNED delta the row stores
   return sql.begin(async (tx) => {
-    await lockOrg(tx, args.orgId);
+    await lockOrg(tx, args.orgId);   // FIRST: the money lock (an empty ledger included)
     const balance = await creditBalance(tx, args.orgId);
-    const { balanceAfter } = credit(balance, args.delta);
+
+    // THE KEY CHECK — under the lock and BEFORE every guard (adminAdjust's order). Looked up
+    // TABLE-wide (the V408 index is table-wide, the donor's V320 scope) so the stored row's org
+    // is part of the comparison. An EXACT replay returns the original row and writes nothing, not
+    // a second ledger row, not a second audit row. The SAME key with a different org, reason,
+    // signed delta or session is a staff mistake (an amount retyped after a lost response), so
+    // it is refused rather than silently answered `applied: false` (adminAdjust does the latter;
+    // this is the recorded departure), and the refusal names nothing about the stored row. The
+    // check must precede the refund cap and the revoke floor, because the ORIGINAL call has
+    // already used them up — a replay that reached them would read as a 422.
+    const [prior] = await tx<{ id: string; org_id: string; reason: string; delta: number; session_id: string | null }[]>`
+      select id, org_id, reason, delta, session_id from org_stream_credits where idempotency_key = ${args.idempotencyKey}`;
+    if (prior) {
+      const same =
+        prior.org_id === args.orgId.toLowerCase() && prior.reason === kind && prior.delta === delta && prior.session_id === sessionId;
+      if (!same) {
+        throw new HttpError(409, "That idempotency key was already used for a different adjustment; nothing was written", "idempotency_key_reused");
+      }
+      return { id: prior.id, balance, applied: false };
+    }
+
+    let balanceAfter: number;
+    if (kind === "revoke") {
+      try {
+        ({ balanceAfter } = debit(balance, args.delta));   // FS10 in memory; the balance_after CHECK is the backstop
+      } catch (e) {
+        if (e instanceof InsufficientCredits) {
+          throw new HttpError(422, `Revoking ${args.delta} would take this organisation's match credits (${balance}) below zero`, "insufficient_credits");
+        }
+        throw e;
+      }
+    } else {
+      if (kind === "refund" && sessionId) {
+        // A linked refund returns what THAT session consumed, at most, across every refund linked to it.
+        // LOCK ORDER (N2): the insert below takes FOR KEY SHARE on this fixture_stream_sessions row
+        // (the session_id FK) AFTER the org lock, while Task 10's live transition holds that row FOR
+        // UPDATE BEFORE consumeForSession takes the org lock — the opposite order. It cannot deadlock
+        // only because a credit is consumed ONCE, at warming → live, so a session inside that
+        // transaction has no committed consume row, and THIS cap refuses its refund BEFORE the insert.
+        // Keep the cap ahead of the insert, and keep consume a one-shot, or this becomes a 40P01.
+        const [s] = await tx<{ consumed: number; refunded: number }[]>`
+          select coalesce(-sum(delta) filter (where reason = 'consume'), 0)::int as consumed,
+                 coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded
+            from org_stream_credits where org_id = ${args.orgId} and session_id = ${sessionId}`;
+        if (s!.refunded + args.delta > s!.consumed) {
+          throw new HttpError(422, `That session consumed ${s!.consumed} and has ${s!.refunded} refunded already; refund it unlinked if more is owed`, "refund_exceeds_consumed");
+        }
+      }
+      ({ balanceAfter } = credit(balance, args.delta));
+    }
+
     const [row] = await tx<{ id: string }[]>`
-      insert into org_stream_credits (org_id, delta, reason, session_id, balance_after, note, created_by)
-      values (${args.orgId}, ${args.delta}, ${reason}, ${args.sessionId ?? null}, ${balanceAfter}, ${args.note}, ${args.createdBy})
+      insert into org_stream_credits (org_id, delta, reason, session_id, balance_after, note, created_by, idempotency_key)
+      values (${args.orgId}, ${delta}, ${kind}, ${sessionId}, ${balanceAfter}, ${args.note}, ${args.createdBy}, ${args.idempotencyKey})
       returning id`;
-    return { id: row!.id, balance: balanceAfter };
-  }) as Promise<{ id: string; balance: number }>;
+    // The unified staff audit, IN this transaction — adminAdjust's auditApplied statement
+    // (lib/credits.ts): target 'org', balance_after in the detail, and `reason` = the note
+    // (the key adjustmentsForOrg renders as the log's subject). Applied writes only.
+    await tx`
+      insert into staff_audit_log (actor_id, action, target_type, target_id, detail)
+      values (${args.createdBy}, ${AUDIT_ACTION[kind]}, 'org', ${args.orgId},
+              ${tx.json({ delta, reason: args.note, session_id: sessionId, ledger_id: row!.id, balance_after: balanceAfter } as never)})`;
+    return { id: row!.id, balance: balanceAfter, applied: true };
+  }).catch((err: unknown) => {
+    // N3: one key on two DIFFERENT orgs at once holds two different money locks, so both writers
+    // miss the lookup and the second insert raises 23505 on the TABLE-wide key index. That is a
+    // reused key, not a server error. Caught OUTSIDE sql.begin: postgres.js rethrows a query
+    // error even when the transaction callback catches it. The constraint-name check is
+    // registration-submit.ts's idiom; any other 23505 stays an error.
+    const pg = err as { code?: string; constraint_name?: string };
+    if (pg.code === "23505" && pg.constraint_name === "org_stream_credits_idempotency_key") {
+      throw new HttpError(409, "That idempotency key was already used for a different adjustment; nothing was written", "idempotency_key_reused");
+    }
+    throw err;
+  }) as Promise<StaffCreditResult>;
 }
 
-export async function grantCredits(args: { orgId: string; delta: number; createdBy: string; note: string }) {
-  return adminRow("grant", args);
+export async function grantCredits(args: StaffCreditArgs): Promise<StaffCreditResult> {
+  return staffRow("grant", args);
 }
 
-export async function refundCredits(args: { orgId: string; delta: number; sessionId: string | null; createdBy: string; note: string }) {
-  return adminRow("refund", args);
+export async function refundCredits(args: StaffCreditArgs & { sessionId: string | null }): Promise<StaffCreditResult> {
+  return staffRow("refund", args);
+}
+
+export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditResult> {
+  return staffRow("revoke", args);
 }
 ```
+
+  Then the allowlist, in `apps/web/src/server/usecases/admin-adjustments-log.ts`:
+  - Add `import { STREAM_CREDIT_AUDIT_ACTIONS } from "@/server/usecases/stream-credits";` beside the `PASS_CREDIT_RESOLVE_ACTION` import.
+  - In `ADJUSTMENT_ACTIONS`, after `PASS_CREDIT_RESOLVE_ACTION,` add:
+
+```ts
+  // Streaming R1 (Task 7 / 7A): the staff match-credit grant, refund and revoke. They move
+  // an org's streaming balance, so they belong in the panel an operator reads. Spread from
+  // the writer so a new staff kind reaches the maps below as a missing key.
+  ...STREAM_CREDIT_AUDIT_ACTIONS,
+```
+
+  - In `ADJUSTMENT_CATEGORY`, add `stream_credit_grant: "credits"`, `stream_credit_refund: "credits"` and `stream_credit_revoke: "credits"`.
+  - In `ADJUSTMENT_REVERSIBLE`, add `stream_credit_grant: true`, `stream_credit_refund: true` (a revoke compensates either) and `stream_credit_revoke: false` (the compensating action, like `addon_revoke`).
+  - In `app/admin/orgs/[id]/adjustment-labels.ts`'s `ADJUSTMENT_LABELS`, add `stream_credit_grant: "Match credits granted"`, `stream_credit_refund: "Match credits refunded"` and `stream_credit_revoke: "Match credits revoked"`.
+  
+  All three maps are `Record<AdjustmentAction, …>`, so tsc refuses any omission. The label map is additionally guarded by `admin-adjustments-log.test.ts` "has a category, a reversibility and a label", which loops over `ADJUSTMENT_ACTIONS`.
 
   **Ruling 13 addition, beyond the code above** (the `ledgerId` half is already folded into the signature, the body and every assertion above): add one `it` to `stream-credits.test.ts` for the purchase link —
 
@@ -6588,9 +7225,1594 @@ export async function refundCredits(args: { orgId: string; delta: number; sessio
   });
 ```
 
-- [ ] **Step 4: Run — expect `7 0 0`.** Then the three money mutants by hand, each reverted with the Write tool: (m2) delete the `await lockOrg(tx, args.orgId)` line in `consumeForSession` → the race test red (`blocked` 0 and/or two consumes); (m3) change `on conflict (stripe_event_id) do nothing` to a plain insert → the replay test red with `23505` (and, if the unique index were dropped instead, with balance 10); (m5) delete the `withinReuseWindow` return → the 24 h test red (its PURE twin is Task 2B's `credits.test.ts`, which a mutant in the SQL wiring cannot reach — that is why both exist). Record the three killers.
+- [ ] **Step 4: Run — expect `15 0 0`, then the money mutants, then the neighbours.** Use Step 2's command, writing to `t7.json` and printing `r.numTotalTests,r.numFailedTests,r.numPendingTests` → `15 0 0`. Pending MUST be 0: pending means the DB URL did not reach the run. The 15 are the Step 1 file's 14 `it`s (Revision 3 added "the same key on two DIFFERENT orgs at once") plus the ruling-13 purchase-link `it` above, with no loop-generated tests (the reused-key rows are one `it`).
 
-- [ ] **Step 5: Report for commit.** `feat(streaming): stream credits ledger — balance, consume under lock, purchase idempotent by Stripe id, grant/refund`.
+  **Mutation protocol**, the same for every mutant:
+  1. Take `cp <file> <scratchpad>/r1/t7-<name>.bak` AFTER the green run.
+  2. Apply ONE mutant with the Edit tool.
+  3. Re-run and confirm `numTotalTests` is still 15.
+  4. Confirm the NAMED test is the one that goes red. For the reused-key members (m13, m17–m19), confirm the failure message carries THAT row's label.
+  5. Restore with `cp` (never `git checkout`), then `cmp` the restored file against the backup.
+
+  **The mutants:**
+  - (m2) delete the `await lockOrg(tx, args.orgId)` line in `consumeForSession` → "two concurrent consumers" goes red (`blocked` 0, and two consumes).
+  - (m3) change `on conflict (stripe_event_id) do nothing` to a plain insert → the replay test goes red with `23505` (and, if the unique index were dropped instead, with balance 10).
+  - (m5) delete the `withinReuseWindow` return → the 24 h test goes red. Its PURE twin is Task 2B's `credits.test.ts`, which a mutant in the SQL wiring cannot reach; that is why both exist.
+  - (m6) delete the whole `if (prior) { … }` block → "a replayed grant" goes red. The unique index refuses the second insert with `23505`, which staffRow's `.catch` answers as 409 `idempotency_key_reused`, so the test fails on the rejection, before its row count.
+  - (m7) in the revoke branch, `({ balanceAfter } = debit(balance, args.delta));` → `({ balanceAfter } = { balanceAfter: balance - args.delta });` → "revoke" goes red. The `balance_after` CHECK answers with `23514`, not the 422.
+  - (m8) delete the `if (s!.refunded + args.delta > s!.consumed) { … }` block → "a session-linked refund is capped" goes red (the second refund lands).
+  - (m9) `s!.refunded + args.delta > s!.consumed` → `args.delta > s!.consumed` → the same test goes red (1 > 1 is false).
+  - (m10) move the `const [prior] = …` lookup and its `if (prior) { … }` block BELOW the whole revoke/refund guard block → "a REPLAYED session-linked refund" goes red (422, not applied false).
+  - (m11) delete the `insert into staff_audit_log` statement → "a replayed grant" goes red on the audit rows (`[]`), and so does "revoke" on the Adjustments log read.
+  - (m12) an audit row on the replay path. Directly before `return { id: prior.id, balance, applied: false };`, insert `await tx\`insert into staff_audit_log (actor_id, action, target_type, target_id) values (${args.createdBy}, ${AUDIT_ACTION[kind]}, 'org', ${args.orgId})\`;` → "a replayed grant" goes red (two audit rows).
+  - (m13) in `same`, delete `prior.org_id === args.orgId.toLowerCase() && ` → "a key reused for a DIFFERENT adjustment" goes red on its `another org (m13)` row (it resolves `applied: false` with the OTHER org's row id).
+  - (m14) delete `await lockOrg(tx, args.orgId);` in `staffRow` → "first-ever writes on an EMPTY ledger" goes red: `blocked` is 1, not 3 (and when the unlocked same-key pair both miss the key, one rejects with 409 `idempotency_key_reused`).
+  - (m15) delete `await lockOrg(tx, args.orgId);` in `recordPurchase` → "first-ever writes on an EMPTY ledger" goes red: `blocked` is 2, not 3 (the purchase lands while the test still holds the lock).
+  - (m16) delete the `if (!same) { throw … }` block → "a key reused for a DIFFERENT adjustment" goes red on its first row (`applied: false`, not 409).
+  - (m17) in `same`, delete `prior.delta === delta && ` → "a key reused for a DIFFERENT adjustment" goes red on `a different delta (m17)`.
+  - (m18) in `same`, delete `prior.reason === kind && ` → "a key reused for a DIFFERENT adjustment" goes red on `a different kind (m18)`.
+  - (m19) in `same`, delete ` && prior.session_id === sessionId` → "a key reused for a DIFFERENT adjustment" goes red on `a different session (m19)`.
+  - (m20) in `consumeForSession`, replace `args.fixtureId === null ? [] : await tx<…>` with the bare `await tx<…>` and `s.fixture_id = ${args.fixtureId}` with `s.fixture_id is not distinct from ${args.fixtureId}` → "a session whose fixture is GONE" goes red (the second consume reuses the first's window: `false, 1`).
+  - (m21) in `orgMoneyLockKey`, `${orgId.toLowerCase()}` → `${orgId}` → "first-ever writes on an EMPTY ledger" goes red on its first assertion (the upper-case and lower-case keys differ). Its second witness is the hold: taken through the upper-case id, it is a different lock, so `blocked` is 0, not 3.
+  - (m22) delete staffRow's `.catch((err: unknown) => { … })` (keep the `as Promise<StaffCreditResult>`) → "the same key on two DIFFERENT orgs at once" goes red: the rejection is the raw PostgresError, code `23505`, with no `status`. `blocked` stays 1: the wait is the index's, not the catch's.
+
+  Record all twenty killers (m2, m3, m5–m22). m1 and m4 are not Task 7's: in Task 17 Step 4's global table, m1 is the consume insert (Task 10) and m4 is the plan-key check in `relay-checkout` (Task 8). Task 7's numbering continues past them and reuses neither.
+
+  Then the neighbours, in ONE run:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/credits-admin-adjust.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7-neighbours.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7-neighbours.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
+  Expect:
+  - six files, all under `…/worktrees/relay/`, with 0 failed and 0 pending
+  - `stream-credits` 15 and `migration-shape` 16
+  - `enc-boundary` green: `_session-rig.ts` names `rtmp_enc` from inside `server/relay/`, so claim 2 (`enc-boundary.test.ts:40-47`, "no file outside server/relay/**") passes, and it sits in `__tests__`, which claim 3 (`:49-54`, "only secret-columns.ts issues SQL over them") filters out. It is not the only such file: `migration-shape.test.ts`, `secret-columns.test.ts` and `telemetry.test.ts` name the column too.
+  - `admin-adjustments-log`, `admin-audit-actor-truth` and `credits-admin-adjust` at their Task 0 baseline counts (`baseline-web.json`) with 0 failed. The per-action loop in `admin-adjustments-log` now also covers the three new actions.
+  
+  Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json > <scratchpad>/r1/t7-tsc.log 2>&1; echo "EXIT=$?"; tail -3 <scratchpad>/r1/t7-tsc.log` → `EXIT=0`, then `rtk proxy npm run lint` → `✖ 0 problems`.
+  **Later callers, amended in this plan (Revision 2, ruling 4):** Task 10 (`stream-sessions.test.ts`'s rig), Task 11 and Task 12 call `grantCredits` in their tests. Each now passes `createdBy: await rigUser()` (a REAL users row, from this task's `_session-rig.ts`) and `idempotencyKey: randomUUID()`, because `seedOrg`'s `userId` is null (`_rig.ts:37`) and the audit row's `actor_id` is NOT NULL with an FK to `users` (`V103__admin.sql:16`). A tsc red naming a `grantCredits` call after those tasks land means a call site the amendment missed.
+
+- [ ] **Step 5: Report for commit.** `feat(streaming): stream credits ledger — balance, every write under the org's money lock, purchase idempotent by Stripe id, staff grant/refund/revoke (idempotent, audited, reused key refused)`. The orchestrator commits `V408__stream_sessions.sql` (the amend: the reason CHECK, column, table-wide index, the `max_duration_minutes > 0` CHECK, FS10 header), `migration-shape.test.ts`, `_session-rig.ts`, `stream-credits.ts` and its test, `admin-adjustments-log.ts` and `adjustment-labels.ts`. The report carries the 16 and 15 counts, the twenty killers, and the recreate log's `schema ready` line.
+
+---
+
+### Task 7A: The staff "Match credits" panel on `/admin/orgs/[id]` (lane B, owner ruling 15)
+
+**Why this task exists (owner ruling 15, 2026-09-16, "yes"):** without a caller in production, Task 7's `grantCredits` and `refundCredits` are an inert seam (AGENTS.md class 1), and refunding a failed stream would mean typing SQL into a money ledger by hand. The panel goes on the EXISTING staff page. `/admin` is held to a functional bar, with no design polish (AGENTS.md). The admin TELEMETRY view is future scope, and this task does NOT build it.
+
+**Revision 1: the orchestrator's rulings on the draft's open questions (2026-09-16, `progress.md`).** These are orchestrator rulings, not owner rulings, except where one says otherwise.
+1. **Idempotency and audit, at parity with the donor, both REQUIRED.**
+   - Every body carries `idempotency_key` (8–200 characters, the donor's bounds at `credits/route.ts:22`).
+   - The panel mints one key per form submission and keeps it across retries.
+   - A replay returns 200 with `applied: false` and writes no second ledger row and no second audit row.
+   - Task 7 writes the `staff_audit_log` row inside the ledger transaction.
+2. **Reversal is a new REVOKE action:** a negative row with `reason 'revoke'`. A revoke above the balance returns 422 `insufficient_credits` (Revision 2) and writes no row.
+3. **Double refund.** A session-linked refund is capped at what that session consumed, across all refunds linked to it; over the cap returns 422 `refund_exceeds_consumed` (Revision 2) and writes no row. An unlinked (goodwill) refund stays allowed.
+   - **Correction to the draft:** a refund ADDS credits, so "refund 1 back" never takes credits away; REVOKE is the action that does.
+4. **Cap:** 1–50 per action for every staff role, with no exemption (as drafted).
+5. **Copy is English-only, following the tree.** This is the orchestrator's READING of `/admin` (every existing `/admin/orgs/[id]` panel is English; evidence under deviation (a)). It is NOT an owner ruling, and it goes to the owner as a reading that one follow-up can reverse.
+
+Items 1–3 are implemented in Task 7 (the V408 amend, `revokeCredits`, the cap, the audit). This task passes the key through, adds the revoke action, and proves all three in the browser.
+
+**Revision 2: the orchestrator's rulings on the plan review (2026-09-16, `progress.md` "PLAN 7/7A REVIEW"; `plan-7A-review.md`).** Orchestrator rulings, not owner rulings.
+- **Refusals are 422**, at parity with the donor route (`credits/route.ts:70-72`): `insufficient_credits` and `refund_exceeds_consumed`.
+- **A reused key is a 409 `idempotency_key_reused`** (Task 7): the same key with a different org, kind, amount or session writes nothing. Only an exact replay answers `applied: false`. On that 409 the panel drops the card's key, re-reads the page (`router.refresh()`, so the attempt that DID land is on screen), resets the card, and says so (review I2).
+- **Every ledger write takes the org's advisory money lock first** (Task 7). The empty-ledger gap is closed, not recorded.
+- **Sequencing:** 7A runs AFTER Task 7 and BEFORE Task 8, not in parallel with it. The lane-B review moves to the end of Task 8 and names every lane-B killer (review I1).
+
+**Files:**
+- Create: `apps/web/src/server/usecases/admin-stream-credits.ts`, which holds the panel's READ and the two constants
+- Create (Test): `apps/web/src/server/usecases/__tests__/admin-stream-credits.test.ts`
+- Create: `apps/web/src/app/api/admin/orgs/[id]/stream-credits/route.ts`, which serves `POST` grant, refund and revoke. It sits **outside the v1 OpenAPI spec**: `openapi-coverage.test.ts` and `key-scopes.test.ts` walk `app/api/v1/**` only, and the donor `api/admin/orgs/[id]/credits/route.ts` appears in neither. So there is no `ROUTES` or `NEVER_KEY_ROUTES` entry, and `openapi:gen` stays at zero diff.
+- Create (Test): `apps/web/src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts`
+- ~~Create `_session-rig.ts`~~: **moved to Task 7 in Revision 1.** Task 7's own test needs the rig (a real users row as the audit actor, real sessions with consume rows), and moving it also closes carry G2. This task CONSUMES `streamRig` / `rigUser` from `@/server/relay/__tests__/_session-rig`.
+- Create: `apps/web/src/components/admin-stream-credits-panel.tsx`
+- Create (Test): `apps/web/src/components/__tests__/admin-stream-credits-panel.test.tsx`
+- Modify: `apps/web/src/app/admin/orgs/[id]/page.tsx`. The change is two imports, one read, and one mount directly under `<AdminCreditsPanel … />`. Nothing else on the page changes.
+- Create: `apps/web/e2e/walkthrough/stream-credits-admin.spec.ts`
+- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts`, where `WALKTHROUGH_SPECS` gains `"stream-credits-admin.spec.ts"` in a new `// Streaming R1` block APPENDED at the END of the literal (wave order). Task 15 Step 3 later adds `stream-relay.spec.ts` to the same block.
+- Modify: `scripts/smoke.ts`, adding `streamCreditsAdminSuite` directly after `platformRevenueSuite` (both the definition and the call). Task 16 adds `streamRelaySuite` elsewhere in the file.
+
+**Interfaces:**
+- Consumes, from Task 7 exactly (`@/server/usecases/stream-credits`, as revised):
+  - `creditBalance(exec: Tx | typeof sql, orgId: string): Promise<number>`
+  - `interface StaffCreditArgs { orgId: string; delta: number; createdBy: string; note: string; idempotencyKey: string }` and `interface StaffCreditResult { id: string; balance: number; applied: boolean }`
+  - `grantCredits(args: StaffCreditArgs): Promise<StaffCreditResult>`
+  - `refundCredits(args: StaffCreditArgs & { sessionId: string | null }): Promise<StaffCreditResult>`, which throws `HttpError(422, …, "refund_exceeds_consumed")` over the session cap
+  - `revokeCredits(args: StaffCreditArgs): Promise<StaffCreditResult>`, which throws `HttpError(422, …, "insufficient_credits")` below zero
+  - all three throw `HttpError(409, …, "idempotency_key_reused")` for a key whose stored row differs in org, kind, signed delta or session
+  - `consumeForSession(tx, { orgId, fixtureId, sessionId })`, in TESTS only: the real producer of the consume row a linked refund is capped against
+  
+  All three writers go through Task 7's `staffRow`, which runs in this order: the org's advisory money lock → **the key check** (an exact replay returns the original id with `applied: false` and writes nothing; a different request with the same key is a 409) → the revoke floor or the refund cap (422) → ONE row → ONE `staff_audit_log` row (`stream_credit_grant` / `_refund` / `_revoke`, actor = `createdBy`, target the org, `detail.reason` = the note), all in one transaction. **A refund ADDS credits; a revoke removes them.**
+- Consumes, from the repo as read at `27c0681b8` (re-read unchanged at `56159fc41`):
+  - `requireStaff(): Promise<StaffUser>` (`lib/admin.ts:16-23`): runs `requireUser`, then checks `users.is_staff`, and throws `AuthError` otherwise.
+  - `handler` (`lib/http.ts:69`): maps `ZodError` to 400 and `AuthError` to 401; an `HttpError` keeps its status and forwards its `code` (`:82-131`). Task 7's two 422s and its 409 therefore reach the client as `{ ok: false, error, code }` without any mapping in this route.
+  - `HttpError(status, message, code?)` (`lib/errors.ts:9-18`) and `sql` (`@/lib/db`).
+  - `org_stream_credits` as amended by Task 7 Step 0c: `idempotency_key` with its TABLE-wide unique index, and `'revoke'` in the reason CHECK. Also `fixture_stream_sessions.org_id`.
+  - `adjustmentsForOrg` (`server/usecases/admin-adjustments-log.ts`), which already feeds the page's "Adjustments log" region (`page.tsx:284-289`). Task 7 allowlists the three actions, so the audit rows surface there with no page edit.
+- Consumes, in tests:
+  - `streamRig({ createdBy? })` and `rigUser()` (`@/server/relay/__tests__/_session-rig`, Task 7). `seedOrg` returns `userId: null` (`_rig.ts:37`), which is Task 1's false premise A, so `created_by` and the audit actor are always a real users row.
+  - e2e: `signInAs` (`e2e/overlay-kit.ts:124`), `TAG`, `expectNoHorizontalScroll` (`e2e/helpers.ts:49`) and `overflowingIn` (`e2e/helpers.ts:157`).
+  - smoke: `raw` (`scripts/smoke.ts:62`), `check` (`:110`), `setStaff` (`:6879`), `cookieHeader`, `BASE`.
+- Produces:
+  - `server/usecases/admin-stream-credits.ts` (`server-only`):
+    - `export const STREAM_CREDIT_ADJUST_MAX = 50`
+    - `export const STREAM_CREDIT_LEDGER_LIMIT = 20`
+    - `export interface StreamCreditLedgerRow { id: string; reason: string; delta: number; balanceAfter: number; note: string | null; createdBy: string | null; createdByEmail: string | null; sessionId: string | null; createdAt: string }`
+    - `export async function streamCreditsForOrg(orgId: string): Promise<{ balance: number; rows: StreamCreditLedgerRow[] }>`
+  - `POST /api/admin/orgs/[id]/stream-credits`. The body is strict and discriminated on `kind`. Every kind carries `delta: int 1..STREAM_CREDIT_ADJUST_MAX`, `note: string` (trimmed, 1..500) and `idempotency_key: string` (8..200):
+    - `{ kind: "grant"; delta; note; idempotency_key }`
+    - `{ kind: "refund"; delta; note; idempotency_key; session_id?: uuid | null }`
+    - `{ kind: "revoke"; delta; note; idempotency_key }`
+    
+    Responses:
+    - 200 `{ ok: true, data: { id, balance, applied } }`, where `applied: false` is an EXACT replay of a key
+    - **401** for a non-staff or anonymous caller, returned BEFORE the body is parsed
+    - 400 on a schema failure
+    - 404 `org_not_found` for an unknown org or a malformed org id
+    - 404 `session_not_found` when a refund's `session_id` is not a session of THIS org
+    - 409 `idempotency_key_reused` when the key was used for a different adjustment (Task 7, forwarded by `handler`)
+    - 422 `refund_exceeds_consumed` or `insufficient_credits` (Task 7's refusals, forwarded by `handler`)
+  - `components/admin-stream-credits-panel.tsx` (client): `export function AdminStreamCreditsPanel(props: { orgId: string; balance: number; rows: StreamCreditLedgerRow[]; maxDelta: number; ledgerLimit: number })`. The `StreamCreditLedgerRow` import is type-only and is erased. Testids:
+    - panel: `stream-credits-panel`, `stream-credits-balance`
+    - grant: `stream-credits-grant-amount`, `stream-credits-grant-note`, `stream-credits-grant-submit`
+    - refund: `stream-credits-refund-amount`, `stream-credits-refund-session`, `stream-credits-refund-note`, `stream-credits-refund-submit`
+    - revoke: `stream-credits-revoke-amount`, `stream-credits-revoke-note`, `stream-credits-revoke-submit`
+    - status and ledger: `stream-credits-error`, `stream-credits-replayed` (shown when the route answers `applied: false`), `stream-credits-empty`, `stream-credits-ledger` (the scroll rail), and `stream-credits-row`, which carries `data-reason` and `data-delta`; each row shows the author's email, or the author's user id when the email is null
+    - every POST body carries `idempotency_key`: one per submission per card, minted on the first attempt, kept across a failed attempt, dropped on success AND on a 409 `idempotency_key_reused` (which also resets the card and refreshes the page)
+
+**Pattern (§9a):**
+- **Parse → authorize → delegate.** The donor is `app/api/admin/orgs/[id]/credits/route.ts`, which AUTHORIZES before it parses (`:33-34`). This route follows that order and hands every write to Task 7.
+- **Money is ledger rows in the same transaction.** Task 7's writers own the advisory money lock, the key check, the floor, the cap, the single row and its audit row; this task adds no money SQL.
+- **One authority per fact.** `creditBalance` supplies the panel's balance. `STREAM_CREDIT_ADJUST_MAX` feeds both the zod ceiling and, through a prop, the input's `max`.
+- **Deny by default.** `requireStaff` guards the route, and `app/admin/layout.tsx:8-9` redirects anyone who is not staff.
+- **Exemplars.** For the panel, `components/admin-plan-panel.tsx`: inline action cards, a required-reason gate, `call()` followed by `router.refresh()` (`:80-98`, `:398-419`). For the DB-backed admin route test, `app/api/admin/competitions/[id]/discovery/__tests__/route.test.ts`, which doubles only `requireUser`, so the REAL `requireStaff` runs against a REAL users row. The ledger rail copies the Adjustments log's rail (`page.tsx:284-289`).
+
+**Deviations, recorded:**
+- **(a) Copy is English-only, against Global Constraints' "all four dictionaries".** This is the ORCHESTRATOR's reading (Revision 1, item 5), not an owner ruling. It follows how the TREE already treats `/admin`:
+  - `components/admin-credits-panel.tsx:8-9` says "The rest of /admin is English-only (no `t`/`dict` island)".
+  - `app/admin/orgs/[id]/slot-waiver-button.tsx:12` says "/admin is staff-only and owes no dictionary keys".
+  - `app/admin/orgs/[id]/adjustment-labels.ts:16` says "no dictionary keys are owed".
+  - The page itself hardcodes its literals (`page.tsx:117-126`, `:140`, `:158`).
+  - At `27c0681b8`, nothing under `src/app/admin` or in `src/components/admin-*.tsx` imports `getDictionary`, `useT(`, `msg(` or `@/lib/i18n` (grep exit 1).
+  
+  AGENTS.md's exception list names only `content/help/**` and `games/**`, so the reading goes to the owner. The orchestrator applies it until the owner says otherwise. No keys are added and `i18n:gen-keys` is not run.
+- **(b) A refund cannot drive a balance negative; the negative-balance case belongs to REVOKE.** `refundCredits` ADDS (Task 7's `staffRow` → `credit`). The draft's "negative-balance refund → 4xx" therefore had nothing to test, and Revision 1 moves the floor to the new revoke: revoke 1 of 0 returns 422 `insufficient_credits` with no row and no audit row, beside revoke 1 of 1 accepted. The zod refusals stay (`delta` ≤ 0, fractional, a string, or above the ceiling → 400 with no row).
+- **(c) The audit row is Task 7's, written inside the ledger transaction (Revision 1, item 1).** This replaces the draft's "no `staff_audit_log` row".
+  - **There is no reusable audit helper to call.** The donor's in-transaction audit is `auditApplied`, a closure inside `adminAdjust` (`lib/credits.ts:1490-1497`). `adminAdjust` is bound to `ai_credit_ledger` and a wallet advisory lock, and Global Constraints forbids editing `lib/credits.ts`. `logStaffAction` (`lib/admin.ts:95-107`) runs on its own connection, outside any transaction.
+  - So Task 7's `staffRow` writes `auditApplied`'s exact statement inside its own `sql.begin`, on applied writes only.
+  - Task 7 also spreads the three actions into `ADJUSTMENT_ACTIONS`, so the rows surface in the page's existing "Adjustments log" and "Staff history" sections with no edit to either section.
+  - This route writes NO second audit row. A post-write `logStaffAction`, the `entitlement-override/route.ts:45` shape, would duplicate Task 7's row and could 500 after the money had moved.
+- **(d) No GET route.** The page is a server component and already reads `walletBalance` and `adjustmentsForOrg` directly (`page.tsx:73-78`). It reads `streamCreditsForOrg` the same way, and `router.refresh()` re-reads it. A GET route would have no caller and would itself be inert.
+
+**Write-path diff against the donor** (TEST-CASE DESIGN, "New write path — diff it against the nearest existing analogous path"):
+
+| Guard | Donor `api/admin/orgs/[id]/credits/route.ts` | This route |
+|---|---|---|
+| Staff only | `requireStaff()` before parse (`:33-34`) | same |
+| Per-adjustment ceiling | support ≤ 50, superadmin unlimited (`:12`, `:38-43`) | ≤ `STREAM_CREDIT_ADJUST_MAX` (50) for EVERY staff role, in zod |
+| Org exists | 404 (`:45-46`) | 404 `org_not_found`, and a malformed id → 404 rather than Postgres 22P02 → 500 |
+| Lock | `pg_advisory_xact_lock(hashtext('ai-credit-wallet:' || walletId))`, first in the transaction (`lib/credits.ts:1482`) | parity: `pg_advisory_xact_lock(hashtext('stream-credits-org:' || orgId))`, first in every Task 7 ledger write, an empty ledger included |
+| Idempotency | `idempotency_key` z.string 8–200, required (`:22`); `adminAdjust` looks it up under the wallet lock, TABLE-wide (the column is globally unique, `V320__ai_credit_ledger.sql:37`; `lib/credits.ts:1484-1489`) | the same bounds, required on every kind; Task 7 looks it up under the org lock BEFORE the floor and the cap, TABLE-wide by the V408 unique index (parity). An exact replay returns 200 `applied: false`. The client mints one key per submission and keeps it across retries (the donor rotates per modal open). |
+| Reused key, different values | `applied: false`, silently (the lookup compares nothing) | **DEVIATION:** 409 `idempotency_key_reused` when the stored row's org, kind, signed amount or session differs, with no row written and nothing revealed about the stored row. A silent `applied: false` on a DIFFERENT request hides a staff mistake (Revision 2). |
+| Audit | `staff_audit_log` in the ledger transaction, applied writes only (`:55-63` → `adminAdjust`) | the same statement in Task 7's transaction, applied writes only; actions `stream_credit_*`, allowlisted (deviation c) |
+| Below zero | 422 `InsufficientBalanceError` (`:70-72`) | parity: 422 `insufficient_credits`, from revoke only (refund and grant add) |
+| Reversal | a negative `delta` on the same action | a separate `revoke` kind (Revision 1, item 2) with its own audit action |
+| Reason | `reason_code` enum + optional note | REQUIRED note (the money audit trail, and the Adjustments log's subject) |
+| Session scoping | n/a | a refund's `session_id` must be THIS org's (404), and the cumulative linked refunds ≤ that session's consumed count (422, Task 7) |
+
+**Checklist rows satisfied:**
+- **VERIFY-AS-CUSTOMER:**
+  - "Use actual UI/API, not code inspection alone" and "Follow the golden path start to finish once": Step 17 drives the real panel → route → Task 7 row + audit row → server re-read → the balance, the ledger AND the page's Adjustments log in the DOM.
+  - "Then break it: empty inputs, wrong perms, network fail, double-submit":
+    - a blank note → 400
+    - a non-staff user → 401 plus a redirect
+    - a request the server APPLIED but the browser lost, retried → the SAME key, `applied: false`, the replay notice, and one row
+    - a request the server APPLIED but the browser lost, then EDITED and resubmitted → 409 `idempotency_key_reused`, the explanation on screen, the landed attempt re-read into the ledger, the card reset, and the next submission under a NEW key
+    - a double-click → ONE request (the in-flight guard; the key is the backstop, so the ledger alone cannot witness this guard)
+    - a revoke above the balance → the 422 message on screen, the balance unchanged, and no row
+    - a session-linked refund naming a session that is not this org's → 404 (route test and smoke; the cap's 422 is proven in the route and usecase tests)
+  - "No horizontal scroll at 320/768/1280 — split on overflow-x": `expectNoHorizontalScroll` plus `overflowingIn`, with the exemption held to the one `tabindex=0` rail.
+  - "Scrolling rail needs tabindex="0" + role + accessible name".
+  - "Verify visually, always": four PNGs, three of which differ, and all three width PNGs OPENED, with the `/admin` header's own row read at 320, 768 and 1280 (Step 17).
+- **PRODUCT-OWNER LENS:**
+  - "Does this solve the stated problem, or a proxy for it?": grant, refund and revoke gain a production caller and a browser proof.
+  - "Does it match existing product conventions": the page's inline cards, English-only `/admin`, authorize before parse, and the donor's idempotency key and in-transaction audit.
+  - "Is this reversible?": a mistaken grant is reversed by a revoke, itself audited.
+  - "Flag anything a decision-maker needs to weigh in on": the English-only reading (orchestrator, not owner) goes to the report. The reused-key 409 is an orchestrator ruling recorded as a deviation from the donor (write-path diff).
+- **TEST-CASE DESIGN:**
+  - "Empty-set case must be checked explicitly": the read and the panel both test it first.
+  - "Negative assertion needs its positive pair": non-staff 401 ↔ staff 200; foreign session 404 ↔ own session 200; exact replay `applied: false` ↔ a new key applied ↔ a reused key with a different amount → 409; revoke 1 of 0 → 422 ↔ 1 of 1 applied; a second linked refund → 422 ↔ the first applied; submit disabled ↔ enabled once a note is typed.
+  - "Every guard needs a case that DEFEATS it", "Mutate the MONEY path specifically" and "Report mutant KILLER LIST": R1–R4, R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2, C1, C1′, C1″, C2, R5, G1, K2, K3, K4, B1, V1, W1, each with a named killer. Task 7 owns the usecase-side killers (m2, m3, m5–m22).
+  - "Include ≥ 1 case where right answer differs from the wrong answer's constant": balance 3 against a snapshot of 99; `maxDelta` 7, not 50; the author is the staff id, not the org id.
+  - "Pin the VALUE a control opens/seeds at": amount 1, `max`, an empty note.
+  - "Cover: happy path, boundary (0, 1, max), empty/null, malformed input": the delta and body tables.
+  - "New write path — diff it against the nearest existing analogous path": the table above.
+
+**Do NOT touch (in addition to Global Constraints):**
+- The page's other panels and sections: `AdminPlanPanel`, `AdminCreditsPanel`, `AdminOrgActions`, `AdminDiscoveryActions`, `SlotWaiverButton`; Members, Discovery showcase, Division slots held, Adjustments log, Staff history.
+- `app/admin/layout.tsx`.
+- `api/admin/orgs/[id]/credits/**`, along with `lib/credits.ts` and `ai_credit_ledger` (already covered by Global Constraints).
+- `server/usecases/stream-credits.ts`. It is Task 7's file and is consumed only through its exports. If an export is missing or wrong, STOP and route it to Task 7; never patch it here.
+- `server/usecases/admin-adjustments-log.ts` and `app/admin/orgs/[id]/adjustment-labels.ts`. Task 7 adds the three actions and their labels; this task edits neither.
+- `lib/admin.ts`.
+- `server/relay/**`, including Task 7's `__tests__/_session-rig.ts` (consumed, never edited).
+- `db/migration/**`. The V408 amend is Task 7's.
+- `enc-boundary.test.ts`.
+- The four dictionaries and `i18n-keys.ts`.
+- `openapi.ts` and `key-scopes.ts`.
+- Any admin TELEMETRY view (future scope, ruling 15).
+
+- [ ] **Step 1: Re-pin on the tree and take the regression baseline (no code).**
+  (a) Task 7 has landed with the signatures this task consumes: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && grep -a -n "^export async function creditBalance\|^export async function grantCredits\|^export async function refundCredits\|^export async function revokeCredits\|^export interface StaffCreditArgs\|^export interface StaffCreditResult\|^export const STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/stream-credits.ts` → exactly 7 lines, matching **Interfaces**. Then `grep -a -n "idempotency_key\|'revoke'" db/migration/deltas/V408__stream_sessions.sql` must show the column, the unique index and the CHECK value; `grep -a -n "STREAM_CREDIT_AUDIT_ACTIONS" apps/web/src/server/usecases/admin-adjustments-log.ts` must show the import and the spread; and `grep -a -n "export async function streamRig\|export async function rigUser" apps/web/src/server/relay/__tests__/_session-rig.ts` must print 2 lines. If anything differs (for example, a refund that now DEBITS, or no key check), STOP and report: this is money, and nothing gets guessed.
+  (b) Anchors: `grep -a -n "AdminCreditsPanel\|adjustmentsForOrg(id\|limit 20\|Adjustments log" "apps/web/src/app/admin/orgs/[id]/page.tsx"`; `grep -a -n "^async function setStaff\|^async function platformRevenueSuite\|await platformRevenueSuite" scripts/smoke.ts`; `grep -a -n "^export async function overflowingIn\|^export async function expectNoHorizontalScroll" apps/web/e2e/helpers.ts`; `grep -a -n "^const WALKTHROUGH_SPECS\|^\];\|\"spectator-public.spec.ts\"" apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` (read at `b4091834d`: the literal opens at `:159`, its LAST entry is `"spectator-public.spec.ts",` at `:282`, and `];` closes it at `:283`; the list is in WAVE order, not alphabetical). Re-pin every line number this task cites if it has moved.
+  (c) Confirm `rly`'s schema carries the amend: `DATABASE_URL=<rly url> DATABASE_SSL=disable` and a one-line `node -e` postgres query, `select column_name from information_schema.columns where table_schema = 'seazn_club' and table_name = 'org_stream_credits' and column_name = 'idempotency_key'` → 1 row. No row means Task 7 Step 0c's recreate did not happen on this database: STOP.
+  (d) Regression baseline. Record the per-file counts; no figure typed here is the gate:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run 'src/app/api/admin/orgs/[id]/credits/__tests__/route.test.ts' src/components/__tests__/admin-credits-panel.test.tsx src/components/__tests__/admin-plan-panel.test.tsx src/server/usecases/__tests__/admin-adjustments-log.test.ts src/lib/__tests__/admin-audit-actor-truth.test.ts src/lib/__tests__/e2e-ci-wiring.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/stream-credits.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-regress-before.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-regress-before.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
+  Expect EIGHT files listed, every path under `…/worktrees/relay/`, 0 failed and 0 pending, with `stream-credits.test.ts` at Task 7's 15. A red here predates this task: attribute it on a clean detached `main` before starting. Then run the one e2e spec that drives this page today, as a whole file:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 npx playwright test e2e/billing-states.spec.ts --reporter=json > <scratchpad>/r1/t7a-billing-before.json 2><scratchpad>/r1/t7a-billing-before.log; echo "EXIT=$?"; node -e "console.log(require('<scratchpad>/r1/t7a-billing-before.json').stats)"`
+  Record the stats.
+
+- [ ] **Step 2: Write the failing READ test.** The session rig is Task 7's `_session-rig.ts` (Revision 1). Create `apps/web/src/server/usecases/__tests__/admin-stream-credits.test.ts`:
+
+```ts
+// The staff "Match credits" panel's read (Task 7A, owner ruling 15). Real Postgres; skipped
+// without DATABASE_URL. Rows are inserted by hand at explicit AGES so the order is the test's,
+// not the clock's. Killers for the PR's mutant table (Step 5):
+//   R1 one authority  balance: creditBalance(sql, orgId) → rows[0]?.balanceAfter ?? 0 → "the balance is sum(delta)"
+//   R2 left join      `left join users` → `join users`                                → "every field is mapped"
+//   R3 org scope      drop `where c.org_id = ${orgId}`                                 → "only THIS org"
+//   R4 order          `c.created_at desc` → `c.created_at asc`                         → "the newest … rows"
+//   R6 limit          drop `limit ${STREAM_CREDIT_LEDGER_LIMIT}`                        → "the newest … rows"
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { sql } from "@/lib/db";
+import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "../admin-stream-credits";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const uniq = () => randomUUID().slice(0, 8);
+
+async function freshOrg(): Promise<string> {
+  const s = uniq();
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${"Ledger " + s}, ${"ledger-" + s}) returning id`;
+  return id;
+}
+
+async function author(): Promise<{ id: string; email: string }> {
+  const email = `ledger-author-${uniq()}@test.local`;
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified) values (${email}, 'Ledger Author', true) returning id`;
+  return { id, email };
+}
+
+/** One ledger row at an explicit age. */
+async function ledgerRow(orgId: string, r: {
+  reason: string; delta: number; balanceAfter: number; minutesAgo: number;
+  note?: string; createdBy?: string; sessionId?: string; stripeEventId?: string;
+}): Promise<void> {
+  await sql`
+    insert into org_stream_credits (org_id, delta, reason, balance_after, note, created_by, session_id, stripe_event_id, created_at)
+    values (${orgId}, ${r.delta}, ${r.reason}, ${r.balanceAfter}, ${r.note ?? null}, ${r.createdBy ?? null},
+            ${r.sessionId ?? null}, ${r.stripeEventId ?? null}, now() - (${r.minutesAgo}::int * interval '1 minute'))`;
+}
+
+describe.skipIf(!HAS_DB)("streamCreditsForOrg — the staff panel's read", () => {
+  it("an EMPTY ledger reads { balance: 0, rows: [] } (the empty set, explicitly)", async () => {
+    expect(await streamCreditsForOrg(await freshOrg())).toEqual({ balance: 0, rows: [] });
+  });
+
+  it("every field is mapped, newest first — a purchase row with NO author and a consume row with NO author survive the users join (R2), the consume row carries its session, and a NEGATIVE revoke row passes through signed", async () => {
+    const a = await author();
+    const r = await streamRig({ createdBy: a.id });
+    const orgId = r.orgId;
+    const sessionId = await r.session(r.fixtureIds[0]!, "failed");
+    await ledgerRow(orgId, { reason: "purchase", delta: 5, balanceAfter: 5, minutesAgo: 40, stripeEventId: `evt_${randomUUID()}` });
+    await ledgerRow(orgId, { reason: "consume", delta: -1, balanceAfter: 4, minutesAgo: 30, sessionId });
+    await ledgerRow(orgId, { reason: "grant", delta: 3, balanceAfter: 7, minutesAgo: 20, note: "pilot league", createdBy: a.id });
+    await ledgerRow(orgId, { reason: "revoke", delta: -1, balanceAfter: 6, minutesAgo: 10, note: "one too many", createdBy: a.id });
+    const read = await streamCreditsForOrg(orgId);
+    expect(read.balance).toBe(6);
+    expect(read.rows).toEqual([
+      { id: expect.any(String), reason: "revoke", delta: -1, balanceAfter: 6, note: "one too many", createdBy: a.id, createdByEmail: a.email, sessionId: null,
+        createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) },
+      { id: expect.any(String), reason: "grant", delta: 3, balanceAfter: 7, note: "pilot league", createdBy: a.id, createdByEmail: a.email, sessionId: null, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null, sessionId, createdAt: expect.any(String) },
+      { id: expect.any(String), reason: "purchase", delta: 5, balanceAfter: 5, note: null, createdBy: null, createdByEmail: null, sessionId: null, createdAt: expect.any(String) },
+    ]);
+  });
+
+  it("only THIS org's rows and balance — another org's grant is in neither, and is readable where it belongs (R3, with its positive pair)", async () => {
+    const a = await freshOrg();
+    const b = await freshOrg();
+    await ledgerRow(a, { reason: "grant", delta: 1, balanceAfter: 1, minutesAgo: 2 });
+    await ledgerRow(b, { reason: "grant", delta: 4, balanceAfter: 4, minutesAgo: 1 });
+    const read = await streamCreditsForOrg(a);
+    expect(read.balance).toBe(1);
+    expect(read.rows.map((r) => r.delta)).toEqual([1]);
+    const other = await streamCreditsForOrg(b);
+    expect([other.balance, other.rows.map((r) => r.delta)]).toEqual([4, [4]]);
+  });
+
+  it("the newest STREAM_CREDIT_LEDGER_LIMIT rows, newest first — the OLDEST is the one dropped — while the balance still counts EVERY row (R4, R6)", async () => {
+    const orgId = await freshOrg();
+    const n = STREAM_CREDIT_LEDGER_LIMIT + 1;
+    for (let i = 1; i <= n; i++) {
+      // row 1 is the oldest; row n the newest
+      await ledgerRow(orgId, { reason: "grant", delta: 1, balanceAfter: i, minutesAgo: n - i + 1, note: `row ${i}` });
+    }
+    const read = await streamCreditsForOrg(orgId);
+    expect(read.rows).toHaveLength(STREAM_CREDIT_LEDGER_LIMIT);
+    expect(read.rows[0]!.note).toBe(`row ${n}`);
+    expect(read.rows.map((r) => r.note)).not.toContain("row 1");
+    // The differential: the balance is over ALL rows, the displayed rows sum to one fewer.
+    expect(read.balance).toBe(n);
+    expect(read.rows.reduce((s, r) => s + r.delta, 0)).toBe(STREAM_CREDIT_LEDGER_LIMIT);
+  });
+
+  it("the balance is sum(delta) through creditBalance, NOT the newest row's balance_after — a disagreeing snapshot is shown as-is and never read as the balance (R1)", async () => {
+    const orgId = await freshOrg();
+    await ledgerRow(orgId, { reason: "grant", delta: 3, balanceAfter: 99, minutesAgo: 1 });
+    const read = await streamCreditsForOrg(orgId);
+    expect(read.balance).toBe(3);
+    expect(read.rows[0]!.balanceAfter).toBe(99);
+  });
+});
+```
+
+- [ ] **Step 3: Run — expect a collection failure that names `../admin-stream-credits`.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/admin-stream-credits.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-read-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-read-red.json');console.log(r.numTotalTests,r.numFailedTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,(t.message||'').slice(0,120))"`
+  Expect `0 1`, with the message naming `admin-stream-credits` and NOT `_session-rig`. Task 7's rig exists, so the red comes from the right module.
+
+- [ ] **Step 4: Write `admin-stream-credits.ts`.**
+
+```ts
+import "server-only";
+// server/usecases/admin-stream-credits.ts — the READ behind the staff "Match credits" panel on
+// /admin/orgs/[id] (Task 7A, owner ruling 15). Writes are NOT here: the admin route calls
+// Task 7's grantCredits / refundCredits / revokeCredits, which own the lock, the key check,
+// the floor, the cap, the row and its staff_audit_log row.
+import { sql } from "@/lib/db";
+import { creditBalance } from "@/server/usecases/stream-credits";
+
+/** The largest single staff adjustment, for EVERY staff role. 50 is the repo's existing
+ *  per-adjustment staff ceiling for credits (api/admin/orgs/[id]/credits/route.ts,
+ *  SUPPORT_CREDIT_CAP), so staff meet one number on one page; it covers the largest
+ *  match-credit pack (20, design §5.2) with room; and it turns typo'd extra digits into a
+ *  400 instead of Postgres 22003 on the `integer` delta (a 500). No superadmin bypass (the
+ *  orchestrator's ruling 4, 2026-09-16): a bigger deal is several attributed, audited rows. */
+export const STREAM_CREDIT_ADJUST_MAX = 50;
+
+/** Ledger rows the panel shows, newest first. 20 is the page's own recent-history depth
+ *  (Staff history, page.tsx `limit 20`); one match credit is one streamed match, so 20 rows
+ *  cover a busy weekend plus the purchase that funded it. Older rows are a SQL read — no
+ *  pager until someone needs one. */
+export const STREAM_CREDIT_LEDGER_LIMIT = 20;
+
+export interface StreamCreditLedgerRow {
+  id: string;
+  /** The DDL CHECK owns the set of reasons; the panel prints the value, so no second union here. */
+  reason: string;
+  delta: number;
+  /** The per-row SNAPSHOT — shown, never read as the balance. */
+  balanceAfter: number;
+  note: string | null;
+  createdBy: string | null;
+  createdByEmail: string | null;
+  sessionId: string | null;
+  /** ISO-8601, UTC. */
+  createdAt: string;
+}
+
+export async function streamCreditsForOrg(orgId: string): Promise<{ balance: number; rows: StreamCreditLedgerRow[] }> {
+  const rows = await sql<{
+    id: string; reason: string; delta: number; balance_after: number; note: string | null;
+    created_by: string | null; email: string | null; session_id: string | null; created_at: Date | string;
+  }[]>`
+    select c.id, c.reason, c.delta, c.balance_after, c.note, c.created_by, u.email, c.session_id, c.created_at
+      from org_stream_credits c
+      left join users u on u.id = c.created_by
+     where c.org_id = ${orgId}
+     order by c.created_at desc, c.id desc
+     limit ${STREAM_CREDIT_LEDGER_LIMIT}`;
+  return {
+    balance: await creditBalance(sql, orgId),   // ONE authority: sum(delta), never rows[0].balance_after
+    rows: rows.map((r) => ({
+      id: r.id, reason: r.reason, delta: r.delta, balanceAfter: r.balance_after, note: r.note,
+      createdBy: r.created_by, createdByEmail: r.email, sessionId: r.session_id,
+      createdAt: new Date(r.created_at).toISOString(),
+    })),
+  };
+}
+```
+
+- [ ] **Step 5: Run — expect `5 0 0`, then the read mutants.** Use the same command as Step 3, writing to `t7a-read.json` and printing `r.numTotalTests,r.numFailedTests,r.numPendingTests` → `5 0 0`. Pending MUST be 0: pending means the DB URL did not reach the run. Next, confirm that the boundary stays green with Task 7's rig in the tree. The rig names `rtmp_enc` from inside `server/relay/__tests__/`, which claim 2 allows (under `server/relay/**`) and claim 3 excludes (`__tests__` paths are filtered out); it is not the only file outside `secret-columns.ts` to name the column (`migration-shape.test.ts`, the secret-columns tests and the telemetry tests do too): `… npx vitest run src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-enc.json …` → 0 failed.
+  **Mutation protocol**, the same for every mutant in this task:
+  1. Take `cp <file> <scratchpad>/r1/t7a-<name>.bak` AFTER the green run. A backup taken earlier restores stale code over your own work.
+  2. Apply ONE mutant with the Edit tool on a unique anchor.
+  3. Re-run and confirm `numTotalTests` is unchanged. A mutant that breaks parsing collects fewer tests and reads as a kill for the wrong reason.
+  4. Confirm that the NAMED test is the one that goes red.
+  5. Restore with `cp` from the backup (NEVER `git checkout`), then `cmp` the restored file against the backup → identical.
+  
+  The mutants: R1 `balance: await creditBalance(sql, orgId)` → `balance: rows[0]?.balance_after ?? 0` → "the balance is sum(delta)" red. R2 `left join users` → `join users` → "every field is mapped" red. R3 delete `where c.org_id = ${orgId}` → "only THIS org" red. R4 `c.created_at desc` → `c.created_at asc` → "the newest … rows" red on `row ${n}`. R6 delete `limit ${STREAM_CREDIT_LEDGER_LIMIT}` → the same test red on `toHaveLength`. Record the five killers, then re-run → `5 0 0`.
+
+- [ ] **Step 6: Write the failing route test.** Create `apps/web/src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts`:
+
+```ts
+// POST /api/admin/orgs/[id]/stream-credits — the staff "Match credits" panel's three money actions
+// (Task 7A, owner ruling 15; Revision 1). DB-backed. Only `requireUser` is doubled — the discovery
+// route test's idiom (api/admin/competitions/[id]/discovery/__tests__/route.test.ts) — so the REAL
+// requireStaff reads a REAL users row, and Task 7's REAL grantCredits / refundCredits /
+// revokeCredits write REAL org_stream_credits and staff_audit_log rows. Skipped without
+// DATABASE_URL. Killers for the PR's mutant table (Step 9):
+//   S1 staff guard        requireStaff() → requireUser()                → "a signed-in NON-staff user"
+//   S2 authorize first    move `Body.parse` above `requireStaff`        → the same test's malformed-body row
+//   O1 session ownership  drop `and org_id = ${id}`                      → "THIS org's consumed session … ANOTHER org" (422, not 404)
+//   O2 session existence  delete the whole session lookup                → "exists nowhere" (422, not 404)
+//   O3 the org's own id   `orgId: org.id` → `orgId: id`                  → "an unknown org" (the upper-case row: its audit row is filed under the upper-case text)
+//   N1 note required      Note: drop `.min(1)`                           → "the note is required" ('' rows)
+//   N2 note trimmed       Note: drop `.trim()`                           → "the note is required" ('   ' rows) and "staff grant" (stored note)
+//   D1 delta ceiling      Delta: drop `.max(STREAM_CREDIT_ADJUST_MAX)`   → "delta bounds" (MAX + 1 row)
+//   A1 author             `createdBy: staff.id` → `createdBy: id` (grant) → "staff grant" (created_by and the audit actor; the FK refuses an org id → 500)
+//   K0 key bounds         Key: drop `.min(8)`                            → "idempotency_key is required" (7-char row)
+//   K1 key passed through `idempotencyKey: body.idempotency_key` → `idempotencyKey: randomUUID()` (grant) → "a replayed key"
+//   V2 revoke routed      revoke arm → `grantCredits(...)`                → "revoke"
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { sql } from "@/lib/db";
+import { AuthError } from "@/lib/errors";
+import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { STREAM_CREDIT_ADJUST_MAX } from "@/server/usecases/admin-stream-credits";
+import { consumeForSession, grantCredits } from "@/server/usecases/stream-credits";
+
+// vi.hoisted: the mock factory runs before this module's own consts initialise.
+const { requireUserMock } = vi.hoisted(() => ({ requireUserMock: vi.fn<() => Promise<{ id: string }>>() }));
+// Spread the real module: _rig.ts's usecases import from @/lib/auth too, and a bare factory
+// would hand them `undefined` for every other export.
+vi.mock("@/lib/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/auth")>()),
+  requireUser: () => requireUserMock(),
+}));
+
+import { POST } from "../route";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+const uniq = () => randomUUID().slice(0, 8);
+const minted: string[] = [];
+
+const post = (orgId: string, body: unknown) =>
+  POST(
+    new Request(`http://test/api/admin/orgs/${orgId}/stream-credits`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: orgId }) },
+  );
+
+/** A fresh users row (`role` null = a plain signed-in user), signed in as the caller. */
+async function signedIn(role: "support" | "superadmin" | null): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, is_staff, staff_role)
+    values (${`stream-credits-${uniq()}@test.local`}, 'Credits Staff', true, ${role !== null}, ${role})
+    returning id`;
+  minted.push(id);
+  requireUserMock.mockReset().mockResolvedValue({ id });
+  return id;
+}
+
+async function freshOrg(): Promise<string> {
+  const s = uniq();
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${"Credits " + s}, ${"credits-" + s}) returning id`;
+  return id;
+}
+
+type LedgerRow = { reason: string; delta: number; balance_after: number; note: string | null; created_by: string | null; session_id: string | null };
+const ledger = async (orgId: string): Promise<LedgerRow[]> => [
+  ...(await sql<LedgerRow[]>`
+    select reason, delta, balance_after, note, created_by, session_id
+      from org_stream_credits where org_id = ${orgId} order by created_at`),
+];
+/** Task 7's audit rows for an org — the route must add none of its own. */
+const audits = async (orgId: string) => [
+  ...(await sql<{ actor_id: string; action: string }[]>`
+    select actor_id, action from staff_audit_log where target_id = ${orgId} order by created_at`),
+];
+
+/** A fresh key per submission, as the panel mints one. */
+const k = () => `idem-${randomUUID()}`;
+
+/** A real session in a real org that CONSUMED one credit, through Task 7's real producer. */
+async function consumedSession(staffId: string): Promise<{ orgId: string; sessionId: string }> {
+  const r = await streamRig({ createdBy: staffId });
+  await grantCredits({ orgId: r.orgId, delta: 1, createdBy: staffId, note: "fund", idempotencyKey: k() });
+  const sessionId = await r.session(r.fixtureIds[0]!);
+  await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: r.fixtureIds[0]!, sessionId }));
+  return { orgId: r.orgId, sessionId };
+}
+
+afterAll(async () => {
+  // Revoke, not delete: no staff bit minted here may outlive the file in a shared DB.
+  if (HAS_DB && minted.length) await sql`update users set is_staff = false, staff_role = null where id = any(${minted})`;
+});
+
+describe.skipIf(!HAS_DB)("POST /api/admin/orgs/[id]/stream-credits", () => {
+  it("a signed-in NON-staff user → 401 and no row — even with a malformed body (authorize BEFORE parse, S1/S2); an anonymous caller → 401", async () => {
+    const orgId = await freshOrg();
+    await signedIn(null);
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "must not land", idempotency_key: k() })).status).toBe(401);
+    expect((await post(orgId, { kind: "nope" })).status).toBe(401);
+    requireUserMock.mockReset().mockRejectedValue(new AuthError("Not authenticated"));
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "must not land", idempotency_key: k() })).status).toBe(401);
+    expect(await ledger(orgId)).toEqual([]);
+    expect(await audits(orgId)).toEqual([]);
+  });
+
+  it("staff grant → 200 { id, balance, applied: true }, exactly ONE row (reason grant, the note TRIMMED, created_by = the staff user) and ONE audit row authored by that user (A1; the 401's positive pair)", async () => {
+    const orgId = await freshOrg();
+    const staffId = await signedIn("superadmin");
+    const res = await post(orgId, { kind: "grant", delta: 3, note: "  pilot league  ", idempotency_key: k() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, data: { id: expect.any(String), balance: 3, applied: true } });
+    expect(await ledger(orgId)).toEqual([
+      { reason: "grant", delta: 3, balance_after: 3, note: "pilot league", created_by: staffId, session_id: null },
+    ]);
+    expect(await audits(orgId)).toEqual([{ actor_id: staffId, action: "stream_credit_grant" }]);
+  });
+
+  it("a SUPPORT-role staff user may grant too — the guard is requireStaff, not requireSuperadmin", async () => {
+    const orgId = await freshOrg();
+    const staffId = await signedIn("support");
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "support grant", idempotency_key: k() })).status).toBe(200);
+    expect((await ledger(orgId)).map((r) => r.created_by)).toEqual([staffId]);
+  });
+
+  it("the note is required: absent, '' and '   ' → 400 with no row on ALL THREE kinds; 'x' → 200 with one (N1, N2)", async () => {
+    const orgId = await freshOrg();
+    await signedIn("superadmin");
+    for (const kind of ["grant", "refund", "revoke"] as const) {
+      expect((await post(orgId, { kind, delta: 1, idempotency_key: k() })).status, `${kind} without a note`).toBe(400);
+      for (const note of ["", "   "]) {
+        expect((await post(orgId, { kind, delta: 1, note, idempotency_key: k() })).status, `${kind} note ${JSON.stringify(note)}`).toBe(400);
+      }
+    }
+    expect(await ledger(orgId)).toEqual([]);
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "x", idempotency_key: k() })).status).toBe(200);
+    expect(await ledger(orgId)).toHaveLength(1);
+  });
+
+  it("delta bounds, derived from STREAM_CREDIT_ADJUST_MAX: 0, -1, 1.5, \"1\" and MAX + 1 → 400 with no row (a revoke's MAX + 1 too); grant 1, refund MAX and revoke MAX → 200 (D1)", async () => {
+    const orgId = await freshOrg();
+    await signedIn("superadmin");
+    for (const delta of [0, -1, 1.5, "1", STREAM_CREDIT_ADJUST_MAX + 1]) {
+      expect((await post(orgId, { kind: "grant", delta, note: "bounds", idempotency_key: k() })).status, `delta ${JSON.stringify(delta)}`).toBe(400);
+    }
+    expect((await post(orgId, { kind: "revoke", delta: STREAM_CREDIT_ADJUST_MAX + 1, note: "bounds", idempotency_key: k() })).status).toBe(400);
+    expect(await ledger(orgId)).toEqual([]);
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "floor", idempotency_key: k() })).status).toBe(200);
+    expect((await post(orgId, { kind: "refund", delta: STREAM_CREDIT_ADJUST_MAX, note: "ceiling", idempotency_key: k() })).status).toBe(200);
+    expect((await post(orgId, { kind: "revoke", delta: STREAM_CREDIT_ADJUST_MAX, note: "ceiling back", idempotency_key: k() })).status).toBe(200);
+    expect((await ledger(orgId)).map((r) => [r.reason, r.delta])).toEqual([
+      ["grant", 1], ["refund", STREAM_CREDIT_ADJUST_MAX], ["revoke", -STREAM_CREDIT_ADJUST_MAX],
+    ]);
+  });
+
+  it("the body is strict: a grant or a revoke carrying session_id, an unknown field, an unknown kind, a refund whose session_id is '' or not a uuid → 400 with no row", async () => {
+    const orgId = await freshOrg();
+    await signedIn("superadmin");
+    const bodies: unknown[] = [
+      { kind: "grant", delta: 1, note: "n", idempotency_key: k(), session_id: randomUUID() },
+      { kind: "revoke", delta: 1, note: "n", idempotency_key: k(), session_id: randomUUID() },
+      { kind: "grant", delta: 1, note: "n", idempotency_key: k(), extra: true },
+      { kind: "debit", delta: 1, note: "n", idempotency_key: k() },
+      { kind: "refund", delta: 1, note: "n", idempotency_key: k(), session_id: "" },
+      { kind: "refund", delta: 1, note: "n", idempotency_key: k(), session_id: "not-a-uuid" },
+    ];
+    for (const body of bodies) expect((await post(orgId, body)).status, JSON.stringify(body)).toBe(400);
+    expect(await ledger(orgId)).toEqual([]);
+  });
+
+  it("idempotency_key is required on every kind, 8..200 chars (the donor's bounds): absent, 7 chars, 201 chars or a number → 400 with no row; 8 and 200 chars → 200 (K0)", async () => {
+    const orgId = await freshOrg();
+    await signedIn("superadmin");
+    for (const kind of ["grant", "refund", "revoke"] as const) {
+      for (const idempotency_key of [undefined, "1234567", "k".repeat(201), 12345678]) {
+        expect((await post(orgId, { kind, delta: 1, note: "n", idempotency_key })).status, `${kind} key ${JSON.stringify(idempotency_key)}`).toBe(400);
+      }
+    }
+    expect(await ledger(orgId)).toEqual([]);
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "n", idempotency_key: randomUUID().slice(0, 8) })).status).toBe(200);
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "n", idempotency_key: randomUUID().repeat(6).slice(0, 200) })).status).toBe(200);
+    expect(await ledger(orgId)).toHaveLength(2);
+  });
+
+  it("a replayed key → 200 applied false with the ORIGINAL id and balance, and still ONE ledger row and ONE audit row; the SAME key with a different amount → 409 idempotency_key_reused, its code forwarded, nothing written; a new key applies (K1, with its positive pair)", async () => {
+    const orgId = await freshOrg();
+    const staffId = await signedIn("superadmin");
+    const key = k();
+    const first = await (await post(orgId, { kind: "grant", delta: 2, note: "double click", idempotency_key: key })).json();
+    const replay = await post(orgId, { kind: "grant", delta: 2, note: "double click", idempotency_key: key });
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({ ok: true, data: { id: first.data.id, balance: 2, applied: false } });
+    // Task 7's reused-key refusal through `handler`: the status AND the code reach the client.
+    const reused = await post(orgId, { kind: "grant", delta: 3, note: "double click, retyped", idempotency_key: key });
+    expect(reused.status).toBe(409);
+    expect(await reused.json()).toMatchObject({ ok: false, code: "idempotency_key_reused" });
+    expect(await ledger(orgId)).toHaveLength(1);
+    expect(await audits(orgId)).toEqual([{ actor_id: staffId, action: "stream_credit_grant" }]);
+    expect(await (await post(orgId, { kind: "grant", delta: 1, note: "a new submission", idempotency_key: k() })).json())
+      .toMatchObject({ ok: true, data: { balance: 3, applied: true } });
+    expect(await ledger(orgId)).toHaveLength(2);
+  });
+
+  it("an unknown org → 404 org_not_found; a non-uuid org id → 404, never a 500; a REAL org's id UPPER-cased (z.uuid() accepts it) → 200, written under the org's STORED id, so its audit row is found by that id (O3)", async () => {
+    const staffId = await signedIn("superadmin");
+    const missing = await post(randomUUID(), { kind: "grant", delta: 1, note: "n", idempotency_key: k() });
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ ok: false, code: "org_not_found" });
+    expect((await post("not-a-uuid", { kind: "grant", delta: 1, note: "n", idempotency_key: k() })).status).toBe(404);
+    // The positive pair, and the one-authority check: staff_audit_log.target_id is TEXT, so a route
+    // that passed the raw URL id would file this grant's audit row under the upper-case spelling,
+    // where this org's Adjustments log (target_id = the stored, lower-case id) never finds it.
+    const orgId = await freshOrg();
+    const upper = await post(orgId.toUpperCase(), { kind: "grant", delta: 1, note: "a pasted upper-case id", idempotency_key: k() });
+    expect(upper.status).toBe(200);
+    expect(await upper.json()).toMatchObject({ ok: true, data: { balance: 1, applied: true } });
+    expect(await audits(orgId)).toEqual([{ actor_id: staffId, action: "stream_credit_grant" }]);
+  });
+
+  it("a refund ADDS (Task 7's credit()): on a balance-0 org, an UNLINKED (goodwill) refund of 2 → 200 balance 2 — no refund can drive a balance negative", async () => {
+    const orgId = await freshOrg();
+    const staffId = await signedIn("support");
+    const res = await post(orgId, { kind: "refund", delta: 2, note: "failed stream, session unknown", session_id: null, idempotency_key: k() });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, data: { balance: 2, applied: true } });
+    expect(await ledger(orgId)).toEqual([
+      { reason: "refund", delta: 2, balance_after: 2, note: "failed stream, session unknown", created_by: staffId, session_id: null },
+    ]);
+  });
+
+  it("a refund naming THIS org's consumed session → 200 and the row carries it; the same session named against ANOTHER org → 404 session_not_found; a SECOND refund of that session → 422 refund_exceeds_consumed; no stray row anywhere (O1, Task 7's cap through the route)", async () => {
+    const staffId = await signedIn("superadmin");
+    const own = await consumedSession(staffId);
+    const other = await freshOrg();
+    expect((await post(own.orgId, { kind: "refund", delta: 1, note: "failed stream", session_id: own.sessionId, idempotency_key: k() })).status).toBe(200);
+    const foreign = await post(other, { kind: "refund", delta: 1, note: "wrong org", session_id: own.sessionId, idempotency_key: k() });
+    expect(foreign.status).toBe(404);
+    expect(await foreign.json()).toMatchObject({ ok: false, code: "session_not_found" });
+    const again = await post(own.orgId, { kind: "refund", delta: 1, note: "twice", session_id: own.sessionId, idempotency_key: k() });
+    expect(again.status).toBe(422);
+    expect(await again.json()).toMatchObject({ ok: false, code: "refund_exceeds_consumed" });
+    expect(await ledger(other)).toEqual([]);
+    expect((await ledger(own.orgId)).map((r) => [r.reason, r.delta, r.session_id])).toEqual([
+      ["grant", 1, null], ["consume", -1, own.sessionId], ["refund", 1, own.sessionId],
+    ]);
+  });
+
+  it("a refund naming a session id that exists NOWHERE → 404 session_not_found and no row (O2 — Task 7's cap would answer 422, so the 404 is the route's own check)", async () => {
+    const orgId = await freshOrg();
+    await signedIn("superadmin");
+    const res = await post(orgId, { kind: "refund", delta: 1, note: "ghost", session_id: randomUUID(), idempotency_key: k() });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ ok: false, code: "session_not_found" });
+    expect(await ledger(orgId)).toEqual([]);
+  });
+
+  it("revoke: 1 of 1 → 200 balance 0 with a NEGATIVE 'revoke' row and its audit row; 1 of 0 → 422 insufficient_credits with no row and no audit row (V2, Task 7's floor through the route)", async () => {
+    const orgId = await freshOrg();
+    const staffId = await signedIn("support");
+    expect((await post(orgId, { kind: "grant", delta: 1, note: "mistaken grant", idempotency_key: k() })).status).toBe(200);
+    const ok = await post(orgId, { kind: "revoke", delta: 1, note: "reverse the mistaken grant", idempotency_key: k() });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ ok: true, data: { balance: 0, applied: true } });
+    const refused = await post(orgId, { kind: "revoke", delta: 1, note: "nothing left", idempotency_key: k() });
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toMatchObject({ ok: false, code: "insufficient_credits" });
+    expect(await ledger(orgId)).toEqual([
+      { reason: "grant", delta: 1, balance_after: 1, note: "mistaken grant", created_by: staffId, session_id: null },
+      { reason: "revoke", delta: -1, balance_after: 0, note: "reverse the mistaken grant", created_by: staffId, session_id: null },
+    ]);
+    expect((await audits(orgId)).map((a) => a.action)).toEqual(["stream_credit_grant", "stream_credit_revoke"]);
+  });
+});
+```
+
+- [ ] **Step 7: Run — expect a collection failure that names `../route`.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run 'src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts' --reporter=json --outputFile=<scratchpad>/r1/t7a-route-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-route-red.json');console.log(r.numTotalTests,r.numFailedTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,(t.message||'').slice(0,120))"`
+  Expect `0 1`, the message naming `route`, and the one path listed under `…/worktrees/relay/`. The path is single-quoted because zsh aborts on the bare `[id]` glob.
+
+- [ ] **Step 8: Write the route.** Create `apps/web/src/app/api/admin/orgs/[id]/stream-credits/route.ts`. It exports the handler only (C21):
+
+```ts
+// POST /api/admin/orgs/[id]/stream-credits — the staff "Match credits" panel's three money actions
+// (Task 7A, owner ruling 15; Revision 1). Outside the v1 OpenAPI spec (app/api/admin/**, like its
+// donor ../credits/route.ts). Parse → authorize → delegate, AUTHORIZING FIRST as the donor does (a
+// non-staff caller learns nothing about the body): requireStaff, the strict body, the org, a
+// refund's session must be THIS org's, then Task 7's grantCredits / refundCredits / revokeCredits.
+// Those own the org's advisory money lock, the idempotency key, the revoke floor, the refund cap,
+// the one row AND its staff_audit_log row, all in one transaction; their 422 refusals and the
+// 409 idempotency_key_reused reach the client, code included, through `handler`.
+// This file writes no SQL and no audit row (plan Task 7A, deviation c).
+import { z } from "zod";
+import { sql } from "@/lib/db";
+import { requireStaff } from "@/lib/admin";
+import { handler, HttpError } from "@/lib/http";
+import { STREAM_CREDIT_ADJUST_MAX } from "@/server/usecases/admin-stream-credits";
+import { grantCredits, refundCredits, revokeCredits } from "@/server/usecases/stream-credits";
+
+const Delta = z.number().int().min(1).max(STREAM_CREDIT_ADJUST_MAX);
+/** The money audit trail: required, trimmed, bounded like the donor's note. */
+const Note = z.string().trim().min(1).max(500);
+/** The donor's bounds exactly (api/admin/orgs/[id]/credits/route.ts:22). REQUIRED on every kind:
+ *  the panel mints one per submission and resends it on a retry, so a replay writes nothing. */
+const Key = z.string().min(8).max(200);
+const Body = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("grant"), delta: Delta, note: Note, idempotency_key: Key }).strict(),
+  z.object({ kind: z.literal("refund"), delta: Delta, note: Note, idempotency_key: Key, session_id: z.uuid().nullable().optional() }).strict(),
+  z.object({ kind: z.literal("revoke"), delta: Delta, note: Note, idempotency_key: Key }).strict(),
+]);
+
+const orgNotFound = () => new HttpError(404, "Organization not found", "org_not_found");
+
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  return handler(async () => {
+    const { id } = await params;
+    const staff = await requireStaff();
+    const body = Body.parse(await req.json().catch(() => null));          // unparseable JSON is a 400, not a 500
+    if (!z.uuid().safeParse(id).success) throw orgNotFound();              // not Postgres 22P02 → 500
+    const [org] = await sql<{ id: string }[]>`select id from organizations where id = ${id}`;
+    if (!org) throw orgNotFound();
+    // `org.id`, never the URL's `id` (Revision 3, N1): z.uuid() accepts an upper-case id, the
+    // lookup above matches it (a uuid compares by value), and a raw pass-through would reach Task 7
+    // in the URL's spelling — staff_audit_log.target_id is TEXT, so the audit row would be filed
+    // where this org's Adjustments log never looks. The stored id is the one authority.
+    const common = { orgId: org.id, delta: body.delta, createdBy: staff.id, note: body.note, idempotencyKey: body.idempotency_key };
+
+    if (body.kind === "grant") return grantCredits(common);
+    if (body.kind === "revoke") return revokeCredits(common);
+    const sessionId = body.session_id ?? null;
+    if (sessionId) {
+      // The route's own 404: Task 7's cap would answer 422 for a session with no consume row here.
+      const [session] = await sql<{ id: string }[]>`
+        select id from fixture_stream_sessions where id = ${sessionId} and org_id = ${id}`;
+      if (!session) throw new HttpError(404, "No stream session with that id in this organisation", "session_not_found");
+    }
+    return refundCredits({ ...common, sessionId });
+  });
+}
+```
+
+- [ ] **Step 9: Run — expect `13 0 0`, then the route mutants.** Use the same command as Step 7, writing to `t7a-route.json` and printing `r.numTotalTests,r.numFailedTests,r.numPendingTests` → `13 0 0`. If the `'   '` rows fail on the UNMUTATED route, zod applied the length check before the trim. In that case re-express `Note` as `z.string().trim().pipe(z.string().min(1).max(500))`; never weaken the row. Then run the mutants under Step 5's protocol, one at a time. `common` is shared by all three writers, so A1 and K1 are applied at the GRANT call only (inline the object there for the mutant), which keeps each mutant on one surface:
+  - S1 `await requireStaff()` → `await requireUser()`, importing `requireUser` from `@/lib/auth` so it compiles: "a signed-in NON-staff user" goes red, with a 200 and a row.
+  - S2 move the `Body.parse` line above `requireStaff`: the same test goes red on its `{ kind: "nope" }` row, which returns 400.
+  - O1 delete `and org_id = ${id}`: "THIS org's consumed session … ANOTHER org" goes red on the foreign call. It now returns **422 `refund_exceeds_consumed`, not 200**: Task 7's cap counts consume rows in the TARGET org, and `other` has none. The 404 is still the route's alone.
+  - O2 delete the whole `if (sessionId) { … }` block: "exists NOWHERE" goes red on 422 (the cap refuses before the FK is reached), and O1's test goes red too.
+  - O3 `orgId: org.id` → `orgId: id`: "an unknown org" goes red on its upper-case row. The write still answers 200 (the ledger's `org_id` is a uuid, and Task 7's lock key and key comparison lower-case the id), but `audits(orgId)` reads `[]`: the audit row's TEXT `target_id` holds the upper-case spelling.
+  - N1 drop `.min(1)`: "the note is required" goes red on the `''` rows.
+  - N2 drop `.trim()`: the same test goes red on the `'   '` rows, AND "staff grant" goes red on the stored note.
+  - D1 drop `.max(STREAM_CREDIT_ADJUST_MAX)`: "delta bounds" goes red on the MAX + 1 rows.
+  - A1 at the grant call, `createdBy: staff.id` → `createdBy: id` (a uuid, so it compiles): "staff grant" goes red. The audit insert's `actor_id` FK to `users` refuses an org id (V103:16), so the route answers 500 where the test expects 200.
+  - K0 drop `.min(8)` from `Key`: "idempotency_key is required" goes red on the 7-character rows.
+  - K1 at the grant call, `idempotencyKey: body.idempotency_key` → `idempotencyKey: crypto.randomUUID()`: "a replayed key" goes red (`applied: true` and a second row and audit row).
+  - V2 `if (body.kind === "revoke") return revokeCredits(common);` → `… return grantCredits(common);`: "revoke" goes red (balance 2, not 0, and no 422).
+  
+  Record the twelve killers, then re-run → `13 0 0`. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npx tsc --noEmit -p apps/web/tsconfig.json > <scratchpad>/r1/t7a-tsc.log 2>&1; echo "EXIT=$?"; tail -3 <scratchpad>/r1/t7a-tsc.log` → `EXIT=0`. Read the OUTPUT too: `rtk` can print a clean verdict while tsc exits 1.
+
+- [ ] **Step 10: Write the failing panel test.** Create `apps/web/src/components/__tests__/admin-stream-credits-panel.test.tsx`:
+
+```tsx
+// The staff "Match credits" panel (Task 7A), static markup. vitest is `environment: "node"` — no
+// DOM, no clicks — so the in-flight guard, the note gate's OPEN direction and router.refresh()
+// are the walkthrough's (Step 17), and so is the idempotency key (minted on the first CLICK, so the
+// static markup carries none) with its reused-key reset (K3, K4). Here: what the panel shows for a
+// given read, and what its controls OPEN AT (AGENTS.md class 19). Killers (Step 13):
+//   C1  grant note gate   `disabled={!forms.grant.note.trim() || busy !== null}` → `disabled={busy !== null}` → "the controls OPEN AT" (grant)
+//   C1' refund note gate  the same on the refund button                                                     → "the controls OPEN AT" (refund)
+//   C1" revoke note gate  the same on the revoke button                                                     → "the controls OPEN AT" (revoke)
+//   C2  author fallback   `r.createdByEmail ?? r.createdBy ?? "—"` → `r.createdByEmail ?? "—"`              → "rows render" (`>user-1<`)
+//   R5  the rail          delete `tabIndex={0}`                                                            → "a keyboard-reachable scroll rail"
+import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
+import { AdminStreamCreditsPanel } from "../admin-stream-credits-panel";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+
+const row = (over: Partial<StreamCreditLedgerRow>): StreamCreditLedgerRow => ({
+  id: "row-1", reason: "grant", delta: 1, balanceAfter: 1, note: "note", createdBy: "user-1",
+  createdByEmail: "staff@example.test", sessionId: null, createdAt: "2026-09-16T10:20:30.000Z", ...over,
+});
+
+function render(props: Partial<Parameters<typeof AdminStreamCreditsPanel>[0]> = {}): string {
+  return renderToStaticMarkup(
+    <AdminStreamCreditsPanel orgId="org-1" balance={0} rows={[]} maxDelta={7} ledgerLimit={20} {...props} />,
+  );
+}
+
+/** The whole opening tag of the element carrying `testid` — asserting inside it, never across the page. */
+function tag(html: string, el: string, testid: string): string {
+  const m = html.match(new RegExp(`<${el}[^>]*data-testid="${testid}"[^>]*>`));
+  expect(m, `<${el} data-testid="${testid}"> is missing`).not.toBeNull();
+  return m![0];
+}
+
+describe("AdminStreamCreditsPanel", () => {
+  it("an EMPTY ledger: balance 0, the empty line, no row, no ledger rail, and neither the error nor the replay notice (the empty set, explicitly)", () => {
+    const html = render();
+    expect(html).toMatch(/data-testid="stream-credits-balance"[^>]*>0</);
+    expect(html).toContain('data-testid="stream-credits-empty"');
+    expect(html).not.toContain('data-testid="stream-credits-row"');
+    expect(html).not.toContain('data-testid="stream-credits-ledger"');
+    expect(html).not.toContain('data-testid="stream-credits-error"');
+    expect(html).not.toContain('data-testid="stream-credits-replayed"');
+    expect(html).not.toContain("idempotency");   // no key in the markup: it is minted on the first click
+  });
+
+  it("rows render in the order given, with reason, SIGNED delta, balance after, note, author (the email, else the user id), session and a UTC stamp; a missing author/note/session reads — (C2)", () => {
+    const html = render({
+      balance: 3,
+      rows: [
+        // An author whose users row has no email to show: the id is printed, never a bare —.
+        row({ id: "r3", reason: "revoke", delta: -1, balanceAfter: 3, note: "one too many", createdByEmail: null }),
+        row({ id: "r2", reason: "consume", delta: -1, balanceAfter: 4, note: null, createdBy: null, createdByEmail: null,
+              sessionId: "5e5510e1-0000-4000-8000-000000000001", createdAt: "2026-09-16T11:00:00.000Z" }),
+        row({ id: "r1", reason: "grant", delta: 5, balanceAfter: 5, note: "pilot league" }),
+      ],
+    });
+    expect(html).toMatch(/data-testid="stream-credits-balance"[^>]*>3</);
+    expect(html).not.toContain('data-testid="stream-credits-empty"');
+    expect([...html.matchAll(/data-testid="stream-credits-row" data-reason="([a-z]+)" data-delta="(-?\d+)"/g)].map((m) => [m[1], m[2]]))
+      .toEqual([["revoke", "-1"], ["consume", "-1"], ["grant", "5"]]);
+    for (const text of [">-1<", ">+5<", ">one too many<", ">pilot league<", ">staff@example.test<", ">user-1<", ">5e5510e1-0000-4000-8000-000000000001<", ">2026-09-16 11:00 UTC<", ">—<"]) {
+      expect(html, text).toContain(text);
+    }
+  });
+
+  it("the controls OPEN AT amount 1, min 1, max = the maxDelta PROP (7 here, not the route's 50), an empty note and session, and all three submits DISABLED until a note is typed (C1, C1', C1\")", () => {
+    const html = render({ maxDelta: 7 });
+    for (const kind of ["grant", "refund", "revoke"]) {
+      const amount = tag(html, "input", `stream-credits-${kind}-amount`);
+      expect(amount).toContain('value="1"');
+      expect(amount).toContain('min="1"');
+      expect(amount).toContain('max="7"');
+      expect(tag(html, "input", `stream-credits-${kind}-note`)).toContain('value=""');
+      expect(tag(html, "button", `stream-credits-${kind}-submit`), `${kind} submit`).toContain('disabled=""');
+    }
+    expect(tag(html, "input", "stream-credits-refund-session")).toContain('value=""');
+  });
+
+  it("the ledger is a keyboard-reachable scroll rail: overflow-x-auto with tabindex 0, role region and an accessible name (R5; axe scrollable-region-focusable; page.tsx:284-289's idiom)", () => {
+    const rail = tag(render({ rows: [row({})] }), "div", "stream-credits-ledger");
+    expect(rail).toContain('tabindex="0"');
+    expect(rail).toContain('role="region"');
+    expect(rail).toContain('aria-label="Match credits ledger"');
+    expect(rail).toMatch(/class="[^"]*\boverflow-x-auto\b/);
+  });
+});
+```
+
+- [ ] **Step 11: Run — expect a collection failure that names `../admin-stream-credits-panel`.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/components/__tests__/admin-stream-credits-panel.test.tsx --reporter=json --outputFile=<scratchpad>/r1/t7a-panel-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-panel-red.json');console.log(r.numTotalTests,r.numFailedTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,(t.message||'').slice(0,120))"`
+  Expect `0 1`.
+
+- [ ] **Step 12: Write the panel.** It is NOT mounted yet; Step 16 mounts it, AFTER the walkthrough has been watched red. Create `apps/web/src/components/admin-stream-credits-panel.tsx`:
+
+```tsx
+"use client";
+
+// Staff "Match credits" panel (Task 7A, owner ruling 15; Revision 1) on /admin/orgs/[id]: the org's
+// streaming match-credit balance, its latest ledger rows, and the three money actions — grant,
+// refund (ADDS credits) and revoke (takes them away, never below zero) — posting to
+// POST /api/admin/orgs/[id]/stream-credits.
+//
+// English only: /admin is staff-only and the tree owes it no dictionary keys
+// (admin-credits-panel.tsx:8-9, slot-waiver-button.tsx:12, adjustment-labels.ts:16).
+// Idiom: AdminPlanPanel's inline action cards — a required note gates the button; a success is
+// followed by router.refresh(), which re-reads the balance and the rows ON THE SERVER
+// (creditBalance) instead of trusting a number computed here. The idempotency key follows
+// admin-credits-panel.tsx's (the donor), minted per SUBMISSION rather than per modal open. Unlike
+// the donor, the route answers 409 idempotency_key_reused when a kept key comes back with DIFFERENT
+// values (Task 7, Revision 2); the card then drops its key and resets (see post()).
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { StreamCreditLedgerRow } from "@/server/usecases/admin-stream-credits";
+
+const inputCls =
+  "rounded border border-slate-600 bg-slate-700 px-2 py-1 text-sm text-white placeholder:text-slate-500";
+const buttonCls =
+  "rounded bg-purple-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-600 disabled:opacity-50";
+
+/** Deterministic on server and client (no locale, no zone), so hydration can never disagree. */
+const utc = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
+
+/** admin-credits-panel.tsx:61-65's key, fallback included (`crypto.randomUUID` is absent on an
+ *  insecure origin). Both shapes clear the route's 8-character floor. */
+const mintKey = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `adj-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+type Kind = "grant" | "refund" | "revoke";
+type Form = { amount: string; note: string; sessionId: string };
+const EMPTY: Form = { amount: "1", note: "", sessionId: "" };
+
+/** Shown on a 409 idempotency_key_reused. The walkthrough asserts on "already landed". */
+const REUSED_KEY_MESSAGE =
+  "An earlier attempt of this submission already landed with different values. The ledger below shows what landed; the form was reset for a new submission.";
+
+export function AdminStreamCreditsPanel({
+  orgId,
+  balance,
+  rows,
+  maxDelta,
+  ledgerLimit,
+}: {
+  orgId: string;
+  /** creditBalance() on the server — the ONE balance. */
+  balance: number;
+  rows: StreamCreditLedgerRow[];
+  /** STREAM_CREDIT_ADJUST_MAX, passed down so the input and the route share one number. */
+  maxDelta: number;
+  ledgerLimit: number;
+}) {
+  const router = useRouter();
+  // The ref closes the window between a second click and React committing `busy`, so a
+  // double-click sends ONE request. The server's idempotency key is the backstop, not the guard.
+  const inFlight = useRef(false);
+  // One key per SUBMISSION, per card: minted on the first attempt, KEPT when that attempt fails
+  // (a retry is the same submission, so a request that reached the server before the connection
+  // dropped replays as applied:false instead of applying twice), dropped on success AND on a 409
+  // idempotency_key_reused (an edited retry of a landed attempt can never succeed under that key).
+  const keys = useRef<Record<Kind, string | null>>({ grant: null, refund: null, revoke: null });
+  const [busy, setBusy] = useState<Kind | null>(null);
+  const [error, setError] = useState("");
+  const [replayed, setReplayed] = useState(false);
+  const [forms, setForms] = useState<Record<Kind, Form>>({ grant: EMPTY, refund: EMPTY, revoke: EMPTY });
+  const edit = (kind: Kind, patch: Partial<Form>) => setForms((f) => ({ ...f, [kind]: { ...f[kind], ...patch } }));
+
+  async function post(kind: Kind, body: Record<string, unknown>) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const key = (keys.current[kind] ??= mintKey());
+    setBusy(kind);
+    setError("");
+    setReplayed(false);
+    try {
+      const res = await fetch(`/api/admin/orgs/${orgId}/stream-credits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind, ...body, idempotency_key: key }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string; data?: { applied?: boolean } };
+      if (!res.ok && data.code === "idempotency_key_reused") {
+        // An earlier attempt of THIS submission landed and the card was edited before the retry.
+        // Keeping the key would 409 on every retry until a reload: drop it (K3), reset the card,
+        // re-read the page so the attempt that DID land is on screen (K4), and say what happened.
+        keys.current[kind] = null;
+        edit(kind, EMPTY);
+        router.refresh();
+        throw new Error(REUSED_KEY_MESSAGE);
+      }
+      if (!res.ok) throw new Error(data.error ?? `Failed (${res.status})`);
+      keys.current[kind] = null;
+      // applied:false is an EXACT replay (the server compares org, kind, amount and session): an
+      // earlier attempt of this submission already landed with these values, so nothing was added.
+      setReplayed(data.data?.applied === false);
+      // Clear the card on success: the button disables again, so a stray click cannot resend it.
+      edit(kind, EMPTY);
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      inFlight.current = false;
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section data-testid="stream-credits-panel">
+      <h2 className="mb-2 text-sm font-semibold text-slate-300">Match credits (streaming)</h2>
+      <div className="space-y-4 rounded-lg bg-slate-800 p-4">
+        <p className="text-2xl font-bold text-white">
+          <span data-testid="stream-credits-balance">{balance}</span>{" "}
+          <span className="text-sm font-normal text-slate-300">match credits</span>
+        </p>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="min-w-0 space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Grant</h3>
+            <input
+              data-testid="stream-credits-grant-amount"
+              aria-label="Credits to grant"
+              type="number"
+              min={1}
+              max={maxDelta}
+              step={1}
+              value={forms.grant.amount}
+              onChange={(e) => edit("grant", { amount: e.target.value })}
+              className={`${inputCls} w-24`}
+            />
+            <input
+              data-testid="stream-credits-grant-note"
+              aria-label="Grant note"
+              maxLength={500}
+              placeholder="Note (required)"
+              value={forms.grant.note}
+              onChange={(e) => edit("grant", { note: e.target.value })}
+              className={`${inputCls} w-full`}
+            />
+            <button
+              data-testid="stream-credits-grant-submit"
+              type="button"
+              disabled={!forms.grant.note.trim() || busy !== null}
+              onClick={() => post("grant", { delta: Number(forms.grant.amount), note: forms.grant.note })}
+              className={buttonCls}
+            >
+              {busy === "grant" ? "…" : "Grant match credits"}
+            </button>
+          </div>
+
+          <div className="min-w-0 space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Refund</h3>
+            <input
+              data-testid="stream-credits-refund-amount"
+              aria-label="Credits to refund"
+              type="number"
+              min={1}
+              max={maxDelta}
+              step={1}
+              value={forms.refund.amount}
+              onChange={(e) => edit("refund", { amount: e.target.value })}
+              className={`${inputCls} w-24`}
+            />
+            <input
+              data-testid="stream-credits-refund-session"
+              aria-label="Refunded session id"
+              placeholder="Session id (optional)"
+              value={forms.refund.sessionId}
+              onChange={(e) => edit("refund", { sessionId: e.target.value })}
+              className={`${inputCls} w-full font-mono`}
+            />
+            <input
+              data-testid="stream-credits-refund-note"
+              aria-label="Refund note"
+              maxLength={500}
+              placeholder="Note (required)"
+              value={forms.refund.note}
+              onChange={(e) => edit("refund", { note: e.target.value })}
+              className={`${inputCls} w-full`}
+            />
+            <button
+              data-testid="stream-credits-refund-submit"
+              type="button"
+              disabled={!forms.refund.note.trim() || busy !== null}
+              onClick={() =>
+                post("refund", {
+                  delta: Number(forms.refund.amount),
+                  session_id: forms.refund.sessionId.trim() || null,
+                  note: forms.refund.note,
+                })
+              }
+              className={buttonCls}
+            >
+              {busy === "refund" ? "…" : "Refund match credits"}
+            </button>
+          </div>
+
+          <div className="min-w-0 space-y-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Revoke</h3>
+            <input
+              data-testid="stream-credits-revoke-amount"
+              aria-label="Credits to revoke"
+              type="number"
+              min={1}
+              max={maxDelta}
+              step={1}
+              value={forms.revoke.amount}
+              onChange={(e) => edit("revoke", { amount: e.target.value })}
+              className={`${inputCls} w-24`}
+            />
+            <input
+              data-testid="stream-credits-revoke-note"
+              aria-label="Revoke note"
+              maxLength={500}
+              placeholder="Note (required)"
+              value={forms.revoke.note}
+              onChange={(e) => edit("revoke", { note: e.target.value })}
+              className={`${inputCls} w-full`}
+            />
+            <button
+              data-testid="stream-credits-revoke-submit"
+              type="button"
+              disabled={!forms.revoke.note.trim() || busy !== null}
+              onClick={() => post("revoke", { delta: Number(forms.revoke.amount), note: forms.revoke.note })}
+              className={buttonCls}
+            >
+              {busy === "revoke" ? "…" : "Revoke match credits"}
+            </button>
+          </div>
+        </div>
+
+        {error && <p data-testid="stream-credits-error" className="text-xs text-red-400">{error}</p>}
+        {replayed && (
+          <p data-testid="stream-credits-replayed" className="text-xs text-amber-300">
+            Already recorded: an earlier attempt of this submission reached the ledger, so nothing was added twice.
+          </p>
+        )}
+        <p className="text-xs text-slate-400">
+          Up to {maxDelta} credits per adjustment. A refund adds credits back; to tie it to a failed stream, paste
+          the session id from that stream&apos;s consume row. A revoke takes credits away and cannot go below zero.
+          Latest {ledgerLimit} ledger entries, newest first.
+        </p>
+
+        {rows.length === 0 ? (
+          <p data-testid="stream-credits-empty" className="text-xs text-slate-400">
+            No match-credit ledger entries for this org.
+          </p>
+        ) : (
+          <div
+            data-testid="stream-credits-ledger"
+            className="overflow-x-auto rounded-lg border border-slate-700"
+            tabIndex={0}
+            role="region"
+            aria-label="Match credits ledger"
+          >
+            <table className="w-full text-sm">
+              <thead className="bg-slate-900 text-xs text-slate-400">
+                <tr>
+                  {["When", "Reason", "Delta", "Balance after", "Note", "By", "Session"].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-3 py-2 text-left">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700">
+                {rows.map((r) => (
+                  <tr key={r.id} data-testid="stream-credits-row" data-reason={r.reason} data-delta={r.delta}>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-slate-400">{utc(r.createdAt)}</td>
+                    <td className="px-3 py-2 text-slate-200">{r.reason}</td>
+                    <td className="px-3 py-2 font-mono text-slate-200">{r.delta > 0 ? `+${r.delta}` : r.delta}</td>
+                    <td className="px-3 py-2 font-mono text-slate-300">{r.balanceAfter}</td>
+                    <td className="px-3 py-2 text-xs text-slate-300">{r.note ?? "—"}</td>
+                    <td className="px-3 py-2 text-xs text-slate-300">{r.createdByEmail ?? r.createdBy ?? "—"}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-400">{r.sessionId ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+```
+
+- [ ] **Step 13: Run — expect `4 0 0`, then the panel mutants, then all three files together.** Use Step 11's command, writing to `t7a-panel.json` → `4 0 0`. Mutants, under Step 5's protocol and one SURFACE at a time:
+  - C1 on the GRANT button only → "the controls OPEN AT" goes red with the message `grant submit`.
+  - C1′ on the REFUND button only → the same test goes red with `refund submit`.
+  - C1″ on the REVOKE button only → the same test goes red with `revoke submit`. The loop reports the FIRST failing kind, so each of the three runs must name its own kind; a run naming `grant` under C1″ means the anchor hit the wrong button.
+  - C2 `{r.createdByEmail ?? r.createdBy ?? "—"}` → `{r.createdByEmail ?? "—"}` → "rows render" goes red with the message `>user-1<`.
+  - R5 delete `tabIndex={0}` → "a keyboard-reachable scroll rail" goes red.
+  
+  Record the killers. Then run the three 7A vitest files in ONE run:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/admin-stream-credits.test.ts 'src/app/api/admin/orgs/[id]/stream-credits/__tests__/route.test.ts' src/components/__tests__/admin-stream-credits-panel.test.tsx src/server/relay/__tests__/enc-boundary.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-unit.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-unit.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests,r.numTotalTestSuites);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.status,t.assertionResults.length)"`
+  Expect 0 failed and 0 pending; four suites listed, all under `…/worktrees/relay/`, with per-file counts of 5, 13, 4 and `enc-boundary`'s Step 1 count. That is **22 new tests**; record the number for Task 17 Step 1(b)(ii). Then tsc as in Step 9 → `EXIT=0`, and lint: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && rtk proxy npm run lint 2>&1 | grep -a -E "✖|problems" | tail -3` → no `✖` line with a non-zero count.
+
+- [ ] **Step 14: Write the walkthrough spec, then rebuild `rly`.** Create `apps/web/e2e/walkthrough/stream-credits-admin.spec.ts`. The staff and non-staff users are minted fresh, so staff privilege is NEVER borrowed from the shared Pro user.
+
+```ts
+// Streaming R1, Task 7A (owner ruling 15; Revision 1) — the staff "Match credits" panel on
+// /admin/orgs/[id], driven through the REAL page and the REAL route. Without this panel Task 7's
+// grantCredits / refundCredits / revokeCredits have no production caller (AGENTS.md class 1); this
+// spec is the seam's producer→consumer proof: a click → the route → Task 7's ledger row and audit
+// row → the server re-read → the DOM, including the page's own Adjustments log.
+//
+// Every user and org is minted fresh by SQL. The staff bit is never borrowed from the shared Pro
+// user (billing-states.spec.ts must restore that one in afterEach), so nothing here can leak into
+// another spec and the tests run fully parallel. A refund ADDS credits and a revoke removes them
+// (Task 7): grant 1, refund 1, refund 1, revoke 1 reads 1 → 2 → 3 → 2.
+import { test, expect, type Page } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+import { TAG, expectNoHorizontalScroll, overflowingIn } from "../helpers";
+import { signInAs } from "../overlay-kit";
+
+/** helpers.ts's withDb is module-private — the settings-admin.spec.ts local copy, same shape. */
+async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for direct DB setup in e2e");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end();
+  }
+}
+
+interface Rig { orgId: string; orgName: string; userEmail: string; userId: string }
+
+const minted: string[] = [];
+
+/** A fresh user (staff at `role`, a plain user when null) and a fresh target org the user is NOT a member of. */
+async function seedRig(role: "support" | "superadmin" | null): Promise<Rig> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const userEmail = `delivered+sca-${tag}@resend.dev`;
+  minted.push(userEmail);
+  return withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, is_staff, staff_role)
+      values (${userEmail}, ${"Credits Staff " + tag}, true, ${role !== null}, ${role}) returning id`;
+    const orgName = "Credits Org " + tag;
+    // overlay-kit.ts's organizations insert shape (status 'active'); the staff user is NOT a member.
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status)
+      values (${orgName}, ${"sca-org-" + tag}, 'active') returning id`;
+    return { orgId, orgName, userEmail, userId };
+  });
+}
+
+type LedgerRow = { reason: string; delta: number; balance_after: number; note: string | null; created_by: string | null; session_id: string | null };
+const ledgerSql = (orgId: string) =>
+  withDb(async (sql) => [
+    ...(await sql<LedgerRow[]>`
+      select reason, delta, balance_after, note, created_by, session_id
+        from org_stream_credits where org_id = ${orgId} order by created_at`),
+  ]);
+const auditSql = (orgId: string) =>
+  withDb(async (sql) => [
+    ...(await sql<{ actor_id: string; action: string }[]>`
+      select actor_id, action from staff_audit_log where target_id = ${orgId} order by created_at`),
+  ]);
+const key = () => `e2e-${randomBytes(8).toString("hex")}`;
+
+const shot = (page: Page, name: string) =>
+  page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputDir, name), fullPage: true });
+
+// afterAll runs on a timeout; an in-test finally does not.
+test.afterAll(async () => {
+  if (minted.length) await withDb((sql) => sql`update users set is_staff = false, staff_role = null where email = any(${minted})`);
+});
+
+test("staff grant, refund and revoke through the real panel — a grant the server applied but the browser lost, retried with a double-click, replays its key (ONE row); a refund the server applied but the browser lost, EDITED and resubmitted, is a 409 that resets the card and shows what landed, and the next refund gets a NEW key; a revoke above the balance is refused on screen; the bodies are what the route expects; every row and audit row is the staff user's", async ({ page }) => {
+  test.setTimeout(180_000);
+  const rig = await seedRig("support");   // support suffices: the route's guard is requireStaff
+  const path = `/api/admin/orgs/${rig.orgId}/stream-credits`;
+  const posts: Record<string, unknown>[] = [];
+  const lose = new Set<string>(["grant", "refund"]);
+  // Every panel POST passes through here, so the BODIES are pinned. The FIRST grant and the FIRST
+  // refund each reach the server (route.fetch) and their responses are then thrown away
+  // (route.abort): the server applied them and the browser saw a network failure, which is
+  // exactly the retry the key exists for.
+  await page.route(`**${path}`, async (route) => {
+    const req = route.request();
+    if (req.method() !== "POST") return route.continue();
+    const body = JSON.parse(req.postData() ?? "null") as Record<string, unknown>;
+    posts.push(body);
+    if (lose.delete(String(body.kind))) {
+      await route.fetch();
+      return route.abort("connectionreset");
+    }
+    return route.continue();
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await signInAs(page, rig.userEmail);
+  await page.goto(`/admin/orgs/${rig.orgId}`);
+  // The PAGE rendered for this bare org (page.tsx's <h1>{org.name}</h1>) — so the pre-mount red
+  // (Step 15) is "no panel", never a page that crashed on an org with no plan, members or wallet.
+  await expect(page.getByRole("heading", { level: 1, name: rig.orgName })).toBeVisible({ timeout: 30_000 });
+
+  const panel = page.getByTestId("stream-credits-panel");
+  const balance = panel.getByTestId("stream-credits-balance");
+  const rows = panel.getByTestId("stream-credits-row");
+  const error = panel.getByTestId("stream-credits-error");
+  const replayed = panel.getByTestId("stream-credits-replayed");
+  await expect(balance).toHaveText("0", { timeout: 30_000 });
+  await expect(panel.getByTestId("stream-credits-empty")).toBeVisible();
+  // What the controls OPEN AT, in the browser (class 19).
+  for (const kind of ["grant", "refund", "revoke"]) {
+    await expect(panel.getByTestId(`stream-credits-${kind}-amount`)).toHaveValue("1");
+    await expect(panel.getByTestId(`stream-credits-${kind}-submit`)).toBeDisabled();
+  }
+
+  // 1. Grant 1: the server applies it, the browser loses the answer.
+  await panel.getByTestId("stream-credits-grant-note").fill("e2e: pilot grant");
+  await expect(panel.getByTestId("stream-credits-grant-submit")).toBeEnabled();   // the note gate's OPEN direction
+  await panel.getByTestId("stream-credits-grant-submit").click();
+  await expect(error).toBeVisible({ timeout: 30_000 });
+  await expect(panel.getByTestId("stream-credits-grant-note")).toHaveValue("e2e: pilot grant");   // a failure keeps the card
+  await expect(balance).toHaveText("0");
+  await expect.poll(async () => (await ledgerSql(rig.orgId)).length, { timeout: 15_000 }).toBe(1);   // the server DID apply it
+
+  // 2. Retry with a DOUBLE-click: ONE request carrying the SAME key → applied:false, still one row.
+  await panel.getByTestId("stream-credits-grant-submit").dblclick();
+  await expect(replayed).toBeVisible({ timeout: 30_000 });
+  await expect(balance).toHaveText("1", { timeout: 30_000 });
+  await expect(rows).toHaveCount(1);
+  await expect(error).toHaveCount(0);
+  await expect(panel.getByTestId("stream-credits-grant-note")).toHaveValue("");
+  await expect(panel.getByTestId("stream-credits-grant-submit")).toBeDisabled();
+
+  // 3. Refund 1 with no session: the server applies it (a refund ADDS), the browser loses the answer.
+  await panel.getByTestId("stream-credits-refund-note").fill("e2e: failed stream refund");
+  await panel.getByTestId("stream-credits-refund-submit").click();
+  await expect(error).toBeVisible({ timeout: 30_000 });
+  await expect(panel.getByTestId("stream-credits-refund-note")).toHaveValue("e2e: failed stream refund");
+  await expect(balance).toHaveText("1");
+  await expect.poll(async () => (await ledgerSql(rig.orgId)).length, { timeout: 15_000 }).toBe(2);   // the server DID apply it
+
+  // 4. The staff user EDITS the amount before retrying: the SAME key with a different delta is Task 7's
+  //    409 idempotency_key_reused. The card drops its key and resets, the page re-reads, and the
+  //    ledger shows the refund of 1 that landed, not the 2 that was typed.
+  await panel.getByTestId("stream-credits-refund-amount").fill("2");
+  await panel.getByTestId("stream-credits-refund-submit").click();
+  await expect(error).toContainText("already landed", { timeout: 30_000 });
+  await expect(balance).toHaveText("2", { timeout: 30_000 });   // router.refresh() on the 409 (K4)
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toHaveAttribute("data-reason", "refund");   // newest first
+  await expect(rows.first()).toHaveAttribute("data-delta", "1");
+  await expect(panel.getByTestId("stream-credits-refund-note")).toHaveValue("");
+  await expect(panel.getByTestId("stream-credits-refund-amount")).toHaveValue("1");
+  await expect(panel.getByTestId("stream-credits-refund-submit")).toBeDisabled();
+  await expect(replayed).toHaveCount(0);
+  expect(await ledgerSql(rig.orgId)).toHaveLength(2);   // the 409 wrote nothing
+
+  // 5. A new, deliberate refund of 1: a NEW key (K3), so it APPLIES — 2 → 3, no notice, no error.
+  await panel.getByTestId("stream-credits-refund-note").fill("e2e: a second, deliberate refund");
+  await panel.getByTestId("stream-credits-refund-submit").click();
+  await expect(balance).toHaveText("3", { timeout: 30_000 });
+  await expect(rows).toHaveCount(3);
+  await expect(replayed).toHaveCount(0);
+  await expect(error).toHaveCount(0);
+
+  // 6. Revoke 1: 3 → 2, a NEGATIVE row.
+  await panel.getByTestId("stream-credits-revoke-note").fill("e2e: reverse one");
+  await panel.getByTestId("stream-credits-revoke-submit").click();
+  await expect(balance).toHaveText("2", { timeout: 30_000 });
+  await expect(rows).toHaveCount(4);
+  await expect(rows.first()).toHaveAttribute("data-reason", "revoke");
+  await expect(rows.first()).toHaveAttribute("data-delta", "-1");
+
+  // 7. Revoke 5 of 2: Task 7's 422 insufficient_credits, shown; nothing moves.
+  await panel.getByTestId("stream-credits-revoke-amount").fill("5");
+  await panel.getByTestId("stream-credits-revoke-note").fill("e2e: too many");
+  await panel.getByTestId("stream-credits-revoke-submit").click();
+  await expect(error).toContainText("below zero", { timeout: 30_000 });
+  await expect(balance).toHaveText("2");
+  await expect(rows).toHaveCount(4);
+
+  // Persistence through the READ path, not client state, and the page's OWN Adjustments log reading
+  // Task 7's audit rows (allowlisted there, so no page edit was needed).
+  await page.reload();
+  await expect(balance).toHaveText("2", { timeout: 30_000 });
+  await expect(rows).toHaveCount(4);
+  const log = page.getByRole("region", { name: "Adjustments log" });
+  for (const [label, n] of [["Match credits granted", 1], ["Match credits refunded", 2], ["Match credits revoked", 1]] as const) {
+    await expect(log.getByText(label, { exact: true }), label).toHaveCount(n);
+  }
+
+  expect(await ledgerSql(rig.orgId)).toEqual([
+    { reason: "grant", delta: 1, balance_after: 1, note: "e2e: pilot grant", created_by: rig.userId, session_id: null },
+    { reason: "refund", delta: 1, balance_after: 2, note: "e2e: failed stream refund", created_by: rig.userId, session_id: null },
+    { reason: "refund", delta: 1, balance_after: 3, note: "e2e: a second, deliberate refund", created_by: rig.userId, session_id: null },
+    { reason: "revoke", delta: -1, balance_after: 2, note: "e2e: reverse one", created_by: rig.userId, session_id: null },
+  ]);
+  expect(await auditSql(rig.orgId)).toEqual([
+    { actor_id: rig.userId, action: "stream_credit_grant" },
+    { actor_id: rig.userId, action: "stream_credit_refund" },
+    { actor_id: rig.userId, action: "stream_credit_refund" },
+    { actor_id: rig.userId, action: "stream_credit_revoke" },
+  ]);
+  // The request BODIES, pinned: a client that normalised a field would hide the server's guard, and
+  // a double-click that sent twice would make eight. Each retry carries its LOST attempt's key (the
+  // edited refund included: that is what the 409 compares); every other submission has its own.
+  expect(posts.map((b) => ({ ...b, idempotency_key: undefined }))).toEqual([   // toEqual skips undefined keys
+    { kind: "grant", delta: 1, note: "e2e: pilot grant" },                                    // 0 lost
+    { kind: "grant", delta: 1, note: "e2e: pilot grant" },                                    // 1 exact replay
+    { kind: "refund", delta: 1, session_id: null, note: "e2e: failed stream refund" },          // 2 lost
+    { kind: "refund", delta: 2, session_id: null, note: "e2e: failed stream refund" },          // 3 edited → 409
+    { kind: "refund", delta: 1, session_id: null, note: "e2e: a second, deliberate refund" },   // 4 new key
+    { kind: "revoke", delta: 1, note: "e2e: reverse one" },                                   // 5
+    { kind: "revoke", delta: 5, note: "e2e: too many" },                                      // 6 → 422
+  ]);
+  for (const b of posts) expect(String(b.idempotency_key)).toMatch(/^[\w-]{8,200}$/);
+  expect(posts[1]!.idempotency_key).toBe(posts[0]!.idempotency_key);
+  expect(posts[3]!.idempotency_key).toBe(posts[2]!.idempotency_key);
+  expect(new Set([1, 3, 4, 5, 6].map((i) => posts[i]!.idempotency_key)).size).toBe(5);
+  await shot(page, "stream-credits-flow-1280.png");
+});
+
+for (const width of [320, 768, 1280] as const) {
+  test(`at ${width}px with ledger rows present: no horizontal page scroll, nothing clipped inside the panel, and its only scroller is the focusable ledger rail`, async ({ page }) => {
+    test.setTimeout(90_000);
+    const rig = await seedRig("superadmin");
+    await page.setViewportSize({ width, height: 900 });
+    await signInAs(page, rig.userEmail);
+    // Two real rows through the REAL route (this context's staff cookie), one with a note that must wrap.
+    for (const data of [
+      { kind: "grant", delta: 5, note: `e2e: ${"a long pilot-league note that has to wrap ".repeat(6)}`, idempotency_key: key() },
+      { kind: "revoke", delta: 1, note: "e2e: revoke", idempotency_key: key() },
+    ]) {
+      const res = await page.request.post(`/api/admin/orgs/${rig.orgId}/stream-credits`, { data });
+      expect(res.status(), JSON.stringify(data)).toBe(200);
+    }
+    await page.goto(`/admin/orgs/${rig.orgId}`);
+    // Page-level, measured BEFORE waiting on the panel: on the pre-mount red run (Step 15) this
+    // call IS the page's own baseline, so an overflow it names there is attributable without the panel.
+    await expectNoHorizontalScroll(page);
+    await expect(page.getByTestId("stream-credits-row")).toHaveCount(2, { timeout: 30_000 });
+    await expectNoHorizontalScroll(page);   // the claim that counts: after the panel painted its rows
+    const o = await overflowingIn(page, '[data-testid="stream-credits-panel"]', "*", "stream-credits-panel is not on the page");
+    expect(o.clipped, `clipped inside the panel at ${width}px`).toEqual([]);
+    expect(o.truncatedByDesign).toEqual([]);
+    // Hold the exemption to something: the only reachable overflow is the tabindex=0 ledger rail.
+    for (const s of o.scrollable) expect(s, `unexpected scroller at ${width}px`).toMatch(/^div \d+px content in \d+px tabindex=0$/);
+    await shot(page, `stream-credits-${width}.png`);
+  });
+}
+
+test("a signed-in NON-staff user gets neither the route (401, no row) nor the page (redirected away) — the positive pair of the staff test", async ({ page }) => {
+  test.setTimeout(60_000);
+  const rig = await seedRig(null);
+  await signInAs(page, rig.userEmail);
+  const res = await page.request.post(`/api/admin/orgs/${rig.orgId}/stream-credits`, {
+    data: { kind: "grant", delta: 1, note: "must not land", idempotency_key: key() },
+  });
+  expect(res.status()).toBe(401);
+  await page.goto(`/admin/orgs/${rig.orgId}`);
+  await page.waitForURL((u) => !u.pathname.startsWith("/admin"), { timeout: 30_000 });   // app/admin/layout.tsx:8-9
+  await expect(page.getByTestId("stream-credits-panel")).toHaveCount(0);
+  expect(await ledgerSql(rig.orgId)).toEqual([]);
+  expect(await auditSql(rig.orgId)).toEqual([]);
+});
+```
+
+  Then `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0. The served bundle must carry the route and the panel module, while the page still has NO mount.
+
+- [ ] **Step 15: Run it BEFORE the mount — expect red for the right reasons, and read the width baseline.**
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable PLAYWRIGHT_BASE=<rly base, localhost> E2E_PROD_TARGET=1 VISUAL_DIR=<scratchpad>/r1/shots-7a npx playwright test e2e/walkthrough/stream-credits-admin.spec.ts --project=walkthrough --reporter=json > <scratchpad>/r1/t7a-e2e-red.json 2><scratchpad>/r1/t7a-e2e-red.log; echo "EXIT=$?"; node -e "const r=require('<scratchpad>/r1/t7a-e2e-red.json');console.log(r.stats);const walk=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results)console.log(sp.title.slice(0,70),'|',x.status,'|',((x.error&&x.error.message)||'').split('\n')[0].slice(0,160));for(const c of s.suites||[])walk(c)};for(const s of r.suites)walk(s)"`
+  Expect `expected 1, unexpected 4`:
+  - The NON-staff test PASSES, because the route and the layout guard both exist before the mount.
+  - The flow test fails at `stream-credits-balance` (the panel is not on the page), AFTER its `<h1>` assertion passed. A red on the heading instead means the page itself fails for a bare SQL org: that is a rig finding, so fix the rig (for example, a group/plan seed) and do not weaken the heading assertion. This run also stands in for mutant W1, "delete the mount".
+  - Each width test fails EITHER at its FIRST `expectNoHorizontalScroll` OR at the rows wait.
+  
+  **The width baseline comes from that first call.** If it failed at a width, the helper's message names the widest offender. That overflow is PRE-EXISTING, because the panel is not mounted:
+  1. Record the width and the culprit in `_STATE.md` as a finding routed to the orchestrator. `app/admin/layout.tsx` and the page's other panels are outside this task's files (RULES.md: fix inline unless the blast radius widens).
+  2. In the spec, wrap both page-level calls for THAT width only: `const PAGE_LEVEL_CLEAN_WIDTHS = new Set<number>([/* the widths whose baseline passed */]);` guarding `if (PAGE_LEVEL_CLEAN_WIDTHS.has(width)) await expectNoHorizontalScroll(page);`, with a comment that names the finding.
+  3. The panel-scoped `overflowingIn` claims stay at EVERY width.
+  
+  Then the wiring test: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && npx vitest run src/lib/__tests__/e2e-ci-wiring.test.ts --reporter=json --outputFile=<scratchpad>/r1/t7a-wiring-red.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/t7a-wiring-red.json');console.log(r.numTotalTests,r.numFailedTests);for(const t of r.testResults)for(const a of t.assertionResults)if(a.status==='failed')console.log(a.title,(a.failureMessages[0]||'').slice(0,200))"` → exactly 1 failed, "names every walkthrough spec on disk in the inventory", naming `walkthrough/stream-credits-admin.spec.ts`. The total must equal Step 1's count for that file.
+
+- [ ] **Step 16: Register the spec and mount the panel.**
+  (a) In `e2e-ci-wiring.test.ts`'s `WALKTHROUGH_SPECS`, APPEND at the END of the literal: after its last entry (`"spectator-public.spec.ts",` at `:282` when read, re-pinned in Step 1(b)) and directly before the closing `];`. The list is in wave order (AGENTS.md class 18), so the newest wave goes last; never insert mid-list or reorder:
+
+```ts
+
+  // Streaming R1 — the staff "Match credits" panel on /admin/orgs/[id] (Task 7A): grant, refund
+  // and revoke through the real panel and route, a lost-then-retried grant replaying its key
+  // (one row), a lost-then-EDITED refund refused as a reused key and reset, a revoke below zero
+  // refused, the widths, and a non-staff caller refused.
+  // (Task 15 adds stream-relay.spec.ts to this block.)
+  "stream-credits-admin.spec.ts",
+```
+
+  (b) In `apps/web/src/app/admin/orgs/[id]/page.tsx`, re-pinned in Step 1(b), make exactly three edits:
+  - Beside the `AdminCreditsPanel` import (`:6`), add `import { AdminStreamCreditsPanel } from "@/components/admin-stream-credits-panel";` and `import { STREAM_CREDIT_ADJUST_MAX, STREAM_CREDIT_LEDGER_LIMIT, streamCreditsForOrg } from "@/server/usecases/admin-stream-credits";`.
+  - Directly after `const adjustments = await adjustmentsForOrg(id, { limit: 50 });` (`:78`), add `const streamCredits = await streamCreditsForOrg(id);`.
+  - Directly after the `<AdminCreditsPanel … />` element (`:129-135`):
+
+```tsx
+      {/* Match credits (streaming R1, Task 7A — owner ruling 15): org_stream_credits balance +
+          latest ledger rows, and staff grant / refund / revoke through Task 7's ledger. */}
+      <AdminStreamCreditsPanel
+        orgId={id}
+        balance={streamCredits.balance}
+        rows={streamCredits.rows}
+        maxDelta={STREAM_CREDIT_ADJUST_MAX}
+        ledgerLimit={STREAM_CREDIT_LEDGER_LIMIT}
+      />
+```
+
+  Then tsc as in Step 9 → `EXIT=0` (the `import type` in the client component crosses no runtime line), lint as in Step 13, and `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0.
+
+- [ ] **Step 17: Run it green, then the browser-side mutants.** Use Step 15's command, writing to `t7a-e2e.json` / `.log`. Expect `stats` `expected 5, unexpected 0, flaky 0, skipped 0`. Then:
+  - `ls <scratchpad>/r1/shots-7a` → `stream-credits-flow-1280.png`, `stream-credits-320.png`, `stream-credits-768.png`, `stream-credits-1280.png`.
+  - `shasum` over the three width files → three DIFFERENT hashes (the visual gate's own vacuous mode, class 10).
+  - OPEN ALL THREE width PNGs (320, 768 and 1280) and write one line each on what they show: the balance, the three cards, the rail, AND the `/admin` layout header's own row (`app/admin/layout.tsx`: the seeded display name plus the role badge) — whether it fits the viewport or runs past its right edge. That is a functional bar with no design verdict, but it is looked at. A header that overflows at a width is a PRE-EXISTING finding for the orchestrator (the layout is outside this task's files, and Step 15's page-level baseline names it too): record the width and what you saw, and do NOT guess a CSS fix here (review M9).
+  - Wiring: Step 15's vitest command → 0 failed.
+  
+  Mutants, each followed by `rebuild --label rly` (wait for EXIT) and the whole spec file. Restore each with `cp` and rebuild again:
+  - **G1** (the double-submit guard): in the panel, delete `if (inFlight.current) return;` AND change all three `disabled={!forms.<kind>.note.trim() || busy !== null}` to `disabled={!forms.<kind>.note.trim()}`. The flow test goes red on `posts` (eight bodies, not seven). It does NOT go red on `ledgerSql`: both retry requests carry the kept key and replay exactly, which is the key doing its job. So the guard's killer is the body count, and the ledger is the key's.
+  - **K2** (the key kept across a failed attempt, money): `const key = (keys.current[kind] ??= mintKey());` → `const key = mintKey();`. The flow test goes red at `replayed` `toBeVisible` in step 2 (the retry APPLIES, so balance 2 and a second grant row), and, if that line is skipped, on `posts[1]!.idempotency_key` equality.
+  - **K3** (the reused key dropped, money): in the `idempotency_key_reused` branch only, delete `keys.current[kind] = null;`. The flow test goes red at step 5's `toHaveText("3")`: the deliberate refund still carries the lost refund's key with the SAME values (refund, 1, no session), so it replays exactly (`applied: false`), the replay notice shows, and the balance stays 2.
+  - **K4** (the page re-read on a reused key): in the same branch only, delete `router.refresh();`. The flow test goes red at step 4's `toHaveText("2")`: nothing re-reads the page after the lost refund, so the balance still reads 1.
+  - **B1** (client normalisation): `session_id: forms.refund.sessionId.trim() || null` → `session_id: forms.refund.sessionId`. The flow test goes red at step 3's `expect.poll` on `ledgerSql` (1 row, not 2): the route answers 400 on `""`, so the lost refund never landed.
+  - **V1** (the panel-scoped claim is not vacuous): add `overflow-hidden` to the `<section data-testid="stream-credits-panel">` and `whitespace-nowrap` to the explainer `<p>`. The 320 test goes red on `clipped inside the panel at 320px`, the `overflowingIn` line, while page-level stays clean because the section clips.
+  
+  Record the six killers. After the final restore and rebuild, the spec is green again with the same `stats`. The flow test's `route.fetch()` + `route.abort()` is the lost-response case: if Step 15 or 17 shows the FIRST grant or the FIRST refund never reaching the server (an `expect.poll` on `ledgerSql` short by one), the harness is not modelling a lost response. STOP and report it; do not replace it with a plain `route.abort()`, which proves only a retry after a request that never landed.
+
+- [ ] **Step 18: Smoke.** In `scripts/smoke.ts`, directly after `platformRevenueSuite`'s closing brace (`:6935`):
+
+```ts
+/** Streaming R1, Task 7A — the staff "Match credits" panel's route and mount over real HTTP.
+ *  Guard first (non-staff 401), then as staff: the page ships the panel, two grants move the
+ *  balance by exactly their deltas, a replayed key moves nothing, a revoke above the balance is a
+ *  422, a session-linked refund naming a session this org does not have is a 404, a blank note is
+ *  refused. The target is the admin's own fresh org; no other suite reads its org_stream_credits
+ *  (Task 16's streamRelaySuite mints its own owner). The linked refund's CAP (422) is not driven
+ *  here: a real consumed session needs a sealed rtmp column and the fixture snapshot columns, which
+ *  this suite does not seed; the route test and Task 7's usecase test own the cap. */
+async function streamCreditsAdminSuite(admin: Session, staffEmail: string, orgId: string): Promise<void> {
+  const path = `/api/admin/orgs/${orgId}/stream-credits`;
+  const key = () => `smoke-${crypto.randomUUID()}`;
+  const balanceOf = (r: { json: { data?: unknown } }) => (r.json.data as { balance?: number } | undefined)?.balance;
+  const denied = await raw(admin, path, "POST", { kind: "grant", delta: 1, note: "smoke: must not land", idempotency_key: key() });
+  check(`stream credits admin: non-staff POST → 401 (got ${denied.status})`, denied.status === 401);
+
+  await setStaff(staffEmail, "superadmin");
+  try {
+    const page = await fetch(`${BASE}/admin/orgs/${orgId}`, { headers: { cookie: cookieHeader(admin) } });
+    const html = await page.text();
+    check(
+      `stream credits admin: /admin/orgs/[id] ships the panel (got ${page.status})`,
+      page.status === 200 && html.includes('data-testid="stream-credits-panel"'),
+    );
+    const replayKey = key();
+    const first = await raw(admin, path, "POST", { kind: "grant", delta: 1, note: "smoke grant", idempotency_key: key() });
+    const second = await raw(admin, path, "POST", { kind: "grant", delta: 2, note: "smoke grant 2", idempotency_key: replayKey });
+    const b1 = balanceOf(first);
+    const b2 = balanceOf(second);
+    check(
+      `stream credits admin: grants land and the balance moves by exactly the delta (${first.status}/${second.status}, ${String(b1)} → ${String(b2)})`,
+      first.status === 200 && second.status === 200 && typeof b1 === "number" && b2 === b1 + 2,
+    );
+    const replay = await raw(admin, path, "POST", { kind: "grant", delta: 2, note: "smoke grant 2", idempotency_key: replayKey });
+    const replayApplied = (replay.json.data as { applied?: boolean } | undefined)?.applied;
+    check(
+      `stream credits admin: a replayed key applies nothing (got ${replay.status}, applied ${String(replayApplied)}, ${String(b2)} → ${String(balanceOf(replay))})`,
+      replay.status === 200 && replayApplied === false && typeof b2 === "number" && balanceOf(replay) === b2,
+    );
+    const over = await raw(admin, path, "POST", { kind: "revoke", delta: 50, note: "smoke: more than the balance", idempotency_key: key() });
+    // `raw`'s json type carries no `code` (smoke.ts:62-74); handler forwards it on an HttpError.
+    const overCode = (over.json as { code?: string }).code;
+    check(
+      `stream credits admin: a revoke above the balance → 422 insufficient_credits (got ${over.status} ${String(overCode)})`,
+      over.status === 422 && overCode === "insufficient_credits",
+    );
+    // The session-linked refund body over real HTTP: a session id this org does not have is the
+    // route's own 404, before Task 7's cap is reached, and nothing moves.
+    const linked = await raw(admin, path, "POST", {
+      kind: "refund", delta: 1, note: "smoke: linked refund", session_id: crypto.randomUUID(), idempotency_key: key(),
+    });
+    const linkedCode = (linked.json as { code?: string }).code;
+    check(
+      `stream credits admin: a session-linked refund naming a session this org does not have → 404 session_not_found (got ${linked.status} ${String(linkedCode)})`,
+      linked.status === 404 && linkedCode === "session_not_found",
+    );
+    const blank = await raw(admin, path, "POST", { kind: "refund", delta: 1, note: "   ", idempotency_key: key() });
+    check(`stream credits admin: a blank note is refused (got ${blank.status})`, blank.status === 400);
+  } finally {
+    await setStaff(staffEmail, null);
+  }
+}
+```
+
+  Add the call directly after `await platformRevenueSuite(admin, \`delivered+admin_${tag}@resend.dev\`);` (`:1043`): `await streamCreditsAdminSuite(admin, \`delivered+admin_${tag}@resend.dev\`, org.id);`. Run it:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && DATABASE_URL=<rly url> DATABASE_SSL=disable SMOKE_BASE=<rly base> AUTH_SECRET=<from apps/web/.env.local> node --experimental-strip-types scripts/smoke.ts > <scratchpad>/r1/t7a-smoke.log 2>&1; echo "EXIT=$?"; grep -a "stream credits admin" <scratchpad>/r1/t7a-smoke.log; grep -a -c "^FAIL" <scratchpad>/r1/t7a-smoke.log`
+  Expect `EXIT=0`, SEVEN `stream credits admin:` lines (401, ships the panel, grants move the balance, replay applies nothing, revoke above the balance 422, linked refund to a session this org does not have 404, blank note 400), every one `PASS`, and `0` FAIL lines anywhere. A red elsewhere in the file is attributed on a clean detached `main`, never absorbed. Then run lint as in Step 13. `smoke.ts` is pinned to two eslint-disable lines; add none.
+
+- [ ] **Step 19: Regression, OpenAPI, P3.** Re-run Step 1(d)'s vitest command to `t7a-regress-after.json`. Every file's count must EQUAL the before-run, with 0 failed; `e2e-ci-wiring.test.ts` keeps its count, because the inventory is data. Re-run `billing-states.spec.ts` to `t7a-billing-after.json` → the same `stats` as Step 1. Then `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npm run openapi:gen && /usr/bin/git diff --exit-code openapi/; echo "OPENAPI=$?"` → `OPENAPI=0`, since no v1 route was added. Then **the P3 probe as Global Constraints defines it**: read its lines, and none may name a file this task adds or edits.
+
+- [ ] **Step 20: Report for commit.** `feat(streaming): staff match-credits panel on /admin/orgs/[id] — balance, ledger, grant, refund and revoke through Task 7's ledger (idempotent, audited)`. The report carries:
+  - the 22 new vitest tests (5 read, 13 route, 4 panel), 5 e2e tests and 7 smoke checks, with their JSON and log paths
+  - the killer list, all 29 (R1–R4, R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2, C1, C1′, C1″, C2, R5, G1, K2, K3, K4, B1, V1, plus W1 from Step 15's pre-mount run)
+  - the width-baseline finding, or "baseline clean at 320/768/1280", and Step 17's `/admin` header line at each of 320, 768 and 1280
+  - for the orchestrator to route to the owner: the English-only READING (deviation a). The 422 refusals are donor parity, and the reused-key 409 is an orchestrator ruling recorded as a deviation in the write-path diff; neither is an open owner item.
+  - The lane-B review runs at the END of Task 8 (Task 8's last step), not here.
 
 ---
 
@@ -7122,7 +9344,17 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable npx vitest run src/server/usecases/__tests__/stream-credits.test.ts src/server/usecases/__tests__/stream-credits-webhook.test.ts src/lib/__tests__/relay-checkout.test.ts src/lib/__tests__/billing-checkout-client.test.ts src/lib/__tests__/credit-packs.test.ts src/server/usecases/__tests__/billing-events.test.ts src/server/usecases/__tests__/billing-events-concurrency.test.ts src/server/usecases/__tests__/billing-events-pass-credit.test.ts src/server/usecases/__tests__/billing-events-sweep.test.ts --reporter=json --outputFile=<scratchpad>/r1/laneB.json > /dev/null 2>&1; node -e "const r=require('<scratchpad>/r1/laneB.json');console.log(r.numTotalTests,r.numFailedTests,r.numPendingTests);for(const t of r.testResults)console.log(t.name.replace(/.*worktrees\/relay\//,''),t.assertionResults.length,t.status)"`
   Expected: 0 failed; the nine per-file lines printed, and the four `billing-events*` files plus `credit-packs.test.ts` EQUAL their own counts in `baseline-web.json` (Task 0) — paste both numbers per file. `billing-checkout-client.test.ts` is the one donor file whose count MOVES: baseline + 2. Then `rtk proxy npm run lint` → `✖ 0 problems` and tsc `EXIT=0` (the route imports `@/lib/relay-checkout`, which is `server-only` — a route is a server module, so this compiles; the PANEL must import only `@/lib/stream-credit-packs`).
 
-- [ ] **Step 12: Lane B review, then report for commit.** Reviewer (`model: opus`) with the killers m2/m3/m5 (Task 7) and the webhook replay. Commits: `feat(streaming): match-credit packs, embedded relay checkout (402 before Stripe), sandbox price script` and `feat(streaming): stream_credits webhook branch → recordPurchase`.
+- [ ] **Step 12: Report for commit.** Commits: `feat(streaming): match-credit packs, embedded relay checkout (402 before Stripe), sandbox price script` and `feat(streaming): stream_credits webhook branch → recordPurchase`. The lane review is NOT here: it is Step 13, after these commits.
+
+- [ ] **Step 13: Lane B review — the LAST step of lane B (Revision 2, review I1).** Lane B runs `7 → 7A → 8` sequentially, so by this step Tasks 7, 7A and 8 have all landed; if `git log` does not show Task 7A's commit, STOP, because the review would pass 7A's money route unread. Dispatch `reviewer` (`model: opus`) on the lane's whole diff (Tasks 7, 7A and 8), with the P3 probe (§Global Constraints), handing it EVERY lane-B killer by name, each with the killer its task recorded:
+  - **Task 7, twenty** (Step 4): m2 (the org lock deleted in `consumeForSession` → "two concurrent consumers"), m3, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14 (the lock deleted in `staffRow`) and m15 (the lock deleted in `recordPurchase`), both → "first-ever writes on an EMPTY ledger serialise", m16, m17, m18, m19 (the reused-key comparison and its members) → "a key reused for a DIFFERENT adjustment", m20 → "a session whose fixture is GONE", m21 (the lock key's `.toLowerCase()` dropped) → "first-ever writes on an EMPTY ledger serialise", and m22 (staffRow's 23505 → 409 `.catch` deleted) → "the same key on two DIFFERENT orgs at once". m1 (Task 10) and m4 are not Task 7's.
+  - **Task 7A read, five** (Step 5): R1, R2, R3, R4, R6.
+  - **Task 7A route, twelve** (Step 9): S1, S2, O1, O2, O3, N1, N2, D1, A1, K0, K1, V2.
+  - **Task 7A panel, five** (Step 13): C1, C1′, C1″, C2, R5.
+  - **Task 7A browser, seven** (Steps 15 and 17): W1 (the mount; the pre-mount red run), G1, K2, K3, K4, B1, V1.
+  - **Task 8**: its code carries global m4 (delete the plan-key check in `relay-checkout`), whose killer is Task 15's e2e "a community org … 402 BEFORE Stripe" (Task 17 Step 4's table). That test does not exist yet at this review, so the reviewer records m4 as OWED to Task 15, never as killed. The webhook replay's witnesses are Task 8's two webhook tests ("writes ONE purchase row … a redelivery claims nothing and writes none" and "an unpaid session is claimed and handled, and writes nothing"), plus any killer Task 8's report records.
+  
+  That is 49 named killers from Tasks 7 and 7A (20 + 5 + 12 + 5 + 7). The reviewer checks that each one names a test that exists in the landed code and that its mutant was actually run: a count is not a list. It also diffs every new write path against the §TEST-CASE DESIGN table (the Task 7 row and the admin-route row).
 
 ---
 
@@ -7537,11 +9769,13 @@ export async function POST(req: Request, { params }: Ctx) {
 // r6/r7/r8/r9 (M3 and the dual-credential qr), m1's wiring twin, C3, C9, and
 // the three "delete the lazy applyExpiry call" mutants.
 import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";   // Task 7: a REAL users row for the staff audit actor
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT,
@@ -7570,7 +9804,9 @@ async function rig(opts: { overlay?: boolean; relay?: boolean; credits?: number;
   const d = await startedDivisionWithFixture(auth, opts.fixtures === 2 ? { fixtures: 2 } : {});
   await override(auth.orgId, "streaming.overlay", opts.overlay ?? true);
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
-  if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: auth.userId!, note: "unit" });
+  // seedOrg's auth.userId is null (_rig.ts:37); the grant's in-transaction audit row needs a real
+  // users row (staff_audit_log.actor_id NOT NULL, V103:16) and every staff write needs a key (Task 7).
+  if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   const target = await createStreamTarget(auth, auth.orgId, {
     kind: opts.kind ?? "youtube", label: "Club",
     rtmpUrl: `rtmps://${opts.targetHost ?? "a.rtmps.youtube.com"}/live2`, streamKey: "yt-key",
@@ -9183,10 +11419,12 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
 // a page-scoped bearer → 401; the job bearer → 200 with the facts / the
 // desiredState reply; a malformed heartbeat body → 400.
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";   // Task 7: a REAL users row for the staff audit actor
 import { mintRelayToken } from "@/server/relay/tokens";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
@@ -9205,7 +11443,7 @@ async function composedSession() {
               on conflict (org_id, feature_key) do update set bool_value = true`;
   }
   await invalidateOrgEntitlements(auth.orgId);
-  await grantCredits({ orgId: auth.orgId, delta: 1, createdBy: auth.userId!, note: "unit" });
+  await grantCredits({ orgId: auth.orgId, delta: 1, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });   // seedOrg's userId is null (_rig.ts:37)
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
   const runner = new FakeRunner();
   setRelayDriversForTest({ ingest: new FakeIngest(), runner });
@@ -9427,9 +11665,11 @@ export async function POST(req: Request, { params }: Ctx) {
 // sweep proves it reaches sessions nobody reads, destroys orphans, and runs
 // retention through retentionPlan with a 409 retried the NEXT day.
 import { describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { rigUser } from "@/server/relay/__tests__/_session-rig";   // Task 7: a REAL users row for the staff audit actor
 import {
   MAX_DURATION_MINUTES, RECORDING_RETENTION_DAYS, SAMPLE_RETENTION_DAYS,
   RUNNER_STOP_GRACE_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS,
@@ -9452,7 +11692,7 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
               on conflict (org_id, feature_key) do update set bool_value = true`;
   }
   await invalidateOrgEntitlements(auth.orgId);
-  await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: auth.userId!, note: "unit" });
+  await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });   // seedOrg's userId is null (_rig.ts:37)
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k", watchUrl: "https://www.youtube.com/watch?v=sweep" });
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
@@ -11326,7 +13566,7 @@ a `useState(() => searchParams.get("stream") === "open" && …)` initialiser in 
 **Files:**
 - Create: `apps/web/e2e/relay-kit.ts`
 - Create: `apps/web/e2e/walkthrough/stream-relay.spec.ts`
-- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-relay.spec.ts"` (a new `// Streaming R1` block after the Settings ones)
+- Modify: `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` — `WALKTHROUGH_SPECS` gains `"stream-relay.spec.ts"` (in Task 7A's `// Streaming R1` block at the END of the literal, after `"stream-credits-admin.spec.ts"`)
 
 **Interfaces:**
 - Consumes: `apiJson`, `seedRosteredFixture`, `setBoolEntitlementOverrideSql`, `expectNoHorizontalScroll`, `TAG` (`./helpers`); `signInAs` (`./overlay-kit`); `postgres` (the e2e's own DB client, the overlay-kit shape); `stripe` SDK (sandbox); the `walkthrough` project (`playwright.config.ts` `WALKTHROUGH` regex — the file is selected by PATH); the server under test started with `RELAY_DRIVERS=fake` (and `FAKE_INGEST_CONNECT_AFTER_MS` unset → 3 s).
@@ -11710,7 +13950,7 @@ test("Stripe sandbox: buy a 1-pack for real, replay the signed completion, balan
 ```
   `fillCardFields` and `scrollSheetToEnd` are copied from `apps/web/e2e/walkthrough/event-pass.spec.ts` (the `iframe[src*="stripe.com"]` frame, placeholder `1234 1234 1234 1234`, `MM / YY`, the CVC textbox, `Full name on card`, the `Country or region` combobox set to `GB`, the settle waits, the postal code) into this spec as module-level helpers — a spec cannot import a spec, and `stripe-checkout-kit.ts` drives the HOSTED page (`#cardNumber`), which is not this surface.
 
-- [ ] **Step 3: Register the spec.** In `e2e-ci-wiring.test.ts`'s `WALKTHROUGH_SPECS`, after the Settings W6 entries:
+- [ ] **Step 3: Register the spec.** In `e2e-ci-wiring.test.ts`'s `WALKTHROUGH_SPECS`, inside Task 7A's `// Streaming R1` block, which 7A APPENDED at the END of the literal (Revision 2, review M3): directly after `"stream-credits-admin.spec.ts",` and before the closing `];`. The list is in wave order (AGENTS.md class 18); never insert mid-list or reorder. Re-pin with `rtk proxy grep -a -n "stream-credits-admin.spec.ts\|^\];" apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` first:
 
 ```ts
   // Streaming R1 — the Phone tab: credits, QR pairing, passthrough live/stop
@@ -11885,7 +14125,7 @@ async function streamRelaySuite(): Promise<void> {
   (a) `~/.claude/skills/seazn-local-env/scripts/seazn-env.sh rebuild --label rly` → EXIT 0; then `curl -s <rly base>/api/health` → 200 AND one page's chunk resolves (`curl -s -o /dev/null -w "%{http_code}" <rly base>/_next/static/chunks/<any chunk named in the served HTML>` → 200 — a stale standalone answers 200 on health with every chunk 404).
   (b) Full `apps/web` vitest, compared to the Task 0 baseline:
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && DATABASE_URL=<rly url> DATABASE_SSL=disable RELAY_KEK=<64 hex> AUTH_SECRET=<from .env.local> npx vitest run --reporter=json --outputFile=<scratchpad>/r1/final-web.json > /dev/null 2>&1; echo "EXIT=$?"; node -e "const a=require('<scratchpad>/r1/baseline-web.json'),b=require('<scratchpad>/r1/final-web.json');console.log('baseline',a.numPassedTests,a.numTotalTests,a.numFailedTests,'final',b.numPassedTests,b.numTotalTests,b.numFailedTests,'pending',b.numPendingTests);console.log('suites baseline',a.numTotalTestSuites,a.numFailedTestSuites,'final',b.numTotalTestSuites,b.numFailedTestSuites);const per=r=>Object.fromEntries(r.testResults.map(t=>[t.name.replace(/.*worktrees\/relay\//,''),t.assertionResults.length]));const pa=per(a),pb=per(b);for(const k of Object.keys(pa))if(/credits|billing-events|live-score|stream-overlay|overlay-/.test(k)&&pa[k]!==pb[k])console.log('COUNT MOVED',k,pa[k],'->',pb[k]);console.log('missing-from-final',Object.keys(pa).filter(k=>!(k in pb)).length);console.log(b.testResults.filter(t=>t.status!=='passed').map(t=>t.name).join('\n'))"`
-  Expected, read out of the JSON and from nowhere else — **no figure typed into this plan is the gate**: (i) `final failed` **0** AND `final failedSuites` **0**, and `final suites` ≥ `baseline suites` — a suite that fails to COLLECT contributes ZERO tests rather than a failure, so the suite counts are the only numbers that can see the module-scope-throw trap, and a total alone cannot; (ii) `final total` ≥ `baseline total` + the sum of the per-task run-step totals each task pasted into `_STATE.md` as it closed (Task 6's `282`, Task 7's, Task 8's, Task 10's `47`, Task 11's `3`, Task 12's `17`, Task 13's `11`, Task 14's, and the rest) — sum THOSE recorded numbers, and if a task's number was never recorded, go and read it out of that task's own JSON before running this gate. An earlier revision of this line expected "+~109" from a literal-`it(`-line census; the true delta is several hundred (the relay tree alone reaches 282 by Task 6 Step 4, and this plan says at that very step that a literal-line census of `runner.test.ts` is "a floor, not its total" — one `it(` inside a `for` yields 96 cells). A floor set ~270 tests below the real delta is vacuous: a whole suite can fail to collect and the wave still signs off, at the LAST gate before merge. (iii) NO `COUNT MOVED` line (the donors and W1's suites unchanged — `ai_credit_ledger` suites, `live-score.test.tsx`); `missing-from-final 0` (the full-suite JSON can OMIT files under load — a missing file is re-run alone, never assumed green); every red file attributed on a clean detached checkout of `main` or fixed.
+  Expected, read out of the JSON and from nowhere else — **no figure typed into this plan is the gate**: (i) `final failed` **0** AND `final failedSuites` **0**, and `final suites` ≥ `baseline suites` — a suite that fails to COLLECT contributes ZERO tests rather than a failure, so the suite counts are the only numbers that can see the module-scope-throw trap, and a total alone cannot; (ii) `final total` ≥ `baseline total` + the sum of the per-task run-step totals each task pasted into `_STATE.md` as it closed (Task 6's relay-tree N from its Step 4 arithmetic, Task 7's (`15` in `stream-credits.test.ts` and +3 in `migration-shape.test.ts`), Task 7A's (`22` vitest: 5 read, 13 route, 4 panel; plus 5 e2e and 7 smoke checks, which the vitest total does not contain), Task 8's, Task 10's `47`, Task 11's `3`, Task 12's `17`, Task 13's `11`, Task 14's, and the rest) — sum THOSE recorded numbers, and if a task's number was never recorded, go and read it out of that task's own JSON before running this gate. An earlier revision of this line expected "+~109" from a literal-`it(`-line census; the true delta is several hundred (the relay tree alone read 282 by Task 6 Step 4 at plan time, and this plan says at that very step that a literal-line census of `runner.test.ts` is "a floor, not its total" — one `it(` inside a `for` yields 96 cells). A floor set ~270 tests below the real delta is vacuous: a whole suite can fail to collect and the wave still signs off, at the LAST gate before merge. (iii) NO `COUNT MOVED` line (the donors and W1's suites unchanged — `ai_credit_ledger` suites, `live-score.test.tsx`); `missing-from-final 0` (the full-suite JSON can OMIT files under load — a missing file is re-run alone, never assumed green); every red file attributed on a clean detached checkout of `main` or fixed.
   (c) `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay && npm run openapi:gen && /usr/bin/git diff --exit-code openapi/; echo "OPENAPI=$?"; pnpm i18n:gen-keys && /usr/bin/git diff --exit-code apps/web/src/lib/i18n-keys.ts; echo "KEYS=$?"; npx tsc --noEmit -p apps/web/tsconfig.json; echo "TSC=$?"; rtk proxy npm run lint 2>&1 | grep -a -E "✖|problems" | tail -1` → `OPENAPI=0 KEYS=0 TSC=0`, `✖ 0 problems`. Then **the P3 probe exactly as Global Constraints defines it once (FT0-2)** — with `--exclude-dir=__tests__` and quoted globs — and READ its lines: every hit must be one `_STATE.md` FT0-2 lists as pre-existing, and none may name a file this wave adds or edits. Do NOT pipe it to `wc -l` and compare with `0`: on a clean tree the unfiltered grep prints 8 lines, so that form fails for the wrong reason (and would pass if this wave added a ninth while another was removed).
   (d) W1's regression witnesses, whole files: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/relay/apps/web && PLAYWRIGHT_BASE=<rly base> E2E_PROD_TARGET=1 npx playwright test e2e/stream-overlay.spec.ts --reporter=json > <scratchpad>/r1/final-overlay.json 2>/dev/null; node -e "console.log(require('<scratchpad>/r1/final-overlay.json').stats)"` → the same stats as Task 0 Step 8. Then the WHOLE `mobile.spec.ts` at all seven widths: `for` each of `mobile-320 mobile-360 mobile-375 mobile-390 mobile-430 mobile-768 mobile-834` (seven separate calls, each `--project=<name> --reporter=json > <scratch>/final-mobile-<name>.json`) — serial file: a red count is a FLOOR; re-run after each fix until a full pass. Paste the seven stats lines.
   (e) The P3 grep once more, and `ls db/migration/deltas | sort -V | tail -2` — the R1 migration is still the tail after the final rebase on `origin/main` (`/usr/bin/git fetch origin main && /usr/bin/git rebase origin/main` — the orchestrator's call; after it, re-run (b)–(e)).
@@ -11984,10 +14224,49 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | Mutant | Killer |
 |---|---|
 | m1 delete the `consume` insert | e2e walkthrough: live reached, `creditSumSql` 1 → red; unit twin `stream-sessions.test.ts` "consuming exactly ONE credit" |
-| m2 delete `for update` | `stream-credits.test.ts` "two concurrent consumers" |
-| m3 drop `stripe_event_id` unique / the on-conflict | `stream-credits.test.ts` "replayed purchase"; `stream-credits-webhook.test.ts`; `migration-shape.test.ts` |
+| m2 delete the org money lock (`await lockOrg(tx, args.orgId)`) in `consumeForSession` | `stream-credits.test.ts` "two concurrent consumers" (`pg_locks` advisory-not-granted, scoped to the holder's pid) |
+| m3 drop `stripe_event_id` unique / the on-conflict | `stream-credits.test.ts` "a replayed purchase"; `stream-credits-webhook.test.ts`; `migration-shape.test.ts` |
 | m4 delete the plan-key check in `relay-checkout` | e2e "a community org … 402 BEFORE Stripe" |
-| m5 delete the 24 h reuse rule | `stream-credits.test.ts` "restart within 24 h … 25 h" |
+| m5 delete the 24 h reuse rule | `stream-credits.test.ts` "a restart on the same fixture within 24 h … 25 h" |
+| m6 delete the staff key check (`if (prior) { … }`) | `stream-credits.test.ts` "a replayed grant" (the index's 23505, answered 409) |
+| m7 revoke bypasses `debit` | `stream-credits.test.ts` "revoke writes a NEGATIVE 'revoke' row" (23514, not 422) |
+| m8 delete the linked-refund cap | `stream-credits.test.ts` "a session-linked refund is capped" |
+| m9 the cap ignores prior refunds | `stream-credits.test.ts` "a session-linked refund is capped" (the second refund) |
+| m10 the key check moved below the floor and cap | `stream-credits.test.ts` "a REPLAYED session-linked refund" (422, not applied false) |
+| m11 delete the in-transaction `staff_audit_log` insert | `stream-credits.test.ts` "a replayed grant" (audit rows) and "revoke writes a NEGATIVE 'revoke' row" (the Adjustments log read) |
+| m12 an audit row on the replay path | `stream-credits.test.ts` "a replayed grant" (two audit rows) |
+| m13 the org dropped from the reused-key comparison | `stream-credits.test.ts` "a key reused for a DIFFERENT adjustment", row `another org (m13)` |
+| m14 delete the org money lock in `staffRow` | `stream-credits.test.ts` "first-ever writes on an EMPTY ledger" (1 waiter, not 3) |
+| m15 delete the org money lock in `recordPurchase` | `stream-credits.test.ts` "first-ever writes on an EMPTY ledger" (2 waiters, not 3) |
+| m16 delete the reused-key refusal (`if (!same) throw`) | `stream-credits.test.ts` "a key reused for a DIFFERENT adjustment" (applied false, not 409) |
+| m17 / m18 / m19 the delta / the kind / the session dropped from the comparison | `stream-credits.test.ts` "a key reused for a DIFFERENT adjustment", rows `a different delta (m17)`, `a different kind (m18)`, `a different session (m19)` |
+| m20 the null-fixture skip → `is not distinct from` | `stream-credits.test.ts` "a session whose fixture is GONE" |
+| m21 drop `.toLowerCase()` in `orgMoneyLockKey` | `stream-credits.test.ts` "first-ever writes on an EMPTY ledger" (the upper/lower key assertion) |
+| m22 delete staffRow's 23505 → 409 `.catch` | `stream-credits.test.ts` "the same key on two DIFFERENT orgs at once" (a raw 23505, no status) |
+| 7A R1 the balance read from `rows[0].balance_after` | `admin-stream-credits.test.ts` "the balance is sum(delta)" |
+| 7A R2 `left join users` → `join` | `admin-stream-credits.test.ts` "every field is mapped" |
+| 7A R3 drop the org filter | `admin-stream-credits.test.ts` "only THIS org's rows and balance" |
+| 7A R4 oldest first / R6 drop the limit | `admin-stream-credits.test.ts` "the newest STREAM_CREDIT_LEDGER_LIMIT rows" |
+| 7A S1 `requireStaff` → `requireUser` / S2 parse before authorize | `route.test.ts` "a signed-in NON-staff user → 401" (S2: the malformed-body row) |
+| 7A O1 drop the session's org filter | `route.test.ts` "a refund naming THIS org's consumed session" (422, not 404) |
+| 7A O2 delete the session lookup | `route.test.ts` "a refund naming a session id that exists NOWHERE" (422, not 404) |
+| 7A O3 `orgId: org.id` → the URL's `id` | `route.test.ts` "an unknown org → 404" (the upper-case row: its audit row is filed under the upper-case text) |
+| 7A N1 drop `.min(1)` / N2 drop `.trim()` on the note | `route.test.ts` "the note is required" (N2 also "staff grant") |
+| 7A D1 drop the delta ceiling | `route.test.ts` "delta bounds" |
+| 7A A1 the org id as the author | `route.test.ts` "staff grant" (the audit FK answers 500) |
+| 7A K0 drop the key's `.min(8)` | `route.test.ts` "idempotency_key is required" |
+| 7A K1 a fresh key per request in the route | `route.test.ts` "a replayed key" |
+| 7A V2 revoke routed to `grantCredits` | `route.test.ts` "revoke: 1 of 1 → 200" |
+| 7A C1 / C1′ / C1″ the note gate dropped on grant / refund / revoke | `admin-stream-credits-panel.test.tsx` "the controls OPEN AT" (message names the kind) |
+| 7A C2 the author falls back to — instead of the user id | `admin-stream-credits-panel.test.tsx` "rows render" (`>user-1<`) |
+| 7A R5 delete the rail's `tabIndex={0}` | `admin-stream-credits-panel.test.tsx` "a keyboard-reachable scroll rail" |
+| 7A W1 delete the page mount | `stream-credits-admin.spec.ts` flow test red at `stream-credits-balance` (Step 15's pre-mount run) |
+| 7A G1 delete the in-flight guard and the busy gate | `stream-credits-admin.spec.ts` flow test: `posts` (eight bodies, not seven) |
+| 7A K2 a fresh key per attempt in the panel | `stream-credits-admin.spec.ts` flow test: `replayed` not visible (the retry applies) |
+| 7A K3 the key kept after a 409 `idempotency_key_reused` | `stream-credits-admin.spec.ts` flow test: balance "3" never reached (the deliberate refund replays) |
+| 7A K4 no `router.refresh()` after that 409 | `stream-credits-admin.spec.ts` flow test: balance "2" never reached after the 409 |
+| 7A B1 the refund's blank session sent as `""` | `stream-credits-admin.spec.ts` flow test: the lost refund never lands (400) |
+| 7A V1 the panel clips its own overflow | `stream-credits-admin.spec.ts` "at 320px …": `clipped inside the panel at 320px` |
 | r1 drop the partial unique index | `migration-shape.test.ts`; e2e double start 409 |
 | r2 drop the stale-beat rule | `relay-sweep.test.ts` "ONE retry … then failed(machine_crash)" (the soak loop) |
 | r3 reference `*_enc` outside `server/relay/**` | `enc-boundary.test.ts` |
@@ -12063,7 +14342,8 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | — rulings 9–14 (second set 2026-09-14): lifecycle scope, granted state via the real admin editor, recommendation B, the second-input sink, capture everything, `RELAY_KEK` present | §"Owner rulings" 9–14; §"House rules" (1)/(2); Task 0 (`RELAY_KEK` presence check, never echoed); Task 17 Step 4 |
 | 3 ports, drivers, fakes, `RELAY_DRIVERS` | Tasks 3, 4, 5A (the Fly client), 5 |
 | 4 tokens on `AUTH_SECRET`, 401 / 410, G1 witness; producer mint | Task 6; Task 10 (410); P2 non-goal |
-| 5 credits usecases (`creditBalance`, `consumeForSession`, `recordPurchase`, grant/refund) | Task 7 |
+| 5 credits usecases (`creditBalance`, `consumeForSession`, `recordPurchase`, grant, refund and revoke; the org money lock on every write; the staff key with its reused-key 409; the in-transaction audit row) | Task 7 |
+| — the staff "Match credits" panel (owner ruling 15): the read, `POST /api/admin/orgs/[id]/stream-credits`, the panel on `/admin/orgs/[id]`, its walkthrough and smoke | Task 7A |
 | 6 checkout (EMBEDDED — owner ruling 8) + webhook + sandbox script + lookup keys | Task 8 (route, params, client helper), Task 14 (the modal) |
 | 7 session API (gate order, 409 active_session with the id, slot-0 row in the same tx, `current` projection with both credential sets, internal routes, state machine, server-side poll) | Tasks 9, 10, 11 |
 | 8 sweep + cron route (+ workflow → P1, DAILY — ruling 3): timeouts / retry / wall clock moved to the LAZY path (Task 10, recommendation B); the sweep keeps retention (`SAMPLE_RETENTION_DAYS = 90`, owner-ruled), the backstop — non-terminal AND terminal-with-a-live-runner (C27) — orphans, the Dd video facts and the Df recompute | Task 12 (+ Task 10) |
@@ -12077,7 +14357,7 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
 | Acceptance: smoke (CRUD, heartbeat, three `*_enc` columns separately, cron order) | Task 16 |
 | Acceptance: regression (W1 spec, `live-score`, seven-width mobile, generators, tsc, totals, donor counts) | Task 17 Step 1 |
 | Acceptance: visual gate (rows, DIFFER, 320 @ 125 %, per-screen verdicts) | Task 15 PNGs; Task 17 Steps 2, 8 |
-| Mutants m1–m5, r1–r9, each with a killer | Task 17 Step 4's table (killers named in Tasks 2, 4, 5, 6, 7, 10, 12, 15) |
+| Mutants m1–m22, r1–r9, and Task 7A's R1–R6, S1, S2, O1, O2, O3, N1, N2, D1, A1, K0–K4, V1, V2, C1, C1′, C1″, C2, W1, G1, B1, each with a killer | Task 17 Step 4's table (killers named in Tasks 2, 4, 5, 6, 7, 7A, 10, 12, 15) |
 
 Corrections C1–C14 and pins P1–P22: the ledger at the top maps each; re-checked against the tasks — every row has a task or a non-goal. Two rows the prompt's acceptance names that this plan places differently, both recorded as deviations: the e2e's `stream-health` fps assertion (C6 + composed disabled → the ingest-state copy) and `storageHeadroom` on the port (C3 → `storageUsage()` + the usecase). `_THEMES.md` §8a/§8b: every row of both sheets is in Task 14's "Sheet values" block.
 
