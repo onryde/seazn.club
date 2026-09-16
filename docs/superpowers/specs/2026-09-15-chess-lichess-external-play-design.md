@@ -1,16 +1,29 @@
 # Chess external play (Lichess) — design
 
-Date: 2026-09-15  
-Status: draft for owner review  
-Approach: fixture bridge (Seazn owns competition; Lichess is the board)
+Date: 2026-09-15 (revised 2026-09-16)
+Status: revised after PR #788 review — for owner review
+Approach: fixture bridge (Seazn owns the competition; Lichess is the board)
+
+## 0. Revision note (2026-09-16)
+
+The first build minted a **direct** Lichess challenge only after both players
+clicked Ready in a Seazn lobby, because a direct realtime challenge expires
+20 seconds after creation. Review of PR #788 found that design produced most of
+the blockers: an accepted game lost when the lobby cleared an "expired"
+challenge, a Lichess HTTP call inside a DB transaction, a lobby realtime token
+that opened the paid score channel, and player OAuth tokens stored in plaintext.
+
+Owner decision 2026-09-16: use a Lichess **open challenge restricted to the two
+players**, created when the play window opens. The Ready lobby, the 20-second
+countdown, the lobby realtime channel and stored player tokens are removed.
 
 ## 1. Problem
 
 Chess competitions in Seazn already pair fixtures, assign colours, and fold
-win/draw/loss into standings via the `boardgame` module. Players who enrol on
-the platform still need somewhere to actually play online. We want Seazn to
-generate an external play path, get both players onto the board at the right
-time, and write the finished result back into the normal scoring pipeline.
+win/draw/loss into standings via the `boardgame` module. Players who enrol need
+somewhere to play online. Seazn should put both players on the right Lichess
+board at the right time and write the finished result back into the normal
+scoring pipeline.
 
 ## 2. Goals (v1)
 
@@ -18,214 +31,264 @@ time, and write the finished result back into the normal scoring pipeline.
   standings stay authoritative.
 - Players **link a Lichess account** on their profile; enrollment into an
   online-Lichess division **requires** that link.
-- At **T−15 minutes** before each fixture’s scheduled start, Seazn **emails
-  both players a Seazn lobby link**. It does not create a Lichess challenge
-  then. A direct Lichess challenge expires 20 seconds after creation unless a
-  stream is held open, so a link minted at T−15 is already dead.
-- Being on the page is not enough. Each player clicks **Ready**. When **both**
-  have clicked, Seazn mints the challenge as White and both screens get Play
-  plus a **20-second countdown**. If that window passes and the game has not
-  started, both Ready clicks are cleared and they click Ready again. A started
-  game never returns to Ready.
-- When Lichess reports game start → fixture becomes live in Seazn.
+- At **T−15** Seazn emails both players a **Seazn fixture link** saying when the
+  board opens. The email never contains a Lichess URL.
+- The **play window opens at T−10**. From then until the **deadline (T+20)** the
+  Seazn fixture page shows each signed-in player **their own** Play link. Before
+  T−10 the Lichess challenge does not exist, so the game cannot be played early.
+  At the deadline Lichess itself expires the challenge.
+- When Lichess reports the game started → fixture becomes live in Seazn.
 - When Lichess reports a clean finish → Seazn appends the normal boardgame
   `result` score event.
-- Messy outcomes → organiser **needs-result** queue (no invented auto-forfeit).
-- Chess.com is a later adapter behind the same fixture extension; not built in
-  v1.
+- Messy outcomes (no-show, abort, mismatch) → organiser **needs-result** queue.
+  No invented auto-forfeit.
+- Chess.com is a later adapter behind the same interface; not built in v1.
 
 ## 3. Non-goals (v1)
 
-- Chess.com adapter implementation
-- Team chess / multi-board ties
-- KO mini-match chains driven by Lichess
-- In-Seazn ticking clock UI for online games (clock is Lichess’s job)
+- Chess.com adapter
+- Team chess / multi-board ties; KO mini-match chains driven by Lichess
+- In-Seazn clock UI (clock is Lichess's job)
 - Auto-forfeit without organiser confirmation
+- Rated Lichess games; delay/Bronstein clocks
 - PGN as scoring authority
-- Changing OTB / manual chess scoring when online play is off
+- Any change to OTB / pad / manual chess scoring when online play is off
+- Configurable window/deadline per division (constants in v1)
 
-## 4. End-to-end flow
+## 4. Lichess facts this design rests on
 
-1. Player links Lichess on Seazn profile (OAuth).
-2. Enrollment into an online-Lichess division fails without a linked account.
-3. Organiser sets division **online play = Lichess** and a clock
-   (`Cfg.clock` / variant as today — metadata already on boardgame).
+Verified 2026-09-16 against the Lichess API spec (`lichess-org/api`) and the
+Lichess server source (`lichess-org/lila`, `modules/challenge`):
+
+1. `POST /api/challenge/open` needs no user token. Parameters include `users`
+   ("only these users will be allowed to join"), `clock.limit` /
+   `clock.increment` (seconds), `rated`, `name`, `rules`, `expiresAt` (ms epoch,
+   default 24h, max 2 weeks). Response: `id`, `url`, `urlWhite`, `urlBlack`.
+   There is **no not-before parameter** — early play is prevented only by not
+   creating the challenge yet.
+2. With `users=a,b`, lila fixes colour by username, not by which URL is opened:
+   `openFixedColor = Color.fromWhite(me.is(userIds._1))`. The **first username is
+   always White**. Anyone else gets "The challenge is not for you to accept."
+3. The game id **equals** the challenge id (`def gameId = id.into(GameId)`).
+4. The game is created when the second of the two players joins.
+5. Lichess OAuth is authorization-code **with PKCE (S256)**, public client, no
+   client secret; tokens are long-lived and have no refresh.
+6. A direct challenge (`POST /api/challenge/{username}`) expires after 20s — the
+   reason it is not used.
+
+## 5. End-to-end flow
+
+1. Player links Lichess on the Seazn profile (OAuth PKCE). Seazn reads
+   `/api/account`, stores Lichess id + username, then revokes the token.
+2. Enrollment into an online-Lichess division fails without a link.
+3. Organiser sets the division **online play = Lichess**. Saving requires a
+   boardgame clock with `base` and no `delay`.
 4. Seazn pairs the round as today (Swiss, colours; home = White).
-5. At **T−15**: job emails both players the **Seazn fixture URL** (not a raw
-   Lichess URL). No challenge is created. Enrollment already required a claimed
-   profile and a Lichess link; the email does not create either.
-6. Each signed-in player opens that page and clicks **Ready**. Realtime on
-   `external-play:{fixtureId}` tells the other screen that the click happened.
-   Presence alone does not mint.
-7. When both Ready clicks are stored, the server mints one direct challenge
-   (White’s token, home = White). Both screens show Play and a 20-second
-   countdown. If the countdown ends and the fixture is not `live`, both Ready
-   flags are cleared and the buttons come back. Clicking Ready again mints a
-   new link and restarts the countdown. `live`, `finished`, and
-   `needs_organiser` never mint again. Opening the link is not what stops it.
-8. Lichess game start (poll, or our workflow’s signed webhook) → Seazn marks
-   the fixture `live` and appends `core.start`. That flip is what stops minting.
-9. Clean Lichess finish → map to boardgame `result` → existing scoring usecase
-   → standings.
-10. Abort / no-show / unfinished / account mismatch → `needs_organiser`.
+5. **T−15** (cron): email each player once — Seazn fixture URL + "board opens at
+   HH:MM".
+6. **T−10 → T+20**: the challenge is minted by whichever comes first — a matched
+   player opening the fixture page, or the cron. `users = whiteUsername,
+   blackUsername`, `expiresAt = T+20`, `rated = false`, `rules = noRematch`.
+   Exactly one challenge is kept per fixture (§8.2).
+7. The fixture page shows the signed-in White player `urlWhite` and the Black
+   player `urlBlack`. Spectators and other users see status only. The page
+   re-reads status every 15s while the window is open.
+8. Lichess game starts (cron poll, or the signed workflow poke) → fixture `live`,
+   `core.start` appended.
+9. Clean finish → boardgame `result` through the existing score-event usecase →
+   standings.
+10. Deadline passes with no started game, abort, account mismatch →
+    `needs_organiser`.
 
-## 5. Architecture
+## 6. Architecture
 
 ```
-[Profile OAuth] ──► linked Lichess identity on person
-[Division cfg]  ──► onlinePlay: lichess | off
-[Pairing]       ──► fixtures (unchanged)
-[T−15 job]      ──► email Seazn lobby link (no Lichess challenge)
-[Lobby]         ──► each player clicks Ready (Realtime tells the other screen)
-                ──► both Ready → adapter.createChallenge as White
-                ──► 20s countdown; miss → clear Ready and ask again
-[Webhook/poll]  ──► adapter.mapResult(game) ──► scoring.append(result)
-                ──► or mark needs_organiser
-[Organiser UI]  ──► manual forfeit / draw / no-result on queued fixtures
+[Profile OAuth PKCE] ─► lichess id + username on user (no token kept)
+[Division cfg]       ─► onlinePlay: lichess | off   (+ clock required)
+[Pairing]            ─► fixtures (unchanged)
+[Cron T−15]          ─► email Seazn fixture link, once per player
+[Page open | Cron]   ─► window open? claim row ─► adapter.createOpenChallenge
+                        (HTTP outside any transaction) ─► store urls, status ready
+[Cron poll | poke]   ─► adapter.fetchGame(challengeId) ─► live / finished /
+                        needs_organiser ─► scoreEvent(result)
+[Organiser queue]    ─► manual result / reschedule (resets bridge to pending)
 ```
 
-Seazn remains the competition system. Lichess is an execution backend for a
-single game. Chess.com later implements the same adapter interface.
+Every entry point (page read, mint, cron sweeps, poke, resolve) goes through one
+guard, `loadOnlinePlayFixture`, which requires: division `onlinePlay = lichess`,
+sport `boardgame`, fixture has `scheduled_at` and both entrants, fixture not
+finished or void. Anything else is refused (page: no panel; API: 404/409; cron:
+skipped).
 
-## 6. Data model
+## 7. Data model
 
-### 6.1 Person / profile
+Migrations V405–V407 are unmerged, so they are **amended**, not corrected
+forward: V405 is rewritten, V406 is folded into it, V407 is deleted.
 
-- Store Lichess user id + username from OAuth (and token material as required
-  by Lichess API policy).
-- Profile can relink; enrollment gate reads current link.
-- Challenges already created keep the identities they were built with until
-  recreated.
+### 7.1 `user_external_accounts`
 
-### 6.2 Division setting
+`id, user_id, provider ('lichess'), external_user_id, username, created_at,
+updated_at`; unique `(user_id, provider)` and `(provider, external_user_id)`.
+**No token columns.** Relink replaces the row.
 
-- `onlinePlay`: `off` (default) | `lichess` (v1) | later `chesscom`.
-- When `off`, behaviour is today’s OTB / pad / manual result path.
-- Clock continues to live on boardgame config (`base`, optional `increment`,
-  optional `delay`). v1 Lichess mapping supports **sudden death** (`base` only)
-  and **Fischer** (`base` + `increment`). If `delay` is set, the T−15 job does
-  **not** auto-create; fixture stays `needs_organiser` with a clear “delay
-  clocks aren’t supported for Lichess sync yet” reason (organiser can still
-  enter the result manually or clear delay and reschedule).
-
-### 6.3 Fixture external-play record
-
-Per fixture (when online play is on):
+### 7.2 `fixture_external_play`
 
 | Field | Purpose |
 |---|---|
-| `provider` | `lichess` |
-| `external_challenge_id` / `external_game_id` | Lichess ids |
-| `play_url` | Current challenge/game URL for the Play button |
+| `fixture_id` (pk), `org_id`, `provider` | Join key, tenant |
 | `status` | `pending` → `ready` → `live` → `finished` \| `needs_organiser` |
-| `last_error` | Optional create/sync failure detail |
-| `white_ready_at` / `black_ready_at` | Set when that side clicks Ready; cleared when the 20s window is missed |
-| `started_at` / `finished_at` | From provider signals |
+| `challenge_id` | Lichess challenge id = game id (unique where not null) |
+| `url_white` / `url_black` | Per-colour Play links |
+| `white_lichess_id` / `black_lichess_id` | Identities the challenge was built with |
+| `expires_at` | Deadline sent to Lichess |
+| `mint_claimed_at` | Short claim so only one caller talks to Lichess |
+| `white_emailed_at` / `black_emailed_at` | Per-recipient email-once |
+| `last_polled_at` | Fair poll ordering |
+| `last_error`, `needs_reason` | Diagnostics / queue reason |
+| `started_at` / `finished_at` | From Lichess |
 
-Exact table vs JSON column is an implementation choice; the fixture remains the
-join key.
+The bridge row is created lazily by the first guarded entry point.
 
-## 7. Lichess adapter responsibilities
+## 8. Behaviour
 
-- Create challenge between the two linked accounts with Seazn-assigned colour
-  (home = White) and mapped time control.
-- **Auth model (v1):** Seazn’s Lichess OAuth app stores each player’s token.
-  Mint the challenge **as White** (home) challenging Black, using White’s
-  token, only when both players have clicked Ready on the lobby. If White’s
-  token is missing/revoked, do not mint and do not flip colours.
-- Create games as **unrated/casual** by default (club comps must not surprise
-  players’ Lichess ratings).
-- Expose current play URL for the fixture page (per side if accept URLs differ).
-- Observe start and finish (webhook preferred; poll as backup).
-- Map finished game → boardgame result payload (`winner` null for draw;
-  method from Lichess termination when available).
-- **Reject** auto-apply if Lichess player ids do not match the linked accounts
-  for that fixture.
-- If the 20-second window passes and the game has not started, clear both
-  Ready clicks. The next mint happens only when both click Ready again.
-  Do not recreate after `live` (game started), `finished`, or
-  `needs_organiser`. Do not treat “opened the link” as started — Lichess does
-  not report that click. Do not re-spam email unless the organiser resends.
+### 8.1 Time constants
 
-## 8. Jobs & notifications
+`EMAIL_LEAD = 15 min`, `WINDOW_OPEN_LEAD = 10 min`, `DEADLINE_AFTER = 20 min`,
+all relative to `fixtures.scheduled_at`, defined once and imported by code and
+tests.
+
+### 8.2 Mint (no transaction around HTTP)
+
+1. Guard passes; `now ∈ [T−10, T+20)`; both players linked.
+2. Claim: `update … set mint_claimed_at = now() where fixture_id = $1 and
+   status = 'pending' and challenge_id is null and (mint_claimed_at is null or
+   mint_claimed_at < now() − 30s) returning`. No row → someone else is minting
+   or already minted; return current view.
+3. Call Lichess (request timeout 10s).
+4. Success: `update … set status='ready', challenge_id, url_white, url_black,
+   white/black_lichess_id, expires_at, mint_claimed_at = null where fixture_id =
+   $1 and status = 'pending'`. Failure: clear `mint_claimed_at`, record
+   `last_error`; next page read or cron retries.
+
+A started game never re-mints: mint requires `status = 'pending'`.
+
+### 8.3 Poll / poke
+
+- Cron selects `status in ('ready','live')` guarded rows, ordered by
+  `last_polled_at nulls first`, limit 50, and stamps `last_polled_at` on every
+  row it looks at, whatever the outcome.
+- Started is decided from the **Lichess game status** (exists and not
+  `created`), not from Seazn's score-event sequence.
+- Every status write is conditional on the expected prior status (`ready → live`,
+  `live → finished`, `ready|live → needs_organiser`).
+- Result mapping: Lichess player ids must equal the stored
+  `white/black_lichess_id`, else `needs_organiser (mismatch)`. White → home.
+- Result is appended through the existing score-event usecase. If the fixture
+  already has a result, the provider result is ignored.
+- Provenance: `challenge_id` + `finished_at` on the bridge row identify the
+  Lichess game behind the result.
+- The workflow poke (`POST /api/webhooks/lichess`, HMAC `x-lichess-signature`)
+  only triggers a poll of the named fixture; it never carries a result.
+
+### 8.4 Deadline
+
+At/after `expires_at`, a `pending` or `ready` row gets one final poll; if no game
+started → `needs_organiser (no_show)`. `live` rows are never escalated by the
+deadline.
+
+### 8.5 Leaving `needs_organiser`
+
+- Organiser enters a result (existing path) → `finished`.
+- Organiser reschedules the fixture → bridge reset to `pending` (challenge,
+  urls, identities, email stamps, claim and reason cleared).
+
+## 9. Jobs & notifications
 
 | When | Action |
 |---|---|
-| T−15 before `fixture.scheduled_at` | Email both players the Seazn lobby URL. No challenge yet. Status stays `pending`. |
-| Both players click Ready | Mint challenge as White; set `ready`; show Play and a 20-second countdown. |
-| Countdown ends, still not `live` | Clear both Ready clicks. Ask them to click Ready again, then mint a new link. |
-| Ongoing | Poll, or `POST /api/webhooks/lichess` signed with HMAC `x-lichess-signature` (`LICHESS_WEBHOOK_SECRET`, not a Lichess setting): `ready` → `live` on start; `live` → `finished` or `needs_organiser` |
-| Scheduled start + 20 min, still not `live` | Escalate to `needs_organiser` (organiser confirms forfeit / rewrite) |
-| Challenge create failure | Stay `pending`; clear Ready so both click again. Email already sent is not repeated |
+| now ≥ T−15, player not yet emailed | Email that player the Seazn fixture URL and window time; stamp that player only |
+| now ≥ T−10, `pending` | Mint (§8.2) if no page open did it first |
+| `ready` / `live` | Poll (§8.3) |
+| now ≥ T+20, not started | `needs_organiser (no_show)` |
 
-The cron (`POST /api/cron/external-play`, `x-cron-secret`) is what polls Lichess.
-The webhook is our workflow poking the same path, not Lichess calling us.
-Emails point at Seazn so expired Lichess URLs are not the durable handle.
+Cron `POST /api/cron/external-play` (`x-cron-secret`) runs every 5 minutes from
+the scheduled-workflow repo. Page-open minting makes the window exact to the
+second regardless of cron cadence.
 
-## 9. Scoring integration
+## 10. Scoring integration
 
-- Clean finishes call the **existing** append-score-event path for boardgame
-  `result`. No parallel standings writer.
-- If a result already exists on the fixture, ignore late provider events
-  (first authoritative result wins).
-- Organiser void/correct uses existing undo/void behaviour.
-- Provenance: record that the result was provider-synced (for audit); fold
-  semantics unchanged.
+- Existing score-event usecase only; no parallel standings writer.
+- First result wins; late provider results ignored.
+- Organiser void/correct uses existing undo/void.
 
-## 10. UI surfaces
+## 11. UI surfaces
 
-- Profile: Link / unlink Lichess.
-- Enrollment: block with clear CTA if online-Lichess division and no link.
-- Fixture (players): **Ready** button for each signed-in player; Play and a
-  20-second countdown only after both have clicked; Ready again if that window
-  is missed. Lobby token is for the two matched players only and does not use
-  the paid `realtime` entitlement.
-- Organiser: division toggle for online play; needs-result queue; optional
-  resend notification; manual result entry for queued fixtures.
-- OTB pad path unchanged when `onlinePlay` is off.
+- **Profile:** link / unlink Lichess.
+- **Enrollment:** block with a link CTA when the division is online-Lichess and
+  the user has no link.
+- **Division settings:** online play Off / Lichess; Lichess requires a clock
+  without delay.
+- **Fixture page (players):** one panel with states — *Opens at HH:MM* (before
+  T−10), *Play as White/Black on Lichess* (window open), *Game in progress*,
+  *Finished*, *Waiting for organiser*, *Window closed*. At least two layout
+  options are shown to the owner before building; verified at 320 / 768 / 1280.
+- **Organiser:** needs-result queue with reason; manual result; resend email.
+- No realtime channel for this feature.
 
-## 11. Failure matrix
+All strings in en/es/fr/nl; email interpolations HTML-escaped.
+
+## 12. Failure matrix
 
 | Case | Behaviour |
 |---|---|
 | Unlinked at enrollment | Block |
-| Lichess create fails | Stay `pending`; email may already have gone out; mint again when both are present |
-| Challenge expired, not started | Clear both Ready clicks. Remint only after both click Ready again. Never remint if `live` / `finished` / `needs_organiser` |
-| One player opens Play, the other does not accept within 20s | Not a lock. Countdown ends, Ready buttons return |
-| One no-show past grace | `needs_organiser` |
+| Division online play on, no clock / delay clock | Settings save refused |
+| Page opened before T−10 | "Opens at HH:MM"; no challenge exists |
+| Two mints at once | One claim wins; the other returns the stored view |
+| Lichess create fails / times out | Stay `pending`, `last_error`; retried on next read/cron |
+| One player joins, other never does | Challenge expires at T+20 → `needs_organiser (no_show)` |
+| Game started, cron slow | Stays `ready` until polled; never re-minted |
 | Clean finish | Auto `result` |
-| Abort / unfinished | `needs_organiser` |
-| Account mismatch on game | `needs_organiser` |
+| Abort / unfinished at deadline | `needs_organiser` |
+| Account mismatch | `needs_organiser (mismatch)` |
 | Result already present | Ignore provider |
-| Provider outage mid-game | Stay `live` until poll recovers or organiser acts |
+| Online play turned off mid-round | Guard refuses; no further mint/poll |
+| Fixture rescheduled | Bridge reset to `pending` |
+| Lichess outage mid-game | Stays `live` until poll recovers or organiser acts |
 
-## 12. Testing
+## 13. Testing
 
-- **Unit:** clock → Lichess time control; game payload → boardgame `result`;
-  mismatch rejection.
-- **Integration:** T−15 email without a challenge; mint only when both sides
-  are present; a second mint inside 20 seconds returns the same URL; `live`
-  refuses mint; webhook/poll through real scoring usecase.
-- **E2E:** linked player Play button; unlinked enrollment blocked; organiser
-  queue path.
-- **Regression:** online play off — pairings + manual/pad result unchanged.
+- **Unit:** clock mapping (units: Lichess wants seconds — pin against the
+  boardgame schema's declared unit); window maths at T−10/T+20 boundaries;
+  adapter request body (`users` order = White first, `expiresAt`, `rated=false`);
+  PKCE parameters and verifier round-trip; email escaping. Each guard mutated
+  and killed.
+- **DB usecase:** concurrent mint keeps one challenge; online play off refuses
+  every entry point; `live` never re-mints; poll stamps skipped rows (no
+  starvation); result through the real score-event usecase; deadline escalation;
+  reschedule reset.
+- **E2E walkthrough:** drive the real fixture page — hidden before window, own
+  colour link only for the signed-in player, spectator sees none; organiser
+  queue resolve. Registered in `WALKTHROUGH_SPECS`.
+- **Smoke:** cron sweep path with a recorded Lichess payload.
+- **Regression:** online play off — pairings + manual/pad result unchanged;
+  division settings page renders and saves for a non-chess sport.
 - **CI:** recorded Lichess payloads only; no live network.
 
-## 13. Open follow-ups (not blocking v1)
+## 14. Open follow-ups (not v1)
 
 - Chess.com adapter
-- Configurable pre-window / grace (defaults: T−15 create+email; +20 min
-  escalate)
-- Rated Lichess games as a division option
-- Bronstein/delay clock mapping to Lichess
-- Optional PGN attach via `core.note` after sync
-- Alternate create-as-Black fallback when White’s token is revoked
+- Per-division window / deadline
+- Rated games option; delay clock mapping
+- Bulk pairing (`pairAt` / `startClocksAt`) as an option for clubs wanting
+  auto-started clocks — needs stored player tokens and `challenge:bulk`
+- PGN attach via `core.note`
 
-## 14. Success criteria
+## 15. Success criteria
 
-- A paired chess fixture in an online-Lichess division gets a playable Lichess
-  game without the organiser tapping Start per board.
-- Both players are notified via email to a Seazn link at T−15.
-- A decisive Lichess finish appears in Seazn standings without manual entry.
-- Aborts and no-shows never silently corrupt the Swiss table.
-- Turning online play off leaves today’s chess behaviour intact.
+- A paired fixture in an online-Lichess division gets a playable Lichess game
+  with no organiser action, playable only between T−10 and T+20.
+- The only way to the Play link is the Seazn fixture page, per player.
+- A decisive Lichess finish appears in standings without manual entry.
+- No-shows and aborts land in the organiser queue and never corrupt the table.
+- Turning online play off leaves today's chess behaviour intact.
