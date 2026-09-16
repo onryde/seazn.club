@@ -80,7 +80,7 @@ capture repo.
 - Recreate: `POSTHOG_KEY= NEXT_PUBLIC_POSTHOG_KEY= ~/.claude/skills/seazn-local-env/scripts/seazn-env.sh up --label rly --server`
   from the worktree; `rebuild --label rly` after every code change; `down --label rly` at wave close.
 
-## R1 Task 0 pins (2026-09-14 @ `453d95cd6`)
+## R1 Task 0 pins (2026-09-14 @ `453d95cd6`; RE-PINNED 2026-09-16 @ `814edc34e`)
 
 Worktree `.claude/worktrees/relay`, branch `feat/stream-relay`, cut from `origin/main` @
 `453d95cd6`. Line numbers are SNAPSHOTS; every brief cites the SYMBOL. **The plan carries no
@@ -89,7 +89,7 @@ so this symbol table IS the re-pin. Every one of the 26 symbol probes in Task 0 
 
 | Symbol | Seen at |
 |---|---|
-| `requireResourceAuth` / `requireOrgAuth` | `server/api-v1/auth.ts:362` / `:210` |
+| `requireResourceAuth` / `requireOrgAuth` | `server/api-v1/auth.ts:352` / `:210` |
 | `ROUTES` | `server/api-v1/openapi.ts:67` |
 | `NEVER_KEY_ROUTES` | `server/api-v1/key-scopes.ts:301` |
 | `reply` / `v1` / `parseBody` | `server/api-v1/http.ts:96` / `:124` / `:252` |
@@ -109,7 +109,7 @@ so this symbol table IS the re-pin. Every one of the 26 symbol probes in Task 0 
 | `CREDIT_PACKS` / `StreamPanelContext` / `relayEntitled` / `stream-tab-phone` / `stream-phone-gate` | `components/v2/fixture-stream-panel.tsx:98` / `:136` / `:141` / `:366` / `:519` |
 | `const [streamOpen` | `components/v2/desk/run-sheet-row.tsx:162` |
 | `SEED_KINDS` / `SEED_PARAMS` | `e2e/visual/manifest.ts:17` / `:19` |
-| `expectNoHorizontalScroll` / `mintLoginPathBySql` / `setBoolEntitlementOverrideSql` / `seedRosteredFixture` | `e2e/helpers.ts:49` / `:274` / `:660` / `:1860` |
+| `expectNoHorizontalScroll` / `mintLoginPathBySql` / `setBoolEntitlementOverrideSql` / `seedRosteredFixture` | `e2e/helpers.ts:49` / `:274` / `:660` / `:1867` |
 | `WALKTHROUGH_SPECS` | `lib/__tests__/e2e-ci-wiring.test.ts:159` |
 | `releaseBoth` / `bothStarted` | `server/usecases/__tests__/registration-concurrency.test.ts:481-487` |
 | `NEXT_PUBLIC_SENTRY_DSN` (commented) | `fly.toml:11` |
@@ -119,11 +119,29 @@ so this symbol table IS the re-pin. Every one of the 26 symbol probes in Task 0 
 | admin overrides editor | `app/admin/orgs/[id]/page.tsx`; `app/api/admin/orgs/[id]/entitlement-override/route.ts:17` (`POST`) / `:53` (`DELETE`) |
 | cron pair idiom | `app/api/cron/registrations/route.ts:15` (503) / `:17` (401) |
 | P21 division gate | `run-sheet-row.tsx:386` `showStream`; `app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:259` `editable`, `:424` `streamOffered`, `:426` `hasFeature(… "streaming.overlay" …)`, `:431` `"streaming.relay"` |
-| P14 panel gate | `fixture-stream-panel.tsx:524` `<UpgradeGate feature="streaming.relay" …>`; `en/ui.json:5083` first `"stream.` key |
+| P14 panel gate | `fixture-stream-panel.tsx:524` `<UpgradeGate feature="streaming.relay" …>`; `en/ui.json:5084` first `"stream.` key |
 
 Negatives, all as expected: no `.github/workflows/relay-sweep.yml`; no `docs/contracts/`; no
-`apps/web/src/server/relay/`; `stream-phone-tab` 0 hits (P13); `POLL_MS` in `live-score.tsx` 0
-(watch 4 FALSE — Task 13 defines `STREAM_POLL_MS`).
+`apps/web/src/server/relay/`; `stream-phone-tab` 0 hits (P13, and the live testid is
+`stream-tab-phone`, 6 hits); `STREAM_POLL_MS` 0 hits repo-wide (watch 4 FALSE — Task 13 defines
+it). **Path corrected 2026-09-16:** the old negative named `POLL_MS` in
+`components/v2/live-score.tsx`, which does not exist — the file is
+`components/public-site/live-score.tsx` (also 0 `POLL_MS` hits, so the conclusion survives, but
+as written the probe was vacuous). The only `*POLL_MS` constants in the tree are `LIVE_POLL_MS`
+and `QUIET_POLL_MS` at `components/v2/desk/band-poll.ts:20` / `:25`.
+
+**Re-pin 2026-09-16 @ `814edc34e`** (full report: `authorities/repin-2026-09-16.md` in the
+gitignored SDD ledger). 66 rows re-taken against current `main`: **SAME 63, MOVED 3, RENAMED 0,
+GONE 0, SPLIT 0.** The three moves are folded into the table above — `requireResourceAuth`
+362→352, `seedRosteredFixture` 1860→1867, first `"stream.` key 5083→5084; both code moves were
+confirmed by opening the file at the new line, not by grep alone. #787 (scorer retirement)
+reshaped `server/usecases/scorers.ts`, `stages.ts`, `api-v1/schemas.ts` and the members role
+route but touched no pinned symbol; `api-v1/**`, the panel, `run-sheet-row.tsx` and the division
+gate are byte-stable at their pinned lines. Three counted facts, all confirming the FT rows:
+`ui.stream.*` = **31** keys (`en/ui.json:5084-5114`; locales are `en`/`es`/`fr`/`nl`, no `de`);
+the migration tails disagree as FT0-1 says (tree V404, all-refs V407) so **R1 takes V408**;
+`SUPABASE_JWT_SECRET` in production code = **5 hits, all in `lib/realtime.ts`** (117, 136 doc
+comments; 194, 197, 207), so FT0-2's rewritten probe is clean.
 
 **Drift since the plan's pin `54a125d9f`** (#782 `9a7393cf4`, #783 `198a4a130`, #784). None of
 the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `billing-events.ts`,
