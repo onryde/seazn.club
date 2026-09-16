@@ -1,10 +1,6 @@
--- Ready clicks for the Lichess lobby. Both must be set before a challenge
--- is minted. Cleared when the 20s window is missed and the game never started.
-alter table fixture_external_play
-  add column if not exists white_ready_at timestamptz,
-  add column if not exists black_ready_at timestamptz;
+-- V407 — private match-room channel external-play:{fixtureId}. The token carries lobby_fixture_id, never fixture_id, so V403's paid fixture:{id} policy cannot match it (spec §7.3).
 
--- Private lobby channel `external-play:{fixtureId}`. Same skip rules as V403:
+-- Same skip rules as V403:
 -- local Postgres has no realtime schema; Flyway may not own the table.
 do $migrate$
 begin
@@ -38,7 +34,8 @@ begin
       for select
       to authenticated
       using (
-        realtime.topic() = ('external-play:' || (select auth.jwt() ->> 'fixture_id'))
+        extension = 'broadcast'
+        and realtime.topic() = ('external-play:' || (select auth.jwt() ->> 'lobby_fixture_id'))
       )
     $sql$;
   exception
