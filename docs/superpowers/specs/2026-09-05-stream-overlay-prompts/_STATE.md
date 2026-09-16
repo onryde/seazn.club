@@ -61,7 +61,8 @@ capture repo.
 - `show data_directory` → `/tmp/seazn-env/rly/pg` (contains `rly`; the script also printed "data_directory verified").
 - Deltas tail on this branch at Task 0: `V403__realtime_fixture_broadcast_policy.sql`; all-refs `V4*`
   tail: the same `V403`. Task 0 therefore reserved V404 — **superseded 2026-09-16, see FT0-1**:
-  main has since landed V404–V407, so **R1's migration is V408**, recorded AS LANDED in `_INDEX.md`.
+  main landed V404 and an unmerged branch claims V405–V407, so **R1's migration is V408**,
+  recorded AS LANDED in `_INDEX.md`.
 - Baseline (`apps/web`, full, fresh DB, placement up): **passed 17064 / total 17141 / failed 0 /
   pending 77** — 1266 files, 0 failed suites, `outside-worktree 0`, runner `EXIT=0`. JSON at
   `/private/tmp/claude-501/-Users-ashokhein-github-seazn-club/3a628426-b486-4e22-bbd6-008e2676b7d0/scratchpad/r1/baseline-web.json`.
@@ -132,9 +133,12 @@ the panel, `run-sheet-row.tsx`, `e2e/helpers.ts`, `e2e/visual/manifest.ts`, `bil
   was ADDED by #782 itself, so the plan's "unchanged at `9a7393cf4`" is false. At Task 0 the
   all-refs scan showed nothing past V403, so Task 0 reserved V404.
   **Re-checked 2026-09-16 and CHANGED: R1's migration is `V408`.** `origin/main` is now
-  `ea5b7027a`, four commits ahead of this branch, and landed `V404__retire_scorer_role.sql`,
-  `V405__lichess_external_play.sql`, `V406__lichess_challenge_identity.sql` and
-  `V407__lichess_lobby_ready.sql`. A duplicate Flyway version survives a clean rebase, so the
+  `ea5b7027a`, four commits ahead of this branch, and landed `V404__retire_scorer_role.sql`
+  (#787). `V405__lichess_external_play.sql`, `V406__lichess_challenge_identity.sql` and
+  `V407__lichess_lobby_ready.sql` are CLAIMED on the unmerged
+  `origin/feat/chess-lichess-external-play` — absent from this tree, and taken all the same.
+  So after a rebase the two commands disagree (tree tail V404, all-refs tail V407); that is
+  the normal case and the higher one wins. A duplicate Flyway version survives a clean rebase, so the
   number is fixed BEFORE rebasing, never after. Re-read `ls db/migration/deltas | sort -V | tail -1`
   AND the all-refs `git log --all --diff-filter=A -- 'db/migration/deltas/V4*'` when Task 1 starts:
   that pair, not this line, is the authority — main moves under long waves.
