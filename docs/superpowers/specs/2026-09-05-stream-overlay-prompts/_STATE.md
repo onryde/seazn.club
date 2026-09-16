@@ -28,7 +28,7 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** Lane A Task 3 (ports + fakes) implementer (opus), BASE `5f55f9e8e`; brief `task-3-brief.md`, carries `task-3-carries.md` (bare SRT URL, RunnerListing.name), report `task-3-report.md`. Task 2C-post COMPLETE (`b98e5f22e`, review clean); plan synced after it (`5f55f9e8e`: F-A no OPEN, F-B stillOurs gate, m1/m2/m5, applyExpiry none → null). If lost: `git status` + report; uncommitted relay files are the implementer's.
+**In flight at time of writing:** Task 3 REVIEW — implementer done, committed `4a11c1b4a` (ports.ts, fakes.ts, fakes.test.ts; 15/15, 53/53 mutants); reviewer writes `task-3-review.md` (range baeb4c99e..4a11c1b4a). Fix round, if any, RESUMES the Task 3 implementer. If lost: read the review file; re-dispatch if missing. Verification note: judge vitest by EXIT code as well as JSON (an unhandled rejection exits 1 with JSON success:true).
 
 **Next, in order:**
 1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
