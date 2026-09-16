@@ -71,6 +71,7 @@ once per lane. Exception: money, safety (no second Machine), data loss, a 500 on
   create_ok into destroyed → lost + force_destroy; marked-creating cells keep destroyed (no retry reachable).
 - An ending session completes (own endReason + fill rule) on a runner `failed` signal; a stop on a provisioning
   session with a lost runner completes stopped.
+- Model (owner, 2026-09-16, asked about Sonnet then "Ok Opus."): every subagent stays opus.
 - Task 7A: donor parity (idempotency key + staff audit row in the same tx), revoke action, session-linked refund
   cap, 1–50 cap, English-only staff copy, 422 validation, per-org advisory lock on lower-cased org id, reused key
   with different values → 409 `idempotency_key_reused` (incl. 23505 race), route passes stored `org.id`.
