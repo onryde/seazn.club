@@ -202,38 +202,6 @@ jobs:
           cat bench-server.log
           exit 1
 
-      # DIAGNOSTIC (temporary, run 35151964731). The first run refused with
-      # `own_port_unbound`: the bench's port-ownership probe shells out to
-      # `lsof -nP -iTCP:3200 -sTCP:LISTEN -t` and got a non-zero exit, while its
-      # own HTTP health probe reached the SAME port in the SAME process — the
-      # pre-flight collects every applicable refusal at once and raised only the
-      # lsof one, so the server was demonstrably alive and answering. The error
-      # text was "Command failed: lsof …", not "spawn lsof ENOENT", so lsof
-      # exists and genuinely reported nothing. This step prints the ground truth
-      # so the fix is chosen from evidence rather than from a guess; it comes
-      # out once the cause is known.
-      - name: Diagnose port visibility
-        run: |
-          # `set +e` FIRST: steps run under `bash -e`, and the whole point of
-          # this step is to run commands that FAIL and print their exit codes.
-          # Without this the step aborts at the first failing lsof, before its
-          # own `echo EXIT=$?` — which is exactly what happened on run
-          # 35152435820, killing the diagnostic instead of the diagnosis.
-          set +e
-          echo "--- which lsof"; command -v lsof || echo "NO lsof ON PATH"
-          echo "--- the probe's exact command"
-          lsof -nP -iTCP:3200 -sTCP:LISTEN -t; echo "EXIT=$?"
-          echo "--- lsof, no LISTEN filter"
-          lsof -nP -iTCP:3200; echo "EXIT=$?"
-          echo "--- ss listeners"
-          ss -ltnp 2>/dev/null | head -20 || echo "NO ss"
-          echo "--- server process"
-          ps -eo pid,user,args | grep -a '[s]erver\.js' || echo "NO server.js PROCESS"
-          echo "--- whoami / server owner"
-          id -un
-          echo "--- HTTP from this same shell"
-          curl -s -o /dev/null -w 'health=%{http_code}\n' http://localhost:3200/api/health || echo "curl failed"
-
       # `--engine` is an ASSERTION, not a selector: nothing chooses an engine,
       # and this fails the run when the board came back from one the operator
       # did not expect. That is what stands between a silently-greedy run and a

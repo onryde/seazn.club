@@ -462,7 +462,7 @@ export function createRealPreflightProbes(): RealProbesHandle {
     async checkOwnPort(port: number): Promise<OwnPortResult> {
       // `execFile`, never a shell pipeline — no intermediate wrapper can mask
       // the real exit code the way `cmd | tail` or `rtk` do (_RULES.md §3 /
-      // AGENTS.md verification traps); Node hands back lsof's own
+      // AGENTS.md verification traps); Node hands back each tool's own
       // exit/error directly, so there is no `EXIT=$?` capture to add here.
       // `-sTCP:LISTEN`, not a bare `-i` — without it lsof also matches a
       // CLIENT socket through this port (some unrelated process's outbound
@@ -472,21 +472,44 @@ export function createRealPreflightProbes(): RealProbesHandle {
       try {
         const { stdout } = await execFileAsync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"]);
         const pid = Number(stdout.trim().split("\n")[0]);
-        if (!Number.isFinite(pid) || pid <= 0) {
-          return {
-            ok: false,
-            reason: "own_port_unbound",
-            detail: `lsof -nP -iTCP:${port} -sTCP:LISTEN -t returned no usable PID ("${stdout.trim()}").`,
-          };
+        if (Number.isFinite(pid) && pid > 0) {
+          return { ok: true, detail: `port ${port} is bound (LISTEN) to PID ${pid}.`, pid };
         }
-        return { ok: true, detail: `port ${port} is bound (LISTEN) to PID ${pid}.`, pid };
-      } catch (err) {
-        // lsof exits non-zero (and prints nothing) when nothing matches —
-        // the expected shape of "no server on this port", not a bug.
+        // Falls through to the `ss` fallback below rather than refusing here:
+        // an empty-but-zero-exit stdout is the same "nothing usable" shape as
+        // the exit-1 case the catch handles, and both get one second opinion.
+      } catch {
+        // lsof exits non-zero (and prints nothing) when nothing matches — the
+        // expected shape of "no server on this port". But `lsof` was also
+        // caught genuinely blind to a same-user listener that `ss` sees on
+        // the GitHub `ubuntu-latest` runner (CI run 35152786466, PR #793: `ss
+        // -ltnp` showed 0.0.0.0:3200 LISTEN owned by the bench's own process
+        // while `lsof -nP -iTCP:3200` — even with the LISTEN filter dropped —
+        // returned nothing at all). So a bare lsof miss is not proof of an
+        // unbound port here; fall through to `ss` for a second opinion before
+        // refusing.
+      }
+      try {
+        // `-H` (no header), `sport = :PORT` scopes to this local port. `-l`
+        // is the same LISTEN-only guarantee as lsof's `-sTCP:LISTEN` (see the
+        // comment above `checkOwnPort`) — a listening socket only, never a
+        // client connection through this port.
+        const { stdout } = await execFileAsync("ss", ["-Hltnp", "sport", "=", `:${port}`]);
+        const match = /pid=(\d+)/.exec(stdout);
+        const pid = match ? Number(match[1]) : NaN;
+        if (Number.isFinite(pid) && pid > 0) {
+          return { ok: true, detail: `port ${port} is bound (LISTEN) to PID ${pid} (via ss; lsof did not see it).`, pid };
+        }
         return {
           ok: false,
           reason: "own_port_unbound",
-          detail: `lsof -nP -iTCP:${port} -sTCP:LISTEN -t found no listening process on that port (${err instanceof Error ? err.message : String(err)}).`,
+          detail: `neither lsof -nP -iTCP:${port} -sTCP:LISTEN -t nor ss -Hltnp sport = :${port} returned a usable PID ("${stdout.trim()}").`,
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          reason: "own_port_unbound",
+          detail: `lsof found no listening process on port ${port}, and the ss fallback also failed: ${err instanceof Error ? err.message : String(err)}.`,
         };
       }
     },
