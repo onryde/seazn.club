@@ -45,9 +45,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { orgSlug, competitionSlug, personId } = await params;
   const data = await getPublicPlayer(orgSlug, competitionSlug, personId);
   if (!data) return {};
+  // The org's locale, like every word on the page (ISR: never the viewer's).
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
   return {
     title: `${data.player.name} — ${data.competition.name}`,
-    description: playerMetaDescription(data.player.name, data.competition.name),
+    description: playerMetaDescription(data.player.name, data.competition.name, dict),
     ...(data.competition.visibility === "unlisted"
       ? { robots: { index: false, follow: false } }
       : {}),

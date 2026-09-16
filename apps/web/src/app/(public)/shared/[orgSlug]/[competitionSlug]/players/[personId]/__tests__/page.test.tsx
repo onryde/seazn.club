@@ -43,7 +43,7 @@ vi.mock("next/navigation", async (importOriginal) => ({
   notFound: nav.notFound,
 }));
 
-import Page, { generateStaticParams, revalidate } from "../page";
+import Page, { generateMetadata, generateStaticParams, revalidate } from "../page";
 
 // ---------------------------------------------------------------- fixtures
 
@@ -359,6 +359,45 @@ describe("player page — the org's locale, from the dictionary", () => {
     const { html } = await renderPage({ locale: "es", matches: [line("f2"), line("f1")] });
     expect(html).toContain(`>${esc(es["player.opponent"].replace("{opponent}", "Opponent f2"))}<`);
     expect(html).toContain(`>${esc(es["player.opponent"].replace("{opponent}", "Opponent f1"))}<`);
+  });
+});
+
+// The description is the ORG's locale, like every visible word on the page:
+// `playerMetaDescription` takes the page's `public` dictionary, and it is a
+// required argument, so a caller that forgets it does not compile
+// (`lib/__tests__/public-meta.test.ts`). This is the page half: the dictionary
+// it passes is the org's, not English. Compared with that locale's own
+// dictionary value, never an English literal.
+describe("player page — generateMetadata", () => {
+  const meta = () => generateMetadata({ params });
+  const sentence = (d: Record<string, string>) =>
+    d["player.metaDescription"]!.replace("{player}", "Ada Lovelace").replace("{competition}", "Autumn Cup");
+
+  it("premise: the es and en sentences differ, so the es assertion below can witness an English fallback", () => {
+    expect(sentence(es)).not.toBe(sentence(en));
+    expect(sentence(es)).not.toMatch(/\{\w+\}/);
+  });
+
+  it("es: the description is the es dictionary's sentence, not the English one", async () => {
+    stub.getPublicPlayer.mockResolvedValue(data({ locale: "es" }));
+    const { description } = await meta();
+    expect(description).toBe(sentence(es));
+    expect(description).not.toBe(sentence(en));
+  });
+
+  it("en: the description is the en dictionary's sentence (positive pair)", async () => {
+    stub.getPublicPlayer.mockResolvedValue(data({ locale: "en" }));
+    expect((await meta()).description).toBe(sentence(en));
+  });
+
+  it("titles the page with the player and the competition", async () => {
+    stub.getPublicPlayer.mockResolvedValue(data({ locale: "es" }));
+    expect((await meta()).title).toBe("Ada Lovelace — Autumn Cup");
+  });
+
+  it("a person getPublicPlayer refuses gets no metadata", async () => {
+    stub.getPublicPlayer.mockResolvedValue(null);
+    expect(await meta()).toEqual({});
   });
 });
 

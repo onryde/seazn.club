@@ -1,6 +1,5 @@
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import enPublic from "@/dictionaries/en/public.json";
 
 // Meta-description builders for the public /shared tree. A page must always
 // return a non-empty description: this Next build does not fall back to the
@@ -50,16 +49,15 @@ export function competitionMetaDescription(
  * in the caller's `public` dictionary — the org's locale, like the rest of the
  * page.
  *
- * `dict` defaults to the ENGLISH dictionary so a caller that has not threaded
- * its dictionary through yet compiles unchanged and keeps the exact sentence it
- * printed before (Task 16; the player page is wired by its own lane). The
- * default is the dictionary, not a second English literal here, so the words
- * live in one place.
+ * `dict` is REQUIRED. It defaulted to the English dictionary while the player
+ * page was still unwired (Task 16), which let that page print English to every
+ * org; a default here is exactly how a caller forgets its locale and still
+ * compiles. The page resolves the org's `public` dictionary and passes it.
  */
 export function playerMetaDescription(
   playerName: string,
   competitionName: string,
-  dict: Dict = enPublic as Dict,
+  dict: Dict,
 ): string {
   return t(dict, "player.metaDescription", { player: playerName, competition: competitionName });
 }

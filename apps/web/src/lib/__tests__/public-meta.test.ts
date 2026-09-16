@@ -48,15 +48,16 @@ describe("competitionMetaDescription", () => {
 
 describe("playerMetaDescription", () => {
   it("always yields supporting text for the player card", () => {
-    expect(playerMetaDescription("A. Kannan", "Riverside Open")).toBe(
+    expect(playerMetaDescription("A. Kannan", "Riverside Open", en)).toBe(
       "A. Kannan's player card at Riverside Open — appearances, results and stats on Seazn Club.",
     );
   });
 
   // Task 16: the sentence lives in `player.metaDescription` now, four locales.
   // A caller that passes the org's `public` dictionary gets that locale's
-  // sentence; a caller that passes nothing (the player page, until its own lane
-  // wires the dict) keeps the English above byte for byte.
+  // sentence. The dictionary is REQUIRED: the English default it had while the
+  // player page was unwired is gone, so no caller can silently ship English to
+  // a Spanish org (the page half: `players/[personId]/__tests__/page.test.tsx`).
   const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
   const expected = (d: Record<string, string>) =>
     d["player.metaDescription"]!.replace("{player}", "A. Kannan").replace(
@@ -81,7 +82,13 @@ describe("playerMetaDescription", () => {
     });
   }
 
-  it("the no-dictionary default IS the English dictionary's sentence (one copy of the words)", () => {
-    expect(playerMetaDescription("A. Kannan", "Riverside Open")).toBe(expected(DICTS.en!));
+  // The compile-time half. Never called: vitest does not typecheck, so what
+  // holds this line is `tsc --noEmit`. If `dict` becomes optional again, the
+  // directive below is unused and tsc reds with TS2578.
+  it("a call without the dictionary does not compile", () => {
+    const _missingDict = () =>
+      // @ts-expect-error — `dict` is required: a caller must pass its org's dictionary.
+      playerMetaDescription("A. Kannan", "Riverside Open");
+    expect(typeof _missingDict).toBe("function");
   });
 });
