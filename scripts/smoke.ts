@@ -936,6 +936,11 @@ async function main() {
   // next stage playable (own fresh free session — not an entitlement gate).
   await stageProgressionSuite();
 
+  // --- Swiss Knockout: a COMMUNITY org builds the composite through the real
+  // route (the live plan matrix, not the gate function), and a Top 3 lands as
+  // a one-bye bracket of four.
+  await swissKnockoutSuite();
+
   // --- F3 Task 5: roster-drift rebuild — withdraw pre-start, rebuild drops
   // the stale name and picks up a late registration; a separate division
   // proves the 409 refusal once a fixture already has a result (own fresh
@@ -7957,6 +7962,176 @@ async function stageProgressionSuite(): Promise<void> {
     payload: { p1Score: 2, p2Score: 1 },
   });
   check("stage progression: next stage is playable — the now-filled KO fixture scores 201", koScore.status === 201);
+}
+
+/**
+ * Swiss Knockout (own fresh FREE session — and that IS the point).
+ *
+ * Both halves are free stage kinds, so a community org must be able to build
+ * the whole composite through the real route with no 402 anywhere.
+ * format-gates.test.ts asserts the gate FUNCTION; only this asserts the
+ * answer against the LIVE plan matrix, over real HTTP, on a real community
+ * bill — the one place a catalogue entry shipped without `pro` and a plan row
+ * that disagrees would actually show up.
+ *
+ * Then the shape the format exists for, which no other suite drives over the
+ * wire: a Top 3 out of a 4-entrant field is a bracket of FOUR with one bye —
+ * the swiss winner waits while 2nd plays 3rd, and the Final is seated with
+ * the bye entrant before that semi is played.
+ *
+ * The `rounds` PUT below is a WORK-AROUND for a live defect, not part of the
+ * format: a swiss stage with no declared `config.rounds` never completes, so
+ * the finals half is never seeded (root cause and differential:
+ * apps/web/src/server/usecases/__tests__/swiss-knockout-shape.test.ts). The
+ * stages are POSTed as the catalogue actually builds them FIRST, so the "no
+ * 402" claim is made about the shipped draft; only then are the rounds
+ * declared, while no fixture exists yet to lock the format. Delete the PUT
+ * when the derived budget is made visible to the completion predicate.
+ */
+async function swissKnockoutSuite(): Promise<void> {
+  const free = newSession();
+  await signIn(free, `delivered+swissko_${tag}@resend.dev`);
+  const comp = v1data<{ id: string }>(
+    await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `SwissKO ${tag}` }),
+  );
+  const div = v1data<{ id: string }>(
+    await v1(free, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  const names = ["Ann", "Bo", "Cy", "Di"];
+  const entrants = v1data<{ id: string; display_name: string }[]>(
+    await v1(
+      free,
+      `/api/v1/divisions/${div.id}/entrants`,
+      "POST",
+      names.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+    ),
+  );
+  const nameOf = new Map(entrants.map((e) => [e.id, e.display_name]));
+  const rank = (id: string | null) => names.indexOf(nameOf.get(id ?? "") ?? "zz");
+
+  // Exactly what format-templates.ts's swiss_knockout build() emits at
+  // qualified: 3 — including NO `rounds` on the swiss stage.
+  const shipped = [
+    { seq: 1, kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
+    {
+      seq: 2,
+      kind: "knockout",
+      name: "Knockout",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    },
+  ];
+  const created = await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", shipped);
+  check(
+    "swiss knockout: a COMMUNITY org builds the whole composite — no 402 on either half, against the live plan matrix",
+    created.status === 201,
+  );
+
+  // The work-around (see this suite's doc comment). No fixture exists yet,
+  // so the format is still editable.
+  const relaid = await v1(free, `/api/v1/divisions/${div.id}/stages`, "PUT", [
+    { ...shipped[0], config: { pairing: "rank_adjacent", rounds: 3 } },
+    shipped[1],
+  ]);
+  check("swiss knockout: the rounds work-around re-lays the stages (200)", relaid.status === 200);
+  const stages = v1data<{ id: string; kind: string; seq: number }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`),
+  );
+  const swissId = stages.find((s) => s.seq === 1)!.id;
+  const koId = stages.find((s) => s.seq === 2)!.id;
+
+  type Fx = {
+    id: string;
+    stage_id: string;
+    status: string;
+    round_no: number;
+    is_final?: boolean;
+    home_entrant_id: string | null;
+    away_entrant_id: string | null;
+  };
+  const fixturesOf = async (stageId: string): Promise<Fx[]> =>
+    v1data<Fx[]>(await v1(free, `/api/v1/divisions/${div.id}/fixtures`)).filter(
+      (f) => f.stage_id === stageId,
+    );
+
+  // Day one: the whole bracket exists as placeholders before a ball is
+  // struck. THREE rows for a Top 3 — a bye line, a semi, and the Final.
+  const koDayOne = v1data<{ created: number; fixtures: Fx[] }>(
+    await v1(free, `/api/v1/stages/${koId}/generate`, "POST"),
+  );
+  check(
+    "swiss knockout: a Top 3 mints a 3-row day-one bracket, all slots TBD",
+    koDayOne.created === 3 &&
+      koDayOne.fixtures.every((f) => f.home_entrant_id === null && f.away_entrant_id === null),
+  );
+
+  await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
+  const started = await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
+  check("swiss knockout: division starts", started.status < 300);
+
+  // Play the field's own 3-round budget out, lower seed winning every time,
+  // so the table is strict on wins: Ann > Bo > Cy > Di.
+  for (let round = 1; round <= 3; round++) {
+    for (const f of await fixturesOf(swissId)) {
+      if (!f.home_entrant_id || !f.away_entrant_id) continue;
+      if (f.status === "decided" || f.status === "finalized") continue;
+      const homeWins = rank(f.home_entrant_id) < rank(f.away_entrant_id);
+      const state = v1data<{ last_seq: number }>(await v1(free, `/api/v1/fixtures/${f.id}/state`));
+      await v1(free, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: state.last_seq,
+        type: "generic.result",
+        payload: homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 },
+      });
+    }
+    if (round < 3) await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
+  }
+  check("swiss knockout: the swiss stopped at the field's own 3-round budget", (await fixturesOf(swissId)).length === 6);
+
+  const done = v1data<{ completed: boolean }>(await v1(free, `/api/v1/stages/${swissId}/complete`, "POST"));
+  check("swiss knockout: the swiss completes once its declared rounds are played", done.completed === true);
+  const proposal = v1data<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
+    await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"),
+  );
+  check(
+    "swiss knockout: the proposal names the swiss's top THREE in table order, not the top four",
+    proposal.computed.qualifiers.map((q) => nameOf.get(q.entrantId)).join(",") === "Ann,Bo,Cy",
+  );
+  await v1(free, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.id });
+
+  const bracket = await fixturesOf(koId);
+  const rounds = [...new Set(bracket.map((f) => f.round_no))].sort((a, b) => a - b);
+  const first = bracket.filter((f) => f.round_no === rounds[0]);
+  const bye = first.find((f) => f.away_entrant_id === null);
+  const semi = first.find((f) => f.away_entrant_id !== null);
+  const final = bracket.find((f) => f.round_no === rounds[1]);
+  check(
+    "swiss knockout: the bye belongs to the SWISS WINNER, and 2nd plays 3rd — not the other way round",
+    rounds.length === 2 &&
+      nameOf.get(bye?.home_entrant_id ?? "") === "Ann" &&
+      [nameOf.get(semi?.home_entrant_id ?? ""), nameOf.get(semi?.away_entrant_id ?? "")].sort().join(",") === "Bo,Cy",
+  );
+  check(
+    "swiss knockout: the Final is already seated with the bye entrant, its other side still open",
+    final?.is_final === true &&
+      [final.home_entrant_id, final.away_entrant_id].filter((x) => x !== null).map((x) => nameOf.get(x!)).join(",") === "Ann" &&
+      [final.home_entrant_id, final.away_entrant_id].filter((x) => x === null).length === 1,
+  );
+  check(
+    "swiss knockout: the 4th-placed entrant is nowhere in the bracket — Top 3 means three",
+    bracket.every(
+      (f) =>
+        nameOf.get(f.home_entrant_id ?? "") !== "Di" && nameOf.get(f.away_entrant_id ?? "") !== "Di",
+    ),
+  );
 }
 
 /**

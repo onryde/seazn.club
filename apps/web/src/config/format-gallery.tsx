@@ -239,8 +239,11 @@ const DIAGRAMS: Record<string, () => React.ReactNode> = {
       <Node x={14} y={54} w={140} label="Swiss rounds" sub="1v2 · 3v4 · 5v6" />
       <Arrow x1={156} y1={71} x2={206} y2={71} label="top N" />
       <Node x={208} y={54} w={160} label="Knockout bracket" sub="sized to your Top N" />
-      <Arrow x1={370} y1={71} x2={412} y2={71} label="winner" />
-      <Node x={414} y={56} w={44} h={30} label="🏆" accent />
+      {/* The winner arrow is long on purpose: its label centres at the
+          midpoint, and a short arrow puts "winner" hard against the trophy
+          box. Verified by screenshot at 1280, not by arithmetic. */}
+      <Arrow x1={370} y1={71} x2={434} y2={71} label="winner" />
+      <Node x={436} y={56} w={44} h={30} label="🏆" accent />
       <text x={14} y={136} className="fill-slate-400 text-[10px]">
         Top 2 is a single final; Top 4 is two semi-finals, then the final.
       </text>
