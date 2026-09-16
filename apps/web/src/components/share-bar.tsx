@@ -19,7 +19,7 @@ export function shareLinks(
 /**
  * Every word this row can say.
  *
- * ALL FIVE OR NONE, deliberately — not a `Partial`. A caller that can supply
+ * ALL FIVE, deliberately — not a `Partial`, and not optional. A caller that can supply
  * four of these can supply the fifth, and a partial override is how one control
  * in a translated row stays in English with nothing red to say so: the `share`
  * label in particular renders only after mount on a device with
@@ -40,17 +40,12 @@ export interface ShareBarLabels {
   copied: string;
 }
 
-/** The English this component shipped with, unchanged, so the callers that
- *  pass no labels (the org news post page) render exactly what they did
- *  before. New public-surface callers pass the four locales' own copy from
- *  `public.json`'s `share.*` family. */
-const DEFAULT_LABELS: ShareBarLabels = {
-  share: "Share",
-  whatsapp: "WhatsApp",
-  whatsappAria: "Share on WhatsApp",
-  copy: "Copy link",
-  copied: "Copied ✓",
-};
+// NO English defaults, deliberately. There used to be a `DEFAULT_LABELS`
+// ("Copy link", "Copied ✓") for callers that passed nothing, and the org news
+// post page passed nothing — so its share row was English in every locale, and
+// "Copied ✓" existed in no dictionary at all. `labels` is REQUIRED now, so tsc
+// refuses a caller that forgets. Public pages pass
+// `shareLabels(dict)` (`components/public-site/share-labels.ts`).
 
 /** Fan-facing share row (PLG L3): native share on mobile, WhatsApp + copy
  *  everywhere. Grassroots sport runs on WhatsApp. An optional `postShare` adds
@@ -65,9 +60,8 @@ export function ShareBar({
   path: string;
   title: string;
   postShare?: { kind: string };
-  labels?: ShareBarLabels;
+  labels: ShareBarLabels;
 }) {
-  const L = labels ?? DEFAULT_LABELS;
   const [origin, setOrigin] = useState("");
   const [copied, setCopied] = useState(false);
   const [canShare, setCanShare] = useState(false);
@@ -110,7 +104,7 @@ export function ShareBar({
           className="btn btn-ghost min-h-11"
           data-testid="native-share"
         >
-          {L.share}
+          {labels.share}
         </button>
       )}
       <a
@@ -119,12 +113,12 @@ export function ShareBar({
         rel="noreferrer"
         onClick={() => fire("whatsapp")}
         className="btn btn-ghost min-h-11"
-        aria-label={L.whatsappAria}
+        aria-label={labels.whatsappAria}
       >
-        {L.whatsapp}
+        {labels.whatsapp}
       </a>
       <button type="button" onClick={copy} className="btn btn-ghost min-h-11">
-        {copied ? L.copied : L.copy}
+        {copied ? labels.copied : labels.copy}
       </button>
     </div>
   );

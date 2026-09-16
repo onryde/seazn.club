@@ -49,7 +49,8 @@ export async function GET(_req: Request, { params }: Ctx) {
     title: post.title,
   });
   return new ImageResponse(
-    <PostShareCard model={model} eyebrow={t(dict, model.eyebrowKey)} size="story" />,
+    <PostShareCard model={model} eyebrow={t(dict, model.eyebrowKey)}
+      badge={t(dict, "news.card.liveOn", { brand: "seazn.club" })} size="story" />,
     STORY_SIZE,
   );
 }

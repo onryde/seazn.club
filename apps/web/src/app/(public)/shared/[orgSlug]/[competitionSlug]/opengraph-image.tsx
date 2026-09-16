@@ -5,6 +5,8 @@ import { getPublicCompetition } from "@/server/public-site/data";
 import { ogTheme } from "@/server/og/model";
 import { CardFrame, LivePill, OG_SIZE } from "@/server/og/card";
 import { posterImageDataUrl } from "@/server/og/poster-image";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, plural, t } from "@/lib/i18n";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -16,6 +18,10 @@ export default async function Image({ params }: Props) {
   const { orgSlug, competitionSlug } = await params;
   const data = await getPublicCompetition(orgSlug, competitionSlug);
   const theme = ogTheme(data?.competition.branding, data?.org.branding);
+  // The ORG's language, like the page this card previews. With no competition
+  // there is no org either, so the English default is the only locale there is.
+  const locale = toLocale(data?.org.default_locale);
+  const dict = await getDictionary(locale, "public");
 
   // IN UTC, and that is load-bearing. `starts_on`/`ends_on` are pg `date`
   // columns — CALENDAR days, not instants — so `new Date("2026-09-01")` is UTC
@@ -46,7 +52,12 @@ export default async function Image({ params }: Props) {
 
   return new ImageResponse(
     (
-      <CardFrame theme={theme} orgName={data?.org.name ?? "seazn.club"} logo={logo}>
+      <CardFrame
+        theme={theme}
+        orgName={data?.org.name ?? "seazn.club"}
+        logo={logo}
+        tagline={t(dict, "og.tagline")}
+      >
         <div
           style={{
             display: "flex",
@@ -71,7 +82,7 @@ export default async function Image({ params }: Props) {
             <div style={{ display: "flex", fontSize: 30, color: theme.muted }}>{dates}</div>
           ) : null}
           <div style={{ display: "flex", gap: 16, marginTop: 6 }}>
-            {live > 0 ? <LivePill theme={theme} label={`${live} live now`} /> : null}
+            {live > 0 ? <LivePill theme={theme} label={plural(dict, "org.live", live, locale)} /> : null}
             <div
               style={{
                 display: "flex",
@@ -81,7 +92,7 @@ export default async function Image({ params }: Props) {
                 fontSize: 22,
               }}
             >
-              {`${divisions} division${divisions === 1 ? "" : "s"}`}
+              {plural(dict, "landing.divisions", divisions, locale)}
             </div>
             <div
               style={{
@@ -92,7 +103,7 @@ export default async function Image({ params }: Props) {
                 fontSize: 22,
               }}
             >
-              {`${entrants} entrant${entrants === 1 ? "" : "s"}`}
+              {plural(dict, "landing.entrants", entrants, locale)}
             </div>
           </div>
         </div>

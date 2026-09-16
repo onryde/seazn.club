@@ -107,6 +107,7 @@ describe("the shared satori frames refuse a URL handed to them directly", () => 
             title: "Season opens on Saturday",
           })}
           eyebrow="NEWS"
+          badge="Live on seazn.club"
           size="story"
         />,
         STORY_SIZE,

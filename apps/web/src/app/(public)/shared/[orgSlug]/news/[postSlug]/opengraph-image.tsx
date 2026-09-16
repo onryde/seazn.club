@@ -46,7 +46,8 @@ export default async function Image({ params }: Props) {
     title: post.title,
   });
   return new ImageResponse(
-    <PostShareCard model={model} eyebrow={t(dict, model.eyebrowKey)} size="og" />,
+    <PostShareCard model={model} eyebrow={t(dict, model.eyebrowKey)}
+      badge={t(dict, "news.card.liveOn", { brand: "seazn.club" })} size="og" />,
     size,
   );
 }

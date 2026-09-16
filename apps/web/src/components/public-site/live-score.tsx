@@ -200,7 +200,7 @@ export function LiveScoreBody({
           {inPlay ? (
             <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
               <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-              {statusWord}{subscribed ? " · realtime" : ""}
+              {statusWord}{subscribed ? ` · ${t(activeDict, "matchCentre.realtime")}` : ""}
               {strength ? (
                 <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-mono text-[11px] font-bold tracking-normal text-amber-300">
                   {strength}
@@ -244,7 +244,7 @@ export function LiveScoreBody({
                   >
                     <span className="truncate font-display text-xl font-semibold uppercase tracking-wide sm:text-2xl">
                       {hasServe ? (
-                        <span aria-label="serving" className="mr-1.5 text-amber-300">●</span>
+                        <span aria-label={t(activeDict, "matchCentre.serving")} className="mr-1.5 text-amber-300">●</span>
                       ) : null}
                       {entrantNames[side.entrantId] ?? "—"}
                     </span>

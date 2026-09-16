@@ -17,6 +17,7 @@ import { postHeroUrl, resolvePostSides, relatedCompetition } from "@/server/news
 import { renderHelpMarkdown } from "@/server/help-content";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareBar } from "@/components/share-bar";
+import { shareLabels } from "@/components/public-site/share-labels";
 import { DownloadCardButton } from "@/components/news/download-card-button";
 import { PostScorebug } from "@/components/news/post-scorebug";
 import { kindEyebrow, scoreboardFor, TONE_ON_LIGHT } from "@/lib/news-presentation";
@@ -142,6 +143,9 @@ export default async function PostPage({ params }: Props) {
           path={`/shared/${orgSlug}/news/${post.slug}`}
           title={post.title}
           postShare={{ kind: post.kind }}
+          // A post is not a competition, so the default accessible name
+          // ("Share on WhatsApp") rather than the competition page's.
+          labels={shareLabels(dict)}
         />
         {isPublishedResult ? (
           <DownloadCardButton

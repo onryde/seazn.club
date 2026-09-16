@@ -95,7 +95,7 @@ export async function GET(
       const description = `${data.competition.name} · https://seazn.club/shared/${data.org.slug}/${data.competition.slug}/${data.division.slug}/fixtures/${f.id}`;
       const common = {
         uid: f.id,
-        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label, f.stage_id)} vs ${nameOrLabel(f.away_entrant_id, f.away_slot_label, f.stage_id)} — ${data.division.name}`,
+        summary: `${nameOrLabel(f.home_entrant_id, f.home_slot_label, f.stage_id)} ${lookup("schedule.vs")} ${nameOrLabel(f.away_entrant_id, f.away_slot_label, f.stage_id)} — ${data.division.name}`,
         // P9 cutover: venue_name/court_name are DERIVED (fixtures.venue_id/
         // court_id via data.ts's withCourtVenueNames) -- venue/court_label
         // are frozen, no writer touches them any more.
