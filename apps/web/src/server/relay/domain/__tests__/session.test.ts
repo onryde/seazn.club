@@ -5,12 +5,12 @@ import { describe, expect, it } from "vitest";
 import {
   ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
 } from "../../config";
-import { evaluate } from "../expiry";
+import { evaluate, type Expiry } from "../expiry";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
   type Command, type Effect, type Session, type SessionState,
 } from "../session";
-import { RUNNER_NONE, RUNNER_STATES, RUNNER_TRIGGER_TYPES, type Runner, type RunnerTrigger } from "../runner";
+import { InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TRIGGER_TYPES, type Runner, type RunnerTrigger } from "../runner";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
 const S = (over: Partial<Session> = {}): Session => ({
@@ -397,9 +397,15 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(done.next).toMatchObject({ state: "completed", endReason: "stopped", failReason: null, endedAt: late, runner: { state: "destroyed" } });
     expect(done.effects).toEqual([FORCE]);                                        // never went live (C4): no replay fill
     // The call finally returns on a COMPLETED session: destroy what it made, change nothing else, never throw.
+    // Fix round 4: a Machine now exists whose destroy is unconfirmed, so the runner goes LOST (it was destroyed) — and on
+    // this terminal row the confirmation then moves it to destroyed with nothing else (C27: no retry, no second ending).
     const stray = decide(done.next, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, late);
-    expect(stray.next).toMatchObject({ state: "completed", endReason: "stopped", runner: { state: "destroyed", machineId: "m9" } });
+    expect(stray.next).toMatchObject({ state: "completed", endReason: "stopped", endedAt: late, runner: { state: "lost", machineId: "m9" } });
     expect(stray.effects).toEqual([FORCE]);
+    const confirmed = decide(stray.next, { type: "runner", trigger: { type: "destroy_ok" } }, late);
+    expect(confirmed.next).toMatchObject({ state: "completed", endReason: "stopped", runner: { state: "destroyed", machineId: "m9" } });
+    expect(confirmed.effects).toEqual([]);
+    expect(confirmed.events.map((e) => e.type)).toEqual(["RunnerChanged"]);
     expect(() => decide(done.next, { type: "runner", trigger: { type: "create_failed", retryable: true } }, late)).not.toThrow();
   });
 
@@ -619,6 +625,103 @@ describe("decide — a composed session's Machine events go through the runner t
       expect(gone.effects, s.state).toEqual([]);                                  // C27: no retry_runner, no second ending
       expect(gone.events.map((e) => e.type), s.state).toEqual(["RunnerChanged"]);
     }
+  });
+
+  // Fix round 4 (ruling on round 3's residual): a LATE create_ok into a DESTROYED runner is a Machine whose destroy is not
+  // confirmed. It goes lost, so the retry waits for destroy_ok / observed destroyed exactly as the crash path does.
+  it("R4, safety: a LIVE session whose destroyed runner awaits its retry gets a late create_ok → lost + force_destroy on that id, no retry; the next stale beat re-issues it and still never retries; the confirmed destroy then retries ONCE (runnerRetries stays 1)", () => {
+    const beat = new Date(T0.getTime() + STALE_HEARTBEAT_SECONDS * 1000);
+    const waiting = C({ state: "live", startedAt: T0, heartbeatAt: T0, runnerRetries: 1, runner: { ...BOOTING, state: "destroyed" } });
+    const late = decide(waiting, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, T0);
+    expect(late.next).toMatchObject({ state: "live", runnerRetries: 1, runner: { state: "lost", attempt: 1, machineId: "m9" } });
+    expect(late.effects).toEqual([FORCE]);
+    expect(late.events).toEqual([{ type: "RunnerChanged", from: "destroyed", to: "lost", trigger: "create_ok" }]);
+    expect(evaluate(late.next, beat)).toEqual({ kind: "stale_beat" });
+    const stale = decide(late.next, { type: "expire", expiry: evaluate(late.next, beat) }, beat);
+    expect(stale.effects).toEqual([FORCE]);                                      // round 3's residual answered [retry_runner] here
+    expect(stale.next).toMatchObject({ state: "live", runner: { state: "lost", machineId: "m9" } });
+    const gone = decide(stale.next, { type: "runner", trigger: { type: "destroy_ok" } }, beat);
+    expect(gone.effects).toEqual([{ type: "retry_runner" }]);
+    expect(gone.next).toMatchObject({ state: "live", runnerRetries: 1, runner: { state: "destroyed", attempt: 1 } });
+  });
+
+  it("R4, liveness — ENDING: an ending session whose destroyed runner gets a late create_ok (now lost) still COMPLETES at its ending timeout with its own end reason, re-issuing the teardown", () => {
+    const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
+    for (const endReason of ["stopped", "max_duration"] as const) {
+      const s = C({ state: "ending", desiredState: "ending", endReason, startedAt: T0, endingAt: T0, runner: { ...BOOTING, state: "destroyed" } });
+      const late = decide(s, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, at(1));
+      expect(late.next, endReason).toMatchObject({ state: "ending", endReason, runner: { state: "lost", machineId: "m9" } });
+      expect(late.effects, endReason).toEqual([FORCE]);
+      expect(evaluate(late.next, at(ENDING_TIMEOUT_SECONDS - 1)), endReason).toEqual({ kind: "none" });
+      const done = decide(late.next, { type: "expire", expiry: evaluate(late.next, at(ENDING_TIMEOUT_SECONDS)) }, at(ENDING_TIMEOUT_SECONDS));
+      expect(done.next, endReason).toMatchObject({ state: "completed", endReason, endedAt: at(ENDING_TIMEOUT_SECONDS), runner: { state: "destroyed", machineId: "m9" } });
+      expect(done.effects, endReason).toEqual([FORCE, { type: "fill_replay" }]);
+    }
+  });
+
+  // Fix round 4: the MARKED creating cells (create_ok, observed found, grace_expired) KEEP destroyed + force_destroy + completed.
+  // The ruling allows that only if no retry is reachable afterwards — so this proves it through the real `decide`, not the
+  // runner walk's path cut: from every session that can hold a marked creating runner (a stop or the deadline in
+  // provisioning / warming / live, F19's ending_timeout, and the three failures that tear a create down), walk EVERY command
+  // decide accepts — each Machine trigger and payload, every expiry kind, every session command — and no decision anywhere
+  // emits retry_runner.
+  it("R4: a marked creating runner's force-only destroyed can never be followed by retry_runner — walked through decide from every session that can mark a create", () => {
+    const CREATING: Runner = { ...BOOTING, state: "creating", machineId: null };
+    const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
+    const seeds: [string, Session, Command][] = [
+      ["provisioning × stop", C({ state: "provisioning", runner: CREATING }), { type: "stop" }],
+      ["warming × stop", C({ state: "warming", runner: CREATING }), { type: "stop" }],
+      ["live replacement × stop", C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "stop" }],
+      ["live replacement × wall_clock", C({ state: "live", startedAt: T0, runner: { ...CREATING, attempt: 2, name: "relay-s1-r2" } }), { type: "expire", expiry: { kind: "wall_clock" } }],
+      ["ending × ending_timeout (C5)", C({ state: "ending", desiredState: "ending", endReason: "stopped", startedAt: T0, endingAt: T0, runner: CREATING }), { type: "expire", expiry: { kind: "ending_timeout" } }],
+      ["warming × warming_timeout", C({ state: "warming", runner: CREATING }), { type: "expire", expiry: { kind: "warming_timeout" } }],
+      ["warming × credit_refused", C({ state: "warming", runner: CREATING }), { type: "credit_refused" }],
+      ["provisioning × provision_timeout", C({ state: "provisioning", runner: CREATING }), { type: "expire", expiry: { kind: "provision_timeout" } }],
+    ];
+    const triggers = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap((t): RunnerTrigger[] =>
+      t === "observed" ? OBSERVED_STATES.map((state) => ({ type: "observed" as const, state }))
+      : t === "create_failed" ? [{ type: "create_failed", retryable: true }, { type: "create_failed", retryable: false }]
+      : t === "create_started" ? [{ type: "create_started", name: `relay-s1-r${r.attempt + 1}`, attempt: r.attempt + 1 }]
+      : t === "create_ok" ? [{ type: "create_ok", machineId: "m9" }]
+      : [{ type: t } as RunnerTrigger]);
+    const EXPIRIES: Expiry["kind"][] = ["none", "requested_timeout", "provision_timeout", "warming_timeout", "wall_clock", "stale_beat", "grace_expired", "ending_timeout"];
+    const SESSION_COMMANDS: Command[] = [{ type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" }, { type: "target_rejected" }, { type: "stop" }, { type: "complete" }];
+    const commandsFor = (s: Session): Command[] => [
+      ...triggers(s.runner).map((trigger): Command => ({ type: "runner", trigger })),
+      ...EXPIRIES.map((kind): Command => ({ type: "expire", expiry: { kind } } as Command)),
+      ...SESSION_COMMANDS,
+    ];
+    const key = (s: Session): string =>
+      [s.state, s.desiredState, s.startedAt ? "started" : "unstarted", s.runner.state, s.runner.attempt, s.runner.stopRequestedAt ? "marked" : "unmarked"].join(":");
+    let decisions = 0, keptCellsTaken = 0;
+    const retried: string[] = [];
+    for (const [label, before, command] of seeds) {
+      const seeded = decide(before, command, at(1)).next;
+      expect(seeded.runner, label).toMatchObject({ state: "creating", stopRequestedAt: at(1) });   // not vacuous: the seed MARKED the create
+      expect(["ending", "failed"], label).toContain(seeded.state);
+      const seen = new Set<string>();
+      const stack: [Session, string[]][] = [[seeded, [label]]];
+      while (stack.length > 0) {
+        const [s, path] = stack.pop()!;
+        if (seen.has(key(s))) continue;
+        seen.add(key(s));
+        for (const c of commandsFor(s)) {
+          let d: ReturnType<typeof decide>;
+          try { d = decide(s, c, at(2)); } catch (e) {
+            expect(e instanceof InvalidTransition || e instanceof InvalidRunnerTransition, [...path, JSON.stringify(c)].join(" → ")).toBe(true);
+            continue;
+          }
+          decisions++;
+          const here = [...path, `${s.state}/${s.runner.state} × ${c.type === "runner" ? c.trigger.type : c.type === "expire" ? c.expiry.kind : c.type}`];
+          if (s.runner.state === "creating" && s.runner.stopRequestedAt && d.next.runner.state === "destroyed" && d.effects.some((e) => e.type === "runner" && e.effect.type === "force_destroy")) keptCellsTaken++;
+          if (d.effects.some((e) => e.type === "retry_runner")) retried.push(here.join(" → "));
+          stack.push([d.next, here]);
+        }
+      }
+    }
+    expect(retried, `retry_runner after a marked create: ${retried.slice(0, 3).join(" ;; ")}`).toEqual([]);
+    expect(decisions).toBeGreaterThan(seeds.length);
+    expect(keptCellsTaken).toBeGreaterThan(0);                                     // the kept cells WERE walked through
   });
 
   // Task 2C carry C6 (minor, fixed): the shared teardown on the way to `failed` dropped the stop step's SessionEnding but

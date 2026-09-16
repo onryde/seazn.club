@@ -128,10 +128,13 @@ const markedDuringCreate = (r: Runner, now: Date, endReason: "stopped" | "max_du
   ({ next: { ...r, stopRequestedAt: r.stopRequestedAt ?? now }, effects: [], signal: { type: "ending", endReason } });
 
 /** A create call that returns AFTER the runner moved on — we gave up (F15's grace, a teardown another reader
- *  already ran) or a stale beat declared the hung create lost (C1): destroy what it made, tell the session
- *  nothing, keep the state. Never a throw on a call we ourselves started. */
+ *  already ran) or a stale beat declared the hung create lost (C1): destroy what it made and tell the session
+ *  nothing. Never a throw on a call we ourselves started.
+ *  Fix round 4 (ruling): the returned id is a Machine whose destroy is NOT confirmed, so the runner is `lost` —
+ *  from `destroyed` too. Only destroy_ok / observed destroyed then lead to a retry (invariant 1); a destroyed
+ *  runner that stayed destroyed here let the next stale beat re-signal the retry beside a live Machine. */
 const destroyLateCreate: Cell = (r, t) =>
-  (t.type === "create_ok" ? { next: { ...r, machineId: t.machineId }, effects: [FORCE_DESTROY], signal: null } : stay(r));
+  (t.type === "create_ok" ? { next: { ...r, state: "lost", machineId: t.machineId }, effects: [FORCE_DESTROY], signal: null } : stay(r));
 
 function observedFrom(active: "booting" | "playing"): Cell {
   return (r, t) => {

@@ -211,6 +211,21 @@ describe("the crash path", () => {
     }
     expect(left).toBe(4);   // destroy_ok, observed destroyed, deadline, session_stop — and nothing else
   });
+  // Fix round 4 (orchestrator ruling on round 3's residual): a create_ok that returns AFTER the runner moved on is a Machine
+  // whose destroy is not yet confirmed. Into `destroyed` it goes LOST (the returned id force-destroyed), so only destroy_ok /
+  // observed destroyed can lead to the next retry. The MARKED creating cells (P1-F-a / F14 / F15 / C5) keep destroyed: their
+  // `completed` signal lands on a session that is already ending or terminal, which can never retry — session.test.ts
+  // "R4 … walked through decide" proves it from every marked-creating seed.
+  it("a LATE create_ok: into destroyed → LOST with force_destroy on the returned id (no signal); into lost → stays lost; a MARKED creating runner's create_ok / found / grace keep destroyed + force_destroy + completed", () => {
+    const late = { type: "create_ok", machineId: "m9" } as const;
+    expect(stepRunner(inState("destroyed"), late, T0)).toEqual({ next: { ...inState("destroyed"), state: "lost", machineId: "m9" }, effects: [{ type: "force_destroy" }], signal: null });
+    expect(stepRunner(inState("lost"), late, T0)).toEqual({ next: { ...inState("lost"), machineId: "m9" }, effects: [{ type: "force_destroy" }], signal: null });
+    const marked = R({ state: "creating", attempt: 1, name: "relay-s1-r1", stopRequestedAt: T0 });
+    expect(stepRunner(marked, late, T0)).toEqual({ next: { ...marked, state: "destroyed", machineId: "m9" }, effects: [{ type: "force_destroy" }], signal: { type: "completed" } });
+    for (const t of [{ type: "observed", state: "running" } as const, { type: "observed", state: "pending" } as const, { type: "grace_expired" } as const]) {
+      expect(stepRunner(marked, t, T0), JSON.stringify(t)).toEqual({ next: { ...marked, state: "destroyed" }, effects: [{ type: "force_destroy" }], signal: { type: "completed" } });
+    }
+  });
   it("failReasonFromExit: oom → machine_oom; non-zero → machine_exit_nonzero; zero/none → machine_crash; the exit info is kept on the runner when observed", () => {
     expect(failReasonFromExit({ exitCode: 1, oomKilled: true, requestedStop: false })).toBe("machine_oom");
     expect(failReasonFromExit({ exitCode: 1, oomKilled: false, requestedStop: false })).toBe("machine_exit_nonzero");
@@ -319,7 +334,10 @@ describe("invariants", () => {
         try { step = stepRunner(r, t, T0); } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); continue; }
         const here = [...path, `${r.state} × ${t.type === "observed" ? `observed ${t.state}` : t.type}`];
         const madeNothing = r.state === "creating" && t.type === "create_failed";
-        const nowCleared = t.type === "create_started" ? false : cleared || confirmedDestroy(t) || madeNothing;
+        // Fix round 4: a create_ok is a Machine that now EXISTS — a late one included — so it clears the confirmation just
+        // like a new attempt does. Without this reset a late create_ok into an already-confirmed destroyed runner walked on
+        // as `cleared`, and the stale beat after it re-signalled the retry while that Machine's destroy was unconfirmed.
+        const nowCleared = t.type === "create_started" || t.type === "create_ok" ? false : cleared || confirmedDestroy(t) || madeNothing;
         const signal = step.signal?.type;
         if (signal === "retry") { retriesReached++; if (!nowCleared) violations.push(here.join(" → ")); }
         if (signal === "ending" || signal === "completed" || signal === "failed") { pathsEnded++; continue; }
