@@ -153,6 +153,64 @@ async function sendHeldNow(page: Page): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// The lineup PhoneDisclosure folds itself the moment the match starts, LIVE
+// — no reload. phone-disclosure.tsx's `desktopCollapsible` effect only ever
+// OPENED (`startOpen: true -> open`) and had no branch for `startOpen`
+// flipping to `false`, so a lineup left open pre-match stayed open forever
+// once `fixture-console.tsx`'s own `send()` resynced `live` client-side after
+// `core.start` — `started` (and therefore `startOpen={!started}`) updates
+// immediately with no `page.reload()` in the loop (`send()`'s own doc: a real
+// `resync()` plus `router.refresh()`, neither of which remounts this client
+// component or its `useState`). Pre-existing coverage
+// (`mobile.spec.ts`'s "lineup editor role/pair-order selects hold at phone
+// width") only ever opens the disclosure and never starts the match, so it
+// never touched the close path this test is for.
+// ---------------------------------------------------------------------------
+
+test("football v3: the lineup disclosure closes itself the moment Start match is pressed, same tab, no reload", async ({
+  page,
+}) => {
+  const fx = await seedRosteredFixture(page.request, {
+    label: `V3 FB Lineup Close ${TAG}`,
+    sportKey: "football",
+    variantKey: "11-a-side",
+    home: [{ fullName: `V3 FBLC Home ${TAG}`, positionKey: "FW" }],
+    away: [{ fullName: `V3 FBLC Away ${TAG}`, positionKey: "GK" }],
+  });
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+
+  const toggles = page.locator('[data-role="phone-disclosure-toggle"]');
+  await expect(toggles.first(), "no lineup disclosure rendered").toBeAttached({ timeout: 20_000 });
+  const count = await toggles.count();
+  expect(count, "expected one lineup disclosure per side").toBeGreaterThanOrEqual(2);
+  // `desktopCollapsible`'s open-at-desktop default is a layout effect, not
+  // SSR state (phone-disclosure.test.tsx's own PR #782 note) — poll rather
+  // than assert once.
+  for (let i = 0; i < count; i++) {
+    await expect(toggles.nth(i), `lineup disclosure ${i} did not open pre-match`).toHaveAttribute(
+      "aria-expanded",
+      "true",
+      { timeout: 20_000 },
+    );
+  }
+
+  await page.getByRole("button", { name: "Start match", exact: true }).click();
+  await expect
+    .poll(async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type), { timeout: 20_000 })
+    .toContain("core.start");
+
+  // No `page.reload()` anywhere above this line — the fold has to happen to
+  // the SAME `open` state this test already observed `true` on.
+  for (let i = 0; i < count; i++) {
+    await expect(toggles.nth(i), `lineup disclosure ${i} stayed open after Start match, same tab`).toHaveAttribute(
+      "aria-expanded",
+      "false",
+      { timeout: 20_000 },
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // The Detail Dock — the goal's enrichment window
 // ---------------------------------------------------------------------------
 

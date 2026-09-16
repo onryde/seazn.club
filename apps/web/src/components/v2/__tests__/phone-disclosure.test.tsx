@@ -23,8 +23,11 @@ describe("PhoneDisclosure", () => {
     // `max-md:min-w-0` cannot satisfy this assertion either.
     expect(html).toMatch(/<div data-role="phone-disclosure" data-open="false" class="[^"]*\smin-w-0"/);
   });
-  it("closed body is a grid carrying h-full and max-md:hidden (fix round 2 item 2: h-full alone on a plain block does not cascade into a content-sized child; a single grid child gets stretch on both axes, which is what actually reaches the card)", () => {
-    expect(html).toMatch(/<div class="grid h-full max-md:hidden" id="[^"]*"><p data-role="body">the editor<\/p><\/div>/);
+  it("the outer wrapper is a flex column, not a plain h-full block (fix round 3: h-full here stacked a second height:100% two grid levels deep and undershot the row's real content height by exactly the toggle button's own height once a lineup had real content, painting the overflow onto whatever section followed on the page — confirmed live, phone-disclosure.tsx's own doc)", () => {
+    expect(html).toMatch(/<div data-role="phone-disclosure" data-open="false" class="flex flex-col min-w-0">/);
+  });
+  it("closed body is a grid carrying flex-1 and max-md:hidden (fix round 3 keeps the body's own `grid` — its single child still gets stretch — but replaces its `h-full` with `flex-1` so the OUTER wrapper's flex-column contribution to the two-column grid's row is real content height, not another percentage)", () => {
+    expect(html).toMatch(/<div class="grid flex-1 max-md:hidden" id="[^"]*"><p data-role="body">the editor<\/p><\/div>/);
   });
   it("shows the summary and aside in the toggle", () => {
     expect(html).toContain("Home Gallery Badminton");
@@ -33,7 +36,7 @@ describe("PhoneDisclosure", () => {
   it("the toggle's aria-controls points at the body's own id (review fix: PhoneDisclosure can mount several times per page, so the id must be per-instance via useId(), not a static string)", () => {
     const controls = /data-role="phone-disclosure-toggle"[^>]*aria-controls="([^"]+)"/.exec(html)?.[1];
     expect(controls).toBeTruthy();
-    const bodyId = /<div class="grid h-full max-md:hidden" id="([^"]+)"/.exec(html)?.[1];
+    const bodyId = /<div class="grid flex-1 max-md:hidden" id="([^"]+)"/.exec(html)?.[1];
     expect(controls).toBe(bodyId);
   });
 });
@@ -57,7 +60,7 @@ describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup o
     // regression) cannot satisfy a loose check.
     expect(closedHtml).toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*"/);
     expect(closedHtml).not.toMatch(/data-role="phone-disclosure-toggle"[^>]*class="[^"]*\smd:hidden"/);
-    expect(closedHtml).toMatch(/<div class="grid h-full hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+    expect(closedHtml).toMatch(/<div class="grid flex-1 hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
   });
 
   it("startOpen=true still renders CLOSED on first paint — the open-at-desktop default is a client-only layout effect, never SSR/hydration state (review fix, PR #782)", () => {
@@ -84,6 +87,6 @@ describe("PhoneDisclosure desktopCollapsible (fixture console: fold the lineup o
       </PhoneDisclosure>,
     );
     expect(html).toMatch(/data-role="phone-disclosure-toggle"[^>]*aria-expanded="false"/);
-    expect(html).toMatch(/<div class="grid h-full hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
+    expect(html).toMatch(/<div class="grid flex-1 hidden" id="[^"]+"><p data-role="body">the editor<\/p><\/div>/);
   });
 });

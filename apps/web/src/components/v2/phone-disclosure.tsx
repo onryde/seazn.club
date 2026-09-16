@@ -47,7 +47,33 @@ export interface PhoneDisclosureProps {
  *  section) fills the wrapper instead of staying content-height. Do not add
  *  `h-full` to `lineup-editor.tsx` itself — it is shared with the
  *  registration surfaces and must not inherit this plan's layout
- *  assumptions. */
+ *  assumptions.
+ *
+ *  Height (fix round 3): round 2's `h-full` on THIS wrapper stacked a
+ *  `height: 100%` block on top of another (button + `grid h-full` body) two
+ *  grid levels deep. With a roster long enough to need real content height
+ *  (a filled-in lineup, not the empty-roster fixture round 2 was screenshot
+ *  against), the two-column grid's auto row track sizes itself using the
+ *  wrapper's OWN percentage-height contribution rather than
+ *  button-height-plus-body-content, undershooting by exactly the toggle
+ *  button's height (44px, measured) — the wrapper's `scrollHeight` (507)
+ *  then exceeds its `clientHeight` (463) with `overflow: visible`, so the
+ *  extra 44px paints past the card's own bottom border and directly onto
+ *  whatever section follows in the page (`MATCH ACTIONS`), a plain visual
+ *  overlap no unit test can see (`apps/web` vitest has no layout box model —
+ *  R2 in the recurring-failure list). Confirmed live (not just read) against
+ *  a real cricket lineup with rostered players.
+ *
+ *  Swapping this wrapper to `flex flex-col` sidesteps the percentage-height
+ *  grid-track quirk entirely: a flex container's contribution to the outer
+ *  grid's auto row is its genuine content height (button + body, no
+ *  percentage in the loop), and `align-items: stretch` on the outer grid
+ *  still hands this wrapper the row's full height afterwards — the body's
+ *  `flex: 1 1 auto` (replacing its own `h-full`) absorbs whatever the
+ *  stretch adds, so a short column still grows to match a tall sibling
+ *  (verified: shrinking one side's content live left both columns equal,
+ *  the original round-2 equal-height goal). The body keeps `grid` so its
+ *  own single child (the real card) still gets `stretch`-to-fill inside it. */
 export function PhoneDisclosure({
   summary,
   aside,
@@ -72,7 +98,21 @@ export function PhoneDisclosure({
   // fixture was pre-match).
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
-    if (!desktopCollapsible || !startOpen) return;
+    if (!desktopCollapsible) return;
+    // `startOpen` isn't just the mount-time default for `desktopCollapsible`
+    // callers — `fixture-console.tsx` passes `!started`, which flips to
+    // `false` live the moment the pad's own client state updates after
+    // `core.start` (no page reload: `send()` resyncs `live` in place, see
+    // its own doc). Before this fix the effect only ever OPENED — a false
+    // `startOpen` hit the early return above and left `open` however it
+    // was, so a lineup opened pre-match (desktop's default) stayed open
+    // forever, "closed" only by a full remount (a hard reload), never by
+    // starting the match in the same session. Close it explicitly here so
+    // starting the match folds it live, same tab, same effect that opens it.
+    if (!startOpen) {
+      setOpen(false);
+      return;
+    }
     if (typeof window === "undefined") return;
     if (window.matchMedia("(min-width: 768px)").matches) setOpen(true);
   }, [desktopCollapsible, startOpen]);
@@ -84,7 +124,7 @@ export function PhoneDisclosure({
   // page).
   const bodyId = useId();
   return (
-    <div data-role="phone-disclosure" data-open={open} className="h-full min-w-0">
+    <div data-role="phone-disclosure" data-open={open} className="flex flex-col min-w-0">
       <button
         type="button"
         data-role="phone-disclosure-toggle"
@@ -92,7 +132,7 @@ export function PhoneDisclosure({
         aria-label={open ? hideLabel : showLabel}
         aria-controls={bodyId}
         onClick={() => setOpen((v) => !v)}
-        className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400${desktopCollapsible ? "" : " md:hidden"}`}
+        className={`flex min-h-11 w-full shrink-0 items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400${desktopCollapsible ? "" : " md:hidden"}`}
       >
         <span className="min-w-0 truncate text-sm font-semibold text-slate-900">{summary}</span>
         <span className="flex shrink-0 items-center gap-2 text-xs text-slate-600">
@@ -101,7 +141,7 @@ export function PhoneDisclosure({
         </span>
       </button>
       <div
-        className={open ? "grid h-full" : desktopCollapsible ? "grid h-full hidden" : "grid h-full max-md:hidden"}
+        className={open ? "grid flex-1" : desktopCollapsible ? "grid flex-1 hidden" : "grid flex-1 max-md:hidden"}
         id={bodyId}
       >
         {children}
