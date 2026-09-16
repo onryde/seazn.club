@@ -1,0 +1,301 @@
+import "server-only";
+// ONE guard fronting every online-play entry point (chess Lichess
+// external-play redesign, Task 7 — spec §6, §7.2). Replaces the
+// pre-redesign `usecases/external-play.ts` (deleted this task; R1).
+import { sql } from "@/lib/db";
+import { mapBoardgameClockToLichess, type BoardgameClockInput } from "@/server/external-play/clock";
+import type { ExternalPlayStatus, LichessClock, NeedsReason } from "@/server/external-play/types";
+import { getFixtureState } from "@/server/usecases/fixtures";
+import { mintOrgOwnerAuth } from "./auth";
+
+export type Side = "home" | "away";
+
+export type SidePlayer = {
+  side: Side;
+  entrantId: string;
+  displayName: string;
+  personId: string | null;
+  userId: string | null;
+  lichess: { id: string; username: string } | null;
+  recipients: { email: string; locale: string | null }[];
+};
+
+/** The revived (Date-typed) shape of a `fixture_external_play` row, as read
+ *  through `loadOnlinePlayFixture`. A strict subset of the table's columns —
+ *  `fixture_id`/`org_id`/`provider`/`last_polled_at`/`last_error`/
+ *  `created_at`/`updated_at` are not modelled here; callers that need them
+ *  read the table directly. */
+export type BridgeRow = {
+  status: ExternalPlayStatus;
+  scheduled_at_basis: Date;
+  challenge_id: string | null;
+  url_white: string | null;
+  url_black: string | null;
+  white_side: Side | null;
+  white_lichess_id: string | null;
+  black_lichess_id: string | null;
+  expires_at: Date | null;
+  mint_claimed_at: Date | null;
+  white_emailed_at: Date | null;
+  black_emailed_at: Date | null;
+  needs_reason: NeedsReason | null;
+  started_at: Date | null;
+  finished_at: Date | null;
+};
+
+export type OnlinePlayFixture = {
+  fixtureId: string;
+  orgId: string;
+  orgSlug: string;
+  orgName: string;
+  competitionSlug: string;
+  divisionSlug: string;
+  scheduledAt: Date;
+  homeEntrantId: string;
+  awayEntrantId: string;
+  fixtureStatus: string;
+  clock: LichessClock;
+  bridge: BridgeRow | null;
+};
+
+/** `to_jsonb(ep)` over the table's columns — jsonb has no Date type, so every
+ *  timestamptz column below arrives as an ISO string; `reviveBridge` below
+ *  parses the `BridgeRow` subset back into `Date`. The extra columns
+ *  (`fixture_id`, `org_id`, `provider`, `last_polled_at`, `last_error`,
+ *  `created_at`, `updated_at`) ride along in the jsonb but are not read here. */
+type RawBridge = {
+  status: ExternalPlayStatus;
+  scheduled_at_basis: string;
+  challenge_id: string | null;
+  url_white: string | null;
+  url_black: string | null;
+  white_side: Side | null;
+  white_lichess_id: string | null;
+  black_lichess_id: string | null;
+  expires_at: string | null;
+  mint_claimed_at: string | null;
+  white_emailed_at: string | null;
+  black_emailed_at: string | null;
+  needs_reason: NeedsReason | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+function reviveBridge(raw: RawBridge): BridgeRow {
+  return {
+    status: raw.status,
+    scheduled_at_basis: new Date(raw.scheduled_at_basis),
+    challenge_id: raw.challenge_id,
+    url_white: raw.url_white,
+    url_black: raw.url_black,
+    white_side: raw.white_side,
+    white_lichess_id: raw.white_lichess_id,
+    black_lichess_id: raw.black_lichess_id,
+    expires_at: raw.expires_at === null ? null : new Date(raw.expires_at),
+    mint_claimed_at: raw.mint_claimed_at === null ? null : new Date(raw.mint_claimed_at),
+    white_emailed_at: raw.white_emailed_at === null ? null : new Date(raw.white_emailed_at),
+    black_emailed_at: raw.black_emailed_at === null ? null : new Date(raw.black_emailed_at),
+    needs_reason: raw.needs_reason,
+    started_at: raw.started_at === null ? null : new Date(raw.started_at),
+    finished_at: raw.finished_at === null ? null : new Date(raw.finished_at),
+  };
+}
+
+type LoadedRow = Omit<OnlinePlayFixture, "clock" | "bridge"> & {
+  divisionConfig: unknown;
+  bridge: RawBridge | null;
+};
+
+/**
+ * THE guard. Every online-play entry point (lobby, resolve, resend, cron
+ * sync/sweep, webhook, match room) loads through this — spec §6. Returns
+ * `null` unless every predicate holds: boardgame sport, `onlinePlay:
+ * 'lichess'` in the division config, the division has left setup/scheduled
+ * (a fixture is not scoreable before then — `scoreEvent` would refuse it
+ * anyway), the fixture has a schedule and both entrants, the fixture is not
+ * finalized/cancelled, and the division's clock config maps onto a Lichess
+ * clock (a legacy Bronstein/delay config is simply not online — Task 11's
+ * settings save refuses saving one for an `onlinePlay: 'lichess'` division,
+ * so this guard only ever sees it on an already-existing row).
+ */
+export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePlayFixture | null> {
+  const [row] = await sql<LoadedRow[]>`
+    select f.id as "fixtureId", o.id as "orgId", o.slug as "orgSlug", o.name as "orgName",
+           c.slug as "competitionSlug", d.slug as "divisionSlug", f.scheduled_at as "scheduledAt",
+           f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
+           f.status as "fixtureStatus", d.config as "divisionConfig",
+           case when ep.fixture_id is null then null else to_jsonb(ep) end as bridge
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      join competitions c on c.id = d.competition_id
+      join organizations o on o.id = c.org_id
+      left join fixture_external_play ep on ep.fixture_id = f.id
+     where f.id = ${fixtureId}
+       and d.sport_key = 'boardgame'
+       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
+       and d.status not in ('setup', 'scheduled')
+       and f.scheduled_at is not null
+       and f.home_entrant_id is not null
+       and f.away_entrant_id is not null
+       and f.status not in ('finalized', 'cancelled')`;
+  if (!row) return null;
+  const cfg = row.divisionConfig as { clock?: BoardgameClockInput } | null;
+  const clockMap = mapBoardgameClockToLichess(cfg?.clock);
+  if (!clockMap.ok) return null; // settings save refuses this (Task 11); a legacy row is simply not online
+  return {
+    fixtureId: row.fixtureId,
+    orgId: row.orgId,
+    orgSlug: row.orgSlug,
+    orgName: row.orgName,
+    competitionSlug: row.competitionSlug,
+    divisionSlug: row.divisionSlug,
+    scheduledAt: row.scheduledAt,
+    homeEntrantId: row.homeEntrantId,
+    awayEntrantId: row.awayEntrantId,
+    fixtureStatus: row.fixtureStatus,
+    clock: clockMap.clock,
+    bridge: row.bridge ? reviveBridge(row.bridge) : null,
+  };
+}
+
+/** A bridge row minted for an OLDER `scheduled_at` than the fixture's
+ *  current one (a reschedule happened after the mint) is stale — UNLESS it
+ *  is already `live`/`finished`, in which case the game already exists and a
+ *  later reschedule cannot un-happen it. */
+export function isStale(f: OnlinePlayFixture): boolean {
+  const b = f.bridge;
+  return (
+    !!b &&
+    b.status !== "live" &&
+    b.status !== "finished" &&
+    b.scheduled_at_basis.getTime() !== f.scheduledAt.getTime()
+  );
+}
+
+/** Pure. The bridge a caller should act on — `null` for both "no bridge yet"
+ *  and "the bridge on file is stale". */
+export function effectiveBridge(f: OnlinePlayFixture): BridgeRow | null {
+  return isStale(f) ? null : f.bridge;
+}
+
+/**
+ * Writes only when `f`'s OWN snapshot judges the bridge stale. The SQL's own
+ * `status in (...)` repeats `isStale`'s live/finished exclusion — belt and
+ * suspenders against a race: `f` is a snapshot, so if the row moved to
+ * `live`/`finished` in the database after `f` was read (e.g. a poll job
+ * landed between the read and this call), the UPDATE below still refuses to
+ * touch it even though the stale caller's copy of `f` does not know that yet.
+ */
+export async function resetStaleBridge(f: OnlinePlayFixture): Promise<void> {
+  if (!isStale(f)) return;
+  await sql`
+    update fixture_external_play
+       set status = 'pending', scheduled_at_basis = ${f.scheduledAt}, challenge_id = null,
+           url_white = null, url_black = null, white_side = null, white_lichess_id = null,
+           black_lichess_id = null, expires_at = null, mint_claimed_at = null,
+           white_emailed_at = null, black_emailed_at = null, needs_reason = null,
+           last_error = null, updated_at = now()
+     where fixture_id = ${f.fixtureId}
+       and status in ('pending', 'ready', 'needs_organiser')
+       and scheduled_at_basis <> ${f.scheduledAt}`;
+}
+
+/** Idempotent — the first caller across every entry point creates the row;
+ *  every other one is a no-op. */
+export async function ensureBridgeRow(f: OnlinePlayFixture): Promise<void> {
+  await sql`
+    insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis)
+    values (${f.fixtureId}, ${f.orgId}, ${f.scheduledAt})
+    on conflict (fixture_id) do nothing`;
+}
+
+type SideRow = {
+  displayName: string;
+  personId: string | null;
+  userId: string | null;
+  email: string | null;
+  locale: string | null;
+  externalUserId: string | null;
+  username: string | null;
+};
+
+/**
+ * The PR's `loadSide` SQL, widened: `p.id as "personId"` and `p.merged_into
+ * is null` (a tombstoned person is not a valid identity), plus a left join
+ * onto `user_external_accounts` for the Lichess identity. Unlike the old
+ * `loadSide` (which INNER-joined `entrant_members`/`persons` and returned
+ * `null` for an entrant it could not resolve), every join here is LEFT: the
+ * new `SidePlayer` always carries a `displayName` (sourced from `entrants`,
+ * not from a joined `persons` row), even for an unrostered entrant or one
+ * whose sole member is a merge tombstone with no live replacement.
+ * `personId`/`userId`/`lichess` resolve only when exactly one member person
+ * has a linked user — several linked members is not a chess seat (the old
+ * code's own rule: never silently pick one). `recipients` stays broad — every
+ * member's linked email, not just the one resolved seat.
+ */
+async function loadSide(side: Side, entrantId: string): Promise<SidePlayer> {
+  const rows = await sql<SideRow[]>`
+    select e.display_name as "displayName",
+           p.id as "personId", p.user_id as "userId",
+           u.email, u.locale,
+           uea.external_user_id as "externalUserId", uea.username
+      from entrants e
+      left join entrant_members em on em.entrant_id = e.id
+      left join persons p on p.id = em.person_id and p.merged_into is null
+      left join users u on u.id = p.user_id
+      left join user_external_accounts uea on uea.user_id = p.user_id and uea.provider = 'lichess'
+     where e.id = ${entrantId}
+     order by em.person_id`;
+  const displayName = rows[0]?.displayName ?? entrantId;
+  const withUser = rows.filter(
+    (r): r is SideRow & { personId: string; userId: string } => r.personId !== null && r.userId !== null,
+  );
+  const distinctPersonIds = [...new Set(withUser.map((r) => r.personId))];
+  const solo =
+    distinctPersonIds.length === 1 ? withUser.find((r) => r.personId === distinctPersonIds[0]) : undefined;
+  return {
+    side,
+    entrantId,
+    displayName,
+    personId: solo?.personId ?? null,
+    userId: solo?.userId ?? null,
+    lichess:
+      solo?.externalUserId !== undefined && solo?.externalUserId !== null
+        ? { id: solo.externalUserId, username: solo.username ?? solo.externalUserId }
+        : null,
+    recipients: rows
+      .filter((r): r is SideRow & { email: string } => r.email !== null)
+      .map((r) => ({ email: r.email, locale: r.locale })),
+  };
+}
+
+export async function loadSides(f: OnlinePlayFixture): Promise<{ home: SidePlayer; away: SidePlayer }> {
+  const [home, away] = await Promise.all([
+    loadSide("home", f.homeEntrantId),
+    loadSide("away", f.awayEntrantId),
+  ]);
+  return { home, away };
+}
+
+type FoldedBoardgameState = { colorOfHome?: "W" | "B" | null };
+
+/** `colorOfHome` off the folded `match_states.state` (same cache
+ *  `getFixtureState` reads for the pad) — `undefined`/`null`/no fold at all
+ *  reads as White-on-home, because that is Swiss's own default (chess.md
+ *  §2, `packages/engine/src/scheduling/swiss.ts:42`: "home: EntrantId //
+ *  chess: White") and the boardgame module's `init` agrees (`colorOfHome:
+ *  cfg.colors ? "W" : null` — colours-on is itself the schema default, so a
+ *  fresh fold before any pairing card already reads "W", never null). */
+function asColorOfHome(state: unknown): "W" | "B" | null {
+  if (state === null || typeof state !== "object") return null;
+  const value = (state as FoldedBoardgameState).colorOfHome;
+  return value === "W" || value === "B" ? value : null;
+}
+
+/** Which side has White — home unless a `boardgame.pairing` card recorded
+ *  Black on home. */
+export async function whiteSideOf(f: OnlinePlayFixture): Promise<Side> {
+  const auth = await mintOrgOwnerAuth(f.orgId);
+  const state = await getFixtureState(auth, f.fixtureId);
+  return asColorOfHome(state.state) === "B" ? "away" : "home";
+}
