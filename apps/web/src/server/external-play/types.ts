@@ -10,6 +10,16 @@ export type ExternalPlayStatus =
   | "finished"
   | "needs_organiser";
 
+/** Spec §9 / row `needs_reason` — why a fixture landed in `needs_organiser`. */
+export type NeedsReason =
+  | "no_show_white"
+  | "no_show_black"
+  | "no_show_both"
+  | "not_started"
+  | "aborted"
+  | "mismatch"
+  | "provider_error";
+
 /** Lichess challenge clock: `limit` is initial time in seconds. */
 export type LichessClock = { limit: number; increment: number };
 
