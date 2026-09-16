@@ -659,6 +659,55 @@ describe("decide — a composed session's Machine events go through the runner t
     }
   });
 
+  // Fix round 5, re-review 2 I1: round 4 made `ending + lost` reachable (a late create_ok after the stop grace destroyed the
+  // runner), and a CONFIRMED destroy of a lost runner on the LAST attempt signals `failed` — whose arm had no ending guard, so
+  // the organiser's stopped (or max_duration) stream became failed(machine_crash) with no replay. Attempt 1 signals `retry`,
+  // whose arm already completes an ending session (F17). Both must complete with the session's own reason and the fill.
+  it("I1: an ENDING session whose late create_ok (now lost) is then CONFIRMED destroyed completes with its OWN end reason and the replay fill — at attempt 1 (retry signal) and at the LAST attempt (failed signal), by destroy_ok or observed destroyed", () => {
+    const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
+    const grace = RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS;
+    const confirms: RunnerTrigger[] = [{ type: "destroy_ok" }, { type: "observed", state: "destroyed" }];
+    for (const attempt of [1, RUNNER_MAX_ATTEMPTS]) {
+      for (const endReason of ["stopped", "max_duration"] as const) {
+        for (const confirm of confirms) {
+          const label = `attempt ${attempt} / ${endReason} / ${confirm.type}`;
+          const playing: Runner = { ...BOOTING, state: "playing", attempt, name: `relay-s1-r${attempt}` };
+          const live = C({ state: "live", startedAt: T0, heartbeatAt: T0, runnerRetries: attempt - 1, runner: playing });
+          const end: Command = endReason === "stopped" ? { type: "stop" } : { type: "expire", expiry: { kind: "wall_clock" } };
+          const stopping = decide(live, end, at(0));
+          expect(stopping.next, label).toMatchObject({ state: "ending", endReason, runner: { state: "stopping" } });
+          expect(evaluate(stopping.next, at(grace)), label).toEqual({ kind: "grace_expired" });
+          const forced = decide(stopping.next, { type: "expire", expiry: evaluate(stopping.next, at(grace)) }, at(grace));
+          expect(forced.next, label).toMatchObject({ state: "ending", endReason, runner: { state: "destroyed" } });
+          expect(forced.effects, label).toEqual([FORCE]);
+          const late = decide(forced.next, { type: "runner", trigger: { type: "create_ok", machineId: "m9" } }, at(grace + 1));
+          expect(late.next, label).toMatchObject({ state: "ending", endReason, runner: { state: "lost", attempt, machineId: "m9" } });
+          expect(late.effects, label).toEqual([FORCE]);
+          const done = decide(late.next, { type: "runner", trigger: confirm }, at(grace + 2));
+          expect(done.next, label).toMatchObject({
+            state: "completed", desiredState: "ending", endReason, failReason: null, endedAt: at(grace + 2), runnerRetries: attempt - 1,
+            runner: { state: "destroyed", attempt, machineId: "m9" },
+          });
+          expect(done.effects, label).toEqual([{ type: "fill_replay" }]);
+          expect(done.events, label).toEqual([{ type: "RunnerChanged", from: "lost", to: "destroyed", trigger: confirm.type }, { type: "SessionEnded", reason: "completed" }]);
+        }
+      }
+    }
+  });
+
+  // Fix round 5, re-review 2 G1: the organiser's stop on a PROVISIONING session whose runner is LOST (F16: create_ok, then an
+  // observed failure, before `provisioned`) goes through lost's session_stop — force_destroy + `completed` — and the completed
+  // arm dropped the signal for provisioning: the stop was swallowed (still provisioning, desiredState live) and the session
+  // later failed provision_timeout. It completes stopped, like the same stop on a live or warming session (F17).
+  it("G1: the organiser's stop on a PROVISIONING session whose runner is lost completes it stopped (no replay: it never went live) — never swallowed into a later provision_timeout", () => {
+    const provisioning = C({ state: "provisioning", runner: { ...BOOTING, state: "lost" } });
+    const d = decide(provisioning, { type: "stop" }, T0);
+    expect(d.next).toMatchObject({ state: "completed", desiredState: "ending", endReason: "stopped", failReason: null, endedAt: T0, runner: { state: "destroyed", machineId: "m1" } });
+    expect(d.effects).toEqual([FORCE]);
+    expect(d.events).toEqual([{ type: "RunnerChanged", from: "lost", to: "destroyed", trigger: "session_stop" }, { type: "SessionEnded", reason: "completed" }]);
+    expect(evaluate(d.next, new Date(T0.getTime() + 24 * 3600 * 1000))).toEqual({ kind: "none" });
+  });
+
   // Fix round 4: the MARKED creating cells (create_ok, observed found, grace_expired) KEEP destroyed + force_destroy + completed.
   // The ruling allows that only if no retry is reachable afterwards — so this proves it through the real `decide`, not the
   // runner walk's path cut: from every session that can hold a marked creating runner (a stop or the deadline in
@@ -731,10 +780,10 @@ describe("decide — a composed session's Machine events go through the runner t
     const cases: [Session, Command, string][] = [
       [C({ runner: lost }), { type: "expire", expiry: { kind: "warming_timeout" } }, "machine_boot_timeout"],
       [C({ runner: lost }), { type: "credit_refused" }, "no_credits"],
-      // NOT a killer for the provision_timeout site's own filter (review M4): a provisioning session ignores the completed
-      // signal the lost runner's session_stop emits (runner()'s `completed` arm), so its teardown carries no SessionEnded and
-      // narrowing THAT site's filter back to SessionEnding-only is equivalent. The row pins the outcome only; the
-      // warming_timeout and credit_refused rows are the killers for their own sites.
+      // Review M4 found this row NOT a killer for the provision_timeout site's own filter: provisioning then ignored the
+      // completed signal the lost runner's session_stop emits. Fix round 5 (re-review 2 G1) made runner()'s `completed` arm
+      // honour it on provisioning, so the teardown now carries a SessionEnded(completed) and narrowing THAT site's filter back
+      // to SessionEnding-only reds this row (mutant F5 provision_timeout-filter). Each site's row is now its own killer.
       [C({ state: "provisioning", runner: lost }), { type: "expire", expiry: { kind: "provision_timeout" } }, "provision_timeout"],
     ];
     for (const [s, command, reason] of cases) {

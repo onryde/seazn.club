@@ -179,7 +179,10 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       if (s.state !== "live" && s.state !== "warming" && s.state !== "provisioning") return { next, events, effects };
       return { next: { ...next, state: "ending", desiredState: "ending", endReason: step.signal.endReason, endingAt: now }, events: [...events, { type: "SessionEnding", endReason: step.signal.endReason }], effects };
     case "completed": {
-      if (s.state !== "ending" && s.state !== "live" && s.state !== "warming") return { next, events, effects };
+      // Fix round 5 (re-review 2 G1): provisioning too. Its only `completed` source without an `ending` first is a LOST
+      // runner's session_stop (F16 makes provisioning/lost reachable); dropping the signal swallowed the organiser's stop,
+      // and the session later failed provision_timeout. Only `requested` still ignores it: no planned caller creates before `provision`.
+      if (s.state !== "ending" && s.state !== "live" && s.state !== "warming" && s.state !== "provisioning") return { next, events, effects };
       // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown
       // leaves it out and the session keeps the one its `ending` step already stored.
       // M2 (Task 2C review): the session's OWN stored reason wins. A session that is already ending chose its reason when
@@ -206,6 +209,14 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       return { next: { ...next, runnerRetries: next.runner.attempt, beatWindowAt: now }, events: [...events, { type: "RunnerRetried", attempt: next.runner.attempt + 1 }], effects: [...effects, { type: "retry_runner" }] };
     }
     case "failed": {
+      // Fix round 5 (re-review 2 I1): the retry arm's rule, for the LAST attempt. A session already ending chose its end when
+      // the organiser stopped or the deadline hit; a Machine confirmed gone after that (a late create_ok's lost runner,
+      // destroyed on the final attempt) is the teardown finishing, not a crash — complete with the session's own reason
+      // and the replay fill, never failed(machine_crash).
+      if (s.state === "ending" || s.desiredState === "ending") {
+        const c = complete(next, now);
+        return { next: c.next, events: [...events, ...c.events], effects: [...effects, ...c.effects] };
+      }
       const f = fail(next, step.signal.reason, now);
       return { next: f.next, events: [...events, ...f.events], effects: [...effects, ...f.effects] };
     }

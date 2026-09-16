@@ -316,9 +316,12 @@ describe("invariants", () => {
   // confirmed, then `destroyed × stale_beat` re-signalled the retry: attempt 2 created while attempt 1 may still be up.
   // This walks EVERY path the table allows from RUNNER_NONE (two steps and deeper), carrying whether the CURRENT attempt's
   // Machine has been confirmed gone (destroy_ok / observed destroyed) or was never made (creating × create_failed);
-  // create_started begins a new attempt and clears it. A path ENDS at a step whose signal ends the session's wish to be
-  // live — ending / completed / failed — because the session's retry arm (F17) completes instead of retrying once the
-  // session is ending, and C27 ignores every signal on a terminal one (session.test.ts F17, F20, C27 prove both).
+  // create_started (a new attempt) and create_ok (a Machine that now exists, fix round 4) reset it. A path ENDS at a step
+  // whose signal ends the session's wish to be live — ending / completed / failed. In `decide`, `ending` and `completed`
+  // move a provisioning / warming / live session to ending or completed (provisioning's `completed` since fix round 5, G1),
+  // `failed` fails it, the retry and failed arms complete a session that is already ending instead (F17; fix round 5, I1),
+  // and C27 ignores every signal on a terminal one (session.test.ts F17, F20, C27, I1, G1 prove these). Only `requested`
+  // ignores `ending` / `completed`, and no planned caller creates before `provision`.
   it("invariant 1, the TWO-STEP half (walked from none): every path that reaches a retry signal passes a confirmed destroy, or a create that made nothing, since its attempt began", () => {
     const seen = new Set<string>();
     const violations: string[] = [];
@@ -364,7 +367,8 @@ describe("invariants", () => {
     //              the grace once a stop is MARKED (a marked creating runner is its own node below, also credited 0);
     //   lost     — its entry issues force_destroy, and a stale beat re-issues it once per STALE_HEARTBEAT_SECONDS until
     //              destroy_ok / observed destroyed moves it on (C1) — no table timer forces it out;
-    //   none, destroyed — no Machine of ours (a create returning into destroyed is force-destroyed on arrival).
+    //   none, destroyed — no Machine of ours (a create returning into destroyed moves the runner to lost with force_destroy,
+    //              fix round 4 — lost is credited 0 above, so that re-entry adds no dwell).
     const DWELL: Record<RunnerState, number> = {
       none: 0, creating: 0, booting: WARMING_TIMEOUT_MINUTES, playing: MAX_DURATION_MINUTES,
       stopping: (RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS) / 60, exited: 0, lost: 0, destroyed: 0,
