@@ -300,11 +300,13 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     halves: [
       {
         who: whoLine(view, "home", t),
+        side: "home",
         big: String(current?.score?.home ?? 0),
         sub: `(${gamesWon.home ?? 0})`,
       },
       {
         who: whoLine(view, "away", t),
+        side: "away",
         big: String(current?.score?.away ?? 0),
         sub: `(${gamesWon.away ?? 0})`,
       },

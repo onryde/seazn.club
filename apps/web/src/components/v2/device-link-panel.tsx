@@ -153,13 +153,13 @@ export function DeviceLinkPanel({
             >
               {msg("dlink.revoke")}
             </button>
-            <button type="button" disabled={busy} onClick={mint} className="btn btn-ghost text-xs">
+            <button type="button" data-testid="device-link-mint" disabled={busy} onClick={mint} className="btn btn-ghost text-xs">
               {msg("dlink.newLink")}
             </button>
           </div>
         </div>
       ) : (
-        <button type="button" disabled={busy} onClick={mint} className="btn btn-primary mt-3">
+        <button type="button" data-testid="device-link-mint" disabled={busy} onClick={mint} className="btn btn-primary mt-3">
           {busy ? "…" : msg("dlink.create")}
         </button>
       )}

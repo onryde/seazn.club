@@ -223,11 +223,15 @@ function fakePlanSql(
       // false on `community` (V295 seeded it false, V393:69 flipped it true,
       // V396:61-64 flipped it back) and true on `pro`/`enterprise` — the same
       // "leverage is sold, correctness is free" split the other two follow.
+      // B07a T11: `scoring.device_links` too — V117__device_links.sql:55-56
+      // (community false, pro true), and `enterprise` inherits pro_plus's row
+      // through V393 step 2.
       if (
         featureKey === "cricket.dls" ||
         featureKey === "officials.auto" ||
         featureKey === "stats.player" ||
-        featureKey === "news.auto"
+        featureKey === "news.auto" ||
+        featureKey === "scoring.device_links"
       ) {
         return [
           // B05: `community` GRANTS `cricket.dls` and nothing else here —
@@ -378,6 +382,24 @@ function fakeServer(billing: FakeOrgBilling = freshOrgBilling()): {
         return { status: 200, json: { ok: true, data: { assignments: [] } } } as never;
       }
 
+      // B07a T11 — `createDeviceLink` gates on `scoring.device_links`
+      // (usecases/device-links.ts:128): 402 on the free plan, a 201 carrying
+      // the one-time secret once `billing.plan` has moved.
+      if (/^\/api\/v1\/fixtures\/[^/]+\/device-links$/.test(path)) {
+        if (billing.plan === "community") {
+          return {
+            status: 402,
+            json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "scoring.device_links" } },
+          } as never;
+        }
+        return { status: 201, json: { ok: true, data: { id: "dl-1", secret: "dl_fake" } } } as never;
+      }
+      // …and the probe revokes what it minted, by DELETE on the link's own
+      // route (api/v1/fixtures/[id]/device-links/[linkId]/route.ts).
+      if (method === "DELETE" && /^\/api\/v1\/fixtures\/[^/]+\/device-links\/[^/]+$/.test(path)) {
+        return { status: 200, json: { ok: true, data: { id: "dl-1", revoked_at: "2026-09-14T12:00:00Z" } } } as never;
+      }
+
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const fixtureId = m[1]!;
@@ -417,9 +439,16 @@ describe("runDlsGateProbe", () => {
       "revise_dls_off_community",
       "other_event_community",
       "gated_feature_refusal_names_its_key",
+      // B07a T11 — the device link is sold, so the probe proves its refusal
+      // before the plan flip and the mint after (device-link-gate.test.ts
+      // owns the detail).
+      "device_link_refused_before_plan",
+      "device_link_minted_after_plan",
       "revise_no_target_after_plan",
     ]);
-    expect(result.cells.map((c) => c.ok)).toEqual([true, true, true, true, true, true]);
+    expect(result.cells.map((c) => c.ok)).toEqual([true, true, true, true, true, true, true, true]);
+    expect(result.deviceLinkGateProbed).toBe(true);
+    expect(result.deviceLinksGranted).toBe(true);
 
     // THE PROMISE over HTTP: the empty-payload revise reached the ENGINE and
     // was refused on SHAPE, on a free-plan org. A 402 here would mean scoring
@@ -428,7 +457,7 @@ describe("runDlsGateProbe", () => {
     expect(result.cells[0]!.detail).toContain("reached the ENGINE");
     // And identically AFTER a paid plan is provisioned: buying something
     // changes nothing about a free feature, in either direction.
-    expect(result.cells[5]!.status).toBe(422);
+    expect(result.cells[7]!.status).toBe(422);
 
     // THE PROMISE at the matrix, read from `plan_entitlements` at call time.
     expect(result.dlsFreeOnCommunityPlan).toBe(true);
@@ -608,7 +637,8 @@ describe("runDlsGateProbe", () => {
           // unsatisfied capability stays `officials.auto` — which keeps this
           // test about the split it was written for rather than about
           // `stats.player` or `news.auto` incidentally going missing too.
-          if (featureKey === "stats.player" || featureKey === "news.auto") {
+          // B07a T11: `scoring.device_links` joins them for the same reason.
+          if (featureKey === "stats.player" || featureKey === "news.auto" || featureKey === "scoring.device_links") {
             return [
               { plan_key: "community", bool_value: false },
               { plan_key: "pro", bool_value: true },

@@ -171,6 +171,30 @@ describe("advanceStageSeeding — propose -> assert -> confirm -> generate (D7)"
     ).rejects.toThrow(/SEEDING_RULES_MISSING/);
   });
 
+  // Minors row 7 (task-1-review.md M4 / re-review §4): `dataOf`'s "carried
+  // no data" throw is now a shared factory (`makeDataOf`, bound to
+  // "advance" here) rather than a hand copy also living in `oracle.ts` —
+  // this pins that the shared prefix/label/path are still all present
+  // after the fold.
+  it("a seed-proposal 201 with no data throws instead of reporting an empty proposal", async () => {
+    const transport: AdvanceTransport = {
+      async raw(): Promise<RawResult> {
+        return { status: 201, json: { ok: true } };
+      },
+    };
+    await expect(
+      advanceStageSeeding({
+        base: BASE,
+        session: session(),
+        stageId: "stage-target",
+        expectedQualifierEntrantIds: ["id-alpha"],
+        transport,
+      }),
+    ).rejects.toThrow(
+      /advance: seed-proposal response for \/api\/v1\/stages\/stage-target\/seed-proposal carried no data/,
+    );
+  });
+
   it("a confirm refusal (e.g. a stale proposal) throws — generate is never reached", async () => {
     const { transport, calls } = fakeSeedingServer({
       qualifiers: [{ rank: 1, entrantId: "id-alpha" }],

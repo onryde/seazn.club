@@ -1262,15 +1262,19 @@ describe("validatePack — the limits stage 0 declares", () => {
     expect(warning?.message).toContain("streams[].stageRef");
   });
 
-  it("cannot bind streams to a POOL, and says so", () => {
+  it("REDS a pool key no stream's ext key carries, naming the key convention", () => {
+    // `_tiny`'s league streams are keyed `rr-r{n}-c{n}` — an UNPOOLED round
+    // robin — so scoping its table to pool "A" asks for a pool that played no
+    // fixtures. That is a pack defect, not a gap in the gate: it used to be
+    // waved through with `standings.pool_unbindable`.
     const pack = tiny();
     pack.expected.tables[0]!.poolKey = "A";
     const result = validatePack(pack, TINY);
-    expect(errors(result.findings)).toEqual([]);
-    expect(warnings(result.findings).map((f) => f.code)).toEqual([
-      "standings.pool_unbindable",
-      ...TINY_NOT_DERIVED,
-    ]);
+    const finding = onlyError(result.findings);
+    expect(finding.code).toBe("standings.pool_has_no_streams");
+    expect(finding.where).toBe("expected.tables[0] (d-tiny/s-league)");
+    expect(finding.message).toContain('"pA-"');
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -1282,6 +1286,20 @@ describe("validatePack — the standings derivation mirrors the product's own", 
   it("reds a table declared against a stage that produces a bracket, not a table", () => {
     const pack = tiny();
     pack.divisions[0]!.stages[0]!.kind = "knockout";
+    const finding = onlyError(validatePack(pack, TINY).findings);
+    expect(finding.code).toBe("standings.not_a_table_stage");
+    expect(finding.message).toContain('kind "knockout"');
+  });
+
+  it("says NOT A TABLE STAGE before it says anything about the pool", () => {
+    // Pins the gate ORDER. The pool check sits below the stage-kind gate
+    // because it needs the stage-scoped stream list; with the two swapped
+    // this same pack would report `standings.pool_has_no_streams` instead,
+    // diagnosing the pool of a stage that can never have a table at all.
+    // The case above declares no poolKey, so nothing there would notice.
+    const pack = tiny();
+    pack.divisions[0]!.stages[0]!.kind = "knockout";
+    pack.expected.tables[0]!.poolKey = "A";
     const finding = onlyError(validatePack(pack, TINY).findings);
     expect(finding.code).toBe("standings.not_a_table_stage");
     expect(finding.message).toContain('kind "knockout"');
@@ -1549,6 +1567,14 @@ interface LeagueSpec {
   readonly tiebreakers?: readonly string[];
   readonly seeds?: Readonly<Record<string, number>>;
   readonly rows?: readonly Record<string, unknown>[];
+  /** `expected.tables` in full, for the cases `rows` cannot pose: a POOLED
+   *  stage declares one row-set per pool, so the stage needs more than one
+   *  table and each one needs its own `poolKey`. `rows` stays the shorthand
+   *  for the single unpooled table every other spec here wants. */
+  readonly tables?: readonly {
+    readonly poolKey?: string;
+    readonly rows: readonly Record<string, unknown>[];
+  }[];
 }
 
 /** A multi-fixture generic league, for the stage-3 cases `_tiny` cannot pose. */
@@ -1566,6 +1592,23 @@ function leaguePack(spec: LeagueSpec): Record<string, unknown> {
           winner: hs > as_ ? home : away,
           loser: hs > as_ ? away : home,
         };
+  const tables =
+    spec.tables !== undefined
+      ? spec.tables.map((t) => ({
+          divisionRef: "d1",
+          stageRef: "s1",
+          ...(t.poolKey === undefined ? {} : { poolKey: t.poolKey }),
+          rows: t.rows.map((r) => ({ ...r })),
+        }))
+      : spec.rows === undefined
+        ? undefined
+        : [
+            {
+              divisionRef: "d1",
+              stageRef: "s1",
+              rows: spec.rows.map((r) => ({ ...r })),
+            },
+          ];
   return {
     schemaVersion: 1,
     suite: "_unit",
@@ -1623,17 +1666,7 @@ function leaguePack(spec: LeagueSpec): Record<string, unknown> {
         fixtureExtKey: key,
         outcome: outcomeOf(home, away, hs, as_),
       })),
-      ...(spec.rows === undefined
-        ? {}
-        : {
-            tables: [
-              {
-                divisionRef: "d1",
-                stageRef: "s1",
-                rows: spec.rows.map((r) => ({ ...r })),
-              },
-            ],
-          }),
+      ...(tables === undefined ? {} : { tables }),
     },
     meta: { synthetic: true, sources: [] },
   };
@@ -1655,6 +1688,160 @@ const row = (
   drawn,
   lost,
   points,
+});
+
+// ===========================================================================
+// A POOLED group stage — one table per pool
+//
+// Which pool a fixture sat in is a FIXTURE-row fact in the product, and a pack
+// declares no fixtures — so every pooled table used to be skipped. It is
+// recoverable from the ext KEY: the product prefixes a pooled round robin's
+// generated ids with `p{key}-` (`usecases/stages.ts:797` wrapping
+// `roundrobin.ts:140`'s `rr-r{round}-c{court}`).
+// ===========================================================================
+
+/** Two pools of three, keyed the way the product's own generator keys them.
+ *  Both pools have the SAME row count and the same column of scalars, so a
+ *  derivation that returned the WRONG pool cannot be caught by the row count
+ *  or by any stat — only by which entrants are in the table, and in what
+ *  order. Each entrant plays the other two of its own pool and nobody else. */
+function pooledPack(): Record<string, unknown> {
+  return leaguePack({
+    stageKind: "group",
+    stage: { pools: { count: 2 } },
+    entrants: ["e1", "e2", "e3", "e4", "e5", "e6"],
+    fixtures: [
+      ["pA-rr-r1-c1", "e1", "e2", 3, 1],
+      ["pA-rr-r2-c1", "e1", "e3", 3, 1],
+      ["pA-rr-r3-c1", "e2", "e3", 3, 1],
+      ["pB-rr-r1-c1", "e4", "e5", 3, 1],
+      ["pB-rr-r2-c1", "e4", "e6", 3, 1],
+      ["pB-rr-r3-c1", "e5", "e6", 3, 1],
+    ],
+    tables: [
+      {
+        poolKey: "A",
+        rows: [
+          row("e1", 1, 2, 2, 0, 0, 6),
+          row("e2", 2, 2, 1, 0, 1, 3),
+          row("e3", 3, 2, 0, 0, 2, 0),
+        ],
+      },
+      {
+        poolKey: "B",
+        rows: [
+          row("e4", 1, 2, 2, 0, 0, 6),
+          row("e5", 2, 2, 1, 0, 1, 3),
+          row("e6", 3, 2, 0, 0, 2, 0),
+        ],
+      },
+    ],
+  });
+}
+
+/** The `expected` block of a built pack — loose like every fixture view here,
+ *  because these are the PRE-parse JSON objects. */
+interface PooledExpected {
+  matches: { fixtureExtKey: string }[];
+  tables: { poolKey?: string; rows: Record<string, unknown>[] }[];
+}
+const expectedOf = (pack: Record<string, unknown>): PooledExpected =>
+  pack["expected"] as unknown as PooledExpected;
+
+describe("validatePack — a pooled group stage is checked one table per pool", () => {
+  it("derives every pool's table, with no findings at all", () => {
+    const result = validatePack(pooledPack(), UNIT);
+    expect(result.findings.map((f) => f.code)).not.toContain(
+      "standings.pool_unbindable",
+    );
+    // Both pools derived, both agreed with what the pack declares. This is
+    // also what kills a "return the first pool for every table" derivation:
+    // pool B's declared rows name entrants pool A's table has never heard of.
+    expectClean(result, []);
+  });
+
+  it("reds when a pool's declared ORDER disagrees with that pool's own results", () => {
+    // The ordering-differential case. Pool B keeps exactly its own three
+    // entrants and exactly its own scalars — only rank 1 and rank 2 trade
+    // places. A comparator that checked MEMBERSHIP, or counts, or the column
+    // of stats, passes this unchanged; only one that reads the ORDER can fail
+    // it. e4 (6 points) and e5 (3) are separated by the fold's primary sort
+    // key, so the swap perturbs the key the ranking actually used.
+    const pack = pooledPack();
+    const poolB = expectedOf(pack).tables.find((t) => t.poolKey === "B");
+    if (poolB === undefined)
+      throw new Error("fixture must declare a pool B table");
+    const rows = poolB.rows;
+    expect(rows).toHaveLength(3);
+    poolB.rows = [
+      { ...rows[1], rank: 1 },
+      { ...rows[0], rank: 2 },
+      { ...rows[2], rank: 3 },
+    ];
+    const finding = onlyError(validatePack(pack, UNIT).findings);
+    expect(finding.code).toBe("standings.order");
+    expect(finding.where).toBe("expected.tables[1] (d1/s1)");
+    expect(finding.message).toContain('rank 1: pack expects "e5"');
+  });
+
+  it("binds each table to ITS OWN pool — swapping the two keys reds both", () => {
+    // Membership, counts and every scalar stay exactly as authored; the only
+    // thing wrong is which pool each table claims to be. A derivation that
+    // ignored `poolKey` — always the first pool, or the whole stage flattened
+    // — cannot tell this pack from the green one above.
+    const pack = pooledPack();
+    const [tableA, tableB] = expectedOf(pack).tables;
+    if (tableA === undefined || tableB === undefined)
+      throw new Error("fixture must declare both pools");
+    expect([tableA.poolKey, tableB.poolKey]).toEqual(["A", "B"]);
+    tableA.poolKey = "B";
+    tableB.poolKey = "A";
+    const codes = errors(validatePack(pack, UNIT).findings).map((f) => f.code);
+    expect(codes).toEqual(["standings.order", "standings.order"]);
+  });
+
+  it("reds a declared pool that no stream played, rather than deriving another", () => {
+    const pack = pooledPack();
+    const expected = expectedOf(pack);
+    pack["streams"] = (
+      pack["streams"] as { fixtureExtKey: string }[]
+    ).filter((s) => !s.fixtureExtKey.startsWith("pB-"));
+    // Their oracles go with them: PackSchema refuses an `expected.matches` row
+    // naming a fixture no stream declares (its ref walk, ~:2053).
+    expected.matches = expected.matches.filter(
+      (m) => !m.fixtureExtKey.startsWith("pB-"),
+    );
+    const result = validatePack(pack, UNIT);
+    expect(result.ok).toBe(false);
+    const finding = onlyError(result.findings);
+    expect(finding.code).toBe("standings.pool_has_no_streams");
+    expect(finding.where).toBe("expected.tables[1] (d1/s1)");
+    expect(finding.message).toContain('"pB-"');
+  });
+
+  it("names the pool that PLAYED but was never declared — one of two is not enough", () => {
+    // The anti-vacuity check was keyed division+stage, so ONE declared table
+    // satisfied the whole stage and the other pool went unasserted in silence.
+    // Suite 10 is four pools per division: declaring 1 of 4 would have checked
+    // one pool and said nothing about three, which reads as a clean gate
+    // (AGENTS.md failure class 6 — an absent symptom meaning suppressed).
+    const pack = pooledPack();
+    const expected = expectedOf(pack);
+    expected.tables = expected.tables.filter((t) => t.poolKey !== "B");
+    expect(expected.tables).toHaveLength(1);
+    const result = validatePack(pack, UNIT);
+    // Still only a warning, like every other "nothing asserts this" notice,
+    // and still ok — whether a table is owed is an authoring judgement.
+    expect(errors(result.findings)).toEqual([]);
+    expect(result.ok).toBe(true);
+    // EXACTLY one: pool A is declared and must NOT be reported. A sweep that
+    // warned per pool regardless would pass a `toContain` and fail this.
+    const list = warnings(result.findings);
+    expect(list.map((f) => f.code)).toEqual(["standings.no_expected_table"]);
+    expect(list[0]?.where).toBe("divisions[ref=d1].stages[ref=s1].pools[B]");
+    expect(list[0]?.message).toContain('3 stream(s) fold into pool "B"');
+    expect(list[0]?.message).toContain('poolKey "B"');
+  });
 });
 
 describe("validatePack — the stage-config mirror is DRIVEN, key by key", () => {

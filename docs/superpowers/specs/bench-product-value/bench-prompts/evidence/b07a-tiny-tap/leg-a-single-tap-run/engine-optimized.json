@@ -1,0 +1,75 @@
+{
+  "runId": "t13-legA",
+  "requestedEngine": "optimized",
+  "divisions": [
+    {
+      "divisionRef": "d-tiny",
+      "actualEngine": "optimized",
+      "metrics": {
+        "makespanMinutes": 1470,
+        "worstIdleGapMinutes": 1350,
+        "courtImbalanceMinutes": 30,
+        "placed": 3,
+        "total": 3
+      },
+      "solverStatus": "ok",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 326,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    },
+    {
+      "divisionRef": "d-badminton",
+      "actualEngine": "greedy",
+      "metrics": {
+        "makespanMinutes": 30,
+        "worstIdleGapMinutes": 0,
+        "courtImbalanceMinutes": 30,
+        "placed": 1,
+        "total": 1
+      },
+      "solverStatus": "already_optimal",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 117,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    },
+    {
+      "divisionRef": "d-tiebreak",
+      "actualEngine": "optimized",
+      "metrics": {
+        "makespanMinutes": 90,
+        "worstIdleGapMinutes": 30,
+        "courtImbalanceMinutes": 30,
+        "placed": 3,
+        "total": 3
+      },
+      "solverStatus": "ok",
+      "mode": "build",
+      "budgetExpired": false,
+      "tiersCompleted": 6,
+      "tiersTotal": 6,
+      "blockingCount": 0,
+      "unplacedCount": 0,
+      "wallMs": 113,
+      "verdict": {
+        "red": false,
+        "reasons": []
+      }
+    }
+  ]
+}

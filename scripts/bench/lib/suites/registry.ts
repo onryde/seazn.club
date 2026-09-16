@@ -13,6 +13,9 @@ const DEFINITIONS: readonly SuiteDefinition[] = [
     key: "_tiny",
     title: "Tiny proof suite",
     packPath: TINY_PACK_PATH,
+    // B07a T10 — d-tiny is played by tapping the real pad, end to end. Every
+    // other division keeps its positional default (d-badminton: import).
+    play: { "d-tiny": "tap" },
     run: runTinySuite,
   },
   {

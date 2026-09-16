@@ -300,6 +300,18 @@ describe("buildScorebug", () => {
     expect(spec.halves[1].who[0]?.name).toBe("scorepad.attribution.away");
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): P1 in the reviewer's mutant table swapped THIS skin's `side`
+  // literals and survived the whole v3 scope. Derived from the fixture's
+  // own goal split (1-0, the test above), never a typed index table.
+  it("marks each half with its OWN side — home's half carries HOME's goals (kills a side swap)", () => {
+    const spec = buildScorebug(view(), t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("1");
+    expect(away?.big).toBe("0");
+  });
+
   it("the strip is period · clock, each with a stable id", () => {
     const spec = buildScorebug(view({ state: state({ asOf: { period: "H1", elapsed: 754 } }) }), t);
     expect(spec.strip.map((item) => item.id)).toEqual(["period", "clock"]);

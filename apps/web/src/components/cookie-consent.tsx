@@ -144,7 +144,7 @@ export function CookieConsent() {
         .
       </p>
       <div className="mt-3 flex gap-2">
-        <button onClick={() => decide("accepted")} className="btn btn-primary text-xs">
+        <button data-testid="cookie-accept" onClick={() => decide("accepted")} className="btn btn-primary text-xs">
           {clientCommon(locale, "cookie.accept")}
         </button>
         <button onClick={() => decide("rejected")} className="btn btn-ghost text-xs">

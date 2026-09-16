@@ -325,16 +325,22 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
               <button
                 key={i}
                 type="button"
-                // Stable e2e handle (R7 review) — `nth(0)`/`nth(1)` is home/
-                // away by this map's own render order (documented at every
-                // e2e call site). Replaces a `.grid > * >> .app-display.font-
-                // bold` structural chain three call sites reached through
-                // instead: brittle because it depends on the score figure's
-                // OWN layout classes rather than on the half itself, and it
-                // breaks the moment either restyles. Clicking the half
-                // (anywhere in the button) is equivalent to clicking the
-                // score figure inside it — same `onClick`.
+                // Stable e2e handle (R7 review). Replaces a `.grid > * >>
+                // .app-display.font-bold` structural chain three call sites
+                // reached through instead: brittle because it depends on the
+                // score figure's OWN layout classes rather than on the half
+                // itself, and it breaks the moment either restyles. Clicking
+                // the half (anywhere in the button) is equivalent to
+                // clicking the score figure inside it — same `onClick`.
+                //
+                // `data-side` (Task 8 fix round 1, R41) comes from
+                // `half.side` ONLY, never from `i` — see `ScorebugHalf.side`'s
+                // own doc (types.ts). A skin whose halves are not sides at
+                // all (cricket's batting total / overs count) sets no
+                // `side`, so this renders no attribute rather than a
+                // fabricated one.
                 data-role="v3-scorebug-half"
+                {...(half.side ? { "data-side": half.side } : {})}
                 // `tapSheet` WINS where a skin set it. The half still carries
                 // its `tapEvent` — the sheet's job is to build that same
                 // event with one more fact attached — so the order here is
@@ -359,6 +365,7 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
             <div
               key={i}
               data-role="v3-scorebug-half"
+              {...(half.side ? { "data-side": half.side } : {})}
               className="flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center max-md:px-2 max-md:py-2"
             >
               {content}

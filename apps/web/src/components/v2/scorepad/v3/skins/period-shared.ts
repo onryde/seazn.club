@@ -850,11 +850,13 @@ export function buildScorebug(spec: PeriodSkinSpec, view: PadHostView, t: TFn): 
     halves: [
       {
         who: [{ name: t(SIDE_LABEL.home) }],
+        side: "home",
         big: officialScoreOf(view, "home"),
         ...(tally === undefined ? {} : { sub: `(${tally.home ?? 0})` }),
       },
       {
         who: [{ name: t(SIDE_LABEL.away) }],
+        side: "away",
         big: officialScoreOf(view, "away"),
         ...(tally === undefined ? {} : { sub: `(${tally.away ?? 0})` }),
       },

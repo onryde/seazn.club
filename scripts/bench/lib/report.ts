@@ -265,6 +265,38 @@ export const ImportSimulationReport = z.object({
 });
 export type ImportSimulationReport = z.infer<typeof ImportSimulationReport>;
 
+/** B07a T10 — the divisions played by TAPPING the real pad. Report-only,
+ *  never gated on: tap counts and wall time describe the run; whether each
+ *  tapped fixture was finalized, and every driver finding, gate through
+ *  `errors` instead. `observations` counts the driver's non-defect notes
+ *  (logged verbatim as `tap_observation`).
+ *
+ *  Minors batch B, row (a) (R79) — `unreadRowsAfterFinalize` sums
+ *  `drivers/scorer.ts`'s own per-match count (rows that landed on the ledger
+ *  strictly after `core.finalize` was verified, never polled again once its
+ *  FIFO emptied). The FINDING that names a nonzero row already reds the gate
+ *  independently (`errors`, via `driver findings RED the gate`); this field
+ *  is the same rule every other count here follows — report-only, but never
+ *  silent either. Optional for backward compatibility with a report built
+ *  before this field existed (`report.test.ts`'s own fixtures, Batch C, out
+ *  of this task's file set) — the real producer (`run-suite.ts`) always
+ *  sets it once any division taps a fixture. */
+export const TapPlayReport = z.object({
+  matches: z.number().int(),
+  taps: z.number().int(),
+  wallMs: z.number(),
+  observations: z.number().int(),
+  unreadRowsAfterFinalize: z.number().int().optional(),
+  /** R86 (owner: "watch the bench play a match") — watchable video/trace
+   *  paths (never Playwright's own hash names), so a human reading the
+   *  report can find them without hunting. Absent unless `--record-video`/
+   *  `--trace` was on for this run; both fold every tapped fixture's own
+   *  artefact together with the run's ONE organiser artefact. */
+  videoPaths: z.array(z.string()).optional(),
+  tracePaths: z.array(z.string()).optional(),
+});
+export type TapPlayReport = z.infer<typeof TapPlayReport>;
+
 /** B05 T2.5 (D9) — one `ScheduleConflict` row `runDivisionStartLayer` read
  *  off a 422 body. Same three fields `schedule.ts`'s own `WireConflict`
  *  reads and no others (`details.kind` ONLY, never `code`/`detail` — see
@@ -721,6 +753,10 @@ export const SuiteReport = z.object({
    *  (D4's OTHER write path). Same gating as `simulation` above; absent when
    *  no division besides division A declares streams. */
   importSimulation: ImportSimulationReport.optional(),
+  /** B07a T10 — absent unless at least one tapped match was handed to the
+   *  tap player (a tap division skipped for want of device links is a
+   *  warning, never `matches: 0`). */
+  tapPlay: TapPlayReport.optional(),
 });
 export type SuiteReport = z.infer<typeof SuiteReport>;
 
@@ -949,6 +985,30 @@ function renderSuitesSection(report: BenchReport): string {
     if (suite.conflictCount !== undefined) lines.push(`- Blocking conflicts: ${suite.conflictCount}`);
     if (suite.provenance !== undefined) lines.push(`- Provenance: ${renderProvenance(suite.provenance)}`);
     else if (suite.provenancePct !== undefined) lines.push(`- Provenance: ${suite.provenancePct}% real`);
+    // B07a T3 — declared since B01 with no writer, exactly as `provenancePct`
+    // had none until B06a T5. Provenance says how much of a pack was
+    // GENERATED rather than observed; this says how much of reality was
+    // RESHAPED to fit the product's model (design §7A), and a thin-data pack's
+    // honesty claim rests on both halves being visible.
+    //
+    // The count is stated even when it is ZERO, and an ABSENT field is a
+    // different state from an empty one: a pre-B07a report never measured
+    // this, while an empty list is a pack asserting it reshaped nothing.
+    // Render silence for both and a pack whose adaptations went missing on
+    // the way here reads as the cleanest pack in the suite.
+    if (suite.adaptations !== undefined) {
+      if (suite.adaptations.length === 0) {
+        lines.push("- Adaptations: 0 adaptations — this pack reshaped nothing.");
+      } else {
+        lines.push(
+          `- Adaptations: ${suite.adaptations.length} adaptations — where reality was reshaped to fit the model:`,
+        );
+        // Every one of them, never a count alone: "2 adaptations" cannot be
+        // told apart from two trivia or from a reshaped draw, and §7A's whole
+        // requirement is prose a human can audit.
+        for (const a of suite.adaptations) lines.push(`  - ${a}`);
+      }
+    }
     // B06a T6 — declared since B01 and written by nothing until claims were
     // actually accepted. Both numbers, never a bare percentage: a report that
     // says invites were minted without saying how many a human could use is
@@ -961,6 +1021,29 @@ function renderSuitesSection(report: BenchReport): string {
     // drafting on, so the product drafted nothing for it to report.
     if (suite.news !== undefined) {
       lines.push(`- News: ${suite.news.published}/${suite.news.drafted} drafted posts published`);
+    }
+    // B07a T10 — report-only; the finalized check and driver findings gate
+    // through errors, never through these numbers.
+    if (suite.tapPlay !== undefined) {
+      const unread = suite.tapPlay.unreadRowsAfterFinalize;
+      lines.push(
+        `- Tap play: ${suite.tapPlay.matches} matches, ${suite.tapPlay.taps} taps, ${suite.tapPlay.wallMs}ms wall, ` +
+          `${suite.tapPlay.observations} driver observations` +
+          // `undefined` only for a report built before this field existed
+          // (the absent-vs-empty rule every other section here follows) —
+          // never omitted for a report a live run just produced.
+          (unread === undefined ? "" : `, ${unread} row(s) unread after finalize`) +
+          " (report-only)",
+      );
+      // R86 — present only when `--record-video`/`--trace` were on; a human
+      // reading this file can open the video without hunting through
+      // bench-report/ for a hash-named one.
+      if (suite.tapPlay.videoPaths !== undefined && suite.tapPlay.videoPaths.length > 0) {
+        lines.push(`  - Videos: ${suite.tapPlay.videoPaths.join(", ")}`);
+      }
+      if (suite.tapPlay.tracePaths !== undefined && suite.tapPlay.tracePaths.length > 0) {
+        lines.push(`  - Traces: ${suite.tapPlay.tracePaths.join(", ")}`);
+      }
     }
     if (suite.oracles && suite.oracles.length > 0) {
       lines.push("- Oracles:");

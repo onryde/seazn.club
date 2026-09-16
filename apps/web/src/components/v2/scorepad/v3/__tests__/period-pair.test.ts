@@ -1457,6 +1457,29 @@ describe("the pad shows the ENGINE's official score, not the goals it happened t
     expect(bug.halves[1]!.big).toBe("0");
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): P2 in the reviewer's mutant table swapped `period-shared.ts`'s
+  // `side` literals — the ONE producer both hockey and ice hockey share —
+  // and survived the whole v3 scope. Derived from EACH sport's own goal
+  // split (2 for home, 1 for away), never a typed index table, and swept
+  // across both `SPORTS` entries because they share the one producer.
+  it("marks each half with its OWN side, for BOTH hockey and ice hockey — home's half carries HOME's goals (kills a side swap)", () => {
+    for (const sport of SPORTS) {
+      const cfg = periodCfg(sport.module);
+      const e = eventTypesOf(sport.spec);
+      const state = livePhaseState(sport, cfg, [
+        [e.goal, { by: "H" }],
+        [e.goal, { by: "H" }],
+        [e.goal, { by: "A" }],
+      ]);
+      const bug = sport.factory(T).scorebug(viewFor(sport, cfg, state));
+      const home = bug.halves.find((h) => h.side === "home");
+      const away = bug.halves.find((h) => h.side === "away");
+      expect(home?.big, sport.key).toBe("2");
+      expect(away?.big, sport.key).toBe("1");
+    }
+  });
+
   it("an UNDECIDED shoot-out credits nothing — the pad and the fold still agree mid-attempt", () => {
     // `officialScore` is gated on the DECIDED outcome, so the pad must not run
     // ahead of it. This is the case the wave's original test covered, kept so

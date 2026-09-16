@@ -98,6 +98,23 @@ describe("compareSpecials", () => {
     expect(r.failures[0]).toMatchObject({ claim: "state.superOver.winner", actual: "(absent)" });
   });
 
+  it("R64 — phase equality is EXACT: a signed-off 'final' never satisfies a claim of 'done'", () => {
+    const signedOff = compareSpecials(
+      [special([{ on: "state", path: "phase", equals: "done" }])],
+      subject({ state: { phase: "final" } }),
+    );
+    expect(signedOff.checked).toBe(1);
+    expect(signedOff.failures).toEqual([
+      { fixtureExtKey: "rr-r3-c1", claim: "state.phase", expected: "done", actual: "final" },
+    ]);
+
+    const decided = compareSpecials(
+      [special([{ on: "state", path: "phase", equals: "done" }])],
+      subject({ state: { phase: "done" } }),
+    );
+    expect(decided.failures).toEqual([]);
+  });
+
   it("fails a standings claim on the cell, naming the entrant and field", () => {
     const r = compareSpecials(
       [special([{ on: "standings", entrant: "id-bravo", field: "won", equals: 1 }])],

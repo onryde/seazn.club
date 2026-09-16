@@ -329,6 +329,7 @@ function buildHalf(view: PadHostView, state: BoardgameStateShape, side: Side, t:
   const winnerPerson = state.players?.[side];
   return {
     who,
+    side,
     big: bigOf(view, state, side),
     tappable,
     ...(tappable

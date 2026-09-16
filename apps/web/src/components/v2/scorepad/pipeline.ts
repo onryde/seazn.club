@@ -77,19 +77,54 @@ function sameIdentityField(a: string | null | undefined, b: string | null | unde
  * Three outcomes, matching the S10 acceptance criteria exactly:
  *  - no slot at all → indeterminate. NEVER renegotiate on a guess — that is
  *    the duplicate bug this ruling exists to prevent.
- *  - slot's type/payload/recorded_by/device_link_id all match ours →
- *    already-applied. Our own retried request landed; drop it.
- *  - slot is foreign (any of those four differ) → renegotiate, but only if
- *    a currentSeq is actually available; otherwise indeterminate too.
+ *  - slot's type/payload/recorded_by/device_link_id all match ours, AND
+ *    `event.attempts > 0` → already-applied. Our own RETRIED request
+ *    landed; drop it.
+ *  - anything else (a foreign slot, OR a content-matching slot on an
+ *    event's FIRST attempt) → renegotiate, but only if a currentSeq is
+ *    actually available; otherwise indeterminate too.
+ *
+ * Task 10 fix round 3 (B07a, ruling R65/R67) — the `event.attempts > 0` gate
+ * is the fix itself. Before it, a content-match ALONE meant "already
+ * applied", which is unsound: two DIFFERENT, legitimately identical events
+ * from the same device (e.g. a scorer awarding the same entrant the same
+ * single point twice in a row) are indistinguishable from a genuine retry by
+ * content alone, and the second one landed on a 409 was being silently and
+ * permanently dropped — proven live-mechanism by
+ * `__tests__/pipeline.test.ts`'s "F2/R63" describe block. `attempts` is
+ * exactly "this SAME queued event was sent before, in ANY process", so
+ * gating on it says "already-applied" only for an event's own recognized
+ * retry, never for a fresh send that merely happens to look like something
+ * already on the ledger. A fresh send whose content collides with an
+ * existing row now renegotiates at the current seq (or stays indeterminate
+ * with no currentSeq) — the SAME fallback an outright-foreign slot already
+ * used, so this changes no other branch's behaviour.
+ *
+ * Task 10 fix round 4 (R68, review finding C1) — the round-3 gate above is
+ * unchanged, but round 3 only ever wrote `attempts` to the store AFTER an
+ * OBSERVED failure (`sendOne`'s network-error/indeterminate/conflict-again
+ * branches). A send whose response is never observed at all — the tab dies
+ * mid-flight, `transport.ts` has no client-side timeout — left `attempts` at
+ * its PRE-send value forever, so a resend that lands on the server's Redis
+ * replay-cache-miss path 409ed against its own already-landed row while
+ * this function still read `attempts === 0`: misread as fresh, renegotiated,
+ * duplicated. `sendOne` below now persists a marker to the store BEFORE
+ * every physical send attempt, not only after a failure — but this function
+ * keeps judging the value AS LOADED at the start of the CURRENT send
+ * (`sendOne` normalises and hands it in explicitly), never the value that
+ * call's own marker just wrote, so a genuinely first-ever send still reads
+ * 0 here and still renegotiates (F2 stays fixed) while a resumed send reads
+ * whatever an EARLIER call already marked.
  */
 export function resolveConflict(
-  event: Pick<PendingEvent, "type" | "payload">,
+  event: Pick<PendingEvent, "type" | "payload" | "attempts">,
   slot: LedgerSlotEvent | null,
   identity: OwnIdentity,
   currentSeq: number | null,
 ): ConflictResolution {
   if (slot === null) return { kind: "indeterminate" };
   const isOurs =
+    event.attempts > 0 &&
     slot.type === event.type &&
     deepEqual(slot.payload, event.payload) &&
     sameIdentityField(slot.recorded_by, identity.recordedBy) &&
@@ -208,6 +243,32 @@ export async function sendOne(
 ): Promise<SendOutcome> {
   const base = { localId: event.localId, idempotencyKey: event.idempotencyKey };
 
+  // The value AS LOADED, at the very start of this call — captured into its
+  // own variable BEFORE the pre-send marker write below touches the store,
+  // so every use of it in this function (including the `resolveConflict`
+  // call after a 409) reflects "how many sends this event has ever had
+  // attempted, across every PROCESS, before this one" rather than anything
+  // this call itself does. `?? 0` is defensive, not a real migration path:
+  // `attempts` has been a required `PendingEvent` field since this
+  // chassis's first commit (S10/#419), so no persisted record should ever
+  // lack it — but a value that somehow reads `undefined` must still heal to
+  // a real number (never `NaN`, which `undefined + 1` would otherwise
+  // poison the store with forever) and must still fail on the SAFE side of
+  // the gate below: NOT already-sent, same as a genuine attempts:0.
+  const attemptsAsLoaded = event.attempts ?? 0;
+
+  // Pre-send marker (Task 10 fix round 4, ruling R68, review finding C1) —
+  // persisted to the store BEFORE the network call, unconditionally, on
+  // EVERY physical send attempt, not only after an observed failure (which
+  // is all round 3 did). This is the fix itself: it durably records "a send
+  // of this event was attempted" even if the tab dies mid-flight and no
+  // local failure is ever observed — see this file's header and
+  // `resolveConflict`'s own doc for the exact gap this closes. Reusing
+  // `attempts` (rather than a new field) means an old-shape persisted queue
+  // needs no migration: the field, and this exact write path's callers,
+  // already existed; only WHEN the first write happens has moved earlier.
+  await recordAttempt(store, event.idempotencyKey, { attempts: attemptsAsLoaded + 1 });
+
   // The ORIGINAL expected_seq and idempotency_key, exactly as persisted —
   // never recomputed here. This is the replay ruling's load-bearing line.
   const first = await transport.appendEvent(fixtureId, toRequestBody(event));
@@ -221,14 +282,19 @@ export async function sendOne(
     return { kind: "rejected", ...base, code: first.code, message: first.message }; // …but surfaced here
   }
   if (first.kind === "network-error") {
-    await recordAttempt(store, event.idempotencyKey, { attempts: event.attempts + 1, lastError: first.message });
+    await recordAttempt(store, event.idempotencyKey, { attempts: attemptsAsLoaded + 1, lastError: first.message });
     return { kind: "stayed-queued", ...base, reason: "network" };
   }
 
   // first.kind === "conflict" — inspect the ledger slot before doing anything else.
   const slot = await findLedgerSlot(transport, fixtureId, event.expectedSeq);
   const currentSeq = await resolveCurrentSeq(transport, fixtureId, first.currentSeq);
-  const resolution = resolveConflict(event, slot, identity, currentSeq);
+  // `attemptsAsLoaded`, NEVER the value the marker write above just
+  // persisted — see this function's own comment on that variable, and
+  // resolveConflict's doc, for why judging the pre-call value is what keeps
+  // F2 (a genuinely first-ever send) renegotiating instead of misreading
+  // its own just-written marker as proof of a prior attempt.
+  const resolution = resolveConflict({ ...event, attempts: attemptsAsLoaded }, slot, identity, currentSeq);
 
   if (resolution.kind === "already-applied") {
     await markDropped(store, event.idempotencyKey);
@@ -236,7 +302,7 @@ export async function sendOne(
   }
   if (resolution.kind === "indeterminate") {
     await recordAttempt(store, event.idempotencyKey, {
-      attempts: event.attempts + 1,
+      attempts: attemptsAsLoaded + 1,
       lastError: "409 conflict: ledger slot unreadable or not yet present",
     });
     return { kind: "stayed-queued", ...base, reason: "indeterminate" };
@@ -261,7 +327,7 @@ export async function sendOne(
   // durably persisted, so the NEXT drain pass retries from there, never from
   // the stale original.
   await recordAttempt(store, event.idempotencyKey, {
-    attempts: event.attempts + 1,
+    attempts: attemptsAsLoaded + 1,
     lastError: second.kind === "conflict" ? "conflict again after renegotiation" : second.message,
   });
   return { kind: "stayed-queued", ...base, reason: second.kind === "conflict" ? "conflict-again" : "network" };

@@ -10,12 +10,15 @@
 // repeatable `--suite` flag plus several string/boolean options; it is a
 // Node builtin, so this adds no new dependency.
 import { execFile } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, promisify } from "node:util";
 import { createRealPreflightProbes, runPreflight, type PreflightResult } from "./lib/env.ts";
 import { log, suiteLogger } from "./lib/log.ts";
 import { gateOf, resolveRunId, writeReport, type BenchReport, type SuiteReport } from "./lib/report.ts";
 import { lookupSuite, suiteKeys } from "./lib/suites/registry.ts";
+import type { SuiteDefinition } from "./lib/suites/types.ts";
 import { createRealPlanSql, type PlanSql } from "./lib/plan.ts";
 import type { SeedTransport } from "./lib/seed.ts";
 import type { ProbeTransport } from "./lib/dls-gate.ts";
@@ -49,6 +52,56 @@ export interface BenchConfig {
   base: string;
   runId?: string;
   entry?: CliEntryFlag;
+  /** R86 (owner: "watch the bench play a match") — OFF unless `--record-video`
+   *  was passed at all. `dir` is set only when the flag carried an explicit
+   *  value; a bare `--record-video` means "on, default directory" — see
+   *  `resolveCaptureDirs`. */
+  recordVideo?: { readonly dir?: string };
+  /** Same shape as `recordVideo`, for `--trace` — troubleshooting, per the
+   *  owner's own framing ("you can use trace for troubleshooting"). */
+  trace?: { readonly dir?: string };
+}
+
+interface OptionalValueFlag {
+  readonly present: boolean;
+  readonly value?: string;
+}
+
+/**
+ * Node's `parseArgs` options are either boolean (never a value) or string
+ * (a value is REQUIRED) — there is no "boolean flag that may also carry a
+ * value" shape, and `--record-video`/`--trace` need exactly that (bare =
+ * default directory, valued = an explicit one, per R86). Both flags are
+ * pulled out of `argv` HERE, before `parseArgs` (below) ever sees them, so
+ * `strict: true` never has to know either one exists — accepts
+ * `--name`, `--name value`, and `--name=value`; a bare flag immediately
+ * followed by another `-`-leading flag is bare, never swallows the next
+ * flag as its own value.
+ */
+function extractOptionalValueFlag(argv: readonly string[], name: string): { flag: OptionalValueFlag; rest: string[] } {
+  const rest: string[] = [];
+  let flag: OptionalValueFlag = { present: false };
+  const eqPrefix = `--${name}=`;
+  const bare = `--${name}`;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith(eqPrefix)) {
+      flag = { present: true, value: arg.slice(eqPrefix.length) };
+      continue;
+    }
+    if (arg === bare) {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        flag = { present: true, value: next };
+        i += 1;
+      } else {
+        flag = { present: true };
+      }
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { flag, rest };
 }
 
 /**
@@ -63,8 +116,15 @@ export interface BenchConfig {
  * against in practice.
  */
 export function parseCliArgs(argv: string[]): BenchConfig {
+  // Pulled out BEFORE node's own strict parseArgs — see
+  // `extractOptionalValueFlag`'s doc comment. Order between the two
+  // extractions does not matter: each only removes its own flag (and, for a
+  // valued bare form, the token right after it) from what it hands the next
+  // stage.
+  const { flag: recordVideoFlag, rest: afterRecordVideo } = extractOptionalValueFlag(argv, "record-video");
+  const { flag: traceFlag, rest: afterTrace } = extractOptionalValueFlag(afterRecordVideo, "trace");
   const { values } = parseArgs({
-    args: argv,
+    args: afterTrace,
     options: {
       suite: { type: "string", multiple: true, default: [] },
       engine: { type: "string", default: "optimized" },
@@ -140,12 +200,70 @@ export function parseCliArgs(argv: string[]): BenchConfig {
     base,
     ...(values.entry === undefined ? {} : { entry: values.entry as CliEntryFlag }),
     runId: values["run-id"],
+    ...(recordVideoFlag.present
+      ? { recordVideo: recordVideoFlag.value === undefined ? {} : { dir: recordVideoFlag.value } }
+      : {}),
+    ...(traceFlag.present ? { trace: traceFlag.value === undefined ? {} : { dir: traceFlag.value } } : {}),
+  };
+}
+
+export interface ResolvedCaptureDirs {
+  readonly recordVideoDir?: string;
+  readonly traceDir?: string;
+}
+
+/**
+ * R86 — `--record-video`/`--trace` are OFF unless the CLI flag was present at
+ * all (`resolveCaptureDirs` output has no key for a flag that was never
+ * given — never a present-but-undefined one). When present without an
+ * explicit directory, default under THIS run's own `<report-dir>/<run-id>/`
+ * so two concurrent legs (the live two-leg protocol, `--engine optimized`
+ * then `--engine greedy` against the same pack) never share one directory
+ * and clobber each other's files.
+ *
+ * `runId` is the SAME resolved identity `writeReport`/`runSuite`'s own
+ * `runId` parameter use — `resolveRunId(config.runId, gitSha)`, already
+ * computed once by `main()` — never re-derived here, for the same "one
+ * identity, one resolution point" reason `runSuite`'s `runId` parameter is
+ * threaded explicitly rather than read off `config.runId` (which is usually
+ * undefined).
+ */
+export function resolveCaptureDirs(config: BenchConfig, runId: string): ResolvedCaptureDirs {
+  return {
+    ...(config.recordVideo === undefined
+      ? {}
+      : { recordVideoDir: config.recordVideo.dir ?? path.join(config.reportDir, runId, "video") }),
+    ...(config.trace === undefined ? {} : { traceDir: config.trace.dir ?? path.join(config.reportDir, runId, "trace") }),
   };
 }
 
 async function gitSha(): Promise<string> {
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"]);
   return stdout.trim();
+}
+
+/**
+ * B07a T7 fix round 1 (I1) — the ONE line that turns a resolved registry row
+ * into a call to its own `run`, forwarding the row's OWN `play` declaration.
+ * Before this existed, `runSuite` called `definition.run({...})` directly and
+ * never read `definition.play` at all: a suite could declare
+ * `play: { "d-tiny": "tap" }` on its registry row and the declaration would
+ * sit there, typed and unit-green, with zero readers — silently reproducing
+ * today's positional write path no matter what the row said.
+ *
+ * Exported (rather than left as a private call inside `runSuite`) so a test
+ * can drive this exact forwarding line with an INJECTED `SuiteDefinition`
+ * that declares `play`, without mutating the real `SUITE_REGISTRY` — every
+ * real row leaves `play` undeclared today (Task 10 is the first to add one,
+ * to `_tiny` alone), so a test that only ever calls `runSuite("_tiny", ...)`
+ * against the real registry can never observe a NON-undefined `play` being
+ * forwarded or dropped.
+ */
+export function invokeSuiteDefinition(
+  definition: SuiteDefinition,
+  input: Parameters<SuiteDefinition["run"]>[0],
+): ReturnType<SuiteDefinition["run"]> {
+  return definition.run(input, definition.play);
 }
 
 /**
@@ -176,12 +294,18 @@ export async function runSuite(
   sql: PlanSql,
   transport?: SeedTransport,
   probeTransport?: ProbeTransport,
+  /** R86 — ALREADY resolved+namespaced by run-id (`resolveCaptureDirs`,
+   *  called once by `main()`), same "one identity, one resolution point"
+   *  reason `runId` above is a parameter rather than read off
+   *  `config.recordVideo`/`config.trace` directly. */
+  recordVideoDir?: string,
+  traceDir?: string,
 ): Promise<SuiteReport> {
   const definition = lookupSuite(key);
   if (definition === undefined) {
     throw new Error(`unknown suite "${key}" — known suites: ${suiteKeys().join(", ")}`);
   }
-  return definition.run({
+  return invokeSuiteDefinition(definition, {
     base: config.base,
     /* B04: `--engine` is an ASSERTION, not a selector (design §2.1/§1.1 —
      * `AutoScheduleRequest` has no engine field, so nothing in the product
@@ -211,6 +335,8 @@ export async function runSuite(
     ...(config.entry === undefined ? {} : { cliEntry: config.entry }),
     ...(transport === undefined ? {} : { transport }),
     ...(probeTransport === undefined ? {} : { probeTransport }),
+    ...(recordVideoDir === undefined ? {} : { recordVideoDir }),
+    ...(traceDir === undefined ? {} : { traceDir }),
   });
 }
 
@@ -220,6 +346,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   log.info({ suites: config.suites, engine: config.engine, keep: config.keep, base: config.base }, "bench_started");
 
   const runId = resolveRunId(config.runId, await gitSha());
+
+  // R86 — resolved ONCE, right alongside runId (the identity it is
+  // namespaced by), then threaded explicitly the rest of the way down;
+  // never re-derived, and never read from an env var inside the tap seam.
+  // Off means off: neither directory is created when its flag was never
+  // given.
+  const capture = resolveCaptureDirs(config, runId);
+  if (capture.recordVideoDir !== undefined) await mkdir(capture.recordVideoDir, { recursive: true });
+  if (capture.traceDir !== undefined) await mkdir(capture.traceDir, { recursive: true });
 
   const { probes, dispose } = createRealPreflightProbes();
   let preflight: PreflightResult;
@@ -256,7 +391,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const suites: SuiteReport[] = [];
   try {
     for (const key of config.suites) {
-      const result = await runSuite(key, config, runId, planSql);
+      const result = await runSuite(key, config, runId, planSql, undefined, undefined, capture.recordVideoDir, capture.traceDir);
       suites.push(result);
       log.info({ suite: key, gate: result.gate }, "suite_completed");
     }

@@ -8,6 +8,7 @@
 import { fileURLToPath } from "node:url";
 import type { SuiteReport } from "../report.ts";
 import { runPackSuite, type PackSuiteInput } from "./run-suite.ts";
+import type { PlayDeclaration } from "./types.ts";
 
 /** Resolved from THIS module rather than from the process cwd — the bench runs
  *  from the repo root via `npm run bench:scheduler` and from a worktree root
@@ -18,7 +19,17 @@ export const SUITE11_PACK_PATH = fileURLToPath(new URL("../../packs/suite11.json
 /** Both `suiteKey` and `packPath` are passed explicitly. The runner refuses to
  *  guess a missing `packPath` — it used to default to `_tiny`'s, which meant a
  *  suite that forgot to pass one folded the proof pack while reporting under
- *  its own name (B06a finding 3). */
-export async function runSuite11(input: PackSuiteInput): Promise<SuiteReport> {
-  return await runPackSuite(input, { suiteKey: "suite11", packPath: SUITE11_PACK_PATH });
+ *  its own name (B06a finding 3).
+ *
+ *  `play` (B07a T7 fix round 1, I1) — see `runTinySuite`'s own doc comment
+ *  for why this is a parameter rather than something read off the row. */
+export async function runSuite11(
+  input: PackSuiteInput,
+  play?: PlayDeclaration["play"],
+): Promise<SuiteReport> {
+  return await runPackSuite(input, {
+    suiteKey: "suite11",
+    packPath: SUITE11_PACK_PATH,
+    ...(play === undefined ? {} : { play }),
+  });
 }

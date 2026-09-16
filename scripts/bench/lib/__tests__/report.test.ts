@@ -1,7 +1,9 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import pino from "pino";
 import { afterEach, describe, expect, it } from "vitest";
+import { PackSchema } from "../pack-schema.ts";
 import {
   BenchReport,
   gateOf,
@@ -13,6 +15,8 @@ import {
   type DivisionScheduleReport,
   type RegistrationDivisionReport,
 } from "../report.ts";
+import { runPackSuite } from "../suites/run-suite.ts";
+import { TINY_PACK_PATH } from "../suites/tiny.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -422,6 +426,107 @@ describe("B06a T7 — news", () => {
     const { news: _dropped, ...suiteWithoutNews } = base.suites[0] as BenchReportType["suites"][number];
     const md = renderMarkdown({ ...base, suites: [suiteWithoutNews] });
     expect(md.split("\n").some((l) => l.includes("News:"))).toBe(false);
+  });
+});
+
+describe("B07a T10 — tap play", () => {
+  it("renders matches, taps, wall time and observations, marked report-only", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          tapPlay: { matches: 4, taps: 17, wallMs: 5230, observations: 2 },
+        },
+      ],
+    });
+    const line = md.split("\n").find((l) => l.includes("Tap play:"));
+    expect(line).toContain("4 matches, 17 taps, 5230ms wall, 2 driver observations (report-only)");
+  });
+
+  it("omits the line for a run that tapped nothing", () => {
+    const base = fullReport();
+    const { tapPlay: _dropped, ...suiteWithoutTaps } = base.suites[0] as BenchReportType["suites"][number];
+    const md = renderMarkdown({ ...base, suites: [suiteWithoutTaps] });
+    expect(md.split("\n").some((l) => l.includes("Tap play:"))).toBe(false);
+  });
+
+  it("the report schema carries tapPlay through, and refuses a fractional tap count", () => {
+    const base = fullReport();
+    const suite = base.suites[0] as BenchReportType["suites"][number];
+    const withTaps = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 5, wallMs: 12.5, observations: 0 } }] };
+    const parsed = BenchReport.parse(withTaps);
+    expect(parsed.suites[0]?.tapPlay).toEqual({ matches: 1, taps: 5, wallMs: 12.5, observations: 0 });
+    const fractional = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 1.5, wallMs: 1, observations: 0 } }] };
+    expect(BenchReport.safeParse(fractional).success).toBe(false);
+  });
+});
+
+// R86 (owner: "watch the bench play a match", trace "for troubleshooting") —
+// the report is where a human FINDS the video without hunting through
+// bench-report/ for a hash-named file, so the paths themselves have to be
+// IN it, not just measured.
+describe("R86 — video/trace capture in the report", () => {
+  it("lists the video and trace paths under Tap play, only when capture was on", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [
+        {
+          ...(base.suites[0] as BenchReportType["suites"][number]),
+          tapPlay: {
+            matches: 1,
+            taps: 3,
+            wallMs: 100,
+            observations: 0,
+            videoPaths: ["bench-report/run-x/video/d-tiny-rr-r1-c1.webm", "bench-report/run-x/video/organiser.webm"],
+            tracePaths: ["bench-report/run-x/trace/d-tiny-rr-r1-c1.zip", "bench-report/run-x/trace/organiser.zip"],
+          },
+        },
+      ],
+    });
+    const lines = md.split("\n");
+    const videoLine = lines.find((l) => l.includes("Videos:"));
+    const traceLine = lines.find((l) => l.includes("Traces:"));
+    expect(videoLine).toContain("bench-report/run-x/video/d-tiny-rr-r1-c1.webm");
+    expect(videoLine).toContain("bench-report/run-x/video/organiser.webm");
+    expect(traceLine).toContain("bench-report/run-x/trace/d-tiny-rr-r1-c1.zip");
+    expect(traceLine).toContain("bench-report/run-x/trace/organiser.zip");
+  });
+
+  it("omits Videos/Traces lines entirely when capture was off", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: [{ ...(base.suites[0] as BenchReportType["suites"][number]), tapPlay: { matches: 1, taps: 3, wallMs: 100, observations: 0 } }],
+    });
+    expect(md.split("\n").some((l) => l.includes("Videos:"))).toBe(false);
+    expect(md.split("\n").some((l) => l.includes("Traces:"))).toBe(false);
+  });
+
+  it("the schema carries videoPaths/tracePaths through, absent by default", () => {
+    const base = fullReport();
+    const suite = base.suites[0] as BenchReportType["suites"][number];
+    const withCapture = {
+      ...base,
+      suites: [
+        {
+          ...suite,
+          tapPlay: { matches: 1, taps: 1, wallMs: 1, observations: 0, videoPaths: ["a.webm"], tracePaths: ["a.zip"] },
+        },
+      ],
+    };
+    expect(BenchReport.parse(withCapture).suites[0]?.tapPlay).toEqual({
+      matches: 1,
+      taps: 1,
+      wallMs: 1,
+      observations: 0,
+      videoPaths: ["a.webm"],
+      tracePaths: ["a.zip"],
+    });
+    const withoutCapture = { ...base, suites: [{ ...suite, tapPlay: { matches: 1, taps: 1, wallMs: 1, observations: 0 } }] };
+    expect(BenchReport.parse(withoutCapture).suites[0]?.tapPlay?.videoPaths).toBeUndefined();
   });
 });
 
@@ -1167,5 +1272,156 @@ describe("renderMarkdown — the cross-division court gate (F-T6-3)", () => {
 
   it("renders NOTHING for a report that scheduled nothing", () => {
     expect(renderMarkdown(fullReport())).not.toContain("Cross-division court occupancy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T3 — adaptations: how much of a pack was RESHAPED
+//
+// `provenancePct` says how much of a pack was GENERATED rather than observed.
+// This says how much of reality was RESHAPED to fit the product's model —
+// design §7A's per-pack list, in prose a human can audit. The field has been
+// declared since B01 (`report.ts`'s `SuiteReport.adaptations`) with no writer
+// and no renderer, so every report before this one carried it undefined, and
+// a thin-data pack's honesty claim rests on both halves being visible.
+// ---------------------------------------------------------------------------
+
+/** `undefined` is a DISTINCT case from `[]` here and both are tested: a
+ *  pre-B07a report never had the field, a pack that reshaped nothing has it
+ *  empty, and the two must not render alike. */
+function reportWithAdaptations(adaptations: readonly string[] | undefined): BenchReportType {
+  const base = fullReport();
+  const suite = { ...(base.suites[0] as BenchReportType["suites"][number]) };
+  if (adaptations === undefined) {
+    const { adaptations: _dropped, ...withoutAdaptations } = suite;
+    return { ...base, suites: [withoutAdaptations] };
+  }
+  return { ...base, suites: [{ ...suite, adaptations: [...adaptations] }] };
+}
+
+describe("renderMarkdown — adaptations (B07a T3)", () => {
+  it("states the count and lists each adaptation", () => {
+    const md = renderMarkdown(
+      reportWithAdaptations([
+        "team and doubles events dropped: the product models no team tie",
+        "8 boards in every round: maxBoards cannot vary by stage",
+      ]),
+    );
+    expect(md).toContain("2 adaptations");
+    // The count alone is an aggregate nobody can audit, and §7A's requirement
+    // is the prose beside it — a bare "2" cannot be told apart from a pack
+    // that reshaped two trivia from one that reshaped its whole draw.
+    expect(md).toContain("the product models no team tie");
+    expect(md).toContain("maxBoards cannot vary by stage");
+  });
+
+  it("says so plainly when a pack reshaped nothing", () => {
+    // Stated, never silent. A pack that reshaped nothing and a pack whose
+    // adaptations were dropped somewhere between the pack file and the report
+    // render IDENTICALLY as an absent line, and only one of them is honest.
+    const md = renderMarkdown(reportWithAdaptations([]));
+    expect(md).toContain("0 adaptations");
+    // The empty case has its OWN sentence, and this is what witnesses that
+    // branch: a single shared line would satisfy "0 adaptations" above while
+    // trailing a colon and an empty list.
+    expect(md).toContain("this pack reshaped nothing");
+  });
+
+  it("omits the line for a report written before anything wrote the field", () => {
+    // The guard's other side: a pre-B07a report has nothing to say here, and
+    // rendering "0 adaptations" for it would assert a fact that run never
+    // measured. Delete the `!== undefined` guard and this reds.
+    const md = renderMarkdown(reportWithAdaptations(undefined));
+    expect(md.split("\n").some((l) => l.includes("Adaptations"))).toBe(false);
+  });
+});
+
+describe("the adaptations seam — the runner's own output, never a hand-built row (B07a T3)", () => {
+  it("carries every adaptation the pack declares through the runner into the rendered report", async () => {
+    // The REAL producer (`runPackSuite`, reading the real pack off disk) into
+    // the REAL consumer (`renderMarkdown`). A fixture on both ends would only
+    // prove the fixture: the report's `adaptations` is written by a return
+    // literal that nothing types against `PackMeta`, so a field never mapped
+    // there is unit-green and inert on a live run.
+    //
+    // The expected list is derived from the PACK, never typed in here, so
+    // editing `_tiny`'s adaptations moves this test with it instead of
+    // leaving it asserting yesterday's list.
+    const declared = PackSchema.parse(
+      JSON.parse(await readFile(TINY_PACK_PATH, "utf8")),
+    ).meta.adaptations;
+    // Vacuity guard: a pack that declared none would satisfy every assertion
+    // below without the seam existing at all.
+    expect(declared.length).toBeGreaterThan(0);
+
+    // The run itself FAILS — there is no server at this base — and that is
+    // irrelevant to what is asserted: stage 0 loads the pack before any
+    // transport, and a red run's report carries its adaptations exactly as a
+    // green one does. (`run-suite.test.ts` uses this same no-server shape.)
+    const report = await runPackSuite(
+      {
+        base: "http://bench.example",
+        engine: "optimized" as const,
+        keep: false,
+        log: pino({ level: "silent" }),
+      } as Parameters<typeof runPackSuite>[0],
+      { suiteKey: "_probe", packPath: TINY_PACK_PATH },
+    );
+    expect(report.adaptations ?? []).toHaveLength(declared.length);
+
+    const md = renderMarkdown({ ...fullReport(), suites: [report] });
+    expect(md).toContain(`${declared.length} adaptations`);
+    // Every declared reshaping, not merely the count and not merely the first.
+    for (const a of declared) {
+      expect(md, `report.md is missing the adaptation "${a.what.slice(0, 40)}…"`).toContain(a.what);
+      // BOTH halves of `PackAdaptation`'s required pair. A writer that mapped
+      // `what` alone satisfies every assertion above, and "what" with no
+      // "why" is precisely the unreviewable list the schema's two required
+      // fields exist to forbid.
+      expect(md, `report.md is missing that adaptation's WHY`).toContain(a.why);
+      // …and the locator when the pack declared one: an adaptation a reader
+      // cannot find in the pack is one they cannot audit.
+      if (a.where !== undefined) {
+        expect(md, `report.md is missing that adaptation's WHERE`).toContain(a.where);
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T3 — the certificate ROW, not its heading
+//
+// The regression guard for the branch a thin-data pack depends on: a division
+// that declares no `historicalAssignment` certifies as SKIPPED_NO_HISTORY and
+// is NOT red. Today's only other assertion on this branch checks that the
+// "## Feasibility certificate" HEADING is present, which is satisfied by any
+// row at all — including a red one.
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — the certificate row itself (B07a T3)", () => {
+  it("renders a division with no history as SKIPPED_NO_HISTORY, not red", () => {
+    const base = fullReport();
+    const md = renderMarkdown({
+      ...base,
+      suites: base.suites.map((s) => ({
+        ...s,
+        suite: "suite10",
+        scheduling: [
+          divisionSchedule({
+            divisionRef: "d-mens",
+            certificate: {
+              branch: "SKIPPED_NO_HISTORY",
+              reason: "the division declares no historicalAssignment",
+              red: false,
+              violations: [],
+            },
+          }),
+        ],
+      })),
+    });
+    // The whole row, in column order: branch AND redness in their own cells,
+    // so "absent by design" cannot be read as, or mutated into, a failure.
+    expect(md).toContain("| suite10 | d-mens | `SKIPPED_NO_HISTORY` | no |");
+    expect(md).toContain("the division declares no historicalAssignment");
   });
 });

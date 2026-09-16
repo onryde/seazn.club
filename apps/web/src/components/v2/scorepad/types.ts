@@ -33,7 +33,26 @@ export interface PendingEvent {
   expectedSeq: number;
   /** ISO instant this event was enqueued. */
   createdAt: string;
-  /** Send attempts so far, including the original. */
+  /** Count of physical send attempts made for this event so far, including
+   *  the current one — written as a durable marker to the store BEFORE
+   *  each call to the transport (pipeline.ts `sendOne`), not only after an
+   *  observed failure. That "before, always" write is what makes this a
+   *  reliable "has this event EVER been sent before, in ANY process"
+   *  signal even across a crash that observes no outcome at all (tab
+   *  death mid-flight, no client timeout — see transport.ts): a value read
+   *  back as `0` means a genuinely first-ever send, and anything `> 0`
+   *  means some earlier call — this process or a dead one — already
+   *  attempted it, whether or not that attempt's outcome was ever seen.
+   *  `resolveConflict` (pipeline.ts) gates its 409 "already-applied"
+   *  verdict on exactly this value AS LOADED at the start of the current
+   *  send: Task 10 fix round 4 (B07a, ruling R68, review finding C1) fixed
+   *  a duplicate-write regression that came from writing this counter only
+   *  on an OBSERVED failure, which left it at `0` forever for a send whose
+   *  response was never read back even though the write had actually
+   *  landed. A byte-identical event can still legitimately be a SEPARATE,
+   *  distinct action rather than a retry of this one (F2/R63) — that is
+   *  exactly why a first-ever send (`0`) must still renegotiate on a
+   *  content-matching 409 instead of assuming it is its own retry. */
   attempts: number;
   /** The most recent send failure, if any (network failure, or a 409 whose
    *  ledger slot could not be read/resolved). Absent once a send attempt has

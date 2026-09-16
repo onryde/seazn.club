@@ -17,15 +17,43 @@
 // `conflictAt` knob on `raw()` so one test can prove a refusal actually
 // reaches `report.errors`/`report.gate`, not just `simulate.ts`'s own unit
 // suite (which already covers the fold logic exhaustively).
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import type { RawResult, Session } from "../http.ts";
 import type { ProbeTransport } from "../dls-gate.ts";
 import type { PlanEntitlementRow, PlanSql } from "../plan.ts";
 import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
+// B07a T7 — most of the play-mode tests below drive `runPackSuite` DIRECTLY
+// rather than `runTinySuite`, so a declaration can be handed straight to the
+// runner's own options without needing a real registry row. (Fix round 1
+// gave `runTinySuite` its own `play` parameter — see the "fix round 1"
+// describe block further down, which drives `runTinySuite` itself.)
+import { registrationDivisionsOf, runPackSuite, type PackSuiteInput } from "../suites/run-suite.ts";
+// Fix round 1 (review check 2) — loads the real, schema-validated `Pack` so
+// the seeded-stage-count regression test below can derive its expected
+// number from `pack.divisions`/`registrationDivisionsOf` (the SAME selector
+// `run-suite.ts`'s own `seedPlan` filter uses), never a literal.
+import { loadPackValue } from "../pack-io.ts";
+import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
+// B07a T7 fix round 1 (I1) — the seam `bench.ts`'s own `runSuite` calls to
+// forward a registry row's `play` into its `.run()`. Imported here (rather
+// than mutating `SUITE_REGISTRY`, which the ruling forbids in a test) so a
+// hand-built `SuiteDefinition` can drive the SAME line production uses.
+//
+// B07a T7 fix round 2 (I1(b)/(c)) — `runSuite`/`parseCliArgs` drive the REAL
+// exported entry point (not the extracted `invokeSuiteDefinition` helper
+// alone), against the REAL registry row (see the `vi.mock` below).
+import { invokeSuiteDefinition, parseCliArgs, runSuite } from "../../bench.ts";
+// Minors row 29 — imported directly (not just mocked below) so the guard
+// test at the bottom of this file can read what the MOCKED `lookupSuite`
+// actually returns for `_tiny` after a prior test's `injectedPlay`, proving
+// the `afterEach` at `:127-130` really resets it rather than leaking it into
+// every later lookup in this file's run.
+import { lookupSuite } from "../suites/registry.ts";
 import { makeScheduleWorld } from "./_schedule-routes.ts";
 import { makeDivisionPhaseWorld } from "./_division-phase.ts";
 import { makeAdvanceRoutesWorld } from "./_advance-routes.ts";
@@ -45,6 +73,73 @@ import {
 } from "./_oracle-routes.ts";
 import { roundRobinRoundCount } from "./_roundrobin-rounds.ts";
 import { OracleResult } from "../report.ts";
+
+// B07a T7 fix round 2 (I1(b)/(c)), narrowed in fix round 3 (R34) — mocks
+// ONLY `registry.ts`'s `lookupSuite`, injecting a `play` declaration onto
+// the REAL `_tiny` row returned by `importOriginal()`, while leaving that
+// row's own `run` binding (`registry.ts`'s `run: runTinySuite`) completely
+// untouched underneath a thin test-side wrapper — the spread
+// (`{ ...real, play: injectedPlay!, run: (input, play) => real.run({
+// ...input, ...injectedTransports }, play) }`) is what lets the REAL row's
+// REAL binding execute (the wrapper calls it, with `play` forwarded
+// UNTOUCHED as its own second argument) when `bench.ts`'s
+// `runSuite("_tiny", ...)` resolves it, rather than a test-built fixture
+// (the gap the round-1 re-review found: round 1's own seam test handed
+// `invokeSuiteDefinition` a row it built itself, so `registry.ts`'s actual
+// `run: runTinySuite` binding never ran).
+//
+// R34(a) — round 2 threaded a supplied `probeTransport` into
+// `PackSuiteInput`'s other test-only transport seams from PRODUCTION
+// `bench.ts` code. The re-review's own verified alternative (and the
+// controller's ruling) moves that threading HERE instead: `injectedTransports`
+// is spread into the row's `run` call, never into `bench.ts` itself, so
+// `runSuite`'s production behaviour for `probeTransport` goes back to
+// meaning only "the DLS-gate probe's transport" — Task 10 wires `tap`
+// through this exact path with REAL transports, and a single fake standing
+// in for five seams belongs on the test side, not in front of it.
+//
+// R34(c) — BOTH `injectedPlay` and `injectedTransports` are OPT-IN, read by
+// the mock factory AT CALL TIME (not baked into the factory itself): unset
+// (`undefined`/`{}`), `lookupSuite("_tiny")` returns the row completely
+// unmodified. Before this, EVERY `_tiny` lookup in this file carried
+// `play: { "d-tiny": "tap" }` — a latent trap for any future test in this
+// file that expects a normal `_tiny` run through `runSuite`. Each of the two
+// tests below sets these before calling `runSuite` and `afterEach` resets
+// them, so no other test in this file (there are ~40) is affected — proven
+// by the full-file run in the fix-round-3 report.
+//
+// `suiteKeys()`/`SUITE_REGISTRY` and every other row pass through
+// `...actual` unchanged. Nothing else in this file imports `registry.ts`
+// (directly or transitively — `run-suite.ts`/`tiny.ts`/`suite11.ts` do not
+// import it, only `bench.ts` does), so this mock cannot contaminate any
+// other test in this file.
+let injectedPlay: Record<string, PlayMode> | undefined;
+let injectedTransports: Partial<PackSuiteInput> = {};
+
+vi.mock("../suites/registry.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../suites/registry.ts")>();
+  return {
+    ...actual,
+    lookupSuite: (key: string) => {
+      const real = actual.lookupSuite(key);
+      if (real === undefined) return real;
+      if (key === "_tiny" && injectedPlay !== undefined) {
+        return {
+          ...real,
+          play: injectedPlay,
+          run: (input: PackSuiteInput, play?: Parameters<SuiteDefinition["run"]>[1]) =>
+            real.run({ ...input, ...injectedTransports }, play),
+        };
+      }
+      return real;
+    },
+  };
+});
+
+afterEach(() => {
+  injectedPlay = undefined;
+  injectedTransports = {};
+});
 
 const silent = pino({ level: "silent" });
 
@@ -126,6 +221,36 @@ function fakeServer(
      *  WIRING. Symmetric with `emptyCareerSports`, and equally scoped: the
      *  leaderboard oracle for the same board must still pass. */
     emptyPersonDivisions?: boolean;
+    /** B07a T12 fix round 1 (R73 I1/I2) — override `/generate`'s knockout
+     *  branch's hardcoded single `["se-r0-i0"]` placeholder with an
+     *  arbitrary ext_key list, so a temp-mutated copy of `_tiny.json` (never
+     *  the committed file — `streams`/`expected.matches` gain matching rows
+     *  in the test itself) can drive a genuinely MIXED last stage
+     *  (`se-r{n}-i{i}` alongside a `se-3p` third-place key that never
+     *  matches that pattern — `bracket.ts:220-227`) or a multi-ROUND one
+     *  (3+ distinct rounds) through the REAL wired news step, without
+     *  needing the real single-elim generator's own bracket math: this
+     *  fake's `/generate` never derived home/away from the bracket shape
+     *  anyway (see the comment above), so a caller-supplied ext_key list is
+     *  exactly as honest as the one placeholder it replaces. Scoped
+     *  globally, not per-stage, because `_tiny.json` declares exactly ONE
+     *  knockout stage (`d-tiny`/`s-playoff`) — a second one would need this
+     *  keyed by stageId. */
+    knockoutFixtureExtKeys?: string[];
+    /** Pre-B07b prerequisite P2 — override the round-robin branch's
+     *  hardcoded `rr-r{n}-c1` ext_key scheme for one NAMED table-kind stage
+     *  (`POST /divisions/{id}/stages`'s own `name` field, the same
+     *  discriminator `stageNameById` already uses elsewhere in this fake).
+     *  A two-boundary division needs its own MIDDLE stage to be table-kind
+     *  too (a knockout cannot carry `expected.tables`, the SOURCE side of
+     *  the next boundary — `validate-pack.ts:1693`), and this fake's default
+     *  round-robin generator mints the SAME `rr-r1-c1` for every table-kind
+     *  stage regardless of which one — `PackStream`'s own uniqueness rule is
+     *  per (divisionRef, ext_key), not per stage, so a second table-kind
+     *  stage in the SAME division would collide with the first's stream.
+     *  Unset (default) leaves the `rr-r{n}-c1` scheme exactly as it was;
+     *  every existing test in this file is unaffected. */
+    roundRobinExtKeysByStageName?: Record<string, string[]>;
   } = {},
 ): {
   transport: ProbeTransport;
@@ -441,30 +566,39 @@ function fakeServer(
         // B05 T3 — a knockout `timing:"setup"` progression stage mints ONE
         // TBD placeholder (`se-r0-i0`, `buildSingleElim`'s own id for a
         // 2-slot single-elim bracket), never this fake's round-robin
-        // arithmetic — see `kindByStageId`'s own comment.
+        // arithmetic — see `kindByStageId`'s own comment. B07a T12 fix
+        // round 1: `opts.knockoutFixtureExtKeys` overrides the placeholder
+        // list (see its own doc comment above) — default unchanged.
+        // P2 — a NAMED override for the round-robin scheme, checked before
+        // falling back to the default `rr-r{n}-c1` list (see this knob's own
+        // doc comment above).
+        const roundRobinOverride =
+          opts.roundRobinExtKeysByStageName?.[stageNameById.get(stageId) ?? ""];
         const fixtures =
           kindByStageId.get(stageId) === "knockout"
-            ? [(() => {
+            ? (opts.knockoutFixtureExtKeys ?? ["se-r0-i0"]).map((extKey) => {
                 const id = `fx-${++fixtureCounter}`;
                 if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                fixtureExtKeyById.set(id, "se-r0-i0");
-                return { id, ext_key: "se-r0-i0" };
-              })()]
-            : Array.from(
-                {
-                  length: roundRobinRoundCount(
-                    divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length,
-                    legsByStageId.get(stageId) ?? 1,
-                  ),
-                },
-                (_v, i) => {
-                  const id = `fx-${++fixtureCounter}`;
-                  if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
-                  const extKey = `rr-r${i + 1}-c1`;
-                  fixtureExtKeyById.set(id, extKey);
-                  return { id, ext_key: extKey };
-                },
-              );
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              })
+            : (
+                roundRobinOverride ??
+                Array.from(
+                  {
+                    length: roundRobinRoundCount(
+                      divisionId === undefined ? 0 : schedule.entrantsOfDivision(divisionId).length,
+                      legsByStageId.get(stageId) ?? 1,
+                    ),
+                  },
+                  (_v, i) => `rr-r${i + 1}-c1`,
+                )
+              ).map((extKey) => {
+                const id = `fx-${++fixtureCounter}`;
+                if (divisionId !== undefined) fixtureDivisionId.set(id, divisionId);
+                fixtureExtKeyById.set(id, extKey);
+                return { id, ext_key: extKey };
+              });
         schedule.addFixtures(stageId, fixtures);
         return { fixtures } as unknown as T;
       }
@@ -872,8 +1006,8 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
       // `expected decided, got scheduled` against a product that was correct.
       // Fold everything, then assert. If these three drift back below the
       // per-match rows, that defect is back.
-      "oracle: s-playoff rank crossing (captured vs standings)",
-      "oracle: s-playoff standings rank vs expected.finalRanks",
+      "oracle: d-tiny/s-playoff rank crossing (captured vs standings)",
+      "oracle: d-tiny/s-playoff standings rank vs expected.finalRanks",
       "oracle: d-tiny champion",
       "oracle: d-tiny per-match results",
       "oracle: d-badminton per-match results",
@@ -1316,6 +1450,293 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // Drafting nothing is not a FAILURE — the gate stays green and the run
     // says what it could not prove.
     expect(report.gate).toBe("green");
+  });
+
+  it("B07a T12 — a last-stage key that fails to parse as se-r{n}-i{i} is excluded from publish and named in a warning; nothing parsing reads NO SUBJECT, never a pass or a fail", async () => {
+    // Ruling R70 rule 4, driven through the REAL wired pipeline rather than
+    // only `publishTargets` itself. The single-elim generator ALWAYS emits
+    // `se-r{n}-i{i}` for a knockout bracket (confirmed by hand: renaming
+    // `d-tiny`'s own playoff stream fails `seedSuite`'s pack-to-generated-
+    // fixture binding, since the product's `/generate` call re-derives the
+    // same key the pack must match) — so the only way a real last-stage key
+    // fails to parse is a last stage that is NOT a knockout at all. `d-tiny`
+    // is `division0` by pack order and always has a knockout `s-playoff`
+    // last stage, so this reorders `divisions` in a temp copy to put
+    // `d-badminton` first instead — its one stage is a plain round robin
+    // (one leg, two entrants), whose real generator emits `rr-r1-c1`, which
+    // never matches `se-r{n}-i{i}`. `PackSchema` does not care about
+    // division ORDER (`divisions: z.array(...).min(1)`, no ordering rule),
+    // so this is a legal pack, just a different division sitting first.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      divisions: { ref: string }[];
+    };
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) throw new Error("test fixture assumption broken: d-badminton not found");
+    raw.divisions = [badminton, ...raw.divisions.filter((d) => d.ref !== "d-badminton")];
+
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-"));
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+      const { transport, sql } = fakeServer();
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // Excluded from publish, never silently — a warning names the key.
+      expect(
+        (report.warnings ?? []).some((w) => w.includes("rr-r1-c1") && w.includes("news publish skipped")),
+      ).toBe(true);
+      // Drafting itself still worked (this pack's folds still draft posts) —
+      // only PUBLISHING has no subject, because nothing in the last stage
+      // parsed as se-r{n}-i{i}.
+      const drafted = (report.oracles ?? []).find((o) => o.name === "news: folding drafted posts");
+      expect(drafted).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      // askedFor === 0 (nothing parsed, so nothing to publish) reads
+      // NO SUBJECT — never a pass (it proved nothing) and never a fail (it
+      // asked for nothing and got nothing).
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "no_subject", subject: false });
+      expect(report.news).toMatchObject({ published: 0 });
+    } finally {
+      // m1 (Task 12 fix round 1 review, Minor-1): this leaked a tmp dir on
+      // every run before — cleaned up the same way the describe block at
+      // ~:3237 cleans its own `reportDir` in `afterEach`.
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("B07a T12 fix round 1 (R73 I1) — a MIXED last stage (se-r{n}-i{i} beside a third-place se-3p) warns by name AND still publishes what parsed", async () => {
+    // R73 I1. `packages/engine/src/scheduling/bracket.ts:220-227`'s
+    // `generateSingleElim` conditionally appends ONE more fixture,
+    // `` `${idPrefix ?? "se"}-3p"` `` (`se-3p` by default), in the SAME
+    // stage as every `se-r{n}-i{i}` key, when `thirdPlace: true` and both
+    // semifinals exist — a real, reachable MIXED last stage neither
+    // committed pack uses today (`grep -rl thirdPlace scripts/bench/packs`
+    // finds nothing), but one the call site's warning guard must still get
+    // right. `d-tiny`'s own `se-r0-i0` stays; a second stream, `se-3p`, is
+    // added to the SAME `s-playoff` stage in a temp copy, with its own
+    // `expected.matches` row — legal pack data (`PackExtKey` has no format
+    // restriction). `fakeServer`'s `knockoutFixtureExtKeys` knob makes
+    // `/generate` mint both ids, exactly the two this pack now declares, so
+    // `bindStreamFixtures` has a real match for each side — no need to
+    // reproduce the generator's own bracket math (see that knob's doc
+    // comment for why the fake never needed to).
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      streams: {
+        divisionRef: string;
+        fixtureExtKey: string;
+        stageRef?: string;
+        home: string;
+        away: string;
+        provenance: string;
+        events: unknown[];
+      }[];
+      expected: {
+        matches: {
+          divisionRef: string;
+          fixtureExtKey: string;
+          outcome: unknown;
+          perSide?: unknown[];
+        }[];
+      };
+    };
+    raw.streams.push({
+      divisionRef: "d-tiny",
+      fixtureExtKey: "se-3p",
+      stageRef: "s-playoff",
+      home: "e-bravo",
+      away: "e-alpha",
+      provenance: "real",
+      events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 1, p2Score: 0 } }],
+    });
+    raw.expected.matches.push({
+      divisionRef: "d-tiny",
+      fixtureExtKey: "se-3p",
+      outcome: { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" },
+      perSide: [
+        { entrant: "e-bravo", line: "1" },
+        { entrant: "e-alpha", line: "0" },
+      ],
+    });
+
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-fix1-mixed-"));
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+      const { transport, sql } = fakeServer({ knockoutFixtureExtKeys: ["se-r0-i0", "se-3p"] });
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // The warning names se-3p BY NAME — never silently dropped.
+      expect(
+        (report.warnings ?? []).some((w) => w.includes("se-3p") && w.includes("news publish skipped")),
+      ).toBe(true);
+      // se-r0-i0 is never named as skipped — only the key that failed to
+      // parse is.
+      expect((report.warnings ?? []).some((w) => w.includes("news publish skipped") && w.includes("se-r0-i0"))).toBe(
+        false,
+      );
+      // The parsed fixture (se-r0-i0, the sole round present) STILL
+      // publishes — a mixed input must not silently swallow the half that
+      // DID parse.
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      expect(report.news).toMatchObject({ published: 1 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("B07a T12 fix round 1 (R73 I2) — a THREE-round last stage publishes exactly its top two rounds through the wired news step, not the whole stage", async () => {
+    // R73 I2. `_tiny.json`'s own `d-tiny`/`s-playoff` has one real round;
+    // `suite11.json`'s 7-round bracket is never driven through the news
+    // step by any test (Important-2 in the review). This builds a
+    // TEST-LOCAL 3-round last stage — never a pack-file or PackSchema edit,
+    // only a temp copy of `_tiny.json` — using the SAME
+    // `knockoutFixtureExtKeys` knob as the I1 test above. Each fixture
+    // reuses `d-tiny`'s own two entrants (`e-alpha`/`e-bravo`); nothing
+    // here depends on a REAL bracket's home/away feed structure — see that
+    // knob's own doc comment for why the fake was already indifferent to
+    // it, exactly as it already was for the pre-existing single-fixture
+    // case.
+    const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+      streams: {
+        divisionRef: string;
+        fixtureExtKey: string;
+        stageRef?: string;
+        home: string;
+        away: string;
+        provenance: string;
+        events: unknown[];
+      }[];
+      expected: {
+        matches: {
+          divisionRef: string;
+          fixtureExtKey: string;
+          outcome: unknown;
+          perSide?: unknown[];
+        }[];
+      };
+    };
+    raw.streams.push(
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r1-i0",
+        stageRef: "s-playoff",
+        home: "e-alpha",
+        away: "e-bravo",
+        provenance: "real",
+        events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }],
+      },
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r2-i0",
+        stageRef: "s-playoff",
+        home: "e-bravo",
+        away: "e-alpha",
+        provenance: "real",
+        events: [{ type: "core.start" }, { type: "generic.result", payload: { p1Score: 4, p2Score: 2 } }],
+      },
+    );
+    raw.expected.matches.push(
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r1-i0",
+        outcome: { kind: "win", winner: "e-alpha", loser: "e-bravo", method: "regulation" },
+        perSide: [
+          { entrant: "e-alpha", line: "3" },
+          { entrant: "e-bravo", line: "1" },
+        ],
+      },
+      {
+        divisionRef: "d-tiny",
+        fixtureExtKey: "se-r2-i0",
+        outcome: { kind: "win", winner: "e-bravo", loser: "e-alpha", method: "regulation" },
+        perSide: [
+          { entrant: "e-bravo", line: "4" },
+          { entrant: "e-alpha", line: "2" },
+        ],
+      },
+    );
+
+    const dir = await mkdtemp(join(tmpdir(), "b07a-t12-fix1-threeround-"));
+    try {
+      const mutatedPackPath = join(dir, "_tiny.json");
+      await writeFile(mutatedPackPath, JSON.stringify(raw), "utf8");
+
+      const { transport, sql } = fakeServer({
+        knockoutFixtureExtKeys: ["se-r0-i0", "se-r1-i0", "se-r2-i0"],
+      });
+      const report = await runTinySuite({
+        base: "http://bench.example",
+        engine: "optimized",
+        keep: false,
+        log: silent,
+        cliEntry: "admin",
+        packPath: mutatedPackPath,
+        transport,
+        sql,
+        probeTransport: transport,
+        simTransport: transport,
+        importTransport: transport,
+        startTransport: transport,
+        advanceTransport: transport,
+        oracleTransport: transport,
+        matchBoard: echoExpectedBoard,
+        specialSubjects: echoSpecialSubjects,
+      });
+
+      // No unparsed keys here — every one of the three rounds parses.
+      expect((report.warnings ?? []).some((w) => w.includes("news publish skipped"))).toBe(false);
+      // Exactly the top TWO rounds (se-r1-i0, se-r2-i0) publish — se-r0-i0
+      // stays draft. A "top three" or "whole stage" regression would
+      // publish 3; a "top one" regression would publish 1.
+      const publishOracle = (report.oracles ?? []).find(
+        (o) => o.name === "news: the named fixtures publish and the rest stay draft",
+      );
+      expect(publishOracle).toMatchObject({ passed: true, verdict: "pass", subject: true });
+      expect(report.news).toMatchObject({ published: 2 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("B06a T7 — an org that cannot buy news.auto never turns drafting on, and says so", async () => {
@@ -2228,10 +2649,10 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
 
     expect(report.gate).toBe("red");
     const runtimeOracles = (report.oracles ?? []).filter((o) => o.name.startsWith("oracle:"));
-    const rankCrossing = runtimeOracles.find((o) => o.name === "oracle: s-playoff rank crossing (captured vs standings)");
+    const rankCrossing = runtimeOracles.find((o) => o.name === "oracle: d-tiny/s-playoff rank crossing (captured vs standings)");
     expect(rankCrossing?.passed).toBe(false);
     const standingsVsExpected = runtimeOracles.find(
-      (o) => o.name === "oracle: s-playoff standings rank vs expected.finalRanks",
+      (o) => o.name === "oracle: d-tiny/s-playoff standings rank vs expected.finalRanks",
     );
     expect(standingsVsExpected?.passed).toBe(false);
     const champion = runtimeOracles.find((o) => o.name === "oracle: d-tiny champion");
@@ -2345,5 +2766,1310 @@ describe("runTinySuite — B05 T1 division-A stream fold wiring", () => {
     // 9 events total (T1's league fold only) — the playoff's own 2-event
     // stream was never sent.
     expect(divisionAEventCalls(calls)).toHaveLength(9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T6 — advancement runs for EVERY division, not only the first.
+//
+// Before this task the advance step was gated on `division0`/`stage0`/`stage1`,
+// so a pack whose SECOND division also had a progression-fed stage imported
+// that stage's fixtures and never seeded them from a proposal. No shipped pack
+// has a second advancing division (`_tiny`'s other three are single-stage, and
+// suite 11 is single-stage in both), so the loop has NO live subject and these
+// fixtures are the only thing that drives it.
+// ---------------------------------------------------------------------------
+
+/** The parts of `_tiny.json` these fixtures reshape. Deliberately loose — the
+ *  file is parsed, mutated and re-serialised, never type-checked against
+ *  `Pack` (stage 0 is what judges it, which is the point). */
+interface MutablePack {
+  divisions: { ref: string; stages: Record<string, unknown>[] }[];
+  streams: { divisionRef: string; fixtureExtKey: string; stageRef?: string }[];
+  expected: {
+    finalRanks: { divisionRef: string; stageRef: string; order: string[] }[];
+    matches: { divisionRef: string; fixtureExtKey: string }[];
+    tables: { divisionRef: string; stageRef: string; rows: { entrant: string; rank: number }[] }[];
+  };
+}
+
+/** `_tiny.json`, mutated and written to its own temp directory. The filename
+ *  must stay `_tiny.json`: `pack-schema.ts`'s own `suite_mismatch` check
+ *  refuses a pack whose declared `suite` disagrees with the file it came from,
+ *  so a different DIRECTORY is what keeps this isolated from the committed
+ *  pack (the same shape the D6 fixture above uses). */
+async function writeMutatedTinyPack(mutate: (raw: MutablePack) => void): Promise<string> {
+  const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as MutablePack;
+  mutate(raw);
+  const dir = await mkdtemp(join(tmpdir(), "b07a-t6-"));
+  const packPath = join(dir, "_tiny.json");
+  await writeFile(packPath, JSON.stringify(raw), "utf8");
+  return packPath;
+}
+
+/** `d-tiny/s-playoff`'s OWN progression, read out of the pack rather than
+ *  re-typed here: a two-slot knockout seeded from the previous stage's
+ *  standings in rank order. Derived from the source of truth so a change to
+ *  the shipped shape moves this fixture with it instead of leaving it
+ *  asserting yesterday's shape (AGENTS.md rule 19). */
+function playoffProgressionOf(raw: MutablePack): Record<string, unknown> {
+  const playoff = raw.divisions
+    .find((d) => d.ref === "d-tiny")
+    ?.stages.find((s) => s["ref"] === "s-playoff");
+  const progression = playoff?.["progression"];
+  if (progression === undefined) {
+    throw new Error("test fixture assumption broken: d-tiny/s-playoff declares no progression");
+  }
+  return progression as Record<string, unknown>;
+}
+
+/** A stage's own `expected.tables` order, rank 1 first — read out of the pack
+ *  rather than typed here, the same way `playoffProgressionOf` reads the
+ *  progression. A finalRanks order typed into the test would keep asserting
+ *  yesterday's answer the moment the table it mirrors moved. */
+function rankOrderOf(raw: MutablePack, divisionRef: string, stageRef: string): string[] {
+  const table = raw.expected.tables.find(
+    (t) => t.divisionRef === divisionRef && t.stageRef === stageRef,
+  );
+  if (table === undefined || table.rows.length === 0) {
+    throw new Error(`test fixture assumption broken: no expected.tables rows for ${divisionRef}/${stageRef}`);
+  }
+  return [...table.rows].sort((a, b) => a.rank - b.rank).map((r) => r.entrant);
+}
+
+/** `_tiny.json` with `d-badminton` given a progression-fed SECOND stage, so
+ *  the pack carries TWO divisions that each owe an advancement. Its league
+ *  table already ranks `e-cho` above `e-dahl`, which is also the order this
+ *  file's fake proposes (entrants in creation order), so a correct run
+ *  advances it cleanly. */
+async function twoAdvancingDivisionsPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    badminton.stages.push({
+      ref: "s-badminton-ko",
+      seq: 2,
+      kind: "knockout",
+      name: "Badminton Playoff",
+      config: {},
+      progression: playoffProgressionOf(raw),
+    });
+    // The knockout's own fixture owes a STREAM: the product stamps a generated
+    // bracket game `scheduled` unless it carries an award (a bye —
+    // `usecases/stages.ts:1351`), and `seedSuite` throws on any generated
+    // fixture still at `scheduled` that no stream claims (`seed.ts:342`,
+    // `SETTLED_AT_GENERATION`). A stream in turn owes an `expected.matches`
+    // row — `PackSchema`'s anti-vacuity rule, "a replayed stream with no
+    // oracle asserts nothing" (`pack-schema.ts:2105`).
+    //
+    // Both are COPIED from `d-badminton`'s own league fixture rather than
+    // authored here: the rally sequence is a reconstructed 21-15/21-18 win for
+    // `e-cho`, and re-deriving one by hand would be inventing a badminton
+    // scoreline this test has no way to check.
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+    raw.expected.finalRanks.push({
+      divisionRef: "d-badminton",
+      stageRef: "s-badminton-ko",
+      // The knockout seats its two entrants in the league table's rank order,
+      // so THAT table is the source of truth for this order, not a literal.
+      order: rankOrderOf(raw, "d-badminton", "s-badminton-league"),
+    });
+  });
+}
+
+describe("runTinySuite — B07a T6 advancement runs for EVERY division", () => {
+  it("proposes, confirms and generates for the SECOND division's progression-fed stage too", async () => {
+    const packPath = await twoAdvancingDivisionsPack();
+    const { transport, sql, calls } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // TWO proposals, not one. This is the whole task: the pre-T6 gate read
+    // `division0`'s second stage only, so `d-badminton`'s knockout was
+    // generated at seed time and then never seeded from a proposal at all.
+    const proposals = calls.filter((c) => c.method === "POST" && /\/seed-proposal$/.test(c.path));
+    expect(proposals).toHaveLength(2);
+    // Confirm and generate reached BOTH target stages — a proposal that was
+    // asserted and then abandoned would leave the second stage unseeded while
+    // still counting above.
+    const confirms = calls.filter((c) => c.method === "POST" && /\/seed-proposal\/confirm$/.test(c.path));
+    expect(confirms).toHaveLength(2);
+
+    // The oracle NAMES carry the division ref. Stage refs are unique only
+    // WITHIN a division (`pack-schema.ts`'s `checkRefsUnique` builds its
+    // `seenStage` set inside the per-division loop), so two divisions may
+    // legally declare the same stage ref — and a report whose reader cannot
+    // tell which division failed is the thing this names away.
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-ko seed proposal qualifiers",
+    ]);
+    // …and both actually PASSED. A reachability assertion is satisfied by any
+    // value (AGENTS.md rule 19): an oracle that compared an empty qualifier
+    // list against an empty proposal would still be present and correctly
+    // named here.
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // The captured `complete` response was compared for BOTH, which is what
+    // proves the second division ran the whole propose -> confirm -> generate
+    // -> play -> complete flow rather than stopping at the assertion.
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-badminton-ko finalRanks",
+    ]);
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // Ruling R1, the half a permissive fake cannot red on its own: the
+    // batch-import fold carries the second division's FIRST stage only. Its
+    // knockout fixture has no real entrants until the advance above seeds it,
+    // so importing that stream up front would post into a fixture nobody had
+    // seeded — which this fake would happily accept (its `/events/import`
+    // branch is a pass-through) and a live run would refuse.
+    //
+    // The import call identifies ITSELF by the rally events it carries rather
+    // than by a division id this test would have to guess.
+    const imports = calls.filter((c) => c.method === "POST" && /\/events\/import$/.test(c.path));
+    const badmintonImport = imports.find((c) =>
+      (c.body as { streams: { events: { type: string }[] }[] }).streams.some((st) =>
+        st.events.some((e) => e.type === "badminton.rally"),
+      ),
+    );
+    expect(badmintonImport).toBeDefined();
+    expect((badmintonImport?.body as { streams: unknown[] }).streams).toHaveLength(1);
+
+    // …and the knockout stream WAS still played, strictly AFTER its own seed
+    // proposal. Scoping the import without this would be indistinguishable
+    // from silently dropping the stream.
+    //
+    // B07a T7 (ruling R23) moved WHICH ROUTE carries it. This used to assert
+    // `badminton.rally` on `/fixtures/{id}/events`, because the advance step
+    // was hard-wired to the single-event route for every division whatever
+    // that division's mode — the half-connected seam R23 exists to close. A
+    // division's play mode is a property of the DIVISION, so `d-badminton`
+    // (index 1, undeclared, therefore "import") now folds its knockout the
+    // same way it folded its league. The GUARANTEE under test is unchanged and
+    // the routing half is newly pinned below, so this is re-expressed rather
+    // than relaxed.
+    const proposalIdxs = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => c.method === "POST" && /\/seed-proposal$/.test(c.path))
+      .map(({ i }) => i);
+    expect(proposalIdxs).toHaveLength(2);
+    const badmintonImportIdxs = calls
+      .map((c, i) => ({ c, i }))
+      .filter(
+        ({ c }) =>
+          c.method === "POST" &&
+          /\/events\/import$/.test(c.path) &&
+          String((c.body as { import_id: string }).import_id).endsWith(":d-badminton"),
+      )
+      .map(({ i }) => i);
+    // TWO: its league in the first-stage fold, then its knockout once the
+    // advance has seeded it. One would mean the knockout stream was dropped.
+    expect(badmintonImportIdxs).toHaveLength(2);
+    // `proposalIdxs[1]` is `d-badminton`'s own proposal — divisions advance in
+    // pack order, which the oracle names above have already pinned.
+    expect(badmintonImportIdxs[1]!).toBeGreaterThan(proposalIdxs[1]!);
+    // …and NOTHING of this division went out on the single-event route. That
+    // negative is what makes the pair above a ROUTING assertion rather than
+    // only an ordering one — without it, a run that played the knockout on
+    // both routes would pass.
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "POST" &&
+          /^\/api\/v1\/fixtures\/[^/]+\/events$/.test(c.path) &&
+          (c.body as { type?: string }).type === "badminton.rally",
+      ),
+    ).toBe(false);
+  });
+
+  it("advances STAGE-MAJOR: every division's FIRST boundary before any division's SECOND", async () => {
+    // The ordering-differential this task turns on (ruling R1), and the test I
+    // wrongly reported as unbuildable. Three things are individually true — the
+    // advance step needs an `expected.tables` row for each SOURCE stage, a table
+    // on a bracket stage is a hard error (`validate-pack.ts:1693`), and a
+    // TABLE-kind middle stage's generated ext keys would collide — and the
+    // conclusion drawn from them was still wrong: a stage-less-and-stream-less
+    // extra stage is only a WARNING (`validate-pack.ts:1875-1902`), so a third
+    // stage carrying nothing but a `progression` loads fine and its advance
+    // pushes an ORDERED error while making zero HTTP calls.
+    //
+    // Two divisions, asymmetric depth, each boundary failing in a way that names
+    // itself:
+    //   d-badminton  league -> ko        (boundary 1) — advances, then errors,
+    //                                     because it declares no finalRanks row
+    //   d-tiny       league -> playoff -> final (boundary 2) — errors before any
+    //                                     call, because a knockout SOURCE has no
+    //                                     expected.tables row
+    // STAGE-major visits every division's boundary 1 first, so s-badminton-ko
+    // errors BEFORE s-final. DIVISION-major would finish d-tiny — both its
+    // boundaries — before starting d-badminton, inverting the pair.
+    const packPath = await writeMutatedTinyPack((raw) => {
+      const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+      const tiny = raw.divisions.find((d) => d.ref === "d-tiny");
+      if (badminton === undefined || tiny === undefined) {
+        throw new Error("test fixture assumption broken: d-badminton / d-tiny not both present");
+      }
+      if (tiny.stages.length !== 2) {
+        throw new Error("test fixture assumption broken: d-tiny is no longer exactly two stages");
+      }
+      const progression = playoffProgressionOf(raw);
+
+      // d-badminton's own first boundary. It owes a stream (a generated bracket
+      // fixture nobody claims throws at `seed.ts:342`) and a stream owes an
+      // expected match — but deliberately NO `expected.finalRanks` row, which is
+      // what makes it report itself after completing.
+      badminton.stages.push({
+        ref: "s-badminton-ko",
+        seq: 2,
+        kind: "knockout",
+        name: "Badminton Playoff",
+        config: {},
+        progression,
+      });
+      const leagueStream = raw.streams.find(
+        (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+      );
+      const leagueMatch = raw.expected.matches.find(
+        (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+      );
+      if (leagueStream === undefined || leagueMatch === undefined) {
+        throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+      }
+      raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+      raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+
+      // d-tiny's SECOND boundary — stream-less on purpose. Its generated
+      // `se-r0-i0` shares a division+ext_key with `s-playoff`'s, which the
+      // playoff stream already claims, so `seedSuite`'s unclaimed-fixture guard
+      // stays satisfied without inventing a second scoreline.
+      tiny.stages.push({ ref: "s-final", seq: 3, kind: "knockout", name: "Final", config: {}, progression });
+    });
+
+    const { transport, sql } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // ORDER is the whole assertion. Both entries are present under either loop
+    // shape — only their sequence differs — so a membership check would pass on
+    // the very thing this test exists to refuse.
+    const advanceErrors = (report.errors ?? []).filter(
+      (e) => e.includes("s-badminton-ko") || e.includes("s-final"),
+    );
+    expect(advanceErrors).toHaveLength(2);
+    expect(advanceErrors[0]).toContain("s-badminton-ko");
+    expect(advanceErrors[1]).toContain("s-final");
+  });
+});
+
+/** `_tiny.json` with `d-badminton` given a progression-fed SECOND stage
+ *  whose ref is `s-playoff` — the SAME ref `d-tiny` already declares for its
+ *  own knockout. Legal per `pack-schema.ts`'s `checkRefsUnique`, which scopes
+ *  its `seenStage` set to ONE division (pack-schema.ts:1746-1750): stage refs
+ *  are unique only WITHIN a division, never across the pack. This is the
+ *  exact collision pre-B07b prerequisite P1 exists for (progress.md Ruling
+ *  R26, task-6-review.md CRUX 2) — `seed.ts`'s `stageIdByRef` used to be one
+ *  FLAT `Map<stageRef, stageId>` shared across every division, so two
+ *  divisions naming the same stage ref would silently overwrite each other's
+ *  entry. Otherwise identical to `twoAdvancingDivisionsPack` above (same
+ *  copied league stream/match, same rank-order-derived finalRanks row) —
+ *  only the ref changes. */
+async function collidingStageRefPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    badminton.stages.push({
+      // COLLIDES with d-tiny's own "s-playoff" (checked below) — the point
+      // of this fixture.
+      ref: "s-playoff",
+      seq: 2,
+      kind: "knockout",
+      name: "Badminton Playoff",
+      config: {},
+      progression: playoffProgressionOf(raw),
+    });
+    const tiny = raw.divisions.find((d) => d.ref === "d-tiny");
+    if (tiny?.stages.some((s) => s["ref"] === "s-playoff") !== true) {
+      throw new Error('test fixture assumption broken: d-tiny no longer declares a stage ref "s-playoff"');
+    }
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-playoff" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+    raw.expected.finalRanks.push({
+      divisionRef: "d-badminton",
+      stageRef: "s-playoff",
+      order: rankOrderOf(raw, "d-badminton", "s-badminton-league"),
+    });
+  });
+}
+
+describe("Pre-B07b prerequisite P1 — stageIdByRef keyed by division AND stage (Ruling R26)", () => {
+  it("two divisions sharing a stage ref seed, generate and advance INDEPENDENTLY, never colliding", async () => {
+    const packPath = await collidingStageRefPack();
+    const { transport, sql, calls } = fakeServer();
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // No advance-time or seed-time defect surfaced. The old flat map's
+    // failure mode is a SILENT wrong answer (AGENTS.md recurring-failure
+    // class 6) — both of `seedSuite`'s own "unmatched stream" / "unclaimed
+    // fixture" guards stay quiet even when the map has collided, because the
+    // generated rows are tagged with the LOOP's own divisionRef regardless
+    // of which real stage actually produced them (task-6-review.md CRUX 2).
+    // So this run must be clean, not merely "did not throw".
+    expect(report.errors ?? []).toEqual([]);
+
+    // (1) — each division's SEED-TIME `/generate` call targeted its OWN
+    // real stage id. A flat `Map<stageRef, id>` collides on the shared
+    // "s-playoff" ref and last-write-wins, so exactly ONE real stage id gets
+    // hit TWICE and the other never — asserted as the FULL SET of targeted
+    // ids, never "which one won", so either `Promise.all` interleaving reds
+    // this the same way (AGENTS.md: "make the red deterministic").
+    // Scoped to calls BEFORE the first `/seed-proposal` — `advance.ts` calls
+    // `/generate` a SECOND time per advanced target stage (idempotent,
+    // `existing: 1` in the fake), which is a different call this assertion
+    // is not about.
+    const firstProposalIdx = calls.findIndex((c) => c.method === "POST" && /\/seed-proposal$/.test(c.path));
+    expect(firstProposalIdx).toBeGreaterThan(-1);
+    const seedTimeGenerateStageIds = calls
+      .slice(0, firstProposalIdx)
+      .filter((c) => c.method === "POST" && /^\/api\/v1\/stages\/[^/]+\/generate$/.test(c.path))
+      .map((c) => /^\/api\/v1\/stages\/([^/]+)\/generate$/.exec(c.path)![1]!);
+    // Every real stage id seen in this window is DISTINCT — never a count
+    // tied to how many divisions/stages this pack happens to declare (the
+    // DLS-gate probe mints and generates its own synthetic stage in this
+    // same window too, unconditionally — `dls-gate.ts:415`). The bug's own
+    // signature is not "the wrong total"; it is "one id repeats and another
+    // never appears" — so the number-of-distinct-ids-equals-number-of-calls
+    // check is what actually targets it, independent of how many other
+    // stages this pack or probe contribute.
+    const distinctSeedTimeIds = new Set(seedTimeGenerateStageIds);
+    expect(seedTimeGenerateStageIds.length).toBeGreaterThan(0);
+    expect(distinctSeedTimeIds.size).toBe(seedTimeGenerateStageIds.length);
+
+    // (2)/(3) — each division's stream bound to its OWN fixture, and
+    // advancement resolved the RIGHT source/target stage ids for EACH
+    // division. Both entries are present under the buggy flat map too — the
+    // failure is a WRONG value, not an absence — so the name/order assertion
+    // (proven correct above by the errors/id-set checks) is not enough on
+    // its own; `passed` must be checked too (AGENTS.md rule 19: pin what a
+    // control opens/seeds at, not just that it is reachable). Under the flat
+    // map, one division's advance resolves the OTHER division's real
+    // target stage and therefore compares against the OTHER division's real
+    // entrants — a mismatch, deterministically, for whichever division lost
+    // whatever `Promise.all` order produced (their entrant id sets are
+    // disjoint, so there is no coincidental pass).
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-playoff seed proposal qualifiers",
+    ]);
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true]);
+
+    // The captured `complete` response (D1 — the only time `finalRanks`
+    // crosses the wire) must belong to the CORRECT stage too: a wrong
+    // `targetStageId` would capture the wrong stage's completion.
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-playoff finalRanks",
+    ]);
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true]);
+  });
+});
+
+/** `_tiny.json` with `d-badminton` given TWO progression-fed stages, so the
+ *  division carries boundaries at stage index 1 AND 2 — the exact shape P2
+ *  exists for (progress.md Ruling R74, task-6-review.md Minor m6):
+ *  `s-badminton-league` (existing) -> `s-badminton-mid` (NEW, table-kind,
+ *  so it can carry its OWN `expected.tables` and be boundary 2's SOURCE —
+ *  a knockout cannot, `validate-pack.ts:1693`) -> `s-badminton-ko`
+ *  (existing shape, now fed from the mid stage instead of the league).
+ *  `s-badminton-mid`'s own generated fixture needs a DISTINCT ext_key from
+ *  `s-badminton-league`'s `rr-r1-c1` — `fakeServer`'s new
+ *  `roundRobinExtKeysByStageName` knob supplies one; without it the two
+ *  table-kind stages' fixtures would collide (`PackStream`'s ext_key
+ *  uniqueness is per DIVISION, not per stage). */
+async function twoBoundaryDivisionPack(): Promise<string> {
+  return await writeMutatedTinyPack((raw) => {
+    const badminton = raw.divisions.find((d) => d.ref === "d-badminton");
+    if (badminton === undefined) {
+      throw new Error("test fixture assumption broken: no d-badminton division");
+    }
+    if (badminton.stages.length !== 1) {
+      throw new Error("test fixture assumption broken: d-badminton is no longer single-stage");
+    }
+    const progression = playoffProgressionOf(raw);
+    // `sources: [{ stage: "previous", ... }]` is INDEX-relative, not by ref
+    // — the SAME progression object seeds both boundaries correctly:
+    // boundary 1 (league -> mid) and boundary 2 (mid -> ko) each read
+    // "previous" as whichever stage precedes them in `seq` order.
+    badminton.stages.push(
+      { ref: "s-badminton-mid", seq: 2, kind: "league", name: "Badminton Mid", config: { legs: 1 }, progression },
+      { ref: "s-badminton-ko", seq: 3, kind: "knockout", name: "Badminton Playoff", config: {}, progression },
+    );
+
+    const leagueStream = raw.streams.find(
+      (st) => st.divisionRef === "d-badminton" && st.fixtureExtKey === "rr-r1-c1",
+    );
+    const leagueMatch = raw.expected.matches.find(
+      (m) => m.divisionRef === "d-badminton" && m.fixtureExtKey === "rr-r1-c1",
+    );
+    if (leagueStream === undefined || leagueMatch === undefined) {
+      throw new Error("test fixture assumption broken: d-badminton has no rr-r1-c1 stream/expected match");
+    }
+    // The mid stage's own fixture/stream/expected rows — copied from the
+    // league's, same reasoning `twoAdvancingDivisionsPack` gives (a
+    // reconstructed rally this test has no way to check independently).
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "rr-mid-c1", stageRef: "s-badminton-mid" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "rr-mid-c1" });
+    // The knockout's own fixture/stream/expected rows.
+    raw.streams.push({ ...leagueStream, fixtureExtKey: "se-r0-i0", stageRef: "s-badminton-ko" });
+    raw.expected.matches.push({ ...leagueMatch, fixtureExtKey: "se-r0-i0" });
+
+    // The fake reports every stage's qualifiers/finalRanks as this
+    // division's entrants IN CREATION ORDER — [e-cho, e-dahl], the SAME
+    // order `s-badminton-league`'s own committed table already ranks them
+    // in (`rankOrderOf` reads it rather than typing the order in twice).
+    const creationOrder = rankOrderOf(raw, "d-badminton", "s-badminton-league");
+    // `s-badminton-mid` needs its OWN `expected.tables` row: it is boundary
+    // 2's SOURCE, and `run-suite.ts`'s advance step demands one for every
+    // source stage (the exact "no expected.tables row" gate CRUX 1 found).
+    const midTable = raw.expected.tables.find(
+      (t) => t.divisionRef === "d-badminton" && t.stageRef === "s-badminton-league",
+    );
+    if (midTable === undefined) {
+      throw new Error("test fixture assumption broken: no expected.tables row for s-badminton-league");
+    }
+    // `midTable.rows` carries more fields than this file's own loose
+    // `MutablePack` type declares (played/won/drawn/lost/points —
+    // `PackSchema`'s real row shape) — spreading each row (rather than
+    // rebuilding one from just `entrant`/`rank`) keeps them at runtime even
+    // though `MutablePack` does not name them.
+    raw.expected.tables.push({
+      ...midTable,
+      stageRef: "s-badminton-mid",
+      rows: midTable.rows.map((row) => ({ ...row })),
+    });
+    raw.expected.finalRanks.push(
+      { divisionRef: "d-badminton", stageRef: "s-badminton-mid", order: creationOrder },
+      { divisionRef: "d-badminton", stageRef: "s-badminton-ko", order: creationOrder },
+    );
+  });
+}
+
+describe("Pre-B07b prerequisite P2 — a two-boundary division completes its middle stage ONCE (Ruling R74 / Minor m6)", () => {
+  it("/complete is called exactly once per stage id, even though the middle stage is both a target and a source", async () => {
+    const packPath = await twoBoundaryDivisionPack();
+    const { transport, sql, calls } = fakeServer({
+      roundRobinExtKeysByStageName: { "Badminton Mid": ["rr-mid-c1"] },
+    });
+    // A REAL (non-silent) logger whose destination is captured rather than
+    // written to stdout, so the skip's own visibility contract ("a log or
+    // observation line naming the stage — never silent") is proven by
+    // reading an actual emitted line, not inferred from a downstream
+    // effect.
+    const logLines: string[] = [];
+    const captured = pino(
+      { level: "info" },
+      new Writable({
+        write(chunk: Buffer, _enc, cb) {
+          logLines.push(chunk.toString("utf8"));
+          cb();
+        },
+      }),
+    );
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: captured,
+      cliEntry: "admin",
+      packPath,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    // The witness: since the fake's own `/complete` route
+    // (`_advance-routes.ts`) always answers 200 regardless of whether the
+    // stage was already complete, a repeat completion is invisible to
+    // every oracle in this report — the RAW CALL COUNT at this route is the
+    // only thing that can see it (task-6-review.md Minor m6's own point:
+    // "invisible to the fake"). Two boundaries, three stages: the league is
+    // completed once (as boundary 1's source), the mid stage should be
+    // completed ONCE despite being both boundary 1's target AND boundary
+    // 2's source, and the knockout once (as boundary 2's target).
+    const completeCalls = calls.filter((c) => c.method === "POST" && /\/complete$/.test(c.path));
+    const completeCallsByStageId = new Map<string, number>();
+    for (const c of completeCalls) {
+      const stageId = /^\/api\/v1\/stages\/([^/]+)\/complete$/.exec(c.path)![1]!;
+      completeCallsByStageId.set(stageId, (completeCallsByStageId.get(stageId) ?? 0) + 1);
+    }
+    // At least the three d-badminton stages were completed at all.
+    expect(completeCallsByStageId.size).toBeGreaterThanOrEqual(3);
+    for (const [stageId, count] of completeCallsByStageId) {
+      expect(count, `stage "${stageId}" was completed ${count} time(s), expected exactly 1`).toBe(1);
+    }
+
+    // The skip is VISIBLE, never silent — a real log line names the
+    // middle stage's own ref and says it was skipped as a repeat
+    // completion. Without the fix, this line is simply absent (the source
+    // site completes it unconditionally) while the call-count assertion
+    // above is what catches THAT failure; this assertion is the positive
+    // pair — proving the skip, when it happens, actually says so.
+    const skipLine = logLines.find(
+      (l) => l.includes("s-badminton-mid") && l.includes("skip") && l.includes("complete"),
+    );
+    expect(skipLine, `no skip line found among:\n${logLines.join("")}`).toBeDefined();
+
+    const finalRanksOracles = (report.oracles ?? []).filter(
+      (o) => o.name.startsWith("advance:") && o.name.includes("finalRanks"),
+    );
+    expect(finalRanksOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff finalRanks",
+      "advance: d-badminton/s-badminton-mid finalRanks",
+      "advance: d-badminton/s-badminton-ko finalRanks",
+    ]);
+    // Both of d-badminton's own boundaries captured the RIGHT stage's
+    // response — a wrong/duplicated completion would corrupt at least one.
+    expect(finalRanksOracles.map((o) => o.passed)).toEqual([true, true, true]);
+
+    const seedOracles = (report.oracles ?? []).filter((o) => o.name.includes("seed proposal qualifiers"));
+    expect(seedOracles.map((o) => o.name)).toEqual([
+      "advance: d-tiny/s-playoff seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-mid seed proposal qualifiers",
+      "advance: d-badminton/s-badminton-ko seed proposal qualifiers",
+    ]);
+    expect(seedOracles.map((o) => o.passed)).toEqual([true, true, true]);
+  });
+});
+
+describe("Pre-B07b prerequisite fix round 1 — the report's seeded-stage count is pinned (review check 2)", () => {
+  it("the suite_seeded log's `stages` field equals the total stages actually seeded, across every non-registration division", async () => {
+    const { transport, sql } = fakeServer();
+    // Captures ONLY the `suite_seeded` pino event (mirrors the
+    // `oracle_checked`-capturing pattern above) — this is the ONLY place
+    // `run-suite.ts:2300`'s `stages: seeded.stageIdByRef.size` ever surfaces;
+    // it is not part of the returned `SuiteReport` object, so it cannot be
+    // read off `report` directly.
+    const seededEvents: { stages: unknown }[] = [];
+    const capturing = pino({ level: "info" }, {
+      write(line: string) {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.msg === "suite_seeded") seededEvents.push({ stages: entry.stages });
+      },
+    });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: capturing,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+    expect(report.gate).toBe("green");
+    expect(seededEvents).toHaveLength(1);
+
+    // The count MEANS "total stages seeded across all divisions" — every
+    // stage row `seedSuite` actually created, summed over every division
+    // that goes through the normal division/stage seeding path. It excludes
+    // a registration-entry division (`_tiny.json`'s own `d-registration`):
+    // `run-suite.ts:2179-2211` filters those OUT of the `SeedPlan` it hands
+    // `seedSuite` — they are created through a separate route
+    // (`registrationDivisionsOf`, `run-suite.ts:498`, exported so this test
+    // can reuse the SAME selector rather than re-deriving it). A future pack
+    // edit, or a future change to what gets filtered, moves this expected
+    // number WITH it, because it is read off the real validated pack here —
+    // never a literal typed into this test.
+    const load = loadPackValue(JSON.parse(await readFile(TINY_PACK_PATH, "utf8")), TINY_PACK_PATH);
+    if (!load.ok) throw new Error("the committed _tiny.json no longer loads");
+    const registrationRefs = new Set(registrationDivisionsOf(load.pack).map((d) => d.ref));
+    const expectedStages = load.pack.divisions
+      .filter((d) => !registrationRefs.has(d.ref))
+      .reduce((n, d) => n + d.stages.length, 0);
+
+    expect(seededEvents[0]?.stages).toBe(expectedStages);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 — the runner DISPATCHES on the declared play mode.
+//
+// Before this task the write path was positional and implicit: `division0`
+// folded through the single-event scoring route and every other division
+// through the batch-import route, each in its own hard-coded block. The
+// declaration has to be able to INVERT that, or it is a field nobody reads —
+// so every test below is a differential against the positional answer rather
+// than a check that some call happened.
+//
+// These drive `runPackSuite` directly, so a `play` map can be handed
+// straight to the runner's own options without needing a real registry row.
+// (Fix round 1 gave `runTinySuite`/`runSuite11` their own `play` parameter,
+// forwarded into these SAME options — see the "fix round 1" describe block
+// below for the tests that drive THAT path instead.)
+// ---------------------------------------------------------------------------
+
+/** Every `POST /divisions/{id}/events/import` call. */
+function importCalls(calls: RecordedCall[]): RecordedCall[] {
+  return calls.filter(
+    (c) => c.method === "POST" && /^\/api\/v1\/divisions\/[^/]+\/events\/import$/.test(c.path),
+  );
+}
+
+/** The DIVISION each import call belongs to, read OFF THE WIRE rather than
+ *  resolved back out of a division id this test never sees: `buildImportId`
+ *  mints `bench-import:{runId ?? "local"}:{divisionRef}` (`import.ts:292`) and
+ *  `buildImportRequestBody` carries it as `import_id`. */
+function importedDivisionRefs(calls: RecordedCall[]): string[] {
+  return importCalls(calls).map((c) =>
+    String((c.body as { import_id: string }).import_id).replace(/^bench-import:[^:]*:/, ""),
+  );
+}
+
+function eventsInImport(call: RecordedCall): number {
+  return (call.body as { streams: { events: unknown[] }[] }).streams.reduce(
+    (n, st) => n + st.events.length,
+    0,
+  );
+}
+
+/** Single-event POSTs that belong to a PACK stream, scoped away from the
+ *  DLS-gate probe's unconditional `cricket.*` cells exactly as
+ *  `divisionAEventCalls` does — but not scoped to division A, because which
+ *  division lands on this route is the very thing these tests vary. */
+function packEventPostCalls(calls: RecordedCall[]): RecordedCall[] {
+  return eventPostCalls(calls).filter((c) => !(c.body as { type: string }).type.startsWith("cricket."));
+}
+
+/** `_tiny.json`'s own event totals, keyed `divisionRef` and
+ *  `divisionRef/stageRef`. READ OUT OF THE PACK, never typed here: a literal
+ *  freezes yesterday's pack, and this file has already had two count
+ *  assertions go stale that way (see the B05 T5b note above). */
+async function tinyEventTotals(): Promise<{
+  byDivision: Map<string, number>;
+  byStage: Map<string, number>;
+}> {
+  const raw = JSON.parse(await readFile(TINY_PACK_PATH, "utf8")) as {
+    streams: { divisionRef: string; stageRef?: string; events: unknown[] }[];
+  };
+  const byDivision = new Map<string, number>();
+  const byStage = new Map<string, number>();
+  for (const st of raw.streams) {
+    byDivision.set(st.divisionRef, (byDivision.get(st.divisionRef) ?? 0) + st.events.length);
+    const stageKey = `${st.divisionRef}/${st.stageRef ?? "-"}`;
+    byStage.set(stageKey, (byStage.get(stageKey) ?? 0) + st.events.length);
+  }
+  return { byDivision, byStage };
+}
+
+function playInput(
+  transport: ReturnType<typeof fakeServer>["transport"],
+  sql: ReturnType<typeof fakeServer>["sql"],
+) {
+  return {
+    base: "http://bench.example",
+    engine: "optimized" as const,
+    keep: false,
+    log: silent,
+    cliEntry: "admin" as const,
+    packPath: TINY_PACK_PATH,
+    transport,
+    sql,
+    probeTransport: transport,
+    simTransport: transport,
+    importTransport: transport,
+    startTransport: transport,
+    advanceTransport: transport,
+    oracleTransport: transport,
+    matchBoard: echoExpectedBoard,
+    specialSubjects: echoSpecialSubjects,
+  };
+}
+
+describe("runPackSuite — B07a T7 play-mode dispatch", () => {
+  it("keeps the positional split when the suite declares nothing", async () => {
+    // The REGRESSION that matters most. `_RULES.md` §3 keeps one suite on the
+    // single-POST path and the import path needs a live subject of its own, so
+    // a dispatch that quietly moved `_tiny`'s divisions would delete coverage
+    // while appearing to add some. Asserted as an exact per-division split,
+    // both sides, so a mode that moved ONE division is caught.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+    });
+
+    expect([...importedDivisionRefs(calls)].sort()).toEqual(["d-badminton", "d-tiebreak"]);
+    // …and division A's whole stream — BOTH its stages — still went through
+    // the single-event route. Derived from the pack, never a literal.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-tiny") ?? 0);
+  });
+
+  it("routes each division by its DECLARED mode, inverting the positional default", async () => {
+    // The differential. `d-tiny` is index 0 (positionally "api") and
+    // `d-badminton` index 1 (positionally "import"); this declaration swaps
+    // both. A runner that ignored the declaration would produce EXACTLY the
+    // assertions of the test above, so neither half can pass by accident.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode, "d-badminton": "api" as PlayMode },
+    });
+
+    // `d-badminton` is no longer imported at all; `d-tiny` now is. Compared as
+    // a SET, because `d-tiny` imports TWICE — once for its league and once for
+    // the playoff the advance step folds by the same declared mode (ruling
+    // R23, which has its own test below). What this assertion is about is
+    // WHICH divisions take the import route, not how many calls each takes.
+    expect([...new Set(importedDivisionRefs(calls))].sort()).toEqual(["d-tiebreak", "d-tiny"]);
+    expect(importedDivisionRefs(calls)).not.toContain("d-badminton");
+    // …and the single-event route now carries `d-badminton`'s whole stream
+    // and nothing else — the exact count, so a route carrying BOTH divisions
+    // (a dispatch that added a path without removing one) fails here.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-badminton") ?? 0);
+    expect(
+      packEventPostCalls(calls).some((c) => (c.body as { type: string }).type === "badminton.rally"),
+    ).toBe(true);
+  });
+
+  it("plays a division's LATER stage by the same declared mode (R23)", async () => {
+    // `d-tiny` is the only shipped division with two stages: `s-league` folds
+    // in the first-stage pass and `s-playoff` is played by the advance step
+    // once its seats are confirmed. Before this task that second fold was
+    // hard-wired to the single-event route for EVERY division, whatever its
+    // mode — the seam Task 6 left open and named R23.
+    const { transport, sql, calls } = fakeServer();
+    const { byStage } = await tinyEventTotals();
+
+    await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode },
+    });
+
+    const tinyImports = importCalls(calls).filter(
+      (c) => String((c.body as { import_id: string }).import_id).endsWith(":d-tiny"),
+    );
+    // TWO imports for the one division: its first stage, then its advanced
+    // stage. One import plus two stray single-event POSTs is exactly the
+    // pre-R23 shape.
+    expect(tinyImports).toHaveLength(2);
+    expect(tinyImports.map(eventsInImport)).toEqual([
+      byStage.get("d-tiny/s-league") ?? 0,
+      byStage.get("d-tiny/s-playoff") ?? 0,
+    ]);
+    // …and the playoff's fold happened AFTER its seats were confirmed. An
+    // import issued before the seed proposal would post into a bracket fixture
+    // that has no real entrants yet.
+    const proposalIdx = calls.findIndex(
+      (c) => c.method === "POST" && /\/seed-proposal$/.test(c.path),
+    );
+    const secondTinyImportIdx = calls.indexOf(tinyImports[1]!);
+    expect(proposalIdx).toBeGreaterThan(-1);
+    expect(secondTinyImportIdx).toBeGreaterThan(proposalIdx);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 28 (task-7-review.md m2). The R23 later-stage import fold
+  // above (`d-tiny`'s own second import call) is on the wire — the test
+  // above already proves that — but `run-suite.ts`'s `importSimulation`
+  // report section only ever summed the FIRST-stage loop's own accumulators,
+  // so a reader trusting `report.importSimulation.eventsSent` undercounted
+  // by exactly the later stage's own event total. Derived from the REAL
+  // wire calls (`importCalls`/`eventsInImport`, both already defined above
+  // for the R23 test), not a hand-typed number, so a change to `_tiny.json`
+  // moves this test with it.
+  // ---------------------------------------------------------------------------
+  it("counts the later-stage import fold into the report's import totals too (Minors row 28)", async () => {
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "import" as PlayMode },
+    });
+
+    const imports = importCalls(calls);
+    // More than one import call must have happened (badminton/tiebreak's
+    // first-stage folds AND d-tiny's own two), or this run cannot witness a
+    // later-stage import moving the total at all.
+    expect(imports.length).toBeGreaterThan(1);
+    const totalEventsSent = imports.reduce((n, c) => n + eventsInImport(c), 0);
+    // The bug: reverting the fix drops `importSimulation.eventsSent` back to
+    // only the first-stage calls' sum — short by exactly `d-tiny`'s own
+    // second (advance) import, `byStage.get("d-tiny/s-playoff")`'s events.
+    expect(report.importSimulation?.eventsSent).toBe(totalEventsSent);
+    // `chunks` is the count of HTTP import calls actually made (this pack is
+    // far under any chunk-size cap, so each call is exactly one chunk) —
+    // the SAME undercount shape as `eventsSent` above, on a different field.
+    expect(report.importSimulation?.chunks).toBe(imports.length);
+  });
+
+  it("reaches the tap branch LOUDLY (no device links: a named warning), proving the dispatch is reached and not merely declared", async () => {
+    // The proof device. The failure this repo ships most often is a seam that
+    // is declared, typed and unit-green while nothing ever drives it. Since
+    // B07a T10 a tap division is PLAYED; on this device-link-less catalog the
+    // tap branch's own named warning can only come from that branch running.
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "tap" as PlayMode },
+    });
+
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
+    // The other half, and the half that makes this a REACHED assertion rather
+    // than a thrown-from-somewhere one: nothing was written for that division
+    // by either write path. A silent fall-back to `api` or `import` would be
+    // indistinguishable from the dispatch never having run.
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 27 (task-7-review.md m1, `run-suite.ts` ~3721-3728). The guard
+  // that refuses a stageRef-less stream in a MULTI-stage division was added
+  // untested: the `if (true) continue;` mutant (dropping the refusal) leaves
+  // the whole suite green. Proven here by actually mutating `_tiny.json`
+  // (Task 6's `writeMutatedTinyPack` temp-dir pattern) rather than by reading
+  // the guard: `d-tiny` already has TWO real stages, so stripping ONE of its
+  // three league streams' `stageRef` reaches the exact ambiguous shape
+  // (division has >1 stage, stream declares none) with no invented pack
+  // structure.
+  // ---------------------------------------------------------------------------
+  it("refuses a stageRef-less stream in a multi-stage division, while a stageRef-carrying sibling in the SAME division still folds", async () => {
+    const { transport, sql, calls } = fakeServer();
+    // `rr-r2-c1` is the middle of d-tiny's three league legs and the ONLY one
+    // whose events include `generic.score` (the other two are
+    // `[core.start, generic.result]` / `[core.start, core.forfeit]`) — a
+    // signature no other d-tiny stream shares, so its presence/absence on the
+    // wire is checked by EVENT TYPE, not by a fragile total count.
+    const packPath = await writeMutatedTinyPack((raw) => {
+      const stream = raw.streams.find(
+        (st) => st.divisionRef === "d-tiny" && st.fixtureExtKey === "rr-r2-c1",
+      );
+      if (stream === undefined) {
+        throw new Error("test fixture assumption broken: no d-tiny/rr-r2-c1 stream");
+      }
+      delete stream.stageRef;
+    });
+
+    // `runPackSuite`'s own precedence is `input.packPath ?? definitionPackPath`
+    // (`run-suite.ts:1894`) — `playInput()` always sets `input.packPath` to
+    // the COMMITTED `TINY_PACK_PATH`, so overriding only `opts.packPath` below
+    // would silently keep loading the real file and never reach this pack at
+    // all. Both must point at the mutated copy.
+    const report = await runPackSuite(
+      { ...playInput(transport, sql), packPath },
+      { suiteKey: "_tiny", packPath },
+    );
+
+    // The refusal itself: named division, named stream, named stage count.
+    // Deleting the `for (const st of divisionStreamsAll)` block (the row 27
+    // mutant) drops this text while leaving the exclusion below unchanged —
+    // exactly the silent-refusal shape the finding is about.
+    expect((report.errors ?? []).join("\n")).toContain(
+      'stream "rr-r2-c1" names division "d-tiny" with no stage, but that division declares 2 stages',
+    );
+
+    // `d-tiny` is index 0 (positional "api"), and this pack declares no
+    // `play` override — every one of its OWN events, refused or not, can
+    // only reach the wire through the single-event route below, never
+    // through an import call.
+    const postedTypes = packEventPostCalls(calls).map((c) => (c.body as { type: string }).type);
+    // The refused direction: `rr-r2-c1`'s own `generic.score` events (its
+    // only signature among d-tiny's OWN streams — `rr-r1-c1`/`rr-r3-c1`/
+    // `se-r0-i0` carry none) never reached the wire. A silent fold-in (the
+    // pre-Task-7 shape: "folded into the first stage anyway") would leak
+    // them here instead.
+    expect(postedTypes).not.toContain("generic.score");
+    // The legitimate direction, same division, same run: d-tiny's OTHER two
+    // league streams still carry an explicit `stageRef` and still fold
+    // normally through its "api" positional default — `rr-r1-c1`'s
+    // `generic.result` (p1Score 3 / p2Score 1) and `rr-r3-c1`'s
+    // `core.forfeit`, both untouched by this pack's only mutation.
+    expect(postedTypes).toContain("core.forfeit");
+    expect(
+      packEventPostCalls(calls).some(
+        (c) =>
+          (c.body as { type: string }).type === "generic.result" &&
+          (c.body as { payload?: { p1Score?: number; p2Score?: number } }).payload?.p1Score === 3,
+      ),
+    ).toBe(true);
+    // A single-stage division's stageRef-less stream is the ORDINARY shape
+    // (an absent stageRef means the division's only stage) and must keep
+    // working unaffected: `d-badminton` (untouched by the mutation) still
+    // reaches the import route.
+    expect(importedDivisionRefs(calls)).toContain("d-badminton");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 fix round 1 — I1 (the registry row's `play` had zero readers) and
+// I2 (an unplanned `play` key silently falls back instead of refusing).
+//
+// I1's dispatch test above (`runPackSuite — B07a T7 play-mode dispatch`)
+// proves `run-suite.ts`'s OWN dispatch refuses a declared `tap`. It does NOT
+// prove the declaration ever gets there from the registry row — `runPackSuite`
+// was called directly, with a hand-built `opts.play`, bypassing every hop a
+// live run actually takes. These tests drive the two hops a live run takes
+// instead: `bench.ts`'s own forwarding seam (`invokeSuiteDefinition`), and
+// `runTinySuite`'s own forwarding of its new `play` parameter.
+// ---------------------------------------------------------------------------
+describe("a registry row's `play` reaches the dispatch (B07a T7 fix round 1, I1)", () => {
+  it("runTinySuite forwards its `play` parameter into runPackSuite's dispatch", async () => {
+    // Drives the REAL `runTinySuite` (not `runPackSuite` directly) with a
+    // declared `play`, exactly as `bench.ts`'s forwarding seam would call it
+    // once handed a row's `definition.play`. Deleting `runTinySuite`'s own
+    // `...(play === undefined ? {} : { play })` spread reds this test and
+    // nothing else in this hop.
+    const { transport, sql, calls } = fakeServer();
+
+    const report = await runTinySuite(playInput(transport, sql), {
+      "d-tiny": "tap" as PlayMode,
+    });
+
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  it("bench.ts's own forwarding seam passes a registry row's `play` into its `.run()`", async () => {
+    // `SUITE_REGISTRY` is never mutated here (the ruling forbids it, and
+    // every real row leaves `play` undeclared until Task 10 touches `_tiny`
+    // alone) — this drives `invokeSuiteDefinition`, the exact line
+    // `runSuite("_tiny", ...)` calls in production, with a hand-built
+    // `SuiteDefinition` that both declares `play` AND wires its own `run` to
+    // the real `runPackSuite`, so the assertion below can only pass if
+    // `definition.play` actually crossed this one line.
+    const { transport, sql, calls } = fakeServer();
+
+    const definition: SuiteDefinition = {
+      key: "_tiny",
+      title: "fake row for the forwarding-seam test",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "tap" as PlayMode },
+      run: (input, play) =>
+        runPackSuite(input, {
+          suiteKey: "_tiny",
+          packPath: TINY_PACK_PATH,
+          ...(play === undefined ? {} : { play }),
+        }),
+    };
+
+    const report = await invokeSuiteDefinition(definition, playInput(transport, sql));
+
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+});
+
+describe("an unplanned `play` key reds the gate instead of silently falling back (B07a T7 fix round 1, I2)", () => {
+  it("names the misspelled key and lists the planned divisions, gate red", async () => {
+    // Same shape as CHECK 2's probe in the review: a typo'd division ref in
+    // `play` used to produce NO refusal, NO warning, `d-tiny` single-POSTed
+    // positionally, and `report.gate === "green"`. This pins the fixed
+    // behaviour: an error naming the bad key, and a red gate.
+    const { transport, sql, calls } = fakeServer();
+    const { byDivision } = await tinyEventTotals();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tinyy": "tap" as PlayMode },
+    });
+
+    expect(report.gate).toBe("red");
+    const errorText = (report.errors ?? []).join("\n");
+    expect(errorText).toContain('play declares division "d-tinyy"');
+    // "lists the planned refs" — EXACT match on the message's own list, not
+    // a bare `toContain` per ref: "d-tiny" is itself a substring of this
+    // test's own bad key "d-tinyy" (from the assertion just above), so a
+    // plain `errorText.toContain("d-tiny")` would pass even if the
+    // "planned divisions:" list dropped "d-tiny" entirely — it could never
+    // fail. Split the message's own list and compare it exactly instead.
+    const plannedRefsText = errorText.split("planned divisions: ")[1];
+    expect(plannedRefsText).toBeDefined();
+    expect((plannedRefsText ?? "").split(", ")).toEqual([
+      "d-tiny",
+      "d-badminton",
+      "d-registration",
+      "d-tiebreak",
+    ]);
+    // The typo never touched `d-tiny`'s OWN play — it still single-POSTs
+    // positionally, proving the guard doesn't fail the run's data, only its
+    // gate.
+    expect(packEventPostCalls(calls)).toHaveLength(byDivision.get("d-tiny") ?? 0);
+  });
+
+  // The positive pair for the test above. Without it, a guard that compares
+  // every key against the WRONG set (e.g. an always-empty one, rather than
+  // `plannedDivisionRefs`) would flag a correctly-named key too — reddening
+  // every run that declares `play` at all — and nothing above would catch
+  // it, since the misspelled-key test only proves an unplanned key gets
+  // flagged, never that a PLANNED one does not.
+  //
+  // TWO keys, one at index 0 (`d-tiny`) and one NOT (`d-badminton`, index
+  // 1) — re-review round 1 finding, M7: a positive pair that only ever
+  // declares the FIRST planned division cannot tell a correct guard from
+  // one that (wrongly) accepts only `plan.divisions[0]`, because "first
+  // division" and "planned division" give the same answer at index 0. Both
+  // keys here are declared at their OWN positional default (`api` for index
+  // 0, `import` for index 1), so the write path is unchanged either way —
+  // this test is about the GUARD, not the dispatch.
+  it("a correctly-named play key never trips the unplanned-division guard, at index 0 or later", async () => {
+    const { transport, sql } = fakeServer();
+
+    const report = await runPackSuite(playInput(transport, sql), {
+      suiteKey: "_tiny",
+      packPath: TINY_PACK_PATH,
+      play: { "d-tiny": "api" as PlayMode, "d-badminton": "import" as PlayMode },
+    });
+
+    expect((report.errors ?? []).join("\n")).not.toContain("play declares division");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B07a T7 fix round 2 — I1(b)/(c): round 1's own seam test proved
+// `invokeSuiteDefinition` forwards `definition.play`, but drove it with a
+// `SuiteDefinition` the TEST built — never `bench.ts`'s own exported
+// `runSuite`, and never the REAL registry row's `run` binding. Reverting
+// `bench.ts`'s call to the seam (M1), or replacing either registry row's
+// `run` with a wrapper that drops the second argument (M2/M3), stayed green.
+// This block drives the REAL `runSuite` against the REAL row (mocked ABOVE
+// to carry an injected `play`, but with the row's own `run` untouched), so
+// all three links — `runSuite` -> the seam -> the row's real binding -> the
+// dispatch — are exercised in one call.
+//
+// Fix round 3 (R34): `probeTransport` is no longer auto-threaded into
+// `simTransport`/`importTransport`/`startTransport`/`advanceTransport`/
+// `oracleTransport` by PRODUCTION `bench.ts` code (that was round 2's own
+// deviation, reverted — see `bench.ts`'s `runSuite`). This test now supplies
+// all five itself, via `injectedTransports`, spread into the row's `run`
+// call by the mock above — a test-side seam, not a production one. It also
+// points `--report-dir` at a fresh `mkdtemp` directory, removed in
+// `afterEach`, so no `bench-report/<run-id>/` artifact is ever written into
+// the worktree (round 2's own `fix-round-2-i1bc` directory, R34(b)).
+// ---------------------------------------------------------------------------
+describe("bench.ts's REAL runSuite drives the REAL `_tiny` registry row (B07a T7 fix round 2, I1(b)/(c))", () => {
+  let reportDir: string | undefined;
+
+  afterEach(async () => {
+    if (reportDir !== undefined) {
+      await rm(reportDir, { recursive: true, force: true });
+      reportDir = undefined;
+    }
+  });
+
+  it("a play declaration injected onto the real row reaches the real dispatch: tap-branch warning, zero writes", async () => {
+    const { transport, sql, calls } = fakeServer();
+
+    // Opt-in (R34(c)): unset, `lookupSuite("_tiny")` returns the row
+    // completely unmodified — every OTHER test in this file, which calls
+    // `runTinySuite`/`runPackSuite` directly and never touches
+    // `lookupSuite`, is unaffected either way, but this keeps the mock
+    // honest for any FUTURE test here that calls `runSuite("_tiny", ...)`
+    // expecting a normal run.
+    injectedPlay = { "d-tiny": "tap" as PlayMode };
+    // `transport` doubles for all six: the SAME fake `fakeServer()` returns
+    // already answers every route the DLS-gate probe, division-start, and
+    // every other granular test-only transport seam need — one
+    // comprehensive fake, not five different ones. Threaded here, by the
+    // TEST, into the row's `run` call — never by `bench.ts`.
+    injectedTransports = {
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+    };
+    reportDir = await mkdtemp(join(tmpdir(), "bench-report-fix-round-3-"));
+
+    // No `--suite` needed: `runSuite`'s `key` argument is independent of
+    // `config.suites` (that list only gates the CLI's own `--suite` flag
+    // validation).
+    const config = parseCliArgs([
+      "--base",
+      "http://bench.example",
+      "--wipe",
+      "--report-dir",
+      reportDir,
+    ]);
+    const report = await runSuite("_tiny", config, "fix-round-3-i1bc", sql, transport);
+
+    // B07a T10 — the dispatch now PLAYS a tap division, and this fake's catalog
+    // sells no `scoring.device_links` (deviceLinksGranted false). The tap
+    // branch's own loud warning (R55) can only come from that branch running,
+    // and no tapPlay is published for fixtures nobody played.
+    expect((report.warnings ?? []).join("\n")).toContain('division "d-tiny" declares play "tap"');
+    expect((report.warnings ?? []).join("\n")).toContain("tap fixtures NOT played");
+    expect(report.tapPlay).toBeUndefined();
+    // The negative half: nothing was written for `d-tiny` on either write
+    // path. A silent fall-back (M1/M2/M3, each of which drops the `play`
+    // forward somewhere on this path) would single-POST `d-tiny` instead —
+    // it is index 0, so its positional default is `"api"`.
+    expect(importedDivisionRefs(calls)).not.toContain("d-tiny");
+    expect(packEventPostCalls(calls)).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Minors row 29 (task-7-re-review.md:343 m4). `injectedPlay`/
+  // `injectedTransports` (`:96-97`) are read by the `registry.ts` mock
+  // (`:105-119`) AT CALL TIME: when `injectedPlay !== undefined` it returns a
+  // SYNTHETIC row whose `run` is a fresh closure over `injectedTransports`;
+  // otherwise it returns `real` UNTOUCHED, same `run` reference. The ONLY
+  // thing that stops the test above from leaking its injected state into
+  // every OTHER `lookupSuite("_tiny")` call for the rest of this file's run
+  // is the top-level `afterEach` (`:127-130`).
+  //
+  // This does NOT compare `row.play`: the REAL `_tiny` row now legitimately
+  // declares `play: { "d-tiny": "tap" }` itself (`registry.ts:18`, Task 10),
+  // which happens to equal exactly what the test above injects — a value
+  // comparison could not tell "reset" apart from "leaked". Comparing the
+  // `run` REFERENCE against the untouched actual module can: it is identity-
+  // equal only when the mock returned `real` unchanged.
+  //
+  // Runs deliberately AFTER the injecting test, in the same file, same
+  // module — vitest executes a file's tests top to bottom by default, which
+  // is the ordering this guards. Deleting the `afterEach` (or narrowing it to
+  // drop `injectedPlay = undefined`) leaves this red.
+  // ---------------------------------------------------------------------------
+  it("a later lookup through the SAME mocked registry returns the row's OWN `run` once the mock resets (guards the afterEach, row 29)", async () => {
+    const actual = await vi.importActual<typeof import("../suites/registry.ts")>(
+      "../suites/registry.ts",
+    );
+    const realRow = actual.lookupSuite("_tiny");
+    const mockedRow = lookupSuite("_tiny");
+    expect(realRow).toBeDefined();
+    expect(mockedRow?.run).toBe(realRow?.run);
   });
 });

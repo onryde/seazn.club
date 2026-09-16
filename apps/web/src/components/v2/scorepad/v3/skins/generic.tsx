@@ -328,6 +328,7 @@ function buildHalf(view: PadHostView, state: GenericStateShape, side: Side, t: T
       : { winnerId: entrantOf(state, side) };
   return {
     who,
+    side,
     big: bigOf(view, state, side),
     tappable,
     ...(tappable

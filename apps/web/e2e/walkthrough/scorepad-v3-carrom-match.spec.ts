@@ -59,14 +59,15 @@ function sheet(page: Page) {
 function strip(page: Page, id: string) {
   return scorebug(page).locator(`[data-strip-item-id="${id}"]`);
 }
-/** Same locator shape every sibling walkthrough's own `halfScore` uses —
- *  scoped to `.app-display.font-bold` because that class names the ONE
+/** Scoped to `.app-display.font-bold` because that class names the ONE
  *  score digit, never the WHO line or the "(gamesWon)" sub-caption sharing
- *  the same grid cell. */
+ *  the same grid cell. `data-side` (scorebug.tsx, Task 8) names the half by
+ *  VALUE rather than by render-order position — the `.grid > * nth(0|1)`
+ *  shape this used to be silently flips home/away the moment a layout
+ *  change reorders the halves; `[data-side]` cannot. */
 function halfScore(page: Page, side: "home" | "away") {
   return scorebug(page)
-    .locator(".grid > *")
-    .nth(side === "home" ? 0 : 1)
+    .locator(`[data-side="${side}"]`)
     .locator(".app-display.font-bold");
 }
 
@@ -120,7 +121,7 @@ async function postEvent(
  *  takes: a no-op when no dock is open, so this is safe to call
  *  unconditionally after every tap. */
 async function sendHeldNow(page: Page): Promise<void> {
-  const btn = pad(page).locator('[data-role="v3-dock"]').getByRole("button", { name: "Send now", exact: true });
+  const btn = pad(page).locator('[data-testid="pad-send-now"]');
   if (await btn.count()) await btn.click();
 }
 
@@ -194,8 +195,8 @@ async function tapBoard(page: Page, fx: RosteredFixture, winner: "home" | "away"
   await tile(page, "board").click();
   await expect(sheet(page)).toBeVisible({ timeout: 10_000 });
   await sheet(page).locator(`[data-choice-option-id="${winner}"]`).click();
-  await sheet(page).getByLabel("Opponent's coins left", { exact: true }).fill("9");
-  await sheet(page).getByRole("button", { name: "Confirm", exact: true }).click();
+  await sheet(page).locator('[data-testid="pad-sheet-number"]').fill("9");
+  await sheet(page).locator('[data-testid="pad-sheet-confirm"]').click();
   await sendHeldNow(page);
   // Derived from HOLD_MS, not a flat 20s: "Send now" flushes well under the
   // full hold in the common case, but a bare 20s proved tight under real

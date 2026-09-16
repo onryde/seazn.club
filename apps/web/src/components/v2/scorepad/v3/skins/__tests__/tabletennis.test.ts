@@ -411,6 +411,20 @@ describe("scorebug", () => {
     expect(assertScorebugSpec(spec)).toEqual([]);
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): closes the parity gap the reviewer's P-series showed — a `side`
+  // swap here would otherwise survive the whole v3 scope. Derived from this
+  // fixture's own point split (2-0, the test above), never a typed index
+  // table.
+  it("marks each half with its OWN side — home's half carries HOME's points (kills a side swap)", () => {
+    const v = view({ events: stream(summary(11, 7), anchor("H", "H"), rally("H")) });
+    const spec = buildScorebug(v, t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.big).toBe("2");
+    expect(away?.big).toBe("0");
+  });
+
   it("words Deuce off the CFG-DERIVED target, never a hardcoded 10 — hardbat-21 accelerates at 20-all", () => {
     const deuceDefault = view({ events: stream(...Array.from({ length: 20 }, (_, i) => rally(i % 2 === 0 ? "H" : "A"))) });
     expect(buildScorebug(deuceDefault, t).context).toContain("pad.tabletennis.context.deuce");

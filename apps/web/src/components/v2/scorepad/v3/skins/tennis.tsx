@@ -552,6 +552,7 @@ function buildHalf(
   const soleScorer = players.length === 1 ? players[0]?.personId : undefined;
   return {
     who,
+    side,
     big: pointBig(state.points, side),
     tappable,
     ...(tappable

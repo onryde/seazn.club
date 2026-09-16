@@ -238,6 +238,20 @@ describe("buildScorebug — the halves", () => {
     expect(spec.halves[1].tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "A", winnerPerson: "A1" } });
   });
 
+  // Task 8 fix round 2 (review re-review round 1, Important I1(b), ruling
+  // R43): the reviewer's P-series showed a `side` swap survives the whole
+  // v3 scope unless a test derives the expected side from the skin's own
+  // output. Here that is the tap's own winner entrant — "H"/"A" are the
+  // SAME literal the test above already proves belongs to halves[0]/[1] —
+  // never a typed index table.
+  it("marks each half with its OWN side — the half whose tap names winner \"H\" is home's (kills a side swap)", () => {
+    const spec = buildScorebug(view({ events: stream(start()) }), t);
+    const home = spec.halves.find((h) => h.side === "home");
+    const away = spec.halves.find((h) => h.side === "away");
+    expect(home?.tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "H" } });
+    expect(away?.tapEvent).toEqual({ type: RESULT_TYPE, payload: { winner: "A" } });
+  });
+
   it("shows an em dash before any result is recorded", () => {
     expect(buildScorebug(view(), t).halves.map((h) => h.big)).toEqual(["—", "—"]);
   });

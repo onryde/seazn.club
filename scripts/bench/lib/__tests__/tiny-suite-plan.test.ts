@@ -72,6 +72,16 @@ function fakeServer(opts: {
   /** B06a T7 — knobs for the shared news rail (`_news-routes.ts`). */
   newsRoutes?: NewsRoutesOptions;
   officialsAutoGranted: boolean;
+  /**
+   * B07a T11 — put `scoring.device_links` on the catalog as the live DB has it
+   * (community false, pro true: V117__device_links.sql:55-56). Off by default,
+   * which leaves the key with no rows at all: nothing to refuse for, so the
+   * probe's two device-link cells retire and the run has to SAY so.
+   */
+  deviceLinksSold?: boolean;
+  /** B07a T11 fix round 1 — the status the device-link revoke answers (200 by
+   *  default): anything else stands in for a revoke that went wrong. */
+  deviceLinkRevokeStatus?: number;
 
   /** B04 — knobs for the shared scheduling world (`_schedule-routes.ts`). */
   schedule?: FakeScheduleOptions;
@@ -456,6 +466,26 @@ function fakeServer(opts: {
           json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "officials.auto" } } as never,
         };
       }
+      // B07a T11 — the probe's device-link cells. `createDeviceLink` gates on
+      // `scoring.device_links` (usecases/device-links.ts:128) before it reads
+      // the fixture, so again only the plan decides the answer.
+      if (/^\/api\/v1\/fixtures\/[^/]+\/device-links$/.test(path)) {
+        if (!opts.deviceLinksSold) throw new Error(`fake server: device-link mint with no device links on the catalog: ${path}`);
+        if (provisionedPlan === null) {
+          return {
+            status: 402,
+            json: { ok: false, error: { code: "PAYMENT_REQUIRED", message: "nope", feature_key: "scoring.device_links" } } as never,
+          };
+        }
+        return { status: 201, json: { ok: true, data: { id: "dl-1", secret: "dl_fake" } } as never };
+      }
+      // …and revokes what it minted, by DELETE on the link's own route.
+      if (method === "DELETE" && /^\/api\/v1\/fixtures\/[^/]+\/device-links\/[^/]+$/.test(path)) {
+        const status = opts.deviceLinkRevokeStatus ?? 200;
+        return status === 200
+          ? { status, json: { ok: true, data: { id: "dl-1", revoked_at: "2026-09-14T12:00:00Z" } } as never }
+          : { status, json: { ok: false, error: { code: "INTERNAL", message: "nope" } } as never };
+      }
       const m = /^\/api\/v1\/fixtures\/([^/]+)\/events$/.exec(path);
       if (!m) throw new Error(`fake server: unhandled raw ${method} ${path}`);
       const { type, payload } = body as { type: string; payload: { target?: unknown } };
@@ -495,6 +525,12 @@ function fakeServer(opts: {
         return [
           { plan_key: "community", bool_value: false },
           { plan_key: "pro", bool_value: opts.officialsAutoGranted },
+        ] satisfies PlanEntitlementRow[];
+      }
+      if (featureKey === "scoring.device_links" && opts.deviceLinksSold === true) {
+        return [
+          { plan_key: "community", bool_value: false },
+          { plan_key: "pro", bool_value: true },
         ] satisfies PlanEntitlementRow[];
       }
       // `stats.player` deliberately absent, and the omission is load-bearing:
@@ -601,10 +637,98 @@ describe("runTinySuite — B03 T7 plan/entitlement-gate wiring", () => {
     expect(retiredWarning, "a retired paywall cell must be reported").toBeDefined();
     expect(retiredWarning).toContain("PROVOCABLE_GATED_FEATURES");
 
+    // B07a T11 — this catalog has no `scoring.device_links` rows at all, so
+    // the probe's two device-link cells retire (nothing to refuse for) and the
+    // chosen plan cannot mint a device link. Both are REPORTED, never silent;
+    // the sold path, where neither warning may appear, is the next test.
+    const warnings = report.warnings ?? [];
+    expect(
+      warnings.find((w) => w.includes("scoring.device_links") && w.includes("not paywalled")),
+      "retired device-link cells must be reported",
+    ).toBeDefined();
+    expect(
+      warnings.find((w) => w.includes("deviceLinksGranted")),
+      "a run whose plan cannot mint a device link must say so",
+    ).toBeDefined();
+
     // The probe's own throwaway competition really was created over HTTP —
     // proof this is DRIVEN, not merely defined and never called.
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/v1/competitions" &&
       (c.body as { name: string }).name.startsWith("Bench DLS Gate Probe"))).toBe(true);
+  });
+
+  it("B07a T11 — device links sold: both device-link cells reach the report as passing oracles, and nothing warns about device links", async () => {
+    const { transport, sql } = fakeServer({ officialsAutoGranted: true, deviceLinksSold: true });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    expect((report.errors ?? []).join("\n")).toBe("");
+    expect(report.gate).toBe("green");
+    // Through run-suite's generic `entitlement-gate: ${cell.cell}` loop — no
+    // device-link-specific wiring exists or is needed there.
+    const byName = new Map((report.oracles ?? []).map((o) => [o.name, o] as const));
+    expect(byName.get("entitlement-gate: device_link_refused_before_plan")?.passed).toBe(true);
+    expect(byName.get("entitlement-gate: device_link_minted_after_plan")?.passed).toBe(true);
+    // The negative pair of the previous test's two warnings.
+    expect(
+      (report.warnings ?? []).filter((w) => w.includes("scoring.device_links") || w.includes("deviceLinksGranted")),
+    ).toEqual([]);
+  });
+
+  it("B07a T11 fix round 1 — a device-link revoke that fails reaches the report as a WARNING: no error, a green gate, and never the secret", async () => {
+    const { transport, sql, calls } = fakeServer({
+      officialsAutoGranted: true,
+      deviceLinksSold: true,
+      deviceLinkRevokeStatus: 500,
+    });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: silent,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+
+    expect((report.errors ?? []).join("\n")).toBe("");
+    expect(report.gate).toBe("green");
+    const byName = new Map((report.oracles ?? []).map((o) => [o.name, o] as const));
+    expect(byName.get("entitlement-gate: device_link_minted_after_plan")?.passed).toBe(true);
+    // The revoke really went out, and its failure is said exactly once.
+    expect(calls.filter((c) => c.method === "DELETE" && /\/device-links\/[^/]+$/.test(c.path))).toHaveLength(1);
+    const revokeWarnings = (report.warnings ?? []).filter((w) => w.includes("dl-1"));
+    expect(revokeWarnings).toHaveLength(1);
+    expect(revokeWarnings[0]).toContain("status 500");
+    // The one-time secret is nowhere in what the run reports.
+    expect(JSON.stringify(report)).not.toContain("dl_fake");
   });
 
   it("autoAssign OFF: the provisioned plan does NOT grant officials.auto, so /officials/auto is never called", async () => {

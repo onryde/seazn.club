@@ -1,0 +1,772 @@
+{
+  "runId": "t13-legB2-1",
+  "startedAt": "2026-09-16T13:35:08.942Z",
+  "finishedAt": "2026-09-16T13:35:38.270Z",
+  "engine": "optimized",
+  "base": "http://localhost:3363",
+  "preflight": {
+    "ok": true,
+    "refusals": [],
+    "placement": {
+      "status": "live",
+      "detail": "placement channel to localhost:50714 reached READY within 3s."
+    }
+  },
+  "suites": [
+    {
+      "suite": "_tiny",
+      "gate": "green",
+      "timings": {
+        "seedMs": 2544,
+        "scheduleMs": 516,
+        "importMs": 1135
+      },
+      "keep": false,
+      "solver": {
+        "requestedEngine": "optimized"
+      },
+      "conflictCount": 0,
+      "oracles": [
+        {
+          "name": "entitlement-gate: revise_no_target_community",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: revise_with_target_community",
+          "passed": true,
+          "detail": "not refused for payment (status 201) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: revise_dls_off_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: other_event_community",
+          "passed": true,
+          "detail": "not refused for payment (status 422) — the entitlement gate cleared it"
+        },
+        {
+          "name": "entitlement-gate: gated_feature_refusal_names_its_key",
+          "passed": true,
+          "detail": "refused as expected: 402 PAYMENT_REQUIRED, feature_key \"officials.auto\""
+        },
+        {
+          "name": "entitlement-gate: device_link_refused_before_plan",
+          "passed": true,
+          "detail": "refused as expected: 402 PAYMENT_REQUIRED, feature_key \"scoring.device_links\""
+        },
+        {
+          "name": "entitlement-gate: device_link_minted_after_plan",
+          "passed": true,
+          "detail": "minted: 201 with a one-time device-link secret (deliberately not copied here) — provisioning cleared the refusal"
+        },
+        {
+          "name": "entitlement-gate: revise_no_target_after_plan",
+          "passed": true,
+          "detail": "reached the ENGINE and was refused on shape: 422 INVALID_EVENT — the entitlement door let this call through, which is what \"scoring is free\" means over HTTP"
+        },
+        {
+          "name": "entitlement-gate: cricket.dls is free on the plan a non-paying org resolves to",
+          "passed": true,
+          "detail": "plan_entitlements grants cricket.dls on \"community\" — scoring is free, as ruled (V390__scoring_free.sql; V393__entitlements_v18.sql:63-70)"
+        },
+        {
+          "name": "officials: claim invite unclaimed (off-eli)",
+          "passed": true,
+          "detail": "claim 0b0d31fb-1fca-4ea3-9602-a02b6a6792b1 for person 8e494507-f32a-4b9c-ad8d-b8d6cf7d1d2d is minted and unclaimed"
+        },
+        {
+          "name": "officials: claim invite unclaimed (off-dee)",
+          "passed": true,
+          "detail": "claim 08b67363-8e6c-4af0-aab3-29a1d7f3593b for person c1da94e7-c866-4b06-bdb9-9f8e8f6fcf51 is minted and unclaimed"
+        },
+        {
+          "name": "officials: auto-assign reaches the auto-needing official(s) after scheduling",
+          "passed": true,
+          "detail": "3 proposed, 3 applied across 3 fixture(s)"
+        },
+        {
+          "name": "player-stats: baseline",
+          "passed": true,
+          "detail": "2 roster read(s), 0 division row(s), 0 public row(s) — empty rows is the correct baseline (B03 folds no score events; see lib/stats.ts's header comment)"
+        },
+        {
+          "name": "oracle: d-tiebreak discipline enforced at the team sheet (p-hotel)",
+          "passed": true,
+          "detail": "naming the ACTIVE-suspended \"p-hotel\" on \"rr-r3-c1\" was REFUSED with 422 SUSPENDED_PLAYER, and the ELIGIBLE team-mate \"p-foxtrot\" alone was ACCEPTED on that same sheet — the gate refuses the banned player, not everybody"
+        },
+        {
+          "name": "oracle: d-tiebreak discipline carry (p-hotel)",
+          "passed": true,
+          "detail": "the ban confirmed through POST /divisions/{id}/suspensions + PATCH {kind:\"confirm\"} is ACTIVE over 1 match(es), stamped on entrant \"e-foxtrot\", and \"p-hotel\" is off the team sheet of rr-r3-c1 while still on 1 fixture(s) the pack does NOT name — and the ELIGIBLE team-mate \"p-foxtrot\" holds no ban and is on all 2 sheet(s)"
+        },
+        {
+          "name": "tap: d-tiny/rr-r1-c1 finalized",
+          "passed": true,
+          "detail": "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+        },
+        {
+          "name": "tap: d-tiny/rr-r2-c1 finalized",
+          "passed": true,
+          "detail": "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+        },
+        {
+          "name": "tap: d-tiny/rr-r3-c1 finalized",
+          "passed": true,
+          "detail": "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+        },
+        {
+          "name": "advance: d-tiny/s-playoff seed proposal qualifiers",
+          "passed": true,
+          "detail": "proposal qualifiers [e204993e-6301-4df4-a5aa-1bec70e77a0b, 917b72ee-3f69-404e-b603-85ca23a66fb9] match the pack's expected order"
+        },
+        {
+          "name": "tap: d-tiny/se-r0-i0 finalized",
+          "passed": true,
+          "detail": "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+        },
+        {
+          "name": "advance: d-tiny/s-playoff finalRanks",
+          "passed": true,
+          "detail": "captured finalRanks [e204993e-6301-4df4-a5aa-1bec70e77a0b, 917b72ee-3f69-404e-b603-85ca23a66fb9] match the pack's expected order",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny/s-playoff rank crossing (captured vs standings)",
+          "passed": true,
+          "detail": "captured finalRanks and the re-read standings agree: [e204993e-6301-4df4-a5aa-1bec70e77a0b, 917b72ee-3f69-404e-b603-85ca23a66fb9]",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny/s-playoff standings rank vs expected.finalRanks",
+          "passed": true,
+          "detail": "re-read standings [e204993e-6301-4df4-a5aa-1bec70e77a0b, 917b72ee-3f69-404e-b603-85ca23a66fb9] match the pack's expected order",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny champion",
+          "passed": true,
+          "detail": "champion e204993e-6301-4df4-a5aa-1bec70e77a0b matches the pack's expected champion"
+        },
+        {
+          "name": "oracle: d-tiny per-match results",
+          "passed": true,
+          "detail": "4 checked, 0 mismatched (r1: 2/2, r2: 1/1, r3: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-badminton per-match results",
+          "passed": true,
+          "detail": "1 checked, 0 mismatched (r1: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak per-match results",
+          "passed": true,
+          "detail": "3 checked, 0 mismatched (r1: 1/1, r2: 1/1, r3: 1/1)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny/s-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-league\" match the pack's expected.tables row — live rows also carry metric(s) this pack does not declare (not gated): e204993e-6301-4df4-a5aa-1bec70e77a0b: {\"for\":5,\"diff\":2,\"against\":3}; 917b72ee-3f69-404e-b603-85ca23a66fb9: {\"for\":3,\"diff\":-2,\"against\":5}"
+        },
+        {
+          "name": "oracle: d-tiny/s-league tie-order cascade",
+          "passed": true,
+          "detail": "no two rows in \"s-league\" are tied on points that cascade [points,diff] could decide — this oracle has NO SUBJECT and compared nothing (0 checked, 0 skipped)",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "oracle: d-badminton/s-badminton-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-badminton-league\" match the pack's expected.tables row — live rows also carry metric(s) this pack does not declare (not gated): ca4fce8d-5e0f-4601-a310-5465fdd638e2: {\"sets_won\":2,\"sets_lost\":0,\"points_won\":42,\"points_lost\":33}; 28009a8e-7edc-459f-b1f6-4d84fe04d91f: {\"sets_won\":0,\"sets_lost\":2,\"points_won\":33,\"points_lost\":42}"
+        },
+        {
+          "name": "oracle: d-badminton/s-badminton-league tie-order cascade",
+          "passed": true,
+          "detail": "no two rows in \"s-badminton-league\" are tied on points that cascade [points,wins,set_ratio,point_ratio,h2h_points] could decide — this oracle has NO SUBJECT and compared nothing (0 checked, 0 skipped)",
+          "verdict": "no_subject",
+          "subject": false
+        },
+        {
+          "name": "oracle: d-tiebreak/s-tiebreak-league standings table",
+          "passed": true,
+          "detail": "live standings for \"s-tiebreak-league\" match the pack's expected.tables row"
+        },
+        {
+          "name": "oracle: d-tiebreak/s-tiebreak-league tie-order cascade",
+          "passed": true,
+          "detail": "live order agrees with cascade [points,diff,for] on every tied pair (1 checked, 0 skipped)",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: specials",
+          "passed": true,
+          "detail": "1 special(s), 5 claim(s) checked, 0 failed, 0 unsupported",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiny person cards (scores)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-tiny\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiny leaderboard (points)",
+          "passed": true,
+          "detail": "live leaderboard \"points\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiny person cards (points)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"points\" count on their own /persons/{id}/stats card for \"d-tiny\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak leaderboard (scores)",
+          "passed": true,
+          "detail": "live leaderboard \"scores\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiebreak person cards (scores)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"scores\" count on their own /persons/{id}/stats card for \"d-tiebreak\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: d-tiebreak leaderboard (points)",
+          "passed": true,
+          "detail": "live leaderboard \"points\" matches the pack's expected.leaderboards row"
+        },
+        {
+          "name": "oracle: d-tiebreak person cards (points)",
+          "passed": true,
+          "detail": "each of the 2 person(s) on this board carries the SAME \"points\" count on their own /persons/{id}/stats card for \"d-tiebreak\"",
+          "subject": true
+        },
+        {
+          "name": "oracle: p-ana career rollup",
+          "passed": true,
+          "detail": "the live ?group=sport rollup carries all 2 of this person's expected.careers metric(s), each in exactly one sport"
+        },
+        {
+          "name": "people: claim invites accepted",
+          "passed": true,
+          "detail": "2/2 invites accepted by the invited address",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an invalid claim token is refused",
+          "passed": true,
+          "detail": "a same-shape, same-length token that was never minted drew HTTP 401",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: an accepted invite is closed",
+          "passed": true,
+          "detail": "all 2 accepted invites no longer read back as open",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: invites past the limit stay unclaimed",
+          "passed": true,
+          "detail": "2 invite(s) were never touched and still read back as open",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "people: a claimed profile still reports the same stats",
+          "passed": true,
+          "detail": "2 claimed profile(s) report the same divisions and stats as before acceptance",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: folding drafted posts",
+          "passed": true,
+          "detail": "15 draft(s) exist for this run's competition after the folds",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: the named fixtures publish and the rest stay draft",
+          "passed": true,
+          "detail": "1/1 named fixture(s) published, 14 post(s) still draft",
+          "verdict": "pass",
+          "subject": true
+        },
+        {
+          "name": "news: a republish does not move published_at",
+          "passed": true,
+          "detail": "publishing an already-published post left published_at where it was",
+          "verdict": "pass",
+          "subject": true
+        }
+      ],
+      "provenancePct": 75,
+      "provenance": {
+        "total": 8,
+        "real": 6,
+        "reconstructed": 2,
+        "synthetic": 0,
+        "realPct": 75
+      },
+      "claims": {
+        "total": 4,
+        "accepted": 2
+      },
+      "news": {
+        "drafted": 15,
+        "published": 1
+      },
+      "adaptations": [
+        "The whole pack is invented. There is no historical tournament behind it, which is why meta.synthetic is true and meta.sources is empty. — WHY: _tiny is the shared fixture the pack validator (B02 task 2) and the _tiny runner suite (B02 task 3) both prove themselves on. Binding it to a real event would make every future edit an archival research task, and a two-entrant three-game series has no real-world analogue worth citing. [the whole file]",
+        "Per-stream provenance describes how each stream was AUTHORED inside this fixture, not correspondence to a real event. — WHY: The bench's provenance doctrine ('real' vs 'reconstructed', never disguised) is a property of the stream's authoring method. In a synthetic pack 'real' means the stream IS the authored ground truth and 'reconstructed' means it was built to fold to a target score — which is exactly the distinction the validator and the report need to exercise. [streams[1]]",
+        "The reconstructed d-tiny stream (rr-r2-c1) is hand-written and therefore carries no reconstruction.seed. — WHY: Task 3 owns the deterministic generators; this file must not wait on them. A generated stream carries its seed so the same bytes come out on every machine. (B03 T5 adds the SECOND division, d-badminton, whose stream IS generated and DOES carry a seed — see streams[3].) [streams[1].reconstruction]",
+        "Each stream declares its own home/away entrants rather than leaving them to be re-derived from the round-robin generator. — WHY: foldMatch takes LineupPair as a required argument, and generic.result maps p1Score to HOME (sports/generic/generic.ts:113-114) while a multi-leg round robin mirrors home/away on even legs (scheduling/roundrobin.ts). rr-r2-c1 is leg 2, so its sides ARE swapped: without a declaration, the same payload would name a different winner depending on a generator this pack never mentions. B03 should assert the seeded fixture's sides match these. [streams[].home / streams[].away]",
+        "The expected table omits per-entrant metrics (for/against/diff). — WHY: How the competition layer AGGREGATES a StandingsDelta's metrics across fixtures is verified by the stage-0 validator (task 2), not authored blind here. Points, played, won, drawn and lost are derivable from the module's own standingsDelta and are asserted. [expected.tables[0].rows]",
+        "d-badminton is a SECOND division, added by B03 T5 to exercise the two-division generalisation `buildSeedPlan` unlocked once `tinyPlan`'s divisions.length !== 1 refusal was deleted (T4). — WHY: A synthetic fixture proves nothing about the real generalisation; a second real division in the shared pack does. badminton.rally is the only one of badminton's six declared eventSchemas that any shipped preset's padSpec actually exposes to a scorer — the other five (game.summary, timeout, sanction, sub, expedite.start) are either coarse-tier-only or unreachable, so it is the only legal choice for a reconstructed rally stream (see `assertDeclaresEventType`, lib/reconstruct.ts:172-180). [divisions[1], streams[3], expected.matches[3], expected.tables[1]]",
+        "This whole file is now a GENERATED artefact — see build-packs/_tiny.ts. It is committed anyway (as openapi/v1.json is) so a pack consumer never needs to run the generator to read it, and so drift between the generator and the committed bytes is a mechanical, testable fact rather than an assertion. — WHY: build-packs/_tiny.ts is modelled on scripts/openapi-gen.ts's generator/committed-output/drift-test pattern. B03's charter does not include a CI step for it (unlike the OpenAPI gate at .github/workflows/ci.yml:94-98); the determinism test under build-packs/__tests__ is the gate for now. [the whole file]",
+        "officials[] declares TWO officials against d-tiny only: off-dee (a named assignment onto rr-r1-c1 — MANUAL) and off-eli (no assignments at all — left to autoAssignOfficials). p-eli is a NEW official-lane person added alongside the already-declared, previously-unused p-dee — B03 T6 closes that dangling ref by giving it an official row at last. — WHY: pack-schema.ts's own comment on PackOfficial (\"an official with named assignments is manual, one without is left to autoAssignOfficials\") names both paths; one official can only ever prove one of them. d-badminton was deliberately left out — this addition is orthogonal to T5's, and mixing the two would make a failure here harder to attribute. [officials[]]",
+        "venues[] declares ONE venue with TWO courts, and BOTH scheduled divisions (d-tiny, d-badminton) carry the SAME scheduleConfig naming those courts by @-sigil. suites/tiny.ts's own ad-hoc one-venue/one-court HTTP creation is deleted; the pack is the one source. — WHY: B04 design §7. One court makes design §3.3's court-double-booking rule unfalsifiable — every fixture sits on the same court, so the rule reports clean forever — which is exactly the vacuous-guard class this bench exists to catch. Two courts give it somewhere to happen. The config is SHARED between the two divisions rather than copied, so \"both divisions are scheduled onto the same courts\" is true by construction; gapMinutes: 0 is declared on purpose so the report carries a real EncodedConstraints.unmodelled entry and the \"unchecked beside the verdict\" rendering is exercised on a green run. [venues[], divisions[0].scheduleConfig, divisions[1].scheduleConfig]",
+        "B04 T7a (fix round 1): both courts declare weekly `hours` (Thu/Fri/Sat 08:00-19:00), and the shared scheduleConfig declares a real perEntrantMinRest (15), one blackout (c-tiny-1, day 1, 09:30-12:00), two session windows (day 1 and day 2, day 3 deliberately absent) and one max_fixtures_per_day hard rule (count 2, scoped every_entrant) — every one of them previously a vacuous sentinel (0 / [] / [] / no constraints.hard at all). — WHY: checker.ts's rules 2a/2b/2c/3/4 could not fire on ANY input while _tiny, the only pack this bench runs, declared sentinel values for all five — a green live run reported CLEAN having measured half of what it claims. T7a's first cut used count: 3, pinned at the cap BY THE FIXTURE COUNT ITSELF (both d-tiny entrants play exactly 3 fixtures) — no real defect could ever exceed it, only a hand-added fourth fixture _tiny cannot produce. count: 2 forces the third fixture onto a second day on every real run, so the cap is both satisfied by the live schedule AND violable from _tiny's own three real fixtures (checker.test.ts proves both) — see TINY_SCHEDULE_CONFIG's own comment for the full reasoning and the exact satisfying schedule. Rule 5 stays deliberately vacuous: making all eight live would leave the report's own \"nothing to check\" section empty on every real run — the same vacuous-report trap one level up. [venues[0].courts[0].hours, venues[0].courts[1].hours, divisions[0].scheduleConfig, divisions[1].scheduleConfig]",
+        "claimInvites[] carries two entries, one per division's own star (p-ana from d-tiny, p-cho from d-badminton) — minted, never accepted (B03 §5: \"the accept flow is B05's, seeding only mints invites\"). — WHY: Bench design §9 P2: \"pc_ claim invites for ~3 stars/suite\". Two is enough for _tiny to prove the mapping generalises across divisions without inflating a fixture whose whole point is staying small. [claimInvites[]]",
+        "d-tiny gained a SECOND stage, s-playoff (kind: knockout, progression-fed from s-league, timing: setup), a fourth stream (se-r0-i0) and expected.finalRanks — B05 T3's non-vacuous subject for the propose->assert->confirm->generate->complete advancement flow, and the first pack stage anywhere that asserts a knockout's placement order rather than a table. — WHY: B05's design doc (D1/D7) found every division in this pack single-stage, so an advancement layer built against it would have no subject and expected.finalRanks no value to compare (the exact vacuity B04 shipped one layer down). Two entrants keep it the smallest possible knockout: one TBD fixture (se-r0-i0, buildSingleElim's own id), generated at setup time by seedSuite's existing per-stage /generate loop, no new bench seeding primitive required. [divisions[0].stages[1], streams[3], expected.matches[3], expected.finalRanks]",
+        "d-registration declares two ordinary-shaped entrants[] rows (e-reg-priya, e-reg-sami) that a live run NEVER creates over HTTP — they exist only to satisfy PackSchema's checkEntrantDivisions minimum (every division needs >=2 declared entrants, with no carve-out for a registration-only division). — WHY: This division's REAL entrants only exist once the registration funnel completes (register.ts), which runs long after PackSchema parses. There is no PackSchema field meaning \"this division's entrant minimum is satisfied by its registration block instead\", and adding one is a schema change outside this task's file set (pack-schema.ts is frozen pre-B06 and owned by a completed task). suites/tiny.ts filters divisionRef === \"d-registration\" out of the SeedPlan it hands to seedSuite, so these two rows never reach /entrants. [entrants[] (e-reg-priya, e-reg-sami), divisions[2]]",
+        "d-registration's one stage (s-registration) is never created over HTTP this session. — WHY: usecases/stages.ts:1141 refuses to /generate a stage with fewer than two entrants, and this division's real entrant count is only known after the registration funnel runs — after seedSuite's create-then-generate walk would already have tried and failed. suites/tiny.ts excludes this division from seedSuite's plan entirely and creates + configures it directly via register.ts's own driver flow instead. The stage exists only because PackDivision.stages requires at least one; kind:\"knockout\" keeps it out of buildSeedPlan's expectedFixtureCounts (league-only), so it changes nothing about the existing fixture-count arithmetic the other two divisions already prove. [divisions[2].stages[0]]",
+        "registration.byDivision[\"d-registration\"] declares exactly one organiser action (approve) though both entries expect:\"entrant\". — WHY: The task brief's own acceptance line is \"2 entries, approval: manual, 1 approve\" — the unapproved entry stays \"pending\", which register.ts's classifyFunnelOutcome counts as an entrant exactly like an approved one (manual approval only produces a different classification via an explicit reject). The single approve action proves the organiser-action leg of the driver runs; it is not needed to make the funnel oracle's arithmetic balance. [registration.byDivision[\"d-registration\"].organiser]"
+      ],
+      "warnings": [
+        "leaderboards.not_derived @ expected.leaderboards: 4 declared expected.leaderboards entries are NOT checked offline: the product's player-stats fold needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140), and a second, differently-built ctx here would be a parallel implementation rather than a check. Owed to the seeded HTTP run (B05)",
+        "champions.not_derived @ expected.champions: 1 declared expected.champions entry is NOT checked offline: a champion is the product's stage-completion and progression answer, not the fold's. Owed to the seeded HTTP run (B05)",
+        "finalRanks.not_derived @ expected.finalRanks: 1 declared expected.finalRanks entry is NOT checked offline: a stage's placement order is the product's progression answer, exactly like a champion — a bracket writes a `placementTable`-wrapped row (usecases/stages.ts:2400) that stage 0 has no fixture rows to reproduce. The REFS and the order's internal consistency are checked at parse (PackSchema), including against a sibling expected.tables row where the stage has one. Owed to the seeded HTTP run (B05)",
+        "careers.not_derived @ expected.careers: 2 declared expected.careers entries are NOT checked offline: a career rollup spans divisions and rides the same player-stats fold as a leaderboard, which needs a PlayerStatsFoldCtx built from entrant-member rows (usecases/player-stats.ts:124-140). Summing the per-division leaderboards here would compute one expected value out of others. Owed to the seeded HTTP run (B05)",
+        "suspensions.not_derived @ expected.suspensions: 1 declared expected.suspensions entry is NOT checked offline: a discipline carry-over spans fixtures, and stage 0 folds each fixture on its own. Owed to the seeded HTTP run (B05)",
+        "_tiny: division \"d-tiny\" declares 2 stages and only \"s-league\" is scheduled — B04 drives one stage per division"
+      ],
+      "registration": [
+        {
+          "divisionRef": "d-registration",
+          "entries": 2,
+          "entrants": 2,
+          "waitlisted": 0,
+          "rejectedEligibility": 0,
+          "rejectedManual": 0,
+          "paidCents": 0,
+          "organiserForceEligibilityProven": false,
+          "funnelWallMs": 4939
+        }
+      ],
+      "scheduling": [
+        {
+          "divisionRef": "d-tiny",
+          "requestedEngine": "optimized",
+          "actualEngine": "optimized",
+          "solverStatus": "ok",
+          "mode": "build",
+          "budgetExpired": false,
+          "tiersCompleted": 6,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 1470,
+            "worstIdleGapMinutes": 1350,
+            "courtImbalanceMinutes": 30,
+            "placed": 3,
+            "total": 3
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 175,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-tiny, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 52
+              },
+              {
+                "key": "courtBalance",
+                "score": 92
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 100
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        },
+        {
+          "divisionRef": "d-badminton",
+          "requestedEngine": "optimized",
+          "actualEngine": "greedy",
+          "solverStatus": "already_optimal",
+          "mode": "build",
+          "budgetExpired": false,
+          "tiersCompleted": 6,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 30,
+            "worstIdleGapMinutes": 0,
+            "courtImbalanceMinutes": 30,
+            "placed": 1,
+            "total": 1
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 120,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 1 — court double-booking",
+                "reason": "no two placed fixtures share a court to compare for overlap"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 1 — court double-booking",
+                "reason": "no two placed fixtures share a court to compare for overlap"
+              },
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              },
+              {
+                "rule": "Rule 8 — round order",
+                "reason": "isRoundRobin is false, or no two placed fixtures had a comparable round number"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-badminton, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 100
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        },
+        {
+          "divisionRef": "d-tiebreak",
+          "requestedEngine": "optimized",
+          "actualEngine": "optimized",
+          "solverStatus": "ok",
+          "mode": "build",
+          "budgetExpired": false,
+          "tiersCompleted": 6,
+          "tiersTotal": 6,
+          "metrics": {
+            "makespanMinutes": 90,
+            "worstIdleGapMinutes": 30,
+            "courtImbalanceMinutes": 30,
+            "placed": 3,
+            "total": 3
+          },
+          "blockingCount": 0,
+          "warnKindTally": {},
+          "unplacedCount": 0,
+          "wallMs": 109,
+          "scheduleErrors": [],
+          "checker": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 4 — day caps",
+                "reason": "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              }
+            ]
+          },
+          "checkerAfterOfficials": {
+            "clean": true,
+            "findings": [],
+            "unchecked": [
+              {
+                "type": "gapMinutes",
+                "reason": "not modelled by the bench checker — gapMinutes is a spacing preference and not an occupancy claim — court occupancy is judged on [start, start + matchMinutes) and design §3.3's rule list has no gap rule, so the value is carried for the report and never checked"
+              }
+            ],
+            "unexercised": [
+              {
+                "rule": "Rule 2b — blackouts",
+                "reason": "blackouts is empty, or nothing was placed — no blackout was available to test a placed fixture against"
+              },
+              {
+                "rule": "Rule 3 — rest minima",
+                "reason": "perEntrantMinRest is 0, or no entrant played two or more placed fixtures to measure a gap between"
+              },
+              {
+                "rule": "Rule 4 — day caps",
+                "reason": "no max_fixtures_per_day hard rule matched a placed fixture's scope on any day"
+              },
+              {
+                "rule": "Rule 5 — not_before / not_after",
+                "reason": "no not_before/not_after hard rule matched a placed fixture's scope"
+              },
+              {
+                "rule": "Rule 6 — pin integrity",
+                "reason": "pins is empty — no pin was declared for this rule to verify"
+              },
+              {
+                "rule": "Rule 7 — officials",
+                "reason": "the pack did not declare officials for this division, or nothing was placed"
+              }
+            ]
+          },
+          "certificate": {
+            "branch": "SKIPPED_NO_HISTORY",
+            "reason": "the pack declares no historicalAssignment for d-tiebreak, so there is no real timetable to check our encoding against",
+            "red": false,
+            "violations": []
+          },
+          "believability": {
+            "metrics": [
+              {
+                "key": "restSpread",
+                "score": 100
+              },
+              {
+                "key": "courtBalance",
+                "score": 100
+              },
+              {
+                "key": "gapDispersion",
+                "score": 100
+              },
+              {
+                "key": "homeAwayAlternation",
+                "score": 100
+              },
+              {
+                "key": "primeSlotFairness",
+                "score": 100
+              }
+            ]
+          },
+          "red": false,
+          "reasons": []
+        }
+      ],
+      "engineDelta": {
+        "note": "engine delta omitted: only the optimized leg has an artifact for this run — one leg is not a comparison"
+      },
+      "divisionStart": [
+        {
+          "divisionRef": "d-tiny",
+          "acknowledgedWarnings": true,
+          "warnings": [
+            {
+              "fixtureId": "32598d72-9718-4d69-8ac8-93b048726150",
+              "blocking": false
+            }
+          ],
+          "confirmedStatus": "active",
+          "started": true
+        },
+        {
+          "divisionRef": "d-badminton",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        },
+        {
+          "divisionRef": "d-tiebreak",
+          "acknowledgedWarnings": false,
+          "warnings": [],
+          "confirmedStatus": "active",
+          "started": true
+        }
+      ],
+      "importSimulation": {
+        "eventsSent": 84,
+        "wallMs": 1135,
+        "eventsPerSecond": 74.00881057268722,
+        "chunks": 2
+      },
+      "tapPlay": {
+        "matches": 4,
+        "taps": 24,
+        "wallMs": 18584,
+        "observations": 1,
+        "unreadRowsAfterFinalize": 0
+      }
+    }
+  ],
+  "gate": "green"
+}

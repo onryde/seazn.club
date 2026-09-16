@@ -58,6 +58,18 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
         invitee flow, with an invalid token proven refused (B06a T6)
       - news: drafting turned on before the folds, named fixtures published,
         the rest proven still draft, republish proven inert (B06a T7)
+      - device hand-over: for any pad-tapped fixture, the device link is
+        MINTED through the real entitlement gate (`scoring.device_links`),
+        its QR decodes to the exact minted secret URL and its copy button's
+        clipboard content matches byte for byte (both proven in a real
+        browser, not asserted from the mint response alone) (B07a T9/T10/
+        T11 — proven live on `_tiny`). It is **NOT revoked after use** —
+        tap-minted links are unrevoked BY DESIGN, owner-accepted (2026-09-14
+        — throwaway org, day-scoped secrets, no blast radius); this counts
+        as closed because a decision was made, not because revoking was
+        built. (The only revoke in this codebase mints and immediately
+        revokes a *different* link, inside the entitlement-gate's own paywall
+        probe — `dls-gate.ts` — never the tap driver's device link.)
       - coach lanes: **NOT WIRED — deferred, no step exists.** Named here so
         a pack session records the gap rather than assuming it is covered
 - [ ] Entitlement: recorded, not faked. Entitlements v18 W1 deleted the
@@ -65,7 +77,11 @@ oracles). Read `_RULES.md` §4 first. Spec: bench design §4 (packs), §5
       unlock** — see `_RULES.md` §3. A suite whose sport IS gated provokes
       the refusal with a key DERIVED from the live catalog and then clears
       it by provisioning; a suite whose sport is not gated satisfies this
-      item by saying so in the report
+      item by saying so in the report. A SECOND key is now live-proven the
+      same way for any pad-tapped suite: `scoring.device_links` — the DLS
+      probe (`lib/dls-gate.ts`, B07a T11) mints refused pre-plan, mints
+      clearing post-plan, and revokes; a tap suite reuses that probe rather
+      than re-deriving the gate
 - [ ] Report committed under the PR (json+md), timings present,
       NOT asserted. Throughput figures in a pack report are a **FLOOR**, not
       a measurement: they are whatever that pack's stream volume happened to

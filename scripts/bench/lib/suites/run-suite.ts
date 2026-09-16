@@ -116,6 +116,7 @@ import { hashPack } from "../pack-hash.ts";
 import {
   fixtureKey,
   type Pack,
+  type PackAdaptation,
   type PackDivision,
   type PackExpectedMatch,
   type PackClaim,
@@ -159,12 +160,15 @@ import {
 import {
   buildSeedPlan,
   type SeedPlan,
+  type SeedPlanDivision,
   type SeedPlanExpectedFixtureCount,
+  type SeedPlanStage,
 } from "../seed-plan.ts";
 import {
   defaultTransport,
   runOfficialsAutoAssign,
   seedSuite,
+  stageKey,
   type ClaimInviteReadBack,
   type FixtureOfficialRow,
   type SeededSuite,
@@ -192,9 +196,30 @@ import type {
   SimulationReport,
   SolverResult,
   SuiteReport,
+  TapPlayReport,
 } from "../report.ts";
-import { computeEventsPerSecond, simulateDivisionStreams } from "../simulate.ts";
+import { computeEventsPerSecond, simulateDivisionStreams, type SimulateResult } from "../simulate.ts";
+import { defaultLedgerTransport } from "../ledger.ts";
+import { personOutsideByEntrantFindings, saveTapLineups, tapLineupSides } from "../tap-setup.ts";
+import { specialStateThroughPackEvents } from "../special-state.ts";
+import {
+  adapterForSport,
+  browserTapPlayer,
+  consoleFixturePath,
+  playTapRounds,
+  tapBoardRowsOf,
+  type TapBoardRow,
+  type TapFixtureJob,
+  type TapPlayer,
+  type TapPlayerFactory,
+} from "../tap-play.ts";
 import { buildImportId, importDivisionStreams, type ImportFinding } from "../import.ts";
+// B07a T7 — `types.ts` carries only `import type` statements, so this is a
+// TYPE-ONLY module at runtime and importing its one function here adds no
+// runtime edge back into `tiny.ts`/`registry.ts` (the cycle that file's own
+// header exists to avoid). `strip-types-loadable.test.ts` spawns a real
+// import of every shipped module, which is what keeps that claim honest.
+import { playModeFor, type PlayDeclaration } from "./types.ts";
 import {
   advanceStageSeeding,
   compareFinalRanks,
@@ -264,11 +289,16 @@ import {
   newOrganiserBrowserSession,
   type RegistrationBrowserSession,
 } from "../drivers/browser.ts";
+import {
+  expectedQualifierRefs,
+  type QualifierTable,
+  type TopNPerGroup,
+} from "../qualifiers.ts";
 
 /** What a suite definition tells the runner about itself: which key its
  *  report and log lines carry, and which pack to fold when the caller does
  *  not override `input.packPath`. */
-export interface RunPackSuiteOptions {
+export interface RunPackSuiteOptions extends PlayDeclaration {
   readonly suiteKey: string;
   readonly packPath: string;
 }
@@ -277,6 +307,172 @@ export interface RunPackSuiteOptions {
  *  (jsonb). Exported so a test can construct a matching/mismatching branding
  *  value without hand-typing the key twice. */
 export const KEEP_BRANDING_KEY = "benchPackHash";
+
+// ---------------------------------------------------------------------------
+// B07a T5 — WHICH qualifier derivation the advance step uses (D7).
+//
+// Two source shapes, two rules. An UNPOOLED source stage has one stage-wide
+// `expected.tables` row and its qualifiers are that row in rank order — the
+// long-standing behaviour `_tiny`'s league -> playoff advance relies on. A
+// POOLED source stage has one table PER POOL and no stage-wide row at all, so
+// the flat path has nothing to read; its seat order comes from the
+// progression rule itself (`lib/qualifiers.ts`).
+//
+// Every refusal below yields NO seats and NAMES what it saw. Guessing a rule
+// would assert a confident wrong ORDER — the exact failure this task exists to
+// prevent — whereas an empty list is length-compared against the product's
+// real proposal and reds loudly.
+// ---------------------------------------------------------------------------
+
+/** The advance step's expected qualifier order, plus how it was reached. */
+export interface ExpectedQualifierOrder {
+  /** Entrant REFS in seat order (seed 1 first); `[]` when none could be derived. */
+  readonly refs: readonly string[];
+  /** True when the source stage declared pools and the progression rule was used. */
+  readonly pooled: boolean;
+  /** Set when the progression could not be read: a placement that does not
+   *  consume the list verbatim (EITHER source shape), or — for a pooled
+   *  source — a take rule this derivation does not cover. Names what was
+   *  actually found, never a guess. */
+  readonly warning?: string;
+}
+
+function takeKindOf(rule: unknown): string {
+  const kind = (rule as Record<string, unknown> | null)?.["kind"];
+  return typeof kind === "string" ? kind : JSON.stringify(kind);
+}
+
+/**
+ * The PLACEMENT check — applied to EVERY source shape, pooled or not.
+ *
+ * `rank_order` is a plain `pots.flat()` that consumes the qualifier list
+ * VERBATIM (`placeDescriptors`, progression.ts:239-298). `snake` reverses
+ * alternate waves and `seeded_map` seats named qualifiers at named slots, so
+ * under either one a rank-order expectation is confidently WRONG rather than
+ * merely unverified — and the mismatch would blame the PRODUCT for the
+ * bench's own assumption.
+ *
+ * Fix round 1, I2: this used to live inside `parseTopNPerGroup`, which runs
+ * only for a POOLED source. An UNPOOLED stage declaring `seeded_map` skipped
+ * it entirely and was handed a flat rank-order expectation — a false red on a
+ * legitimate pack.
+ *
+ * Deliberately CONSERVATIVE, and worth knowing before anyone tightens it:
+ * `placeDescriptors` returns `flat` UNCHANGED when a `seeded_map` carries no
+ * map or an empty one (progression.ts:299), so that particular shape would in
+ * fact consume the list as-is and is refused here anyway. The refusal is loud
+ * and harmless; do not read this as a claim that `seeded_map` always permutes.
+ *
+ * Fix round 2 — this now also checks the SOURCE COUNT. That is the other half
+ * of the same I2 finding, and round 1 left it behind: the count sat inside
+ * `parseTopNPerGroup`, which runs for a POOLED source only, so an UNPOOLED
+ * stage fed by a two-source progression was handed its flat table with NO
+ * warning at all, while the identical progression on a pooled stage was
+ * refused by name. Both are SHAPE facts — each invalidates the flat
+ * derivation exactly as it invalidates the pooled one — so both belong above
+ * the pooled/unpooled split, and the two shapes now refuse in parity.
+ *
+ * Returns the single validated source on success, so the take-rule parser
+ * never re-reads and never re-checks `sources`: one check, one place. A
+ * duplicated guard would be worse than none — the two cover for each other,
+ * and neither can then be killed by mutation.
+ */
+function progressionShape(
+  progression: Record<string, unknown>,
+): { reason: string } | { source: Record<string, unknown> } {
+  const placement = progression["placement"];
+  if (placement !== "rank_order") {
+    return {
+      reason:
+        `its placement is ${JSON.stringify(placement)} rather than "rank_order" — only rank_order ` +
+        "consumes the qualifier list verbatim (snake reverses alternate waves; seeded_map seats by name)",
+    };
+  }
+
+  const sources = progression["sources"];
+  if (!Array.isArray(sources) || sources.length !== 1) {
+    return {
+      reason: `it declares ${Array.isArray(sources) ? sources.length : JSON.stringify(sources)} progression sources, and this derivation covers exactly one`,
+    };
+  }
+
+  return { source: (sources[0] ?? {}) as Record<string, unknown> };
+}
+
+/**
+ * Narrowly parse the TAKE RULE out of ONE progression source — the source
+ * having already been validated and handed over by `progressionShape`. The
+ * progression is carried OPAQUE through the schema (`pack-schema.ts:459`, a
+ * `Record<string, PackJsonValue>`), so every field is checked rather than
+ * trusted. Neither placement NOR the source count is this function's
+ * business; both are shape facts and live in `progressionShape`.
+ */
+function parseTopNPerGroup(
+  source: Record<string, unknown>,
+): { rule: TopNPerGroup } | { reason: string } {
+  const take = source["take"];
+  if (!Array.isArray(take) || take.length !== 1) {
+    const kinds = Array.isArray(take)
+      ? take.map((t) => takeKindOf(t)).join(", ")
+      : JSON.stringify(take);
+    return { reason: `its source combines take rules [${kinds}], and this derivation covers exactly one` };
+  }
+
+  const kind = takeKindOf(take[0]);
+  if (kind !== "topNPerGroup") {
+    return { reason: `its take rule is "${kind}", not topNPerGroup` };
+  }
+
+  const n = (take[0] as Record<string, unknown>)["n"];
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+    return { reason: `its topNPerGroup n is ${JSON.stringify(n)}, not a positive integer` };
+  }
+  return { rule: { kind: "topNPerGroup", n } };
+}
+
+/**
+ * The expected qualifier refs for a progression-fed stage, choosing between
+ * the pooled derivation and the flat table by what the SOURCE stage actually
+ * declared. Exported so this decision is directly testable: a branch that
+ * silently picks the wrong path is exactly the inert-seam class
+ * (AGENTS.md failure class 1).
+ */
+export function expectedQualifierOrder(
+  stageTables: readonly QualifierTable[],
+  progression: Record<string, unknown> | undefined,
+): ExpectedQualifierOrder {
+  // No table at all: the caller already names that, and a second complaint
+  // about the same fact would only obscure it.
+  if (stageTables.length === 0) return { refs: [], pooled: false };
+
+  const pooledTables = stageTables.filter((t) => t.poolKey !== undefined);
+  const pooled = pooledTables.length > 0;
+  const flatRefs = (): readonly string[] => {
+    const flat = stageTables.find((t) => t.poolKey === undefined);
+    return [...(flat?.rows ?? [])].sort((a, b) => a.rank - b.rank).map((r) => r.entrant);
+  };
+
+  if (progression === undefined) {
+    // An UNPOOLED source needs no progression to be read: its seats ARE its
+    // one table, in rank order. A POOLED one has no seat order without the rule.
+    return pooled
+      ? { refs: [], pooled: true, warning: "it declares no progression at all" }
+      : { refs: flatRefs(), pooled: false };
+  }
+
+  // I2, BOTH halves: the progression's SHAPE — placement and source count —
+  // is checked for either source shape, above the split. Each fact
+  // invalidates the flat derivation exactly as it invalidates the pooled one,
+  // so a refusal here reads the same whether the source declared pools or not.
+  const shape = progressionShape(progression);
+  if ("reason" in shape) return { refs: [], pooled, warning: shape.reason };
+
+  if (!pooled) return { refs: flatRefs(), pooled: false };
+
+  const parsed = parseTopNPerGroup(shape.source);
+  if ("reason" in parsed) return { refs: [], pooled: true, warning: parsed.reason };
+  return { refs: expectedQualifierRefs(pooledTables, parsed.rule), pooled: true };
+}
 
 // ---------------------------------------------------------------------------
 // Registration wiring (B03r tasks 9+10, design §3/§9) — the --entry
@@ -645,6 +841,12 @@ export interface PackSuiteInput {
     resolvedEntry: "registration-api" | "registration-ui",
     ctx: RegistrationDriverContext,
   ) => Promise<RegistrationDriverSet>;
+  /** B07a T10 (R45) — builds the player every `tap` division is played by.
+   *  Defaults to `browserTapPlayer` (a real Chromium signed in as the run's
+   *  organiser) — same "optional, defaults to the real thing" convention as
+   *  `registrationDrivers` above. A live run never passes it; a test that
+   *  does never reaches a real browser. */
+  tapPlayer?: TapPlayerFactory;
   /** Resolves the SERVER-ASSIGNED org slug that every public URL is addressed
    *  by. Defaults to `sql.getOrgSlug` — same "optional, defaults to the real
    *  thing" convention as `transport`/`sql` above.
@@ -691,6 +893,14 @@ export interface PackSuiteInput {
   /** See `reportDir`. Already RESOLVED — never a raw `--run-id` that may be
    *  undefined. */
   runId?: string;
+  /** R86 (owner: "watch the bench play a match") — off unless bench.ts's
+   *  `--record-video`/`--trace` was on for this run; ALREADY resolved and
+   *  namespaced by run-id (`resolveCaptureDirs`), same "one identity, one
+   *  resolution point" reason `runId` above is threaded rather than
+   *  re-derived. Forwarded into the tap player's `TapPlayerContext`; unread
+   *  by anything else. */
+  recordVideoDir?: string;
+  traceDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,7 +1619,7 @@ interface IdOut {
  *  `oracle.ts` takes ids already resolved by its caller. Unresolvable refs are
  *  collected rather than thrown on, so one bad row reports every bad ref in
  *  that division instead of the first. */
-function resolveExpectedOutcome(
+export function resolveExpectedOutcome(
   outcome: PackExpectedOutcome,
   entrantIdByRef: ReadonlyMap<string, string>,
   unresolved: string[],
@@ -1418,10 +1628,19 @@ function resolveExpectedOutcome(
   const winner = entrantIdByRef.get(outcome.winner);
   if (winner === undefined) unresolved.push(outcome.winner);
   if (outcome.kind === "award") {
-    // The PACK's award variant carries no `score` (pack-schema.ts states why
-    // it deliberately carries no `method` either) — only the engine's does.
+    // The PACK's award variant carries no `score` — only the engine's does.
+    //
+    // It DOES carry `method`, and this rebuild used to drop it. The note that
+    // stood here cited `pack-schema.ts` for a rule that had since been
+    // rewritten to say the opposite: the engine's award variant now declares
+    // `method`, fed verbatim from `core.forfeit`'s required `reason`, and the
+    // pack's was opened to match. Dropping it here meant `compareMatches`
+    // compared an award's reason against a value it was never handed — so
+    // suite 11's declared walkover (`se-r0-i19`) asserted nothing on a live
+    // run. A field this function does not NAME is a field the oracle cannot
+    // check, whatever the schema and the comparator agree between them.
     if (winner === undefined) return undefined;
-    return { kind: "award", winner };
+    return { kind: "award", winner, ...(outcome.method === undefined ? {} : { method: outcome.method }) };
   }
   const loser = entrantIdByRef.get(outcome.loser);
   if (loser === undefined) unresolved.push(outcome.loser);
@@ -1507,6 +1726,115 @@ function specialStandingsDelta(
   }
 }
 
+/**
+ * B07a T3 — one `PackAdaptation` as the single line of prose the report
+ * carries for it.
+ *
+ * Exported, and a named function rather than an inline lambda at its three
+ * call sites, because the `where` branch otherwise has NO witness anywhere:
+ * `where` is optional in the schema, and neither `_tiny` (15 rows) nor
+ * `suite11` (13) declares a row without one — so deleting the guard would
+ * render a literal `[undefined]` into every report and no pack in the tree
+ * would notice. Its test drives both sides directly.
+ *
+ * BOTH required fields, never just `what`: `PackAdaptation` splits
+ * what-was-reshaped from why precisely because "what" with no "why" is the
+ * unreviewable list those two required fields exist to forbid, and a report
+ * carrying half of each row would rebuild exactly that.
+ */
+export function formatAdaptation(a: PackAdaptation): string {
+  return `${a.what} — WHY: ${a.why}${a.where === undefined ? "" : ` [${a.where}]`}`;
+}
+
+/** `se-r{n}-i{i}` — the single-elim generator's own id shape
+ *  (`packages/engine/src/scheduling/singleelim.ts`, and `_tiny`'s own
+ *  `se-r0-i0`, `pack-schema.test.ts`). Both captures parsed as integers —
+ *  see `publishTargets` below for why. */
+const SE_ROUND_KEY = /^se-r(\d+)-i(\d+)$/;
+
+interface ParsedSeKey {
+  readonly extKey: string;
+  readonly round: number;
+  readonly index: number;
+}
+
+/**
+ * B07a Task 12 / Ruling R70 — the array `publishTargets` returns, PLUS one
+ * non-enumerable property naming the input keys that did not parse as
+ * `se-r{n}-i{i}`.
+ *
+ * Non-enumerable deliberately: `expect(publishTargets(x)).toEqual([...])`
+ * (the brief's own three tests) compares plain arrays via `Object.keys`,
+ * which never sees a non-enumerable property, so the brief's assertions
+ * keep working unmodified. `runPackSuite` reads `.unparsedKeys` directly
+ * (bracket/dot access does not care about enumerability) to push a warning
+ * naming what it silently excluded — see rule 4.
+ */
+export type PublishTargets = readonly string[] & {
+  readonly unparsedKeys: readonly string[];
+};
+
+function withUnparsedKeys(published: readonly string[], unparsedKeys: readonly string[]): PublishTargets {
+  const result: string[] = published.slice();
+  Object.defineProperty(result, "unparsedKeys", {
+    value: unparsedKeys,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return result as unknown as PublishTargets;
+}
+
+/**
+ * B07a Task 12 / Ruling R70 — the news step publishes the SEMIS and the
+ * FINAL, not the whole last stage. Pure over ONE stage's streams: the caller
+ * (`runPackSuite`, below) filters to division0's last stage before calling
+ * this, exactly as it filtered before Task 12 — this function only decides
+ * WHICH of those streams' ext keys publish.
+ *
+ * - Empty case FIRST (rule 3): no streams in => `[]` out. NOT a separate
+ *   early return — the mutation sweep proved one dead (removing it never
+ *   reddened a test): `parsed` stays `[]`, so `roundsPresent` is `[]`,
+ *   `topTwoRounds` is the empty set, and the final filter falls through to
+ *   `[]` on its own. Left out rather than shipped as decoration
+ *   (AGENTS.md recurring-failure class 3 — "a guard nothing kills is not
+ *   tested"). This is also a DIFFERENT empty case from "streams present but
+ *   none parse" below — both land on `[]`, for different reasons, and rule 4
+ *   requires the second one to say so via `unparsedKeys` while this one has
+ *   nothing to name.
+ * - The round is parsed from `se-r{n}-i{i}` with BOTH `n` and `i` read as
+ *   INTEGERS (rule 2): a string sort would put `"se-r10-i0"` between
+ *   `"se-r1x"` and `"se-r2x"`, so `se-r10` would wrongly outrank `se-r9`.
+ * - The TOP TWO distinct rounds present publish, in round-then-index order.
+ *   Exactly one round present => that round only — never an invented semi.
+ * - A key that does not match `se-r{n}-i{i}` is excluded from the published
+ *   set (never guessed at) and reported on the returned array's
+ *   `unparsedKeys` (rule 4) so `runPackSuite` can warn by name instead of
+ *   the list silently coming back short.
+ */
+export function publishTargets(streams: readonly Pick<PackStream, "fixtureExtKey">[]): PublishTargets {
+  const parsed: ParsedSeKey[] = [];
+  const unparsedKeys: string[] = [];
+  for (const st of streams) {
+    const m = SE_ROUND_KEY.exec(st.fixtureExtKey);
+    if (m === null) {
+      unparsedKeys.push(st.fixtureExtKey);
+      continue;
+    }
+    parsed.push({ extKey: st.fixtureExtKey, round: Number(m[1]), index: Number(m[2]) });
+  }
+
+  const roundsPresent = [...new Set(parsed.map((p) => p.round))].sort((a, b) => a - b);
+  const topTwoRounds = new Set(roundsPresent.slice(-2));
+
+  const published = parsed
+    .filter((p) => topTwoRounds.has(p.round))
+    .sort((a, b) => (a.round !== b.round ? a.round - b.round : a.index - b.index))
+    .map((p) => p.extKey);
+
+  return withUnparsedKeys(published, unparsedKeys);
+}
+
 export async function runPackSuite(
   input: PackSuiteInput,
   opts: RunPackSuiteOptions,
@@ -1559,6 +1887,15 @@ export async function runPackSuite(
    *  `importSimulation` above run, since neither fold can succeed against an
    *  unstarted division. */
   let divisionStart: DivisionStartReport[] | undefined;
+  /** B07a T10 — the tap player (created on the first tapped division, closed
+   *  after the run whatever happened) and `report.tapPlay`, set only when at
+   *  least one tapped match was actually handed to the player. A holder rather
+   *  than two `let`s: both are written inside a closure, which control-flow
+   *  narrowing cannot see. */
+  const tapState: { player?: TapPlayer; report?: TapPlayReport } = {};
+  // Fix round 2 (R64) — fixtures the tap path played, and so signed off with a
+  // bench-appended core.finalize that is not a pack event.
+  const tapPlayedFixtureIds = new Set<string>();
 
   // Stage 0 FIRST, and nothing is created if it refuses: a pack the offline
   // gate rejects would otherwise be seeded over HTTP and report a product
@@ -1623,6 +1960,11 @@ export async function runPackSuite(
         timings: { seedMs: Math.round(performance.now() - seedStart) },
         keep,
         solver: { requestedEngine: engine },
+        // B07a T3 — the pack LOADED here (it is precisely the CHANGED pack
+        // that caused this refusal), so its §7A list is known and is a fact
+        // about this run like any other. Omitting it would render the
+        // "never measured" state over a pack sitting in memory.
+        adaptations: pack.meta.adaptations.map(formatAdaptation),
         errors: [message],
         ...(warnings.length > 0 ? { warnings } : {}),
       };
@@ -1656,6 +1998,12 @@ export async function runPackSuite(
         timings,
         keep,
         solver: { requestedEngine: engine },
+        // B07a T3 — and this is the one that matters most: `--keep` is the
+        // DEFAULT (`bench.ts`'s `keep: !values.wipe`), so a repeat run lands
+        // HERE, not on the main return. The pack was loaded and hashed to
+        // get this far; reporting "never measured" while its adaptations sit
+        // in memory is the silence this field exists to break.
+        adaptations: pack.meta.adaptations.map(formatAdaptation),
         ...(warnings.length > 0 ? { warnings } : {}),
       };
     }
@@ -1668,14 +2016,17 @@ export async function runPackSuite(
     // authoring bug stage 0 does not currently catch, so it is named here
     // rather than silently producing `undefined.id` downstream.
     //
-    // B05 T3: `division0` now legitimately declares a SECOND stage
-    // (`s-playoff`, a knockout fed from the league) — `stage1`, undefined for
-    // every pack (and division) that does not. Every existing reader of
-    // `division0`/`stage0` above is unaffected; `stage1` is read only by the
-    // advance step below.
+    // B05 T3: `division0` legitimately declares a SECOND stage (`s-playoff`, a
+    // knockout fed from the league).
+    //
+    // B07a T6: there is no longer a `stage1` binding here. Advancement used to
+    // read `division0.stages[1]` and nothing else, which is precisely why it
+    // ran for one division only; it now walks every division's own stage list
+    // (see the advance loop below), so a single hoisted "second stage of the
+    // first division" has no reader left. `division0`/`stage0` are unaffected
+    // and still name what this suite's scheduling walk drives.
     const division0 = plan.divisions[0];
     const stage0 = division0?.stages[0];
-    const stage1 = division0?.stages[1];
     if (division0 === undefined || stage0 === undefined) {
       throw new Error(
         `${suiteKey}: the pack's plan has no division/stage to seed and schedule`,
@@ -1710,6 +2061,9 @@ export async function runPackSuite(
     // (`usecases/divisions.ts:652-654`), and because drafting is a side effect
     // of FOLDING there is no later moment at which this run could recover.
     let newsAutoGranted = false;
+    // B07a T11 — whether the chosen plan grants `scoring.device_links`, from
+    // the same selection. Task 10's tap branch consumes this.
+    let deviceLinksGranted = false;
     if (input.sql !== undefined) {
       log.info(
         {},
@@ -1768,6 +2122,28 @@ export async function runPackSuite(
       }
       autoAssign = probe.officialsAutoGranted;
       newsAutoGranted = probe.newsAutoGranted;
+      deviceLinksGranted = probe.deviceLinksGranted;
+      // B07a T11 — the two device-link cells ride the generic loop above; what
+      // needs saying here is when they could not run, or could not pass.
+      if (!probe.deviceLinkGateProbed) {
+        warnings.push(
+          `${suiteKey}: scoring.device_links is not paywalled for a "${FREE_PLAN_KEY}" org on this catalog, so the ` +
+            "device_link_refused_before_plan / device_link_minted_after_plan cells were not emitted — there is no " +
+            "device-link paywall on this catalog for the probe to prove",
+        );
+      }
+      if (!deviceLinksGranted) {
+        warnings.push(
+          `${suiteKey}: plan "${probe.provisionedPlan}" does not grant scoring.device_links (deviceLinksGranted false) — ` +
+            "this org cannot mint a device link, so no scorer on this run can be handed one",
+        );
+      }
+      // What the device-link proof must say without reddening: a link it
+      // minted and could not revoke, or a single-plan choice that traded device
+      // links away while a public plan sells them.
+      for (const warning of probe.deviceLinkWarnings) {
+        warnings.push(`${suiteKey}: ${warning}`);
+      }
       // B03 review F1(a): the chosen plan is not guaranteed to grant every
       // capability this run wants (`chooseGrantingPlanForCapabilities` picks
       // the best available candidate, never invents one) — reported here,
@@ -1785,6 +2161,8 @@ export async function runPackSuite(
           provisionedPlan: probe.provisionedPlan,
           officialsAutoGranted: probe.officialsAutoGranted,
           newsAutoGranted: probe.newsAutoGranted,
+          deviceLinksGranted,
+          deviceLinkGateProbed: probe.deviceLinkGateProbed,
           unsatisfiedCapabilities: probe.unsatisfiedCapabilities,
           statsPlayerGranted,
           dlsFreeOnCommunityPlan: probe.dlsFreeOnCommunityPlan,
@@ -1862,7 +2240,7 @@ export async function runPackSuite(
       );
     }
     const divisionId = seeded.divisionIdByRef.get(division0.ref);
-    const stageId = seeded.stageIdByRef.get(stage0.ref);
+    const stageId = seeded.stageIdByRef.get(stageKey(division0.ref, stage0.ref));
     if (divisionId === undefined || stageId === undefined) {
       throw new Error(
         `${suiteKey}: seedSuite resolved no id for division "${division0.ref}" / stage "${stage0.ref}"`,
@@ -2038,7 +2416,7 @@ export async function runPackSuite(
     for (const planned of seedPlan.divisions) {
       const plannedDivisionId = seeded.divisionIdByRef.get(planned.ref);
       const stage = planned.stages[0];
-      const plannedStageId = stage === undefined ? undefined : seeded.stageIdByRef.get(stage.ref);
+      const plannedStageId = stage === undefined ? undefined : seeded.stageIdByRef.get(stageKey(planned.ref, stage.ref));
       if (plannedDivisionId === undefined || stage === undefined || plannedStageId === undefined) {
         // Never silent: a division that was seeded and then not scheduled is
         // indistinguishable in a report from one that was scheduled cleanly.
@@ -3001,195 +3379,537 @@ export async function runPackSuite(
       }
     }
 
-    // B05 T1 — the single-event write-path fold (design doc §3 D4): division
-    // A's own streams (`division0` — this file's own "declares exactly one
-    // FIRST division" comment above is why that index is always the division
-    // the pack calls A) folded through the LIVE `POST /fixtures/{id}/events`
-    // route, strictly sequential per fixture (`simulate.ts`'s own header
-    // comment). Division B's import path is a SEPARATE task (T2) — this
-    // block touches only `division0`'s streams.
+    // B05 T1/T2 + B07a T7 — the write-path fold: ONE loop over the plan's
+    // divisions, dispatching on the play mode the suite declared for each
+    // (design doc §3 D4).
     //
-    // Gated on `input.sql`, placed AFTER the player-stats baseline above on
-    // purpose: that baseline's own oracle asserts EMPTY rows ("B03 folds no
-    // score events") and would go stale the moment real events land on
-    // division A's fixtures — running the fold first would silently turn a
-    // correct baseline oracle into a wrong one for every future `input.sql`
-    // caller. Ordered AFTER, this step touches nothing the baseline already
-    // read.
+    // This replaces two hard-coded blocks — a single-event fold for
+    // `division0` and a batch-import fold for "every OTHER division". That
+    // split was positional and implicit, so a pack had no way to say how any
+    // of its divisions should be played. `playModeFor` answers that now, and
+    // its DEFAULT reproduces the positional split VERBATIM, so `_tiny`
+    // (`d-tiny` single-POSTs, the rest import) and suite 11 (`d-worlds`
+    // single-POSTs, `d-womens` imports) are unchanged — which matters,
+    // because `_RULES.md` §3 keeps one suite on the single-POST path and the
+    // import path needs a live subject of its own. A mode that silently moved
+    // either would delete coverage while appearing to add some.
     //
-    // B05 T3: scoped to `stage0`'s OWN streams, never `stage1`'s (a
-    // progression-fed stage's fixture has no real entrants until the advance
-    // step below confirms them — folding it here would score a TBD fixture
-    // before it exists as anything but a placeholder). A stream naming no
-    // stage still counts when the division has exactly one — the same
-    // "absent means the division's only stage" convention `validate-pack.ts`'s
-    // own `resolveStage` uses — so no pack before this task sees any change.
-    // `stage1`'s own stream is folded separately, after the advance step,
-    // reusing this exact function (see that block's own comment for why: the
-    // acceptance bar is "the existing fold covers it", not a new primitive).
-    if (input.sql !== undefined) {
-      const divisionAStreams = pack.streams.filter(
-        (st) =>
-          st.divisionRef === division0.ref &&
-          (st.stageRef === undefined
-            ? division0.stages.length === 1
-            : st.stageRef === stage0.ref),
-      );
-      if (divisionAStreams.length > 0) {
-        // `@`-sigilled payload refs (pack-schema.ts header note 6) name
-        // EITHER an entrant or a person — ONE namespace, so merging both
-        // maps is exactly as authoritative as keeping them separate.
-        const refIdByKey = new Map<string, string>([
-          ...seeded.entrantIdByRef,
-          ...seeded.personIdByRef,
-        ]);
-        log.info(
-          { streams: divisionAStreams.length },
-          `${suiteKey}: folding division A's streams through the single-event scoring route (B05 T1)`,
+    // Gated on `input.sql`, and ordered AFTER the player-stats baseline above
+    // on purpose: that baseline's own oracle asserts EMPTY rows ("B03 folds
+    // no score events") and would go stale the moment real events landed on a
+    // division's fixtures, so folding first would silently turn a correct
+    // baseline oracle into a wrong one for every future `input.sql` caller.
+    //
+    // FIRST STAGE ONLY, for every division (B07a T6's scoping, now applied
+    // uniformly rather than to the non-first divisions alone). A later stage's
+    // fixtures are placeholders with no real entrants until that division's
+    // own advance seeds them, so folding their streams here would post into
+    // fixtures nobody has seeded yet. Each later stage's streams are played by
+    // the advance step below, which dispatches on the SAME mode — a division
+    // plays every one of its stages the one way it declared (ruling R23).
+    // -----------------------------------------------------------------
+    // B07a T10 — play one division's streams by TAPPING the real pad: the
+    // organiser taps the device hand-over and mints a link, a scorer on a
+    // phone-sized page plays the match through it, and the organiser signs it
+    // off. Called by BOTH dispatch sites below (the first-stage fold and the
+    // advance step), because a division plays every stage the one way it
+    // declared (ruling R23).
+    //
+    // Judged on what the PRODUCT says afterwards, never on the driver's word:
+    // every tapped fixture must read `finalized` on a fresh board read — a
+    // separate oracle, because the per-match oracle's `SETTLED_STATUSES`
+    // accepts `decided` for every other path and has to keep doing so.
+    const playDivisionByTaps = async (
+      division: SeedPlanDivision,
+      streams: readonly Pack["streams"][number][],
+    ): Promise<void> => {
+      const keys = streams.map((st) => st.fixtureExtKey);
+      // R55 — never a silent skip, and never counted in `tapPlay`: a plan
+      // without device links means no scorer can be handed anything.
+      if (!deviceLinksGranted) {
+        const message =
+          `${suiteKey}: WARNING — division "${division.ref}" declares play "tap", but this run's plan does not grant ` +
+          `scoring.device_links (deviceLinksGranted false), so no scorer can be handed a device link — tap fixtures ` +
+          `NOT played: ${keys.join(", ")} (not counted in tapPlay)`;
+        warnings.push(message);
+        log.warn({ division: division.ref, fixtures: keys, unsatisfiedCapability: "scoring.device_links" }, message);
+        return;
+      }
+      const notPlayed = `fixtures not played: ${keys.join(", ")}`;
+      const divisionId = seeded.divisionIdByRef.get(division.ref);
+      const packDivision = pack.divisions.find((d) => d.ref === division.ref);
+      if (divisionId === undefined || packDivision === undefined) {
+        errors.push(`tap: division "${division.ref}" has no resolved divisionId — cannot open its console (${notPlayed})`);
+        return;
+      }
+      // R45 — the cap is the division's REAL court count: the courts the
+      // scheduling layer resolved and PUT to the product for this division
+      // (`EncodedConstraints.courtIds`), never a typed number.
+      const courtCount = constraintsByRef.get(division.ref)?.courtIds.length ?? 0;
+      if (courtCount < 1) {
+        errors.push(
+          `tap: division "${division.ref}" has no courts in its schedule constraints — tapped matches run at most one ` +
+            `per court at once, and there is no court count to derive that cap from (${notPlayed})`,
         );
-        // B06b — fold in DEPENDENCY WAVES, not one flat `Promise.all`. A
-        // bracket fixture's entrants are written by its feeders' decisions, so
-        // posting round 2 concurrently with round 1 refuses every later round
-        // with `WRONG_PHASE — fixture has an unassigned entrant (bye/TBD)`.
-        // The round comes off the REAL board rather than being parsed out of
-        // the generator's `se-r{n}-i{m}` ext key: the key format is the
-        // product's, and reading `round_no` keeps this correct for any stage
-        // kind rather than for the ones whose keys happen to encode a round.
-        const divisionAId = seeded.divisionIdByRef.get(division0.ref);
-        const roundByFixtureKey = new Map<string, number>();
-        if (divisionAId !== undefined) {
-          for (const f of await fetchDivisionFixtures(base, s, divisionAId, input.oracleTransport)) {
-            if (f.ext_key == null || f.round_no == null) continue;
-            roundByFixtureKey.set(fixtureKey(division0.ref, f.ext_key), f.round_no);
-          }
-        }
-        const sim = await simulateDivisionStreams({
-          base,
-          session: s,
-          streams: divisionAStreams,
-          fixtureIdByKey: seeded.fixtureIdByKey,
-          refIdByKey,
-          roundByFixtureKey,
-          ...(input.simTransport === undefined
-            ? {}
-            : { transport: input.simTransport }),
-        });
-        timings.simMs = sim.wallMs;
-        simulation = {
-          eventsSent: sim.eventsSent,
-          wallMs: sim.wallMs,
-          eventsPerSecond: sim.eventsPerSecond,
-          ...(sim.findings.length > 0 ? { findings: [...sim.findings] } : {}),
-        };
-        // D5: a refusal is a FINDING, reported and never silently retried —
-        // and, for `_tiny`'s own real historical stream, also a genuine
-        // product defect (the pack's events are meant to fold cleanly), so
-        // it reds the run rather than staying a quiet report-only note.
-        for (const finding of sim.findings) {
+        return;
+      }
+      const adapter = adapterForSport(packDivision.sportKey);
+      if (adapter === undefined) {
+        errors.push(`tap: no tap adapter exists for sport "${packDivision.sportKey}" (division "${division.ref}"; ${notPlayed})`);
+        return;
+      }
+      let cfg: unknown;
+      let orgSlug: string;
+      let competitionSlug: unknown;
+      let divisionSlug: unknown;
+      let board: readonly TapBoardRow[];
+      try {
+        const resolved = resolveDivisionCfg(
+          bootRegistry().get(packDivision.sportKey, packDivision.moduleVersion),
+          packDivision,
+        );
+        if (!resolved.ok) throw new Error(`its cfg could not be resolved (${resolved.reason})`);
+        cfg = resolved.cfg;
+        // Every console URL segment is the SERVER's value — see
+        // `resolveOrgSlug`'s own doc for what a pack slug does here.
+        const resolveOrgSlug =
+          input.resolveOrgSlug ??
+          (async (id: string) => {
+            if (input.sql === undefined) throw new Error("no PlanSql seam to read the server-assigned org slug from");
+            return input.sql.getOrgSlug(id);
+          });
+        orgSlug = await resolveOrgSlug(orgId);
+        competitionSlug = (await t.request<{ slug?: unknown }>(base, s, `/api/v1/competitions/${seeded.competitionId}`))?.slug;
+        divisionSlug = (await t.request<{ slug?: unknown }>(base, s, `/api/v1/divisions/${divisionId}`))?.slug;
+        board = tapBoardRowsOf(await fetchDivisionFixtures(base, s, divisionId, input.oracleTransport));
+      } catch (err) {
+        errors.push(
+          `tap: division "${division.ref}" could not be prepared for tap play — ` +
+            `${err instanceof Error ? err.message : String(err)} (${notPlayed})`,
+        );
+        return;
+      }
+      if (typeof competitionSlug !== "string" || typeof divisionSlug !== "string") {
+        errors.push(`tap: the competition or division read carried no slug — cannot address "${division.ref}"'s console (${notPlayed})`);
+        return;
+      }
+
+      const refIdByKey = new Map<string, string>([...seeded.entrantIdByRef, ...seeded.personIdByRef]);
+      const jobsByRound = new Map<number, TapFixtureJob[]>();
+      for (const st of streams) {
+        const fixtureId = seeded.fixtureIdByKey.get(fixtureKey(division.ref, st.fixtureExtKey));
+        const row = fixtureId === undefined ? undefined : board.find((r) => r.id === fixtureId);
+        if (fixtureId === undefined || row === undefined || row.fixtureNo === null) {
           errors.push(
-            `simulate: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
-              `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+            `tap: ${division.ref}/${st.fixtureExtKey} is not on the division's board with a fixture_no — its console ` +
+              "cannot be addressed, so it was not played",
+          );
+          continue;
+        }
+        // Fix round 2 (R62) — the team sheets are SETUP, written through the
+        // real lineups API with the organiser session before any scorer is
+        // handed the fixture: player-attributed pad scoring needs a saved
+        // lineup. Built from each side's own seeded members; a pack event
+        // naming a non-member, or a refused sheet, is a finding that reds.
+        const lineupFindings = [
+          ...personOutsideByEntrantFindings(pack, st),
+          ...(await saveTapLineups({
+            base,
+            session: s,
+            fixtureId,
+            sides: tapLineupSides(pack, st),
+            entrantIdByRef: seeded.entrantIdByRef,
+            personIdByRef: seeded.personIdByRef,
+            transport: input.oracleTransport,
+          })),
+        ];
+        for (const finding of lineupFindings) errors.push(`tap: ${division.ref}/${st.fixtureExtKey}: ${finding}`);
+        // The round comes off the REAL board, same reasoning as the api
+        // branch's dependency waves. A board row with no round sorts last.
+        const round = row.roundNo ?? Number.MAX_SAFE_INTEGER;
+        const jobs = jobsByRound.get(round) ?? [];
+        jobs.push({
+          divisionRef: division.ref,
+          fixtureExtKey: st.fixtureExtKey,
+          fixtureId,
+          consolePath: consoleFixturePath({ orgSlug, competitionSlug, divisionSlug, fixtureNo: row.fixtureNo }),
+          stream: st,
+          adapter,
+          cfg,
+          refIdByKey,
+        });
+        jobsByRound.set(round, jobs);
+      }
+      if (jobsByRound.size === 0) return;
+
+      let player: TapPlayer;
+      try {
+        player =
+          tapState.player ??
+          (tapState.player = await (input.tapPlayer ?? browserTapPlayer)({
+            base,
+            session: s,
+            email,
+            ledger: defaultLedgerTransport,
+            ...(input.recordVideoDir === undefined ? {} : { recordVideoDir: input.recordVideoDir }),
+            ...(input.traceDir === undefined ? {} : { traceDir: input.traceDir }),
+          }));
+      } catch (err) {
+        errors.push(`tap: the tap player could not start — ${err instanceof Error ? err.message : String(err)} (${notPlayed})`);
+        return;
+      }
+
+      const rounds = [...jobsByRound.entries()].sort((a, b) => a[0] - b[0]).map(([, jobs]) => jobs);
+      log.info(
+        { division: division.ref, fixtures: keys.length, rounds: rounds.length, courts: courtCount },
+        `${suiteKey}: playing a division's streams by tapping the real pad (B07a T10)`,
+      );
+      const blockStart = performance.now();
+      const played = await playTapRounds(rounds, courtCount, async (job) => {
+        try {
+          return { job, result: await player.playFixture(job) };
+        } catch (err) {
+          // `playFixture` promises never to reject; this keeps that promise
+          // for it rather than letting one match abort a round.
+          const detail = err instanceof Error ? err.message : String(err);
+          return {
+            job,
+            result: { fixtureId: job.fixtureId, taps: 0, wallMs: 0, findings: [`player: unexpected failure — ${detail}`], observations: [] },
+          };
+        }
+      });
+      const blockMs = Math.round(performance.now() - blockStart);
+
+      // Driver findings RED the gate; observations are reported, never gated.
+      for (const { job, result } of played) {
+        tapPlayedFixtureIds.add(job.fixtureId);
+        for (const finding of result.findings) errors.push(`tap: ${division.ref}/${job.fixtureExtKey}: ${finding}`);
+        for (const observation of result.observations) {
+          log.info({ division: division.ref, fixture: job.fixtureExtKey, observation }, "tap_observation");
+        }
+        log.info(
+          {
+            division: division.ref,
+            fixture: job.fixtureExtKey,
+            taps: result.taps,
+            wallMs: result.wallMs,
+            findings: result.findings.length,
+            observations: result.observations.length,
+          },
+          "tap_fixture_played",
+        );
+      }
+
+      // The sign-off check: a FRESH board read, after every match of this
+      // block was played.
+      let after: readonly TapBoardRow[] = [];
+      try {
+        after = tapBoardRowsOf(await fetchDivisionFixtures(base, s, divisionId, input.oracleTransport));
+      } catch (err) {
+        errors.push(
+          `tap: could not re-read "${division.ref}"'s board to check its tapped fixtures were finalized — ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      for (const { job } of played) {
+        const status = after.find((r) => r.id === job.fixtureId)?.status ?? "(absent)";
+        const passed = status === "finalized";
+        oracles.push({
+          name: `tap: ${division.ref}/${job.fixtureExtKey} finalized`,
+          passed,
+          // Worded for what was OBSERVED — the status once tap play ended —
+          // never "after the sign-off": the first live run stopped every match
+          // on an adapter finding before the organiser was ever asked to sign.
+          detail: passed
+            ? "the organiser's sign-off landed: the product reads the tapped fixture as finalized"
+            : `the product reads "${status}" once tap play ended, not "finalized"`,
+        });
+        log.info(oracleLogFields("tap_fixture_finalized", passed ? "pass" : "fail"), "oracle_checked");
+        if (!passed) {
+          errors.push(
+            `tap: ${division.ref}/${job.fixtureExtKey} reads "${status}" once tap play ended — a tapped fixture must be ` +
+              `finalized by the organiser's sign-off, not left "${status}" (the per-match oracle's SETTLED_STATUSES ` +
+              `accepts "decided"; this check does not)`,
           );
         }
-        log.info(
-          // B05 T2 — `path` added so this event and the batch-import fold's
-          // own `suite_simulated` below are distinguishable in a log stream
-          // by more than which fields happen to be present.
-          { events: sim.eventsSent, ms: sim.wallMs, eventsPerSecond: sim.eventsPerSecond, path: "single" },
-          "suite_simulated",
+      }
+
+      const prev = tapState.report;
+      // R86 — each fixture's OWN scorer-side capture (`tap-play.ts`'s
+      // `createTapPlayer`), folded the same way `unreadRowsAfterFinalize` is
+      // across every division this run tapped. Computed OUTSIDE the object
+      // literal below so the field itself can be OMITTED (never a present-
+      // but-empty array) when this run never captured anything — the same
+      // absent-vs-empty rule every other optional field on this report
+      // follows.
+      const videoPaths = [
+        ...(prev?.videoPaths ?? []),
+        ...played.flatMap((p) => (p.result.videoPath === undefined ? [] : [p.result.videoPath])),
+      ];
+      const tracePaths = [
+        ...(prev?.tracePaths ?? []),
+        ...played.flatMap((p) => (p.result.tracePath === undefined ? [] : [p.result.tracePath])),
+      ];
+      tapState.report = {
+        matches: (prev?.matches ?? 0) + played.length,
+        taps: (prev?.taps ?? 0) + played.reduce((n, p) => n + p.result.taps, 0),
+        wallMs: (prev?.wallMs ?? 0) + blockMs,
+        observations: (prev?.observations ?? 0) + played.reduce((n, p) => n + p.result.observations.length, 0),
+        // Minors batch B, row (a) (R79) — `unreadRowsAfterFinalize` was set
+        // by `drivers/scorer.ts` and dropped by `tap-play.ts`'s own success
+        // path, so it never reached here to be counted at all. Summed the
+        // same way `observations` is, across every match this division just
+        // played, folded onto whatever an earlier division's tap fold
+        // already counted.
+        unreadRowsAfterFinalize:
+          (prev?.unreadRowsAfterFinalize ?? 0) +
+          played.reduce((n, p) => n + (p.result.unreadRowsAfterFinalize ?? 0), 0),
+        ...(videoPaths.length === 0 ? {} : { videoPaths }),
+        ...(tracePaths.length === 0 ? {} : { tracePaths }),
+      };
+    };
+
+    if (input.sql !== undefined) {
+      // A stream whose division the PLAN does not carry is invisible to a loop
+      // over `plan.divisions`, so it is NAMED here rather than silently
+      // skipped — carried forward from the per-stream guard B07a T6 added, and
+      // still fail-loud rather than fail-open, because scoping such a stream
+      // out of the fold would report a clean run that played nothing.
+      // Unreachable today (`pack-schema.ts` refuses a stream naming an unknown
+      // division, and the registration filter builds a SEPARATE `seedPlan`
+      // rather than narrowing `plan`), which is why it is an error rather than
+      // a guard with a fallback.
+      const plannedDivisionRefs = new Set(plan.divisions.map((d) => d.ref));
+      for (const st of pack.streams) {
+        if (plannedDivisionRefs.has(st.divisionRef)) continue;
+        errors.push(
+          `${suiteKey}: stream "${st.fixtureExtKey}" names division "${st.divisionRef}", which has no stage in ` +
+            "the plan — cannot tell which of its streams belong to its first stage",
         );
       }
-    }
 
-    // B05 T2 — the batch write-path fold (design doc §3 D4): every OTHER
-    // division's own streams (never `division0` — that is `simulate.ts`'s
-    // job, immediately above) folded through the LIVE
-    // `POST /divisions/{id}/events/import` route. `_tiny.json` declares
-    // exactly one such division today (`d-badminton`); grouped by
-    // `divisionRef` rather than hardcoding that name, so a future pack
-    // adding a third streamed division folds it too, aggregated into the
-    // same report section (T7 owns splitting that presentation out per
-    // division, if it ever needs to be).
-    //
-    // Gated on `input.sql`, same as division A's block — a unit test with no
-    // `sql` gets today's behavior unchanged.
-    if (input.sql !== undefined) {
-      const otherStreamsByDivisionRef = new Map<string, PackStream[]>();
-      for (const st of pack.streams) {
-        if (st.divisionRef === division0.ref) continue;
-        const group = otherStreamsByDivisionRef.get(st.divisionRef) ?? [];
-        group.push(st);
-        otherStreamsByDivisionRef.set(st.divisionRef, group);
+      // B07a T7 fix round 1 (I2) — a `play` key naming no planned division
+      // used to fall straight through `playModeFor`'s `declared?.[divisionRef]`
+      // lookup to the positional default, with nothing to say the key was
+      // ever read. A misspelled division ref then turns a suite's intended
+      // `tap` (or any other override) into a silent no-op behind a GREEN
+      // gate — exactly the "hidden API fallback on a tapped division" Global
+      // Constraint 3 forbids. Same fail-loud shape as the stream guard just
+      // above: named, pushed, and the fold still runs (a typo'd key affects
+      // no real division either way), so the run reports red rather than
+      // clean.
+      for (const key of Object.keys(opts.play ?? {})) {
+        if (plannedDivisionRefs.has(key)) continue;
+        errors.push(
+          `${suiteKey}: play declares division "${key}", which is not a planned division — planned ` +
+            `divisions: ${[...plannedDivisionRefs].join(", ")}`,
+        );
       }
-      if (otherStreamsByDivisionRef.size > 0) {
-        const refIdByKey = new Map<string, string>([
-          ...seeded.entrantIdByRef,
-          ...seeded.personIdByRef,
-        ]);
-        const importStart = performance.now();
-        let importEventsSent = 0;
-        const importFindings: ImportFinding[] = [];
-        let importChunks = 0;
-        for (const [divisionRef, streams] of otherStreamsByDivisionRef) {
-          const divisionId = seeded.divisionIdByRef.get(divisionRef);
-          if (divisionId === undefined) {
+
+      // `@`-sigilled payload refs (pack-schema.ts header note 6) name EITHER
+      // an entrant or a person — ONE namespace, so merging both maps is
+      // exactly as authoritative as keeping them separate. Built once here
+      // rather than once per fold, which is what the two blocks this replaces
+      // each did separately.
+      const refIdByKey = new Map<string, string>([
+        ...seeded.entrantIdByRef,
+        ...seeded.personIdByRef,
+      ]);
+
+      // Both report sections aggregate ACROSS divisions, so a pack that puts
+      // several divisions on one path publishes one honest total rather than
+      // whichever division happened to fold last. With exactly one division
+      // per path — every pack shipped today — each total is that division's
+      // own, unchanged.
+      const sims: SimulateResult[] = [];
+      const importFindings: ImportFinding[] = [];
+      let importEventsSent = 0;
+      let importChunks = 0;
+      let importWallMs = 0;
+      let importRan = false;
+
+      for (const [divisionIndex, division] of plan.divisions.entries()) {
+        const divisionStreamsAll = pack.streams.filter((st) => st.divisionRef === division.ref);
+        if (divisionStreamsAll.length === 0) continue;
+
+        const firstStageRef = division.stages[0]?.ref;
+        if (firstStageRef === undefined) {
+          // Same fail-loud reasoning as the plan guard above: a division that
+          // declares streams but reached here with no stage cannot have any of
+          // them placed, and a silent skip would report a clean run.
+          errors.push(
+            `${suiteKey}: division "${division.ref}" declares streams but has no stage in the plan — cannot ` +
+              "tell which of its streams belong to its first stage",
+          );
+          continue;
+        }
+
+        // An absent `stageRef` means "the division's ONLY stage" — the
+        // convention `validate-pack.ts`'s own `resolveStage` uses. A division
+        // with SEVERAL stages therefore cannot place such a stream at all, and
+        // this says so rather than guessing. The two blocks being replaced
+        // disagreed on precisely this point: `division0`'s dropped the stream
+        // SILENTLY (it is matched by neither this fold nor the advance step's
+        // explicit `stageRef` filter, so it was never played anywhere), while
+        // every other division's assumed the first stage. Neither silence nor
+        // a guess survives a unification, so the ambiguity is reported.
+        // `validate-pack.ts` only WARNS about such a stream, so no pack in the
+        // tree reaches this today.
+        for (const st of divisionStreamsAll) {
+          if (st.stageRef !== undefined || division.stages.length <= 1) continue;
+          errors.push(
+            `${suiteKey}: stream "${st.fixtureExtKey}" names division "${division.ref}" with no stage, but that ` +
+              `division declares ${division.stages.length} stages — an absent stageRef means a division's ONLY ` +
+              "stage, so there is no way to tell whether this stream belongs to the stage being folded",
+          );
+        }
+
+        const divisionStreams = divisionStreamsAll.filter((st) =>
+          st.stageRef === undefined ? division.stages.length === 1 : st.stageRef === firstStageRef,
+        );
+        if (divisionStreams.length === 0) continue;
+
+        // THE DISPATCH, exhaustive over all three modes. `tap` is played by
+        // tapping the real pad (B07a T10) and never falls back to either write
+        // path: a tapped division that cannot be played says so, loudly.
+        const mode = playModeFor(opts, division.ref, divisionIndex);
+
+        if (mode === "tap") {
+          await playDivisionByTaps(division, divisionStreams);
+        } else if (mode === "api") {
+          // B06b — fold in DEPENDENCY WAVES, not one flat `Promise.all`. A
+          // bracket fixture's entrants are written by its feeders' decisions,
+          // so posting round 2 concurrently with round 1 refuses every later
+          // round with `WRONG_PHASE — fixture has an unassigned entrant
+          // (bye/TBD)`. The round comes off the REAL board rather than being
+          // parsed out of the generator's `se-r{n}-i{m}` ext key: the key
+          // format is the product's, and reading `round_no` keeps this correct
+          // for any stage kind rather than for the ones whose keys happen to
+          // encode a round.
+          const roundByFixtureKey = new Map<string, number>();
+          const apiDivisionId = seeded.divisionIdByRef.get(division.ref);
+          if (apiDivisionId !== undefined) {
+            for (const f of await fetchDivisionFixtures(base, s, apiDivisionId, input.oracleTransport)) {
+              if (f.ext_key == null || f.round_no == null) continue;
+              roundByFixtureKey.set(fixtureKey(division.ref, f.ext_key), f.round_no);
+            }
+          }
+          log.info(
+            { division: division.ref, streams: divisionStreams.length },
+            `${suiteKey}: folding a division's streams through the single-event scoring route (B05 T1)`,
+          );
+          const sim = await simulateDivisionStreams({
+            base,
+            session: s,
+            streams: divisionStreams,
+            fixtureIdByKey: seeded.fixtureIdByKey,
+            refIdByKey,
+            roundByFixtureKey,
+            ...(input.simTransport === undefined ? {} : { transport: input.simTransport }),
+          });
+          sims.push(sim);
+          // D5: a refusal is a FINDING, reported and never silently retried —
+          // and, for `_tiny`'s own real historical stream, also a genuine
+          // product defect (the pack's events are meant to fold cleanly), so
+          // it reds the run rather than staying a quiet report-only note.
+          for (const finding of sim.findings) {
+            errors.push(
+              `simulate: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+                `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+            );
+          }
+        } else {
+          const importDivisionId = seeded.divisionIdByRef.get(division.ref);
+          if (importDivisionId === undefined) {
             // Never silent: a division that declares streams but was never
             // seeded/scheduled is indistinguishable in a report from one the
             // import fold simply skipped.
             errors.push(
-              `${suiteKey}: division "${divisionRef}" declares streams but has no resolved divisionId — ` +
+              `${suiteKey}: division "${division.ref}" declares streams but has no resolved divisionId — ` +
                 "cannot fold them through the import route",
             );
             continue;
           }
           log.info(
-            { division: divisionRef, streams: streams.length },
-            `${suiteKey}: folding division B's streams through the batch-import route (B05 T2)`,
+            { division: division.ref, streams: divisionStreams.length },
+            `${suiteKey}: folding a division's streams through the batch-import route (B05 T2)`,
           );
           const imp = await importDivisionStreams({
             base,
             session: s,
-            divisionId,
-            importId: buildImportId(divisionRef, input.runId),
-            streams,
+            divisionId: importDivisionId,
+            importId: buildImportId(division.ref, input.runId),
+            streams: divisionStreams,
             fixtureIdByKey: seeded.fixtureIdByKey,
             refIdByKey,
             ...(input.importTransport === undefined
               ? {}
               : { transport: input.importTransport }),
           });
+          importRan = true;
           importEventsSent += imp.eventsSent;
           importChunks += imp.chunks;
+          importWallMs += imp.wallMs;
           importFindings.push(...imp.findings);
+          // Same D5 discipline as the single-event branch above: an
+          // oversize/refusal/not-imported finding is reported and never
+          // silently retried.
+          for (const finding of imp.findings) {
+            errors.push(`import: ${describeImportFinding(finding)}`);
+          }
         }
-        const importWallMs = Math.round(performance.now() - importStart);
+      }
+
+      if (sims.length > 0) {
+        const simEventsSent = sims.reduce((n, x) => n + x.eventsSent, 0);
+        const simWallMs = sims.reduce((n, x) => n + x.wallMs, 0);
+        const simFindings = sims.flatMap((x) => [...x.findings]);
+        // The SAME derivation `simulate.ts` applies to its own result
+        // (simulate.ts:317), so a one-division run publishes exactly the
+        // number it always did rather than a separately-rounded one.
+        const simEventsPerSecond = computeEventsPerSecond(simEventsSent, simWallMs);
+        timings.simMs = simWallMs;
+        simulation = {
+          eventsSent: simEventsSent,
+          wallMs: simWallMs,
+          eventsPerSecond: simEventsPerSecond,
+          ...(simFindings.length > 0 ? { findings: simFindings } : {}),
+        };
+        log.info(
+          // B05 T2 — `path` added so this event and the batch-import fold's
+          // own `suite_simulated` below are distinguishable in a log stream
+          // by more than which fields happen to be present.
+          { events: simEventsSent, ms: simWallMs, eventsPerSecond: simEventsPerSecond, path: "single" },
+          "suite_simulated",
+        );
+      }
+
+      // `importRan`, never `importFindings.length` or a division count: the
+      // section is written when an import call was actually MADE. A run whose
+      // only import division never resolved an id has already pushed its error
+      // above, and publishing `eventsSent: 0, chunks: 0` for it would read as
+      // "imported nothing, cleanly" — the absent-vs-empty rule every other
+      // section in this report follows.
+      if (importRan) {
+        const importEventsPerSecond = computeEventsPerSecond(importEventsSent, importWallMs);
         timings.importMs = importWallMs;
         importSimulation = {
           eventsSent: importEventsSent,
           wallMs: importWallMs,
-          eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+          eventsPerSecond: importEventsPerSecond,
           chunks: importChunks,
           ...(importFindings.length > 0
             ? { findings: importFindings.map(toImportFindingReport) }
             : {}),
         };
-        // Same D5 discipline as division A's block: a refusal/oversize/
-        // not-imported finding is reported and never silently retried, and —
-        // for `_tiny`'s own real historical streams — also a genuine product
-        // defect (the pack's events are meant to fold cleanly), so it reds
-        // the run rather than staying a quiet report-only note.
-        for (const finding of importFindings) {
-          errors.push(`import: ${describeImportFinding(finding)}`);
-        }
         log.info(
-          // Same event name as division A's fold above (`suite_simulated`),
-          // same core fields (events/ms/eventsPerSecond), plus `path` to
-          // distinguish which write path produced this line, and `chunks`
-          // (meaningless for the single-event door, so not present there).
+          // Same event name as the single-event fold above, same core fields,
+          // plus `path` to distinguish which write path produced this line and
+          // `chunks` (meaningless for the single-event door, so absent there).
           {
             events: importEventsSent,
             ms: importWallMs,
-            eventsPerSecond: computeEventsPerSecond(importEventsSent, importWallMs),
+            eventsPerSecond: importEventsPerSecond,
             chunks: importChunks,
             path: "import",
           },
@@ -3214,60 +3934,134 @@ export async function runPackSuite(
     // The rule this encodes: FOLD EVERYTHING, THEN ASSERT. Every oracle
     // below now reads a competition whose every stage has been played,
     // rather than one still mid-progression.
-    // B05 T3 — stage advancement (design doc §3 D1/D7): `division0`'s second
-    // stage, `stage1`, when it declares a `progression` (a `timing:"setup"`
-    // knockout fed from `stage0`'s standings, in `_tiny`'s own case) is
-    // advanced through the LIVE `propose -> assert -> confirm -> generate`
-    // flow (`advance.ts`), its own stream folded through the SAME
-    // `simulateDivisionStreams` T1 uses above, and completed with the
-    // `finalRanks` response CAPTURED (D1 — it is the only time they cross the
-    // wire; `GET /divisions/{id}/history` never carries the payload).
+    // B05 T3 — stage advancement (design doc §3 D1/D7): a division's
+    // progression-fed stage (a `timing:"setup"` knockout fed from the
+    // preceding stage's standings, in `_tiny`'s own case) is advanced through
+    // the LIVE `propose -> assert -> confirm -> generate` flow (`advance.ts`),
+    // its own stream folded through the SAME `simulateDivisionStreams` T1 uses
+    // above, and completed with the `finalRanks` response CAPTURED (D1 — it is
+    // the only time they cross the wire; `GET /divisions/{id}/history` never
+    // carries the payload).
     //
-    // Gated on `input.sql`, same as every other B05 step — a unit test with
-    // no `sql` gets today's behavior unchanged. A no-op for any pack (or
-    // division) whose second stage declares no `progression`: `_tiny` is the
-    // only pack this bench runs, and its OTHER two divisions
-    // (d-badminton, d-registration) are both single-stage.
-    if (input.sql !== undefined && stage1?.progression !== undefined) {
-      const sourceStageId = seeded.stageIdByRef.get(stage0.ref);
-      const targetStageId = seeded.stageIdByRef.get(stage1.ref);
+    // B07a T6 — this was gated on `division0`/`stage0`/`stage1`, so it ran for
+    // the FIRST division's SECOND stage and nothing else. Every other division
+    // was batch-imported with no stage step at all, which was harmless only
+    // because every other division in every shipped pack happens to be
+    // single-stage. The body is unchanged and now takes its division and its
+    // two stages as parameters; the loop below drives it for every division.
+    //
+    // Minors batch B, row 28 — R23 (below) can send a LATER stage's streams
+    // down this same import route, but `importEventsSent`/`importChunks`/
+    // `importWallMs` above are scoped to the `if (input.sql !== undefined)`
+    // block that closes before this closure is even declared, so they cannot
+    // be accumulated into directly. Own accumulators here, folded into
+    // `importSimulation` once every division has advanced (below the
+    // `advanceDivision` loop) rather than left to sit beside it, unread — the
+    // finding's exact shape: "logs `path: 'advance-import'`, but never adds
+    // to `importEventsSent`, `importChunks` or `timings.importMs`".
+    let advanceImportEventsSent = 0;
+    let advanceImportChunks = 0;
+    let advanceImportWallMs = 0;
+    let advanceImportRan = false;
+
+    // Pre-B07b prerequisite P2 (progress.md Ruling R74, task-6-review.md
+    // Minor m6) — a division with boundaries at stage index 1 AND 2 would
+    // complete its MIDDLE stage twice: once here as the idx-2 boundary's
+    // SOURCE (below), and once already at the idx-1 boundary's TARGET (this
+    // function's own `completeStageCapture` call further down). Every real
+    // stage id this run has already completed, across every division and
+    // every boundary — real ids are globally unique (the product's own
+    // `/stages` POST mints them), so this needs no per-division scoping.
+    // The bench-side fix ONLY: `POST /stages/{id}/complete`'s own behaviour
+    // on an already-completed stage is a PRODUCT fact this task does not
+    // change (see the report's "Product finding").
+    const completedStageIds = new Set<string>();
+
+    const advanceDivision = async (
+      division: SeedPlanDivision,
+      divisionIndex: number,
+      sourceStage: SeedPlanStage,
+      targetStage: SeedPlanStage,
+    ): Promise<void> => {
+      const sourceStageId = seeded.stageIdByRef.get(stageKey(division.ref, sourceStage.ref));
+      const targetStageId = seeded.stageIdByRef.get(stageKey(division.ref, targetStage.ref));
       if (sourceStageId === undefined || targetStageId === undefined) {
         errors.push(
-          `${suiteKey}: division "${division0.ref}" declares a progression-fed stage "${stage1.ref}" but one of ` +
-            `its own stage ids ("${stage0.ref}" / "${stage1.ref}") never resolved — cannot advance it`,
+          `${suiteKey}: division "${division.ref}" declares a progression-fed stage "${targetStage.ref}" but one of ` +
+            `its own stage ids ("${sourceStage.ref}" / "${targetStage.ref}") never resolved — cannot advance it`,
         );
       } else {
         // The expected qualifier order (D7's "expected qualifier list"),
-        // derived from the SOURCE stage's own `expected.tables` row — the
-        // pack's already-authored, already-offline-checked final standings
-        // for `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
-        // minted. Assumes the progression's own take rule pulls every ranked
-        // entrant of that table, in order (true of `_tiny`'s own
-        // `rankRange(1, N)` — a future pack with a NARROWER take, e.g. top 2
-        // of 8, would need this sliced to the qualifier count, out of this
-        // task's scope).
-        const sourceTable = pack.expected.tables.find(
-          (t) => t.divisionRef === division0.ref && t.stageRef === stage0.ref && t.poolKey === undefined,
+        // derived from the SOURCE stage's own `expected.tables` — the pack's
+        // already-authored, already-offline-checked final standings for
+        // `stage0`, resolved from refs to the REAL entrant ids `seedSuite`
+        // minted.
+        //
+        // B07a T5: this used to read "the one table with no poolKey", in rank
+        // order, and assume the take rule pulled every ranked entrant of it.
+        // That is right for an UNPOOLED source (`_tiny`'s league, whose
+        // `rankRange(1, N)` does take them all) and it is not a derivation at
+        // all for a POOLED group stage, which has one table per pool and no
+        // stage-wide row — so `find(... poolKey === undefined)` returned
+        // undefined and the run died on the "no expected.tables row" error
+        // below. `expectedQualifierOrder` now picks the rule by what the
+        // source actually declared; a pooled stage's seats come from the
+        // progression itself, RANK BEFORE GROUP (lib/qualifiers.ts).
+        //
+        // STILL TRUE, and carried forward from the comment this replaced: the
+        // UNPOOLED branch returns EVERY ranked row of the stage-wide table,
+        // whatever the take rule asks for. A future pack with a NARROWER take
+        // — "top 2 of 8" — would need that list sliced to the qualifier count.
+        // That shape reds LOUDLY on length rather than passing silently
+        // (`compareQualifiers` compares length before order), so it is a
+        // documented limitation and not a silent hole — but a pack author who
+        // meets it should recognise it rather than hunt a product defect.
+        const stageTables = pack.expected.tables.filter(
+          (t) => t.divisionRef === division.ref && t.stageRef === sourceStage.ref,
         );
+        const qualifierOrder = expectedQualifierOrder(stageTables, targetStage.progression);
+        if (qualifierOrder.warning !== undefined) {
+          warnings.push(
+            `${suiteKey}: stage "${targetStage.ref}" is fed by ` +
+              `${qualifierOrder.pooled ? "the POOLED stage" : "the unpooled stage"} "${sourceStage.ref}", but ` +
+              `${qualifierOrder.warning} — this bench derives a qualifier order only for a rank_order ` +
+              "placement, and for a pooled source only from a single topNPerGroup take, so it asserts " +
+              "none here (D7)",
+          );
+        }
         const expectedQualifierEntrantIds: string[] = [];
         const unresolvedQualifierRefs: string[] = [];
-        for (const row of [...(sourceTable?.rows ?? [])].sort((a, b) => a.rank - b.rank)) {
-          const id = seeded.entrantIdByRef.get(row.entrant);
-          if (id === undefined) unresolvedQualifierRefs.push(row.entrant);
+        for (const ref of qualifierOrder.refs) {
+          const id = seeded.entrantIdByRef.get(ref);
+          if (id === undefined) unresolvedQualifierRefs.push(ref);
           else expectedQualifierEntrantIds.push(id);
         }
-        if (sourceTable === undefined || unresolvedQualifierRefs.length > 0) {
+        if (stageTables.length === 0 || unresolvedQualifierRefs.length > 0) {
           errors.push(
-            sourceTable === undefined
-              ? `${suiteKey}: stage "${stage1.ref}" declares a progression from "${stage0.ref}" but the pack carries ` +
-                `no expected.tables row for "${stage0.ref}" — there is no expected qualifier order to assert ` +
+            stageTables.length === 0
+              ? `${suiteKey}: stage "${targetStage.ref}" declares a progression from "${sourceStage.ref}" but the pack carries ` +
+                `no expected.tables row for "${sourceStage.ref}" — there is no expected qualifier order to assert ` +
                 "against before confirming (D7)"
-              : `${suiteKey}: stage "${stage0.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
+              : `${suiteKey}: stage "${sourceStage.ref}"'s expected table names entrant ref(s) with no resolved id: ` +
                 `${unresolvedQualifierRefs.join(", ")}`,
+          );
+        } else if (expectedQualifierEntrantIds.length === 0) {
+          // A pooled source whose progression this bench cannot read reaches
+          // here with an empty list. It stays a LOUD failure — the same shape
+          // the un-derivable case has always had — rather than advancing the
+          // stage with nothing asserted about its seats.
+          errors.push(
+            `${suiteKey}: stage "${targetStage.ref}" is fed by "${sourceStage.ref}", whose expected tables yielded no ` +
+              `qualifier order to assert before confirming — ${qualifierOrder.warning ?? "the source declared no ranked rows"} (D7)`,
           );
         } else {
           log.info(
-            { sourceStage: stage0.ref, targetStage: stage1.ref, expected: expectedQualifierEntrantIds },
+            {
+              division: division.ref,
+              sourceStage: sourceStage.ref,
+              targetStage: targetStage.ref,
+              expected: expectedQualifierEntrantIds,
+            },
             `${suiteKey}: advancing the progression-fed stage (B05 T3)`,
           );
           // The SOURCE stage must be COMPLETE before `computeSeedProposal`
@@ -3275,7 +4069,24 @@ export async function runPackSuite(
           // otherwise) — nothing upstream of this block ever completes a
           // stage, so this run does it here, once, immediately before
           // proposing into the stage it feeds.
-          await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+          //
+          // P2 — EXCEPT when this exact stage id was already completed as a
+          // PRIOR boundary's TARGET (a division with boundaries at stage
+          // index 1 and 2 reaches its own middle stage as a target first,
+          // then as this call's source next). Calling `/complete` again
+          // would be a second completion of an already-complete stage — a
+          // PRODUCT fact this bench does not change (see the report's
+          // "Product finding") — so the skip is bench-side only, and never
+          // silent.
+          if (completedStageIds.has(sourceStageId)) {
+            log.info(
+              { division: division.ref, stage: sourceStage.ref, stageId: sourceStageId },
+              `${suiteKey}: skipping a repeat /complete — "${sourceStage.ref}" was already completed as a prior boundary's target (P2)`,
+            );
+          } else {
+            await completeStageCapture(base, s, sourceStageId, input.advanceTransport);
+            completedStageIds.add(sourceStageId);
+          }
 
           const advanceOutcome = await advanceStageSeeding({
             base,
@@ -3285,13 +4096,21 @@ export async function runPackSuite(
             ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
           });
           const qc = advanceOutcome.qualifierCheck;
+          // B07a T6 — the DIVISION ref leads every name this block pushes.
+          // Stage refs are unique only WITHIN a division (`pack-schema.ts`'s
+          // `checkRefsUnique` builds its `seenStage` set inside the
+          // per-division loop), so two divisions may legally call their
+          // knockout the same thing — and now that every division advances,
+          // a stage-only name would give the report two identical rows and
+          // no way to tell which division failed. Same `division/stage`
+          // shape the standings-table oracles below already use.
           oracles.push({
-            name: `advance: ${stage1.ref} seed proposal qualifiers`,
+            name: `advance: ${division.ref}/${targetStage.ref} seed proposal qualifiers`,
             passed: qc.matched,
             detail: qc.matched
               ? `proposal qualifiers [${qc.actual.join(", ")}] match the pack's expected order`
               : `proposal qualifiers [${qc.actual.join(", ")}] disagree with the pack's expected order ` +
-                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${stage1.ref}" (D7)`,
+                `[${qc.expected.join(", ")}] — confirm/generate/complete were never called for "${targetStage.ref}" (D7)`,
           });
           // B05 review round 1, MAJOR 4: this pushed an `OracleResult` and
           // emitted nothing, so a log consumer reading `oracle_checked`
@@ -3299,7 +4118,7 @@ export async function runPackSuite(
           log.info(oracleLogFields("seed_proposal_qualifiers", qc.matched ? "pass" : "fail"), "oracle_checked");
           if (!qc.matched) {
             errors.push(
-              `advance: ${stage1.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
+              `advance: ${division.ref}/${targetStage.ref}: seed proposal qualifiers [${qc.actual.join(", ")}] disagree with the ` +
                 `pack's expected order [${qc.expected.join(", ")}]`,
             );
           } else {
@@ -3307,54 +4126,134 @@ export async function runPackSuite(
             // SAME single-event route T1 uses above — reusing that function
             // is the acceptance bar (T3's brief: "the existing fold covers
             // it", not a new folding primitive). Explicit `stageRef` match
-            // only: `division0` now has more than one stage, so the "absent
-            // means the division's only stage" fallback (T1's own block)
-            // does not apply here.
-            const stage1Streams = pack.streams.filter(
-              (st) => st.divisionRef === division0.ref && st.stageRef === stage1.ref,
+            // only: a division reaching here has more than one stage, so the
+            // "absent means the division's only stage" fallback (T1's own
+            // block) does not apply here.
+            //
+            // B07a T6 — this is also the ONLY place a non-first stage's
+            // streams are played now: the batch-import fold above is scoped
+            // to each division's first stage, because a later stage's
+            // fixtures have no real entrants until the advance directly above
+            // seeds them (ruling R1).
+            const targetStageStreams = pack.streams.filter(
+              (st) => st.divisionRef === division.ref && st.stageRef === targetStage.ref,
             );
-            if (stage1Streams.length > 0) {
+            if (targetStageStreams.length > 0) {
               const refIdByKey = new Map<string, string>([
                 ...seeded.entrantIdByRef,
                 ...seeded.personIdByRef,
               ]);
-              const advSim = await simulateDivisionStreams({
-                base,
-                session: s,
-                streams: stage1Streams,
-                fixtureIdByKey: seeded.fixtureIdByKey,
-                refIdByKey,
-                ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
-              });
-              for (const finding of advSim.findings) {
-                errors.push(
-                  `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
-                    `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+              // B07a T7 (ruling R23) — this fold used to be hard-wired to the
+              // single-event route for EVERY division, whatever that division
+              // declared. A division's play mode is a property of the DIVISION,
+              // not of one of its stages, so a later stage follows the same
+              // mode its first stage did; leaving this hard-wired would have
+              // made `play` a half-connected seam that a pack could set and
+              // then watch be ignored for every stage past the first.
+              const advanceMode = playModeFor(opts, division.ref, divisionIndex);
+              if (advanceMode === "tap") {
+                await playDivisionByTaps(division, targetStageStreams);
+              } else if (advanceMode === "import") {
+                const divisionId = seeded.divisionIdByRef.get(division.ref);
+                if (divisionId === undefined) {
+                  // Never silent — same discipline as the first-stage fold's
+                  // identical guard.
+                  errors.push(
+                    `${suiteKey}: division "${division.ref}" declares streams for "${targetStage.ref}" but has no ` +
+                      "resolved divisionId — cannot fold them through the import route",
+                  );
+                } else {
+                  // The SAME `import_id` this division's first-stage fold used.
+                  // The importer's receipts are keyed
+                  // `(division_id, import_id, fixture_id)` (`import.ts:275`),
+                  // and a later stage's fixtures are DIFFERENT fixtures, so
+                  // they import normally rather than reading as duplicates —
+                  // while a rerun at the same commit still replays identically,
+                  // which is what `buildImportId`'s run-scoped id is for.
+                  const advImp = await importDivisionStreams({
+                    base,
+                    session: s,
+                    divisionId,
+                    importId: buildImportId(division.ref, input.runId),
+                    streams: targetStageStreams,
+                    fixtureIdByKey: seeded.fixtureIdByKey,
+                    refIdByKey,
+                    ...(input.importTransport === undefined
+                      ? {}
+                      : { transport: input.importTransport }),
+                  });
+                  for (const finding of advImp.findings) {
+                    errors.push(`advance: ${describeImportFinding(finding)}`);
+                  }
+                  // Minors batch B, row 28 — this log line reported these
+                  // numbers but never fed them anywhere a reader of the
+                  // REPORT (as opposed to the log stream) could see them.
+                  advanceImportRan = true;
+                  advanceImportEventsSent += advImp.eventsSent;
+                  advanceImportChunks += advImp.chunks;
+                  advanceImportWallMs += advImp.wallMs;
+                  log.info(
+                    {
+                      events: advImp.eventsSent,
+                      ms: advImp.wallMs,
+                      eventsPerSecond: advImp.eventsPerSecond,
+                      chunks: advImp.chunks,
+                      // Its own `path`, never the first-stage fold's "import":
+                      // these events were sent AFTER a seed proposal, and a log
+                      // reader that could not tell the two apart would be
+                      // unable to check that ordering at all.
+                      path: "advance-import",
+                    },
+                    "suite_simulated",
+                  );
+                }
+              } else {
+                const advSim = await simulateDivisionStreams({
+                  base,
+                  session: s,
+                  streams: targetStageStreams,
+                  fixtureIdByKey: seeded.fixtureIdByKey,
+                  refIdByKey,
+                  ...(input.advanceTransport === undefined ? {} : { transport: input.advanceTransport }),
+                });
+                for (const finding of advSim.findings) {
+                  errors.push(
+                    `advance: fixture ${finding.fixtureId} (stream ${finding.streamKey}) event #${finding.eventIndex}: ` +
+                      `${finding.code} (HTTP ${finding.status}) — ${finding.message}`,
+                  );
+                }
+                log.info(
+                  { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
+                  "suite_simulated",
                 );
               }
-              log.info(
-                { events: advSim.eventsSent, ms: advSim.wallMs, eventsPerSecond: advSim.eventsPerSecond, path: "advance" },
-                "suite_simulated",
-              );
             }
 
+            // P2 — the TARGET-site completion is NEVER skipped: it is the
+            // only call that captures THIS stage's own `finalRanks` (D1 —
+            // the only time they cross the wire), and the finalRanks oracle
+            // just below reads that captured response. Recorded into
+            // `completedStageIds` so a LATER boundary that reaches this same
+            // stage id as its own SOURCE (this division's next iteration,
+            // if it has one) skips the redundant completion above instead.
             const completion = await completeStageCapture(
               base,
               s,
               targetStageId,
               input.advanceTransport,
             );
+            completedStageIds.add(targetStageId);
             // D1 — the finalRanks oracle: the pack's OWN expected order
             // (`expected.finalRanks`, `PackExpectedFinalRanks` — the ONLY
             // block that can assert a bracket's placement order) compared
             // against the CAPTURED `complete` response. A mismatch renders
             // BOTH sides, never just one.
             const expectedFinalRanksRow = pack.expected.finalRanks.find(
-              (fr) => fr.divisionRef === division0.ref && fr.stageRef === stage1.ref,
+              (fr) => fr.divisionRef === division.ref && fr.stageRef === targetStage.ref,
             );
             if (expectedFinalRanksRow === undefined) {
               errors.push(
-                `${suiteKey}: stage "${stage1.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
+                `${suiteKey}: stage "${division.ref}/${targetStage.ref}" completed but the pack declares no expected.finalRanks row for it — ` +
                   "there is nothing to compare the captured finalRanks against",
               );
             } else {
@@ -3367,13 +4266,13 @@ export async function runPackSuite(
               }
               if (unresolvedFinalRankRefs.length > 0) {
                 errors.push(
-                  `${suiteKey}: stage "${stage1.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
+                  `${suiteKey}: stage "${division.ref}/${targetStage.ref}"'s expected.finalRanks names entrant ref(s) with no resolved id: ` +
                     `${unresolvedFinalRankRefs.join(", ")}`,
                 );
               } else {
                 const franksCheck = compareFinalRanks(expectedIds, completion.finalRanks);
                 oracles.push({
-                  name: `advance: ${stage1.ref} finalRanks`,
+                  name: `advance: ${division.ref}/${targetStage.ref} finalRanks`,
                   passed: franksCheck.matched,
                   // `reason` is set by the comparator only when a side was
                   // EMPTY — i.e. exactly when there was nothing to compare.
@@ -3387,7 +4286,7 @@ export async function runPackSuite(
                 log.info(oracleLogFields("final_ranks", franksCheck.matched ? "pass" : "fail"), "oracle_checked");
                 if (!franksCheck.matched) {
                   errors.push(
-                    `advance: ${stage1.ref}: captured finalRanks ` +
+                    `advance: ${division.ref}/${targetStage.ref}: captured finalRanks ` +
                       `[${franksCheck.actual === undefined ? "(absent)" : franksCheck.actual.join(", ")}] disagree with ` +
                       `the pack's expected order [${franksCheck.expected.join(", ")}]`,
                   );
@@ -3408,7 +4307,7 @@ export async function runPackSuite(
 
                 const rankCrossing = compareRankCrossings(completion.finalRanks, standingsRanked);
                 oracles.push({
-                  name: `oracle: ${stage1.ref} rank crossing (captured vs standings)`,
+                  name: `oracle: ${division.ref}/${targetStage.ref} rank crossing (captured vs standings)`,
                   passed: rankCrossing.matched,
                   subject: rankCrossing.reason === undefined,
                   detail: rankCrossing.matched
@@ -3418,14 +4317,14 @@ export async function runPackSuite(
                 log.info(oracleLogFields("rank_crossing", rankCrossing.matched ? "pass" : "fail"), "oracle_checked");
                 if (!rankCrossing.matched) {
                   errors.push(
-                    `oracle: ${stage1.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
+                    `oracle: ${division.ref}/${targetStage.ref}: the captured complete response and the re-read standings DISAGREE on final order — ` +
                       `${renderRankCrossingMismatch(rankCrossing)}`,
                   );
                 }
 
                 const standingsVsExpected = compareFinalRanks(expectedIds, standingsRanked);
                 oracles.push({
-                  name: `oracle: ${stage1.ref} standings rank vs expected.finalRanks`,
+                  name: `oracle: ${division.ref}/${targetStage.ref} standings rank vs expected.finalRanks`,
                   passed: standingsVsExpected.matched,
                   subject: standingsVsExpected.reason === undefined,
                   detail: standingsVsExpected.matched
@@ -3436,7 +4335,7 @@ export async function runPackSuite(
                 log.info(oracleLogFields("standings_final_rank", standingsVsExpected.matched ? "pass" : "fail"), "oracle_checked");
                 if (!standingsVsExpected.matched) {
                   errors.push(
-                    `oracle: ${stage1.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
+                    `oracle: ${division.ref}/${targetStage.ref}: re-read standings [${standingsRanked.join(", ")}] disagree with the ` +
                       `pack's expected order [${expectedIds.join(", ")}]`,
                   );
                 }
@@ -3447,11 +4346,11 @@ export async function runPackSuite(
                 // exists anywhere on the wire (F1b) — the bench does not
                 // invent one.
                 const expectedChampionRow = pack.expected.champions.find(
-                  (c) => c.divisionRef === division0.ref && (c.stageRef === undefined || c.stageRef === stage1.ref),
+                  (c) => c.divisionRef === division.ref && (c.stageRef === undefined || c.stageRef === targetStage.ref),
                 );
                 if (expectedChampionRow === undefined) {
                   warnings.push(
-                    `oracle: division "${division0.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
+                    `oracle: division "${division.ref}" completed but the pack declares no expected.champions row for it — champion oracle skipped`,
                   );
                 } else {
                   const expectedChampionId = seeded.entrantIdByRef.get(expectedChampionRow.entrant);
@@ -3462,7 +4361,7 @@ export async function runPackSuite(
                   } else {
                     const championCheck = compareChampion(expectedChampionId, standingsRanked, completion.finalRanks);
                     oracles.push({
-                      name: `oracle: ${division0.ref} champion`,
+                      name: `oracle: ${division.ref} champion`,
                       passed: championCheck.matched,
                       detail: championCheck.matched
                         ? `champion ${championCheck.fromStandings} matches the pack's expected champion`
@@ -3479,6 +4378,60 @@ export async function runPackSuite(
           }
         }
       }
+    };
+
+    // B07a T6 — advancement for EVERY division, driven STAGE-MAJOR: one whole
+    // stage boundary at a time across every division, before any division
+    // moves on to its next boundary.
+    //
+    // The order is the point (ruling R1). Each division's later-stage streams
+    // are played by `advanceDivision` itself, immediately after the advance
+    // that generates that stage's fixtures — so walking divisions in the outer
+    // loop instead would seat and PLAY a second boundary of division A before
+    // division B's first knockout had been seeded at all. Interleaving by
+    // boundary keeps every division's stage N generated before anything's
+    // stage N+1 is proposed, which is the only order in which a knockout
+    // fixture exists before its own stream is folded into it. The batch-import
+    // fold above is scoped to each division's FIRST stage for the same reason.
+    //
+    // `plan.divisions` is pack order (`buildSeedPlan` maps `pack.divisions`
+    // 1:1), so oracles read in the order the pack author wrote their
+    // divisions. A division with a single stage, or whose next stage declares
+    // no `progression`, contributes nothing — which is every division of every
+    // pack shipped before this task except `_tiny`'s own `d-tiny`, so no
+    // existing run changes shape.
+    if (input.sql !== undefined) {
+      const deepestStageCount = Math.max(0, ...plan.divisions.map((d) => d.stages.length));
+      for (let stageIndex = 1; stageIndex < deepestStageCount; stageIndex += 1) {
+        for (const [divisionIndex, division] of plan.divisions.entries()) {
+          const sourceStage = division.stages[stageIndex - 1];
+          const targetStage = division.stages[stageIndex];
+          if (sourceStage === undefined || targetStage?.progression === undefined) continue;
+          await advanceDivision(division, divisionIndex, sourceStage, targetStage);
+        }
+      }
+    }
+
+    // Minors batch B, row 28 — fold the later-stage import fold's own
+    // accumulators (above) into the report's `importSimulation`, once every
+    // division has advanced. Added rather than replaced: a division whose
+    // FIRST stage also imported already has an `importSimulation` from the
+    // block above, and this later fold is on top of that, never instead of
+    // it. `importSimulation` can also still be `undefined` here (a division
+    // with streams ONLY on a later stage, none on its first), so this is the
+    // one place that can create it, not only extend it.
+    if (advanceImportRan) {
+      const eventsSent = (importSimulation?.eventsSent ?? 0) + advanceImportEventsSent;
+      const wallMs = (importSimulation?.wallMs ?? 0) + advanceImportWallMs;
+      const chunks = (importSimulation?.chunks ?? 0) + advanceImportChunks;
+      importSimulation = {
+        eventsSent,
+        wallMs,
+        eventsPerSecond: computeEventsPerSecond(eventsSent, wallMs),
+        chunks,
+        ...(importSimulation?.findings === undefined ? {} : { findings: importSimulation.findings }),
+      };
+      timings.importMs = wallMs;
     }
 
     // B05 T4b — the standings comparator (design doc §3, oracle.ts's
@@ -3488,12 +4441,15 @@ export async function runPackSuite(
     // reached it from nothing on a real run (AGENTS.md failure class 1, the
     // inert seam — the exact thing this whole wave exists to close;
     // `b05-oracle-comparators.md`'s own vacuity note). Gated on
-    // `input.sql !== undefined` only — unlike T3's advance step below, this
-    // does NOT depend on `stage1?.progression`: `d-badminton` (T2's
-    // batch-import division, folded just above) carries its own
-    // `expected.tables` row and is never advanced through a progression at
-    // all, so a gate on `stage1?.progression` would leave it permanently
-    // unreached.
+    // `input.sql !== undefined` only — it does NOT depend on any division
+    // being advanced. A division can carry an `expected.tables` row and never
+    // declare a progression at all (`d-tiebreak` does exactly that), so gating
+    // this on the advance step would leave such a table permanently unasserted.
+    //
+    // B07a T6: this comment used to say "unlike T3's advance step BELOW … does
+    // not depend on `stage1?.progression`". Both halves are now stale — the
+    // advance step moved ABOVE this block in B06a T9, and `stage1` no longer
+    // exists: advancement walks every division's own stage list.
     const reportMatchOracle = (
       divisionRef: string,
       expectedRows: readonly ExpectedMatchRow[],
@@ -3612,7 +4568,7 @@ export async function runPackSuite(
 
       const standingsByDivision = new Map<string, ReadonlyMap<string, Record<string, number>>>();
       for (const table of pack.expected.tables) {
-        const tableStageId = seeded.stageIdByRef.get(table.stageRef);
+        const tableStageId = seeded.stageIdByRef.get(stageKey(table.divisionRef, table.stageRef));
         if (tableStageId === undefined) {
           errors.push(
             `oracle: expected.tables row for "${table.divisionRef}"/"${table.stageRef}" names a stage ref with no resolved id`,
@@ -3785,7 +4741,57 @@ export async function runPackSuite(
             .get(sp.divisionRef)
             ?.find((row) => row.extKey === sp.fixtureExtKey)?.outcome;
           if (specialFixtureId !== undefined) {
-            const specialState = await fetchFixtureModuleState(base, s, specialFixtureId, input.oracleTransport);
+            let specialState: unknown;
+            if (tapPlayedFixtureIds.has(specialFixtureId)) {
+              // Fix round 2 (R64) — a pack claim describes the STREAM's end
+              // state. A tapped fixture's stored state is folded through the
+              // bench-appended core.finalize (generic: "done" -> "final"), so
+              // the claim is judged on the product's own ledger rows through
+              // the last pack event instead. Never a fallback to /state: a
+              // failed fold reds, and the claims read `(absent)`.
+              const specialStream = pack.streams.find(
+                (st) => st.divisionRef === sp.divisionRef && st.fixtureExtKey === sp.fixtureExtKey,
+              );
+              const specialDivision = pack.divisions.find((d) => d.ref === sp.divisionRef);
+              const homeEntrantId = specialStream === undefined ? undefined : seeded.entrantIdByRef.get(specialStream.home);
+              const awayEntrantId = specialStream === undefined ? undefined : seeded.entrantIdByRef.get(specialStream.away);
+              try {
+                if (
+                  specialStream === undefined ||
+                  specialDivision === undefined ||
+                  homeEntrantId === undefined ||
+                  awayEntrantId === undefined
+                ) {
+                  throw new Error("its stream, division or entrant ids did not resolve");
+                }
+                const specialModule = bootRegistry().get(specialDivision.sportKey, specialDivision.moduleVersion);
+                const specialCfg = resolveDivisionCfg(specialModule, specialDivision);
+                if (!specialCfg.ok) throw new Error(`its cfg could not be resolved (${specialCfg.reason})`);
+                const folded = await specialStateThroughPackEvents({
+                  base,
+                  session: s,
+                  fixtureId: specialFixtureId,
+                  homeEntrantId,
+                  awayEntrantId,
+                  packEventTypes: specialStream.events.map((event) => event.type),
+                  module: specialModule,
+                  cfg: specialCfg.cfg,
+                  transport: input.oracleTransport,
+                });
+                specialState = folded.state;
+                log.info(
+                  { fixture: specialKey, signOffRows: folded.signOffRows },
+                  `${suiteKey}: special state judged through the pack's own events (R64)`,
+                );
+              } catch (err) {
+                errors.push(
+                  `oracle: specials: ${specialKey} was tapped, and its state through the pack's own events could not be ` +
+                    `folded — ${err instanceof Error ? err.message : String(err)} (never judged off the signed-off /state)`,
+                );
+              }
+            } else {
+              specialState = await fetchFixtureModuleState(base, s, specialFixtureId, input.oracleTransport);
+            }
             specialSubjects.set(specialKey, {
               outcome: specialOutcome,
               state: specialState,
@@ -4694,23 +5700,30 @@ export async function runPackSuite(
     if (input.sql !== undefined && newsEnable !== undefined && newsEnable.enabled > 0) {
       try {
         const newsTransport = input.oracleTransport ?? defaultProbeTransport;
-        // Publish the LAST stage's fixtures — the closest `_tiny` has to the
-        // design's "semis and final", and a proper SUBSET so what stays draft
-        // is provable. Derived from the pack, never a count typed in here.
-        // `fixtureKey`, never a hand-built string. The map is keyed by
-        // `JSON.stringify([divisionRef, extKey])` (`pack-schema.ts:1579`) —
-        // a delimiter join misses EVERY entry, and it misses silently: the
-        // list comes back empty and the two oracles below report NO SUBJECT,
-        // which reads exactly like a suite that legitimately drafted nothing.
+        // Publish the semis and the final of the LAST stage — not the whole
+        // stage (B07a Task 12 / Ruling R70) — and a proper SUBSET so what
+        // stays draft is provable. Derived from the pack, never a count
+        // typed in here. `fixtureKey`, never a hand-built string: the map is
+        // keyed by `JSON.stringify([divisionRef, extKey])`
+        // (`pack-schema.ts:1579`) — a delimiter join misses EVERY entry, and
+        // it misses silently: the list comes back empty and the two oracles
+        // below report NO SUBJECT, which reads exactly like a suite that
+        // legitimately drafted nothing.
         const lastStage = division0.stages[division0.stages.length - 1];
         const division0Streams = pack.streams.filter((st) => st.divisionRef === division0.ref);
-        const publishFixtureIds =
-          lastStage === undefined
-            ? []
-            : division0Streams
-                .filter((st) => st.stageRef === lastStage.ref)
-                .map((st) => seeded.fixtureIdByKey.get(fixtureKey(st.divisionRef, st.fixtureExtKey)))
-                .filter((id): id is string => id !== undefined);
+        const lastStageStreams =
+          lastStage === undefined ? [] : division0Streams.filter((st) => st.stageRef === lastStage.ref);
+        const targets = publishTargets(lastStageStreams);
+        if (targets.unparsedKeys.length > 0) {
+          warnings.push(
+            `${suiteKey}: news publish skipped ${targets.unparsedKeys.length} last-stage fixture key(s) that ` +
+              `do not match se-r{n}-i{i}, so they were neither published nor counted toward the top two rounds: ` +
+              targets.unparsedKeys.join(", "),
+          );
+        }
+        const publishFixtureIds = targets
+          .map((extKey) => seeded.fixtureIdByKey.get(fixtureKey(division0.ref, extKey)))
+          .filter((id): id is string => id !== undefined);
 
         const news = await runNewsStep({
           base,
@@ -4827,6 +5840,34 @@ export async function runPackSuite(
     errors.push(err instanceof Error ? err.message : String(err));
   }
 
+  // B07a T10 — the tap player owns a real browser: closed after the run
+  // whatever happened above, so a thrown step never leaves Chromium running.
+  if (tapState.player !== undefined) {
+    try {
+      await tapState.player.close();
+      // R86 — the organiser side's own capture artefacts are only known
+      // once `close()` has finished renaming them; called strictly AFTER
+      // the await above, never before. `tapState.report` is only undefined
+      // here if a tap division was created but never actually played a
+      // fixture, which cannot happen (the player is constructed lazily,
+      // right before `playTapRounds` runs) — guarded anyway rather than
+      // asserted, since a report with no `tapPlay` section at all is a
+      // strictly safer failure mode than a crash while closing the browser.
+      const organiserArtefacts = tapState.player.artefacts?.() ?? {};
+      if (tapState.report !== undefined) {
+        const videoPaths = [...(tapState.report.videoPaths ?? []), ...(organiserArtefacts.videoPath === undefined ? [] : [organiserArtefacts.videoPath])];
+        const tracePaths = [...(tapState.report.tracePaths ?? []), ...(organiserArtefacts.tracePath === undefined ? [] : [organiserArtefacts.tracePath])];
+        tapState.report = {
+          ...tapState.report,
+          ...(videoPaths.length === 0 ? {} : { videoPaths }),
+          ...(tracePaths.length === 0 ? {} : { tracePaths }),
+        };
+      }
+    } catch (err) {
+      warnings.push(`${suiteKey}: closing the tap player failed — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // Warnings are REPORTED, never gated on. Stage 0 names what it does not
   // derive offline; that is a fact the report has to carry, and a gate that
   // read it would red `_tiny` on every run for saying something true.
@@ -4848,6 +5889,21 @@ export async function runPackSuite(
     // this one carried it undefined.
     provenancePct: provenance.realPct,
     provenance,
+    // B07a T3 — `report.adaptations` has been declared since B01 with no
+    // writer, for the same reason `provenancePct` had none until T5 above:
+    // nothing ever mapped the pack's own §7A list into the report. So every
+    // report so far published how much of a pack was GENERATED without ever
+    // saying what was RESHAPED to get there — the other half of the same
+    // honesty claim, and the half a thin-data pack leans on hardest.
+    //
+    // Written on EVERY return that got a pack, empty list included: a run
+    // that loaded a pack HAS measured this, and `[]` is that pack saying it
+    // reshaped nothing. The two `--keep` short circuits above carry it for
+    // the same reason — `--keep` is the DEFAULT (`bench.ts`'s
+    // `keep: !values.wipe`), so those, not this one, are the ordinary
+    // re-run shape. The field is absent on exactly one return in this
+    // function: the stage-0 refusal, which gives up before a pack exists.
+    adaptations: pack.meta.adaptations.map(formatAdaptation),
     errors: errors.length > 0 ? errors : undefined,
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(oracles.length > 0 ? { oracles } : {}),
@@ -4872,5 +5928,9 @@ export async function runPackSuite(
     ...(newsSummary === undefined ? {} : { news: newsSummary }),
     ...(simulation === undefined ? {} : { simulation }),
     ...(importSimulation === undefined ? {} : { importSimulation }),
+    // B07a T10 — report-only. Absent unless a tapped match was actually handed
+    // to the player; a division skipped for want of device links is a warning,
+    // never a `matches: 0`.
+    ...(tapState.report === undefined ? {} : { tapPlay: tapState.report }),
   };
 }

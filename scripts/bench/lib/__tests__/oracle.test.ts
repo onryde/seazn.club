@@ -115,6 +115,17 @@ describe("fetchStandings", () => {
     }));
     await expect(fetchStandings(BASE, session(), "stage-x", undefined, t)).rejects.toThrow(/NOT_FOUND/);
   });
+
+  // Minors row 7 (task-1-review.md M4 / re-review §4): `dataOf`'s "carried
+  // no data" throw is now a shared factory (`makeDataOf`, bound to "oracle"
+  // here) rather than a hand copy also living in `advance.ts` — this pins
+  // that the shared prefix/label/path are still all present after the fold.
+  it("throws when a 200 carries no data instead of reporting an empty standings table", async () => {
+    const t = fakeRaw(() => ({ status: 200, json: { ok: true } }));
+    await expect(fetchStandings(BASE, session(), "stage-1", undefined, t)).rejects.toThrow(
+      /oracle: standings response for \/api\/v1\/stages\/stage-1\/standings carried no data/,
+    );
+  });
 });
 
 describe("fetchDivisionPlayerStats", () => {

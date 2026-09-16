@@ -110,6 +110,7 @@ function TextPromptDialog({
           <input
             name="reason"
             type="text"
+            data-testid="score-prompt-reason"
             autoComplete="off"
             defaultValue={initialValue}
             className="input w-full"
@@ -118,7 +119,7 @@ function TextPromptDialog({
             <button type="button" className="btn btn-ghost" onClick={onClose}>
               {msg("editor.cancel")}
             </button>
-            <button type="submit" className="btn btn-primary">
+            <button type="submit" data-testid="score-prompt-submit" className="btn btn-primary">
               {msg("editor.apply")}
             </button>
           </div>
@@ -855,6 +856,7 @@ export function FixtureConsole({
               {!started && (
                 <button
                   type="button"
+                  data-testid="score-start-match"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.start", {})}
                   className="btn btn-primary min-h-11"
@@ -1099,6 +1101,7 @@ export function FixtureConsole({
               <>
                 <button
                   type="button"
+                  data-testid="score-finalize"
                   disabled={busy || padSyncing}
                   onClick={() => send("core.finalize", {})}
                   className="btn btn-ghost min-h-11"
@@ -1189,6 +1192,7 @@ function ForfeitButton({
     <div ref={ref} className="relative">
       <button
         type="button"
+        data-testid="score-forfeit"
         disabled={busy || padSyncing}
         onClick={() => setOpen(!open)}
         className="btn btn-danger min-h-11"
@@ -1197,10 +1201,11 @@ function ForfeitButton({
       </button>
       {open && (
         <div className="card absolute z-10 mt-1 w-56 space-y-1 p-2 shadow-lg">
-          {[home, away].map((s) => (
+          {([["home", home], ["away", away]] as const).map(([sideKey, s]) => (
             <button
               key={s.id}
               type="button"
+              data-testid={`score-forfeit-${sideKey}`}
               className="block min-h-11 w-full rounded px-2 py-1.5 text-left text-sm hover:bg-purple-50"
               onClick={() => {
                 setOpen(false);
