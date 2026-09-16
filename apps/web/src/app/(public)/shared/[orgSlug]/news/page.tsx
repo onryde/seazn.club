@@ -28,11 +28,17 @@ function orgLocale(defaultLocale: string): Locale {
   return hasLocale(defaultLocale) ? defaultLocale : DEFAULT_LOCALE;
 }
 
+// publishedAt is a timestamptz — a real instant, not a calendar day an organiser
+// typed — so the pinned zone is about DETERMINISM, not day-correctness. This is a
+// server render: a zone-less format follows whatever zone the Node host happens
+// to run in, which is never the reader's zone, so two hosts print two different
+// days for the same post. UTC makes it one day everywhere.
 function fmtDate(iso: string, locale: Locale): string {
   return new Date(iso).toLocaleDateString(locale, {
     day: "numeric",
     month: "short",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 

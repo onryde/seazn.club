@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { fmtDate, fmtTime, fmtDateTime, fmtZoneAbbrev, fmtRange } from "@/lib/format";
 
 // A fixed UTC instant: 2026-08-16T13:30:00Z == 19:00 in Asia/Kolkata (IST).
@@ -47,6 +48,59 @@ describe("unknown zone falls back to UTC, never throws", () => {
   it("fmtTime tolerates a bogus zone", () => {
     expect(() => fmtTime("Mars/Phobos", IST_1900)).not.toThrow();
     expect(fmtTime("Mars/Phobos", IST_1900)).toBe("13:30"); // UTC fallback
+    // Derived rather than a second pinned literal, so it tracks the instant
+    // above instead of restating it. On a NON-UTC runner this discriminates on
+    // its own; on a UTC runner it cannot, which is what the child process
+    // below exists for.
+    expect(fmtTime("Mars/Phobos", IST_1900)).toBe(fmtTime("UTC", IST_1900));
+  });
+
+  // m1 — why the pinned "13:30" above is not enough. `fmt()` catches the
+  // RangeError and REBUILDS the formatter with an explicit `timeZone: "UTC"`.
+  // Delete that one option and the retry silently adopts the runtime's own
+  // resolved zone instead. Under CI (TZ=UTC) both spellings of the bug render
+  // "13:30", so the assertion passes on broken code; it only ever reddened on
+  // a non-UTC dev box. "Falls back to UTC" and "falls back to the process
+  // zone" are indistinguishable in-process whenever the process IS UTC, so no
+  // assertion made in this worker can close the gap.
+  //
+  // Forcing the zone from inside the test does not work either: vitest runs
+  // `pool: "threads"`, and assigning `process.env.TZ` / `vi.stubEnv("TZ", …)`
+  // in a worker updates the variable but does NOT reset ICU's cached default
+  // zone. TZ is only honoured at PROCESS SPAWN — hence a child. `lib/format.ts`
+  // has no imports and only erasable type syntax, so Node loads the .ts
+  // directly with no build step.
+  it("renders the UTC fallback even when the process itself is in another zone", () => {
+    const mod = new URL("../format.ts", import.meta.url).href;
+    const probe = `
+      const m = await import(${JSON.stringify(mod)});
+      const AT = ${JSON.stringify(IST_1900)};
+      process.stdout.write(JSON.stringify({
+        bogus: m.fmtTime("Mars/Phobos", AT),
+        utc: m.fmtTime("UTC", AT),
+        // The same instant rendered in the process's OWN zone, with fmtTime's
+        // default options — what a fallback that forgot timeZone would emit.
+        ambient: new Intl.DateTimeFormat("en-GB", {
+          hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+        }).format(new Date(AT)),
+      }));`;
+    // Asia/Kolkata: +05:30 and DST-free, so the offset holds all year.
+    const out = execFileSync(process.execPath, ["--input-type=module", "-e", probe], {
+      env: { ...process.env, TZ: "Asia/Kolkata" },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const got = JSON.parse(out) as { bogus: string; utc: string; ambient: string };
+
+    // Precondition, asserted rather than assumed: without it a child that
+    // ignored TZ would make every assertion below vacuously true. Derived from
+    // the RENDER, not from resolvedOptions().timeZone — ICU canonicalises
+    // Asia/Kolkata to "Asia/Calcutta", so comparing zone spellings is a trap.
+    expect(got.ambient, "the forced TZ never took — the rest proves nothing").not.toBe(got.utc);
+
+    // The discrimination the pinned literal cannot make, at ANY runner zone.
+    expect(got.bogus, "fell back to the process zone, not to UTC").toBe(got.utc);
+    expect(got.bogus).not.toBe(got.ambient);
   });
 });
 

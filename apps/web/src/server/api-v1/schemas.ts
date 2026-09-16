@@ -31,6 +31,15 @@ import { MatchCentreDoc } from "../public-site/match-centre-schema.ts";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../lib/stream-url.ts";
+// m2 — the ONE Intl-backed zone validator, reused rather than restated, so
+// `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
+// and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
+// RELATIVE with an explicit `.ts` extension, NOT the `@/` alias, for the same
+// reason as registration-rules.ts above: this module is shared with the
+// standalone OpenAPI generator (scripts/openapi-gen.ts), which runs under bare
+// `node --experimental-strip-types` with no tsconfig `paths` resolution.
+// lib/tz.ts is deliberately import-free, so it is safe for that generator.
+import { isValidIana } from "../../lib/tz.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1725,8 +1734,14 @@ export const PutScheduleSettings = z.object({
    *              division's venue zone)
    *   null     → clear it, inherit from the org
    *   string   → pin this division to an explicit zone
+   *
+   * A string is additionally checked against the runtime's Intl: the length
+   * bounds alone let any 1-64 character value reach the column, and the two
+   * public loaders resolve it in SQL as `coalesce(ss.tz, o.timezone, 'UTC')`,
+   * which rescues NULL only — so a junk zone stored here flows straight out
+   * to a spectator surface instead of degrading to the org's zone.
    */
-  tz: z.string().min(1).max(64).nullish(),
+  tz: z.string().min(1).max(64).refine(isValidIana, { message: "Unknown timezone" }).nullish(),
 }).superRefine(checkInstantOrder);
 export type PutScheduleSettings = z.infer<typeof PutScheduleSettings>;
 
