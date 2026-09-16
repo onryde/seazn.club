@@ -1008,6 +1008,14 @@ export const StageConfig = z
     // Swiss (also `rounds`).
     rounds: z.number().int().min(1).optional(),
     chess: z.boolean().optional(),
+    // Which pairing model the swiss generator uses. Mirrors the engine's
+    // `SwissConstraints.pairing` (packages/engine/src/scheduling/swiss.ts) —
+    // spelled out rather than imported because this file may not reach into
+    // `@/` or the engine (see the import-boundary note at the top). OMITTED
+    // is the fold default: every swiss stage that predates Swiss Playoff
+    // carries no `pairing` key and must keep folding top-vs-bottom, so this
+    // deliberately has NO `.default()`.
+    pairing: z.enum(["fold", "rank_adjacent"]).optional(),
     // Ladder.
     challengeRange: z.number().int().min(1).optional(),
     ladder_order: z.array(z.string()).optional(),
