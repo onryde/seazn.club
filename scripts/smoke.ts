@@ -8057,6 +8057,14 @@ async function swissKnockoutSuite(): Promise<void> {
     is_final?: boolean;
     home_entrant_id: string | null;
     away_entrant_id: string | null;
+    // The two columns a bye is READ from — the outcome `isBye` gates on
+    // (lib/run-sheet-groups) and the label the phantom side carries. Pulled
+    // over the wire rather than out of Postgres on purpose: the serving API
+    // is what the run sheet and the bracket panel actually consume, and a
+    // fix that lands in the table but not in this payload is still a defect
+    // on screen.
+    outcome: { kind?: string; winner?: string } | null;
+    away_slot_label: { key?: string } | null;
   };
   const fixturesOf = async (stageId: string): Promise<Fx[]> =>
     v1data<Fx[]>(await v1(free, `/api/v1/divisions/${div.id}/fixtures`)).filter(
@@ -8119,10 +8127,32 @@ async function swissKnockoutSuite(): Promise<void> {
       nameOf.get(bye?.home_entrant_id ?? "") === "Ann" &&
       [nameOf.get(semi?.home_entrant_id ?? ""), nameOf.get(semi?.away_entrant_id ?? "")].sort().join(",") === "Bo,Cy",
   );
+  // …and the bye is SETTLED, over the wire. A progression-seeded bracket is
+  // drawn before anyone qualifies, so the walkover cannot be baked at
+  // generation time; it is recorded when the seat is filled
+  // (`awardSeededByes`, confirmSeedProposal). Left undone, this row reaches
+  // the API as `scheduled` with a null outcome — which `isBye` reads as
+  // false, so the run sheet and the bracket panel render "Ann vs TBD —
+  // awaiting draw" on a match nobody can ever play, and the stage can never
+  // complete. Asserted on the serving payload, not just in Postgres.
+  check(
+    "swiss knockout: the bye reaches the API as a WALKOVER — forfeited, award to the bye entrant, 'Bye' on the empty seat",
+    bye?.status === "forfeited" &&
+      bye.outcome?.kind === "award" &&
+      bye.outcome.winner === bye.home_entrant_id &&
+      bye.away_slot_label?.key === "bracket.slot.bye",
+  );
+  // The positive above needs its negative pair, or "the bye is decided" also
+  // passes on a build that decides EVERY one-sided line: the Final is seated
+  // with Ann and still waiting on the semi winner, and it must stay open.
+  check(
+    "swiss knockout: the half-filled Final is NOT swept up as a bye — it is still a match to play",
+    final?.status === "scheduled" && (final.outcome ?? null) === null,
+  );
   check(
     "swiss knockout: the Final is already seated with the bye entrant, its other side still open",
     final?.is_final === true &&
-      [final.home_entrant_id, final.away_entrant_id].filter((x) => x !== null).map((x) => nameOf.get(x!)).join(",") === "Ann" &&
+      [final.home_entrant_id, final.away_entrant_id].filter((x) => x !== null).map((x) => nameOf.get(x)).join(",") === "Ann" &&
       [final.home_entrant_id, final.away_entrant_id].filter((x) => x === null).length === 1,
   );
   check(
