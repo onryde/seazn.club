@@ -205,14 +205,32 @@ export default async function CompetitionHomePage({ params }: Props) {
   // the shell's, while the document's hrefs are in-product navigation and
   // consistency with the rest of the document is worth more there.
   //
-  // An earlier version of this comment priced the stale-slug case at "one
-  // permanent redirect (`sharedRenameTarget`)". That is FALSE, and re-review N4
-  // is right: `sharedRenameTarget` has three call sites and NEITHER `/present`
-  // nor `/register` is among them — both just `notFound()`. So a stale slug in
-  // those two hrefs costs a 404, not a redirect, which is strictly worse than
-  // the sentence claimed. The conclusion survives on its other half; the
-  // arithmetic did not, and a comment that makes a trade look cheaper than it
-  // is will be read as permission to repeat it.
+  // What a stale slug actually costs has now been written here wrongly twice:
+  // first as "one permanent redirect (`sharedRenameTarget`)", then as "both
+  // just `notFound()`". Neither holds. Driven against seeded renames on a live
+  // build (2026-09-16), the answer splits by WHICH slug went stale:
+  //
+  //   - a stale ORG slug REDIRECTS, on every /shared page including /present.
+  //     Since k1 both the chrome and the kiosk layout enter through
+  //     `publicOrgOr404`, which calls `sharedRenameTarget`. Measured 308 on
+  //     the competition board, the division board, and both chrome pages.
+  //   - a stale COMPETITION slug redirects on the hub (308) but 404s on
+  //     /present, because the board page calls plain `notFound()`. Measured on
+  //     four separate seeded renames, so this is not one lucky sample.
+  //
+  // And the org redirect loses the tail: /shared/<old>/<comp>/present lands on
+  // /shared/<new> — the org hub, not the board. `sharedRenameTarget` takes
+  // compSlug/divSlug and would keep them, but a layout only has its own param
+  // to pass. Recorded as a finding rather than fixed here: reading the rest of
+  // the path in a layout means `headers()`, which would make these pages
+  // dynamic and cost the `revalidate = 30` cache.
+  //
+  // (/register was not measured; the ORG half above covers it by construction,
+  // the competition half is untested for that route.)
+  //
+  // So the cost is a redirect to the wrong page, or a 404, depending on which
+  // slug moved. The conclusion survives; the arithmetic is now measured rather
+  // than reasoned, because reasoning it produced two different wrong answers.
   const sharePath = `/shared/${org.slug}/${competition.slug}`;
 
   return (
