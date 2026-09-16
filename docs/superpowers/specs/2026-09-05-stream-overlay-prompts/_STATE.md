@@ -1,5 +1,92 @@
 # Stream overlay — resume state
 
+## R1 EXECUTION STATE — CURRENT (updated 2026-09-16, session r1-w1). READ THIS BLOCK FIRST; it supersedes every older "where things stand" block.
+
+**Owner standing order (2026-09-16):** context is compacted without warning, so every state change and every
+decision is written HERE (committed, `_STATE.md`) and in the ledger
+(`.superpowers/sdd/2026-09-13-streaming-r1/progress.md`, git-ignored, machine-local) AT THE TIME IT HAPPENS —
+never only in conversation. After a compaction, trust these two files and `git log`, not recollection.
+
+**Where:** worktree `.claude/worktrees/relay`, branch `feat/stream-relay`, env label `rly`
+(Postgres :54484 dbs `seazn_rly` + `seazn_rly_t1`, data_directory `/tmp/seazn-env/rly/pg`; placement :50257).
+Commits are LOCAL — nothing pushed this session. Process: superpowers:subagent-driven-development, `model: opus`
+on every dispatch, reviewer after every task + every lane, orchestrator re-runs the gate at lane boundaries,
+orchestrator commits (implementers never commit).
+
+**Floor:** 17856 total / 0 real failures @ `b4091834d` (JSON at
+`.superpowers/sdd/2026-09-13-streaming-r1/authorities/baseline-2026-09-16/`). Old 17064/17141 is SUPERSEDED.
+
+**Done (task → commits → review):**
+- Baseline → `ea60d147a`.
+- Task 1 V408 migration (8 tables, RLS forced zero policies, SUPERUSER_ONLY exemption) → `62e988a6f`, `f590dc114` — clean.
+- Task 2 config / AES-256-GCM envelope / `*_enc` boundary / sanitiser / telemetry → `27c0681b8`, `56159fc41` — clean.
+- Task 2A session aggregate → `5851d2956`, `e3c937736` — clean.
+- Task 2B expiry / credits / retention → `4c1e66288`, `a2f6d5bb4` — clean.
+- Plan amendment Tasks 7 / 7A (staff Match credits panel) → `36a9132e6` (plan file only).
+- Task 2C runner table → `a49e3f4ff` + fix rounds `a21913582` (1), `292ac278b` (2+3), `56b29d971` (4),
+  `30560cf9a` (5, FINAL). Domain 212/212/0, relay-with-DB 262/262/0, tsc/eslint 0.
+
+**In flight at time of writing:** Task 2C scoped RE-REVIEW 3 of round 5 → writes
+`.superpowers/sdd/2026-09-13-streaming-r1/task-2C-rereview-3.md`. All 5 fix rounds are used: if it reports
+open findings, the orchestrator ADJUDICATES each (load-bearing → rule a fix; else park in ledger as carry),
+then writes `Task 2C: complete`. If the file is missing/partial after a compaction, re-dispatch the re-review
+(inputs: task-2C-rereview-2.md, report "## Fix round 5", `git diff 56b29d971 30560cf9a`).
+
+**Next, in order:**
+1. Close 2C (above). Update MEMORY.md streaming line.
+2. Plan drafter pass BEFORE Task 7 (plan text owed): G1 `beat_window_at` — V408 column at Task 7 Step 0c,
+   persist (plan≈10361) + row select/mapper (≈10306, ≈10315), backdate it WITH `heartbeat_at` in DB tests
+   plan≈10176–10195 and ≈11730–11745, add a DB test that two reads in one window re-issue force_destroy for a
+   lost runner exactly once; runner table text L231–240 (C1 stale_beat column, lost × create_ok/create_failed,
+   lost × grace_expired/orphan_listed stay lost, destroyed × create_ok → lost, creating row "no grace clock"
+   superseded); 2C Step 6 counts (actual 212). Verify landing lines by grep, commit plan-only.
+3. Lane A: Tasks 3 → 4 → 5A → 5 → 6 (sequential dispatch), lane-A reviewer, orchestrator full gate (JSON vs floor).
+4. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
+5. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
+
+**Owed by the owner:** `FLY_API_TOKEN=` in `apps/web/.env.local` before Task 5A's live test (0 in both env
+files as of 2026-09-16). Never print/echo/log RELAY_KEK, FLY_API_TOKEN/FLY_IO_TOKEN or `.env.local` values.
+
+**Owner decisions this session (owner's words):**
+- "FLY_API_TOKEN -Ok" — the env var is named `FLY_API_TOKEN` (not FLY_IO_TOKEN).
+- "yes" to "Are we planning to build a new page in /admin?" follow-up — the staff Match credits panel goes on the
+  EXISTING `/admin/orgs/[id]` page (plan owner ruling 15, Task 7A); no new admin page.
+
+**Orchestrator rulings this session (full text + cost-if-wrong in the ledger):**
+- V408: fixture delete sets `fixture_stream_sessions.fixture_id` null (money/history survive); producer-less
+  `vcpu_seconds`/`duplicated_frames` dropped; four org_id stream tables in `SUPERUSER_ONLY`; unmerged migration
+  is AMENDED, never forward-fixed.
+- SRT `{passphrase, streamId}` sealed as JSON in `ingest_srt_key_enc`; stored URLs stripped of query/fragment.
+- Composed `credit_refused` tears the Machine down like `warming_timeout`; `fill_replay` only when `startedAt` set.
+- A live composed session whose runner is not beating goes `stale_beat`; EVERY runner state answers it:
+  none → fail; creating → lost + force_destroy; booting/playing → lost; stopping/exited stay; destroyed → retry
+  while attempt < 2 else fail; lost → re-issue force_destroy once per window, no retry.
+- `heartbeatAt` = last beat RECEIVED only (organiser panel); new `beatWindowAt` anchors the stale window
+  (written by the stale arm and the retry arm); `evaluate` uses the later of the two.
+- `runnerRetries` follows `runner.attempt` (idempotent).
+- Invariant 1 (no retry create before the prior Machine's destroy is CONFIRMED) is proven by a full-depth walk
+  of RUNNER_TABLE: lost leaves only on destroy_ok / observed destroyed (plus F17 completion cells); a late
+  create_ok into destroyed → lost + force_destroy; marked-creating cells keep destroyed (no retry reachable).
+- An ending session completes (own endReason + fill rule) on a runner `failed` signal; a stop on a provisioning
+  session with a lost runner completes stopped.
+- Task 7A: donor parity (idempotency key + staff audit row in the same tx), revoke action, session-linked refund
+  cap, 1–50 cap, English-only staff copy, 422 validation, per-org advisory lock on lower-cased org id, reused key
+  with different values → 409 `idempotency_key_reused` (incl. 23505 race), route passes stored `org.id`.
+- Fix-loop rounds 4–5 resumed the SAME opus implementer (owner mandate pins opus; context continuity).
+
+**Carries to later tasks (details in ledger):** T5-a `create_ok {machineId, attempt}` (late cross-attempt adopt;
+M5 machineId overwrite); T5-b retryable create_failed ⇒ Fly holds no Machine; 5A retunes PROVISION_TIMEOUT;
+T10-a beating lost Machine answered desiredState live; T10-b pin heartbeat route booting||playing guard;
+T10-c lastExit provenance; T10-d / G2 drop `heartbeat_at` from apply's persist (beat route single writer);
+T10 M1 retry_runner skip when runner no longer destroyed (lost × create_started throws); M2 plan
+`machine_seconds` double count on re-entry to destroyed; G3 sweep `retried++` counts re-signals; T12-a
+`orphan_listed` only terminal/absent; T-any composed `target_rejected` teardown; Tasks 3/4/13 fake driver on
+observed CF SRT shape; G1-CI no workflow sets RELAY_KEK; Task 7 `consumeForSession(fixtureId: string | null)`;
+Task 10 cost estimate (Fly preset incl. 2GB/CPU, lhr ×1.134615385), poll decrypt, `egress_bytes` null,
+`created_by = userId ?? orgId`, fill_replay no-op when fixtureId null; flyway no outOfOrder (R1 before
+`feat/chess-lichess-external-play` ⇒ that branch renumbers V405–V407).
+<!-- /R1 EXECUTION STATE -->
+
 **Read this first.** It says what exists, what is decided, and the next
 action in order.
 
