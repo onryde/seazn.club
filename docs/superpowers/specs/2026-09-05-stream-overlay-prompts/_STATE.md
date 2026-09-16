@@ -28,15 +28,10 @@ orchestrator commits (implementers never commit).
   **COMPLETE** — re-review 3 Approved (task-2C-rereview-3.md), 3 Minor parked (duplicate "I1:" test title,
   comment precision session.ts:182–184/:212, C6 does not pin desiredState).
 
-**In flight at time of writing:** plan sync drafter (opus) — brief `.superpowers/sdd/2026-09-13-streaming-r1/plan-2C-sync-brief.md`, report `plan-2C-sync-report.md` (written incrementally). On return: verify landing lines by grep, commit plan-only. If lost to a compaction/limit: read the report, re-dispatch for items not landed.
+**In flight at time of writing:** Task 2C-post (F-A) implementer (opus) — brief `.superpowers/sdd/2026-09-13-streaming-r1/task-2C-post-brief.md`, report `task-2C-post-report.md` (incremental), BASE `525f22c92`. On return: re-run domain JSON, commit, reviewer, then the F-B/F-A plan-text drafter pass. If lost: read the report + `git status`; uncommitted domain edits are the implementer's.
 
 **Next, in order:**
-1. Plan drafter pass BEFORE Task 7 (plan text owed): G1 `beat_window_at` — V408 column at Task 7 Step 0c,
-   persist (plan≈10361) + row select/mapper (≈10306, ≈10315), backdate it WITH `heartbeat_at` in DB tests
-   plan≈10176–10195 and ≈11730–11745, add a DB test that two reads in one window re-issue force_destroy for a
-   lost runner exactly once; runner table text L231–240 (C1 stale_beat column, lost × create_ok/create_failed,
-   lost × grace_expired/orphan_listed stay lost, destroyed × create_ok → lost, creating row "no grace clock"
-   superseded); 2C Step 6 counts (actual 212). Verify landing lines by grep, commit plan-only.
+1. DONE `525f22c92`: plan synced to closed 2C (beat_window_at column/persist/tests, lifecycle table, carries as steps; T5-a in NAME form). Two OPEN items ruled: F-A (a) domain → Task 2C-post (in flight); F-B → Task 10 force_destroy feeds destroy_ok only while the locked row still names the destroyed Machine (drafter pass after 2C-post, which also removes the F-A OPEN notes).
 2. Lane A: Tasks 3 → 4 → 5A → 5 → 6 (sequential dispatch), lane-A reviewer, orchestrator full gate (JSON vs floor).
 3. Lane B: Task 7 (Step 0c V408 amend → recreate `seazn_rly` + `seazn_rly_t1`) → 7A → 8 (lane-B review, 49 killers).
 4. Lanes C/D/E per plan. Wave close: V408 retry-cap comment, rls-exempt header wording, File Structure `streamIdOf` row.
@@ -68,6 +63,7 @@ orchestrator commits (implementers never commit).
 - Task 7A: donor parity (idempotency key + staff audit row in the same tx), revoke action, session-linked refund
   cap, 1–50 cap, English-only staff copy, 422 validation, per-org advisory lock on lower-cased org id, reused key
   with different values → 409 `idempotency_key_reused` (incl. 23505 race), route passes stored `org.id`.
+- F-A: stopping/exited × grace_expired signal completed (organiser stop ends at grace+slack, not the 300 s backstop). F-B: stale destroy_ok gated at the application layer (Task 10), domain keeps throwing.
 - Fix-loop rounds 4–5 resumed the SAME opus implementer (owner mandate pins opus; context continuity).
 
 **Carries to later tasks (details in ledger):** T5-a `create_ok {machineId, attempt}` (late cross-attempt adopt;
