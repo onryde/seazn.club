@@ -1,7 +1,8 @@
 import "server-only";
-// Linked external board accounts (Lichess first). Tokens live in
-// user_external_accounts and are only touched via privileged `sql` (FORCE RLS
-// with no app_user policy — see V405).
+// Linked external board accounts (Lichess first). IDENTITY ONLY — no OAuth
+// token is ever stored here (V405 dropped the token columns; the OAuth
+// callback reads /api/account and revokes the token before this is called).
+// Touched only via privileged `sql` (FORCE RLS with no app_user policy).
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 
@@ -36,28 +37,17 @@ export async function getLinkedAccount(
 
 export async function upsertLichessLink(
   userId: string,
-  row: {
-    externalUserId: string;
-    username: string;
-    accessToken: string;
-    refreshToken?: string;
-    tokenExpiresAt?: Date;
-  },
+  row: { externalUserId: string; username: string },
 ): Promise<void> {
   await sql`
     insert into user_external_accounts (
-      user_id, provider, external_user_id, username,
-      access_token, refresh_token, token_expires_at, updated_at
+      user_id, provider, external_user_id, username, updated_at
     ) values (
-      ${userId}, 'lichess', ${row.externalUserId}, ${row.username},
-      ${row.accessToken}, ${row.refreshToken ?? null}, ${row.tokenExpiresAt ?? null}, now()
+      ${userId}, 'lichess', ${row.externalUserId}, ${row.username}, now()
     )
     on conflict (user_id, provider) do update set
       external_user_id = excluded.external_user_id,
       username = excluded.username,
-      access_token = excluded.access_token,
-      refresh_token = excluded.refresh_token,
-      token_expires_at = excluded.token_expires_at,
       updated_at = now()`;
 }
 
@@ -83,14 +73,6 @@ export async function personHasLichessLink(
   if (!userId) return false;
   const linked = await getLinkedAccount(userId, "lichess");
   return linked !== null;
-}
-
-/** Privileged read of the access token for challenge create (cron / prepare). */
-export async function getLichessAccessToken(userId: string): Promise<string | null> {
-  const rows = await sql<{ access_token: string }[]>`
-    select access_token from user_external_accounts
-     where user_id = ${userId} and provider = 'lichess'`;
-  return rows[0]?.access_token ?? null;
 }
 
 export async function assertUserHasLichessForOnlinePlay(userId: string | null): Promise<void> {

@@ -27,7 +27,6 @@ describe.skipIf(!HAS_DB)("external-accounts", () => {
     await upsertLichessLink(userId, {
       externalUserId: `lid-${suffix}`,
       username: `Player${suffix}`,
-      accessToken: "tok-1",
     });
 
     const linked = await getLinkedAccount(userId, "lichess");
@@ -40,7 +39,6 @@ describe.skipIf(!HAS_DB)("external-accounts", () => {
     await upsertLichessLink(userId, {
       externalUserId: `lid-${suffix}`,
       username: `Renamed${suffix}`,
-      accessToken: "tok-2",
     });
     expect((await getLinkedAccount(userId, "lichess"))?.username).toBe(`Renamed${suffix}`);
 
@@ -81,7 +79,6 @@ describe.skipIf(!HAS_DB)("external-accounts", () => {
     await upsertLichessLink(userId, {
       externalUserId: `lid2-${suffix}`,
       username: `U${suffix}`,
-      accessToken: "tok",
     });
     expect(await personHasLichessLink(orgId, personId)).toBe(true);
   });

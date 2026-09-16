@@ -6,6 +6,9 @@ export const OAUTH_STATE_COOKIE = "seazn_oauth_state";
  *  Lichess callback (and vice versa). */
 export const LICHESS_OAUTH_STATE_COOKIE = "seazn_lichess_oauth_state";
 export const LICHESS_OAUTH_NEXT_COOKIE = "seazn_lichess_oauth_next";
+/** PKCE code_verifier, round-tripped through the OAuth-start redirect the same
+ *  way as state — see server/external-play/pkce.ts. */
+export const LICHESS_OAUTH_VERIFIER_COOKIE = "seazn_lichess_oauth_verifier";
 
 export const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -55,11 +58,17 @@ export interface GoogleProfile {
 export const LICHESS_AUTH_URL = "https://lichess.org/oauth";
 export const LICHESS_TOKEN_URL = "https://lichess.org/api/token";
 export const LICHESS_ACCOUNT_URL = "https://lichess.org/api/account";
-/** challenge:write — create challenges as White; preference:read — account id. */
-export const LICHESS_OAUTH_SCOPES = "challenge:write preference:read";
+/** Empty: the link flow only reads `/api/account` (no scope required) and
+ *  revokes the token immediately after — it is never used again, so there is
+ *  nothing to ask permission for. Challenge creation (challenge:write) is a
+ *  separate, server-held credential, not this per-user grant. */
+export const LICHESS_OAUTH_SCOPES = "";
 
+/** True iff a Lichess client id is configured. PKCE public clients have no
+ *  secret (design §4.5) — `LICHESS_CLIENT_SECRET` is not read here or anywhere
+ *  in the OAuth flow. */
 export function lichessConfigured(): boolean {
-  return Boolean(process.env.LICHESS_CLIENT_ID && process.env.LICHESS_CLIENT_SECRET);
+  return Boolean(process.env.LICHESS_CLIENT_ID);
 }
 
 export function lichessRedirectUri(req: Request): string {
