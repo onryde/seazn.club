@@ -20,8 +20,10 @@ Owner decisions 2026-09-16:
 2. Keep a **check-in**, with realtime so each player sees the other arrive.
    Mint when both have checked in.
 3. One **window, T−10 → T+20**, for both check-in and play.
-4. Players use a new private **match room** at `/me/fixtures/[fixtureId]`. The
-   public fixture page shows read-only status only.
+4. Players use a new private **match room** at
+   `/shared/[org]/[comp]/[div]/fixtures/[fixtureId]/play`, beside the public
+   match centre. `/me` stays the player home. The public match centre shows
+   read-only status only.
 5. Organisers get **no new page**: attention on the Fixture Console row, detail
    and resolve on the organiser fixture page.
 6. Check-in **reuses** the existing `fixture_availability.checked_in_at` and
@@ -93,7 +95,7 @@ Lichess server source (`lichess-org/lila`, `modules/challenge`):
 3. Organiser sets the division **online play = Lichess**. Saving requires a
    boardgame clock with `base` and no `delay`.
 4. Seazn pairs the round as today (Swiss, colours; home = White).
-5. **T−15** (cron): email each player once — link to `/me/fixtures/[id]` and the
+5. **T−15** (cron): email each player once — link to the match room and the
    window time.
 6. **T−10 → T+20**, match room: the player taps **Check in** →
    `checkInToFixture` stamps `fixture_availability.checked_in_at` → a ping on
@@ -276,17 +278,27 @@ the scheduled-workflow repo.
   the user has no link.
 - **Division settings:** online play Off / Lichess; Lichess requires a clock
   without delay.
-- **Match room `/me/fixtures/[fixtureId]` (new, private, signed-in, not
-  org-scoped like `/me`):** opponent, colour, time; states — *Opens at HH:MM*,
+- **Match room `/shared/[org]/[comp]/[div]/fixtures/[fixtureId]/play`** (new; sibling of the public
+  match centre; private): opponent, colour, time; states — *Opens at HH:MM*,
   *Check in*, *You're checked in — waiting for opponent*, *Opponent checked in*,
   *Play as White/Black on Lichess*, *Game in progress*, *Finished*, *Opponent
   didn't show — organiser will confirm*, *Window closed*. Realtime ping plus a
   15s re-read fallback. At least two layout options shown to the owner before
   building; verified at 320 / 768 / 1280.
-- **`/me` schedule card:** online fixtures get a "Check in" / "Open match room"
-  link into the match room.
-- **Public fixture page:** read-only status only (e.g. *Live on Lichess* + watch
-  link `lichess.org/{challengeId}` once live). No controls, no Play URLs.
+  - **Rendering / cache:** `export const dynamic = "force-dynamic"`, the same
+    as `/shared/[org]/[comp]/register`, so it is sent `private, no-store`.
+    That register route was measured `cf-cache-status: DYNAMIC` through
+    Cloudflare on 2026-09-14 while the ISR match centre (`revalidate = 30`) is
+    cached — the match room must never inherit the match centre's ISR.
+  - **Access:** signed out → `/login?next=<match room>`; signed in but not one
+    of the two players → redirect to the public match centre; player → room.
+  - **Entry points:** the T−15 email, and a "Playing this match? Open match
+    room" link on the public match centre while online play is on and the
+    fixture is not finished (same for every viewer, so it stays cacheable).
+- **`/me`:** unchanged player home in v1.
+- **Public match centre (existing, ISR):** read-only status only (e.g. *Live on
+  Lichess* + watch link `lichess.org/{challengeId}` once live) and the match-room
+  link. No controls, no Play URLs, nothing per-viewer.
 - **Fixture Console (division `?tab=fixtures`):** red attention on rows in
   `needs_organiser`, using the desk's existing attention rule (red attention
   outranks the phase pill). Read the competition-desk `_INDEX.md` / `_RULES.md`
@@ -304,7 +316,8 @@ All strings in en/es/fr/nl; email interpolations HTML-escaped.
 | Unlinked at enrollment | Block |
 | Online play on, no clock / delay clock | Settings save refused |
 | Match room before T−10 | "Opens at HH:MM"; check-in disabled |
-| Non-player opens match room | 404 |
+| Signed-out opens match room | Login, then back to the room |
+| Non-player opens match room | Redirect to the public match centre |
 | One checked in, other not yet | "Waiting for opponent"; no challenge |
 | Two mints at once | One claim wins; the other returns the stored view |
 | Lichess create fails / times out | Stay `pending`, `last_error`; retried on next read/cron |
@@ -334,8 +347,9 @@ All strings in en/es/fr/nl; email interpolations HTML-escaped.
   §9 row; reschedule reset.
 - **E2E walkthrough:** two signed-in players drive the real match room —
   check-in disabled before window, first check-in shows on the other screen,
-  Play appears for both with their own colour, spectator public page shows no
-  Play link; organiser sees the attention on the Fixture Console and resolves a
+  Play appears for both with their own colour, a signed-in non-player is
+  redirected, the match room response is `private, no-store`, the public match
+  centre shows no Play link; organiser sees the attention on the Fixture Console and resolves a
   no-show. Registered in `WALKTHROUGH_SPECS`.
 - **Smoke:** cron sweep with a recorded Lichess payload.
 - **Regression:** online play off — pairings + manual/pad result unchanged; QR
