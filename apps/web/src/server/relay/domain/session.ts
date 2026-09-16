@@ -183,8 +183,8 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
       // runner's session_stop (F16 makes provisioning/lost reachable); dropping the signal swallowed the organiser's stop,
       // and the session later failed provision_timeout. Only `requested` still ignores it: no planned caller creates before `provision`.
       if (s.state !== "ending" && s.state !== "live" && s.state !== "warming" && s.state !== "provisioning") return { next, events, effects };
-      // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown
-      // leaves it out and the session keeps the one its `ending` step already stored.
+      // F17: when the completion IS the ending, the signal carries the reason; P1-F-a's mid-create teardown and
+      // F-A's grace-forced destroy leave it out and the session keeps the one its `ending` step already stored.
       // M2 (Task 2C review): the session's OWN stored reason wins. A session that is already ending chose its reason when
       // ending began; a stop routed through the runner afterwards (ending_timeout over a lost runner) must never turn
       // max_duration into "stopped". Only a session with no reason yet (live, warming) takes the signal's.

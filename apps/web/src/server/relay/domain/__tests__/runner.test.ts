@@ -5,8 +5,8 @@
 // RUNNER_STATES against a per-state ruling; (c) the named invariants; (d) the
 // specific edges the mutants target. Killers: allow a retry while not destroyed
 // → "invariant 1"; skip SIGINT and destroy directly → "the stop sequence"; treat
-// unknown as running → "unknown Fly state"; drop the grace force-destroy →
-// "grace_expired"; drop persist-before-create → "invariant 4"; the retry cap
+// unknown as running → "unknown Fly state"; drop the grace force-destroy, or its
+// `completed` signal (F-A) → "grace_expired"; drop persist-before-create → "invariant 4"; the retry cap
 // `<` → `<=` → "lost → destroyed …", "create_failed …" and "the stale_beat
 // column … destroyed" (C2); any stale_beat cell set back to null → "the
 // stale_beat column" (C1).
@@ -160,11 +160,13 @@ describe("the stop sequence (R0-memo.md:279 — SIGINT, never a keystroke)", () 
     expect(done.signal).toEqual({ type: "completed" });
     expect(stepRunner(inState("exited"), { type: "destroy_ok" }, T0).signal).toEqual({ type: "completed" });
   });
-  it("grace_expired in stopping/exited → force_destroy → destroyed (mutant: drop the force → red)", () => {
+  // Task 2C-post, ruling F-A (a): the forced destroy after grace ENDS the session — it signals `completed` in the shape the
+  // other stopping/exited completion cells use (no endReason: the session's own, stored when ending began, is the one kept).
+  // Without the signal an organiser stop whose Machine never auto-destroys stayed `ending` until ENDING_TIMEOUT_SECONDS.
+  it("grace_expired in stopping/exited → force_destroy → destroyed, signalling completed with no end reason of its own (mutants: drop the force, drop the signal, signal failed, carry an endReason → red)", () => {
     for (const s of ["stopping", "exited"] as const) {
       const step = stepRunner(inState(s), { type: "grace_expired" }, T0);
-      expect(step.effects, s).toEqual([{ type: "force_destroy" }]);
-      expect(step.next.state, s).toBe("destroyed");
+      expect(step, s).toEqual({ next: { ...inState(s), state: "destroyed" }, effects: [{ type: "force_destroy" }], signal: { type: "completed" } });
     }
   });
   it("stopping never re-sends the stop, and a stale beat while stopping is expected quiet", () => {

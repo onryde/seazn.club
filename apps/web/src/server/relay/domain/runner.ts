@@ -7,7 +7,7 @@
 // The stop is a SIGNAL (SIGINT, R0-memo.md:279 — exit 0 in 114 ms), never a
 // keystroke (`q` is discarded under -nostdin, :346–354). A stopped runner is
 // expected to auto_destroy (both R0 soaks did, :565); the grace + slack window
-// then FORCES a destroy. A runner observed gone WITHOUT our stop is `lost`:
+// then FORCES a destroy, which completes the session (F-A). A runner observed gone WITHOUT our stop is `lost`:
 // torn down, then retried ONCE (design §6.4) — only after it is destroyed
 // (invariant 1) — else the session fails with the reason the exit info shows.
 //
@@ -107,7 +107,12 @@ const toLost = (r: Runner, t: RunnerTrigger): RunnerStep => ({ next: { ...withEx
 /** Fix round 3, ruling (a): a `lost` runner's teardown has not been SEEN to land. Re-issue it and stay — `destroyed` means
  *  confirmed gone, and only destroy_ok / observed destroyed confirm it (invariant 1: a retry only after that). */
 const reissueDestroy = (r: Runner): RunnerStep => ({ next: r, effects: [FORCE_DESTROY], signal: null });
-const forceDestroyed = (r: Runner): RunnerStep => ({ next: { ...r, state: "destroyed" }, effects: [FORCE_DESTROY], signal: null });
+/** Task 2C-post, ruling F-A (a): OUR stop's grace ran out with no destroy seen, so the destroy is forced — and that ENDS the
+ *  session now, in the shape the other stopping/exited completion cells use (no endReason: the session stored its own when
+ *  ending began, and keeps it). Signalling nothing left an organiser stop whose Machine never auto-destroys `ending` until
+ *  ENDING_TIMEOUT_SECONDS. Safe past invariant 1: a stopping/exited runner only exists past an `ending` signal, so this lands
+ *  on an ending session (it completes) or a terminal one (C27 ignores it) — nothing after it can retry. */
+const forceDestroyed = (r: Runner): RunnerStep => ({ next: { ...r, state: "destroyed" }, effects: [FORCE_DESTROY], signal: { type: "completed" } });
 
 /** F17: the deadline or the organiser's stop reaching a LOST runner. The teardown is the same force_destroy;
  *  what changes is that the SESSION is told, so this destroy COMPLETES it. Without the signal the session
