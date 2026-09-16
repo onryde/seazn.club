@@ -16,7 +16,7 @@ import { createEntrants } from "../entrants";
 import { createStages, getStandings } from "../stages";
 import { startDivision } from "../schedule";
 import { upsertLichessLink } from "../external-accounts";
-import { applyProviderGameUpdate, prepareExternalPlayWindow } from "../external-play";
+import { applyProviderGameUpdate, markExternalPlayReady, prepareExternalPlayWindow } from "../external-play";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { ExternalPlayAdapter, LichessGameSnapshot } from "@/server/external-play/types";
@@ -159,8 +159,28 @@ describe.skipIf(!HAS_DB)("external-play happy path + OTB regression", () => {
       sendReadyEmail,
       orgId: owner.orgId,
     });
-    expect(prepared.prepared).toBe(1);
+    expect(prepared.prepared).toBe(0);
     expect(prepared.emailed).toBe(1);
+    expect(createChallenge).not.toHaveBeenCalled();
+
+    const waiting = await markExternalPlayReady({
+      userId: white.userId,
+      fixtureId: fixture!.id,
+      now,
+      adapter,
+    });
+    expect(waiting.phase).toBe("ready_up");
+    expect(waiting.homeReady).toBe(true);
+    expect(waiting.awayReady).toBe(false);
+    expect(createChallenge).not.toHaveBeenCalled();
+
+    const minted = await markExternalPlayReady({
+      userId: black.userId,
+      fixtureId: fixture!.id,
+      now,
+      adapter,
+    });
+    expect(minted.phase).toBe("countdown");
     expect(createChallenge).toHaveBeenCalledWith(
       expect.objectContaining({
         whiteAccessToken: `tok-${homeLichess}`,
@@ -189,7 +209,7 @@ describe.skipIf(!HAS_DB)("external-play happy path + OTB regression", () => {
     const [fx] = await sql<{ status: string; outcome: unknown }[]>`
       select status, outcome from fixtures where id = ${fixture!.id}`;
     expect(fx!.status).toBe("decided");
-    expect(fx!.outcome).toMatchObject({ kind: "win" });
+    expect(fx!.outcome).toMatchObject({ kind: "win", winner: home!.id });
 
     const standings = await getStandings(owner, stage!.id);
     const rows = standings.rows as {

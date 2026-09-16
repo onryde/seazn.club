@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { useRouter } from "next/navigation";
@@ -15,6 +15,21 @@ export type NeedsOrganiserRow = {
   lastError: string | null;
   href: string;
 };
+
+const REASON_KEYS: Record<string, MessageKey> = {
+  delay_unsupported: "externalPlay.reason.delayUnsupported",
+  no_show_grace_elapsed: "externalPlay.reason.noShow",
+  account_mismatch: "externalPlay.reason.accountMismatch",
+  abort: "externalPlay.reason.abort",
+  unfinished: "externalPlay.reason.unfinished",
+  lichess_link_missing: "externalPlay.reason.linkMissing",
+};
+
+function reasonLabel(msg: (key: MessageKey) => string, code: string | null): string | null {
+  if (!code) return null;
+  const key = REASON_KEYS[code];
+  return key ? msg(key) : msg("externalPlay.reason.generic");
+}
 
 const RESOLVE_KINDS: { kind: "home_forfeit" | "away_forfeit" | "draw" | "no_result"; labelKey: MessageKey }[] = [
   { kind: "home_forfeit", labelKey: "externalPlay.resolve.homeForfeit" },
@@ -41,8 +56,8 @@ export function ExternalPlayNeedsResultQueue({ rows }: { rows: NeedsOrganiserRow
         json: { kind },
       });
       router.refresh();
-    } catch (err) {
-      setError(err instanceof ApiV1Error ? err.message : msg("externalPlay.resolve.failed"));
+    } catch {
+      setError(msg("externalPlay.resolve.failed"));
     } finally {
       setBusyId(null);
     }
@@ -75,13 +90,31 @@ export function ExternalPlayNeedsResultQueue({ rows }: { rows: NeedsOrganiserRow
                   ? msg("externalPlay.queue.match", { no: row.fixtureNo })
                   : msg("externalPlay.queue.matchUnknown")}
                 {": "}
-                {row.homeName} vs {row.awayName}
+                {row.homeName || msg("externalPlay.queue.tbd")}
+                {` ${msg("externalPlay.queue.versus")} `}
+                {row.awayName || msg("externalPlay.queue.tbd")}
               </a>
-              {row.lastError && (
-                <span className="text-[11px] text-slate-500">{row.lastError}</span>
+              {reasonLabel(msg, row.lastError) && (
+                <span className="text-[11px] text-slate-500">{reasonLabel(msg, row.lastError)}</span>
               )}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busyId === row.fixtureId}
+                data-testid="external-play-resend"
+                onClick={() => {
+                  setBusyId(row.fixtureId);
+                  setError(null);
+                  void apiV1(`/api/v1/fixtures/${row.fixtureId}/external-play/resend`, { method: "POST" })
+                    .then(() => setError(null))
+                    .catch(() => setError(msg("externalPlay.queue.resendFailed")))
+                    .finally(() => setBusyId(null));
+                }}
+                className="inline-flex min-h-11 items-center rounded border border-slate-200 px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {msg("externalPlay.queue.resend")}
+              </button>
               {RESOLVE_KINDS.map((opt) => (
                 <button
                   key={opt.kind}
@@ -89,7 +122,7 @@ export function ExternalPlayNeedsResultQueue({ rows }: { rows: NeedsOrganiserRow
                   disabled={busyId === row.fixtureId}
                   data-testid={`external-play-resolve-${opt.kind}`}
                   onClick={() => void resolve(row.fixtureId, opt.kind)}
-                  className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center rounded border border-slate-200 px-3 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   {msg(opt.labelKey)}
                 </button>

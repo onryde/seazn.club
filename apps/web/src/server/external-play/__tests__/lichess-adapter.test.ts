@@ -6,10 +6,9 @@ describe("createLichessAdapter", () => {
   it("POSTs challenge as white with unrated clock fields", async () => {
     const fetchMock = vi.fn(async () =>
       Response.json({
-        challenge: {
-          id: "chal1",
-          url: "https://lichess.org/chal1",
-        },
+        id: "chal1",
+        url: "https://lichess.org/chal1",
+        status: "created",
       }),
     );
 
