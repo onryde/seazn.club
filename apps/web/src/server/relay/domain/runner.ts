@@ -104,6 +104,9 @@ function toStopping(r: Runner, endReason: "stopped" | "max_duration", now: Date)
 }
 
 const toLost = (r: Runner, t: RunnerTrigger): RunnerStep => ({ next: { ...withExit(r, t), state: "lost" }, effects: [FORCE_DESTROY], signal: null });
+/** Fix round 3, ruling (a): a `lost` runner's teardown has not been SEEN to land. Re-issue it and stay — `destroyed` means
+ *  confirmed gone, and only destroy_ok / observed destroyed confirm it (invariant 1: a retry only after that). */
+const reissueDestroy = (r: Runner): RunnerStep => ({ next: r, effects: [FORCE_DESTROY], signal: null });
 const forceDestroyed = (r: Runner): RunnerStep => ({ next: { ...r, state: "destroyed" }, effects: [FORCE_DESTROY], signal: null });
 
 /** F17: the deadline or the organiser's stop reaching a LOST runner. The teardown is the same force_destroy;
@@ -248,12 +251,15 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     // C1: the teardown this state's entry issued has not been seen to land. Re-issue it — NEVER a retry signal, which
     // waits for destroyed (invariant 1). The once-per-STALE_HEARTBEAT_SECONDS bound is the session's: `decide`'s
     // stale_beat arm restarts the beat window (the session's beatWindowAt), since no beat arrives from a lost runner.
-    stale_beat: (r) => ({ next: r, effects: [FORCE_DESTROY], signal: null }),
-    // F17 — a deadline or a stop here ENDS the session; only `grace_expired` (our own teardown timing out)
-    // leaves it to `destroy_ok`, which is the crash path's ONE retry.
-    deadline: (r) => lostTornDown(r, "max_duration"), session_stop: (r) => lostTornDown(r, "stopped"), grace_expired: (r) => forceDestroyed(r),
+    stale_beat: (r) => reissueDestroy(r),
+    // F17 — a deadline or a stop here ENDS the session (completed: no retry can follow on a session that stopped wanting live).
+    deadline: (r) => lostTornDown(r, "max_duration"), session_stop: (r) => lostTornDown(r, "stopped"),
+    // Fix round 3, ruling (a): our own teardown timing out, or the sweep finding the Machine, is NOT a confirmation — both
+    // re-issue the force_destroy and stay lost. Round 2 measured the defect they closed: → destroyed on a force alone, then
+    // the next stale beat re-signalled the retry while attempt 1 might still be up. Only destroy_ok leaves to the ONE retry.
+    grace_expired: (r) => reissueDestroy(r),
     destroy_ok: (r) => afterLostDestroyed(r),
-    orphan_listed: (r) => forceDestroyed(r),
+    orphan_listed: (r) => reissueDestroy(r),
   },
   destroyed: {
     create_started: createStarted,                                  // the retry — only from here (invariant 1)

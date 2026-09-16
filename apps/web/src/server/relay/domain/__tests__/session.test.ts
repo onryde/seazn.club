@@ -552,6 +552,75 @@ describe("decide — a composed session's Machine events go through the runner t
     }
   });
 
+  // Fix round 3, ruling (a) — `lost × grace_expired / orphan_listed` STAY lost, re-issuing force_destroy (destroyed means
+  // CONFIRMED gone). Round 2 measured the defect through decide → evaluate → decide: those two cells moved a live session's
+  // runner to destroyed with nothing confirmed, and the next stale beat answered [retry_runner]. These three tests are the
+  // session-level safety twin and the LIVENESS guard the ruling asked for: a lost runner that no longer leaves on a force
+  // must still let every ending and terminal session finish.
+  it("R3 (a), safety: on a LIVE session a lost runner's grace_expired / orphan_listed re-issues the teardown and stays lost — the next stale beat re-issues it again and NEVER retries; only the confirmed destroy retries, once", () => {
+    const t1 = new Date(T0.getTime() + 60_000);
+    const beat = new Date(T0.getTime() + STALE_HEARTBEAT_SECONDS * 1000);
+    for (const type of ["grace_expired", "orphan_listed"] as const) {
+      const s = C({ state: "live", startedAt: T0, heartbeatAt: T0, runner: { ...BOOTING, state: "lost" } });
+      const forced = decide(s, { type: "runner", trigger: { type } }, t1);
+      expect(forced.next, type).toMatchObject({ state: "live", runnerRetries: 0, runner: { state: "lost", attempt: 1, machineId: "m1" } });
+      expect(forced.effects, type).toEqual([FORCE]);
+      expect(evaluate(forced.next, beat), type).toEqual({ kind: "stale_beat" });
+      const stale = decide(forced.next, { type: "expire", expiry: evaluate(forced.next, beat) }, beat);
+      expect(stale.effects, type).toEqual([FORCE]);                              // round 2 measured [retry_runner] here
+      expect(stale.next, type).toMatchObject({ state: "live", runnerRetries: 0, runner: { state: "lost" } });
+      const gone = decide(stale.next, { type: "runner", trigger: { type: "destroy_ok" } }, beat);
+      expect(gone.effects, type).toEqual([{ type: "retry_runner" }]);
+      expect(gone.next, type).toMatchObject({ state: "live", runnerRetries: 1, runner: { state: "destroyed" } });
+    }
+  });
+
+  it("R3 (a), liveness — ENDING: a lost runner (marked or not) whose grace_expired / orphan_listed only re-issued the teardown still COMPLETES at the ending timeout, with its own end reason — none one second before", () => {
+    const at = (sec: number) => new Date(T0.getTime() + sec * 1000);
+    for (const stopRequestedAt of [null, T0]) {
+      for (const endReason of ["stopped", "max_duration"] as const) {
+        const label = `${stopRequestedAt ? "marked" : "unmarked"} ${endReason}`;
+        const s = C({ state: "ending", desiredState: "ending", endReason, startedAt: T0, endingAt: T0, runner: { ...BOOTING, state: "lost", stopRequestedAt } });
+        const graced = decide(s, { type: "expire", expiry: { kind: "grace_expired" } }, at(1));
+        expect(graced.next, label).toMatchObject({ state: "ending", endReason, endedAt: null, runner: { state: "lost" } });
+        expect(graced.effects, label).toEqual([FORCE]);
+        const listed = decide(graced.next, { type: "runner", trigger: { type: "orphan_listed" } }, at(2));
+        expect(listed.next, label).toMatchObject({ state: "ending", runner: { state: "lost" } });
+        expect(listed.effects, label).toEqual([FORCE]);
+        // the bound: a lost runner is never grace-timed (evaluate times stopping / exited / creating), so the ENDING timeout is
+        // what finishes it — measured from endingAt, exactly as for any other ending session
+        expect(evaluate(listed.next, at(ENDING_TIMEOUT_SECONDS - 1)), label).toEqual({ kind: "none" });
+        expect(evaluate(listed.next, at(ENDING_TIMEOUT_SECONDS)), label).toEqual({ kind: "ending_timeout" });
+        const done = decide(listed.next, { type: "expire", expiry: evaluate(listed.next, at(ENDING_TIMEOUT_SECONDS)) }, at(ENDING_TIMEOUT_SECONDS));
+        expect(done.next, label).toMatchObject({ state: "completed", endReason, endedAt: at(ENDING_TIMEOUT_SECONDS), runner: { state: "destroyed" } });
+        expect(done.effects, label).toEqual([FORCE, { type: "fill_replay" }]);
+        expect(evaluate(done.next, at(10 * ENDING_TIMEOUT_SECONDS)), label).toEqual({ kind: "none" });
+      }
+    }
+  });
+
+  it("R3 (a), liveness — TERMINAL (C27): a completed or failed session whose runner is lost accepts the re-issued teardown (grace_expired, by expiry or trigger) without throwing and without touching the session; the confirmed destroy then moves the runner and signals nothing", () => {
+    const rows: Session[] = [
+      C({ state: "completed", desiredState: "ending", endReason: "stopped", startedAt: T0, endedAt: T0, runner: { ...BOOTING, state: "lost" } }),
+      C({ state: "failed", failReason: "target_rejected", endedAt: T0, runner: { ...BOOTING, state: "lost" } }),
+    ];
+    for (const s of rows) {
+      const commands: Command[] = [{ type: "expire", expiry: { kind: "grace_expired" } }, { type: "runner", trigger: { type: "grace_expired" } }];
+      for (const command of commands) {
+        const label = `${s.state} × ${command.type}`;
+        let d: ReturnType<typeof decide> | undefined;
+        expect(() => { d = decide(s, command, T0); }, label).not.toThrow();
+        expect(d!.next, label).toEqual({ ...s, runner: s.runner });
+        expect(d!.effects, label).toEqual([FORCE]);
+        expect(d!.events, label).toEqual([{ type: "RunnerChanged", from: "lost", to: "lost", trigger: "grace_expired" }]);
+      }
+      const gone = decide(s, { type: "runner", trigger: { type: "destroy_ok" } }, T0);
+      expect(gone.next, s.state).toEqual({ ...s, runner: { ...s.runner, state: "destroyed" } });
+      expect(gone.effects, s.state).toEqual([]);                                  // C27: no retry_runner, no second ending
+      expect(gone.events.map((e) => e.type), s.state).toEqual(["RunnerChanged"]);
+    }
+  });
+
   // Task 2C carry C6 (minor, fixed): the shared teardown on the way to `failed` dropped the stop step's SessionEnding but
   // not a SessionEnded — and a LOST runner's session_stop COMPLETES the session (F17), so the row logged two endings.
   it("C6: tearing down a LOST runner on the way to failed reports exactly ONE SessionEnded — warming timeout, credit refusal and provisioning timeout alike", () => {
