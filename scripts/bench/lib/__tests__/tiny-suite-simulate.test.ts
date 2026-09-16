@@ -32,7 +32,12 @@ import { runTinySuite, TINY_PACK_PATH } from "../suites/tiny.ts";
 // runner's own options without needing a real registry row. (Fix round 1
 // gave `runTinySuite` its own `play` parameter — see the "fix round 1"
 // describe block further down, which drives `runTinySuite` itself.)
-import { runPackSuite, type PackSuiteInput } from "../suites/run-suite.ts";
+import { registrationDivisionsOf, runPackSuite, type PackSuiteInput } from "../suites/run-suite.ts";
+// Fix round 1 (review check 2) — loads the real, schema-validated `Pack` so
+// the seeded-stage-count regression test below can derive its expected
+// number from `pack.divisions`/`registrationDivisionsOf` (the SAME selector
+// `run-suite.ts`'s own `seedPlan` filter uses), never a literal.
+import { loadPackValue } from "../pack-io.ts";
 import type { PlayMode, SuiteDefinition } from "../suites/types.ts";
 // B07a T7 fix round 1 (I1) — the seam `bench.ts`'s own `runSuite` calls to
 // forward a registry row's `play` into its `.run()`. Imported here (rather
@@ -3427,6 +3432,65 @@ describe("Pre-B07b prerequisite P2 — a two-boundary division completes its mid
       "advance: d-badminton/s-badminton-ko seed proposal qualifiers",
     ]);
     expect(seedOracles.map((o) => o.passed)).toEqual([true, true, true]);
+  });
+});
+
+describe("Pre-B07b prerequisite fix round 1 — the report's seeded-stage count is pinned (review check 2)", () => {
+  it("the suite_seeded log's `stages` field equals the total stages actually seeded, across every non-registration division", async () => {
+    const { transport, sql } = fakeServer();
+    // Captures ONLY the `suite_seeded` pino event (mirrors the
+    // `oracle_checked`-capturing pattern above) — this is the ONLY place
+    // `run-suite.ts:2300`'s `stages: seeded.stageIdByRef.size` ever surfaces;
+    // it is not part of the returned `SuiteReport` object, so it cannot be
+    // read off `report` directly.
+    const seededEvents: { stages: unknown }[] = [];
+    const capturing = pino({ level: "info" }, {
+      write(line: string) {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.msg === "suite_seeded") seededEvents.push({ stages: entry.stages });
+      },
+    });
+
+    const report = await runTinySuite({
+      base: "http://bench.example",
+      engine: "optimized",
+      keep: false,
+      log: capturing,
+      cliEntry: "admin",
+      packPath: TINY_PACK_PATH,
+      transport,
+      sql,
+      probeTransport: transport,
+      simTransport: transport,
+      importTransport: transport,
+      startTransport: transport,
+      advanceTransport: transport,
+      oracleTransport: transport,
+      matchBoard: echoExpectedBoard,
+      specialSubjects: echoSpecialSubjects,
+    });
+    expect(report.gate).toBe("green");
+    expect(seededEvents).toHaveLength(1);
+
+    // The count MEANS "total stages seeded across all divisions" — every
+    // stage row `seedSuite` actually created, summed over every division
+    // that goes through the normal division/stage seeding path. It excludes
+    // a registration-entry division (`_tiny.json`'s own `d-registration`):
+    // `run-suite.ts:2179-2211` filters those OUT of the `SeedPlan` it hands
+    // `seedSuite` — they are created through a separate route
+    // (`registrationDivisionsOf`, `run-suite.ts:498`, exported so this test
+    // can reuse the SAME selector rather than re-deriving it). A future pack
+    // edit, or a future change to what gets filtered, moves this expected
+    // number WITH it, because it is read off the real validated pack here —
+    // never a literal typed into this test.
+    const load = loadPackValue(JSON.parse(await readFile(TINY_PACK_PATH, "utf8")), TINY_PACK_PATH);
+    if (!load.ok) throw new Error("the committed _tiny.json no longer loads");
+    const registrationRefs = new Set(registrationDivisionsOf(load.pack).map((d) => d.ref));
+    const expectedStages = load.pack.divisions
+      .filter((d) => !registrationRefs.has(d.ref))
+      .reduce((n, d) => n + d.stages.length, 0);
+
+    expect(seededEvents[0]?.stages).toBe(expectedStages);
   });
 });
 
