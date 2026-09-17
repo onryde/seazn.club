@@ -254,7 +254,13 @@ export default async function DivisionHomePage({ params }: Props) {
                   />
                   {poolFixtures.length > 0 && (
                     <details>
-                      <summary className="cursor-pointer text-xs font-medium text-ink-muted hover:text-ink">
+                      {/* `min-h-11 py-3.5` is the 44px tap floor (W2 contact
+                          sheet img-135, owner approved): the toggle was plain
+                          text, 16px tall at 320. The padding rather than a
+                          `flex` is deliberate — a `<summary>` is `display:
+                          list-item`, and changing its display takes the
+                          disclosure triangle with it. */}
+                      <summary className="min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink">
                         {t(dict, "division.resultsGrid")}
                       </summary>
                       <div className="mt-2">

@@ -867,12 +867,20 @@ test("HB9d: at 320 the division page's Schedule filter and Entrants cards hold a
   await expectHeld("#panel-entrants");
 });
 
-async function presentHitHeight(page: Page, box: { x: number; y: number; width: number; height: number }): Promise<number> {
+/** The height a finger actually gets on the control `selector` matches, walked
+ *  with `elementFromPoint` up and down the box's centre line until a point
+ *  stops landing on it. A painted box can be taller or shorter than what takes
+ *  the tap; this is what takes it. */
+async function hitHeight(
+  page: Page,
+  box: { x: number; y: number; width: number; height: number },
+  selector: string,
+): Promise<number> {
   return page.evaluate(
-    ([x, y]) => {
+    ([x, y, sel]) => {
       const onLink = (yy: number) => {
         const el = document.elementFromPoint(x as number, yy);
-        return !!el && !!el.closest('a[href$="/present"]');
+        return !!el && !!el.closest(sel as string);
       };
       if (!onLink(y as number)) return 0;
       let top = y as number;
@@ -881,8 +889,16 @@ async function presentHitHeight(page: Page, box: { x: number; y: number; width: 
       while (bottom < window.innerHeight - 1 && onLink(bottom + 1)) bottom++;
       return bottom - top + 1;
     },
-    [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)] as const,
+    [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2), selector] as const,
   );
+}
+
+/** The Present link's tap height, the one call shape HB14 makes. */
+async function presentHitHeight(
+  page: Page,
+  box: { x: number; y: number; width: number; height: number },
+): Promise<number> {
+  return hitHeight(page, box, 'a[href$="/present"]');
 }
 
 // HB14 — the division page's header actions ("Present ▸" and the WhatsApp
@@ -965,6 +981,51 @@ test("HB14: the division page's Present and Share actions stay on screen at 320 
     }
   }
   console.log(`HB14:\n${lines.join("\n")}`);
+});
+
+// HB15 — the two tap targets the W2 contact sheet caught under the 44px floor
+// (owner approved 2026-09-17; sheet ids img-115/116 and img-135): the standings
+// table's "Full division" link (`standings-table-view.tsx`) and the division
+// page's results-grid toggle (`[divisionSlug]/page.tsx`). Both were plain text
+// controls whose box WAS the line box — about 16px tall — so a class scan
+// cannot witness the fix (AGENTS.md: a class present is not a class in effect,
+// and a `min-h` on a control whose display is `inline` does nothing at all).
+// Measured two ways at 320: the box `boundingBox()` paints, and the height a
+// finger actually gets from `elementFromPoint`, which is what takes the tap.
+test("HB15: the Full division link and the results-grid toggle each clear the 44px tap floor at 320", async ({
+  browser,
+}) => {
+  test.setTimeout(Math.max(FLOOR_MS, 4 * STEP_MS));
+  const page = await spectator(browser, { width: 320 });
+
+  await openTab(page, "table");
+  const full = page.locator('[data-testid^="mh-table-"][data-testid$="-full"]').first();
+  await expect(full, "the Table tab shows a Full division link").toBeVisible();
+  const fullTestid = await full.getAttribute("data-testid");
+  const fullBox = (await full.boundingBox())!;
+  expect(fullBox.height, `the Full division link's painted box is ${fullBox.height}px tall`).toBeGreaterThanOrEqual(
+    HIT_TARGET_FLOOR_PX,
+  );
+  expect(
+    await hitHeight(page, fullBox, `[data-testid="${fullTestid}"]`),
+    "the Full division link takes a tap over the whole floor",
+  ).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+
+  await page.goto(`/shared/${org.slug}/${comp.slug}/${genericSlug}`, { waitUntil: "load" });
+  const toggle = page
+    .locator("summary")
+    .filter({ hasText: dictString("en", "division.resultsGrid") })
+    .first();
+  await expect(toggle, "the division page shows the results-grid toggle").toBeVisible();
+  const toggleBox = (await toggle.boundingBox())!;
+  expect(toggleBox.height, `the results-grid toggle's painted box is ${toggleBox.height}px tall`).toBeGreaterThanOrEqual(
+    HIT_TARGET_FLOOR_PX,
+  );
+  expect(
+    await hitHeight(page, toggleBox, "summary"),
+    "the results-grid toggle takes a tap over the whole floor",
+  ).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  await expectNoHorizontalScroll(page);
 });
 
 // HB10 — a completed card's result sentence is the match centre's.

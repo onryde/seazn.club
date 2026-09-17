@@ -285,10 +285,17 @@ export function StandingsTableView({
           {view.caption}
         </h3>
         {showFullLink ? (
+          // `inline-flex min-h-11 items-center` is the 44px tap floor, the
+          // same shape `match-centre/info-tab.tsx` uses. W2 contact sheet
+          // img-115/116 (owner approved): this link was plain text, so its
+          // box WAS its line box — 16px measured at 320 — and a class that
+          // only looked bigger would not have moved it. The height has to
+          // come from the box a finger meets, which is why the display goes
+          // with the `min-h`: `min-height` on an inline box does nothing.
           <Link
             data-testid={`${testid}-full`}
             href={view.fullHref}
-            className="shrink-0 text-xs font-medium uppercase tracking-wide text-accent-strong hover:underline"
+            className="inline-flex min-h-11 shrink-0 items-center text-xs font-medium uppercase tracking-wide text-accent-strong hover:underline"
           >
             {t(dict, "table.fullDivision")}
           </Link>
