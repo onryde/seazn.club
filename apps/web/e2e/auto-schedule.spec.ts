@@ -443,8 +443,8 @@ test.describe("Auto-schedule confirm gate (#pins-ui)", () => {
     const dialog = page.getByTestId("schedule-rebuild");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     // The count in the dialog body names exactly the one locked fixture —
-    // wrong copy here would say "2 fixtures" on a board with one pin.
-    await expect(dialog).toContainText("1 fixture is locked");
+    // wrong copy here would say "2 locked matches" on a board with one pin.
+    await expect(dialog).toContainText("1 locked match stays exactly where it is");
 
     await page.getByTestId("schedule-rebuild-cancel").click();
     await expect(dialog).toBeHidden();
@@ -556,6 +556,7 @@ test("the toolbar renders one action set, aimed at the picked stage", async ({ p
 
   const autoButton = page.getByTestId("schedule-auto");
   await autoButton.click();
+  await page.getByTestId("schedule-rebuild-confirm").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: 45_000 });
   await expect(autoButton).toBeEnabled({ timeout: 45_000 });
