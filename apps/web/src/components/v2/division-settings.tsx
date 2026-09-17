@@ -373,6 +373,24 @@ export function DivisionSettings({
   const derivedSwissRounds =
     ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
     null;
+  // Read-only on purpose. buildTemplateStages deliberately declines to stamp
+  // the rounds knob onto a template that declares none, so an editable input
+  // would look live and then drop the organiser's number on save. Gated on
+  // the TEMPLATE as well as the value: a plain `swiss` stage's rounds were
+  // CHOSEN by the organiser, and captioning those "decided by the size of the
+  // field" would be a lie. One node, rendered from both branches of the
+  // locked/editable split below, because the value and the lock arrive
+  // together and a single-branch version renders nowhere.
+  const derivedRoundsLine =
+    ["swiss_playoff", "swiss_knockout"].includes(template) && derivedSwissRounds !== null ? (
+      <p className="mt-2 text-xs text-slate-600">
+        <span className="font-medium text-slate-700">{msg("divset.rounds")}</span>{" "}
+        <span data-testid="division-settings-derived-rounds" className="font-semibold text-slate-800">
+          {derivedSwissRounds}
+        </span>{" "}
+        <span className="text-slate-500">{msg("divset.roundsFromField")}</span>
+      </p>
+    ) : null;
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
   );
@@ -763,6 +781,13 @@ export function DivisionSettings({
               <Link href={fixturesHref} className="text-purple-700 underline">{msg("divset.fixtures")}</Link>
               {msg("divset.lockedNotePost")}
             </p>
+            {/* This is the ONLY branch that can actually show the number:
+                swissGen writes config.rounds at the first generation, and
+                generating is exactly what creates the fixture that sets
+                `locked`. Rendered in the editable branch too (below), which
+                covers a stage whose rounds were set over the API before any
+                fixture existed. */}
+            {derivedRoundsLine}
           </div>
         ) : (
           <>
@@ -822,23 +847,7 @@ export function DivisionSettings({
                       onChange={(e) => setSwissRounds(Number(e.target.value))} className="input mt-1 w-full" />
                   </label>
                 )}
-                {/* The derived budget, shown READ-ONLY. It is not editable
-                    here because buildTemplateStages deliberately does not
-                    stamp the rounds knob onto a template that declares none
-                    — an input wired to `swissRounds` would look editable and
-                    drop the organiser's number on save. Shown only once the
-                    number exists, so this never displays a guess. */}
-                {["swiss_playoff", "swiss_knockout"].includes(template) &&
-                  derivedSwissRounds !== null && (
-                    <label className="block text-xs text-slate-500">
-                      {msg("divset.rounds")}
-                      <input type="number" readOnly disabled value={derivedSwissRounds}
-                        data-testid="division-settings-derived-rounds" className="input mt-1 w-full" />
-                      <span className="mt-0.5 block text-[11px] text-slate-400">
-                        {msg("divset.roundsFromField")}
-                      </span>
-                    </label>
-                  )}
+                {derivedRoundsLine}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.legs")}
