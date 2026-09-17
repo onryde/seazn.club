@@ -26,7 +26,10 @@
 //    read, running its function directly — but still stores its result;
 //  - it caches by key parts and arguments;
 //  - an entry whose own tags have EXPIRED is a miss; one whose own tags are
-//    STALE is served once and refreshed in the background.
+//    STALE is served and refreshed in the background. This double serves it
+//    for a single read and then refreshes; a real build keeps serving it until
+//    the rebuild lands — measured after a consent OFF at 2.8–4.3s, 2–3 loads,
+//    in a local prod build (`firePersonRevalidate`'s doc).
 // Timers are ignored: every test runs well inside each entry's revalidate window.
 //
 // The write side is Next's own code, as in `score-revalidate-in-request.test.ts`:
@@ -441,7 +444,7 @@ describe.skipIf(!HAS_DB)("a person write reaches every cached page and data entr
     expect(await benAsShown(s), "premise: every entry names Ben in full, and is now cached").toEqual(full);
 
     await inRequest<unknown>(write);
-    await benAsShown(s); // the one stale read a stale-while-revalidate tag allows
+    await benAsShown(s); // a stale read, served while the rebuild runs (this double serves exactly one)
     await refreshed();
 
     const masked = maskDisplayName("Ben Stokes", "first_initial");

@@ -36,7 +36,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
+import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
@@ -894,7 +894,8 @@ type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
  * re-read, never re-masked. A line links to the player page only where the
  * view published an id (consent + player-profile entitlement) AND the
  * division shows full names: a masked name with a link is the full name one
- * click away. The id is withheld on exactly the same terms.
+ * click away (`playerLinkId`, which the division page's Entrants tab links
+ * through too). The id is withheld on exactly the same terms.
  *
  * A ban is matched to a line by PERSON, never by name (two players can share
  * one), by zipping `readEntrantMemberRefs`'s internal rows onto the view's
@@ -920,13 +921,12 @@ async function divisionSquads(args: {
   base: string;
 }): Promise<{ membersByEntrant: Map<string, HubMemberT[]>; suspensions: HubSuspensionT[] }> {
   const { division, entrants, bans, names, base } = args;
-  const linkable = resolveNameDisplay(division.player_name_display, division.youth ?? false) === "full";
   const membersByEntrant = new Map<string, HubMemberT[]>();
   for (const e of entrants) {
     membersByEntrant.set(
       e.id,
       (e.members ?? []).map((m) => {
-        const publicId = linkable && m.person_id ? m.person_id : null;
+        const publicId = playerLinkId(m.person_id, division);
         return {
           personId: publicId,
           name: m.name,

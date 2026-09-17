@@ -387,6 +387,48 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     expect(names.length).toBeGreaterThan(0);
   });
 
+  // Round-3 review m7: the organiser leaderboard linked a row to the PUBLIC
+  // card on consent alone, so on an org without player pages the organiser
+  // followed it into the card's refusal. It now links on the rule every public
+  // link to the card uses (`playerLinkId`).
+  it("the organiser leaderboard links a row to the public card only on the card's terms — consent, player pages granted, full names", async () => {
+    const { auth } = await seedOrg();
+    const { division, fixtures, teamA, entrants } = await seedDivision(auth, "public");
+    const f = fixtures[0]!;
+    await scoreEvent(auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(auth, f.id, {
+      expected_seq: 1,
+      type: "football.goal",
+      payload: { by: entrants[0]!.id, scorer: teamA[0]!.id }, // Ada Striker, consented
+    });
+    await scoreEvent(auth, f.id, {
+      expected_seq: 2,
+      type: "football.goal",
+      payload: { by: entrants[0]!.id, scorer: teamA[2]!.id }, // Minor Hidden, no consent
+    });
+    const playerPages = async (value: boolean) => {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${auth.orgId}, 'dashboard.player_profiles', ${value}, 'test')
+        on conflict (org_id, feature_key) do update set bool_value = excluded.bool_value`;
+      await invalidateOrgEntitlements(auth.orgId);
+    };
+    const links = async () =>
+      Object.fromEntries(
+        (await divisionPlayerStats(auth, division.id, { metric: "goals" })).rows.map((r) => [r.full_name, r.public_profile]),
+      );
+
+    await playerPages(true);
+    expect(await links()).toEqual({ "Ada Striker": true, "Minor Hidden": false });
+
+    await playerPages(false);
+    expect(await links()).toEqual({ "Ada Striker": false, "Minor Hidden": false });
+
+    await playerPages(true);
+    await sql`update divisions set player_name_display = 'first_initial' where id = ${division.id}`;
+    expect(await links()).toEqual({ "Ada Striker": false, "Minor Hidden": false });
+  });
+
   // W3-A (2026-09-06, V399): `stats.player` (the per-division record) is free
   // on every plan now. This used to be the "stats gate 402s Community" half of
   // the test above — a Free org reading its OWN record was refused while the

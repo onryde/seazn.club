@@ -44,7 +44,7 @@
 // ---------------------------------------------------------------------------
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
+import { playerLinkId, resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
 import type { LeaderBoardT } from "./competition-hub-schema";
 import type { DivisionConsentCtx } from "./public-lineups";
 
@@ -107,8 +107,10 @@ export interface LeaderInputRow {
   /** Already display-resolved. Never the raw `full_name` for a masked person. */
   name: string;
   masked: boolean;
-  /** True only when the person is in `public_players_v` — i.e. a player page
-   *  exists for them. Absence of a profile is never absence of a row. */
+  /** True only when a public name may link to the player's card, on the terms
+   *  every public roster link uses (`playerLinkId`): the view published the
+   *  person's id (consent + the org's player-page entitlement) and the
+   *  division shows full names. Absence of a profile is never absence of a row. */
   publicProfile: boolean;
   entrantName: string | null;
   badgeUrl: string | null;
@@ -183,7 +185,8 @@ export function specsFor(sportKey: string, model: PlayerStatsModel | undefined):
  * A masked person is RANKED and rendered under their masked label — dropping
  * the row would silently change the standings a spectator sees. What masking
  * removes is the LINK: `personHref` is offered only for a person who both has
- * a public profile (`public_players_v`) and is not masked here, because the
+ * a public profile (`publicProfile`, on `playerLinkId`'s terms) and is not
+ * masked here, because the
  * player page renders the unmasked name and linking to it from a youth
  * division would undo that division's own safeguarding policy.
  */
@@ -254,6 +257,7 @@ export interface LeaderSnapshotRow {
   entrant_name: string | null;
   badge_url: string | null;
   team_logo_path: string | null;
+  /** `public_entrants_v` published this person's id in their entrant. */
   public_profile: boolean;
 }
 
@@ -309,7 +313,7 @@ export function toLeaderInputRows(
       personId: row.person_id,
       name,
       masked,
-      publicProfile: row.public_profile,
+      publicProfile: playerLinkId(row.public_profile ? row.person_id : null, division) !== null,
       entrantName: row.entrant_id === null ? null : (entrantNames.get(row.entrant_id) ?? null),
       badgeUrl: resolveEntrantBadge({
         badge_url: row.badge_url,

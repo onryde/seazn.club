@@ -13,6 +13,26 @@ export function resolveNameDisplay(
   return youth ? "first_initial" : "full";
 }
 
+/**
+ * The person id a PUBLIC roster line may link to the player's card with, or
+ * null for a plain name. Two terms, both required:
+ *  - `personId` is the id the VIEW published — `public_entrants_v` publishes
+ *    it only with the person's public-name consent AND the org's player-page
+ *    entitlement (`org_has_feature('dashboard.player_profiles')`), so a null
+ *    there is the refusal, and a caller never reads the entitlement again;
+ *  - the division shows FULL names — a masked name with a link is the full
+ *    name one click away.
+ * The hub's Teams tab (`divisionSquads`) and the division page's Entrants tab
+ * both link through this, so the two cannot disagree about who is linked.
+ */
+export function playerLinkId(
+  personId: string | null | undefined,
+  division: { player_name_display?: string | null; youth?: boolean | null },
+): string | null {
+  if (!personId) return null;
+  return resolveNameDisplay(division.player_name_display, division.youth ?? false) === "full" ? personId : null;
+}
+
 function maskOne(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return parts[0] ?? "";

@@ -28,6 +28,7 @@ vi.mock("@/server/public-site/revalidate", () => ({
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const DIVISION_CONFIG = {
@@ -272,7 +273,6 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
 
     const mine = await listMyPlayerStats(player);
     expect(mine).toHaveLength(1);
-    expect(mine[0]!.competition_public).toBe(true);
     expect(mine[0]!.division_slug).toBeTruthy();
     expect(mine[0]!.org_slug).toBeTruthy();
     const goals = mine[0]!.metrics.find((m) => m.key === "goals");
@@ -280,6 +280,44 @@ describe.skipIf(!HAS_DB)("player home /me (PROMPT-53)", () => {
     expect(mine[0]!.metrics.find((m) => m.key === "assists")).toBeUndefined();
 
     expect(await listMyPlayerStats(stranger)).toHaveLength(0);
+  });
+
+  // Round-3 review m7: /me linked to the player's PUBLIC card on consent and a
+  // public competition alone, so on an org without player pages it opened the
+  // card's refusal. The link now follows the rule every public link to the card
+  // uses (`playerLinkId`): the view published the person's id (consent + the
+  // org's player-page entitlement) and the division shows full names.
+  it("listMyPlayerStats: the link to my public card follows the card's own terms — granted links; denied org, masked division or no consent does not", async () => {
+    const a = await seedOrg("card");
+    const rigA = await rig(a.owner);
+    const player = await makeUser("cardplayer");
+    const me = rigA.persons[0]!;
+    await sql`update persons set user_id = ${player}, consent = ${sql.json({ public_name: true })} where id = ${me.id}`;
+    await sql`
+      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
+      values (${rigA.division.id}, ${me.id}, 'football', ${sql.json({ goals: 2 })}, 1)`;
+    const playerPages = async (value: boolean) => {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${a.orgId}, 'dashboard.player_profiles', ${value}, 'test')
+        on conflict (org_id, feature_key) do update set bool_value = excluded.bool_value`;
+      await invalidateOrgEntitlements(a.orgId);
+    };
+    const card = async () => (await listMyPlayerStats(player)).map((s) => s.public_card);
+
+    await playerPages(true);
+    expect(await card(), "granted, consented, full names").toEqual([true]);
+
+    await playerPages(false);
+    expect(await card(), "player pages denied").toEqual([false]);
+
+    await playerPages(true);
+    await sql`update divisions set player_name_display = 'first_initial' where id = ${rigA.division.id}`;
+    expect(await card(), "division masks names").toEqual([false]);
+
+    await sql`update divisions set player_name_display = null where id = ${rigA.division.id}`;
+    await sql`update persons set consent = ${sql.json({ public_name: false })} where id = ${me.id}`;
+    expect(await card(), "consent withdrawn").toEqual([false]);
   });
 
   it("isPlayerOnly: claimed person + no org = true; members and strangers = false", async () => {

@@ -17,7 +17,10 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
   const tags = [divisionTag(divisionId), ...(competitionId ? [competitionTag(competitionId)] : [])];
   try {
     // Next 16 signature: second arg = stale-while-revalidate window ('max' =
-    // serve stale while fresh regenerates — right for spectator pages).
+    // serve the previous render while fresh regenerates — right for spectator
+    // pages). How long that lasts was MEASURED once, for the pages a consent
+    // OFF touches (`firePersonRevalidate`); these division and competition
+    // pages use the same SWR mechanism but were not measured.
     revalidateTag(tags[0], "max");
     if (competitionId) revalidateTag(competitionTag(competitionId), "max");
   } catch {
@@ -40,19 +43,27 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *     entries at every competition URL, allowed or refused, including a
  *     competition they are not rostered in (`public_players_v` is org-scoped);
  *   - the division and competition tags of every division they are rostered
- *     in, deduped, stale-while-revalidate — the tags the player's consent write
- *     has always fired: the entries that mask their name for others
- *     (`pub-div`, `pub-fixture`, and other players' cards through
- *     `pub-player-v16`), and the pages built on them. One stale read, then the
- *     background rebuild waits on fresh data.
+ *     in, deduped, stale-while-revalidate ('max') — the tags the player's
+ *     consent write has always fired: the entries that mask their name for
+ *     others (`pub-div`, `pub-fixture`, and other players' cards through
+ *     `pub-player-v16`), and the pages built on them. 'max' serves the
+ *     PREVIOUS render while the background rebuild runs. Measured after a
+ *     consent OFF (spectator W2, 2026-09-17): those pages kept serving the
+ *     previous render for a few seconds — 2.8–4.3s, 2–3 loads — in a local
+ *     prod build at a machine load average of 16–40, and in that window the
+ *     match page can briefly show the full name and the masked name together
+ *     (MEASURED: seen on the page; the likely cause, INFERRED, is one of its
+ *     data entries rebuilt and another not yet). Owner ruling 2026-09-17:
+ *     that window is accepted, no behaviour change. The person's own card is
+ *     not in it: its tag EXPIRES (above).
  *  Never the org tag: that would expire every page and data entry of the org,
  *  hubs included, on each of these writes — and `PATCH /api/v1/persons/{id}`
  *  takes API keys, so a roster sync would be one org-wide expiry per person.
  *  One broadcast per profile and one CDN purge per write.
  *
  *  AWAIT it inside the request, after commit: it reads the rosters before
- *  firing, and Next flushes a handler's revalidations once, when the handler
- *  resolves, so a voided call's tags go nowhere. It never rejects — the write
+ *  firing, and Next flushes a handler's revalidations when the handler
+ *  resolves and never after, so a voided call's tags go nowhere. It never rejects — the write
  *  it follows has committed — so the caller's next after-commit step (the Redis
  *  retire) always runs. A failed roster read is logged, and the person tags
  *  still fire. */
@@ -91,13 +102,16 @@ export async function firePersonRevalidate(
 
 /** A SCORE write — `invalidatePublicCache` (usecases/scoring.ts) is the only
  *  caller. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
- *  `fireOrgRevalidate` below gives: 'max' serves one more stale read, and the
- *  reads that follow a score are read-your-own-writes (the smoke hub champion
- *  check reads once; a realtime push triggers one refresh). Every spectator
+ *  `fireOrgRevalidate` below gives: 'max' keeps serving the previous render
+ *  while the rebuild runs (same SWR mechanism; measured once, for the
+ *  consent-OFF pages — a few seconds and several loads, see
+ *  `firePersonRevalidate` — never for a score write), and the reads that follow a score are
+ *  read-your-own-writes (the smoke hub champion check reads a single time; a
+ *  realtime push triggers one refresh). Every spectator
  *  entry a score changes carries the division tag (`pub-div`, `pub-fixture`,
  *  `pub-hub-v2`), and an expired tag beats a stale one on an entry carrying
  *  both. The competition tag keeps SWR. Cost accepted: the first reader after
- *  a score rebuilds instead of getting a stale answer at once.
+ *  a score rebuilds instead of getting a stale answer immediately.
  *
  *  ORDER IS LOAD-BEARING: competition 'max' first, division expiry second. A
  *  flush groups its tags by profile in first-seen order and Next's tag

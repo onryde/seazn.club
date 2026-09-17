@@ -63,6 +63,13 @@ export async function readLeaderRows(
 ): Promise<LeaderInputRow[]> {
   if (divisions.length === 0) return [];
 
+  // `public_profile` is whether `public_entrants_v` published this person's id
+  // in their entrant's members — it does so only with public-name consent AND
+  // the org's player-page entitlement for this competition, the public card's
+  // own terms (`toLeaderInputRows` adds the division's full-names check through
+  // `playerLinkId`). It used to be "is in `public_players_v`", which is consent
+  // only: on a plan with stats but without player pages, every consented
+  // leader linked to a card that refuses them.
   const rows = await sql<SnapshotQueryRow[]>`
     select ps.division_id, ps.person_id, ps.stats,
            p.full_name, p.consent,
@@ -71,12 +78,14 @@ export async function readLeaderRows(
            e.display_name  as entrant_name,
            e.badge_url,
            e.team_display->>'logo_path' as team_logo_path,
-           exists (select 1 from public_players_v v where v.id = ps.person_id) as public_profile
+           coalesce(e.published, false) as public_profile
     from player_stat_snapshots ps
     join public_divisions_v d on d.id = ps.division_id
     join persons p on p.id = ps.person_id and p.merged_into is null
     left join lateral (
-      select en.id, en.kind, en.display_name, en.badge_url, en.team_display
+      select en.id, en.kind, en.display_name, en.badge_url, en.team_display,
+             exists (select 1 from jsonb_array_elements(en.members) m
+                      where m->>'person_id' = ps.person_id::text) as published
       from entrant_members em
       join public_entrants_v en on en.id = em.entrant_id
       where em.person_id = ps.person_id and en.division_id = ps.division_id

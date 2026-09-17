@@ -21,6 +21,7 @@ import { groupCareerStatsBySport, type CareerSnapshotRow, type CareerSportStats 
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import { playerLinkId } from "@/lib/name-display";
 
 type Tx = postgres.TransactionSql;
 
@@ -414,8 +415,12 @@ export interface LeaderboardRow {
   squad_number: number | null;
   entrant: string | null;
   stats: Record<string, number>;
-  /** PROMPT-65: the person has a public profile (public_name consent) — rows
-   *  link there; non-consented rows stay plain text. */
+  /** PROMPT-65: the row may link to the person's PUBLIC card — on the rule
+   *  every public link to the card uses (`playerLinkId`): `public_entrants_v`
+   *  published their id (public-name consent AND the org's player-page
+   *  entitlement for this competition) and the division shows full names.
+   *  Otherwise plain text: consent alone linked organisers on a plan without
+   *  player pages straight into the card's refusal. */
   public_profile: boolean;
 }
 
@@ -435,8 +440,10 @@ export async function divisionPlayerStats(
   await requireFeature(auth.orgId, "stats.player", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
     const { rows, hasModel } = await recomputePlayerStats(tx, divisionId);
-    const [division] = await tx<{ sport_key: string; module_version: string }[]>`
-      select sport_key, module_version from divisions where id = ${divisionId}`;
+    const [division] = await tx<
+      { sport_key: string; module_version: string; youth: boolean; player_name_display: string | null }[]
+    >`
+      select sport_key, module_version, youth, player_name_display from divisions where id = ${divisionId}`;
     const sportModule = resolveModule(division!.sport_key, division!.module_version);
     const model = sportModule.playerStats;
     const metrics = [
@@ -447,11 +454,8 @@ export async function divisionPlayerStats(
 
     const personIds = rows.map((r) => r.personId);
     const people = personIds.length
-      ? await tx<
-          { id: string; full_name: string; squad_number: number | null; entrant: string | null; public_name: boolean }[]
-        >`
-          select p.id, p.full_name, em.squad_number, e.display_name as entrant,
-                 coalesce((p.consent->>'public_name')::boolean, false) as public_name
+      ? await tx<{ id: string; full_name: string; squad_number: number | null; entrant: string | null }[]>`
+          select p.id, p.full_name, em.squad_number, e.display_name as entrant
           from persons p
           left join entrant_members em on em.person_id = p.id
             and em.entrant_id in (select id from entrants where division_id = ${divisionId})
@@ -459,6 +463,19 @@ export async function divisionPlayerStats(
           where p.id in ${tx(personIds)}`
       : [];
     const infoById = new Map(people.map((p) => [p.id, p]));
+    // The ids the public view publishes for this division's rosters — the
+    // public card's own consent + entitlement terms (see `public_profile`).
+    const published = personIds.length
+      ? new Set(
+          (
+            await tx<{ person_id: string }[]>`
+              select distinct m->>'person_id' as person_id
+              from public_entrants_v en
+              cross join lateral jsonb_array_elements(en.members) m
+              where en.division_id = ${divisionId} and m->>'person_id' is not null`
+          ).map((r) => r.person_id),
+        )
+      : new Set<string>();
 
     const metric = query.metric ?? metrics[0]?.key ?? "points";
     const dir = query.sort === "asc" ? 1 : -1;
@@ -469,7 +486,7 @@ export async function divisionPlayerStats(
         squad_number: infoById.get(r.personId)?.squad_number ?? null,
         entrant: infoById.get(r.personId)?.entrant ?? null,
         stats: r.stats,
-        public_profile: infoById.get(r.personId)?.public_name ?? false,
+        public_profile: playerLinkId(published.has(r.personId) ? r.personId : null, division!) !== null,
       }))
       .sort((a, b) => dir * ((a.stats[metric] ?? 0) - (b.stats[metric] ?? 0)) || a.full_name.localeCompare(b.full_name));
 

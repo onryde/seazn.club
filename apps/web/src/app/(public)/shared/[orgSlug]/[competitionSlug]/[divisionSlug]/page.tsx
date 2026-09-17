@@ -24,6 +24,7 @@ import { ResultsMatrix } from "@/components/public-site/results-matrix";
 import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
+import { playerLinkId } from "@/lib/name-display";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
@@ -280,29 +281,34 @@ export default async function DivisionHomePage({ params }: Props) {
           </p>
           {e.members.length > 0 ? (
             <ul className="mt-2 space-y-1 text-sm text-zinc-600">
-              {e.members.map((m, i) => (
-                <li key={i} className="flex items-center gap-2">
-                  {m.squad_number != null ? (
-                    <span className="w-6 text-right font-display text-xs font-semibold tabular-nums text-ink-muted">
-                      {m.squad_number}
-                    </span>
-                  ) : null}
-                  {m.person_id ? (
-                    <Link
-                      href={`/shared/${org.slug}/${competition.slug}/players/${m.person_id}`}
-                      className="underline decoration-accent-line underline-offset-2 hover:text-accent-strong hover:decoration-accent"
-                    >
-                      {m.name}
-                    </Link>
-                  ) : (
-                    // No public-name consent: initials, no link (doc 06 §4.7).
-                    <span>{m.name}</span>
-                  )}
-                  {m.position ? (
-                    <span className="text-xs text-ink-muted">{m.position}</span>
-                  ) : null}
-                </li>
-              ))}
+              {e.members.map((m, i) => {
+                const linkId = playerLinkId(m.person_id, division);
+                return (
+                  <li key={i} className="flex items-center gap-2">
+                    {m.squad_number != null ? (
+                      <span className="w-6 text-right font-display text-xs font-semibold tabular-nums text-ink-muted">
+                        {m.squad_number}
+                      </span>
+                    ) : null}
+                    {linkId ? (
+                      <Link
+                        href={`/shared/${org.slug}/${competition.slug}/players/${linkId}`}
+                        className="underline decoration-accent-line underline-offset-2 hover:text-accent-strong hover:decoration-accent"
+                      >
+                        {m.name}
+                      </Link>
+                    ) : (
+                      // No link on the hub Teams tab's terms (`playerLinkId`): no
+                      // public-name consent, player pages not granted to the org,
+                      // or a division that masks names (doc 06 §4.7).
+                      <span>{m.name}</span>
+                    )}
+                    {m.position ? (
+                      <span className="text-xs text-ink-muted">{m.position}</span>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
         </li>

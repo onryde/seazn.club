@@ -277,6 +277,61 @@ describe("OrgLiveChips — the poll (R10)", () => {
     expect(hrefs).toEqual(["/shared/riverside/b-cup"]);
   });
 
+  // Owner ruling 2026-09-17: the org home lists its competitions in three tiers
+  // read off each card's chip — a match in play ("2 live now"), then "On now"
+  // with nothing in play, then the rest — keeping the incoming order within a
+  // tier. The island sorts with the same function the server does
+  // (`sortOrgHomeCompetitions`), after every poll, so a competition that goes
+  // live moves up on the same poll that lights its chip, whatever order the
+  // poll's rows arrive in.
+  it("the cards are drawn in three tiers after every poll — in play, then 'On now', then the rest — even when the poll lists them by date", async () => {
+    const hrefs = (tree: ReactElement[]) =>
+      tree.map((e) => propsOf(e).href).filter((h): h is string => typeof h === "string");
+    vi.mocked(fetchOrgLive)
+      // Date order, NOT tiered: c went live, b was marked live with nothing in play.
+      .mockResolvedValueOnce(poll(row("a", "published", 0), row("b", "live", 0), row("c", "published", 1)))
+      .mockResolvedValue(poll(row("a", "published", 0), row("b", "published", 0), row("c", "published", 0)));
+    // First paint: the server's order (a newest; nothing live).
+    const island = renderIsland(
+      OrgLiveChips,
+      props([comp("a", "published", 0), comp("b", "published", 0), comp("c", "published", 0)]),
+    );
+    expect(hrefs(island.tree())).toEqual(["/shared/riverside/a-cup", "/shared/riverside/b-cup", "/shared/riverside/c-cup"]);
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    // c (in play, oldest) above b ("On now") above a (newest, idle) — the whole
+    // card moves, its chip with it.
+    expect(hrefs(island.tree())).toEqual(["/shared/riverside/c-cup", "/shared/riverside/b-cup", "/shared/riverside/a-cup"]);
+    expect(chipText(island.tree(), "c")).toBe(liveNow(DICT, "one", 1));
+    expect(chipText(island.tree(), "b")).toBe(t(DICT, "chip.onNow"));
+    expect(Object.keys(chips(island.tree())), "the chips moved with their cards").toEqual(["c", "b", "a"]);
+
+    await vi.advanceTimersByTimeAsync(HUB_POLL_MS);
+
+    // Nothing live any more: one tier, the incoming (date) order.
+    expect(hrefs(island.tree())).toEqual(["/shared/riverside/a-cup", "/shared/riverside/b-cup", "/shared/riverside/c-cup"]);
+    expect(chips(island.tree())).toEqual({ a: "upcoming", b: "upcoming", c: "upcoming" });
+  });
+
+  it("the FIRST paint is drawn in three tiers too, before any poll lands", () => {
+    vi.mocked(fetchOrgLive).mockReturnValue(new Promise(() => {}));
+    const island = renderIsland(
+      OrgLiveChips,
+      props([comp("a", "published", 0), comp("b", "live", 0), comp("c", "draft", 2)]),
+    );
+    expect(Object.keys(chips(island.tree()))).toEqual(["c", "b", "a"]);
+  });
+
+  it("a poll naming a competition the page never rendered skips it (no name to draw) and keeps the poll's order for the rest", async () => {
+    vi.mocked(fetchOrgLive).mockResolvedValue(
+      poll(row("c", "published", 2), row("new", "published", 1), row("a", "published", 0)),
+    );
+    const island = renderIsland(OrgLiveChips, props([comp("a", "published", 0), comp("c", "published", 0)]));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Object.keys(chips(island.tree()))).toEqual(["c", "a"]);
+  });
+
   it("a poll that returns NOTHING keeps polling, so a competition made public again comes back", async () => {
     vi.mocked(fetchOrgLive)
       .mockResolvedValueOnce(poll())

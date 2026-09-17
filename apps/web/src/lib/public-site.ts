@@ -637,10 +637,45 @@ export function isoDateTime(value: unknown): string | null {
     status ladder exactly as it was. */
 export type CompetitionChip = "on-now" | "finished" | "upcoming";
 export function competitionChip(status: string, inPlay = 0): CompetitionChip {
-  if (inPlay > 0) return "on-now";
+  if (chipShowsCount(inPlay)) return "on-now";
   if (status === "live") return "on-now";
   if (status === "completed" || status === "archived") return "finished";
   return "upcoming";
+}
+
+/** Whether a competition's chip COUNTS its matches in play ("2 live now",
+ *  `org.live.one`/`.other`) rather than reading its status label. The chip's
+ *  first rung, the org home island's label, and the org home's first tier
+ *  (`orgHomeTier`) all read this one predicate. */
+export function chipShowsCount(inPlay: number): boolean {
+  return inPlay > 0;
+}
+
+/** The org home's order tier for one competition (owner ruling 2026-09-17),
+ *  read off the chip its card shows:
+ *   0 — the chip counts matches in play ("2 live now");
+ *   1 — the chip says "On now" with no count: marked `live`, nothing in play;
+ *   2 — the rest ("Upcoming", "Finished").
+ *  Derived from `chipShowsCount` and `competitionChip`, never a second reading
+ *  of the status or the count, so a card can never sit above one whose chip is
+ *  livelier. */
+export type OrgHomeTier = 0 | 1 | 2;
+export function orgHomeTier(status: string, inPlay = 0): OrgHomeTier {
+  if (chipShowsCount(inPlay)) return 0;
+  if (competitionChip(status, inPlay) === "on-now") return 1;
+  return 2;
+}
+
+/** The org home's list in tier order (`orgHomeTier`), keeping the INCOMING
+ *  order within each tier — the caller hands the rows over in date order
+ *  (`listOrgHomeCompetitions`: starts_on desc, undated last, newer row first).
+ *  The server sorts the page's rows and the poll's with it, and the island
+ *  sorts its cards with it after every poll. Returns a new array. */
+export function sortOrgHomeCompetitions<T extends { status: string; in_play: number }>(rows: readonly T[]): T[] {
+  return rows
+    .map((row, index) => ({ row, index, tier: orgHomeTier(row.status, row.in_play) }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map(({ row }) => row);
 }
 
 /** i18n dictionary key for a competition's status chip label (v5 i18n §4). Pure

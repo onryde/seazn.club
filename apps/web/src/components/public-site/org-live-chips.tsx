@@ -30,7 +30,7 @@ import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Locale, Dict as PublicDict } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
-import { chipLabelKey, competitionChip } from "@/lib/public-site";
+import { chipLabelKey, chipShowsCount, competitionChip, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { fetchOrgLive } from "./org-live-data";
 import { HUB_IDLE_POLL_MS, HUB_POLL_MS } from "./use-live-competition";
 
@@ -65,7 +65,9 @@ function statusChip(id: string, status: string, inPlay: number, dict: PublicDict
   const chip = competitionChip(status, inPlay);
   // A count when there is one ("1 live now"); otherwise the status label.
   // `data-chip` is "on-now" either way — only the words change.
-  const label = inPlay > 0 ? plural(dict, "org.live", inPlay, locale) : t(dict, chipLabelKey(status, inPlay));
+  const label = chipShowsCount(inPlay)
+    ? plural(dict, "org.live", inPlay, locale)
+    : t(dict, chipLabelKey(status, inPlay));
   const testid = `mh-org-chip-${id}`;
   if (chip === "on-now") {
     return (
@@ -121,12 +123,26 @@ export function OrgLiveChips({ orgSlug, competitions, dict, locale }: OrgLiveChi
   // unlisted) since this page was rendered — its card must not keep pulsing
   // "live" until the page revalidates. A failed poll never gets here, so it
   // drops nothing.
-  const current = polled
-    ? competitions.flatMap((c) => {
-        const live = polled.get(c.id);
-        return live ? [{ ...c, status: live.status, in_play: live.in_play }] : [];
-      })
-    : competitions;
+  //
+  // The cards are drawn in three tiers read off their chips — a match in play,
+  // then "On now" with nothing in play, then the rest (owner ruling 2026-09-17)
+  // — by `sortOrgHomeCompetitions`, the function the server orders the page and
+  // the poll with, applied to the chips being drawn NOW. So a competition that
+  // goes live moves up on the same poll that lights its chip, instead of
+  // waiting out the page's ISR window. Within a tier the incoming order stands:
+  // the poll's (a Map keeps insertion order), which is the query's date order,
+  // or the first paint's before any poll lands. A competition the poll names
+  // but this page never rendered has no name to draw, and is skipped until the
+  // page revalidates.
+  const rendered = new Map(competitions.map((c) => [c.id, c]));
+  const current = sortOrgHomeCompetitions(
+    polled
+      ? [...polled].flatMap(([id, live]) => {
+          const c = rendered.get(id);
+          return c ? [{ ...c, status: live.status, in_play: live.in_play }] : [];
+        })
+      : competitions,
+  );
   // Whether to poll at all follows what the SERVER listed, not what survived
   // the last poll: a competition hidden and then made public again comes back
   // on a later poll only if the poll is still running.

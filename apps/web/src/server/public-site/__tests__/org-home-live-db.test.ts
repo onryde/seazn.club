@@ -43,6 +43,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { publicOrgLive } from "@/server/usecases/public";
+import { competitionChip } from "@/lib/public-site";
 import { getPublicOrg } from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -57,6 +58,11 @@ const DIVISION_CONFIG = {
 interface Scene {
   emptyOrgSlug: string;
   orgSlug: string;
+  /** The three-tier order (owner ruling 2026-09-17). See `seedOrdering`. */
+  ordering: OrderingScene;
+  /** An org with NOTHING in play and nothing marked live: the listing is the
+   *  date order, untouched. */
+  calm: CalmScene;
   /** Public. Division `open`: 3 fixtures, ONE in play. Division `old`:
    *  archived, 1 fixture, in play. Expected count: 1. */
   mainId: string;
@@ -70,34 +76,45 @@ interface Scene {
   privateId: string;
 }
 
+interface OrderingScene {
+  orgSlug: string;
+  /** Starts 2026-09-10 — the NEWEST. Status `published`, one division, 3
+   *  fixtures, none in play. Tier 2 ("Upcoming"). */
+  newIdleId: string;
+  /** Starts 2026-07-01. Status `live` and NOTHING in play in a public division:
+   *  scheduled fixtures in its public division, and an in-play fixture in an
+   *  ARCHIVED one, which the chip does not count. Tier 1 ("On now"). */
+  onNowId: string;
+  /** Starts 2026-06-01. Status `published`, ONE fixture in play. Tier 0. */
+  oldLiveId: string;
+  /** Starts 2026-05-01. TWO fixtures in play — more than `oldLive`, so a sort
+   *  by the count instead of by "any in play" puts it first. Tier 0. */
+  olderLiveId: string;
+  /** The fixture that makes `oldLive` live — the "match finishes" case moves it. */
+  oldLiveFixtureId: string;
+  /** Starts 2026-04-01, the OLDEST. Status `published`, an in-play fixture in an
+   *  ARCHIVED division and scheduled fixtures in its public one — "in play" by
+   *  a wrong reading of the fixtures, while its chip says "Upcoming". Tier 2. */
+  decoyId: string;
+}
+
+interface CalmScene {
+  orgSlug: string;
+  /** starts 2026-10-01 */
+  octId: string;
+  /** starts 2026-09-01, created AFTER `septFirstId` */
+  septSecondId: string;
+  /** starts 2026-09-01, created first */
+  septFirstId: string;
+  /** no dates at all */
+  undatedId: string;
+}
+
 let scene: Scene;
 
-async function seed(): Promise<Scene> {
-  const suffix = randomUUID().slice(0, 8);
-  const insertOrg = async (label: string) => {
-    const slug = `org-live-${label}-${suffix}`;
-    const [{ id }] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug) values (${`Org Live ${label} ${suffix}`}, ${slug})
-      returning id`;
-    return { id, slug };
-  };
-  const empty = await insertOrg("empty");
-  const org = await insertOrg("main");
-
-  await sql`
-    insert into sports (key, name, module_version, position_catalog)
-    values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
-    on conflict (key) do nothing`;
-  await sql`
-    insert into sport_variants (sport_key, key, name, config, is_system)
-    values ('generic', 'score', 'Score', ${sql.json(DIVISION_CONFIG)}, true)
-    on conflict do nothing`;
-  // Five competitions exceed the community active cap.
-  await sql`
-    insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
-    values (${org.id}, 'competitions.max_active', null, 'test')`;
-
-  const auth: AuthCtx = { orgId: org.id, via: "session", userId: null, role: "owner", keyId: null };
+/** Seeding helpers bound to one org. */
+function orgKit(orgId: string, suffix: string) {
+  const auth: AuthCtx = { orgId, via: "session", userId: null, role: "owner", keyId: null };
 
   // Created PRIVATE and moved to the visibility under test with one UPDATE:
   // `createCompetition` silently degrades an over-cap public create to
@@ -139,6 +156,103 @@ async function seed(): Promise<Scene> {
   };
   const play = (fixtureId: string) => sql`update fixtures set status = 'in_play' where id = ${fixtureId}`;
 
+  return { competition, division, play };
+}
+
+async function insertOrg(label: string, suffix: string) {
+  const slug = `org-live-${label}-${suffix}`;
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug) values (${`Org Live ${label} ${suffix}`}, ${slug})
+    returning id`;
+  // Five-plus competitions exceed the community active cap.
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+    values (${id}, 'competitions.max_active', null, 'test')`;
+  return { id, slug };
+}
+
+/**
+ * The three-tier order. Date order (starts_on desc) would read
+ *   newIdle, onNow, oldLive, olderLive, decoy.
+ * Three tiers read
+ *   oldLive, olderLive | onNow | newIdle, decoy
+ * — the two with a match in play lifted in their own date order, the one marked
+ * live with nothing in play next, ABOVE the newer idle one, and the decoy left
+ * at the bottom because its chip counts 0 and says "Upcoming". Each tier
+ * boundary is an ordering differential: at both, the older row is above.
+ */
+async function seedOrdering(suffix: string): Promise<OrderingScene> {
+  const org = await insertOrg("order", suffix);
+  const { competition, division, play } = orgKit(org.id, suffix);
+
+  const newIdleId = await competition("New Idle Cup", "public", "2026-09-10");
+  await division(newIdleId, "new-idle", 3);
+  await sql`update competitions set status = 'published' where id = ${newIdleId}`;
+
+  const onNowId = await competition("On Now Cup", "public", "2026-07-01");
+  await division(onNowId, "on-now-open", 3);
+  const onNowArchived = await division(onNowId, "on-now-old", 2);
+  await play(onNowArchived.fixtureIds[0]!);
+  await sql`update divisions set archived_at = now() where id = ${onNowArchived.divisionId}`;
+  await sql`update competitions set status = 'live' where id = ${onNowId}`;
+
+  const oldLiveId = await competition("Old Live Cup", "public", "2026-06-01");
+  const oldLive = await division(oldLiveId, "old-live", 2);
+  await play(oldLive.fixtureIds[0]!);
+  await sql`update competitions set status = 'published' where id = ${oldLiveId}`;
+
+  const olderLiveId = await competition("Older Live Cup", "public", "2026-05-01");
+  const olderLive = await division(olderLiveId, "older-live", 4);
+  await play(olderLive.fixtureIds[0]!);
+  await play(olderLive.fixtureIds[1]!);
+
+  const decoyId = await competition("Decoy Cup", "public", "2026-04-01");
+  await division(decoyId, "decoy-open", 3);
+  const decoyArchived = await division(decoyId, "decoy-old", 2);
+  await play(decoyArchived.fixtureIds[0]!);
+  await sql`update divisions set archived_at = now() where id = ${decoyArchived.divisionId}`;
+  await sql`update competitions set status = 'published' where id = ${decoyId}`;
+
+  return {
+    orgSlug: org.slug,
+    newIdleId,
+    onNowId,
+    oldLiveId,
+    olderLiveId,
+    oldLiveFixtureId: oldLive.fixtureIds[0]!,
+    decoyId,
+  };
+}
+
+async function seedCalm(suffix: string): Promise<CalmScene> {
+  const org = await insertOrg("calm", suffix);
+  const { competition, division } = orgKit(org.id, suffix);
+  const septFirstId = await competition("Sept First Cup", "public", "2026-09-01");
+  const undatedId = await competition("Undated Cup", "public", "2026-01-01");
+  await sql`update competitions set starts_on = null, ends_on = null where id = ${undatedId}`;
+  const octId = await competition("Oct Cup", "public", "2026-10-01");
+  const septSecondId = await competition("Sept Second Cup", "public", "2026-09-01");
+  // Fixtures exist, none in play: "calm" is a count of 0, not an absence.
+  await division(septFirstId, "calm", 3);
+  return { orgSlug: org.slug, octId, septSecondId, septFirstId, undatedId };
+}
+
+async function seed(): Promise<Scene> {
+  const suffix = randomUUID().slice(0, 8);
+  const empty = await insertOrg("empty", suffix);
+  const org = await insertOrg("main", suffix);
+
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('generic', 'Generic', '1.0.0', ${sql.json({ groups: [], lineup: { size: 1, benchMax: 0 } })})
+    on conflict (key) do nothing`;
+  await sql`
+    insert into sport_variants (sport_key, key, name, config, is_system)
+    values ('generic', 'score', 'Score', ${sql.json(DIVISION_CONFIG)}, true)
+    on conflict do nothing`;
+
+  const { competition, division, play } = orgKit(org.id, suffix);
+
   const mainId = await competition("Main Cup", "public", "2026-09-01");
   const open = await division(mainId, "open", 3);
   expect(open.fixtureIds.length, "the seed needs a second, NOT-in-play fixture beside the live one").toBeGreaterThan(1);
@@ -159,7 +273,17 @@ async function seed(): Promise<Scene> {
   const privateId = await competition("Private Cup", "private", "2026-05-01");
   await play((await division(privateId, "pv", 2)).fixtureIds[0]!);
 
-  return { emptyOrgSlug: empty.slug, orgSlug: org.slug, mainId, nextDoorId, quietId, unlistedId, privateId };
+  return {
+    emptyOrgSlug: empty.slug,
+    orgSlug: org.slug,
+    ordering: await seedOrdering(suffix),
+    calm: await seedCalm(suffix),
+    mainId,
+    nextDoorId,
+    quietId,
+    unlistedId,
+    privateId,
+  };
 }
 
 beforeAll(async () => {
@@ -212,8 +336,106 @@ describe.skipIf(!HAS_DB)("getPublicOrg — each listed competition's in-play cou
     expect(ids).not.toContain(scene.unlistedId);
     expect(ids).not.toContain(scene.privateId);
     // Positive pair: the listing is not empty for some other reason, and it is
-    // still in the page's order (starts_on descending).
+    // still in the page's order (in play first, then starts_on descending —
+    // main and next door are both in play, so here the two orders agree; the
+    // ordering describe below is where they differ).
     expect(ids).toEqual([scene.mainId, scene.nextDoorId, scene.quietId]);
+  });
+});
+
+// Owner ruling 2026-09-17: the org home lists competitions in THREE tiers, each
+// read off the chip on the card — a match in play ("{count} live now"), then
+// marked live with nothing in play ("On now"), then the rest. Within each tier
+// the date order stands. The tier is `orgHomeTier` (lib/public-site.ts), built
+// on the chip's own predicates, never a second reading of the status or the
+// count. The poll carries the same order, and the island sorts its cards with
+// the same function after every poll (org-live-chips.tsx).
+describe.skipIf(!HAS_DB)("listOrgHomeCompetitions — three tiers: in play, then 'On now', then the rest", () => {
+  const pageIds = async (slug: string) => (await getPublicOrg(slug))!.competitions.map((c) => c.id);
+  const pollIds = async (slug: string) => (await publicOrgLive(slug)).competitions.map((c) => c.id);
+  const THREE_TIERS = (o: OrderingScene) => [o.oldLiveId, o.olderLiveId, o.onNowId, o.newIdleId, o.decoyId];
+
+  it("EMPTY first: an org with nothing in play and nothing marked live keeps the date order exactly (starts_on desc, undated last, newer row breaks a tie)", async () => {
+    const { calm } = scene;
+    const data = (await getPublicOrg(calm.orgSlug))!;
+    expect(data.competitions.every((c) => c.in_play === 0), "premise: nothing in play").toBe(true);
+    expect(data.competitions.every((c) => c.status !== "live"), "premise: nothing marked live").toBe(true);
+    const expected = [calm.octId, calm.septSecondId, calm.septFirstId, calm.undatedId];
+    expect(data.competitions.map((c) => c.id)).toEqual(expected);
+    expect(await pollIds(calm.orgSlug)).toEqual(expected);
+  });
+
+  it("the whole list: in play (by date), then 'On now', then the rest (by date) — against a date order that differs at every tier", async () => {
+    const o = scene.ordering;
+    // Date order alone would be [newIdle, onNow, oldLive, olderLive, decoy].
+    expect(await pageIds(o.orgSlug)).toEqual(THREE_TIERS(o));
+  });
+
+  it("tier 1 | tier 2 boundary: an OLDER competition with a match in play is above a NEWER one marked live with nothing in play", async () => {
+    const o = scene.ordering;
+    const ids = await pageIds(o.orgSlug);
+    expect(ids.indexOf(o.oldLiveId)).toBeLessThan(ids.indexOf(o.onNowId));
+    expect(ids.indexOf(o.olderLiveId)).toBeLessThan(ids.indexOf(o.onNowId));
+  });
+
+  it("tier 2 | tier 3 boundary: an OLDER competition marked live with nothing in play ('On now') is above a NEWER idle one", async () => {
+    const o = scene.ordering;
+    const ids = await pageIds(o.orgSlug);
+    expect(ids.indexOf(o.onNowId)).toBeLessThan(ids.indexOf(o.newIdleId));
+  });
+
+  it("each row's tier is its chip: count > 0, else 'On now', else neither — an archived division's live match counts for nothing", async () => {
+    const o = scene.ordering;
+    const rows = (await getPublicOrg(o.orgSlug))!.competitions;
+    expect(rows.map((c) => [c.id, c.in_play > 0, competitionChip(c.status, c.in_play)])).toEqual([
+      [o.oldLiveId, true, "on-now"],
+      [o.olderLiveId, true, "on-now"],
+      [o.onNowId, false, "on-now"],
+      [o.newIdleId, false, "upcoming"],
+      [o.decoyId, false, "upcoming"],
+    ]);
+    const onNow = rows.find((c) => c.id === o.onNowId)!;
+    expect(onNow.status, "premise: 'On now' is the STATUS").toBe("live");
+    expect(onNow.in_play, "premise: its archived division's live match is not counted").toBe(0);
+    expect(rows.find((c) => c.id === o.decoyId)!.in_play).toBe(0);
+    // The in-play ones are ordered by date, not by how many are in play:
+    // `olderLive` has MORE matches in play and is still second.
+    const count = counts(rows);
+    expect(count[o.olderLiveId]).toBeGreaterThan(count[o.oldLiveId]!);
+  });
+
+  it("the poll lists the competitions in the page's order", async () => {
+    const o = scene.ordering;
+    const live = await publicOrgLive(o.orgSlug);
+    expect(live.competitions.map((c) => c.id)).toEqual(THREE_TIERS(o));
+    expect(live.competitions.map((c) => c.id)).toEqual(await pageIds(o.orgSlug));
+  });
+
+  it("a match FINISHING drops its competition past the 'On now' one, back into the date order of the rest, on the page and in the poll", async () => {
+    const o = scene.ordering;
+    await sql`update fixtures set status = 'decided' where id = ${o.oldLiveFixtureId}`;
+    try {
+      const expected = [o.olderLiveId, o.onNowId, o.newIdleId, o.oldLiveId, o.decoyId];
+      expect(await pageIds(o.orgSlug)).toEqual(expected);
+      expect(await pollIds(o.orgSlug)).toEqual(expected);
+    } finally {
+      await sql`update fixtures set status = 'in_play' where id = ${o.oldLiveFixtureId}`;
+    }
+    // …and starting again lifts it back: the scene is restored for its siblings.
+    expect(await pageIds(o.orgSlug)).toEqual(THREE_TIERS(o));
+  });
+
+  it("marking the 'On now' competition published again drops it into the date order of the rest, on the page and in the poll", async () => {
+    const o = scene.ordering;
+    await sql`update competitions set status = 'published' where id = ${o.onNowId}`;
+    try {
+      const expected = [o.oldLiveId, o.olderLiveId, o.newIdleId, o.onNowId, o.decoyId];
+      expect(await pageIds(o.orgSlug)).toEqual(expected);
+      expect(await pollIds(o.orgSlug)).toEqual(expected);
+    } finally {
+      await sql`update competitions set status = 'live' where id = ${o.onNowId}`;
+    }
+    expect(await pageIds(o.orgSlug)).toEqual(THREE_TIERS(o));
   });
 });
 

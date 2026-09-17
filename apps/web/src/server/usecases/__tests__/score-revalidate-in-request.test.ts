@@ -380,7 +380,8 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
       // What the NEXT public read sees. `pub-div` / `pub-hub-v2` carry the
       // division tag, so an expired tag makes them a miss rebuilt with the
-      // score — not one more stale read. The competition tag keeps SWR.
+      // score — not the previous render served again while it rebuilds. The
+      // competition tag keeps SWR.
       expect(areTagsExpired([div], cachedAt), `${write.type}: division entry is a miss`).toBe(true);
       expect(areTagsExpired([comp, div], cachedAt), write.type).toBe(true);
       expect(areTagsExpired([comp], cachedAt), write.type).toBe(false);

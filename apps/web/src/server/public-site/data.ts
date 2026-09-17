@@ -10,7 +10,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
-import { isoDateTime } from "@/lib/public-site";
+import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { resolveVenueTz } from "@/lib/tz";
 import { venueTzRow } from "@/server/venue-tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
@@ -470,9 +470,21 @@ export interface PublicOrgCompetition extends PublicCompetition {
  * join is what makes it a PUBLIC count: `public_fixtures_v` filters on the
  * competition's visibility only, so it still returns the fixtures of an
  * ARCHIVED division, which the public pages do not show (V262).
+ *
+ * Order (owner ruling 2026-09-17): three tiers, each read off the chip its card
+ * shows — a match in play ("{count} live now") first, then marked `live` with
+ * nothing in play ("On now"), then the rest; within each tier `starts_on`
+ * descending (undated last), the newer row breaking a tie. The SQL sorts by
+ * date only and `sortOrgHomeCompetitions` (lib/public-site.ts) lifts the
+ * tiers, reading the SAME `status` and `in_play` the row carries to the chip,
+ * through the chip's own predicates — so the list cannot put a competition
+ * above one whose chip is livelier, and there is no second, SQL copy of the
+ * rule to drift. The poll (`publicOrgLive`) returns rows in this order, and the
+ * island sorts its cards with the same function after every poll, so a
+ * competition going live moves up on the same poll that lights its chip.
  */
 export async function listOrgHomeCompetitions(orgId: string): Promise<PublicOrgCompetition[]> {
-  return sql<PublicOrgCompetition[]>`
+  const byDate = await sql<PublicOrgCompetition[]>`
     select c.id, c.org_id, c.name, c.slug, c.description, c.starts_on, c.ends_on,
            c.branding, c.status, c.visibility,
            (select count(*)::int
@@ -482,6 +494,7 @@ export async function listOrgHomeCompetitions(orgId: string): Promise<PublicOrgC
     from public_competitions_v c
     where c.org_id = ${orgId} and c.visibility = 'public'
     order by c.starts_on desc nulls last, c.created_at desc`;
+  return sortOrgHomeCompetitions(byDate);
 }
 
 /** Org landing: the org + its `public` competitions (unlisted stays link-only). */
@@ -1061,9 +1074,24 @@ export interface PublicPlayerGate {
  *  - the `dashboard.player_profiles` ENTITLEMENT for THIS competition (V307) —
  *    outside any cache on purpose: no entitlement write busts the competition
  *    tag, so a gate inside one would stay frozen at whatever the org held when
- *    it was first cached. `hasFeature`'s own 5-minute cache is the only
- *    staleness. The competition id is what makes an Event Pass count for the
- *    competition it paid for, and only that one;
+ *    it was first cached. No entitlement write fires a tag, so a grant or a
+ *    denial reaches the card only as these expire, not immediately:
+ *      · the card page — MEASURED (review of W2 round 2, response headers on
+ *        a prod build): served `s-maxage=30`, not the route's `revalidate =
+ *        300`, because this gate's `getPublicCompetition` read
+ *        (`REVALIDATE_FAST`, 30s) lowers the page's revalidate;
+ *      · `hasFeature`'s cache — INFERRED from `ENT_TTL_SECONDS` (300s, Redis):
+ *        up to 5 more minutes wherever the write that changed the entitlement
+ *        does not call `invalidateOrgEntitlements`;
+ *      · a CDN in front — INFERRED: its own copy for up to the s-maxage.
+ *    So the worst case is INFERRED at about 30s + 300s + 30s — past five
+ *    minutes when the write skips the invalidation. MEASURED in a local prod
+ *    build with no Redis (spectator W2, 2026-09-17): a denial took ~13s to
+ *    refuse the card, and a restore kept serving the refusal for 38s. Owner
+ *    ruling 2026-09-17: up to 5 minutes stale after an entitlement change is
+ *    accepted, no tag owed — the composite above can exceed that.
+ *    The competition id is what makes an Event Pass count for the competition
+ *    it paid for, and only that one;
  *  - CONSENT and org scope: the person is in `public_players_v` (granted
  *    `public_name`, rostered in a public competition) for this org.
  */

@@ -27,6 +27,7 @@ import { countMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import { playerLinkId } from "@/lib/name-display";
 // #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
 // claimed player is usually not an org member) — `courtLabelsByOrg` is the
 // cross-org twin of schedule.ts's `courtNamesById` (which needs a
@@ -304,8 +305,13 @@ export interface MyStatBlock {
   org_slug: string;
   competition_name: string;
   competition_slug: string;
-  /** Only public competitions get a "public profile" link from /me. */
-  competition_public: boolean;
+  /** Whether /me links to this person's PUBLIC card, on the rule every public
+   *  link to the card uses (`playerLinkId`): `public_entrants_v` published the
+   *  person's id in this division (public-name consent AND the org's
+   *  player-page entitlement for the competition) and the division shows full
+   *  names. Consent plus a public competition alone opened the card's refusal
+   *  on a plan without player pages. */
+  public_card: boolean;
   division_name: string;
   division_slug: string;
   sport_key: string;
@@ -318,17 +324,22 @@ export interface MyStatBlock {
  *  PUBLIC card). Labels via the shared module-declared model. */
 export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> {
   const rows = await sql<
-    (Omit<MyStatBlock, "metrics" | "competition_public"> & {
+    (Omit<MyStatBlock, "metrics" | "public_card"> & {
       module_version: string;
-      visibility: string;
       stats: Record<string, number>;
+      published: boolean;
+      youth: boolean;
+      player_name_display: string | null;
     })[]
   >`
     select ps.person_id, p.full_name as person_name,
            o.name as org_name, o.slug as org_slug,
-           c.name as competition_name, c.slug as competition_slug, c.visibility,
+           c.name as competition_name, c.slug as competition_slug,
            d.name as division_name, d.slug as division_slug,
-           ps.sport_key, d.module_version, ps.stats
+           ps.sport_key, d.module_version, ps.stats, d.youth, d.player_name_display,
+           exists (select 1 from public_entrants_v en
+                   cross join lateral jsonb_array_elements(en.members) m
+                   where en.division_id = d.id and m->>'person_id' = ps.person_id::text) as published
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null
@@ -341,10 +352,11 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
   // English is the right answer there, not a crash.
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return rows.flatMap(({ module_version, visibility, stats, ...row }) => {
+  return rows.flatMap(({ module_version, stats, published, youth, player_name_display, ...row }) => {
     const metrics = labelPlayerStats(row.sport_key, module_version, stats, m);
     if (metrics.length === 0) return [];
-    return [{ ...row, competition_public: visibility === "public", metrics }];
+    const public_card = playerLinkId(published ? row.person_id : null, { youth, player_name_display }) !== null;
+    return [{ ...row, public_card, metrics }];
   });
 }
 
