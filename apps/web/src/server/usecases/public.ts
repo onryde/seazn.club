@@ -51,6 +51,11 @@ import {
 import { hasFeature } from "@/lib/entitlements";
 import { reconcilePlayerStatsOnRead } from "@/server/usecases/player-stats-refresh";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
+import {
+  publicDivisionEntrantsCacheKey,
+  publicDivisionScheduleCacheKey,
+  publicDivisionStandingsCacheKey,
+} from "@/server/public-site/division-doc-cache-keys";
 // The first TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
@@ -63,13 +68,25 @@ import {
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
 const TTL_SECONDS = 30;
 
+/** The client IP both public limiters key on. */
+function publicClientIp(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip") ?? "unknown";
+}
+
 /** Per-IP limit for unauthenticated reads (doc 08 §6: 60/min). */
 export async function publicRateLimit(req: Request): Promise<void> {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "unknown";
-  await rateLimit(`pubv1:${ip}`, { max: 60, windowSeconds: 60 });
+  await rateLimit(`pubv1:${publicClientIp(req)}`, { max: 60, windowSeconds: 60 });
+}
+
+/** Per-IP limit for the public endpoints a page POLLS on a timer: the match
+ *  centre and overlay fixture reads, the competition hub, a player's match
+ *  lines and the org home's live chips (owner ruling 2026-09-17: 300/min). A
+ *  bucket of its own, so an open page's polling never spends the 60 a minute
+ *  every other public read gets, and the reverse. A route calls exactly one of
+ *  the two. `app/api/v1/public/__tests__/poll-rate-limit.test.ts` lists where
+ *  each poll lives in the client. */
+export async function publicPollRateLimit(req: Request): Promise<void> {
+  await rateLimit(`pubv1poll:${publicClientIp(req)}`, { max: 300, windowSeconds: 60 });
 }
 
 async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
@@ -284,10 +301,10 @@ async function playerMatchesGeneration(competitionId: string): Promise<string> {
  * for the page, and a person whose page 404s cannot be read through this
  * endpoint either. It folds nothing. `readPlayerMatchLines` is the DATA, read
  * once per rebuild. Never `getPublicPlayer` itself: it would fold every line a
- * second time, and its lines sit behind an `unstable_cache` entry that a score
- * write only marks stale-while-revalidate (`fireScoreRevalidate`, competition
- * tag 'max'), so the first read after a wicket still answers the figures from
- * before it — the thing a poll exists to move past.
+ * second time, and read the card's whole `unstable_cache` entry (stats,
+ * career, memberships) that a poll does not need. A score write expires that
+ * entry through its division tags (final review I1), and this document through
+ * the generation key.
  *
  * Same refusal order as `publicCompetitionHub`: `findCompetition` 404s a
  * private or unknown competition before the cache is touched. A 404 inside
@@ -370,7 +387,7 @@ export async function publicSchedule(
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:schedule`, async () => {
+  return cached(publicDivisionScheduleCacheKey(division.id), async () => {
     // Fix round 3 (Gap 9): home_slot_label/away_slot_label were on
     // public_fixtures_v since V362 but never selected here, so an API v1
     // consumer saw nothing where the HTML schedule page (public-site/data.ts)
@@ -416,7 +433,7 @@ export async function publicStandings(
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:standings`, async () => {
+  return cached(publicDivisionStandingsCacheKey(division.id), async () => {
     const standings = await sql`
       select stage_id, pool_id, rows, updated_at
       from public_standings_v where division_id = ${division.id}`;
@@ -431,9 +448,9 @@ export async function publicEntrants(
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
   // `-v2` (privacy hotfix, 2026-09-16): a masked member now carries no
-  // `person_id`/`photo`. Still under the division glob `pub:v1:div:{id}:*` the
-  // score and schedule writers sweep.
-  return cached(`pub:v1:div:${division.id}:entrants-v2`, async () => {
+  // `person_id`/`photo`. Named in division-doc-cache-keys.ts with its siblings,
+  // so every invalidator drops it by name.
+  return cached(publicDivisionEntrantsCacheKey(division.id), async () => {
     const entrants = await sql<
       {
         id: string;

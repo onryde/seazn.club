@@ -185,6 +185,14 @@ const HAS_DB = !!process.env.DATABASE_URL;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const hubKey = (competitionId: string) => `pub:v1:hub:${competitionId}`;
 const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v2:${fixtureId}`;
+/** The division's own public documents (schedule, standings, entrants), DEL'd
+ *  by name in the same DEL since review r2-m4 replaced the keyspace SCAN.
+ *  Spelled out, so a drift in the production spelling reds. */
+const divisionKeys = (divisionId: string) => [
+  `pub:v1:div:${divisionId}:schedule`,
+  `pub:v1:div:${divisionId}:standings`,
+  `pub:v1:div:${divisionId}:entrants-v2`,
+];
 /** Task 14 — the per-competition generation every player's match lines are
  *  keyed under: one of the keys EVERY score write drops. */
 const playerMatchesGenKey = (competitionId: string) => `pub:v1:player-matches-gen:${competitionId}`;
@@ -247,7 +255,8 @@ function theOneDel(): { first: string; rest: string[]; inTx: boolean } {
   return { first: first!, rest: [...rest].sort(), inTx: probe.inTxAtDel[0]! };
 }
 
-/** The shape every slot-moving write owes: one DEL (hub key + `ids`) sent
+/** The shape every slot-moving write owes: one DEL (hub key + `ids` + the
+ *  division's own documents) sent
  *  after commit, nothing pushed until it settles, then the division push once
  *  and one push per id. */
 async function expectDelThenPushes(
@@ -258,7 +267,7 @@ async function expectDelThenPushes(
 ): Promise<void> {
   const del = theOneDel();
   expect(del.first).toBe(hubKey(competitionId));
-  expect(del.rest).toEqual([...ids].sort().map(fixtureKey));
+  expect(del.rest).toEqual([...ids.map(fixtureKey), ...divisionKeys(divisionId)].sort());
   expect(del.inTx, "the DEL went out after the write committed, not from inside its transaction").toBe(false);
   await sleep(20);
   expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
@@ -607,7 +616,7 @@ describe.skipIf(!HAS_DB)("stage generate and rebuild drop what they replaced, th
 
     const del = theOneDel();
     expect(del.first).toBe(hubKey(competitionId));
-    expect(del.rest).toEqual([...after.keys()].sort().map(fixtureKey));
+    expect(del.rest).toEqual([...[...after.keys()].map(fixtureKey), ...divisionKeys(divisionId)].sort());
     await releaseDel();
     expect(probe.divisionPushes).toEqual([[divisionId, "start"]]);
   }, 120_000);

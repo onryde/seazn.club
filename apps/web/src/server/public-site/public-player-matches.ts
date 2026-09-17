@@ -508,8 +508,10 @@ const LIVE_FIGURES_REVALIDATE = 300;
  * bowling figures, or to what the fold refuses.
  *
  * "-v2": the cricket core-event fix (fix/cricket-scorecard-core-events) turned
- * a ledger with a `core.lineup.*` event from a refusal (cached under "-v1" as
- * `null`) into figures. It also changed `didNotBat`, which nothing here reads.
+ * a ledger with a `core.lineup.*` event from a refusal into figures, and
+ * changed `didNotBat`, which nothing here reads. W2 introduces this key, so no
+ * "-v1" entry was ever served in production: the bump keeps the rule above
+ * (a fold change moves the version), it does not retire a deployed entry.
  */
 async function fixtureFigures(sql: Sql, seed: PlayerMatchSeed): Promise<FixtureFigures | null> {
   const { fixtureId, lastSeq, snapshotAt, status } = seed;
@@ -538,8 +540,10 @@ function isFoldRefusal(err: unknown): boolean {
 /**
  * The engine's scorecard for one fixture, reduced to per-person figures. The
  * config MUST be parsed — `loadFoldInputs` carries it raw, and the scorecard
- * fold throws on the raw value. The scorecard fold has no void resolution of
- * its own, so the ledger is resolved first. Its own transaction, opened and
+ * fold throws on the raw value. The scorecard fold resolves voids itself now
+ * (it rides `foldMatch`, which calls `resolveVoids`), and `resolveVoids` is
+ * idempotent, so resolving the ledger first here is free; it stays so this
+ * read and `loadMatchCentre` fold one stream. Its own transaction, opened and
  * closed here: a statement Postgres refuses aborts this fixture's transaction
  * and no other's.
  *

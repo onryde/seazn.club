@@ -112,7 +112,8 @@ import "server-only";
 // never filled, shows no Stats tab: that visit's stats read, or the hub page's
 // first poll, queues the refresh, and the tab appears once it lands. Accepted (owner ruling 2026-09-17); no warm-up job.
 import { connectionOptions, sql, withTenant } from "@/lib/db";
-import { cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
+import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
+import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { deferred } from "@/lib/deferred";
 import { publishDivisionUpdate } from "@/lib/realtime";
 import { log } from "@/server/logger";
@@ -557,13 +558,11 @@ async function invalidateAfterRefresh(orgId: string, divisionId: string): Promis
       );
       remember(clearRefused, divisionId.toLowerCase(), true);
     }
-    const hubKey = `pub:v1:hub:${row.competition_id}`;
-    const deleted = cacheDel(hubKey).catch((err: unknown) => {
-      log.warn({ err, divisionId, key: hubKey }, "player-stats: a public Redis delete failed after the refresh");
-    });
-    const pattern = `pub:v1:div:${divisionId}:*`;
-    void cacheDelPattern(pattern).catch((err: unknown) => {
-      log.warn({ err, divisionId, pattern }, "player-stats: a public Redis sweep failed after the refresh");
+    // The hub, and the division's schedule, standings and entrants documents by
+    // name in the same DEL (final review r2-m4: no keyspace SCAN).
+    const keys = [`pub:v1:hub:${row.competition_id}`, ...publicDivisionCacheKeys(divisionId)];
+    const deleted = cacheDel(...keys).catch((err: unknown) => {
+      log.warn({ err, divisionId, keys }, "player-stats: a public Redis delete failed after the refresh");
     });
     // The push waits on the hub DEL (never longer than its bound), the same
     // rule as the score path: a refetch that beat the delete would read the

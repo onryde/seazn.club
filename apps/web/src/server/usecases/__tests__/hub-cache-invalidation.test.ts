@@ -32,8 +32,10 @@
 // push forever, and exactly once either way.
 //
 // R10c m1 — the SCHEDULE path gets the same shape. Its hub key is literal, so
-// it goes out in one DEL, and only the division glob is still a SCAN. Its
-// division push waits on that DEL, never longer than the bound, exactly once.
+// it goes out in one DEL. Review r2-m4: so do the division's own documents, by
+// name, where a `pub:v1:div:{id}:*` SCAN used to find them; the schedule path
+// sends no SCAN at all. Its division push waits on that DEL, never longer than
+// the bound, exactly once.
 // Both paths send through ONE helper (`sendAfterDeleteOrBound`, lib/cache.ts),
 // so the two describes below that pin the bound are two witnesses of it.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,6 +135,13 @@ const COMPETITION = "comp-1";
 const FIXTURE_KEY = `pub:v1:fixture:v2:${FIXTURE}`;
 const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
 const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
+/** The division's documents a schedule write DELs by name (review r2-m4),
+ *  spelled out so a drift in the production spelling reds. */
+const DIVISION_KEYS = [
+  `pub:v1:div:${DIVISION}:schedule`,
+  `pub:v1:div:${DIVISION}:standings`,
+  `pub:v1:div:${DIVISION}:entrants-v2`,
+];
 /** Task 14 — the player page's match lines are keyed per PERSON under a
  *  per-competition generation token. Deleting the token retires every one of
  *  them, so a score write never has to SCAN for them. Spelled out here rather
@@ -140,7 +149,6 @@ const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
 const PLAYER_MATCHES_GEN_KEY = `pub:v1:player-matches-gen:${COMPETITION}`;
 const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
 const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
-const SCHEDULE_SWEEP_FAILED = "schedule: a public Redis sweep failed (the write stands)";
 const SCHEDULE_DELETE_FAILED = "schedule: a public Redis delete failed (the write stands)";
 
 const patterns = () => cacheDelPattern.mock.calls.map(([pattern]) => pattern);
@@ -493,9 +501,9 @@ describe("afterScheduleWrite — a schedule write", () => {
     },
   );
 
-  it("still drops the division key and fires the ISR tag", () => {
+  it("still drops the division's documents and fires the ISR tag", () => {
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
-    expect(patterns()).toContain(DIVISION_GLOB);
+    expect(deletedKeys()).toEqual(expect.arrayContaining(DIVISION_KEYS));
     expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
   });
 
@@ -510,25 +518,23 @@ describe("afterScheduleWrite — a schedule write", () => {
   });
 });
 
-describe("afterScheduleWrite — the hub key by one DEL, only the division glob by SCAN (R10c m1)", () => {
-  it("the hub key goes out in ONE direct DEL; no literal key goes through a SCAN, and no glob through DEL", () => {
+describe("afterScheduleWrite — every key by name in one DEL, no SCAN (R10c m1, review r2-m4)", () => {
+  it("the hub key and the division's documents go out in ONE direct DEL; no SCAN is sent, and no glob through DEL", () => {
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
-    expect(cacheDel, "one round trip for the literal key").toHaveBeenCalledTimes(1);
+    expect(cacheDel, "one round trip for the literal keys").toHaveBeenCalledTimes(1);
     expect(deletedKeys()).toContain(HUB_KEY);
-    expect(patterns()).toContain(DIVISION_GLOB);
-    expect(patterns().filter((pattern) => !pattern.endsWith("*")), "a literal key sent through a SCAN").toEqual([]);
+    expect(deletedKeys()).toEqual(expect.arrayContaining(DIVISION_KEYS));
+    expect(patterns(), "a keyspace SCAN on a schedule write").toEqual([]);
     expect(deletedKeys().filter((key) => key.includes("*")), "a glob sent through DEL").toEqual([]);
   });
 
-  it("the push waits for the DEL: nothing while it is in flight, nothing when only the SCAN has settled", async () => {
+  it("the push waits for the DEL: nothing while it is in flight", async () => {
     redis.hold = true;
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
-    expect(redis.held.map((gate) => gate.kind).sort()).toEqual(["del", "scan"]);
+    expect(redis.held.map((gate) => gate.kind)).toEqual(["del"]);
 
     await macrotask();
     expect(publishDivisionUpdate, "pushed before the DEL settled").not.toHaveBeenCalled();
-    await release("scan", { resolve: true });
-    expect(publishDivisionUpdate, "released by the SCAN").not.toHaveBeenCalled();
 
     await release("del", { resolve: true });
     expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
@@ -543,23 +549,6 @@ describe("afterScheduleWrite — the hub key by one DEL, only the division glob 
 // reject, and a voided call with no handler is an unhandled rejection on every
 // schedule write.
 describe("afterScheduleWrite — a Redis call that REJECTS", () => {
-  it("a SCAN that rejects is logged and never left unhandled; the push still goes out", async () => {
-    await watchingUnhandled(async (unhandled) => {
-      const failure = new Error("simulated Redis failure");
-      redis.failScan = failure;
-      afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
-      // Node reports an unhandled rejection once the microtask queue drains.
-      await macrotask();
-      expect(unhandled, "a voided SCAN rejected with no handler").toEqual([]);
-      expect(logMock.error).toHaveBeenCalledWith({ err: failure, pattern: DIVISION_GLOB }, SCHEDULE_SWEEP_FAILED);
-      expect(logMock.error).toHaveBeenCalledTimes(1);
-      // The write's other effects still happened.
-      expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
-      expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
-      expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
-    });
-  });
-
   it("a DEL that rejects is logged and never left unhandled; the push still goes out", async () => {
     await watchingUnhandled(async (unhandled) => {
       const failure = new Error("simulated Redis failure");
@@ -567,19 +556,24 @@ describe("afterScheduleWrite — a Redis call that REJECTS", () => {
       afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
       await macrotask();
       expect(unhandled, "a DEL rejected with no handler").toEqual([]);
-      expect(logMock.error).toHaveBeenCalledWith({ err: failure, keys: [HUB_KEY, FIXTURE_KEY] }, SCHEDULE_DELETE_FAILED);
+      expect(logMock.error).toHaveBeenCalledWith(
+        { err: failure, keys: [HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS] },
+        SCHEDULE_DELETE_FAILED,
+      );
       expect(logMock.error).toHaveBeenCalledTimes(1);
+      // The write's other effects still happened.
+      expect(fireDivisionRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
       expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
       expect(publishDivisionUpdate).toHaveBeenCalledWith(DIVISION, "schedule");
       expect(publishFixtureUpdate.mock.calls, "a failed DEL swallowed the fixture push").toEqual([[FIXTURE, "schedule"]]);
     });
   });
 
-  it("the quiet twin: a DEL and a SCAN that succeed log nothing", async () => {
+  it("the quiet twin: a DEL that succeeds logs nothing", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
     await macrotask();
-    expect(cacheDel.mock.calls).toEqual([[HUB_KEY, FIXTURE_KEY]]);
-    expect(patterns()).toEqual([DIVISION_GLOB]);
+    expect(cacheDel.mock.calls).toEqual([[HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS]]);
+    expect(patterns()).toEqual([]);
     expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
     expect(logMock.error).not.toHaveBeenCalled();
   });
@@ -623,7 +617,6 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
     expect(publishDivisionUpdate, "the bound fired more than once").toHaveBeenCalledTimes(1);
     await settleHeld("del", { resolve: true });
-    await settleHeld("scan", { resolve: true });
     expect(publishDivisionUpdate, "the late DEL pushed a second time").toHaveBeenCalledTimes(1);
   });
 
@@ -633,7 +626,10 @@ describe("afterScheduleWrite — the push waits for the DEL, never longer than t
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
 
     await settleHeld("del", { reject: failure });
-    expect(logMock.error).toHaveBeenCalledWith({ err: failure, keys: [HUB_KEY, FIXTURE_KEY] }, SCHEDULE_DELETE_FAILED);
+    expect(logMock.error).toHaveBeenCalledWith(
+      { err: failure, keys: [HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS] },
+      SCHEDULE_DELETE_FAILED,
+    );
     expect(publishDivisionUpdate, "a failed DEL swallowed the push").toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 2);
@@ -685,13 +681,13 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
   it("a reschedule of ONE fixture: its key rides the hub key's one DEL, and its push waits for that DEL", async () => {
     redis.hold = true;
     afterScheduleWrite(DIVISION, COMPETITION, "schedule", [FIXTURE]);
-    expect(cacheDel.mock.calls, "one DEL carrying the hub key and the moved fixture's key").toEqual([[HUB_KEY, FIXTURE_KEY]]);
-    expect(patterns().filter((pattern) => pattern.startsWith("pub:v1:fixture:")), "a fixture key sent through a SCAN").toEqual([]);
+    expect(cacheDel.mock.calls, "one DEL carrying the hub key and the moved fixture's key").toEqual([
+      [HUB_KEY, FIXTURE_KEY, ...DIVISION_KEYS],
+    ]);
+    expect(patterns(), "a key sent through a SCAN").toEqual([]);
 
     await macrotask();
     expect(publishFixtureUpdate, "fixture push before the DEL settled").not.toHaveBeenCalled();
-    await release("scan", { resolve: true });
-    expect(publishFixtureUpdate, "fixture push released by the SCAN").not.toHaveBeenCalled();
 
     await release("del", { resolve: true });
     expect(publishFixtureUpdate.mock.calls).toEqual([[FIXTURE, "schedule"]]);
@@ -702,7 +698,7 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
     const moved = ids(3);
     redis.hold = true;
     afterScheduleWrite(DIVISION, COMPETITION, "publish", moved);
-    expect(cacheDel.mock.calls).toEqual([[HUB_KEY, ...moved.map(keyOf)]]);
+    expect(cacheDel.mock.calls).toEqual([[HUB_KEY, ...moved.map(keyOf), ...DIVISION_KEYS]]);
 
     await macrotask();
     expect(publishFixtureUpdate, "fixture push before the DEL settled").not.toHaveBeenCalled();
@@ -721,17 +717,17 @@ describe("afterScheduleWrite — the documents of the fixtures the write changed
     const moved = ids(SCHEDULE_FIXTURE_PUSH_CAP + 1);
     redis.hold = true;
     afterScheduleWrite(DIVISION, COMPETITION, "start", moved);
-    expect(cacheDel.mock.calls, "the cap must not skip the DEL").toEqual([[HUB_KEY, ...moved.map(keyOf)]]);
+    expect(cacheDel.mock.calls, "the cap must not skip the DEL").toEqual([[HUB_KEY, ...moved.map(keyOf), ...DIVISION_KEYS]]);
 
     await release("del", { resolve: true });
     expect(publishDivisionUpdate.mock.calls).toEqual([[DIVISION, "start"]]);
     expect(publishFixtureUpdate, "a 51-fixture write fanned out per-fixture pushes").not.toHaveBeenCalled();
   });
 
-  it("a write that changed no fixture: the hub key alone, and no fixture push", async () => {
+  it("a write that changed no fixture: the hub key and the division's documents only, and no fixture push", async () => {
     afterScheduleWrite(DIVISION, COMPETITION, "publish", []);
     await macrotask();
-    expect(cacheDel.mock.calls).toEqual([[HUB_KEY]]);
+    expect(cacheDel.mock.calls).toEqual([[HUB_KEY, ...DIVISION_KEYS]]);
     expect(publishDivisionUpdate).toHaveBeenCalledTimes(1);
     expect(publishFixtureUpdate).not.toHaveBeenCalled();
   });

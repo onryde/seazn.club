@@ -2153,12 +2153,20 @@ describe.skipIf(!HAS_DB)("a person merge and a result refresh never deadlock (re
       else await reverseMerge(s.auth, mergeId!, { confirmedBy: s.auth.userId! });
       expect(await goalsOf(s.divisionId, which === "merge" ? twin : s.ada), "refolded in the staff write").toBe(1);
 
-      expect(probe.tasks, "one refresh for the one refolded division").toHaveLength(1);
+      // Two after-tasks: the one refolded division's refresh, and the person
+      // write's SECOND drop of the Redis documents naming the merged people,
+      // run once its tags have flushed (review r2-m1). Run one at a time, so
+      // each task's own steps are read apart.
+      expect(probe.tasks, "one refresh for the one refolded division, and one second drop").toHaveLength(2);
       probe.folds = 0;
-      probe.order.length = 0;
-      await runAfterResponse();
+      const perTask: string[][] = [];
+      for (const task of probe.tasks.splice(0)) {
+        probe.order.length = 0;
+        await task();
+        perTask.push([...probe.order]);
+      }
       expect(probe.folds, "the staff write's own fold already covered it").toBe(0);
-      expect(probe.order).toEqual(["tags", "del:hub", "push:score"]);
+      expect(perTask.sort((x, y) => y.length - x.length)).toEqual([["tags", "del:hub", "push:score"], ["del:hub"]]);
     }, 90_000);
   });
 

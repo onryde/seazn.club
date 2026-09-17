@@ -58,6 +58,8 @@ const probe = vi.hoisted(() => ({
   fires: [] as Array<{ awaited: boolean }>,
   /** Make the roster read inside `firePersonRevalidate` reject. */
   failRosterRead: false,
+  /** Every peer broadcast the request sent: its tags and its mode. */
+  broadcasts: [] as Array<{ tags: string[]; mode: "swr" | "expire" }>,
 }));
 
 vi.mock("next/cache", async (importOriginal) => {
@@ -110,7 +112,13 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
     for (const key of keys) probe.redis.delete(key);
     return Promise.resolve();
   },
-  cacheDelPattern: async () => {},
+  // A SCAN sweep of `prefix*`, over the in-memory keys (final review I2).
+  cacheDelPattern: async (pattern: string) => {
+    const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
+    for (const key of [...probe.redis.keys()]) {
+      if (pattern.endsWith("*") ? key.startsWith(prefix) : key === pattern) probe.redis.delete(key);
+    }
+  },
 }));
 // The pooled `sql`, with ONE query made to fail on request: the roster read in
 // `firePersonRevalidate`. Every other query passes through untouched.
@@ -149,6 +157,11 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
     },
   };
 });
+vi.mock("@/lib/peer-revalidate", () => ({
+  broadcastRevalidate: async (tags: string[], mode: "swr" | "expire") => {
+    probe.broadcasts.push({ tags: [...tags], mode });
+  },
+}));
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: () => ({
     storage: { from: () => ({ upload: async () => ({ error: null }) }) },
@@ -165,7 +178,9 @@ const logMock = vi.hoisted(() => ({
 }));
 vi.mock("@/server/logger", () => ({ log: logMock }));
 
+import { EventEmitter } from "node:events";
 import { unstable_cache } from "next/cache";
+import { AfterContext } from "next/dist/server/after/after-context";
 import { workAsyncStorage, type WorkStore } from "next/dist/server/app-render/work-async-storage.external";
 import {
   workUnitAsyncStorage,
@@ -186,21 +201,27 @@ import {
   getPublicDivision,
   getPublicFixture,
   getPublicPlayer,
+  NEXT_CACHE_TAG_MAX_ITEMS,
   orgTag,
   personTag,
+  playerCardTags,
 } from "@/server/public-site/data";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
 import { setMyConsent, setMyPersonPhoto } from "../me";
 import { createPerson, patchPerson, setPersonPhoto } from "../persons";
 import { mergePersons, reverseMerge } from "../person-merge";
+import { scoreEvent } from "../scoring";
 import { endSql, scene, type Scene } from "./_player-matches-writes-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const FIRE_FAILED =
   "public pages: a person's rosters could not be read to revalidate the pages naming them (the write stands)";
+const PLAYER_CARD_TAGS_CAPPED =
+  "player card: the competition has more divisions than one cache entry can carry tags for; a score in a dropped division serves this card stale once";
 const PNG = { contentType: "image/png", bytes: Buffer.from("png-bytes") };
 const DIVISION_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
@@ -214,10 +235,27 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  *  older than the flush and every entry cached after it strictly newer. */
 async function inRequest<T>(
   handler: () => Promise<T>,
+  /** Runs after the handler has resolved and before its flush: a poll landing
+   *  in the gap between a write's mid-request Redis drop and its tag expiry. */
+  gap?: () => void,
 ): Promise<{ result: T; tags: string[]; fires: boolean[] }> {
   await sleep(3);
   const tags: string[] = [];
   const fsCache = new FileSystemCache({} as ConstructorParameters<typeof FileSystemCache>[0]);
+  // The after-window, as Next runs it (`player-stats-refresh-after.test.ts`):
+  // `after()` callbacks run only once the response's `close` fires, AFTER the
+  // request's flush.
+  const res = new EventEmitter();
+  const waitingOn: Array<Promise<unknown>> = [];
+  const afterContext = new AfterContext({
+    waitUntil: (promise: Promise<unknown>) => {
+      waitingOn.push(promise);
+    },
+    onClose: (listener: () => void) => {
+      res.once("close", listener);
+    },
+    onTaskError: undefined,
+  });
   const workStore = {
     route: "/api/v1/persons/[id]",
     page: "/api/v1/persons/[id]/route",
@@ -229,16 +267,21 @@ async function inRequest<T>(
       },
     },
     cacheLifeProfiles: defaultConfig.cacheLife,
+    afterContext,
   } as unknown as WorkStore;
   const requestStore = { type: "request", phase: "action" } as unknown as RequestStore;
   probe.fires = [];
+  probe.broadcasts = [];
   const out = await workAsyncStorage.run(workStore, async () => {
     const result = await workUnitAsyncStorage.run(requestStore, handler);
     const fires = probe.fires.map((f) => f.awaited);
+    gap?.();
     const flush = executeRevalidates(workStore);
     if (flush !== false) await flush;
     return { result, tags: [...new Set(tags)].sort(), fires };
   });
+  res.emit("close");
+  await Promise.all(waitingOn);
   await sleep(3);
   return out;
 }
@@ -444,7 +487,10 @@ describe.skipIf(!HAS_DB)("a person write reaches every cached page and data entr
     expect(await benAsShown(s), "premise: every entry names Ben in full, and is now cached").toEqual(full);
 
     await inRequest<unknown>(write);
-    await benAsShown(s); // a stale read, served while the rebuild runs (this double serves exactly one)
+    // Every one of these entries now EXPIRES on a person write (division tag),
+    // so this read rebuilds; kept, with the refresh, so a regression back to a
+    // stale tag is still read through to its rebuilt value.
+    await benAsShown(s);
     await refreshed();
 
     const masked = maskDisplayName("Ben Stokes", "first_initial");
@@ -601,4 +647,223 @@ describe.skipIf(!HAS_DB)("a person write reaches every cached page and data entr
       FIRE_FAILED,
     );
   }, 180_000);
+});
+
+// W2 final review I1 — owner rule: results are never stale. A score write
+// EXPIRES the division tag (`fireScoreRevalidate`) and only makes the
+// competition tag stale. The player card bakes each match's result, score line
+// and `lastSeq` into `pub-player-v17`, so the card's page and data entries must
+// carry the division tag of every division its matches come from, or the next
+// loads serve the old result while a background rebuild runs, exactly as the
+// fixture page no longer does.
+describe.skipIf(!HAS_DB)("a SCORE write expires the player card like the fixture page (final review I1)", () => {
+  it("scoreEvent on a match the card lists: the card's page entry and its pub-player-v17 data entry EXPIRE, not stale; the same player's card at a competition with no score is untouched", async () => {
+    const s = await scene("card-score");
+    const second = await publicCompetition(s, "Second Cup");
+    await rosterIn(s, second.id, s.ada.id, s.ada.full_name);
+
+    const cardPage = await render(() => card(s, s.ada.id));
+    expect(cardPage.result, "premise: Ada's card is served").not.toBeNull();
+    expect(
+      cardPage.result!.matches.map((m) => m.fixtureId),
+      "premise: the card lists the match the score lands on",
+    ).toContain(s.fixture.id);
+    const fixturePage = await render(() =>
+      getPublicFixture(s.orgSlug, s.competition.slug, s.division.slug, s.fixture.id),
+    );
+    const elsewhere = await render(() => card(s, s.ada.id, second.slug));
+    expect(elsewhere.result, "premise: Ada's card at the second competition is served").not.toBeNull();
+
+    await inRequest(() =>
+      scoreEvent(s.owner, s.fixture.id, {
+        expected_seq: 1,
+        type: "generic.score",
+        payload: { by: s.fixture.home_entrant_id, points: 1 },
+      }),
+    );
+
+    // The positive control: the fixture page has always expired on a score.
+    expect(expired(fixturePage), "the fixture page").toBe(true);
+    expect(expired(cardPage), "the card PAGE entry").toBe(true);
+    expect(expired(dataEntry("pub-player-v17", s.competition.id, s.ada.id)), "the card DATA entry").toBe(true);
+    // The negative pair: the card at a competition the score is not in.
+    expect(untouched(elsewhere), "Ada's card page at the second competition").toBe(true);
+    expect(untouched(dataEntry("pub-player-v17", second.id, s.ada.id)), "its data entry").toBe(true);
+  }, 120_000);
+
+  it("a competition with more divisions than an entry can carry tags for: the card keeps the tags of the person's OWN divisions (roster and lineup) first, the rest by id, and drops the overflow with a warning (review r2-m3)", async () => {
+    const s = await scene("card-cap");
+    // A division Ada is seated in by a LINEUP only.
+    const cy = await createPerson(s.owner, { full_name: "Cy Twombly", consent: { public_name: true }, dob: null });
+    const lineupDivision = await rosterIn(s, s.competition.id, cy.id, cy.full_name);
+    const dee = await createPerson(s.owner, { full_name: "Dee Dash", consent: { public_name: true }, dob: null });
+    const [deeEntrant] = await createEntrants(s.owner, lineupDivision.id, [
+      {
+        kind: "individual" as const,
+        display_name: dee.full_name,
+        seed: 2,
+        members: [{ person_id: dee.id, squad_number: null, default_position_key: null, is_captain: false, roles: [] }],
+      },
+    ]);
+    const [stage] = await createStages(s.owner, lineupDivision.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(s.owner, stage!.id);
+    await sql`
+      insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, position_key, order_no, roles)
+      values (${fixtures[0]!.id}, ${deeEntrant!.id}, ${s.ada.id}, ${s.orgId}, 'starting', null, 1, ${sql.json([])})`;
+    // Enough empty divisions to pass the cap by one. Straight into the table:
+    // the plan's per-competition quota is not what is under test.
+    const room = NEXT_CACHE_TAG_MAX_ITEMS - 3;
+    await sql`
+      insert into divisions (competition_id, name, slug, sport_key, variant_key, config, module_version, youth)
+      select d.competition_id, 'Extra ' || g, 'extra-' || g, d.sport_key, d.variant_key, d.config, d.module_version, d.youth
+      from divisions d, generate_series(1, ${room - 1}) g
+      where d.id = ${s.division.id}`;
+    const all = await sql<{ id: string }[]>`select id from divisions where competition_id = ${s.competition.id}`;
+    expect(all, "premise: one division more than the entry has room for").toHaveLength(room + 1);
+
+    const own = [s.division.id, lineupDivision.id].sort();
+    const rest = all.map((d) => d.id).filter((id) => !own.includes(id)).sort();
+    expect(rest[0]! < own[1]!, "premise: id order alone would not put Ada's divisions first").toBe(true);
+
+    logMock.warn.mockClear();
+    await card(s, s.ada.id);
+    const { tags } = dataEntry("pub-player-v17", s.competition.id, s.ada.id);
+    expect(tags).toHaveLength(NEXT_CACHE_TAG_MAX_ITEMS);
+    expect(tags).toEqual([
+      competitionTag(s.competition.id),
+      personTag(s.ada.id),
+      orgTag(s.orgSlug),
+      ...[...own, ...rest].slice(0, room).map(divisionTag),
+    ]);
+    expect(tags, "the overflow: the last division by id that Ada plays no match in").not.toContain(divisionTag(rest.at(-1)!));
+    expect(logMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ competitionId: s.competition.id, personId: s.ada.id, divisions: room + 1, kept: room }),
+      PLAYER_CARD_TAGS_CAPPED,
+    );
+  }, 180_000);
+});
+
+describe("playerCardTags: never more tags than Next keeps on one entry (review r2-m3)", () => {
+  const fixed = ["competition:c", "pub-person:p", "org-public:o"];
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `d${String(n - i).padStart(3, "0")}`);
+
+  it("the cap is Next's own", async () => {
+    const next = await import("next/dist/lib/constants");
+    expect(NEXT_CACHE_TAG_MAX_ITEMS).toBe(next.NEXT_CACHE_TAG_MAX_ITEMS);
+  });
+
+  it("up to the room left by the fixed tags: every division, in the order given, and no warning", () => {
+    logMock.warn.mockClear();
+    const given = ids(NEXT_CACHE_TAG_MAX_ITEMS - fixed.length);
+    expect(playerCardTags(fixed, given, { competitionId: "c", personId: "p" })).toEqual([
+      ...fixed,
+      ...given.map(divisionTag),
+    ]);
+    expect(logMock.warn).not.toHaveBeenCalled();
+  });
+
+  it("one past it: the fixed tags and the FIRST divisions in the order given, the last dropped, and a warning", () => {
+    logMock.warn.mockClear();
+    const given = ids(NEXT_CACHE_TAG_MAX_ITEMS - fixed.length + 1);
+    const tags = playerCardTags(fixed, given, { competitionId: "c", personId: "p" });
+    expect(tags).toHaveLength(NEXT_CACHE_TAG_MAX_ITEMS);
+    expect(tags).toEqual([...fixed, ...given.slice(0, -1).map(divisionTag)]);
+    expect(logMock.warn).toHaveBeenCalledWith(
+      { competitionId: "c", personId: "p", divisions: given.length, kept: given.length - 1 },
+      PLAYER_CARD_TAGS_CAPPED,
+    );
+  });
+});
+
+// W2 final review I2 — the public REDIS documents printing a person's name (the
+// hub, a division's schedule, standings and entrants, a fixture's match-centre
+// document) are reached by no tag. They served the old name to every poll for
+// up to their 15–30s TTL after a consent OFF. The keys are pinned as literals,
+// as the score and schedule invalidation suites pin them, so a reader and this
+// writer cannot drift apart.
+describe.skipIf(!HAS_DB)("a person write drops the public Redis documents naming that person (final review I2)", () => {
+  /** Ben's scene, plus a competition he is NOT rostered in whose one fixture
+   *  seats him in a LINEUP only (a lineup can outlive its membership). */
+  async function docsScene(tag: string) {
+    const s = await scene(tag);
+    const other = await publicCompetition(s, "Other Cup");
+    const cy = await createPerson(s.owner, { full_name: "Cy Twombly", consent: { public_name: true }, dob: null });
+    const otherDivision = await rosterIn(s, other.id, cy.id, cy.full_name);
+    const deePerson = await createPerson(s.owner, { full_name: "Dee Dash", consent: { public_name: true }, dob: null });
+    const [dee] = await createEntrants(s.owner, otherDivision.id, [
+      {
+        kind: "individual" as const,
+        display_name: deePerson.full_name,
+        seed: 2,
+        members: [{ person_id: deePerson.id, squad_number: null, default_position_key: null, is_captain: false, roles: [] }],
+      },
+    ]);
+    const [stage] = await createStages(s.owner, otherDivision.id, { seq: 1, kind: "league", name: "L", config: {} });
+    const { fixtures } = await generateStageFixtures(s.owner, stage!.id);
+    const lineupFixture = fixtures[0]!;
+    await sql`
+      insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, position_key, order_no, roles)
+      values (${lineupFixture.id}, ${dee!.id}, ${s.ben.id}, ${s.orgId}, 'starting', null, 1, ${sql.json([])})`;
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from entrant_members em join entrants e on e.id = em.entrant_id
+      where e.division_id = ${otherDivision.id} and em.person_id = ${s.ben.id}`;
+    expect(n, "premise: Ben is on no roster of the other division, only in its lineup").toBe(0);
+    const named = [
+      `pub:v1:hub:${s.competition.id}`,
+      `pub:v1:div:${s.division.id}:entrants-v2`,
+      `pub:v1:div:${s.division.id}:standings`,
+      `pub:v1:div:${s.division.id}:schedule`,
+      `pub:v1:fixture:v2:${s.fixture.id}`,
+      `pub:v1:fixture:v2:${lineupFixture.id}`,
+    ];
+    const unrelated = [`pub:v1:hub:${other.id}`, `pub:v1:div:${otherDivision.id}:entrants-v2`];
+    return { s, other, otherDivision, named, unrelated };
+  }
+
+  it("consent OFF: the rostered competition's hub, the division's documents, the match-centre documents of his fixture AND of a lineup-only fixture are gone; another competition's are kept; peers are told to EXPIRE the division", async () => {
+    const { s, other, otherDivision, named, unrelated } = await docsScene("docs-consent");
+    for (const key of [...named, ...unrelated]) probe.redis.set(key, { cached: "with Ben Stokes" });
+    // The hub document is rebuilt THROUGH `getPublicDivision`'s `pub-div-v2`
+    // entry. Were that entry only stale, the first rebuild after the drop would
+    // be served the old names and bake them back into the hub for its TTL.
+    expect((await getPublicDivision(s.orgSlug, s.competition.slug, s.division.slug))!.entrants.map((e) => e.display_name))
+      .toContain("Ben Stokes");
+    expect(await getPublicDivision(s.orgSlug, other.slug, otherDivision.slug), "premise: the other division is served").not.toBeNull();
+
+    await inRequest(() => patchPerson(s.owner, s.ben.id, { consent: { public_name: false } }));
+
+    expect(named.filter((key) => probe.redis.has(key)), "documents still naming Ben").toEqual([]);
+    expect(unrelated.filter((key) => probe.redis.has(key)), "documents of a competition Ben is not in").toEqual(unrelated);
+    expect(expired(dataEntry("pub-div-v2", s.division.id)), "Ben's division data entry EXPIRES, not stale").toBe(true);
+    expect(untouched(dataEntry("pub-div-v2", otherDivision.id)), "a division Ben is not in").toBe(true);
+    const rebuilt = await getPublicDivision(s.orgSlug, s.competition.slug, s.division.slug);
+    expect(rebuilt!.entrants.map((e) => e.display_name), "the first rebuild after the drop").not.toContain("Ben Stokes");
+
+    // Every OTHER machine: the division tag goes out as EXPIRE, never as SWR,
+    // or a peer's hub rebuild reads its stale `pub-div-v2` (review r2-m2 Y6).
+    const div = divisionTag(s.division.id);
+    const comp = competitionTag(s.competition.id);
+    const modesOf = (tag: string) => probe.broadcasts.filter((b) => b.tags.includes(tag)).map((b) => b.mode);
+    expect(modesOf(div), "the division tag's broadcasts").toEqual(["expire"]);
+    expect(modesOf(personTag(s.ben.id)), "the person tag's broadcasts").toEqual(["expire"]);
+    expect(modesOf(comp), "the competition tag's broadcasts").toEqual(["swr"]);
+  }, 120_000);
+
+  it("a poll that re-bakes a document between the write's Redis drop and its tag flush: the document is dropped AGAIN in the after-window (review r2-m1)", async () => {
+    const { s, named } = await docsScene("docs-rebake");
+    for (const key of named) probe.redis.set(key, { cached: "with Ben Stokes" });
+
+    let droppedMidRequest: string[] | null = null;
+    await inRequest(
+      () => patchPerson(s.owner, s.ben.id, { consent: { public_name: false } }),
+      () => {
+        // The handler has resolved; the tags have not flushed yet.
+        droppedMidRequest = named.filter((key) => !probe.redis.has(key));
+        for (const key of named) probe.redis.set(key, { cached: "re-baked with Ben Stokes" });
+      },
+    );
+
+    expect(droppedMidRequest, "premise: the first drop ran inside the request").toEqual(named);
+    expect(named.filter((key) => probe.redis.has(key)), "documents re-baked in the gap and never dropped again").toEqual([]);
+  }, 120_000);
 });

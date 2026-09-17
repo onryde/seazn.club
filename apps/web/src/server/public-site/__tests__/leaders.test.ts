@@ -354,6 +354,25 @@ describe("buildLeaderBoards", () => {
     );
     expect(boards[0]!.rows[0]!.personHref).toBeNull();
     expect(boards[0]!.rows[0]!.person.masked).toBe(false);
+    // Nor its real id (final review A m3): the public views did not publish
+    // it (no consent answer, or no player-page entitlement), so the board
+    // carries a stand-in, as it does for a masked row.
+    expect(boards[0]!.rows[0]!.person.personId).toBe("m1");
+  });
+
+  it("CONSENT: only a LINKED row carries its real id — beside an unlinked unmasked row and a masked row, each with a stand-in", () => {
+    const boards = buildLeaderBoards(
+      args([
+        row("linked", { runs: 9 }, { name: "Lee Linked", masked: false, publicProfile: true }),
+        row("unpublished", { runs: 7 }, { name: "Una Published", masked: false, publicProfile: false }),
+        row("hidden", { runs: 5 }, { name: "H. M.", masked: true, publicProfile: false }),
+      ]),
+    );
+    expect(boards[0]!.rows.map((r) => [r.person.personId, r.personHref !== null])).toEqual([
+      ["linked", true],
+      ["m1", false],
+      ["m2", false],
+    ]);
   });
 
   it("CONSENT: a person masked by DIVISION policy gets no link even with a public profile", () => {

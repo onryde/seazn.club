@@ -5,11 +5,14 @@ import "server-only";
 // call use-cases outside a request scope where revalidateTag would throw.
 import { revalidatePath, revalidateTag } from "next/cache";
 import { sql } from "@/lib/db";
-import { cacheDelPattern } from "@/lib/cache";
+import { cacheDel, cacheDelPattern } from "@/lib/cache";
 import { broadcastRevalidate } from "@/lib/peer-revalidate";
 import { purgeCdn } from "@/lib/cdn-purge";
 import { log } from "@/server/logger";
 import { divisionTag, competitionTag, orgTag, personTag, DISCOVERY_TAG } from "./data";
+import { deferred } from "@/lib/deferred";
+import { publicFixtureCacheKey } from "./fixture-doc-cache-key";
+import { publicDivisionCacheKeys } from "./division-doc-cache-keys";
 
 export { DISCOVERY_TAG };
 
@@ -42,20 +45,27 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *   - each person's tag (`personTag`), EXPIRED: their card's page and data
  *     entries at every competition URL, allowed or refused, including a
  *     competition they are not rostered in (`public_players_v` is org-scoped);
- *   - the division and competition tags of every division they are rostered
- *     in, deduped, stale-while-revalidate ('max') — the tags the player's
- *     consent write has always fired: the entries that mask their name for
- *     others (`pub-div`, `pub-fixture`, and other players' cards through
- *     `pub-player-v17`), and the pages built on them. 'max' serves the
- *     PREVIOUS render while the background rebuild runs. Measured after a
- *     consent OFF (spectator W2, 2026-09-17): those pages kept serving the
- *     previous render for a few seconds — 2.8–4.3s, 2–3 loads — in a local
- *     prod build at a machine load average of 16–40, and in that window the
- *     match page can briefly show the full name and the masked name together
- *     (MEASURED: seen on the page; the likely cause, INFERRED, is one of its
- *     data entries rebuilt and another not yet). Owner ruling 2026-09-17:
- *     that window is accepted, no behaviour change. The person's own card is
- *     not in it: its tag EXPIRES (above).
+ *   - the division tag of every division they are rostered in, deduped,
+ *     EXPIRED: the entries that mask their name for others (`pub-div-v2`,
+ *     `pub-fixture-v3`, `pub-hub-v3`, and other players' cards through
+ *     `pub-player-v17`), and the pages built on them. It used to be 'max',
+ *     which serves the PREVIOUS render while the rebuild runs (measured after
+ *     a consent OFF: 2.8–4.3s, 2–3 loads, in a local prod build at load 16–40).
+ *     Final review I2 closed that: the hub's Redis document is dropped below
+ *     and rebuilt through `pub-div-v2`, so a stale entry baked the old names
+ *     back into the hub for its 15s TTL;
+ *   - the competition tag of each, deduped, still 'max' (as a score write
+ *     fires it): no name is baked only under the competition tag, and an
+ *     expired tag beats a stale one on an entry carrying both.
+ *  Cost: a person on N rosters expires N divisions' entries, once per write,
+ *  and the first reader of each rebuilds — the same a score write does to one
+ *  division on every point.
+ *  The public REDIS documents that print their name are dropped too (final
+ *  review I2): the hub of every competition they are rostered in, the
+ *  schedule, standings and entrants documents of every such division, and the
+ *  match-centre document of every fixture their entrant plays or their lineup
+ *  names (`dropNamedPublicDocuments`). Those serve a poll for up to 15–30s
+ *  from Redis, beyond the reach of any tag.
  *  Never the org tag: that would expire every page and data entry of the org,
  *  hubs included, on each of these writes — and `PATCH /api/v1/persons/{id}`
  *  takes API keys, so a roster sync would be one org-wide expiry per person.
@@ -72,17 +82,18 @@ export async function firePersonRevalidate(
   context: Record<string, unknown>,
 ): Promise<void> {
   const personTags = [...new Set(personIds)].map(personTag);
-  let scopeTags: string[] = [];
+  let divisionTags: string[] = [];
+  let competitionTags: string[] = [];
+  let memberships: { division_id: string; competition_id: string }[] = [];
   try {
-    const memberships = await sql<{ division_id: string; competition_id: string }[]>`
+    memberships = await sql<{ division_id: string; competition_id: string }[]>`
       select distinct e.division_id, d.competition_id
       from entrant_members em
       join entrants e on e.id = em.entrant_id
       join divisions d on d.id = e.division_id
       where em.person_id in ${sql([...personIds])}`;
-    scopeTags = [
-      ...new Set(memberships.flatMap((m) => [divisionTag(m.division_id), competitionTag(m.competition_id)])),
-    ];
+    divisionTags = [...new Set(memberships.map((m) => divisionTag(m.division_id)))];
+    competitionTags = [...new Set(memberships.map((m) => competitionTag(m.competition_id)))];
   } catch (err) {
     log.error(
       { err, personIds, ...context },
@@ -90,27 +101,108 @@ export async function firePersonRevalidate(
     );
   }
   try {
+    // Competition 'max' FIRST, for the reason `fireScoreRevalidate` gives: a
+    // later 'max' for one of these divisions in the same request must join the
+    // already-open 'max' group, never overwrite the expiry.
+    for (const tag of competitionTags) revalidateTag(tag, "max");
     for (const tag of personTags) revalidateTag(tag, { expire: 0 });
-    for (const tag of scopeTags) revalidateTag(tag, "max");
+    for (const tag of divisionTags) revalidateTag(tag, { expire: 0 });
   } catch {
     // outside a Next request scope (tests, scripts) — nothing to invalidate
   }
-  void broadcastRevalidate(personTags, "expire");
-  void broadcastRevalidate(scopeTags, "swr");
+  const peersExpired = broadcastRevalidate([...personTags, ...divisionTags], "expire");
+  void broadcastRevalidate(competitionTags, "swr");
   void purgeCdn();
+  let fixtureIds: string[] = [];
+  try {
+    const fixtures = await sql<{ id: string }[]>`
+      select f.id
+      from entrant_members em
+      join fixtures f on f.home_entrant_id = em.entrant_id or f.away_entrant_id = em.entrant_id
+      where em.person_id in ${sql([...personIds])}
+      union
+      select l.fixture_id as id from lineups l where l.person_id in ${sql([...personIds])}`;
+    fixtureIds = fixtures.map((f) => f.id);
+  } catch (err) {
+    log.error(
+      { err, personIds, ...context },
+      "public documents: the fixtures naming a person could not be read to drop their match-centre documents (the write stands)",
+    );
+  }
+  dropNamedPublicDocuments(
+    {
+      competitionIds: memberships.map((m) => m.competition_id),
+      divisionIds: memberships.map((m) => m.division_id),
+      fixtureIds,
+    },
+    { personIds, ...context },
+    peersExpired,
+  );
 }
 
-/** A SCORE write — `invalidatePublicCache` (usecases/scoring.ts) is the only
- *  caller. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
+/**
+ * Drop the public REDIS documents that print names from these scopes (final
+ * review I2): each competition's hub (`pub:v1:hub:{id}`, 15s), each division's
+ * schedule, standings and entrants (`publicDivisionCacheKeys`, 30s), and each
+ * fixture's match-centre document (`publicFixtureCacheKey`, 30s). A tag
+ * reaches none of them, so without this a consent OFF or a name-policy change
+ * kept serving the old name to every poll until the TTL ran out. The same keys
+ * a score (`invalidatePublicCache`), a schedule write (`afterScheduleWrite`)
+ * and a stats refresh drop. All by name, in one DEL: never a keyspace SCAN
+ * (review r2-m4), since a person write can be a photo upload or one row of an
+ * API roster sync.
+ *
+ * TWICE (review r2-m1). The first DEL runs now, mid-request. But the tags the
+ * caller fired reach this machine only at the flush after the handler resolves,
+ * and other machines only when `peersExpired` (the caller's "expire" broadcast)
+ * lands. A poll in that gap rebuilds the document from a data entry not yet
+ * expired and bakes the old name back for its TTL. So the same DEL runs again
+ * in the after-window (`deferred`: after the response, so after the flush),
+ * once the broadcast has settled. It never rejects and is bounded by the
+ * broadcast's own per-peer timeout.
+ *
+ * Not awaited: ioredis has no command timeout (`PUSH_AFTER_DELETE_BOUND_MS`),
+ * so an unanswering Redis must not hold the organiser's request. Never
+ * rejects: a failure is logged and the committed write stands.
+ */
+export function dropNamedPublicDocuments(
+  scope: { competitionIds: readonly string[]; divisionIds: readonly string[]; fixtureIds: readonly string[] },
+  context: Record<string, unknown>,
+  peersExpired: Promise<unknown> = Promise.resolve(),
+): void {
+  const keys = [
+    ...[...new Set(scope.competitionIds)].map((id) => `pub:v1:hub:${id}`),
+    ...[...new Set(scope.divisionIds)].flatMap(publicDivisionCacheKeys),
+    ...[...new Set(scope.fixtureIds)].map(publicFixtureCacheKey),
+  ];
+  if (keys.length === 0) return;
+  const drop = () =>
+    void cacheDel(...keys).catch((err: unknown) => {
+      log.warn({ err, keys, ...context }, "public documents: a Redis delete failed (the write stands)");
+    });
+  drop();
+  deferred(async () => {
+    await peersExpired;
+    drop();
+  });
+}
+
+/** A SCORE write — `invalidatePublicCache` (usecases/scoring.ts) — and a
+ *  division NAME-POLICY change (`patchDivision`, final review I2), which needs
+ *  exactly the same two tags: a route rebuilding a dropped Redis document must
+ *  not read a stale `pub-div-v2` and bake the old names back in. The division tag EXPIRES (`{ expire: 0 }`, not 'max') for the reason
  *  `fireOrgRevalidate` below gives: 'max' keeps serving the previous render
  *  while the rebuild runs (same SWR mechanism; measured once, for the
  *  consent-OFF pages — a few seconds and several loads, see
  *  `firePersonRevalidate` — never for a score write), and the reads that follow a score are
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
- *  entry a score changes carries the division tag (`pub-div-v2`,
- *  `pub-fixture-v3`, `pub-hub-v3`), and an expired tag beats a stale one on an entry carrying
- *  both. The competition tag keeps SWR. Cost accepted: the first reader after
+ *  entry a score changes carries the division tag: `pub-div-v2`,
+ *  `pub-fixture-v3` and `pub-hub-v3` carry their own division's, and the
+ *  player card's `pub-player-v17` carries every division of its competition,
+ *  because its match lines can come from any of them (final review I1). An
+ *  expired tag beats a stale one on an entry carrying both. The competition
+ *  tag keeps SWR. Cost accepted: the first reader after
  *  a score rebuilds instead of getting a stale answer immediately.
  *
  *  ORDER IS LOAD-BEARING: competition 'max' first, division expiry second. A
@@ -119,16 +211,20 @@ export async function firePersonRevalidate(
  *  in the same request (`completeStage`'s voided `fireStageRevalidate`, reached
  *  from scoreEvent's auto-advance) joins the already-open 'max' group and can
  *  no longer overwrite the expiry. */
-export function fireScoreRevalidate(divisionId: string, competitionId: string): void {
+export function fireScoreRevalidate(divisionId: string, competitionId: string): Promise<void> {
   try {
     revalidateTag(competitionTag(competitionId), "max");
     revalidateTag(divisionTag(divisionId), { expire: 0 });
   } catch {
     // outside a Next request scope (tests, scripts) — nothing to invalidate
   }
-  void broadcastRevalidate([divisionTag(divisionId)], "expire");
+  const peersExpired = broadcastRevalidate([divisionTag(divisionId)], "expire");
   void broadcastRevalidate([competitionTag(competitionId)], "swr");
   void purgeCdn();
+  // Settles when the division's expiry has been sent to every peer; never
+  // rejects. Nothing need wait on it: `patchDivision` hands it to
+  // `dropNamedPublicDocuments` (review r2-m1).
+  return peersExpired;
 }
 
 /** A player-stats refresh landed (`player-stats-refresh.ts`). The same two tags

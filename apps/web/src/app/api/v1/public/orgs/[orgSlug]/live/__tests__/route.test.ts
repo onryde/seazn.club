@@ -45,9 +45,9 @@ describe("GET /api/v1/public/orgs/{orgSlug}/live", () => {
     expect(await res.json()).toMatchObject({ ok: false });
   });
 
-  it("calls the per-IP public rate limiter", async () => {
+  it("calls the per-IP public POLL rate limiter", async () => {
     usecase.publicOrgLive.mockResolvedValue(body);
     await GET(new Request("http://x/api/v1/public/orgs/riverside/live"), ctx);
-    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1:unknown", { max: 60, windowSeconds: 60 });
+    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1poll:unknown", { max: 300, windowSeconds: 60 });
   });
 });

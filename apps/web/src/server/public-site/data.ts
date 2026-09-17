@@ -9,6 +9,7 @@ import "server-only";
 // `revalidateTag('division:{id}')` for instant refresh (see usecases/scoring.ts).
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { resolveVenueTz } from "@/lib/tz";
@@ -169,6 +170,33 @@ export const orgTag = (orgSlug: string) => `org-public:${orgSlug}`;
  *  refused. Fired by every write to what a card shows about them
  *  (`firePersonRevalidate`); nothing else carries it. */
 export const personTag = (personId: string) => `pub-person:${personId}`;
+
+/** Next keeps at most this many tags on one cache entry and drops the rest
+ *  with nothing but a console line (`validateTags`, next/dist/lib/constants).
+ *  Pinned against Next's own value by the person-writes revalidate suite. */
+export const NEXT_CACHE_TAG_MAX_ITEMS = 128;
+
+/** The player card's entry tags: `fixed`, then one division tag per id IN THE
+ *  ORDER GIVEN, never more than Next keeps (review r2-m3). Past the cap the
+ *  LAST ids are dropped, with a warning: a score in a dropped division then
+ *  reaches the card only through the competition tag, which a score makes
+ *  stale, not expired, so that card is served stale once. The caller orders the
+ *  person's own divisions first, so what is dropped is a division the person
+ *  plays no match in. */
+export function playerCardTags(
+  fixed: string[],
+  orderedDivisionIds: string[],
+  context: { competitionId: string; personId: string },
+): string[] {
+  const room = NEXT_CACHE_TAG_MAX_ITEMS - fixed.length;
+  if (orderedDivisionIds.length > room) {
+    log.warn(
+      { ...context, divisions: orderedDivisionIds.length, kept: room },
+      "player card: the competition has more divisions than one cache entry can carry tags for; a score in a dropped division serves this card stale once",
+    );
+  }
+  return [...fixed, ...orderedDivisionIds.slice(0, room).map(divisionTag)];
+}
 /** One shared tag for every discovery surface (doc 15, PROMPT-19). */
 export const DISCOVERY_TAG = "discovery";
 
@@ -1250,6 +1278,31 @@ export async function getPublicPlayer(
   // half-built.
   const { readPlayerMatchSeeds, completePlayerMatchLines } = await import("./public-player-matches");
 
+  // Final review I1 (owner rule: results are never stale). The entry below
+  // bakes each match's result, score line and `lastSeq`, and a score write
+  // EXPIRES only the division tag (`fireScoreRevalidate`); the competition tag
+  // it merely makes stale, which served the old result for the next loads. So
+  // the entry carries the tag of EVERY division in the competition: the
+  // matches come from any of them (a lineup can seat the person outside their
+  // roster division), and the tags must be known before the read. Read here,
+  // uncached, so a division created a moment ago is covered too. Cost: the
+  // first card read after a score in the competition rebuilds, as the fixture
+  // page already does.
+  //
+  // In a FIXED order (review r2-m3): the person's own divisions first (a roster
+  // or a lineup seats them there), then the rest by id. An entry holds at most
+  // 128 tags (`playerCardTags`), so in a competition with more divisions than
+  // that, the ones dropped are divisions this person plays no match in.
+  const competitionDivisions = await sql<{ id: string }[]>`
+    select d.id from divisions d
+    where d.competition_id = ${shell.competition.id}
+    order by (
+      exists (select 1 from entrant_members em join entrants e on e.id = em.entrant_id
+              where e.division_id = d.id and em.person_id = ${personId})
+      or exists (select 1 from lineups l join fixtures f on f.id = l.fixture_id
+                 where f.division_id = d.id and l.person_id = ${personId})
+    ) desc, d.id`;
+
   const detail = await unstable_cache(
     async () => {
       // Only the relational half is held in this entry; the cricket figures are
@@ -1488,8 +1541,14 @@ export async function getPublicPlayer(
     // competition they are not rostered in, which no competition tag reaches.
     // The org tag: a division name-policy change anywhere in the org
     // (`patchDivision`) must rebuild `nameMask` (privacy hotfix).
+    // The division tags: a score write expires this entry (final review I1,
+    // above).
     {
-      tags: [competitionTag(shell.competition.id), personTag(personId), orgTag(shell.org.slug)],
+      tags: playerCardTags(
+        [competitionTag(shell.competition.id), personTag(personId), orgTag(shell.org.slug)],
+        competitionDivisions.map((d) => d.id),
+        { competitionId: shell.competition.id, personId },
+      ),
       revalidate: REVALIDATE_SLOW,
     },
   )();

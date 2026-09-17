@@ -33,7 +33,11 @@ import {
 } from "./slugs";
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
-import { fireDivisionRevalidate, fireOrgRevalidate } from "@/server/public-site/revalidate";
+import {
+  dropNamedPublicDocuments,
+  fireOrgRevalidate,
+  fireScoreRevalidate,
+} from "@/server/public-site/revalidate";
 // D5/P8: same trim/lowercase/dedupe/drop-empties rule the courts path uses
 // for their own `tags` — one copy, imported, not re-implemented (a court
 // tagged "clay" must match a division requiring "Clay").
@@ -958,11 +962,30 @@ export async function patchDivision(
     // lines under the NEW generation, never the old one. Fired synchronously
     // before this use-case resolves, never behind a `void`: Next flushes a
     // request's revalidations once, when the handler resolves, and drops any
-    // that arrive later. Division 'max' first, org expiry second (different
-    // tags; the order mirrors `fireScoreRevalidate`).
+    // that arrive later.
+    //
+    // The division tag EXPIRES here, not 'max' (final review I2): the public
+    // Redis documents below are dropped, and a route rebuilding one reads
+    // `pub-div-v2`. A merely stale entry is served to a route handler while it
+    // refreshes in the background, which would bake the old names straight
+    // back into Redis for another TTL. `fireScoreRevalidate` is exactly that
+    // pair — competition 'max', then division expiry — and the org expiry
+    // follows it. A policy change is rare, so the first reader rebuilding is
+    // cheap.
     const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
-    fireDivisionRevalidate(row.id, row.competition_id);
+    const fixtures = await sql<{ id: string }[]>`select id from fixtures where division_id = ${row.id}`;
+    const peersExpired = fireScoreRevalidate(row.id, row.competition_id);
     if (org) fireOrgRevalidate(org.slug);
+    // Every public Redis document printing this division's names: its
+    // competition's hub, its schedule, standings and entrants, and each of its
+    // fixtures' match-centre documents (final review I2). Dropped again in the
+    // after-window once the division expiry has flushed here and reached the
+    // peers (review r2-m1).
+    dropNamedPublicDocuments(
+      { competitionIds: [row.competition_id], divisionIds: [row.id], fixtureIds: fixtures.map((f) => f.id) },
+      { divisionId: row.id },
+      peersExpired,
+    );
   }
   return row;
 }

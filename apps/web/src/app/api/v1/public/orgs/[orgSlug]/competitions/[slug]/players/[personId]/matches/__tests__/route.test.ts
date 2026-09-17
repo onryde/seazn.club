@@ -57,10 +57,10 @@ describe("GET /api/v1/public/orgs/{org}/competitions/{slug}/players/{personId}/m
   });
 
   // The hub route's own measured case: `@/lib/rate-limit` is mocked, so a
-  // removed `await publicRateLimit(req)` survives every other test here.
-  it("calls the per-IP public rate limiter before touching the usecase", async () => {
+  // removed `await publicPollRateLimit(req)` survives every other test here.
+  it("calls the per-IP public POLL rate limiter before touching the usecase", async () => {
     usecase.publicPlayerMatches.mockResolvedValue(doc);
     await GET(new Request(url), ctx);
-    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1:unknown", { max: 60, windowSeconds: 60 });
+    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1poll:unknown", { max: 300, windowSeconds: 60 });
   });
 });

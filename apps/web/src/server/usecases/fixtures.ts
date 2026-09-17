@@ -21,7 +21,6 @@ import { lineupCatalogFor } from "./lineup-catalog";
 import { validateLineup, type LineupIssue } from "@seazn/engine/sport";
 import type { Lineup } from "@seazn/engine/core";
 import { log } from "@/server/logger";
-import { withStructuredCricketMargin } from "./stored-cricket-margin";
 
 /** Doc 13 §7: a device link reads fixture state/events ONLY — every other
  *  fixture surface (detail, lineups, schedule) is 403 for dl_ tokens. */
@@ -534,10 +533,8 @@ export interface FixtureStateOut {
   outcome: unknown;
 }
 
-/** The `/state` ETag. The `-m2` names the representation: the same `last_seq`
- *  served an English cricket margin before 2026-09-16 and `{ kind, value? }`
- *  after (`stored-cricket-margin.ts`), so a client revalidating a body it
- *  cached before that must get the new body, not a 304 for the old one. */
+/** The `/state` ETag: the ledger seq. The `-m2` suffix is kept as it is (the
+ *  representation's name since the cricket margin became `{ kind, value? }`). */
 export function fixtureStateEtag(lastSeq: number): string {
   return `"seq-${lastSeq}-m2"`;
 }
@@ -546,28 +543,20 @@ export function fixtureStateEtag(lastSeq: number): string {
 export async function getFixtureState(auth: AuthCtx, fixtureId: string): Promise<FixtureStateOut> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<
-      {
-        status: string;
-        outcome: unknown;
-        sport_key: string;
-        last_seq: number | null;
-        state: unknown;
-        summary: unknown;
-      }[]
+      { status: string; outcome: unknown; last_seq: number | null; state: unknown; summary: unknown }[]
     >`
-      select f.status, f.outcome, d.sport_key, m.last_seq, m.state, m.summary
-      from fixtures f
-      join divisions d on d.id = f.division_id
-      left join match_states m on m.fixture_id = f.id
+      select f.status, f.outcome, m.last_seq, m.state, m.summary
+      from fixtures f left join match_states m on m.fixture_id = f.id
       where f.id = ${fixtureId}`;
     if (!row) throw new HttpError(404, "fixture not found");
-    const stored = withStructuredCricketMargin(row.sport_key, { state: row.state ?? null, summary: row.summary ?? null });
+    // `CricketState.margin` is `{ kind, value? }` in every stored fold (greenfield:
+    // no legacy English margins are stored), so the rows are served as they are.
     return {
       fixture_id: fixtureId,
       status: row.status,
       last_seq: row.last_seq ?? 0,
-      summary: stored.summary,
-      state: stored.state,
+      summary: row.summary ?? null,
+      state: row.state ?? null,
       outcome: row.outcome,
     };
   });

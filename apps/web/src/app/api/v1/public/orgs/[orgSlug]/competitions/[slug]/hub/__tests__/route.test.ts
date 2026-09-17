@@ -40,13 +40,13 @@ describe("GET /api/v1/public/orgs/{org}/competitions/{slug}/hub", () => {
     const res = await GET(new Request("http://x/"), ctx);
     expect(res.status).toBe(404);
   });
-  // Without this, a removed `await publicRateLimit(req)` survives every other
+  // Without this, a removed `await publicPollRateLimit(req)` survives every other
   // test in this file — `@/lib/rate-limit` is mocked globally and nothing
   // else here asserts it was reached (measured: this mutant killed nothing
   // until this test was added).
-  it("calls the per-IP public rate limiter before touching the usecase", async () => {
+  it("calls the per-IP public POLL rate limiter before touching the usecase", async () => {
     hub.publicCompetitionHub.mockResolvedValue(doc);
     await GET(new Request("http://x/api/v1/public/orgs/riverside/competitions/cup/hub"), ctx);
-    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1:unknown", { max: 60, windowSeconds: 60 });
+    expect(limiter.rateLimit).toHaveBeenCalledWith("pubv1poll:unknown", { max: 300, windowSeconds: 60 });
   });
 });

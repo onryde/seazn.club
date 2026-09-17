@@ -200,8 +200,14 @@ export function specsFor(sportKey: string, model: PlayerStatsModel | undefined):
  * stand-in. The memo is per DIVISION, the unit the policy masks by: a child
  * playing up in U12 and U14 gets unrelated stand-ins, so nothing ties the two
  * rows together. The id is only the row's React key and testid
- * (`stats-tab.tsx`), which needs uniqueness inside one board only. Unmasked
- * people keep their real id: the player-page link is built from it.
+ * (`stats-tab.tsx`), which needs uniqueness inside one board only.
+ *
+ * Only a LINKED row keeps its real id (final review A m3): the one whose
+ * `personHref` is built from it, which is exactly a row `playerLinkId` published
+ * (`publicProfile`) and the policy does not mask. An unmasked row the public
+ * views did not publish (no consent answer, or no player-page entitlement)
+ * gets a stand-in too: the hub must carry no person id `public_entrants_v`
+ * withheld.
  */
 export function buildLeaderBoards(a: {
   divisions: readonly LeaderDivision[];
@@ -220,8 +226,9 @@ export function buildLeaderBoards(a: {
 
   for (const division of a.divisions) {
     const standIns = new Map<string, string>();
+    const linked = (row: LeaderInputRow): boolean => row.publicProfile && !row.masked;
     const publicId = (row: LeaderInputRow): string => {
-      if (!row.masked) return row.personId;
+      if (linked(row)) return row.personId;
       const seen = standIns.get(row.personId);
       if (seen !== undefined) return seen;
       const minted = `m${standIns.size + 1}`;
@@ -249,7 +256,7 @@ export function buildLeaderBoards(a: {
         label: a.label(spec, division, model),
         rows: scored.map(({ row, value }) => ({
           person: { personId: publicId(row), name: row.name, masked: row.masked },
-          personHref: row.publicProfile && !row.masked ? a.personHref(row.personId) : null,
+          personHref: linked(row) ? a.personHref(row.personId) : null,
           entrantName: row.entrantName,
           badgeUrl: row.badgeUrl,
           // Formatted from the SAME number the ranking used, so a change to
