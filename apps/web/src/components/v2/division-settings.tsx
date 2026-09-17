@@ -364,6 +364,15 @@ export function DivisionSettings({
   const [swissRounds, setSwissRounds] = useState(
     ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ?? 5,
   );
+  // swiss_playoff / swiss_knockout declare no rounds: the budget scales with
+  // the field (lib/swiss-rounds.ts) and swissGen writes it into the stage's
+  // config at the first generation. Read the STAGE, never `swissRounds` —
+  // that state falls back to 5 when the key is absent, and a confidently
+  // wrong round count on screen is worse than none at all. null until the
+  // swiss has actually been generated and the field has decided it.
+  const derivedSwissRounds =
+    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
+    null;
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
   );
@@ -813,6 +822,23 @@ export function DivisionSettings({
                       onChange={(e) => setSwissRounds(Number(e.target.value))} className="input mt-1 w-full" />
                   </label>
                 )}
+                {/* The derived budget, shown READ-ONLY. It is not editable
+                    here because buildTemplateStages deliberately does not
+                    stamp the rounds knob onto a template that declares none
+                    — an input wired to `swissRounds` would look editable and
+                    drop the organiser's number on save. Shown only once the
+                    number exists, so this never displays a guess. */}
+                {["swiss_playoff", "swiss_knockout"].includes(template) &&
+                  derivedSwissRounds !== null && (
+                    <label className="block text-xs text-slate-500">
+                      {msg("divset.rounds")}
+                      <input type="number" readOnly disabled value={derivedSwissRounds}
+                        data-testid="division-settings-derived-rounds" className="input mt-1 w-full" />
+                      <span className="mt-0.5 block text-[11px] text-slate-400">
+                        {msg("divset.roundsFromField")}
+                      </span>
+                    </label>
+                  )}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.legs")}

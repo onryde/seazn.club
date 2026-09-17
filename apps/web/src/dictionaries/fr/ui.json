@@ -2256,6 +2256,7 @@
   "divset.topN": "Les N premiers se qualifient",
   "divset.groups": "Groupes",
   "divset.rounds": "Tours",
+  "divset.roundsFromField": "Déterminé par le nombre de participants.",
   "divset.legs": "Tours contre chaque adversaire",
   "divset.changeFormat": "Changer de format (reconstruit les phases)",
   "divset.setFormat": "Définir le format",

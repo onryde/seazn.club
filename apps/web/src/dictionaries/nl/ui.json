@@ -2211,6 +2211,7 @@
   "divset.topN": "Top N gaat door",
   "divset.groups": "Groepen",
   "divset.rounds": "Rondes",
+  "divset.roundsFromField": "Bepaald door het aantal deelnemers.",
   "divset.legs": "Rondes tegen elke tegenstander",
   "divset.changeFormat": "Formaat wijzigen (bouwt fasen opnieuw)",
   "divset.setFormat": "Formaat instellen",

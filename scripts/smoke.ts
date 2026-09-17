@@ -7979,14 +7979,11 @@ async function stageProgressionSuite(): Promise<void> {
  * the swiss winner waits while 2nd plays 3rd, and the Final is seated with
  * the bye entrant before that semi is played.
  *
- * The `rounds` PUT below is a WORK-AROUND for a live defect, not part of the
- * format: a swiss stage with no declared `config.rounds` never completes, so
- * the finals half is never seeded (root cause and differential:
- * apps/web/src/server/usecases/__tests__/swiss-knockout-shape.test.ts). The
- * stages are POSTed as the catalogue actually builds them FIRST, so the "no
- * 402" claim is made about the shipped draft; only then are the rounds
- * declared, while no fixture exists yet to lock the format. Delete the PUT
- * when the derived budget is made visible to the completion predicate.
+ * The stages are POSTed exactly as the catalogue builds them — no `rounds`,
+ * no re-lay. That used to need a work-around PUT, because a swiss with no
+ * declared `config.rounds` never completed and the finals half was never
+ * seeded; `swissGen` now persists the field's derived budget at the first
+ * generation, which this suite reads back over the wire before playing on.
  */
 async function swissKnockoutSuite(): Promise<void> {
   const free = newSession();
@@ -8036,15 +8033,12 @@ async function swissKnockoutSuite(): Promise<void> {
     created.status === 201,
   );
 
-  // The work-around (see this suite's doc comment). No fixture exists yet,
-  // so the format is still editable.
-  const relaid = await v1(free, `/api/v1/divisions/${div.id}/stages`, "PUT", [
-    { ...shipped[0], config: { pairing: "rank_adjacent", rounds: 3 } },
-    shipped[1],
-  ]);
-  check("swiss knockout: the rounds work-around re-lays the stages (200)", relaid.status === 200);
-  const stages = v1data<{ id: string; kind: string; seq: number }[]>(
+  const stages = v1data<{ id: string; kind: string; seq: number; config: { rounds?: number } }[]>(
     await v1(free, `/api/v1/divisions/${div.id}/stages`),
+  );
+  check(
+    "swiss knockout: the shipped draft declares no rounds — the field decides them",
+    stages.find((s) => s.seq === 1)!.config.rounds === undefined,
   );
   const swissId = stages.find((s) => s.seq === 1)!.id;
   const koId = stages.find((s) => s.seq === 2)!.id;
@@ -8083,6 +8077,15 @@ async function swissKnockoutSuite(): Promise<void> {
   );
 
   await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");
+  // Generating writes the field's own budget down, which is the whole reason
+  // the handoff below fires at all. Read over the wire, on the shipped draft.
+  const afterGen = v1data<{ seq: number; config: { rounds?: number } }[]>(
+    await v1(free, `/api/v1/divisions/${div.id}/stages`),
+  );
+  check(
+    "swiss knockout: the first generation persists the derived 3-round budget",
+    afterGen.find((s) => s.seq === 1)!.config.rounds === 3,
+  );
   const started = await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
   check("swiss knockout: division starts", started.status < 300);
 
@@ -8105,7 +8108,7 @@ async function swissKnockoutSuite(): Promise<void> {
   check("swiss knockout: the swiss stopped at the field's own 3-round budget", (await fixturesOf(swissId)).length === 6);
 
   const done = v1data<{ completed: boolean }>(await v1(free, `/api/v1/stages/${swissId}/complete`, "POST"));
-  check("swiss knockout: the swiss completes once its declared rounds are played", done.completed === true);
+  check("swiss knockout: the swiss completes once its DERIVED rounds are played — nothing declared them", done.completed === true);
   const proposal = v1data<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
     await v1(free, `/api/v1/stages/${koId}/seed-proposal`, "POST"),
   );

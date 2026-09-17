@@ -2256,6 +2256,7 @@
   "divset.topN": "Top N advance",
   "divset.groups": "Groups",
   "divset.rounds": "Rounds",
+  "divset.roundsFromField": "Decided by the size of the field.",
   "divset.legs": "Rounds vs each opponent",
   "divset.changeFormat": "Change format (rebuilds stages)",
   "divset.setFormat": "Set format",

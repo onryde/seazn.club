@@ -227,12 +227,11 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
 // Final already holding the bye entrant. Not "the API returned 200": the
 // assertions below read the division page's own bracket panel and run sheet.
 //
-// BLOCKER worked around, deliberately and visibly (see
-// server/usecases/__tests__/swiss-knockout-shape.test.ts's header for the
-// full root cause): a swiss stage with no `config.rounds` can never complete,
-// so the finals half is never seeded. The PUT below declares the rounds — the
-// same shape the Settings tab writes — before any fixture exists. Delete it
-// when the derived budget is made visible to the completion predicate.
+// This runs the stages EXACTLY as the picker lays them down — no rounds PUT.
+// It used to need one: a swiss with no `config.rounds` could never complete,
+// so the finals half was never seeded. `swissGen` now persists the field's
+// derived budget at the first generation, which this test pins below off the
+// live API rather than trusting the unit suite for it.
 test("swiss_knockout template: Top 3 builds a one-bye bracket the division page renders", async ({ page, request }) => {
   test.setTimeout(180_000);
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
@@ -260,7 +259,16 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await expect(qualify).toHaveValue("4");
   expect(
     await qualify.evaluate((e) => [...(e as HTMLSelectElement).options].map((o) => o.text)),
-  ).toEqual(["Top 2", "Top 3", "Top 4", "Top 6", "Top 8", "Top 16"]);
+  ).toEqual(["Top 2", "Top 3", "Top 4", "Top 6", "Top 8", "Top 12", "Top 16", "Top 24", "Top 32"]);
+  // And pin the ENDS on their own. `format.swiss_knockout.body.1` promises
+  // "anything from 2 to 32" in all four locales, and the Settings tab's own
+  // Top N input is min 2 / max 32 — a wizard that stopped short of either end
+  // made that copy false and put the biggest brackets out of reach until
+  // after the division already existed.
+  const span = await qualify.evaluate((e) =>
+    [...(e as HTMLSelectElement).options].map((o) => Number(o.value)),
+  );
+  expect([Math.min(...span), Math.max(...span)]).toEqual([2, 32]);
   await qualify.selectOption({ label: "Top 3" });
 
   await page.getByRole("button", { name: "Scheduling", exact: true }).click();
@@ -285,15 +293,10 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
     timing: "setup",
   });
 
-  // ── blocker work-around, see this test's header ──
-  const ko = stages.data!.find((s) => s.seq === 2)!;
-  await apiJson(request, `/api/v1/divisions/${divisionId}/stages`, "PUT", [
-    { seq: 1, kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent", rounds: 3 }, progression: null },
-    { seq: 2, kind: "knockout", name: "Knockout", config: {}, progression: ko.progression },
-  ]);
-  const after = await apiJson<Stage[]>(page.request, `/api/v1/divisions/${divisionId}/stages`);
-  const swissId = after.data!.find((s) => s.seq === 1)!.id;
-  const koId = after.data!.find((s) => s.seq === 2)!.id;
+  // The picker declares no rounds, and nothing here adds any.
+  expect(stages.data!.find((s) => s.seq === 1)!.config).not.toHaveProperty("rounds");
+  const swissId = stages.data!.find((s) => s.seq === 1)!.id;
+  const koId = stages.data!.find((s) => s.seq === 2)!.id;
 
   const names = ["Ann", "Bo", "Cy", "Di"];
   const { ids } = await addEntrantsViaApi(request, divisionId, names);
@@ -310,6 +313,12 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   const dayOne = await apiJson<{ created: number }>(request, `/api/v1/stages/${koId}/generate`, "POST");
   expect(dayOne.data!.created).toBe(3); // 2 round-0 lines + the Final
   await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST");
+  // Generating the swiss writes the field's own budget down. Read back off the
+  // live API, not the unit suite: this is the number the completion predicate
+  // will read, and without it everything below this line stalls at the
+  // handoff into the knockout.
+  const generated = await apiJson<Stage[]>(page.request, `/api/v1/divisions/${divisionId}/stages`);
+  expect(generated.data!.find((s) => s.seq === 1)!.config).toMatchObject({ rounds: 3 });
   await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
 
   // Play the swiss out, TAPPING the organiser's own "Pair next round" control

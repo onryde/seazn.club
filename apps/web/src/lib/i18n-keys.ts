@@ -1750,6 +1750,7 @@ export type DictionaryKey =
   | "divset.requiredTags.saved"
   | "divset.requiredTags.title"
   | "divset.rounds"
+  | "divset.roundsFromField"
   | "divset.rulesNote"
   | "divset.saveName"
   | "divset.saveRules"

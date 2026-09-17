@@ -2211,6 +2211,7 @@
   "divset.topN": "Los N primeros avanzan",
   "divset.groups": "Grupos",
   "divset.rounds": "Rondas",
+  "divset.roundsFromField": "Lo decide el número de participantes.",
   "divset.legs": "Rondas contra cada rival",
   "divset.changeFormat": "Cambiar formato (reconstruye las etapas)",
   "divset.setFormat": "Establecer formato",
