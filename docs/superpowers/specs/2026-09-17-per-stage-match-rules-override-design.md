@@ -174,13 +174,15 @@ with the bump.
 **D5 — no entitlement gate.** Per-stage rules are core format settings.
 D2's allowlist plus D2a's sport gate are what keep `points` out of reach.
 
-**O1 — OPEN, owner: D4 (translating the labels) is withdrawn pending your
-call.** `match-rules.tsx:6-9` records a deliberate decision that rule
-labels are canonical English, like sport and format names, with only the
-picker chrome localised. Translating the nine in-scope labels would leave
-the other 44 inconsistent. Recommendation: **drop D4**, keep the labels
-English, and treat the documented decision as standing. Cost if wrong: the
-stage panel reads English inside an otherwise translated page.
+**D4 — WITHDRAWN. Rule labels stay English** (owner, 2026-09-17).
+`match-rules.tsx:6-9` already records rule vocabulary as canonical English,
+like sport and format names, with only the picker chrome localised; the
+owner confirmed that decision stands. So this feature ships **no
+dictionary work and no `gen-keys` regen for the labels themselves**.
+Anything the stage panel adds around them — a "Same as division" control,
+a lock reason, an error toast — is picker chrome and DOES owe all four
+dictionaries plus the regen. Keep that line clear in review: the nine
+field labels are exempt, the panel's own copy is not.
 
 ## Design
 
