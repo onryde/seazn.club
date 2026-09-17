@@ -376,28 +376,37 @@ export function sigil(ref: string): string {
 }
 
 /**
- * The two stage-config keys that overlay a division's resolved cfg for
+ * The two stage-config DECIDER keys that overlay a division's resolved cfg for
  * fixtures in that stage — `STAGE_DECIDER_KEYS` in
- * `apps/web/src/server/engine-db/stage-cfg.ts:9`, whose comment is the
- * authority: "those two keys (and only those) overlay the division config".
+ * `apps/web/src/server/engine-db/stage-cfg.ts`, whose comment is the
+ * authority. They are no longer the only source: a stage may ALSO carry
+ * `config.rules`, a partial per-stage format override (design 2026-09-17 §T1),
+ * which `stageScopedFoldCfg` applies FIRST so these two keys keep a single
+ * winner. Null inside `rules` means "inherit", never "blank the division
+ * value", so nulls are skipped rather than copied.
  *
  * A HAND MIRROR of a product constant, which is a drift risk this file cannot
  * remove — `apps/web` may not be imported from `scripts/bench` (GLOBAL.md:
  * `@/` aliases do not resolve here and most of that tree is `server-only`).
  * It is mirrored rather than skipped because skipping it makes stage 0 fold a
- * knockout stage that declares `shootout` under the WRONG cfg, which is
- * exactly the class of divergence the bench exists to find. Recorded in the
- * task report; the live cross-check is B05's.
+ * knockout stage that declares `shootout` (or now a `rules` override) under
+ * the WRONG cfg, which is exactly the class of divergence the bench exists to
+ * find. Recorded in the task report; the live cross-check is B05's.
  */
 const STAGE_DECIDER_KEYS = ["shootout", "extraTime"] as const;
 
-/** `stageScopedCfg` (stage-cfg.ts:11-22), for a pack's own stage config. */
+/** `stageScopedCfg` (stage-cfg.ts), for a pack's own stage config. */
 export function stageScopedFoldCfg(
   divisionCfg: unknown,
   stageCfg: Record<string, unknown> | undefined,
 ): unknown {
   if (stageCfg === undefined) return divisionCfg;
   const overlay: Record<string, unknown> = {};
+  // Rules first, decider keys second — mirrors stage-cfg.ts field for field.
+  const rules = stageCfg.rules;
+  if (rules != null && typeof rules === "object" && !Array.isArray(rules))
+    for (const [k, v] of Object.entries(rules as Record<string, unknown>))
+      if (v !== null && v !== undefined) overlay[k] = v;
   for (const key of STAGE_DECIDER_KEYS) {
     if (stageCfg[key] !== undefined) overlay[key] = stageCfg[key];
   }
