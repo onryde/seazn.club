@@ -12866,6 +12866,13 @@
                           "chess": {
                             "type": "boolean"
                           },
+                          "pairing": {
+                            "type": "string",
+                            "enum": [
+                              "fold",
+                              "rank_adjacent"
+                            ]
+                          },
                           "challengeRange": {
                             "type": "integer",
                             "minimum": 1,
@@ -13254,6 +13261,13 @@
                             },
                             "chess": {
                               "type": "boolean"
+                            },
+                            "pairing": {
+                              "type": "string",
+                              "enum": [
+                                "fold",
+                                "rank_adjacent"
+                              ]
                             },
                             "challengeRange": {
                               "type": "integer",
@@ -14070,6 +14084,13 @@
                           "chess": {
                             "type": "boolean"
                           },
+                          "pairing": {
+                            "type": "string",
+                            "enum": [
+                              "fold",
+                              "rank_adjacent"
+                            ]
+                          },
                           "challengeRange": {
                             "type": "integer",
                             "minimum": 1,
@@ -14458,6 +14479,13 @@
                             },
                             "chess": {
                               "type": "boolean"
+                            },
+                            "pairing": {
+                              "type": "string",
+                              "enum": [
+                                "fold",
+                                "rank_adjacent"
+                              ]
                             },
                             "challengeRange": {
                               "type": "integer",

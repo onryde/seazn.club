@@ -7,6 +7,7 @@
 // re-duplication in either call site is caught two ways.
 import { describe, expect, it } from "vitest";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../format-gates";
+import { buildTemplateStages } from "@/components/v2/format-templates";
 
 describe("stageNeedsDoubleElimGate", () => {
   it.each(["double_elim", "page_playoff"])("gates on kind '%s'", (kind) => {
@@ -63,5 +64,35 @@ describe("stageNeedsAdvancedFormatsGate", () => {
       false,
     );
     expect(stageNeedsAdvancedFormatsGate({ kind: "knockout", config: undefined })).toBe(false);
+  });
+});
+
+// Swiss Knockout ships WITHOUT a `pro` badge (product decision: both halves
+// are free kinds, same as league_ko). A badge and a gate that disagree is a
+// defect either way round, so this asserts the gates against the template's
+// REAL stage drafts rather than against a kind list typed in by hand — if a
+// later edit gives the swiss stage a `byes`/`cross_feeds`/`placements` key,
+// or swaps the plain knockout for a page_playoff, this reds instead of
+// silently paywalling a format the catalogue advertises as free.
+describe("swiss_knockout is free at the server gate, and swiss_playoff is not", () => {
+  const KNOBS = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+
+  it("no swiss_knockout stage trips either gate, at any Top N the knob offers", () => {
+    for (const qualified of [2, 3, 4, 8, 32]) {
+      const stages = buildTemplateStages("swiss_knockout", { ...KNOBS, qualified });
+      // buildTemplateStages falls back to STAGE_TEMPLATES[0] (league) for an
+      // unknown key, which would make every gate assertion below true of the
+      // wrong format. Pin the shape first so this cannot pass vacuously.
+      expect(stages.map((s) => s.kind)).toEqual(["swiss", "knockout"]);
+      for (const stage of stages) {
+        expect(stageNeedsDoubleElimGate(stage.kind), `${stage.kind} @ N=${qualified}`).toBe(false);
+        expect(stageNeedsAdvancedFormatsGate(stage), `${stage.kind} @ N=${qualified}`).toBe(false);
+      }
+    }
+  });
+
+  it("swiss_playoff still trips the double_elim gate on its page_playoff half", () => {
+    const stages = buildTemplateStages("swiss_playoff", KNOBS);
+    expect(stages.some((s) => stageNeedsDoubleElimGate(s.kind))).toBe(true);
   });
 });

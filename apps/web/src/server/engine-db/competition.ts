@@ -405,6 +405,31 @@ export async function recomputeStandings(
   });
 }
 
+/**
+ * The stage's ranked standings rows, computed in the CALLER's transaction —
+ * the same fold + tiebreaker cascade `recomputeStandings` runs, with neither
+ * a second tenant transaction nor a snapshot write.
+ *
+ * Exists for Swiss Playoff's repairing (usecases/stages.ts `swissGen`), which
+ * needs the division's REAL finishing order between rounds and must read it
+ * inside the generation transaction it is already holding the division lock
+ * in. `recomputeStandings` cannot serve that: it opens its own `withTenant`.
+ *
+ * Single-pool by construction for its one caller — a swiss stage has no pools
+ * — so it returns the first (only) pool's rows; a stage whose fixtures are
+ * all still unplayed ranks every entrant on a zero row, and a stage with no
+ * fixtures at all returns [].
+ */
+export async function rankedStageStandings(
+  tx: Tx,
+  stageId: string,
+): Promise<readonly StandingsRow[]> {
+  const inputs = await loadStageInputs(tx, stageId);
+  if (inputs.entrants.length === 0) return [];
+  const { tables } = completeTableStage(toTableStage(inputs), inputs.tableFixtures);
+  return tables.pools[0]?.rows ?? [];
+}
+
 // Append a division_event under the division lock, assigning a gapless per-
 // division seq (doc 07 note 3). Returns the new seq. Callers that treat the
 // event as the division watermark also bump divisions.seq (doc 07).

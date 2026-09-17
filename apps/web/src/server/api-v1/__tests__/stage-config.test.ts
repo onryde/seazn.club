@@ -24,6 +24,7 @@ const KNOWN: Record<string, unknown> = {
   courtCount: 3,
   rounds: 7,
   chess: true,
+  pairing: "rank_adjacent",
   challengeRange: 3,
   ladder_order: ["ent-1"],
   qualified: ["ent-1"],
@@ -84,6 +85,30 @@ describe("StageConfig closes the key set", () => {
     expect(StageConfig.safeParse({ mode: "conquian" }).success).toBe(false);
     expect(StageConfig.safeParse({ pools: { count: 4, extra: 1 } }).success).toBe(false);
     expect(StageConfig.safeParse({ h2h_scope: "group" }).success).toBe(false);
+  });
+
+  // Swiss Playoff's one new knob. The engine union is
+  // `scheduling/swiss.ts`'s SwissConstraints.pairing; this is the only write
+  // path that can reach it, so the union has to be spelled the same here.
+  describe("swiss `pairing` (Swiss Playoff)", () => {
+    it("accepts both engine pairing models and refuses anything else", () => {
+      expect(StageConfig.safeParse({ pairing: "fold" }).success).toBe(true);
+      expect(StageConfig.safeParse({ pairing: "rank_adjacent" }).success).toBe(true);
+      expect(StageConfig.safeParse({ pairing: "rank-adjacent" }).success).toBe(false);
+      expect(StageConfig.safeParse({ pairing: "hammes" }).success).toBe(false);
+      expect(StageConfig.safeParse({ pairing: true }).success).toBe(false);
+    });
+
+    it("stays ABSENT when omitted — every existing swiss stage keeps fold pairing", () => {
+      // The regression guard for the live stages that predate this key: an
+      // omitted `pairing` must parse to undefined, NOT to a defaulted value
+      // that the generator would then read as an opt-in. `swissGen` treats
+      // anything but the literal "rank_adjacent" as fold.
+      const r = StageConfig.safeParse({ rounds: 5 });
+      expect(r.success).toBe(true);
+      expect(r.data).not.toHaveProperty("pairing");
+      expect((r.data as { pairing?: unknown }).pairing).toBeUndefined();
+    });
   });
 
   it("leaves the shapes another authority owns unvalidated, deliberately", () => {

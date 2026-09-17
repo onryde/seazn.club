@@ -30,6 +30,12 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   // L3/#414 pass 3 — the two new qualification-from-any-stage presets.
   await expect(page.getByText("Knockout + Plate", { exact: true })).toBeVisible();
   await expect(page.getByText("Qualifying + Main draw", { exact: true })).toBeVisible();
+  // Swiss Playoff and Swiss Knockout. `exact` matters: the plain "Swiss" card
+  // sits right beside them, and a substring match would resolve to whichever
+  // came first.
+  await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
+  await expect(page.getByText("Swiss Knockout", { exact: true })).toBeVisible();
+  await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });
@@ -211,6 +217,173 @@ test("ko_plate template: completing the main draw computes a seed proposal; conf
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByText(expectedLoserNames[0]!).first()).toBeVisible({ timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+});
+
+// Swiss Knockout: the picker builds it, the Top N knob reaches 3 (the shape
+// the owner asked for and the one a power-of-two-only list cannot express),
+// and the bracket that comes out the far end is the right shape IN THE
+// BROWSER — one bye for the swiss winner, a real 2nd-v-3rd semi-final, and a
+// Final already holding the bye entrant. Not "the API returned 200": the
+// assertions below read the division page's own bracket panel and run sheet.
+//
+// This runs the stages EXACTLY as the picker lays them down — no rounds PUT.
+// It used to need one: a swiss with no `config.rounds` could never complete,
+// so the finals half was never seeded. `swissGen` now persists the field's
+// derived budget at the first generation, which this test pins below off the
+// live API rather than trusting the unit suite for it.
+test("swiss_knockout template: Top 3 builds a one-bye bracket the division page renders", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `SwissKO ${TAG}`,
+    visibility: "private",
+  });
+  const competitionId = comp.data!.id;
+  await page.goto(await competitionPath(page.request, competitionId, "/d/new"));
+  await page.getByRole("textbox").first().fill(`SwissKO ${TAG}`);
+  // Generic/Score, for the same reason ko_plate above picks it: the wizard
+  // defaults to the catalog's first sport and `generic.result` would 422.
+  await page.locator("label", { hasText: "Sport" }).locator("select").selectOption({ label: "Generic" });
+  await page.locator("label", { hasText: "Variant" }).locator("select").selectOption({ label: "Score" });
+  await page.getByRole("button", { name: "Format", exact: true }).click();
+  await page.getByText("Swiss Knockout", { exact: true }).click();
+
+  // The knob: scoped by "Qualify to finals", NOT bare "Qualify" — the
+  // "Qualifying + Main draw" picker card matches that too and the locator
+  // goes strict-mode ambiguous.
+  const qualify = page.locator("label", { hasText: "Qualify to finals" }).locator("select");
+  // A reachability check would pass on any list, so pin the MEMBERSHIP: a
+  // generic bracket makes 3 and 6 real shapes, and the power-of-two list the
+  // other templates use cannot express the case this test then drives.
+  await expect(qualify).toHaveValue("4");
+  expect(
+    await qualify.evaluate((e) => [...(e as HTMLSelectElement).options].map((o) => o.text)),
+  ).toEqual(["Top 2", "Top 3", "Top 4", "Top 6", "Top 8", "Top 12", "Top 16", "Top 24", "Top 32"]);
+  // And pin the ENDS on their own. `format.swiss_knockout.body.1` promises
+  // "anything from 2 to 32" in all four locales, and the Settings tab's own
+  // Top N input is min 2 / max 32 — a wizard that stopped short of either end
+  // made that copy false and put the biggest brackets out of reach until
+  // after the division already existed.
+  const span = await qualify.evaluate((e) =>
+    [...(e as HTMLSelectElement).options].map((o) => Number(o.value)),
+  );
+  expect([Math.min(...span), Math.max(...span)]).toEqual([2, 32]);
+  await qualify.selectOption({ label: "Top 3" });
+
+  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await page.getByRole("button", { name: /create division/i }).click();
+  await page.waitForURL(/\/o\/[^/]+\/c\/[^/]+\/d\/(?!new(?:$|[/?]))[^/?]+/, { timeout: 30_000 });
+  const slug = page.url().match(/\/d\/([^/?]+)/)![1]!;
+  const divisions = await apiJson<{ id: string; slug: string }[]>(
+    page.request,
+    `/api/v1/competitions/${competitionId}/divisions`,
+  );
+  const divisionId = divisions.data!.find((d) => d.slug === slug)!.id;
+
+  type Stage = { id: string; seq: number; kind: string; config: Record<string, unknown>; progression: unknown };
+  const stages = await apiJson<Stage[]>(page.request, `/api/v1/divisions/${divisionId}/stages`);
+  expect(stages.data!.map((s) => s.kind)).toEqual(["swiss", "knockout"]);
+  // What the picker actually sent: rank-adjacent pairing, and the knob's 3 —
+  // not the template's default 4.
+  expect(stages.data!.find((s) => s.seq === 1)!.config).toMatchObject({ pairing: "rank_adjacent" });
+  expect(stages.data!.find((s) => s.seq === 2)!.progression).toMatchObject({
+    sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+    placement: "rank_order",
+    timing: "setup",
+  });
+
+  // The picker declares no rounds, and nothing here adds any.
+  expect(stages.data!.find((s) => s.seq === 1)!.config).not.toHaveProperty("rounds");
+  const swissId = stages.data!.find((s) => s.seq === 1)!.id;
+  const koId = stages.data!.find((s) => s.seq === 2)!.id;
+
+  const names = ["Ann", "Bo", "Cy", "Di"];
+  const { ids } = await addEntrantsViaApi(request, divisionId, names);
+  const nameOf = new Map(ids.map((id, i) => [id, names[i]!]));
+  const rank = (id: string | null) => names.indexOf(nameOf.get(id ?? "") ?? "zz");
+
+  type Fx = { id: string; stage_id: string; status: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null };
+  const fixturesOf = async (stageId: string): Promise<Fx[]> => {
+    const all = await apiJson<Fx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+    return (all.data ?? []).filter((f) => f.stage_id === stageId);
+  };
+
+  // Day one: the bracket exists as placeholders before a ball is struck.
+  const dayOne = await apiJson<{ created: number }>(request, `/api/v1/stages/${koId}/generate`, "POST");
+  expect(dayOne.data!.created).toBe(3); // 2 round-0 lines + the Final
+  await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST");
+  // Generating the swiss writes the field's own budget down. Read back off the
+  // live API, not the unit suite: this is the number the completion predicate
+  // will read, and without it everything below this line stalls at the
+  // handoff into the knockout.
+  const generated = await apiJson<Stage[]>(page.request, `/api/v1/divisions/${divisionId}/stages`);
+  expect(generated.data!.find((s) => s.seq === 1)!.config).toMatchObject({ rounds: 3 });
+  await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+
+  // Play the swiss out, TAPPING the organiser's own "Pair next round" control
+  // between rounds rather than POSTing /generate — the pairing seam is only
+  // proven through the control that actually issues it.
+  const decide = async (fid: string, a: number, b: number) => {
+    const st = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fid}/state`);
+    await apiJson(request, `/api/v1/fixtures/${fid}/events`, "POST", {
+      expected_seq: st.data!.last_seq,
+      type: "generic.result",
+      payload: { p1Score: a, p2Score: b },
+    });
+  };
+  // 4 entrants get the field's own 3-round budget (lib/swiss-rounds.ts), and
+  // the loop is written to that number rather than to "until nothing grows":
+  // "Pair next round" stays on screen past the cap, so a growth-driven loop
+  // reads its own last no-op tap as a failure.
+  const SWISS_ROUNDS = 3;
+  for (let round = 1; round <= SWISS_ROUNDS; round++) {
+    for (const f of await fixturesOf(swissId)) {
+      if (!f.home_entrant_id || !f.away_entrant_id) continue;
+      if (["decided", "finalized"].includes(f.status)) continue;
+      const homeWins = rank(f.home_entrant_id) < rank(f.away_entrant_id);
+      await decide(f.id, homeWins ? 2 : 0, homeWins ? 0 : 2);
+    }
+    if (round === SWISS_ROUNDS) break;
+    await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+    await page.getByRole("button", { name: /pair next round/i }).first().click();
+    await expect
+      .poll(async () => (await fixturesOf(swissId)).length, { timeout: 20_000 })
+      .toBe(2 * (round + 1));
+  }
+  // Every pair met exactly once over those three rounds, so the table is
+  // strict on wins: Ann > Bo > Cy > Di.
+  expect(await fixturesOf(swissId)).toHaveLength(6);
+
+  const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${swissId}/complete`, "POST");
+  expect(done.data!.completed).toBe(true);
+  const proposal = await apiJson<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
+    request,
+    `/api/v1/stages/${koId}/seed-proposal`,
+    "POST",
+  );
+  expect(proposal.data!.computed.qualifiers.map((q) => nameOf.get(q.entrantId))).toEqual(["Ann", "Bo", "Cy"]);
+  await apiJson(request, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", {
+    proposalId: proposal.data!.id,
+  });
+
+  // ── the shape, IN THE BROWSER ──
+  await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
+  const bracket = page.getByTestId("bracket-panel");
+  await expect(bracket.getByText("Cy", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(bracket.getByText("Bo", { exact: true }).first()).toBeVisible();
+  // Two knockout round groups on the run sheet and no third: a Top 3 pads to
+  // a 4-slot bracket, which is a semi-final round and a final. A quarter-final
+  // here would mean the bracket was sized to 8.
+  await expect(page.getByText("Knockout — Semi-finals")).toBeVisible();
+  await expect(page.getByText("Knockout — Final", { exact: true })).toBeVisible();
+  await expect(page.getByText("Quarter-final")).toHaveCount(0);
+  // Di finished 4th and did not qualify: she is nowhere in the bracket.
+  await expect(bracket.getByText("Di", { exact: true })).toHaveCount(0);
+
+  await expectNoHorizontalScroll(page);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(bracket.getByText("Cy", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
 });
 
