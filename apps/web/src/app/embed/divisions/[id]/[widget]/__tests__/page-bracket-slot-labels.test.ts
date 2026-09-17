@@ -175,10 +175,12 @@ describe("embed bracket widget — a waiting side names its feeder's ROUND (R10d
 describe("embed bracket widget — its card footers are in the org's locale (B1)", () => {
   /** How many times `text` renders as a whole text node. */
   const count = (html: string, text: string) => html.split(`>${attr(text)}<`).length - 1;
-  /** Each card's footer text (its markup, tags stripped), keyed by the card's href. */
+  /** Each card's footer text (its markup, tags stripped), keyed by the card's
+   *  href. Cards link to their fixture; the widget's other link is the
+   *  attribution beneath it (fix round 2), which has no footer. */
   const footersOf = (html: string): Record<string, string> =>
     Object.fromEntries(
-      [...html.matchAll(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => {
+      [...html.matchAll(/<a[^>]*href="([^"]*\/fixtures\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g)].map((m) => {
         const card = m[2]!;
         const at = card.lastIndexOf('<div class="mt-1.5');
         expect(at, `the footer of ${m[1]}`).toBeGreaterThan(-1);

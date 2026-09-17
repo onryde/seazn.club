@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
-import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
+import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
@@ -421,7 +421,7 @@ export function Schedule({
               const anchor = list.find((x) => x.scheduled_at)?.scheduled_at;
               return anchor ? (
                 <span className="font-sans text-[10px] font-medium normal-case tracking-normal text-ink-muted/70">
-                  {copy.timesIn.replace("{zone}", fmtZoneAbbrev(tz, anchor))}
+                  {copy.timesIn.replace("{zone}", fmtPublicZoneAbbrev(locale, tz, anchor))}
                 </span>
               ) : null;
             })()}

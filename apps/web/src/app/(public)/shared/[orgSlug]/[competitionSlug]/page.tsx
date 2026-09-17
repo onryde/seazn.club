@@ -17,8 +17,7 @@
 // and pre-resolves every string in the document against it: `divisionName`,
 // board labels, format lines, slot sentences. Those strings arrive already
 // translated and this page cannot re-translate them. So a page that resolved
-// the VIEWER's locale for its chrome would put two languages in one panel,
-// three once `lib/format.ts`'s en-GB dates are counted.
+// the VIEWER's locale for its chrome would put two languages in one panel.
 //
 // And this route is ISR (`revalidate` below). A per-visitor locale read would
 // make the cached copy wrong for everybody who is not the visitor who warmed
@@ -288,9 +287,9 @@ export default async function CompetitionHomePage({ params }: Props) {
                   "4 September 2026" for a competition starting on the 5th.
                   `competitionDateLine` fixes the zone internally so no caller
                   can choose it — see its own header for the full reasoning. */}
-              {competitionDateLine(hub.info) ? (
+              {competitionDateLine(hub.info, locale) ? (
                 <p data-testid="mh-hero-dates" className="mt-2 text-sm text-court-muted">
-                  {competitionDateLine(hub.info)}
+                  {competitionDateLine(hub.info, locale)}
                 </p>
               ) : null}
               {/* The title sponsor, under the competition name (owner ruling

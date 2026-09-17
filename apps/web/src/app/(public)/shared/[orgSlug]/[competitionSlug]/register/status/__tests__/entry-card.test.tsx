@@ -12,6 +12,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
 
@@ -229,4 +232,55 @@ describe("EntryCard — reg-status-outcome bench hook", () => {
     expect(other).toContain('data-registration-id="reg-zzz-999"');
     expect(other).not.toContain('data-registration-id="reg-abc-123"');
   });
+});
+
+// Owner ruling 2026-09-16: a public page's dates are in the locale its copy is
+// in, and English is day-month. The deadline went through `fmtDateTime`, which
+// is en-GB in every locale — so a Spanish registrant read "15 Mar 2026, 05:30"
+// inside a Spanish sentence. The zone is the org's, named in the expectation.
+describe("EntryCard — the deadline is written in the page's locale", () => {
+  const DEADLINE = "2026-03-15T00:00:00.000Z";
+  const UI = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const render = (locale: keyof typeof UI) => {
+    const props = baseProps();
+    return renderToStaticMarkup(
+      <EntryCard
+        {...props}
+        locale={locale}
+        ui={UI[locale] as Dict}
+        entry={{ ...props.entry, free_agent: true, assigned_team_name: null, pool_place_by_at: DEADLINE }}
+        cart={{ ...props.cart, timezone: "Asia/Kolkata" }}
+      />,
+    );
+  };
+
+  it("en: day-month, the organiser's zone, named", () => {
+    expect(render("en")).toContain("15 Mar 2026, 05:30 IST");
+  });
+
+  for (const locale of ["es", "fr", "nl"] as const) {
+    it(`${locale}: that locale's own Intl form`, () => {
+      const own = new Intl.DateTimeFormat(locale, {
+        timeZone: "Asia/Kolkata",
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(DEADLINE));
+      expect(own, "premise: differs from en-GB").not.toBe("15 Mar 2026, 05:30");
+      const html = render(locale);
+      expect(html).toContain(own);
+      expect(html).not.toContain("15 Mar 2026, 05:30");
+    });
+
+    it(`${locale}: the zone label beside it is Intl's in ${locale}, never the English "IST"`, () => {
+      const at = new Date(DEADLINE);
+      const own = new Intl.DateTimeFormat(locale, { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }).format(at);
+      const zone = new Intl.DateTimeFormat(locale, { timeZone: "Asia/Kolkata", timeZoneName: "short" })
+        .formatToParts(at)
+        .find((p) => p.type === "timeZoneName")?.value;
+      expect(zone, "premise: not the English abbreviation").not.toBe("IST");
+      const html = render(locale);
+      expect(html).toContain(`${own} ${zone}`);
+      expect(html).not.toContain("IST");
+    });
+  }
 });

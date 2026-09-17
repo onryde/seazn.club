@@ -398,6 +398,10 @@ export default async function DivisionPage({
           }),
         )
       : [];
+  // The standings table and results grid take their words from the PUBLIC
+  // dictionary (the same helpers as the hub's table), in this viewer's
+  // locale. Loaded only on the tab that draws them, like `standings` above.
+  const publicDict = tab === "standings" ? await getDictionary(locale, "public") : {};
 
   // Stream Overlay W1 (task 6) — the per-PAGE half of every run-sheet row's
   // stream panel, resolved ONCE here rather than per row.
@@ -718,6 +722,7 @@ export default async function DivisionPage({
                         entrantNames={entrantNames}
                         entrantLogos={entrantLogos}
                         caption={caption}
+                        dict={publicDict}
                       />
                       {poolFixtures.length > 0 && (
                         <details>
@@ -736,6 +741,7 @@ export default async function DivisionPage({
                                   ? routes.fixture(orgSlug, compSlug, divSlug, row.fixture_no)
                                   : "#";
                               }}
+                              dict={publicDict}
                             />
                           </div>
                         </details>

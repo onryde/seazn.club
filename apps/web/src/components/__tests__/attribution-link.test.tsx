@@ -14,8 +14,9 @@ import { AttributionLink } from "../attribution-link";
 // element's props instead of rendering to a DOM.
 describe("AttributionLink", () => {
   it("links to /start with surface UTM and fires the event on click", () => {
-    const el = AttributionLink({ surface: "badge" });
-    expect(el.props.children).toMatch(/run your own free/i);
+    const el = AttributionLink({ surface: "badge", label: "Organiza el tuyo gratis" });
+    // The words are the caller's (the page's locale); only the arrow is ours.
+    expect(el.props.children).toBe("Organiza el tuyo gratis →");
     expect(el.props.href).toContain("seazn.club/start");
     expect(el.props.href).toContain("utm_source=badge");
     el.props.onClick();

@@ -28,6 +28,7 @@ import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, maskDisplayName, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
+import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
 import type { PlayerMatchLine } from "./public-player-matches";
 
@@ -241,6 +242,11 @@ export interface PublicDivision {
    *  Optional so a hand-built `PublicDivision` in an existing test still
    *  type-checks — every real query that builds one now selects it. */
   config?: unknown;
+  /** T16b fix round 3 — `sport_variants.name` for this division's variant
+   *  (this org's own row over the system row), the FALLBACK `variantLabel`
+   *  prints only for a variant `VARIANT_LABEL_KEYS` does not name. Optional
+   *  for the same hand-built-fixture reason as the fields above. */
+  variant_name?: string | null;
 }
 
 export interface PublicFixture {
@@ -554,7 +560,16 @@ export async function getPublicCompetition(
                -- these (see PublicDivision's own doc comment) — a cheap
                -- primary-key join to the base table rather than widening
                -- that view for every other consumer of it.
-               dv.youth, dv.player_name_display, dv.config
+               dv.youth, dv.player_name_display, dv.config,
+               -- T16b fix round 3: the stored format name, the fallback for a
+               -- variant the dictionary map does not name (variant-label.ts).
+               -- System rows and this org's own only, the org's row first —
+               -- the same scoping as getPublicFixture's variant lookup.
+               (select v.name from sport_variants v
+                 where v.sport_key = d.sport_key and v.key = d.variant_key
+                   and (v.org_id is null or v.org_id = ${org.id})
+                 order by v.org_id nulls last
+                 limit 1) as variant_name
         from public_divisions_v d
         left join sports s on s.key = d.sport_key
         join divisions dv on dv.id = d.id
@@ -951,9 +966,17 @@ export async function getPublicFixture(
       //
       // Scoped to system rows and this org's own: variants are org-scoped, and
       // a bare match on (sport_key, key) would happily return ANOTHER org's
-      // renamed variant. The org's own row wins where both exist, which is what
-      // renaming a variant is for; the key remains the fallback, so a division
-      // pointing at a variant the catalog no longer has still says something.
+      // renamed variant. Between those two rows the org's own is read first.
+      //
+      // PRECEDENCE on public pages (`variantLabel`, variant-label.ts): the
+      // dictionary word wins for every engine-declared variant key, in the
+      // org's locale; this row is the fallback only for a key the map does not
+      // name (an org's own custom variant), and the raw key after that. So an
+      // org RENAME of an engine-declared key (e.g. its own row for `t20`) does
+      // NOT show publicly — deliberate (T16b fix round 3: a variant is copy in
+      // four locales, a rename is one English string), and pinned by
+      // public-fixture-format-label.test.ts. Nothing in the product writes org
+      // rows today; an org-variant editor must settle this before it ships.
       const [variantRow] = await sql<{ name: string }[]>`
         select name from sport_variants
         where sport_key = ${division.sport_key} and key = ${division.variant_key}
@@ -967,7 +990,13 @@ export async function getPublicFixture(
         division: {
           sportKey: division.sport_key,
           moduleVersion: division.module_version,
-          formatLabel: variantRow?.name ?? division.variant_key,
+          // T16b fix round 3: the dictionary's word for an engine-declared
+          // variant, in the org's locale; the catalog name above only for a
+          // variant the map does not name, the key after that.
+          formatLabel: variantLabel(
+            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null },
+            (key) => msgFor(locale, key),
+          ),
           tz: tzRow?.division_tz ?? null,
           youth: division.youth ?? false,
           playerNameDisplay: division.player_name_display ?? null,

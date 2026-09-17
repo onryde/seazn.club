@@ -16,7 +16,7 @@
 // `competitionDateLine` from this file on the server.
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { UTC, fmtDate } from "@/lib/format";
+import { UTC, fmtPublicDate } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
@@ -34,11 +34,10 @@ export interface InfoTabProps {
    * (review F9). `competition-hub.ts:368` builds the whole document in the
    * ORG's `default_locale`, so every pre-resolved string in it — the board
    * labels on the Stats tab, `divisionName` everywhere — is org-language. This
-   * prop is the viewer's, and drives the venue conjunction. The dates are
-   * en-GB in all four. A Spanish viewer of an English org therefore reads
-   * Spanish chrome, English board labels and English dates on one screen. That
-   * is the shipped behaviour of the merged document, not a choice this file
-   * makes; what Task 11 decides is which dict it hands down here.
+   * prop drives the venue conjunction and the dates (owner ruling 2026-09-16:
+   * public dates are in the page's locale, English day-month). The competition
+   * page hands down the document's locale, so today the three agree; a caller
+   * that handed down a different one would mix languages on one screen.
    */
   locale: Locale;
   /** The competition's own prose. The page renders it (`renderProse` +
@@ -90,13 +89,12 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * Kept, corrected, because the trap itself is worth naming: a `date` column is
  * a wall-clock DAY, and any zone at all — including none — can move it.
  *
- * ── AND IN ENGLISH, IN EVERY LOCALE ────────────────────────────────────────
- * `format.ts:10` pins `const LOCALE = "en-GB"` and `fmtDate` takes no locale
- * parameter — a repo-wide, deliberate deferral ("the v5 i18n wave threads the
- * resolved locale through the same signatures"). The brief's "`fmtDate` in
- * `Intl` of the org locale" describes something the helper cannot do today.
- * Threading a locale through it is that wave's work, not this tab's: it would
- * move every date on every surface at once.
+ * ── IN THE PAGE'S LOCALE ───────────────────────────────────────────────────
+ * Owner ruling 2026-09-16: a public page's dates are in the org's locale, and
+ * English is day-month. `fmtPublicDate` is `fmtDate`'s public sibling — same
+ * zone handling, locale through `intlLocaleFor` — because `fmtDate` itself
+ * stays en-GB for the organiser surfaces that call it. Until this ruling the
+ * line read "1 September 2026" in all four locales.
  *
  * ── WHY NOT `fmtRange` ─────────────────────────────────────────────────────
  * `format.ts`'s own range helper returns "" when `from` is null, which would
@@ -104,13 +102,16 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * schema makes the two nullable independently, so both halves are filtered and
  * de-duplicated instead.
  */
-export function competitionDateLine(info: {
-  startsOn: string | null;
-  endsOn: string | null;
-}): string {
+export function competitionDateLine(
+  info: {
+    startsOn: string | null;
+    endsOn: string | null;
+  },
+  locale: string,
+): string {
   const days = [info.startsOn, info.endsOn]
     .filter((d): d is string => d !== null)
-    .map((d) => fmtDate(UTC, d, DATE_OPTS));
+    .map((d) => fmtPublicDate(locale, UTC, d, DATE_OPTS));
   // De-duplicated on the FORMATTED value, so a one-day competition reads "1
   // September 2026" rather than the same date twice with a dash between it.
   return [...new Set(days)].join(" – ");
@@ -195,7 +196,7 @@ export function InfoTab({
   shareSlot,
 }: InfoTabProps) {
   const info = doc.info;
-  const dates = competitionDateLine(info);
+  const dates = competitionDateLine(info, locale);
   // `Intl.ListFormat` on the VIEWER's locale, the same helper
   // `components/v2/stages-panel.tsx:1343` uses and for the same reason: a
   // hardcoded ", " is English punctuation, and the conjunction that ends the

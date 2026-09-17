@@ -15,6 +15,7 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import { renderProse } from "@/lib/prose";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { ShareButton } from "@/components/share-button";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
@@ -29,6 +30,9 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
+import { variantLabel } from "@/server/public-site/variant-label";
+import { sportLabel } from "@/lib/scoring-vocab";
+import { pickDictPrefixes } from "@/lib/i18n-subset";
 
 export const revalidate = 30;
 
@@ -46,9 +50,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { orgSlug, competitionSlug, divisionSlug } = await params;
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
   if (!data) return {};
+  // The org's language, like every word on the page (ISR: never the viewer's).
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
   return {
     title: `${data.division.name} — ${data.competition.name}`,
-    description: `Schedule, standings and entrants for ${data.division.name} at ${data.competition.name}`,
+    description: t(dict, "division.metaDescription", {
+      division: data.division.name,
+      competition: data.competition.name,
+    }),
     ...(data.competition.visibility === "unlisted"
       ? { robots: { index: false, follow: false } }
       : {}),
@@ -103,6 +112,14 @@ export default async function DivisionHomePage({ params }: Props) {
   // Accept-Language — a per-visitor choice would need a request-scoped read and
   // would make every cached copy wrong for somebody.
   const dict = await getDictionary(orgLocale, "public");
+  // `ShareButton` reads its label through `useMsg()` (ui.json), which needs a
+  // `<DictProvider>` ancestor to see any locale but English — the fixture
+  // page's own finding, and this page had none either (Task 16 review, I1).
+  // Only the `share.*` keys: the provider's `dict` is a client prop, serialised
+  // into this ISR page's flight payload, and the whole ui.json is 324–365 KB
+  // for the two words ShareButton reads (T16b re-review I-r2-1). An island
+  // added under this provider that reads another prefix adds it here.
+  const ui = pickDictPrefixes(await getDictionary(orgLocale, "ui"), ["share."]);
   const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
     msgFor(orgLocale, k, v);
   // R10d n4: the Bracket names a side still waiting on a match through the
@@ -172,7 +189,7 @@ export default async function DivisionHomePage({ params }: Props) {
         <span className="animate-trophy text-4xl" aria-hidden>🏆</span>
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-300">
-            Champion
+            {t(dict, "table.champion")}
           </p>
           <p className="truncate font-display text-3xl font-bold uppercase leading-tight tracking-tight">
             {entrantNames[championId] ?? "—"}
@@ -201,6 +218,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 slotText={namer.slot}
                 copy={scheduleCopy}
                 tz={tz}
+                locale={orgLocale}
               />
             </section>
           );
@@ -229,14 +247,15 @@ export default async function DivisionHomePage({ params }: Props) {
                     entrantLogos={entrantLogos}
                     caption={
                       snap.pool_id
-                        ? `${stage.name} — ${poolName.get(snap.pool_id) ?? "Pool"}`
+                        ? `${stage.name} — ${poolName.get(snap.pool_id) ?? t(dict, "table.pool")}`
                         : stage.name
                     }
+                    dict={dict}
                   />
                   {poolFixtures.length > 0 && (
                     <details>
                       <summary className="cursor-pointer text-xs font-medium text-ink-muted hover:text-ink">
-                        Results grid
+                        {t(dict, "division.resultsGrid")}
                       </summary>
                       <div className="mt-2">
                         <ResultsMatrix
@@ -245,6 +264,7 @@ export default async function DivisionHomePage({ params }: Props) {
                           entrantLogos={entrantLogos}
                           fixtures={poolFixtures}
                           fixtureHref={(id) => `${basePath}/fixtures/${id}`}
+                          dict={dict}
                         />
                       </div>
                     </details>
@@ -257,10 +277,10 @@ export default async function DivisionHomePage({ params }: Props) {
       })}
       {standings.length === 0 && !stages.some((s) => BRACKET_KINDS.has(s.kind)) ? (
         <p className="rounded-xl border border-dashed border-zinc-300 bg-surface p-6 text-center text-sm text-ink-muted">
-          Standings appear after the first results.
+          {t(dict, "division.standingsEmpty")}
         </p>
       ) : null}
-      <SuspensionsStrip suspensions={suspensions} />
+      <SuspensionsStrip suspensions={suspensions} dict={dict} locale={orgLocale} />
     </div>
   );
 
@@ -275,7 +295,7 @@ export default async function DivisionHomePage({ params }: Props) {
             <span className="truncate">{e.display_name}</span>
             {e.seed ? (
               <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 font-sans text-[11px] font-medium text-accent-strong">
-                Seed {e.seed}
+                {t(dict, "division.seed", { seed: e.seed })}
               </span>
             ) : null}
           </p>
@@ -314,109 +334,117 @@ export default async function DivisionHomePage({ params }: Props) {
         </li>
       ))}
       {entrants.length === 0 ? (
-        <p className="text-sm text-ink-muted">No entrants yet.</p>
+        <p className="text-sm text-ink-muted">{t(dict, "division.entrantsEmpty")}</p>
       ) : null}
     </ul>
   );
 
   return (
-    <div style={publicThemeStyle(competition.branding)}>
-      <nav className="mb-4 text-xs text-ink-muted">
-        <Link href={`/shared/${org.slug}`} className="hover:text-accent-strong hover:underline">
-          {org.name}
-        </Link>{" "}
-        /{" "}
-        <Link
-          href={`/shared/${org.slug}/${competition.slug}`}
-          className="hover:text-accent-strong hover:underline"
-        >
-          {competition.name}
-        </Link>
-      </nav>
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
-        <h1 className="font-display text-4xl font-bold uppercase leading-none tracking-tight text-ink sm:text-5xl">
-          {division.name}
-        </h1>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen. */}
+    <DictProvider dict={ui} locale={orgLocale}>
+      <div style={publicThemeStyle(competition.branding)}>
+        <nav className="mb-4 text-xs text-ink-muted">
+          <Link href={`/shared/${org.slug}`} className="hover:text-accent-strong hover:underline">
+            {org.name}
+          </Link>{" "}
+          /{" "}
           <Link
-            href={`/shared/${org.slug}/${competition.slug}/${division.slug}/present`}
-            className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink"
+            href={`/shared/${org.slug}/${competition.slug}`}
+            className="hover:text-accent-strong hover:underline"
           >
-            {/* N1e e7: the label in the org's locale; the ▸ is decoration. */}
-            {t(dict, "division.present")} <span aria-hidden="true">▸</span>
+            {competition.name}
           </Link>
-          {/* Standings share (v3/10 #2) — the link unfurls into the OG card. */}
-          <ShareButton
-            title={`${division.name} — ${competition.name}`}
-            text={`${division.name} standings & fixtures — ${competition.name}:`}
-            url={`/shared/${org.slug}/${competition.slug}/${division.slug}`}
-          />
+        </nav>
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+          <h1 className="font-display text-4xl font-bold uppercase leading-none tracking-tight text-ink sm:text-5xl">
+            {division.name}
+          </h1>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen. */}
+            <Link
+              href={`/shared/${org.slug}/${competition.slug}/${division.slug}/present`}
+              className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink"
+            >
+              {/* N1e e7: the label in the org's locale; the ▸ is decoration. */}
+              {t(dict, "division.present")} <span aria-hidden="true">▸</span>
+            </Link>
+            {/* Standings share (v3/10 #2) — the link unfurls into the OG card. */}
+            <ShareButton
+              title={`${division.name} — ${competition.name}`}
+              text={t(dict, "division.share.text", { division: division.name, competition: competition.name })}
+              url={`/shared/${org.slug}/${competition.slug}/${division.slug}`}
+            />
+          </div>
         </div>
-      </div>
-      <p className="mb-6 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
-        <span className="font-medium text-zinc-600">
-          {division.sport_name ?? division.sport_key}
-        </span>
-        <span className="rounded-full bg-accent-soft px-2 py-0.5 uppercase text-accent-strong">
-          {division.variant_key}
-        </span>
-        {stages.map((s) => (
-          <span
-            key={s.id}
-            className={`rounded-full px-2 py-0.5 ${
-              s.status === "complete"
-                ? "bg-emerald-50 text-emerald-700"
-                : "bg-zinc-100 text-zinc-600"
-            }`}
-          >
-            {stageById.get(s.id)?.name}
-            {s.status === "complete" ? " ✓" : ""}
+        <p className="mb-6 flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+          <span className="font-medium text-zinc-600">
+            {/* T16b fix round 4: `sport.<key>` in the org's locale, the same
+                helper /discover names sports with — `sport_name` is the
+                English `sports.name` catalog row. */}
+            {sportLabel(division.sport_key, lookup)}
           </span>
-        ))}
-      </p>
+          <span className="rounded-full bg-accent-soft px-2 py-0.5 uppercase text-accent-strong">
+            {variantLabel(
+              { sportKey: division.sport_key, variantKey: division.variant_key, storedName: division.variant_name ?? null },
+              lookup,
+            )}
+          </span>
+          {stages.map((s) => (
+            <span
+              key={s.id}
+              className={`rounded-full px-2 py-0.5 ${
+                s.status === "complete"
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-zinc-100 text-zinc-600"
+              }`}
+            >
+              {stageById.get(s.id)?.name}
+              {s.status === "complete" ? " ✓" : ""}
+            </span>
+          ))}
+        </p>
 
-      {championBanner}
+        {championBanner}
 
-      {division.description ? (
-        <section className="mb-6">
-          <CompetitionProse html={await renderProse(division.description)} />
-        </section>
-      ) : null}
+        {division.description ? (
+          <section className="mb-6">
+            <CompetitionProse html={await renderProse(division.description)} />
+          </section>
+        ) : null}
 
-      {/* The ids are the `?tab=` values the hub already links to
-          (`competition-hub.ts:584,608`) and are deliberately NOT translated —
-          a shared link has to survive the reader's locale. The LABELS are, and
-          were English in every locale until now: the four keys have shipped in
-          en/es/fr/nl all along and nothing rendered them, so their only
-          consumer was the coverage test asserting they exist. */}
-      <Tabs
-        ids={["schedule", "standings", "entrants"]}
-        labels={[
-          t(dict, "division.tab.schedule"),
-          t(dict, "division.tab.standings"),
-          t(dict, "division.tab.entrants"),
-        ]}
-        label={t(dict, "division.tabsLabel")}
-      >
-        {[
-          <Schedule
-            key="schedule"
-            fixtures={fixtures}
-            entrantNames={entrantNames}
-            divisionPath={basePath}
-            tz={tz}
-            slotLabels={slotLabels}
-            roundLabels={roundLabels}
-            stageOrder={stageOrder}
-            stageNames={stageNames}
-            copy={scheduleCopy}
-            locale={orgLocale}
-          />,
-          standingsPanel,
-          entrantsPanel,
-        ]}
-      </Tabs>
-    </div>
+        {/* The ids are the `?tab=` values the hub already links to
+            (`competition-hub.ts:584,608`) and are deliberately NOT translated —
+            a shared link has to survive the reader's locale. The LABELS are, and
+            were English in every locale until now: the four keys have shipped in
+            en/es/fr/nl all along and nothing rendered them, so their only
+            consumer was the coverage test asserting they exist. */}
+        <Tabs
+          ids={["schedule", "standings", "entrants"]}
+          labels={[
+            t(dict, "division.tab.schedule"),
+            t(dict, "division.tab.standings"),
+            t(dict, "division.tab.entrants"),
+          ]}
+          label={t(dict, "division.tabsLabel")}
+        >
+          {[
+            <Schedule
+              key="schedule"
+              fixtures={fixtures}
+              entrantNames={entrantNames}
+              divisionPath={basePath}
+              tz={tz}
+              slotLabels={slotLabels}
+              roundLabels={roundLabels}
+              stageOrder={stageOrder}
+              stageNames={stageNames}
+              copy={scheduleCopy}
+              locale={orgLocale}
+            />,
+            standingsPanel,
+            entrantsPanel,
+          ]}
+        </Tabs>
+      </div>
+    </DictProvider>
   );
 }

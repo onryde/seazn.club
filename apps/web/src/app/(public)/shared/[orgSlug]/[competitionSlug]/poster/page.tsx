@@ -18,9 +18,21 @@ export async function generateStaticParams() {
 
 type Props = { params: Promise<{ orgSlug: string; competitionSlug: string }> };
 
-export const metadata: Metadata = {
-  robots: { index: false, follow: false }, // a print artefact, not a landing page
-};
+// Every field a page's metadata leaves out is INHERITED from the root layout,
+// whose title and description are English (`app/layout.tsx`), so this page
+// sets both in the org's language (Task 16 review, I2).
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const robots = { index: false, follow: false }; // a print artefact, not a landing page
+  const { orgSlug, competitionSlug } = await params;
+  const data = await getPublicCompetition(orgSlug, competitionSlug);
+  if (!data) return { robots };
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
+  return {
+    title: t(dict, "qrPoster.metaTitle", { competition: data.competition.name }),
+    description: t(dict, "qrPoster.scan"),
+    robots,
+  };
+}
 
 export default async function PosterPage({ params }: Props) {
   const { orgSlug, competitionSlug } = await params;

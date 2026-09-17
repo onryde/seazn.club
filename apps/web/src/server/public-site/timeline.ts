@@ -268,15 +268,14 @@ const PARAMS_FOR: Record<string, (ctx: ParamCtx) => Params> = {
   "core.suspend": () => ({}),
   "core.resume": () => ({}),
 
+  // A penalty or an own goal is named by its SENTENCE (KEY_OVERRIDE below),
+  // not by an English "(pen)" / "(og)" on `detail`: this builder has no
+  // dictionary, and a flag glued into free text is past any renderer's reach.
   "football.goal": (c) => {
     const assist = nameOf(c, "assist");
-    const flags = [
-      c.payload.ownGoal === true ? "(og)" : "",
-      c.payload.penalty === true ? "(pen)" : "",
-    ];
     return {
       side: sideNameOf(c),
-      detail: detailOf(nameOf(c, "scorer"), assist === "" ? "" : `(${assist})`, ...flags),
+      detail: detailOf(nameOf(c, "scorer"), assist === "" ? "" : `(${assist})`),
     };
   },
   "football.card": (c) => ({
@@ -455,6 +454,15 @@ const KEY_OVERRIDE: Readonly<
   // name a winner" and "there is no winner" take the same, safe branch.
   "boardgame.result": (_payload, sideIndex) =>
     sideIndex === null ? "timeline.boardgame.draw" : null,
+  // Task 16: the goal's own flags choose its sentence. An own goal wins over a
+  // penalty if a ledger ever carries both — the scorer did not score for his
+  // side, whatever the kick was.
+  "football.goal": (payload) =>
+    payload.ownGoal === true
+      ? "timeline.football.ownGoal"
+      : payload.penalty === true
+        ? "timeline.football.penaltyGoal"
+        : null,
   // Same shape for the lineup family: with no side to name, the template that
   // names one would render "Line-up change — " with a dangling dash. Five
   // types, one override, because they share one sentence.

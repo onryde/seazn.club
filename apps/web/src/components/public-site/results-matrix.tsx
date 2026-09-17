@@ -5,6 +5,8 @@
 // come from ScoreSummary.headline, order comes from the standings.
 import Link from "next/link";
 import type { PublicFixture } from "@/server/public-site/data";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { EntityLogo } from "@/components/ui/entity-logo";
 
 interface Props {
@@ -16,6 +18,9 @@ interface Props {
   fixtures: PublicFixture[];
   fixtureHref: (fixtureId: string) => string;
   caption?: string;
+  /** The PUBLIC dictionary, in the page's language — the corner cell and the
+   *  live dot's accessible name are its words, never English literals. */
+  dict: Dict;
 }
 
 const DONE = new Set(["decided", "finalized", "forfeited", "abandoned"]);
@@ -27,6 +32,7 @@ export function ResultsMatrix({
   fixtures,
   fixtureHref,
   caption,
+  dict,
 }: Props) {
   if (entrantIds.length < 2) return null;
   // home → away → fixtures (double round-robins stack two lines in a cell).
@@ -60,7 +66,7 @@ export function ResultsMatrix({
         <thead>
           <tr className="border-b border-zinc-200/80 text-xs text-ink-muted">
             <th scope="col" className="px-3 py-2 text-left font-medium">
-              Home \ Away
+              {t(dict, "division.resultsGrid.corner")}
             </th>
             {entrantIds.map((id) => (
               <th
@@ -111,7 +117,7 @@ export function ResultsMatrix({
                       <span className="flex flex-col items-center gap-0.5">
                         {cell.map((f) =>
                           f.status === "in_play" ? (
-                            <Link key={f.id} href={fixtureHref(f.id)} aria-label="Live">
+                            <Link key={f.id} href={fixtureHref(f.id)} aria-label={t(dict, "matchesHub.live")}>
                               <span className="animate-live-pulse inline-block h-2 w-2 rounded-full bg-emerald-500" />
                             </Link>
                           ) : DONE.has(f.status) && f.summary?.headline ? (

@@ -24,10 +24,10 @@
 //     (`competition-hub-schema.ts:168-169`); `new Date("2026-09-01")` is UTC
 //     midnight, so formatting it in any zone behind UTC rolls the day back. See
 //     the dates block for the executed evidence and the zone this suite uses.
-//  2. `fmtDate` renders in en-GB in EVERY locale — `format.ts:10` pins
-//     `LOCALE` and the helper takes no locale parameter. The brief's "`fmtDate`
-//     in `Intl` of the org locale" is false, repo-wide. The dates assertions
-//     are English on purpose.
+//  2. The dates assertions here are English because the suite renders "en".
+//     (Until the owner's 2026-09-16 ruling `fmtDate` was en-GB in every locale;
+//     the tabs now use `fmtPublicDate`, and `hub-dates-locale.test.tsx` renders
+//     the dates in all four locales.)
 //  3. `info.calendars[]` carries NO slug, and the testid the brief mandates
 //     needs one. Joined on `href`, never on array position — see `calendarSlug`.
 //  4. `mh-leader-{personId}` is not unique. One person tops two boards of the
@@ -1264,17 +1264,17 @@ describe("InfoTab", () => {
     // One sample is not a parity sweep (AGENTS.md 7). All five states of a pair
     // of independently-nullable dates, on the function rather than through five
     // renders — the render above proves the line reaches the DOM.
-    expect(competitionDateLine({ startsOn: null, endsOn: null })).toBe("");
-    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: null })).toBe("1 September 2026");
+    expect(competitionDateLine({ startsOn: null, endsOn: null }, "en")).toBe("");
+    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: null }, "en")).toBe("1 September 2026");
     // An end date with no start is not a shape the console can produce today,
     // but the schema permits it independently and `fmtRange` would silently
     // print NOTHING for it — the reason this is a `filter` and not that helper.
-    expect(competitionDateLine({ startsOn: null, endsOn: "2026-09-20" })).toBe("20 September 2026");
-    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: "2026-09-20" })).toBe(
+    expect(competitionDateLine({ startsOn: null, endsOn: "2026-09-20" }, "en")).toBe("20 September 2026");
+    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: "2026-09-20" }, "en")).toBe(
       "1 September 2026 – 20 September 2026",
     );
     // A one-day competition says its day once, not twice with a dash.
-    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: "2026-09-01" })).toBe(
+    expect(competitionDateLine({ startsOn: "2026-09-01", endsOn: "2026-09-01" }, "en")).toBe(
       "1 September 2026",
     );
   });
@@ -1291,9 +1291,8 @@ describe("InfoTab", () => {
     const venues = h.slice(h.indexOf(`data-testid="mh-info-venues"`));
     expect(venues).toContain("Venues");
     // `Intl.ListFormat`, the same helper `stages-panel.tsx:1343` uses, not a
-    // hardcoded ", ". This is the ONE thing on the tab the `locale` prop is
-    // for — the dates deliberately do not take it (`format.ts:10` pins en-GB
-    // repo-wide, and threading a locale through `fmtDate` is separate work).
+    // hardcoded ", ". The `locale` prop drives this and the dates
+    // (`hub-dates-locale.test.tsx` renders those in all four locales).
     expect(venues).toContain("Riverside Oval and Kings Park");
 
     const empty = render(hubDoc({ divisions: infoDivisions, info: info({ venues: [] }) }));
@@ -1561,10 +1560,14 @@ describe("InfoTab", () => {
     // The list conjunction is the locale's too — "y", not "and". A component
     // that hardcoded `en` here would still pass every label assertion above.
     expect(h).toContain("Riverside Oval y Kings Park");
-    // The DATES stay en-GB in every locale, which is `format.ts`'s repo-wide
-    // deferral and not a gap this tab may close on its own (the brief said
-    // otherwise). Asserted so the divergence is a decision on the record.
-    expect(h).toContain("1 September 2026");
+    // The DATES are Spanish too (owner ruling 2026-09-16). Until then they
+    // stayed en-GB in every locale and this line asserted "1 September 2026".
+    expect(h).toContain(
+      new Intl.DateTimeFormat("es", { timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }).format(
+        new Date("2026-09-01"),
+      ),
+    );
+    expect(h).not.toContain("1 September 2026");
   });
 
   it("the four locales all carry the keys this tab renders", () => {

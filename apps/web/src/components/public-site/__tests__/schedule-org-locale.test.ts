@@ -13,7 +13,7 @@
 // string is read from the dictionaries; the dates from `Intl` in the locale's
 // own tag, in a locale whose weekday differs from en-GB's.
 import { describe, expect, it, vi } from "vitest";
-import { isValidElement, type ReactElement } from "react";
+import { createElement, isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const embedDivisionData = vi.fn();
@@ -243,6 +243,20 @@ describe.each(SURFACES)("public Schedule in the org's locale: %s (N1e e5)", (sur
       expect({ what: probe.what, es: shows(html, es, probe.as) }).toEqual({ what: probe.what, es: true });
       expect({ what: probe.what, en: shows(html, en, probe.as) }).toEqual({ what: probe.what, en: false });
     }
+  });
+
+  it("es org in a named zone: the caption's zone label is es's, never the English 'BST'", async () => {
+    // Task 16: `fmtZoneAbbrev` is en-GB, so a Spanish org on London time read
+    // "horarios en BST" — British Summer Time, an English name. The fixture
+    // zone above is UTC, which reads "UTC" in every locale and cannot tell.
+    const schedule = await scheduleFrom(surface, "es");
+    const html = renderToStaticMarkup(createElement(Schedule, { ...schedule.props, tz: "Europe/London" }));
+    const esZone = new Intl.DateTimeFormat("es", { timeZone: "Europe/London", timeZoneName: "short" })
+      .formatToParts(new Date(`${DAY_1}T18:00:00.000Z`))
+      .find((p) => p.type === "timeZoneName")?.value;
+    expect(esZone, "premise: es does not write BST").not.toBe("BST");
+    expect(shows(html, await valueOf("es", { ns: "public", key: "division.timesIn", vars: { zone: esZone! } }))).toBe(true);
+    expect(html).not.toContain("BST");
   });
 
   it("es org, day view: the day headings are written in es, where the weekday differs from en-GB's", async () => {

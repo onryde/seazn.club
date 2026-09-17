@@ -176,10 +176,10 @@ export interface CompetitionLandingProps {
    * What is NOT in this root's gift, and is worth stating where the props are:
    * `competition-hub.ts:368` builds the whole document in the org's
    * `default_locale`, so every pre-resolved string in it — board labels,
-   * `divisionName` everywhere — is org-language whatever is passed here; and
-   * `lib/format.ts:10` pins `en-GB` for every date on the surface. So a page
-   * that chose to pass a viewer locale would produce three languages in one
-   * panel. Passing the org's collapses it to two.
+   * `divisionName` everywhere — is org-language whatever is passed here, while
+   * the dates follow THIS locale (`fmtPublicDate`, owner ruling 2026-09-16). So
+   * a page that chose to pass a viewer locale would put two languages in one
+   * panel. Passing the org's collapses it to one.
    */
   dict: PublicDict;
   locale: Locale;

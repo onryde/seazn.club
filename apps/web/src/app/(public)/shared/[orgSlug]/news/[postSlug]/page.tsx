@@ -23,6 +23,7 @@ import { PostScorebug } from "@/components/news/post-scorebug";
 import { kindEyebrow, scoreboardFor, TONE_ON_LIGHT } from "@/lib/news-presentation";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 
 export const revalidate = 30;
 export async function generateStaticParams() {
@@ -51,7 +52,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { orgSlug, postSlug } = await params;
   const loaded = await load(orgSlug, postSlug);
   if (!loaded) return {};
-  return { title: `${loaded.post.title} · ${loaded.org.name}` };
+  // A description too: one left out is INHERITED from the root layout, whose
+  // description is English (`app/layout.tsx`) — and a link preview that finds
+  // no og:description reads that one (Task 16 review, I2). The post's kind
+  // and the org's news line, in the org's language.
+  const dict = await getDictionary(orgLocale(loaded.org.default_locale), "public");
+  return {
+    title: `${loaded.post.title} · ${loaded.org.name}`,
+    description: `${t(dict, kindEyebrow(loaded.post.kind).labelKey)} · ${t(dict, "news.feedIntro", { org: loaded.org.name })}`,
+  };
 }
 
 export default async function PostPage({ params }: Props) {
@@ -75,8 +84,10 @@ export default async function PostPage({ params }: Props) {
   // rendered HTML is served to every visitor worldwide, so there is no viewer
   // timezone to resolve against, and without the pin the printed date depends on
   // which host happened to fill the cache.
+  // `intlLocaleFor`: English day-month (owner ruling 2026-09-16), not the US
+  // form bare "en" gives `Intl`.
   const date = post.publishedAt
-    ? new Date(post.publishedAt).toLocaleDateString(locale, {
+    ? new Date(post.publishedAt).toLocaleDateString(intlLocaleFor(locale), {
         day: "numeric",
         month: "short",
         year: "numeric",

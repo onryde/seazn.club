@@ -11,7 +11,7 @@
 // as a plain string.
 import type { ReactNode } from "react";
 import { formatMinor, type Currency } from "@/lib/currency";
-import { fmtDateTime, fmtZoneAbbrev } from "@/lib/format";
+import { fmtPublicDateTime, fmtPublicZoneAbbrev } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
@@ -188,14 +188,18 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
       : formatMinor(entry.amount_cents, cart.currency as Currency, locale);
   const showsFeeLine = entryCountsTowardTotal(entry.status) && money.kind !== "stripe_due";
 
-  // FIX #13(a): org-zone-aware, zone-labelled ("01/09/2026, 00:30 IST", not
-  // hardcoded-UTC "01/09/2026, 19:00" with no label at all). dateStyle/
+  // FIX #13(a): org-zone-aware, zone-labelled ("1 Sept 2026, 00:30 IST", not
+  // hardcoded-UTC "01/09/2026, 19:00" with no label at all), in the page's
+  // locale (owner ruling 2026-09-16: public dates follow the copy's locale,
+  // English day-month; it was en-GB in all four). The zone label follows the
+  // same locale (Task 16): en keeps "IST", es/fr/nl read Intl's own "GMT+5:30"
+  // / "UTC+5:30" rather than an English abbreviation. dateStyle/
   // timeStyle cannot be combined with timeZoneName in one Intl.DateTimeFormat
   // call (throws), so the two are composed by hand — same convention
   // officials-panel.tsx/timezone-preference.tsx already use elsewhere in
   // this codebase.
   const deadlineLabel = (deadline: string) =>
-    `${fmtDateTime(cart.timezone, deadline)} ${fmtZoneAbbrev(cart.timezone, deadline)}`;
+    `${fmtPublicDateTime(locale, cart.timezone, deadline)} ${fmtPublicZoneAbbrev(locale, cart.timezone, deadline)}`;
 
   // RS012 review cleanup: computed once here rather than calling
   // `poolPlaceByDate(entry)` a second time inside the JSX below, which used

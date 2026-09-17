@@ -472,7 +472,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // cannot fail when a rung appears. The renderer can: under `tsc` a seventh
     // rung is a compile error at the `never`, and at runtime it is this throw.
     const rogue = { kind: "playoffs" } as unknown as LandingStatus;
-    expect(() => overviewPlan(rogue, dict)).toThrow(/playoffs/);
+    expect(() => overviewPlan(rogue, dict, "en")).toThrow(/playoffs/);
   });
 
   it("each rung's ORDER is pinned as itself, not only as what a document happened to render", () => {
@@ -488,7 +488,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // Pinned as whole arrays rather than "contains"/"does not contain": the
     // defect a ladder ships is a wrong POSITION, and every containment check
     // passes on a shuffled list.
-    const orderOf = (s: LandingStatus) => overviewPlan(s, dict).order;
+    const orderOf = (s: LandingStatus) => overviewPlan(s, dict, "en").order;
     expect(orderOf({ kind: "live", n: 1 })).toEqual([
       "live",
       "next",
@@ -527,7 +527,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // mutant can kill, which is what the sweep found (setting `finished`'s to
     // "ahead" survived everything).
     for (const rung of ALL_RUNGS) {
-      const plan = overviewPlan(rung, dict);
+      const plan = overviewPlan(rung, dict, "en");
       expect(plan.nextUp !== null, `${rung.kind} pairs its scope with its order`).toBe(
         plan.order.includes("next"),
       );
@@ -535,11 +535,11 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // The two rungs that DO render it disagree about what "next" means, which
     // is the whole reason the scope exists — asserted by value, so collapsing
     // them to one predicate reds here as well as in the render tests.
-    expect(overviewPlan({ kind: "live", n: 1 }, dict).nextUp).toBe("ahead");
+    expect(overviewPlan({ kind: "live", n: 1 }, dict, "en").nextUp).toBe("ahead");
     expect(
-      overviewPlan({ kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "UTC" }, dict).nextUp,
+      overviewPlan({ kind: "next", at: "2026-09-05T13:00:00.000Z", tz: "UTC" }, dict, "en").nextUp,
     ).toBe("ahead");
-    expect(overviewPlan({ kind: "match_day" }, dict).nextUp).toBe("today");
+    expect(overviewPlan({ kind: "match_day" }, dict, "en").nextUp).toBe("today");
     // `live` is the only rung that can carry a live match — every other rung
     // sits below `landingStatus`'s own live check — so a `"live"` entry in any
     // other order would be a section that provably cannot render.
@@ -555,7 +555,7 @@ describe("OverviewTab — the ladder decides the ORDER, and the order alone", ()
     // has the same hole as the cast N3 was filed about: it accepts six entries
     // for a seven-member union without complaint.
     for (const rung of ALL_RUNGS) {
-      const plan = overviewPlan(rung, dict);
+      const plan = overviewPlan(rung, dict, "en");
       if (rung.kind === "live") {
         // THE ONE EXEMPTION, pinned rather than excused. The live rung's
         // sentence said "Live now: 1 match" directly above a section headed
@@ -1216,7 +1216,7 @@ describe("OverviewTab — the register CTA and the slots", () => {
     // `OverviewSection` with nothing ever filling it renders nothing and looks
     // exactly like this test passing.
     for (const rung of ALL_RUNGS) {
-      expect(overviewPlan(rung, dict).order, rung.kind).not.toContain("sponsors");
+      expect(overviewPlan(rung, dict, "en").order, rung.kind).not.toContain("sponsors");
     }
     expect(render(closed, { descriptionSlot: <p>ABOUT THIS CUP</p> })).not.toContain(
       `data-testid="mh-sec-sponsors"`,

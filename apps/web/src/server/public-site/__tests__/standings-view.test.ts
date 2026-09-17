@@ -37,11 +37,21 @@
 // Every mutant compiles and collects, so none is the collection-break shape
 // that reads as a survivor; `numTotalTests` was pinned on each run.
 import { describe, expect, it } from "vitest";
-import type { StandingsRow } from "@seazn/engine/competition";
+import { DERIVED_METRICS, type StandingsRow } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
 import { TableView } from "../competition-hub-schema";
 import {
   buildTableView,
+  columnHeader,
   COMPACT_KEYS,
+  METRIC_HEADER_KEYS,
+  NOTATION_HEADERS,
+  STRUCTURAL_ABBR_KEYS,
+  STRUCTURAL_KEYS,
   TIE_BREAK_MSG_KEYS,
   type TableViewInput,
 } from "../standings-view";
@@ -72,6 +82,7 @@ const base: Omit<TableViewInput, "rows"> = {
     { key: "gf", label: "GF" },
     { key: "ga", label: "GA" },
     { key: "gd", label: "GD" },
+    { key: "pf", label: "PF" },
     { key: "cards", label: "Cards", display: false },
   ],
   cascade: ["points", "gd"],
@@ -113,8 +124,8 @@ describe("buildTableView", () => {
 
   it("compact columns are exactly P W L Pts; metrics are the long tail, and structural titles are localised", () => {
     const rows = [
-      row("a", { played: 2, won: 2, points: 6, metrics: { gf: 5, ga: 1, gd: 4 }, rank: 1 }),
-      row("b", { played: 2, lost: 2, metrics: { gf: 1, ga: 5, gd: -4 }, rank: 2 }),
+      row("a", { played: 2, won: 2, points: 6, metrics: { gf: 5, ga: 1, gd: 4, pf: 7 }, rank: 1 }),
+      row("b", { played: 2, lost: 2, metrics: { gf: 1, ga: 5, gd: -4, pf: 3 }, rank: 2 }),
     ];
     const v = buildTableView({ ...base, rows });
     expect(v.columns.map((c) => [c.key, c.compact])).toEqual([
@@ -124,15 +135,27 @@ describe("buildTableView", () => {
       ["gf", false],
       ["ga", false],
       ["gd", false],
+      ["pf", false],
       ["points", true],
     ]);
     expect(v.columns.every((c) => c.compact === COMPACT_KEYS.has(c.key))).toBe(true);
-    // Structural headers are COPY and get a dictionary key. Metric headers are
-    // the sport's own NOTATION and keep the engine's label as their title too,
-    // exactly as `stat-table.tsx` does for R/B/4s/SR.
+    // Structural headers are COPY and get a dictionary key…
     expect(v.columns[0]!.title).toBe("table.col.played");
-    expect(v.columns[6]!.title).toBe("table.col.points");
-    expect(v.columns[3]).toEqual({ key: "gf", abbr: "GF", title: "GF", compact: false });
+    expect(v.columns[7]!.title).toBe("table.col.points");
+    // …and so is the abbreviation printed over the column (Task 16): "P" is
+    // English, and in Spanish it is the LOST column's letter. GF/GA/GD are
+    // copy too (review M2: a Spanish table writes GF/GC/DG); every OTHER metric
+    // is the sport's own notation and keeps the engine's label as both.
+    expect(v.columns.map((c) => [c.abbr, c.title])).toEqual([
+      ["table.abbr.played", "table.col.played"],
+      ["table.abbr.won", "table.col.won"],
+      ["table.abbr.lost", "table.col.lost"],
+      ["table.abbr.gf", "table.col.gf"],
+      ["table.abbr.ga", "table.col.ga"],
+      ["table.abbr.gd", "table.col.gd"],
+      ["PF", "PF"],
+      ["table.abbr.points", "table.col.points"],
+    ]);
     // The `display: false` spec earns no column at all (positive pair: gf did).
     expect(v.columns.map((c) => c.key)).not.toContain("cards");
   });
@@ -247,6 +270,93 @@ describe("buildTableView", () => {
     // of the eighteen strings reds here rather than in a spectator's browser.
     for (const [trace, dictKey] of Object.entries(TIE_BREAK_MSG_KEYS)) {
       expect(dictKey).toBe(`table.tieBreak.${trace}`);
+    }
+  });
+
+  // Every (key, label) pair a table can print beyond the structural five: each
+  // shipped module's VISIBLE metrics (`standingsColumns` drops `display: false`)
+  // and every derived cascade column. Read off the engine, never typed here, so
+  // a metric added or relabelled there reds below until it is keyed or ruled
+  // notation.
+  const printable = (): [string, string, string][] => [
+    ...builtinModules.flatMap((m) =>
+      m.metrics.filter((spec) => spec.display !== false).map((spec): [string, string, string] => [m.key, spec.key, spec.label]),
+    ),
+    ...DERIVED_METRICS.map((d): [string, string, string] => ["(derived)", d.key, d.label]),
+  ];
+  const keyed = (key: string, label: string) => Object.hasOwn(METRIC_HEADER_KEYS, key) && Object.hasOwn(METRIC_HEADER_KEYS[key]!, label);
+  const notation = (key: string, label: string) => Object.hasOwn(NOTATION_HEADERS, key) && NOTATION_HEADERS[key]!.includes(label);
+
+  it("every metric and derived column a shipped module can print is copy with keys, or ruled notation — never neither", () => {
+    const columns = printable();
+    expect(columns.length, "premise: the engine declares columns to check").toBeGreaterThan(15);
+    const unaccounted = columns.filter(([, key, label]) => !keyed(key, label) && !notation(key, label));
+    expect(unaccounted, "a column that would print its English label in every locale").toEqual([]);
+    expect(columns.filter(([, key, label]) => keyed(key, label) && notation(key, label)), "keyed AND notation").toEqual([]);
+  });
+
+  it("no entry names a column nothing declares (a stale pair would hide a relabel)", () => {
+    const declared = new Set(printable().map(([, key, label]) => `${key}\u0000${label}`));
+    const entries = [
+      ...Object.entries(METRIC_HEADER_KEYS).flatMap(([key, byLabel]) => Object.keys(byLabel).map((label) => `${key}\u0000${label}`)),
+      ...Object.entries(NOTATION_HEADERS).flatMap(([key, labels]) => labels.map((label) => `${key}\u0000${label}`)),
+    ];
+    expect(entries.filter((e) => !declared.has(e)).map((e) => e.replace("\u0000", " / "))).toEqual([]);
+  });
+
+  // The header words that are the SAME word in a locale as in English, by
+  // design — each (key, locale) pair declared, so any other pair equal to
+  // English is a value pasted, not translated (re-review m1). Exact: a pair
+  // listed here that stops being identical reds too.
+  const HEADER_IDENTICAL_BY_DESIGN: Readonly<Record<string, readonly string[]>> = {
+    "table.abbr.gf": ["es"], // goles a favor — GF
+    "table.col.ratio": ["es", "fr"],
+  };
+
+  it("every header key is authored in all four locales, the English value IS the engine's label, and every locale translates every word", () => {
+    const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    const keys = new Set<string>();
+    for (const [key, byLabel] of Object.entries(METRIC_HEADER_KEYS)) {
+      for (const [label, { abbr, title }] of Object.entries(byLabel)) {
+        for (const [locale, dict] of Object.entries(dicts)) {
+          expect(Object.hasOwn(dict, abbr), `${locale} ${abbr}`).toBe(true);
+          expect(Object.hasOwn(dict, title), `${locale} ${title}`).toBe(true);
+        }
+        // English keeps exactly what the engine printed before, over the column.
+        expect(dicts.en![abbr], `${key}/${label}`).toBe(label);
+        keys.add(abbr).add(title);
+      }
+    }
+    for (const k of keys) {
+      for (const locale of ["es", "fr", "nl"]) {
+        const identical = HEADER_IDENTICAL_BY_DESIGN[k]?.includes(locale) ?? false;
+        expect(dicts[locale]![k] === dicts.en![k], `${locale} ${k} = ${JSON.stringify(dicts[locale]![k])}`).toBe(identical);
+      }
+    }
+    expect(Object.keys(HEADER_IDENTICAL_BY_DESIGN).filter((k) => !keys.has(k)), "a stale homograph entry").toEqual([]);
+  });
+
+  it("columnHeader is the one authority both tables read: structural, sport metric by its declared label, and notation", () => {
+    expect(columnHeader({ key: "won", label: "W" }, msg)).toEqual({ abbr: "table.abbr.won", title: "table.col.won" });
+    expect(columnHeader({ key: "ga", label: "GA" }, msg)).toEqual({ abbr: "table.abbr.ga", title: "table.col.ga" });
+    // One key, two words: tennis's sets and badminton's games.
+    expect(columnHeader({ key: "sets_won", label: "Sets won" }, msg)).toEqual({ abbr: "table.col.setsWon", title: "table.col.setsWon" });
+    expect(columnHeader({ key: "sets_won", label: "Games won" }, msg)).toEqual({ abbr: "table.col.gamesWon", title: "table.col.gamesWon" });
+    expect(columnHeader({ key: "set_ratio", label: "Ratio" }, msg)).toEqual({ abbr: "table.col.ratio", title: "table.col.ratio" });
+    expect(columnHeader({ key: "nrr", label: "NRR" }, msg)).toEqual({ abbr: "NRR", title: "NRR" });
+    // A label no module declares for that key is not guessed at.
+    expect(columnHeader({ key: "sets_won", label: "Frames won" }, msg)).toEqual({ abbr: "Frames won", title: "Frames won" });
+    expect(columnHeader({ key: "constructor", label: "X" }, msg)).toEqual({ abbr: "X", title: "X" });
+  });
+
+  it("the structural abbreviation keys are spelled out, one per structural column (NEW-3's shape)", () => {
+    // Task 16: the visible header letters are copy (en "P", es "PJ", fr "J",
+    // nl "GS"), keyed per column. Exact membership against STRUCTURAL_KEYS, so
+    // a structural column added without its abbreviation reds here, and every
+    // value is the literal key for its own column.
+    expect(Object.keys(STRUCTURAL_ABBR_KEYS).sort()).toEqual([...STRUCTURAL_KEYS].sort());
+    for (const [col, dictKey] of Object.entries(STRUCTURAL_ABBR_KEYS)) {
+      expect(dictKey).toBe(`table.abbr.${col}`);
     }
   });
 

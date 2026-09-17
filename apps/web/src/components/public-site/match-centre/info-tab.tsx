@@ -30,6 +30,10 @@ import { t } from "@/lib/i18n-runtime";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
 import { TabPanel } from "./tab-panel";
+// The toss row's `elected` is the engine's own enum token ("bat"/"bowl"); the
+// Summary tab and the Timeline already swap such a token for its `term.*` word,
+// and this tab printed it bare inside a translated sentence (Task 16's sweep).
+import { localiseParams } from "./timeline-tab";
 
 export interface InfoTabProps {
   doc: MatchCentreDocT;
@@ -67,7 +71,7 @@ export function InfoTab({ doc, dict }: InfoTabProps): ReactNode {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-4 md:grid-cols-3 md:gap-x-7 md:gap-y-5">
           {/* See note 1: the order given. */}
           {rows.map((row, i) => {
-            const value = t(dict, row.value.key, row.value.params);
+            const value = t(dict, row.value.key, localiseParams(dict, row.value.params));
             // A LONG value takes the full width on a phone rather than
             // wrapping to three ragged lines in a half-width cell. Decided
             // from the RESOLVED string, so it holds in every locale — a

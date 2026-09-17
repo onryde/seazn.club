@@ -85,6 +85,18 @@ describe("public org layout — header strip and footer in the org's locale (N1e
     expect(text).toContain(t(en, "layout.poweredBy", { brand: BRAND }));
   });
 
+  it("the footer's attribution link is the org locale's dictionary value — es, and en as its positive pair", async () => {
+    // It was the literal "Run your own free →" inside `AttributionLink`, English
+    // on every /shared page in every locale (found by the zero-English sweep
+    // and by the W2 screenshot run).
+    const [en, es] = await Promise.all([getDictionary("en", "public"), getDictionary("es", "public")]);
+    expect(t(es, "layout.attribution"), "the premise: es differs from en").not.toBe(t(en, "layout.attribution"));
+    const esText = textOf(await layoutHtml("es"));
+    expect(esText).toContain(`${t(es, "layout.attribution")} →`);
+    expect(esText).not.toContain(t(en, "layout.attribution"));
+    expect(textOf(await layoutHtml("en"))).toContain(`${t(en, "layout.attribution")} →`);
+  });
+
   it("a branded org has no platform footer in any locale", async () => {
     const es = await getDictionary("es", "public");
     const text = textOf(await layoutHtml("es", true));

@@ -18,6 +18,7 @@ import PDFDocument from "pdfkit";
 import { notFound } from "next/navigation";
 import { getPublicCompetition, getPublicDivision } from "@/server/public-site/data";
 import { toLocale } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msgFor } from "@/lib/messages-i18n";
 import { buildDrawModel, type DrawStageGroup } from "@/lib/poster-draw";
 
@@ -74,8 +75,11 @@ export async function GET(req: Request, { params }: Ctx) {
   // NOT `lib/format.ts`'s `fmtDate`: that helper pins `LOCALE = "en-GB"`
   // internally and takes no locale parameter, so adopting it here would
   // silently drop the org-locale month names this route exists to render.
+  //
+  // `intlLocaleFor`: an English org's handout reads "1 September 2026", not the
+  // US "September 1, 2026" bare "en" gives `Intl` (owner ruling 2026-09-16).
   const fmt = (d: string) =>
-    new Date(d).toLocaleDateString(locale, {
+    new Date(d).toLocaleDateString(intlLocaleFor(locale), {
       day: "numeric",
       month: "long",
       year: "numeric",

@@ -23,7 +23,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { getPublicFixture } from "../data";
+import { getPublicCompetition, getPublicFixture } from "../data";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -149,5 +149,48 @@ describe.skipIf(!HAS_DB)("getPublicFixture names the format, and does not print 
     const meta = await metaOf(ours);
     expect(meta).toContain("System Name");
     expect(meta).not.toContain("Stranger Name");
+  });
+
+  // T16b fix round 3. Every test above uses a key no engine module declares,
+  // which is exactly where the catalog row is still the answer. For a DECLARED
+  // variant the dictionary wins (server/public-site/variant-label.ts).
+  it("an engine-declared variant is the dictionary's word in the org's locale — not the catalog row, not an org rename", async () => {
+    // `score` is generic's own variant. The system row reads "Score" and this
+    // org renames it; the org's Spanish locale reads `variant.generic.score`
+    // as "Marcador", a word neither the key nor any row carries. No `variants`
+    // push: that cleanup deletes by key, and `score` is a real system row. The
+    // org-scoped row cascades with the org.
+    const s = await seed("score");
+    orgs.push(s.orgId);
+    await sql`update organizations set default_locale = 'es' where id = ${s.orgId}`;
+    await sql`
+      insert into sport_variants (sport_key, key, name, is_system, org_id, config)
+      values ('generic', 'score', 'Our Own Name', false, ${s.orgId}, '{}')`;
+    const meta = await metaOf(s);
+    expect(meta, "the dictionary's word for a declared variant").toContain("Marcador");
+    expect(meta).not.toContain("Our Own Name");
+  });
+
+  it("the division shell carries the same org-scoped catalog name, the division page's fallback", async () => {
+    const key = "fmt-shell-" + uniq();
+    variants.push(key);
+    await sql`
+      insert into sport_variants (sport_key, key, name, is_system, config)
+      values ('generic', ${key}, 'System Name', true, '{}')`;
+    const stranger = await seed(key);
+    orgs.push(stranger.orgId);
+    await sql`
+      insert into sport_variants (sport_key, key, name, is_system, org_id, config)
+      values ('generic', ${key}, 'Stranger Name', false, ${stranger.orgId}, '{}')`;
+    const ours = await seed(key);
+    orgs.push(ours.orgId);
+
+    const nameOf = async (s: Seeded) => {
+      const shell = await getPublicCompetition(s.orgSlug, s.compSlug);
+      expect(shell, "the seeded competition must be public").not.toBeNull();
+      return shell!.divisions.find((d) => d.slug === s.divSlug)?.variant_name;
+    };
+    expect(await nameOf(stranger), "an org's own rename beats the system row").toBe("Stranger Name");
+    expect(await nameOf(ours), "another org's rename is never borrowed").toBe("System Name");
   });
 });

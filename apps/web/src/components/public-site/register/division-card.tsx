@@ -7,6 +7,7 @@
 // never whether the division accepts entries at all (that's `open`).
 import { useT } from "@/components/i18n/dict-provider";
 import { formatMinor, type Currency } from "@/lib/currency";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { INELIGIBLE_MESSAGE_KEY, type SelfEligibility } from "./eligibility-presentation";
 import { BTN_GHOST, BTN_PRIMARY } from "./styles";
 import type { DivisionLike } from "./types";
@@ -49,7 +50,9 @@ const BADGE = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-me
  *  a test can pin a zone deterministically instead of silently asserting
  *  whatever zone the CI box happens to run in. */
 export function windowDate(iso: string, locale: string, timeZone?: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  // `intlLocaleFor`: English public dates are day-month (owner ruling
+  // 2026-09-16) — bare "en" gave `Intl` the US "Mar 6, GMT+11".
+  return new Intl.DateTimeFormat(intlLocaleFor(locale), {
     day: "numeric",
     month: "short",
     timeZoneName: "short",

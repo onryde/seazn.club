@@ -1070,9 +1070,10 @@ function buildInfoView(
     });
   }
 
-  // 4. Start.
+  // 4. Start. `intlLocaleFor`, like `startTimeText` above: English public dates
+  // are day-month (owner ruling 2026-09-16), and bare "en" is US to `Intl`.
   if (fixture.scheduled_at !== null) {
-    const when = new Intl.DateTimeFormat(locale, {
+    const when = new Intl.DateTimeFormat(intlLocaleFor(locale), {
       timeZone: venueTz,
       dateStyle: "full",
       timeStyle: "short",
