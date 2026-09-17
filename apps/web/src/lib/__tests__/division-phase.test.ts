@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import {
   fixtureAwaitsSeedDraw,
   resolvePhase,
@@ -1030,8 +1033,15 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
       row({ home_entrant_id: "e1", away_slot_label: seedLabel(4) }), true],
     ["both seats labelled and empty — the whole bracket before its draw",
       row({ home_slot_label: seedLabel(1), away_slot_label: seedLabel(8) }), true],
-    ["THE DEFECT: a sibling-fed slot carries no label at all — round 2+ of a DRAWN bracket",
+    // A sibling-fed slot carries no label — UNLESS its feeder is a bye line,
+    // in which case the setup generator's third pass stamps the bye's own
+    // seed descriptor there (stages.ts). That one is a real seed destination:
+    // it carries a `seed`, and the same confirm fills and clears it. The row
+    // below it in this table is that shape, and it is deliberately `true`.
+    ["THE DEFECT: an ordinary sibling-fed slot has no label — round 2+ of a DRAWN bracket",
       row(), false],
+    ["a bye's winner-feed target IS labelled, and is owed until the draw fills it",
+      row({ home_slot_label: seedLabel(1) }), true],
     ["half sibling-fed: one side through, the other still coming from its feeder",
       row({ home_entrant_id: "e1" }), false],
     ["a seeded bye line before confirm: labelled on both sides, nobody in it yet",
@@ -1043,6 +1053,42 @@ describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty sid
       row({ home_entrant_id: "e1", home_slot_label: seedLabel(1), away_entrant_id: "e2" }), false],
   ])("%s", (_name, r, expected) => {
     expect(fixtureAwaitsSeedDraw(r as SlotRow)).toBe(expected);
+  });
+
+  // The inert-seam door. `undefined` is not a fixture state — it is a
+  // producer whose query forgot the column, and the silent answer is `false`
+  // for EVERY fixture in the competition, which retires the red row exactly
+  // as permanently as the defect this function replaced. Dropping `f.outcome`
+  // from competition-desk.ts's select left 297 tests green before the guard.
+  it.each(["home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label", "outcome"])(
+    "refuses a row whose producer never selected %s, instead of silently reading it as drawn",
+    (column) => {
+      const partial: Record<string, unknown> = { ...row({ home_slot_label: seedLabel(1) }) };
+      delete partial[column];
+      expect(() => fixtureAwaitsSeedDraw(partial as unknown as SlotRow)).toThrow(column);
+    },
+  );
+
+  // Both PRODUCERS, at the source level. There is no jsdom here and a Next
+  // server page cannot be rendered without a database, so the wiring is
+  // guarded the same way lineup-catalog-read-path.test.ts guards its three
+  // page bootstraps. This is the commit's own premise — "the two authorities
+  // cannot drift" — stated as a test: hardcoding either side to a literal
+  // (`awaitsSeedDraw: false`) otherwise survives the entire suite, which is
+  // how the ORIGINAL two-copy `tbd` expression drifted in the first place.
+  it("both producers derive the fact through this one helper, never a literal", () => {
+    const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    for (const producer of [
+      "server/usecases/competition-desk.ts",
+      "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+    ]) {
+      const src = readFileSync(path.join(web, producer), "utf8");
+      expect(src, `${producer} does not import fixtureAwaitsSeedDraw`).toContain("fixtureAwaitsSeedDraw");
+      expect(
+        src.match(/awaitsSeedDraw:\s*fixtureAwaitsSeedDraw\(/g)?.length ?? 0,
+        `${producer} must build PhaseFixture.awaitsSeedDraw by calling the helper`,
+      ).toBe(1);
+    }
   });
 
   // ── and the same facts through the real consumer ────────────────────────

@@ -293,8 +293,10 @@ export async function getCompetitionDesk(
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
                  -- The draw fact's raw inputs (fixtureAwaitsSeedDraw): an
                  -- unfilled SEED slot still carries its {key, params, seed}
-                 -- descriptor, an unfilled sibling-fed slot never had one,
-                 -- and a baked bye award lands in the outcome column. The
+                 -- descriptor, an unfilled sibling-fed slot has none unless
+                 -- its feeder is a bye line (which carries a seed too, and
+                 -- is filled and cleared by the same confirm), and a baked
+                 -- bye award lands in the outcome column. The
                  -- entrant IDS rather than the joined display names, because
                  -- that is what the label columns are paired with (fillSlot
                  -- clears a label exactly when it writes the id).

@@ -391,7 +391,13 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
           stages={r.shape.stages.map((s) => ({ id: s.id, seq: s.seq, kind: "league", name: s.name, config: {}, progression: null, status: s.status }))}
           fixtures={r.shape.fixtures.map((f, i) => ({
             id: f.id, stage_id: f.stageId, pool_id: null, round_no: 1, seq_in_round: i + 1, fixture_no: i + 1,
+            // An awaiting-draw fixture is an EMPTY, LABELLED pair of seats —
+            // both halves, or the row disagrees with the `awaitsSeedDraw` it
+            // was built from and stops being the same division in two
+            // renderings, which is the one thing this sweep exists to check.
             home_entrant_id: f.awaitsSeedDraw ? null : "e1", away_entrant_id: f.awaitsSeedDraw ? null : "e2",
+            home_slot_label: f.awaitsSeedDraw ? { key: "slot.rank", params: { rank: 1 }, seed: 1 } : null,
+            away_slot_label: f.awaitsSeedDraw ? { key: "slot.rank", params: { rank: 2 }, seed: 2 } : null,
             scheduled_at: f.scheduledAt, venue: null, court_label: null, court_id: null, court_name: null,
             status: f.status, outcome: null,
           }))}

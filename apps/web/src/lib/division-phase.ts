@@ -92,9 +92,22 @@ export interface PhaseFixture {
  *    a null entrant is therefore exactly "this seat is waiting on this
  *    stage's draw" — the only state the panel's door can act on.
  *  - **Sibling-fed** — round 2+ of the same bracket. Those slots carry NO
- *    label at all; they are the target of an earlier fixture's
- *    `winner_to_fixture`/`winner_to_slot` and fill when that match is
- *    decided. Normal progression, nothing owed, nothing an organiser can do.
+ *    label, UNLESS their feeder is a bye line: the setup generator's third
+ *    pass (stages.ts) stamps the bye's own `awardLabel` onto the winner-feed
+ *    TARGET slot, so seed 1's place in the next round is named rather than
+ *    blank. That label carries a `seed`, which is what makes it a
+ *    destination `destinationSlotsBySeed` fills and `fillSlot` clears at
+ *    confirm — so it is genuinely owed until the draw lands, and reads
+ *    correctly here either way. Every other sibling-fed slot is unlabelled
+ *    and fills when its feeder is decided: normal progression, nothing owed,
+ *    nothing an organiser can do.
+ *
+ *    Note what this does NOT make redundant: after that confirm the BYE LINE
+ *    itself still sits there with one empty seat and `bracket.slot.bye` on
+ *    it. Only the outcome term below retires it. Deleting that term because
+ *    "labels are cleared at confirm" would bring the whole defect back for
+ *    every bye-bearing bracket — which is the shape competition-desk.test.ts
+ *    now drives end to end through the real `confirmSeedProposal`.
  *
  *  Byes need no special case and deliberately get none: a seeded bye line is
  *  stamped `bracket.slot.bye` (a label, so it counts as owed) and left
@@ -108,9 +121,23 @@ export function fixtureAwaitsSeedDraw(f: {
   away_slot_label: unknown;
   outcome: unknown;
 }): boolean {
+  // An INERT-SEAM guard, not a data check. Every field here is a COLUMN:
+  // `null` is a real value, and `undefined` means the producer's query never
+  // selected it. That shape derives `false` for every fixture in the
+  // competition and retires the red row silently and permanently — the exact
+  // failure this function was written to end, arriving by the other door.
+  // Dropping `f.outcome` from competition-desk.ts's select left 297 tests
+  // green before this guard existed. Loud beats silent.
+  for (const column of [
+    "home_entrant_id", "away_entrant_id", "home_slot_label", "away_slot_label", "outcome",
+  ] as const) {
+    if (f[column] === undefined) {
+      throw new Error(`fixtureAwaitsSeedDraw: fixture row is missing the ${column} column`);
+    }
+  }
   // A decided row (a baked bye award, a walkover, a played match) is not
   // waiting for anybody, whatever its empty side still says.
-  if (f.outcome !== null && f.outcome !== undefined) return false;
+  if (f.outcome !== null) return false;
   return (
     (f.home_entrant_id === null && f.home_slot_label != null) ||
     (f.away_entrant_id === null && f.away_slot_label != null)
