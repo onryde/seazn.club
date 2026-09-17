@@ -113,16 +113,16 @@ const drawableStage = (o: Partial<PhaseStage> = {}) =>
        timing: "setup", sourceReady: true, ...o });
 const fxt = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "decided", scheduledAt: FUTURE, startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: true, stageId: "s1", tbd: false, ...o,
+  hasScorer: true, stageId: "s1", awaitsSeedDraw: false, ...o,
 });
-const tbd = (o: Partial<PhaseFixture> = {}) =>
-  fxt({ id: "tbd1", stageId: "fin", tbd: true, status: "scheduled", scheduledAt: null, ...o });
+const awaitsDraw = (o: Partial<PhaseFixture> = {}) =>
+  fxt({ id: "tbd1", stageId: "fin", awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
 
 const SHAPES: Shape[] = [
   {
     why: "setting_up/needs_draw — league complete, the finals bracket generated and its draw owed",
     stages: [st({ status: "complete" }), drawableStage()],
-    fixtures: [fxt({ id: "a" }), tbd()],
+    fixtures: [fxt({ id: "a" }), awaitsDraw()],
   },
   {
     why: "setting_up/needs_fixtures — league complete, the next stage never generated",
@@ -172,7 +172,7 @@ const SHAPES: Shape[] = [
   {
     why: "match_day/needs_draw — today's last group match is dated and the finals draw is owed",
     stages: [st({ status: "complete" }), drawableStage()],
-    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: TODAY }), tbd()],
+    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: TODAY }), awaitsDraw()],
   },
   {
     why: "match_day/needs_fixtures — today's match is dated and the next stage is empty",
@@ -391,7 +391,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
           stages={r.shape.stages.map((s) => ({ id: s.id, seq: s.seq, kind: "league", name: s.name, config: {}, progression: null, status: s.status }))}
           fixtures={r.shape.fixtures.map((f, i) => ({
             id: f.id, stage_id: f.stageId, pool_id: null, round_no: 1, seq_in_round: i + 1, fixture_no: i + 1,
-            home_entrant_id: f.tbd ? null : "e1", away_entrant_id: f.tbd ? null : "e2",
+            home_entrant_id: f.awaitsSeedDraw ? null : "e1", away_entrant_id: f.awaitsSeedDraw ? null : "e2",
             scheduled_at: f.scheduledAt, venue: null, court_label: null, court_id: null, court_name: null,
             status: f.status, outcome: null,
           }))}

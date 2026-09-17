@@ -59,7 +59,7 @@ describe("StagesPanel phase gating", () => {
     ],
     fixtures: [1, 2, 3, 4, 5, 6].map((n) => ({
       id: `f${n}`, status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true,
-      stageId: "s1", tbd: false,
+      stageId: "s1", awaitsSeedDraw: false,
     })),
     now: "2026-03-01T12:00:00Z",
     tz: "UTC",

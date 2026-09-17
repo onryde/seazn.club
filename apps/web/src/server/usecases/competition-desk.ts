@@ -11,6 +11,7 @@ import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { resolveVenueTz } from "@/lib/tz";
 import {
+  fixtureAwaitsSeedDraw,
   resolveAttention,
   resolvePhase,
   type Attention,
@@ -154,6 +155,20 @@ type FixtureRaw = {
   scheduled_at: string | null;
   fixture_no: number;
   stage_id: string;
+  /** The row's own entrant ids, paired with the slot labels below — the
+   *  inputs `fixtureAwaitsSeedDraw` reads. `home`/`away` are the joined
+   *  DISPLAY NAMES and answer a different question (what to print). */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  /** `{key, params, seed}` while the matching entrant id is null and the
+   *  slot is one THIS stage's draw fills; cleared by `fillSlot`. A slot fed
+   *  by an earlier fixture of the same bracket never carries one. */
+  home_slot_label: unknown;
+  away_slot_label: unknown;
+  /** `{kind: "award", winner}` for a bye baked by `awardSeededByes`, and the
+   *  decided outcome of any played fixture. Read only as "is this row
+   *  already resolved?". */
+  outcome: unknown;
   home: string | null;
   away: string | null;
   event_count: number;
@@ -276,6 +291,17 @@ export async function getCompetitionDesk(
     const fixtures = ids.length
       ? await tx<FixtureRaw[]>`
           select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id,
+                 -- The draw fact's raw inputs (fixtureAwaitsSeedDraw): an
+                 -- unfilled SEED slot still carries its {key, params, seed}
+                 -- descriptor, an unfilled sibling-fed slot never had one,
+                 -- and a baked bye award lands in the outcome column. The
+                 -- entrant IDS rather than the joined display names, because
+                 -- that is what the label columns are paired with (fillSlot
+                 -- clears a label exactly when it writes the id).
+                 -- NOTE: no backticks in this comment -- it lives inside a JS
+                 -- tagged template literal, where a backtick ENDS the SQL.
+                 f.home_entrant_id, f.away_entrant_id,
+                 f.home_slot_label, f.away_slot_label, f.outcome,
                  h.display_name as home, a.display_name as away,
                  coalesce(e.n, 0)::int as event_count, e.started_at, e.started_at_key,
                  ms.summary->>'headline' as headline
@@ -435,12 +461,14 @@ export async function getCompetitionDesk(
       matchMinutes,
       hasScorer: fixturesWithScorer.has(x.id),
       stageId: x.stage_id,
-      // M1 (fix round I): "has this bracket been drawn?" — the same
-      // `left join entrants` this query already does for the row's own
-      // "Rank 1 v Rank 4" labels. A generated-but-unseeded knockout slot has
-      // no entrant on that side; confirming a seed proposal fills every one
-      // of them, so `tbd` going false IS the draw completing.
-      tbd: x.home === null || x.away === null,
+      // M1 (fix round I): "has this bracket been drawn?" — but asked of the
+      // SEED slots only. This used to be `x.home === null || x.away === null`
+      // off the same `left join entrants` the row's own labels use, which is
+      // true for every round after the first of any bracket, drawn or not, so
+      // a confirmed knockout kept its red "Needs draw" row for good. The
+      // derivation is shared with `d/[divSlug]/page.tsx` rather than written
+      // out twice — see `fixtureAwaitsSeedDraw`.
+      awaitsSeedDraw: fixtureAwaitsSeedDraw(x),
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,

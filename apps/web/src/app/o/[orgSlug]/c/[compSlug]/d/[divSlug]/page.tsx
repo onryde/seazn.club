@@ -28,7 +28,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { resolveVenueTz } from "@/lib/tz";
-import { resolvePhase, type DivisionStatus } from "@/lib/division-phase";
+import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
@@ -204,9 +204,12 @@ export default async function DivisionPage({
       // load-bearing — `resolvePhase` never reads it.
       startedAt: null,
       stageId: f.stage_id,
-      // M1: the draw fact, read off the fixture's own entrants — the same
-      // question the desk answers from its own `left join entrants`.
-      tbd: f.home_entrant_id === null || f.away_entrant_id === null,
+      // M1: the draw fact, read off the fixture's own entrants, slot labels
+      // and outcome — through the SAME shared derivation the desk uses, so
+      // the two authorities cannot drift. It was a bare "either entrant is
+      // null" in both files, which is also true of every round after the
+      // first of a fully drawn bracket.
+      awaitsSeedDraw: fixtureAwaitsSeedDraw(f),
       eventCount: 0,
       // Final review minor fix: was a bare `?? 60`, retyping a number that
       // had already drifted from the desk's own schema-derived default (30).

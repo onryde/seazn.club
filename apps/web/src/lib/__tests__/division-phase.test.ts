@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  fixtureAwaitsSeedDraw,
   resolvePhase,
   resolveAttention,
   localDateKey,
@@ -25,7 +26,7 @@ const stage = (o: Partial<PhaseStage> = {}): PhaseStage => ({
 });
 const fx = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
   id: "f1", status: "scheduled", scheduledAt: "2026-09-12T09:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 90,
-  hasScorer: false, stageId: "st1", tbd: false, ...o,
+  hasScorer: false, stageId: "st1", awaitsSeedDraw: false, ...o,
 });
 /**
  * M1 (fix round I): a stage that owes its DRAW — the only shape that raises
@@ -40,8 +41,8 @@ const drawable = (o: Partial<PhaseStage> = {}): PhaseStage =>
   // makes a draw computable at all — moves the stage to `active`.
   stage({ id: "fin", name: "Finals", seq: 2, status: "active", hasFixtures: true,
           timing: "setup", sourceReady: true, proposal: "none", ...o });
-const tbdFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
-  fx({ id: `${stageId}-tbd`, stageId, tbd: true, status: "scheduled", scheduledAt: null, ...o });
+const seedSlotFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
+  fx({ id: `${stageId}-slot`, stageId, awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
   divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, ...o,
 });
@@ -269,10 +270,10 @@ describe("resolvePhase — rule order", () => {
     // `stageOwesWork`'s OR is false here, so only the draw clause can
     // produce this answer.
     const stages = [drawable({ seq: 1 })];
-    expect(resolvePhase(input({ stages, fixtures: [tbdFx("fin")] }))).toBe("setting_up");
+    expect(resolvePhase(input({ stages, fixtures: [seedSlotFx("fin")] }))).toBe("setting_up");
     // M1 (fix round I): and the SAME stage with its bracket drawn is not
     // setting up — the one fact that separates the two is the fixture.
-    expect(resolvePhase(input({ stages, fixtures: [tbdFx("fin", { tbd: false, scheduledAt: "2026-09-12T09:00:00Z" })] })))
+    expect(resolvePhase(input({ stages, fixtures: [seedSlotFx("fin", { awaitsSeedDraw: false, scheduledAt: "2026-09-12T09:00:00Z" })] })))
       .toBe("scheduled");
   });
   // K1's fix must NOT over-apply to rule 4. Rule 2 asks "is there anything
@@ -355,7 +356,7 @@ describe("resolveAttention", () => {
   // not die inside the predicate: see `stageOwesDraw`'s own note.
   it("needs_draw ONLY when the panel's draw door is both rendered and operable", () => {
     const stages = [drawable()];
-    const fixtures = [tbdFx("fin")];
+    const fixtures = [seedSlotFx("fin")];
     expect(resolveAttention(input({ stages, fixtures }))).toContainEqual({
       kind: "needs_draw", stageName: "Finals", door: "compute",
     });
@@ -365,15 +366,15 @@ describe("resolveAttention", () => {
     ["no generated fixtures at all (computeSeedProposal 422s SEEDING_RULES_MISSING)",
       { st: { hasFixtures: false }, fx: [] as PhaseFixture[] }, "needs_fixtures"],
     ["the bracket is already drawn (confirming filled every slot)",
-      { st: {}, fx: [tbdFx("fin", { tbd: false })] }, undefined],
+      { st: {}, fx: [seedSlotFx("fin", { awaitsSeedDraw: false })] }, undefined],
     ["a source stage is not complete (progression-panel.tsx returns null)",
-      { st: { sourceReady: false }, fx: [tbdFx("fin")] }, undefined],
+      { st: { sourceReady: false }, fx: [seedSlotFx("fin")] }, undefined],
     ["the stage auto-seeds instead (timing on_complete never goes through propose/confirm)",
-      { st: { timing: "on_complete" }, fx: [tbdFx("fin")] }, undefined],
+      { st: { timing: "on_complete" }, fx: [seedSlotFx("fin")] }, undefined],
     // `openStages` (the caller) owns this one — the predicate itself does not
     // restate it, and this case is what proves the filter is doing the work.
     ["the stage is complete",
-      { st: { status: "complete" }, fx: [tbdFx("fin")] }, undefined],
+      { st: { status: "complete" }, fx: [seedSlotFx("fin")] }, undefined],
   ])("needs_draw is NOT raised when %s", (_why, shape, becomes) => {
     const out = resolveAttention(input({ stages: [drawable(shape.st)], fixtures: shape.fx }));
     expect(out.some((a) => a.kind === "needs_draw")).toBe(false);
@@ -387,12 +388,12 @@ describe("resolveAttention", () => {
     ["draft", "confirm"],
     ["stale", "recompute"],
   ] as const)("a %s proposal makes the action point at the panel's %s door", (proposal, door) => {
-    const out = resolveAttention(input({ stages: [drawable({ proposal })], fixtures: [tbdFx("fin")] }));
+    const out = resolveAttention(input({ stages: [drawable({ proposal })], fixtures: [seedSlotFx("fin")] }));
     expect(out).toContainEqual({ kind: "needs_draw", stageName: "Finals", door });
   });
   it("resolvePhase never reads `proposal` — the field is the action label only", () => {
     const phases = (["none", "draft", "stale", "confirmed"] as const).map((proposal) =>
-      resolvePhase(input({ stages: [drawable({ proposal })], fixtures: [tbdFx("fin")] })),
+      resolvePhase(input({ stages: [drawable({ proposal })], fixtures: [seedSlotFx("fin")] })),
     );
     // All four identical: `d/[divSlug]/page.tsx` hardcodes "none" (it has no
     // organiser-only proposal read), so if the phase ever depended on this
@@ -518,26 +519,33 @@ describe("resolveAttention", () => {
   });
   // Review 7, Important 4: `stageOwesDraw`'s `f.stageId === stage.id` had no
   // test at any layer — a mutant dropping it survived 246/246. It is
-  // load-bearing, not cosmetic: `tbd` is derived from a missing entrant, and a
-  // BYE in an earlier stage is exactly that. Without the scoping, any division
-  // whose league contains a bye would raise red "Needs draw · Compute
-  // proposal" for an ungenerated Finals — instance TWELVE, regenerated, and
-  // pointing at a panel button that cannot be operated.
-  it("needs_draw is scoped to its OWN stage: a bye in an earlier stage does not draw the finals", () => {
+  // load-bearing, not cosmetic: an undrawn slot elsewhere in the division is
+  // exactly what an earlier bracket carries while ITS own draw is pending.
+  // Without the scoping, any division holding one anywhere would raise red
+  // "Needs draw · Compute proposal" for an ungenerated Finals — instance
+  // TWELVE, regenerated, and pointing at a panel button that cannot be
+  // operated.
+  //
+  // It used to be stated with a played BYE in the league ("decided, one side
+  // missing"), which the blind `tbd` read as owed. `awaitsSeedDraw` no longer
+  // does — a decided row is nobody's draw — so the case is restated on a
+  // shape that IS still true: the earlier stage's own seed slot, unfilled and
+  // not yet resolved. The mutant it exists for (dropping `f.stageId ===
+  // stage.id`) dies exactly the same way.
+  it("needs_draw is scoped to its OWN stage: an undrawn slot in an earlier stage does not draw the finals", () => {
     const stages = [
       // Complete, and nothing of its own still live — otherwise a LATER stage
       // is deliberately not reported at all and the case proves nothing.
       stage({ id: "lg", name: "League", seq: 1, status: "complete", hasFixtures: true }),
       // Its bracket was never generated, so this stage owes FIXTURES, not a
-      // draw — whatever tbd fixtures exist elsewhere in the division.
+      // draw — whatever unfilled seed slots exist elsewhere in the division.
       drawable({ id: "fin", name: "Finals", hasFixtures: false }),
     ];
     const fixtures = [
-      // The bye: a played league fixture that never had a second side.
-      fx({ id: "bye", stageId: "lg", status: "decided", tbd: true, scheduledAt: null }),
+      seedSlotFx("lg", { id: "lg-open-slot" }),
     ];
     const kinds = resolveAttention(input({ stages, fixtures })).map((a) => a.kind);
-    expect(kinds, "a bye in the league must not be read as the finals' bracket").toContain("needs_fixtures");
+    expect(kinds, "another stage's undrawn slot must not be read as the finals' bracket").toContain("needs_fixtures");
     expect(kinds).not.toContain("needs_draw");
   });
 
@@ -684,7 +692,7 @@ describe("resolveAttention", () => {
   });
   it("orders red before amber before slate", () => {
     const stages = [drawable()];
-    const fixtures = [tbdFx("fin"), fx({ id: "u", scheduledAt: null })];
+    const fixtures = [seedSlotFx("fin"), fx({ id: "u", scheduledAt: null })];
     const kinds = resolveAttention(input({ stages, fixtures, awaitingRegistrations: 1 })).map((a) => a.kind);
     expect(kinds).toEqual(["needs_draw", "unscheduled", "registrations_waiting"]);
   });
@@ -738,7 +746,7 @@ describe("resolveAttention", () => {
     });
     it("needs_draw, unscheduled and registrations_waiting are NOT gated by divisionStatus — every one legitimately applies before Start", () => {
       const stages = [drawable({ seq: 1 })];
-      const fixtures = [tbdFx("fin"), fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const fixtures = [seedSlotFx("fin"), fx({ id: "u", status: "scheduled", scheduledAt: null })];
       const out = resolveAttention(input({ divisionStatus: "setup", stages, fixtures, awaitingRegistrations: 2 }));
       expect(out.map((a) => a.kind).sort()).toEqual(["needs_draw", "registrations_waiting", "unscheduled"]);
     });
@@ -924,9 +932,9 @@ describe("isUnscheduledFixture", () => {
 
   it("agrees with the `unscheduled` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
-      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", tbd: false },
+      { id: "a", status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "c", status: "decided", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 30, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
@@ -966,9 +974,9 @@ describe("isResultMissing", () => {
 
   it("agrees with the `result_missing` attention it was lifted out of", () => {
     const fixtures: PhaseFixture[] = [
-      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
-      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
-      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", tbd: false },
+      { id: "a", status: "scheduled", scheduledAt: "2026-09-05T10:00:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "b", status: "scheduled", scheduledAt: "2026-09-05T17:45:00Z", startedAt: null, eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
+      { id: "c", status: "in_play", scheduledAt: "2026-09-05T09:00:00Z", startedAt: "2026-09-05T09:00:00Z", eventCount: 1, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false },
     ];
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
@@ -978,5 +986,132 @@ describe("isResultMissing", () => {
     expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
     );
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The draw FACT itself: which empty slot is actually waiting on a draw.
+//
+// The defect these replace: `PhaseFixture.tbd` was `home === null || away ===
+// null`, which is true of every round after the first of ANY bracket, drawn
+// or not — a slot fed by the match before it is empty by CONSTRUCTION. So a
+// knockout whose proposal had been computed, confirmed and half played went
+// on showing red "Needs draw · Compute proposal" for the rest of its life,
+// pointing at a panel button that re-runs a draw already done.
+//
+// Every fixture below is built from RAW `fixtures` columns THROUGH the same
+// derivation production uses — `fixtureAwaitsSeedDraw`, called by both
+// competition-desk.ts and `d/[divSlug]/page.tsx` — never by hand-setting the
+// flag. Hand-setting it would pin the flag and leave the rule that produces
+// it untested, which is the exact shape K3 and M1 shipped twice.
+describe("fixtureAwaitsSeedDraw — an unfilled SEED slot, not just an empty side", () => {
+  type SlotRow = Parameters<typeof fixtureAwaitsSeedDraw>[0];
+  /** A `fixtures` row as both producers read it. Defaults to the emptiest
+   *  shape there is: nobody in either seat, no label, nothing decided — which
+   *  is precisely round 2 of a fully drawn bracket. */
+  const row = (o: Partial<SlotRow> = {}): SlotRow => ({
+    home_entrant_id: null, away_entrant_id: null,
+    home_slot_label: null, away_slot_label: null, outcome: null, ...o,
+  });
+  // The two label shapes stages.ts writes for a setup-timing stage: a seed
+  // destination descriptor (`{key, params, seed}`) and the bye marker. Only
+  // their PRESENCE is read here, so the exact keys are not load-bearing at
+  // this layer — competition-desk.test.ts drives the real generator and the
+  // real confirm for that.
+  const seedLabel = (seed: number) => ({ key: "slot.rank", params: { rank: seed }, seed });
+  const byeLabel = { key: "bracket.slot.bye", params: {} };
+
+  it.each([
+    ["a drawn, filled pair owes nothing",
+      row({ home_entrant_id: "e1", away_entrant_id: "e2" }), false],
+    ["an unfilled, LABELLED home seat is the draw this stage owes",
+      row({ home_slot_label: seedLabel(1), away_entrant_id: "e2" }), true],
+    ["…and the same on away",
+      row({ home_entrant_id: "e1", away_slot_label: seedLabel(4) }), true],
+    ["both seats labelled and empty — the whole bracket before its draw",
+      row({ home_slot_label: seedLabel(1), away_slot_label: seedLabel(8) }), true],
+    ["THE DEFECT: a sibling-fed slot carries no label at all — round 2+ of a DRAWN bracket",
+      row(), false],
+    ["half sibling-fed: one side through, the other still coming from its feeder",
+      row({ home_entrant_id: "e1" }), false],
+    ["a seeded bye line before confirm: labelled on both sides, nobody in it yet",
+      row({ home_slot_label: seedLabel(1), away_slot_label: byeLabel }), true],
+    ["the SAME bye once awardSeededByes has baked the walkover onto it",
+      row({ home_entrant_id: "e1", away_slot_label: byeLabel,
+            outcome: { kind: "award", winner: "e1" } }), false],
+    ["a label left beside a FILLED seat is not owed either",
+      row({ home_entrant_id: "e1", home_slot_label: seedLabel(1), away_entrant_id: "e2" }), false],
+  ])("%s", (_name, r, expected) => {
+    expect(fixtureAwaitsSeedDraw(r as SlotRow)).toBe(expected);
+  });
+
+  // ── and the same facts through the real consumer ────────────────────────
+  const LATER = "2026-09-12T09:00:00Z";
+  const bracketFx = (id: string, r: SlotRow, o: Partial<PhaseFixture> = {}): PhaseFixture =>
+    fx({ id, stageId: "fin", status: "scheduled", scheduledAt: null,
+         awaitsSeedDraw: fixtureAwaitsSeedDraw(r), ...o });
+  /** League (complete, so the finals is the lowest OPEN stage) + the finals,
+   *  setup-timing with its source ready and its bracket generated. */
+  const bracketStages = () => [
+    stage({ id: "lg", name: "League", seq: 1, status: "complete", hasFixtures: true }),
+    drawable({ id: "fin", name: "Finals", hasFixtures: true }),
+  ];
+  const drawRows = (fixtures: PhaseFixture[]) =>
+    resolveAttention(input({ stages: bracketStages(), fixtures })).filter((a) => a.kind === "needs_draw");
+
+  it("an 8-entrant knockout PAST its first round owes no draw — the live defect", () => {
+    // The state an organiser is actually in: the draw was confirmed (round 1
+    // filled, its labels cleared by fillSlot), two quarter-finals played,
+    // their winners propagated into the first semi. Every remaining empty
+    // seat is waiting on a MATCH, not on the organiser.
+    const qf = (n: number, o: Partial<PhaseFixture> = {}) =>
+      bracketFx(`qf${n}`, row({ home_entrant_id: `e${n}a`, away_entrant_id: `e${n}b` }), o);
+    const fixtures = [
+      qf(1, { status: "decided" }), qf(2, { status: "decided" }),
+      qf(3, { scheduledAt: LATER }), qf(4, { scheduledAt: LATER }),
+      bracketFx("sf1", row({ home_entrant_id: "e1a", away_entrant_id: "e2a" }), { scheduledAt: LATER }),
+      bracketFx("sf2", row()), // both sides fed by qf3/qf4 — empty, unlabelled
+      bracketFx("final", row()),
+    ];
+    expect(drawRows(fixtures), "a confirmed bracket must not keep asking to be drawn").toEqual([]);
+    expect(resolvePhase(input({ stages: bracketStages(), fixtures }))).toBe("scheduled");
+  });
+
+  it("the SAME bracket before its draw still owes one — the case that must not regress", () => {
+    // Identical stage and fixture COUNT; the only difference is that round
+    // 1's seats are unfilled and still carry their seed descriptors. The
+    // blind predicate could not tell these two states apart at all.
+    const undrawn = (n: number) =>
+      bracketFx(`qf${n}`, row({ home_slot_label: seedLabel(n), away_slot_label: seedLabel(9 - n) }));
+    const fixtures = [
+      undrawn(1), undrawn(2), undrawn(3), undrawn(4),
+      bracketFx("sf1", row()), bracketFx("sf2", row()), bracketFx("final", row()),
+    ];
+    expect(drawRows(fixtures)).toEqual([{ kind: "needs_draw", stageName: "Finals", door: "compute" }]);
+    expect(resolvePhase(input({ stages: bracketStages(), fixtures }))).toBe("setting_up");
+  });
+
+  it("a seeded bye owes the draw until awardSeededByes bakes it, then stops", () => {
+    // Before confirm: the bye line is two labels and no entrants, exactly
+    // like every other undrawn seat.
+    const beforeConfirm = [
+      bracketFx("sf1", row({ home_slot_label: seedLabel(1), away_slot_label: byeLabel })),
+      bracketFx("sf2", row({ home_slot_label: seedLabel(2), away_slot_label: seedLabel(3) })),
+      bracketFx("final", row({ home_slot_label: seedLabel(1), away_slot_label: null })),
+    ];
+    expect(drawRows(beforeConfirm)).toEqual([{ kind: "needs_draw", stageName: "Finals", door: "compute" }]);
+    // After confirm, in the one transaction: fillSlot seats the qualifier and
+    // clears its label, then awardSeededByes writes status 'forfeited' +
+    // {kind: "award", winner} — and LEAVES the bye marker on the empty side
+    // (stages.ts:2481). That leftover label is why the outcome term is the
+    // thing that retires the row, and why byes need no special case here.
+    const afterConfirm = [
+      bracketFx("sf1", row({ home_entrant_id: "e1", away_slot_label: byeLabel,
+                             outcome: { kind: "award", winner: "e1" } }), { status: "forfeited" }),
+      bracketFx("sf2", row({ home_entrant_id: "e2", away_entrant_id: "e3" }), { scheduledAt: LATER }),
+      // The bye's winner-feed target: fillSlot seated the same qualifier here.
+      bracketFx("final", row({ home_entrant_id: "e1" }), { scheduledAt: LATER }),
+    ];
+    expect(drawRows(afterConfirm), "a walked-over bye is nobody's draw").toEqual([]);
   });
 });

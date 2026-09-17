@@ -787,6 +787,78 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.needs_draw_stage).toBeNull();
     });
 
+    /**
+     * The defect `awaitsSeedDraw` replaces `tbd` for, driven against the REAL
+     * generator rather than a hand-built fixture list. `tbd` was "either
+     * entrant is null", and in a bracket that is ALSO true of every round
+     * after the first — a slot fed by the match before it is empty by
+     * construction, for as long as that match is unplayed. So a knockout
+     * whose draw was computed, confirmed and half played kept its red
+     * "Needs draw · Compute proposal" row for good, pointing at a panel
+     * button that re-runs a completed draw.
+     *
+     * The premise is asserted here, off the rows generateStageFixtures
+     * actually wrote, before the state that depends on it: round 1's empty
+     * seats carry `{key, params, seed}` descriptors, and later rounds carry
+     * no label at all (`generateProgressionSetupFixtures`' label pass stamps
+     * only the synthetic seed slots; a sibling-fed slot is wired through
+     * `winner_to_fixture` instead).
+     */
+    it("a DRAWN bracket's later rounds are empty by construction and owe no second draw", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+
+      type SlotRow = {
+        round_no: number;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        home_slot_label: unknown;
+        away_slot_label: unknown;
+      };
+      const bracket = async () => await sql<SlotRow[]>`
+        select round_no, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+          from fixtures where stage_id = ${finalsId} order by round_no, seq_in_round`;
+      const generated = await bracket();
+      const firstRound = Math.min(...generated.map((f) => f.round_no));
+      const later = generated.filter((f) => f.round_no > firstRound);
+      expect(later.length, "a 4-qualifier bracket must have a round beyond its first").toBeGreaterThan(0);
+      expect(
+        later.map((f) => [f.home_slot_label, f.away_slot_label]).flat(),
+        "a sibling-fed slot carries no label — it waits on a MATCH, not on the organiser",
+      ).toEqual(later.flatMap(() => [null, null]));
+      expect(
+        generated.filter((f) => f.round_no === firstRound).every((f) => f.home_slot_label !== null),
+        "round 1's empty seats must carry their seed descriptors",
+      ).toBe(true);
+
+      // Confirm the draw exactly as `fillSlot` (stages.ts:2451) does it —
+      // seat the entrant and NULL the label, in one statement, and ONLY for
+      // slots that HAVE a label. That last part is the whole point: the
+      // later round is never touched by a confirm, and stays null v null.
+      await sql`update fixtures
+                   set home_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1),
+                       home_slot_label = null
+                 where stage_id = ${finalsId} and home_slot_label is not null`;
+      await sql`update fixtures
+                   set away_entrant_id = (select id from entrants where division_id = ${divisionId} offset 1 limit 1),
+                       away_slot_label = null
+                 where stage_id = ${finalsId} and away_slot_label is not null`;
+      // State the thing the verdict hangs on, rather than trusting it: the
+      // bracket really is still carrying an unfilled later round.
+      expect(
+        (await bracket()).some(
+          (f) => f.round_no > firstRound && f.home_entrant_id === null && f.away_entrant_id === null,
+        ),
+        "the later round must still be empty, or this proves nothing",
+      ).toBe(true);
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+    });
+
     it("K3 contrast: 'on_complete' at the same position owes NO draw — the two timings must not collapse", async () => {
       const { auth, competitionId, divisionId, leagueId } = await twoStages("on_complete");
       await sql`update stages set status = 'complete' where id = ${leagueId}`;

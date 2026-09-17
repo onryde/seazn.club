@@ -66,12 +66,55 @@ export interface PhaseFixture {
    *  bracket been drawn yet?" is a question about a STAGE answered by ITS
    *  fixtures, so the two have to be relatable here. */
   stageId: string;
-  /** Either side still unfilled — a generated bracket slot waiting on the
-   *  draw. This is the DRAWN/NOT-DRAWN fact, deliberately derived from the
-   *  entrants on the fixtures themselves rather than from a proposal row:
-   *  it is pure, identical for every viewer, and it is what the organiser
-   *  actually sees on the fixtures tab ("TBD v TBD"). */
-  tbd: boolean;
+  /** Either side is an unfilled slot THIS stage's own draw fills — see
+   *  `fixtureAwaitsSeedDraw` below, which is the one derivation of it.
+   *  Still the DRAWN/NOT-DRAWN fact, still read off the fixture rows rather
+   *  than a proposal row (pure, identical for every viewer), but no longer
+   *  the blind "either entrant is null" it started as: a bracket's later
+   *  rounds are null on both sides by CONSTRUCTION and are filled by the
+   *  round before them, never by a draw. */
+  awaitsSeedDraw: boolean;
+}
+
+/** The one derivation of `PhaseFixture.awaitsSeedDraw`, over the `fixtures`
+ *  columns themselves, shared by BOTH producers (competition-desk.ts and
+ *  `d/[divSlug]/page.tsx`) so the two authorities cannot drift — the same
+ *  reason `seedingSourceReady` lives in lib/ rather than inline in each.
+ *
+ *  A bracket slot is null for two structurally different reasons, and the
+ *  old `tbd` conflated them, so a knockout whose draw was CONFIRMED went on
+ *  showing red "Needs draw · Compute proposal" for the rest of its life:
+ *
+ *  - **Seed-fed** — `generateProgressionSetupFixtures` (stages.ts) stamps a
+ *    `{key, params, seed}` descriptor into `home_slot_label`/`away_slot_label`
+ *    for every synthetic seed slot, and `fillSlot` CLEARS it when the
+ *    confirmed proposal fills that seat (V360). A label still sitting beside
+ *    a null entrant is therefore exactly "this seat is waiting on this
+ *    stage's draw" — the only state the panel's door can act on.
+ *  - **Sibling-fed** — round 2+ of the same bracket. Those slots carry NO
+ *    label at all; they are the target of an earlier fixture's
+ *    `winner_to_fixture`/`winner_to_slot` and fill when that match is
+ *    decided. Normal progression, nothing owed, nothing an organiser can do.
+ *
+ *  Byes need no special case and deliberately get none: a seeded bye line is
+ *  stamped `bracket.slot.bye` (a label, so it counts as owed) and left
+ *  `outcome: null` until `awardSeededByes` bakes `{kind: "award", winner}`
+ *  onto it at confirm time — so gating on "not yet decided" is what makes it
+ *  stop counting, for free, at the moment the draw that resolves it lands. */
+export function fixtureAwaitsSeedDraw(f: {
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  home_slot_label: unknown;
+  away_slot_label: unknown;
+  outcome: unknown;
+}): boolean {
+  // A decided row (a baked bye award, a walkover, a played match) is not
+  // waiting for anybody, whatever its empty side still says.
+  if (f.outcome !== null && f.outcome !== undefined) return false;
+  return (
+    (f.home_entrant_id === null && f.home_slot_label != null) ||
+    (f.away_entrant_id === null && f.away_slot_label != null)
+  );
 }
 
 export interface PhaseInput {
@@ -107,8 +150,8 @@ export type DrawDoor = (typeof DRAW_DOORS)[number];
  *  ternary, so adding a proposal status is a COMPILE error rather than a
  *  silently mislabelled action (phase-pill.tsx's `RED_PILL_KEY` precedent).
  *  `confirmed` maps to `compute` and is unreachable in a `needs_draw` row:
- *  confirming FILLS every slot, so no fixture of that stage is `tbd` any
- *  more and `stageOwesDraw` below is false. */
+ *  confirming FILLS every seed slot, so no fixture of that stage is
+ *  `awaitsSeedDraw` any more and `stageOwesDraw` below is false. */
 const DOOR_FOR_PROPOSAL: Record<SeedProposalState, DrawDoor> = {
   none: "compute",
   draft: "confirm",
@@ -447,12 +490,18 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  *                              (`if (!sourceReady) return null`) and
  *                              `sourcesToTables`' 409
  *                              SEEDING_SOURCE_INCOMPLETE;
- *   - a `tbd` fixture OF THIS STAGE — `computeSeedProposal`'s
+ *   - an `awaitsSeedDraw` fixture OF THIS STAGE — `computeSeedProposal`'s
  *                              `destinationSlotsBySeed` 422 above (no
  *                              generated bracket, nothing to resolve
  *                              against), AND the "already drawn" case, since
- *                              confirming FILLS every slot and a drawn
- *                              bracket has no `tbd` fixture left.
+ *                              confirming FILLS (and un-labels) every seed
+ *                              slot, leaving a drawn bracket with none.
+ *                              Deliberately NOT "either entrant is null":
+ *                              every round after the first is null on both
+ *                              sides until the round before it is played,
+ *                              and the blind form re-raised the red row on
+ *                              a correctly drawn bracket forever — see
+ *                              `fixtureAwaitsSeedDraw` for both shapes.
  *
  * PRECONDITION: the stage is OPEN. Every caller reaches this through
  * `openStages`, which is the ONE place "not complete" is decided, so the
@@ -460,7 +509,8 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * looked load-bearing were removed for the same reason after a mutation
  * sweep proved neither could die on its own: `status !== "complete"` (the
  * caller's filter already guarantees it) and `hasFixtures` (a stage with no
- * fixtures has no `tbd` fixture either, so the last term subsumes it). A
+ * fixtures has no `awaitsSeedDraw` fixture either, so the last term
+ * subsumes it). A
  * term the caller already guarantees is not a guard, it is a second
  * authority — this wave's own recurring defect — and this file's own history
  * carries the same shape: the predicate this one replaces made
@@ -479,8 +529,9 @@ function stageOwesWork(s: PhaseStage, fixtures: readonly PhaseFixture[]): boolea
  * run disproved.
  *
  * Pure and DB-free on purpose: `sourceReady` is `seedingSourceReady` over
- * the caller's own in-memory stage list, and "is this bracket still TBD?" is
- * read off the fixtures' entrants rather than a `stage_seed_proposals` row,
+ * the caller's own in-memory stage list, and "does this bracket still owe its
+ * draw?" is read off the fixtures' own entrants, slot labels and outcomes
+ * (`fixtureAwaitsSeedDraw`) rather than a `stage_seed_proposals` row,
  * so BOTH callers (the desk and `d/[divSlug]/page.tsx`, which computes the
  * phase for the start-locks tip) can answer it identically without a
  * viewer-gated read. Two authorities disagreeing about one division is this
@@ -490,7 +541,7 @@ function stageOwesDraw(stage: PhaseStage, fixtures: readonly PhaseFixture[]): bo
   return (
     stage.timing === "setup" &&
     stage.sourceReady &&
-    fixtures.some((f) => f.stageId === stage.id && f.tbd)
+    fixtures.some((f) => f.stageId === stage.id && f.awaitsSeedDraw)
   );
 }
 
