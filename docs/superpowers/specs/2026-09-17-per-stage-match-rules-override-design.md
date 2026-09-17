@@ -1,9 +1,10 @@
 # Per-stage match-rules override — sets-based sports
 
-Owner-approved 2026-09-17 (chat). Supersedes the v1 draft of the same date;
-v1's design survived review only in outline, and every ruling below is a
-correction to it. Line numbers pinned against `main` `dc64cfcd6`
-(contains #794 `f3dcbdb8b` and spectator #797 `22a9f6131`).
+Owner-approved 2026-09-17 (chat). v3. Supersedes v1 and v2 of the same
+date; both were reviewed and came back Needs Fixes, and the corrections
+below are what survived. Line numbers pinned against `main` `dc64cfcd6`
+(contains #794 `f3dcbdb8b` and spectator #797 `22a9f6131`) and re-verified
+against the tree, pin by pin, after the v2 review.
 
 ## Problem
 
@@ -15,238 +16,325 @@ the knockout/playoff stage of the same division.
 
 Not Swiss-specific. `swiss_playoff` / `swiss_knockout` are **template**
 keys over the existing `swiss` and `knockout` `StageKind`s (#794); they are
-not stage kinds. (`swiss_knockout` does appear as a legacy string at
+not stage kinds. (`swiss_knockout` survives as a legacy string at
 `apps/web/src/server/migration/v1-map.ts:17` and in
-`packages/engine/src/testkit/simulation.ts:69,1025`, where v1 imports are
-split into two stages — a real customer for this feature, not a
-counter-example.) Every multi-stage template has the identical need, so
-this is a generic per-stage override.
+`packages/engine/src/testkit/simulation.ts:69,1025`, where a v1 import is
+split into two stages — a customer for this feature, not a
+counter-example.)
 
-## Scope — sets-based sports only
+## Scope
 
-Owner ruling 2026-09-17: **tennis, badminton, tabletennis, volleyball.**
-Their entire rule surface is nine keys:
+**Sets-based sports only** (owner, 2026-09-17): tennis, badminton,
+tabletennis, volleyball. **Per STAGE only** — not per round (see Known
+gaps). **One editor**: the fixtures-tab stage panel.
 
-| Sport | Overridable keys |
-| --- | --- |
-| volleyball | `winBy`, `bestOf`, `setTo`, `finalSetTo`, `cap` |
-| badminton | `bestOf`, `setTo`, `finalSetTo`, `cap` |
-| tabletennis | `bestOf`, `setTo`, `finalSetTo` |
-| tennis | `bestOf`, `setType`, `finalSet`, `noAd`, `tiebreakWinBy` |
+### Field keys are NOT config keys — the distinction is load-bearing
 
-`SPORT_RULES` sources: volleyball/badminton/tabletennis via the shared
-consts at `match-rules.tsx:56-165` (wired at `:360-362`), tennis at
-`:363-428`.
+A `RuleField`'s `key` names a FORM control; its `build()` decides which
+CONFIG key is written, and for tennis the two diverge:
+`setType`→`set` (a nested four-field object, `match-rules.tsx:382-389`),
+`noAd`→`game` (`:417`), `tiebreakWinBy`→`tiebreak` (`:427`).
 
-This scoping is load-bearing, not cosmetic. It removes three whole classes
-of problem found in review rather than deferring them:
+So the allowlist is the union of `Object.keys(field.build(probe, probe))`
+over a sport's fields, **never `SPORT_RULES[sportKey].map(f => f.key)`** —
+which is the expression already in the repo at `division-settings.tsx:273`
+and would 400 four of tennis's five overrides. Resulting config-key sets:
 
-- **No `points.*` key exists in any sets sport**, so a stage override
-  cannot reach `standingsDelta`'s `cfg.points` and cannot bypass the
-  `standings.custom_points` entitlement gate (`stages.ts:276-282`).
-- **No `shootout` / `extraTime`** in any sets sport, so the new key cannot
-  become a second source for `STAGE_DECIDER_KEYS`
+| Sport | Form fields | CONFIG keys the allowlist admits |
+| --- | --- | --- |
+| tennis | `bestOf`, `setType`, `finalSet`, `noAd`, `tiebreakWinBy` | `bestOf`, `set`, `finalSet`, `game`, `tiebreak` |
+| volleyball | `bestOf`, `setTo`, `finalSetTo`, `cap`, `winBy` | same names |
+| badminton | `bestOf`, `setTo`, `finalSetTo`, `cap`, `winBy` | same names |
+| tabletennis | `bestOf`, `setTo`, `finalSetTo`, `winBy` | same names |
+
+`WIN_BY` (`match-rules.tsx:61-69`) is shared by volleyball, badminton
+(`:140`) and tabletennis (`:167`) — it is not volleyball-only. Sources:
+shared consts `:61-168` (wired `:360-362`), tennis `:363-429`.
+
+### What the scoping does and does not buy
+
+It removes two classes of problem outright, and converts a third into a
+guard that must be built and tested:
+
+- **No `shootout` / `extraTime` field** in any sets sport, so `rules`
+  cannot become a second source for `STAGE_DECIDER_KEYS`
   (`engine-db/stage-cfg.ts:9`), which stays untouched.
-- **No `teamSize` / `playersPerSide` / `goalkeeper`**, so the lineup
-  catalog is not cfg-coupled for these sports (see "Known gaps").
+- **No `teamSize` / `playersPerSide` / `goalkeeper` field**, so the lineup
+  catalog is not cfg-coupled for these sports (see Known gaps).
+- **`points` is NOT absent from these sports' CONFIG.** Tennis's
+  `configSchema` carries a top-level `points` (`{win, loss}`,
+  `packages/engine/src/sports/tennis/tennis.schema.json`) and the setbased
+  kernel carries `pointsMap` (`sports/setbased/kernel.ts:115`, read at
+  `:2249-2255`). What is absent is a `points` FIELD in `SPORT_RULES`. The
+  merged-config parse would therefore ACCEPT `points`; **the allowlist is
+  the only thing keeping it out**, which is why it must be enforced on
+  every write path (T3) and tested for rejection, not assumed.
 
-## Current resolution path (re-verified on `dc64cfcd6`)
+## Current resolution path (re-pinned)
 
-- `resolveFixtureCfg(snapshot, divisionCfg, stageCfg)` —
-  `engine-db/fixture-cfg.ts:39`. Frozen snapshot wins; else
-  `stageScopedCfg`.
-- `stageScopedCfg` — `engine-db/stage-cfg.ts:11`, overlaying exactly
-  `STAGE_DECIDER_KEYS = ["shootout","extraTime"]` (`:9`).
-- Callers: `append-event.ts:245`, `fold.ts:155`, `competition.ts:278-282`,
-  `event-import.ts:279`, `player-stats.ts:129-132`,
-  `match-centre-load.ts:287`, `admin-fixture-config.ts:117,188`,
-  `org-posts.ts:761`.
-- Nothing bakes cfg into a fixture at generation time; `config_snapshot`
-  freezes the resolver's OUTPUT on the first event
-  (`append-event.ts:255,328`). A fixture with zero events reads live cfg
-  deliberately (`fixture-cfg.ts:24-28`).
-- `StageConfig` — `schemas.ts:994-1035`, `.strict()`; `pairing:1018`,
-  `points:1027`, `shootout:1032`, `extraTime:1033`. `rules` inserts after
-  `:1033`. #797 added only `PublicOrgLive` to this file — no contention.
+- `resolveFixtureCfg` — `engine-db/fixture-cfg.ts:39`; `hasFrozenCfg`
+  `:62-64` (its `:53-57` comment records that `undefined` is absence).
+  Live cfg for a zero-event fixture is deliberate (`:24-28`).
+- `stageScopedCfg` — `engine-db/stage-cfg.ts:11`, `STAGE_DECIDER_KEYS` `:9`.
+- Callers: `append-event.ts:245`, `fold.ts:155`, `competition.ts:278`,
+  `event-import.ts:280`, `player-stats.ts:439`, `match-centre-load.ts:291`,
+  `admin-fixture-config.ts:120,191`, `org-posts.ts:761`.
+- Freeze on first event: `append-event.ts:255` (`lastSeq === 0`), written
+  `:328`; carve-out at `:250-255` — a JSON-`null` division config records
+  events and freezes nothing.
+- `StageConfig` — `schemas.ts:994-1035`, `.strictObject` (`:995`);
+  `pairing:1018`, `points:1027`, `shootout:1032`, `extraTime:1033`.
+  `rules` inserts after `:1033`.
+- **A mirrored resolver exists**: `scripts/bench/lib/validate-pack.ts:394-406`
+  (`stageScopedFoldCfg`, own `STAGE_DECIDER_KEYS` at `:392`), mirrored
+  deliberately per its header `:380-391`. T1 must move it or prove packs
+  cannot carry `rules`.
 
-**Five surfaces bypass the resolver and read raw `division.config`:**
+**Five surfaces bypass the resolver**, reading raw `division.config`:
+`d/[divSlug]/f/[no]/page.tsx:119` (`rawConfig`) and `:171`
+(`sport.config`); `score/[token]/page.tsx:84` (SQL aliases `d.config`),
+`:145`, `:168`. The comment at `score/[token]/page.tsx:105-106` claiming
+the device fixture carries its own resolved config is false — corrected
+here. Pad skins read this directly: `tennis.tsx:268,505`,
+`badminton.tsx:351,584`, `volleyball.tsx:496,648`,
+`tabletennis.tsx:356,514`.
 
-| Site | What it feeds |
-| --- | --- |
-| `d/[divSlug]/f/[no]/page.tsx:119` | `rawConfig` → pad bootstrap |
-| `d/[divSlug]/f/[no]/page.tsx:171` | `sport.config` → `<FixtureConsole>` |
-| `score/[token]/page.tsx:84` | SQL selects `d.config` as `fixture.config` |
-| `score/[token]/page.tsx:145` | `rawConfig` → device pad |
-| `score/[token]/page.tsx:168` | `config` → device pad |
-
-The comment at `score/[token]/page.tsx:104-105` ("the device link's fixture
-carries its own resolved `config` column") is false and is corrected here.
-The pad skins read these directly — `tennis.tsx:268,505`,
-`badminton.tsx:351,584`, `volleyball.tsx:496,648`, each `cfg.bestOf ?? n` —
-so today a pad can render a different `bestOf` than the fold uses. Fixed on
-this branch: stage overrides are inert if the surface that renders them
-ignores the resolver.
-
-**Rule values do not round-trip.** `buildRuleOverride` (`:672`) returns a
-flat object; `hydrateRuleValues` (`:698`) rebuilds form values through each
-field's `read`. **Of 52 field entries, exactly 2 implement `read`**
-(`:266`, `:280` — football shoot-out points). None of the nine keys above
-has one, so a saved override reopens blank. This is a live defect in the
-division editor today, not new work this feature invents.
+**Rule values do not round-trip.** Of 53 `RuleField` entries, exactly two
+implement `read` (`match-rules.tsx:266,280` — football shoot-out points).
+None of the in-scope fields has one, so a saved override reopens blank.
+Live defect in the division editor today; T5 fixes it for the nine fields.
 
 ## Rulings
 
-**D1 — lock scope.** `patchDivision` freezes match format division-wide once
-any fixture exists: `withoutEntrants` strips only `entrants`
-(`divisions.ts:582`), and `nonEntrantsChanged` 409s `FORMAT_LOCKED`
-(`:808-815`, `:839-843`). v1's "editable any time" was a silent reversal of
-that. **Ruling: a stage's rules stay editable until the first fixture IN
-THAT STAGE starts, then lock.** This serves the real case — set the
-knockout to Bo3 while the league is still running — and prevents unequal
-rounds inside one stage (Bo1 early, Bo3 late), which is a fairness defect,
-not a feature. Division-level locking is unchanged.
+**D1 — the lock is per stage, and its predicate is named.** Division-wide
+`FORMAT_LOCKED` stays as it is (`divisions.ts:582`, `:808-815`,
+`:839-843` — it does lock `bestOf` today; this is a deliberate, recorded
+relaxation for stage scope). A stage's rules are editable until the first
+fixture in THAT stage has started, then locked.
 
-**D2 — allowlist.** The nine keys above, per sport, derived from
-`SPORT_RULES[sportKey]` rather than a hand-typed list. Anything else 400s.
-The MERGED `{...division.config, ...rules}` is validated through the sport
-module's `configSchema` and 422s `CONFIG_INVALID` exactly as
-`patchDivision` does (`divisions.ts:797-803`). The fragment alone cannot be
-parsed — defaults would fill it — so the merge is what gets parsed.
+"Started" is **not** `fixtures.status`: `fixtureStatusFromFold`
+(`append-event.ts:119-129`) returns `in_play` only while an active
+`core.start` exists, so voiding a start moves a fixture back to
+`scheduled` — non-monotonic, and a stage whose only played fixture had its
+start voided would re-open for editing. Use the monotonic pair:
 
-**D3 — the public format line is IN SCOPE** (owner, 2026-09-17). The hub's
-`formatLine` is built from raw division config at
-`server/public-site/competition-hub.ts:665`
-(`describeFormat(d.sport_key, module_, d.config)`), its only production
-caller. Left alone, the hub would tell spectators "Best of 1" for a Bo3
-knockout. Cost, accepted: a `competition-hub-schema.ts` change (`:119`), an
-`openapi/v1*.json` regen, and a **`pub-hub-v3` → `pub-hub-v4` cache bump**
-(`competition-hub.ts:1042`) — `unstable_cache` otherwise serves an
-old-shaped document. #797 rewrote this file heavily, so re-read before
-editing.
+```sql
+select exists(
+  select 1 from fixtures f
+  where f.stage_id = $1
+    and (f.config_snapshot is not null
+         or exists(select 1 from score_events e where e.fixture_id = f.id))
+) as locked
+```
 
-**D4 — i18n.** The nine labels are hardcoded English literals today.
-Translate them into all four dictionaries; `gen-keys` regen, zero drift.
-This also fixes the existing division editor.
+→ 409 `STAGE_FORMAT_LOCKED`. The `score_events` half covers the
+JSON-`null`-config carve-out where no snapshot is ever taken.
 
-**D5 — no entitlement gate.** Per-stage rules are core format settings, not
-a paid surface. D2's allowlist is what keeps `points` out of reach.
+*Interaction with the admin re-freeze:* `admin-fixture-config.ts` re-freezes
+on `hasFrozenCfg(snapshot) && !LOCKED_FIXTURE_STATUSES.has(status)`
+(`:135`, `:163`, `:184`) — it does not require `in_play`. Accepted, because
+D1's predicate closes it: a fixture with a snapshot locks its stage, so no
+rules edit can land after one exists. A test pins that ordering.
+
+**D2 — allowlist, validation, storage.** The allowlist is derived from
+`build()` output as above, per sport. Every write path validates the MERGED
+`{...division.config, ...rules}` through the sport module's `configSchema`
+and 422s `CONFIG_INVALID`, mirroring `divisions.ts:822-829`; the fragment
+alone cannot be parsed, since defaults would fill it. **Validate the merge,
+store the FRAGMENT** — storing `parsed.data` would write a
+defaults-materialised full config into `config.rules` and pin the stage to
+every division key forever.
+
+**D2a — the sport gate is a guard, not prose.** Both write paths 400 for
+any `sport_key` outside `{tennis, badminton, tabletennis, volleyball}`.
+Without it a football division can POST `rules.points` — a shape
+`SPORT_RULES.football` genuinely emits (`match-rules.tsx:194-204`) — which
+T1's overlay then feeds to `standingsDelta` (`football.ts:2630-2633`) with
+`standings.custom_points` never checked (`createStages` gates on
+`s.config.points`, `stages.ts:282-289`, `requireFeature` `:287`).
+`createStages` never parses stage config through any `configSchema`, so it
+cannot be left as a second door: **`createStages`/`replaceStages` reject a
+`rules` key outright** (400) — no caller needs it now that the builder is
+out of scope (T6).
+
+**D3 — the public hub format line is in scope.** `formatLine` is built from
+raw division config at `competition-hub.ts:665`, `describeFormat`'s only
+production caller. `describeFormat` is pure and takes a bare cfg
+(`describe-format.ts:94-98`), so it is callable per stage. Shape:
+`HubDivision` (`competition-hub-schema.ts:103-134`) gains
+`stageFormatLines: z.array(z.object({stageName, line: Msg})).optional()`;
+`formatLine` (`:119`) stays as the division default. Optional because the
+hub API answers `s-maxage=30, stale-while-revalidate=300` (`:123-130`), so
+a new bundle polls documents built before the field existed — the
+`pub-hub-v3`→`v4` bump (`competition-hub.ts:1042`) clears `unstable_cache`
+only, not that. The hub query must additionally select `s.config`, and
+`competition-hub.test.ts:2489` pins `["pub-hub-v3","comp-1"]` and moves
+with the bump.
+
+**D5 — no entitlement gate.** Per-stage rules are core format settings.
+D2's allowlist plus D2a's sport gate are what keep `points` out of reach.
+
+**O1 — OPEN, owner: D4 (translating the labels) is withdrawn pending your
+call.** `match-rules.tsx:6-9` records a deliberate decision that rule
+labels are canonical English, like sport and format names, with only the
+picker chrome localised. Translating the nine in-scope labels would leave
+the other 44 inconsistent. Recommendation: **drop D4**, keep the labels
+English, and treat the documented decision as standing. Cost if wrong: the
+stage panel reads English inside an otherwise translated page.
 
 ## Design
 
+### T0 — extract the rules table out of the client module
+
+`match-rules.tsx:1` is `"use client"` and `:10` imports the dict provider;
+its only importers today are client components and tests. A server module
+importing it receives client references, not values — and `schemas.ts`
+cannot hold the table either, because `scripts/openapi-gen.ts` runs that
+file under bare `node --experimental-strip-types`, which parses neither
+`@/` imports (`schemas.ts:4-20`, `:1013-1015`) nor JSX. **A vitest unit
+test of the derivation passes regardless** (node env, no RSC boundary), so
+getting this wrong ships green and inert.
+
+Move `RuleField`, `SPORT_RULES`, `buildRuleOverride`, `hydrateRuleValues`
+and the allowlist derivation into a directive-free, JSX-free
+`apps/web/src/lib/match-rules.ts`; `match-rules.tsx` re-exports them and
+keeps `MatchRuleFields`. The derivation must be exercised by a test that
+runs in the SERVER graph, not only from the existing client-side test.
+
 ### T1 — resolver
 
-`stageScopedCfg` gains a second overlay source; the decider-key loop is
-untouched:
+In `stageScopedCfg`, apply `rules` FIRST, then the decider-key loop, so a
+stage's own `shootout`/`extraTime` keep priority over anything in `rules`
+(belt and braces — D2's allowlist already bars them):
 
 ```ts
 if (isPlainObject(stageCfg.rules)) Object.assign(overlay, stageCfg.rules);
+for (const key of STAGE_DECIDER_KEYS) { /* unchanged, runs after */ }
 ```
 
-Merge order: `snapshot ?? {...divisionCfg, ...stage.config.rules}`. A stage
-with no `rules` is identity — the existing reference-identity assertion at
-`stage-cfg.test.ts:24-27` must keep passing. `Object.assign` copies explicit
+Merge order overall: `snapshot ?? {...divisionCfg, ...rules, ...deciders}`.
+Identity when a stage has no `rules` — `stage-cfg.test.ts:24-27` asserts
+reference identity and must keep passing. `Object.assign` copies explicit
 `null`s, so **"inherit" is key ABSENCE, never `null`**; the endpoint strips
-nulls on the way in.
+nulls on the way in. The merge is shallow: `rules.set` replaces the whole
+`set` object, which is safe only because tennis's `build` emits all four
+sub-fields (`match-rules.tsx:380-381` records the same invariant
+client-side) — the merged parse is the enforcement.
+
+Also in T1's file set: the bench mirror
+(`scripts/bench/lib/validate-pack.ts:394-406`), and
+`competition.ts:249`'s comment reasoning about what `stageScopedCfg` can
+produce, which T1 widens. `packages/engine/src/sports/cfg-replay.conformance.test.ts:8`
+quotes the resolver contract and may owe a `rules` case.
 
 ### T2 — atomic stage-config writes
 
-Six writers rewrite a stage's whole config from a JS-side read, with no
+Six writers rewrite a stage's whole config from a JS-side read with no
 lock: `stages.ts:3176,3265,3699,3876`, `scoring.ts:555,567`. A rules write
-landing inside that window is silently lost. #794 already shipped the fix
-pattern at `stages.ts:764` — `config || jsonb_build_object('rounds', …)`,
-a server-side merge. Convert all six, and have the new endpoint write the
-same way.
+inside that window is silently lost. #794 shipped the server-side merge
+pattern at `stages.ts:764` — but that one is guarded
+`and config->>'rounds' is null`, i.e. write-once. `rules` must be
+replaceable and clearable, so: `config || jsonb_build_object('rules', …)`
+to set, `config - 'rules'` to clear. Convert all six; the new endpoint
+writes the same way.
 
 ### T3 — endpoint
 
-`PUT /stages/:id/rules`, following `putStageCourtTags`
-(`stage-court-tags.ts:145-180`): `withTenant`, `stageOrThrow`,
-`frozenCompetitionIds` + `assertNotFrozen`, D1's per-stage lock, D2's
-allowlist and merged-config validation, the T2 atomic write, and an
-**awaited** revalidation — `stages.ts` has four `void fireStageRevalidate`
-calls recorded as a defect (spectator W2 handoff §8, P1c); do not add a
-fifth. Body `{rules: {...}}`; `{rules: null}` clears back to the division. This
-endpoint is the ONLY writer — `createStages` is deliberately left alone,
-since the builder no longer offers rules (T6) and no other caller needs
-them at creation. OpenAPI regen (`ci.yml:92-96` gates drift).
+`PUT /stages/:id/rules`. `withTenant` + `stageOrThrow` follow
+`stage-court-tags.ts:134-209`, but that file has **no** billing-freeze
+guard — take the freeze pattern from `registration-approval.ts:112,139`
+instead (resolve `frozenCompetitionIds` BEFORE the tx, `assertNotFrozen`
+inside). Plus D1's lock, D2's allowlist + merged validation + fragment
+storage, D2a's sport gate, T2's atomic write, and an **awaited**
+revalidation — `stages.ts:1335,1724,2798,3746` are four `void
+fireStageRevalidate` calls already recorded as a defect; do not add a
+fifth. Body `{rules:{…}}`; `{rules:null}` clears. This endpoint is the only
+writer. OpenAPI regen (`ci.yml:92-96` gates drift).
 
 ### T4 — resolver threading
 
-Route the five pad sites through `resolveFixtureCfg`. Both pages must also
-select the fixture's stage config; `score/[token]/page.tsx:84` currently
-selects `d.config` alone.
+Route the five pad surfaces through `resolveFixtureCfg`. Both routes must
+select **two** columns they do not select today — `f.config_snapshot` AND
+the fixture's stage config: `getFixture` (`fixtures.ts:44-66`) selects
+neither, and the device-link SQL (`score/[token]/page.tsx:82-92`) selects
+neither. Because `hasFrozenCfg` treats `undefined` as absence, forgetting
+`config_snapshot` renders live cfg for every scored fixture with no error.
 
-### T5 — `read` for the nine keys
+### T5 — `read` for the in-scope fields
 
-Implement `read` on each of the nine `RuleField`s so the stage panel (and
-the division editor) hydrate. With `read` complete for the exposed set, the
-PATCH carries the full override and replace-vs-merge stops being ambiguous:
-**the endpoint replaces `config.rules` wholesale** with the form's output.
+Implement `read` on each in-scope `RuleField` so the panel hydrates. The
+panel hydrates from the stage's FRAGMENT — `hydrateRuleValues(sportKey,
+stage.config.rules ?? {})`, never the division or resolved config, which
+are defaults-materialised (`usecases/divisions.ts` materialises every
+`.default()` at write time, per `lineup-catalog.ts:22-23`) and would make
+the first save pin the whole division format into `config.rules`. With
+`read` complete for the exposed set, the endpoint replaces `config.rules`
+wholesale and "clear a field" means "inherit".
 
 ### T6 — UI: the Fixture Console only
 
-Owner ruling 2026-09-17: **no division-builder change.** The only editor is
-the fixtures tab `stages-panel.tsx` (the owner's "Fixture Console") — a
-per-stage rules panel calling `PUT /stages/:id/rules`, usable before and
-after generation, disabled with a reason once D1's lock bites. This is
-where an organiser stands when they decide the knockout's format, and it
-keeps the wizard, its payload and its screenshot round out of scope.
-
-`structureDraftsForApply` (`division-settings.tsx:213-227`, applied at
+No division-builder change (owner, 2026-09-17). The only editor is the
+fixtures-tab stage panel `stages-panel.tsx` — per stage, "Same as
+division" by default, disabled with a reason once D1's lock bites.
+`structureDraftsForApply` (`division-settings.tsx:213-226`, applied
 `:551-553`) rebuilds stage drafts from the template and drops stored
-config — it must still carry each surviving stage's `rules` forward, with a
-test that fails without it. That path is reachable from the Format tab
-regardless of where rules were set.
+config; it must carry each surviving stage's `rules` forward, with a test
+that fails without it.
 
-### T7 — public format line (D3)
+### T7 — public format line
 
-Make `formatLine` stage-aware in the hub document, schema + regen + cache
-bump as above.
+Per D3: hub query selects `s.config`, `stageFormatLines` built via
+`describeFormat(sport_key, module_, stageScopedCfg(d.config, s.config))`,
+schema + OpenAPI regen + `pub-hub-v4`, renderer on the hub division view.
 
 ## Testing
 
-- **Unit** — `stageScopedCfg` (identity when no `rules`; per-key override;
-  decider keys unaffected; `null` never overrides). Endpoint: allowlist
-  rejection, merged-config 422, D1 lock boundary, tenancy, freeze. Each
-  verified by mutation: break the predicate, confirm a named test reds.
-- **E2E** — a sets-sport division, league/Swiss at Bo1 and knockout at Bo3,
-  both generated; open the pad on a fixture in each stage and assert the
-  rendered set structure differs. **Prove the selector is visible in pad
-  DOM before relying on it**, or the test passes vacuously. Then: score a
-  fixture, edit that stage's rules, assert the scored fixture's frozen
-  snapshot is unchanged while an unstarted sibling picks the new value, and
-  assert the lock refuses once the stage has started.
+- **Unit** — `stageScopedCfg`: identity without `rules`; per-key override;
+  decider keys still win; `null` never overrides. Endpoint: allowlist
+  rejection (including a tennis `set` accepted where `setType` is
+  rejected), merged-config 422, D1's lock boundary, D2a's sport gate,
+  tenancy, freeze. `createStages` with a `rules` key → 400, **with a
+  football `rules.points` case** — that test is what makes the scoping
+  claim non-vacuous. Each guard verified by mutation: break the predicate,
+  confirm a named test reds.
+- **E2E** — a sets-sport division, league/Swiss and knockout at DIFFERENT
+  formats, both generated; open the pad in each stage and assert the
+  rendered format. Two constraints, or the test cannot witness its own
+  regression: pick values that differ from the skins' `?? ` fallbacks
+  (`cfg.bestOf ?? 3` for tennis/badminton, `?? 5` for
+  volleyball/tabletennis), and derive both expectations from
+  `configSchema.parse` output rather than a constant typed into the test.
+  The only cfg-derived text the skins render is a translated context line
+  taking `bestOf` as a param (`tennis.tsx:507`, `badminton.tsx:601`,
+  `volleyball.tsx:657`, `tabletennis.tsx:529`) — assert on a testid and
+  value, not English text. Mutant: set both stages to the same format and
+  confirm the test reds. Then score a fixture, confirm its frozen snapshot
+  is unchanged, and confirm the stage is now locked.
 - **Regression** — (a) a frozen `config_snapshot` differing from live
-  division config renders from the snapshot on both pad routes; (b) a stage
-  carrying only `shootout` still overlays as before; (c) a division with no
-  stage rules anywhere resolves byte-identically. (a) and (b) are the real
-  regression risk of T4 and are invisible to a "no override" test.
-- **Smoke** — Fixture Console round-trip: set a stage override, reload,
-  confirm it hydrates back into the panel (the `read` gap in T5 is exactly
-  what makes this fail today).
+  division config renders FROM THE SNAPSHOT on both pad routes (names the
+  column, per T4); (b) a stage carrying only `shootout` overlays as before;
+  (c) no stage rules anywhere resolves byte-identically.
+- **Smoke** — Fixture Console round-trip: set an override, reload, confirm
+  it hydrates (the T5 gap is exactly what fails this today).
 - **Visual** — contact sheet at 320/390/768/1024/1280, per-screen verdicts,
-  owner sign-off before PR (spectator programme gate applies to T7's hub
-  change).
+  owner sign-off before PR; the spectator programme's gate applies to T7.
 - Full spec files for e2e, never a `-g` slice; JSON reporter counts only.
 
 ## Known gaps — recorded, not fixed
 
-- **Four lineup-catalog sites still read raw `division.config`**:
+- **Four lineup-catalog sites read raw `division.config`**:
   `d/[divSlug]/f/[no]/page.tsx:70`, `score/[token]/page.tsx:107`,
   `usecases/fixtures.ts:312,320` (SQL `:380`), `d/[divSlug]/page.tsx:37,269`.
-  The catalog is cfg-derived (`lineup-catalog.ts:4-30`: football `teamSize`,
-  cricket `playersPerSide`, hockey `goalkeeper`) — all team sports, none in
-  this scope. They become live defects the day a team sport gains a
-  stage-overridable `teamSize`; that wave owns them.
-- `event-import.ts:250-255` gates DLS entitlement on `division.config` by
+  Catalog inputs are `teamSize`/`playersPerSide`/`goalkeeper`
+  (`lineup-catalog.ts:4-30`) — team sports only, none in scope. They become
+  live defects the day a team sport gains a stage-overridable `teamSize`.
+- `event-import.ts:245-256` gates DLS entitlement on `division.config` by
   deliberate comment. Cricket, out of scope; a stage override must not move
   that gate.
-- Team sports (`points.*`, `shootout`, `extraTime`, `teamSize`) are
-  deliberately excluded. Extending to them re-opens D2's entitlement and
-  two-sources questions and owes its own design round.
-- **Per-ROUND overrides are out** (owner, 2026-09-17: "per stage only").
-  The unit is the stage: a Swiss stage at Bo1 and its playoff stage at Bo3.
-  Round 5 of a Swiss differing from rounds 1-4 is NOT buildable on this
-  design — a round is an integer column on `fixtures`, not a row that can
-  carry config — and it would re-open the mid-stage fairness question D1
-  closes. Its own design round if it is ever wanted.
+- Team sports are excluded; extending re-opens D2a's entitlement question
+  and the decider-key second source, and owes its own design round.
+- **Per-ROUND overrides are out** (owner: "per stage only"). A round is an
+  integer column on `fixtures`, not a row that can carry config, and
+  per-round re-opens the mid-stage fairness question D1 closes.
+- Not verified: whether `resolveScorePadBootstrap` tolerates a frozen
+  snapshot predating a later schema change. Flagged, not asserted.
