@@ -3157,7 +3157,7 @@
   "fixture.decidedBy.shootoutHockey": "{winner} a gagné {score} en tirs de fusillade",
   "fixture.decidedBy.shootoutHockeyPlain": "{winner} a gagné en tirs de fusillade",
   "fixture.decidedBy.superOver": "{winner} a gagné au super over",
-  "fixture.decidedBy.boundaryCount": "{winner} a gagné au décompte des limites",
+  "fixture.decidedBy.boundaryCount": "{winner} a gagné au décompte des boundaries",
   "fixture.decidedBy.extraTime": "{winner} a gagné après prolongation",
   "fixture.decidedBy.plain": "{winner} a gagné",
   "fixture.decidedBy.tie": "Match nul",

@@ -338,6 +338,8 @@
   "table.fewer": "Minder kolommen",
   "table.fullDivision": "Volledige divisie",
   "table.empty": "Nog geen stand",
+  "table.region": "Stand",
+  "table.regionCaptioned": "Stand: {caption}",
   "landing.tabsLabel": "Tabbladen van de competitie",
   "landing.tab.overview": "Overzicht",
   "landing.tab.matches": "Wedstrijden",

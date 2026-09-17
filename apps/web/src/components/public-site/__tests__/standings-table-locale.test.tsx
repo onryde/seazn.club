@@ -85,6 +85,49 @@ describe("StandingsTable — every header word is the page dictionary's", () => 
   });
 });
 
+describe("StandingsTable — the scroll box is a named, focusable region (final review B m3)", () => {
+  // The table is wider than a phone at 320 and this box is what scrolls it. A
+  // keyboard user reaches it only through `tabindex`, and axe's
+  // `scrollable-region-focusable` asks the same. The hub's table
+  // (`standings-table-view.tsx`) and the match centre's scorecard and sets
+  // regions already carry all three.
+  const scrollBox = (html: string) => {
+    const tag = /<div ([^>]*class="[^"]*overflow-x-auto[^"]*"[^>]*)>/.exec(html);
+    expect(tag, "the overflow-x-auto box").not.toBeNull();
+    return tag![1]!;
+  };
+  const render = (dict: Record<string, string>, caption?: string) =>
+    renderToStaticMarkup(
+      createElement(StandingsTable, {
+        rows: [row("a", { rank: 1 }), row("b", { rank: 2 })],
+        metricSpecs: GOALS,
+        cascade: ["points"],
+        entrantNames: { a: "Alpha", b: "Beta" },
+        ...(caption === undefined ? {} : { caption }),
+        dict,
+      }),
+    );
+
+  it("premise: the Spanish name differs from the English one", () => {
+    expect(es["table.region"]).not.toBe(en["table.region"]);
+    expect(es["table.regionCaptioned"]).not.toBe(en["table.regionCaptioned"]);
+  });
+
+  it("es with a caption: tabindex 0, role region, named by the dictionary around the caption", () => {
+    const box = scrollBox(render(es, "Liga — Grupo A"));
+    expect(box).toContain('tabindex="0"');
+    expect(box).toContain('role="region"');
+    expect(box).toContain(`aria-label="${es["table.regionCaptioned"].replace("{caption}", "Liga — Grupo A")}"`);
+  });
+
+  it("no caption: still focusable, and named by the dictionary's word alone", () => {
+    const box = scrollBox(render(es));
+    expect(box).toContain('tabindex="0"');
+    expect(box).toContain('role="region"');
+    expect(box).toContain(`aria-label="${es["table.region"]}"`);
+  });
+});
+
 describe("StandingsTable — every OTHER sport's metric headers are the page dictionary's too (fix round 2)", () => {
   // The REAL module declarations, so the label the table is handed is the one a
   // badminton or cricket division actually hands it.

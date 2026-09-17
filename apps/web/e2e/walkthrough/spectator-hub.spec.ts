@@ -17,8 +17,12 @@
 //     Live now rail leads instead (`overviewPlan`, case "live"), so "status =
 //     landing.status.live.one" can never hold. The case asserts the rail
 //     while live and the sentence's return once nothing is.
-//   - Stats exist only once someone has READ stats (snapshots are lazy); the
-//     seed reads them once before the first hub render (owner ruling E3).
+//   - Stats are not folded by a READ (the option-B stats merge, owner rulings
+//     2026-09-16/17; see `spectator-w2-kit.ts`). B's result schedules the fold,
+//     which reads EVERY event in the division, live match A's included. So A's
+//     eight balls are bowled BEFORE B's result: every fold after that (the
+//     scheduled one, or any a reconcile queues) reads the same ledger until
+//     HB2 moves A again, and HB6's oracle is that whole ledger.
 //
 // One competition on the shared Pro org, everything seeded before the first
 // public read:
@@ -50,6 +54,7 @@ import {
   absoluteEscapes,
   activeOrgSlug,
   API_CALL_MS,
+  awaitStatsFold,
   dictString,
   division,
   entrants,
@@ -70,6 +75,7 @@ import {
   SHOT_STATE_MS,
   shootStates,
   spectator,
+  statsFoldLandMs,
   STEP_MS,
   TAB_CHECK_MS,
   uiString,
@@ -178,7 +184,9 @@ async function startMatch(request: APIRequestContext, fixtureId: string, first: 
   await mustPost(request, fixtureId, "core.start", {});
 }
 
-const A_FIRST_EIGHT = [1, 0, 2, 4, 0, 1, 2, 0];
+/** Big enough that leaving live match A out would change the Stats tab's top
+ *  runs row, whichever side bats first in A and B (HB6 asserts that premise). */
+const A_FIRST_EIGHT = [6, 0, 4, 6, 0, 1, 2, 0];
 const A_REST_OF_INNINGS_ONE = [1, 0, 2];
 const A_CHASE = Array.from({ length: 12 }, () => 0);
 const B_INNINGS_ONE = [6, 1, 0, 4, 2, 1, 0, 4, 1, 2, 0, 6];
@@ -205,7 +213,8 @@ const SEED_CALLS = 120;
 test("setup: a hub with a live and a decided cricket match, a generic league and a teams-only division", async ({
   request,
 }) => {
-  test.setTimeout(Math.max(FLOOR_MS, SEED_CALLS * API_CALL_MS));
+  const foldMs = statsFoldLandMs() + LAND_SLACK_MS;
+  test.setTimeout(Math.max(FLOOR_MS, SEED_CALLS * API_CALL_MS + foldMs));
   org = await activeOrgSlug(request);
   comp = await publicCompetition(request, { name: `Hub Walkthrough ${TAG}`, orgId: org.id });
 
@@ -245,20 +254,23 @@ test("setup: a hub with a live and a decided cricket match, a generic league and
   await scheduleFixture(request, matchA, "2030-08-01T10:00:00Z");
   await scheduleFixture(request, matchC, "2030-08-08T10:00:00Z");
 
-  // B: decided — the home side bats first and wins.
-  const bHome = b.home_entrant_id === teams.ospreys.entrantId ? teams.ospreys : teams.falcons;
-  const bAway = bHome === teams.ospreys ? teams.falcons : teams.ospreys;
-  await startMatch(request, matchB, bHome, bAway);
-  await bowl(request, matchB, new Innings(bHome, bAway), B_INNINGS_ONE);
-  await bowl(request, matchB, new Innings(bAway, bHome), B_INNINGS_TWO);
-
-  // A: live, eight balls into the first innings.
+  // A: live, eight balls into the first innings, BEFORE B's result (header).
   const aHome = a.home_entrant_id === teams.kestrels.entrantId ? teams.kestrels : teams.ospreys;
   const aAway = aHome === teams.kestrels ? teams.ospreys : teams.kestrels;
   await startMatch(request, matchA, aHome, aAway);
   innA = new Innings(aHome, aAway);
   aChase = { batting: aAway, bowling: aHome };
   await bowl(request, matchA, innA, A_FIRST_EIGHT);
+
+  // B: decided — the home side bats first and wins. Its deciding ball schedules
+  // the division's stats fold after its response; a read folds nothing, so wait
+  // for the rows before any hub render (the Stats tab exists only with them).
+  const bHome = b.home_entrant_id === teams.ospreys.entrantId ? teams.ospreys : teams.falcons;
+  const bAway = bHome === teams.ospreys ? teams.falcons : teams.ospreys;
+  await startMatch(request, matchB, bHome, bAway);
+  await bowl(request, matchB, new Innings(bHome, bAway), B_INNINGS_ONE);
+  await bowl(request, matchB, new Innings(bAway, bHome), B_INNINGS_TWO);
+  await awaitStatsFold(org.slug, comp.slug, cricketSlug, foldMs);
 
   // A manual ban on a Falcons player, confirmed so it is active.
   const ban = await apiJson<{ id: string }>(request, `/api/v1/divisions/${cricketId}/suspensions`, "POST", {
@@ -297,12 +309,6 @@ test("setup: a hub with a live and a decided cricket match, a generic league and
     { kind: "team", name: `Juniors Blue ${TAG}`, members: [] },
   ]);
 
-  // Stats snapshots exist only once stats are READ (lazy) — read before any
-  // hub render so the spectator's hub has a Stats tab.
-  const stats = await publicJson<unknown>(
-    `/api/v1/public/orgs/${org.slug}/competitions/${comp.slug}/divisions/${cricketSlug}/stats`,
-  );
-  expect(stats.status, "public cricket stats read").toBe(200);
   console.log(`seeded: ${org.slug}/${comp.slug} cricket=${cricketSlug} A=${matchA} B=${matchB} C=${matchC} generic=${genericSlug}`);
 });
 
@@ -341,10 +347,21 @@ test("HB1: the tab rail is the hub document's tabs, in its order, in English lab
 });
 
 // HB6 — Stats: the top runs row is the batter the ledger says, and it links to
-// a consenting player's card.
-test("HB6: the Stats tab's top runs row is the ledger's top scorer, with the ledger's total", async ({ browser, request }) => {
+// a consenting player's card. What the board shows is the last fold's ledger:
+// B's result folded every event in the division, live A's eight balls included
+// (they were bowled first, see the header), and no fold after it can read
+// anything else until HB2 bowls A again. So the oracle is every ball, A's too,
+// and A's script makes that differ from the settled-only count: a board that
+// left the live match's folded balls out reds here.
+test("HB6: the Stats tab's top runs row is the ledger's top scorer, live match A's folded balls included, with the ledger's total", async ({
+  browser,
+  request,
+}) => {
   test.setTimeout(Math.max(FLOOR_MS, 3 * STEP_MS));
-  const totals = new Map<string, number>();
+  const live = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${matchA}`);
+  expect(live.data?.status, "match A is still in play").toBe("in_play");
+  const all = new Map<string, number>();
+  const withoutA = new Map<string, number>();
   for (const f of [matchA, matchB, matchC]) {
     const events = await apiJson<{ type: string; payload: { striker?: string; runs?: { bat?: number } } }[]>(
       request,
@@ -352,12 +369,19 @@ test("HB6: the Stats tab's top runs row is the ledger's top scorer, with the led
     );
     for (const e of events.data ?? []) {
       if (e.type !== "cricket.ball" || !e.payload.striker) continue;
-      totals.set(e.payload.striker, (totals.get(e.payload.striker) ?? 0) + (e.payload.runs?.bat ?? 0));
+      const add = (m: Map<string, number>) => m.set(e.payload.striker!, (m.get(e.payload.striker!) ?? 0) + (e.payload.runs?.bat ?? 0));
+      add(all);
+      if (f !== matchA) add(withoutA);
     }
   }
-  const ranked = [...totals].sort((x, y) => y[1] - x[1]);
-  console.log(`HB6 ledger runs: ${JSON.stringify(ranked)}`);
+  const rank = (m: Map<string, number>) => [...m].sort((x, y) => y[1] - x[1]);
+  const ranked = rank(all);
+  const rankedWithoutA = rank(withoutA);
+  console.log(`HB6 ledger runs: ${JSON.stringify(ranked.slice(0, 3))} without live A: ${JSON.stringify(rankedWithoutA.slice(0, 3))}`);
   expect(ranked[0]![1], "the ledger's top scorer is unique, or 'first row' proves nothing").toBeGreaterThan(ranked[1]![1]);
+  expect(rankedWithoutA[0], "leaving live A out must change the top row, or this case cannot tell the two apart").not.toEqual(
+    ranked[0],
+  );
   const [topId, topRuns] = ranked[0]!;
 
   const page = await spectator(browser, { width: 390 });

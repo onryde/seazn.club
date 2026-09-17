@@ -115,8 +115,8 @@ describe("cricketMarginMsg — the structured margin, worded per locale", () => 
       "dls:runs/4": "Home Blazers ganó por 4 carreras (DLS)",
       "dls:wickets/1": "Home Blazers ganó por 1 wicket (DLS)",
       "dls:wickets/7": "Home Blazers ganó por 7 wickets (DLS)",
-      super_over: "Home Blazers ganó en el súper over",
-      boundary_count: "Home Blazers ganó por recuento de límites",
+      super_over: "Home Blazers ganó en el super over",
+      boundary_count: "Home Blazers ganó por recuento de boundaries",
     },
     fr: {
       "runs/1": "Home Blazers a gagné par 1 course",
@@ -130,7 +130,7 @@ describe("cricketMarginMsg — the structured margin, worded per locale", () => 
       "dls:wickets/1": "Home Blazers a gagné par 1 wicket (DLS)",
       "dls:wickets/7": "Home Blazers a gagné par 7 wickets (DLS)",
       super_over: "Home Blazers a gagné au super over",
-      boundary_count: "Home Blazers a gagné au décompte des limites",
+      boundary_count: "Home Blazers a gagné au décompte des boundaries",
     },
     nl: {
       "runs/1": "Home Blazers won met 1 run",
@@ -195,13 +195,33 @@ describe("cricketMarginMsg — the structured margin, worded per locale", () => 
     expect(leaks).toEqual([]);
   });
 
+  it("the tie-break sentences name the cricket terms the match centre's own labels use, in every locale (owner ruling 2026-09-17)", () => {
+    // Owner ruling 2026-09-17: es and fr keep the English cricket terms in the
+    // result line, as the ball glyph ("Boundary") and the super-over label
+    // ("Super over") already do on the same page. "recuento de límites",
+    // "décompte des limites" and "súper over" are gone. Each locale's label is
+    // read from its own dictionary, so a label that changes moves this with it.
+    for (const locale of LOCALES) {
+      const superOver = String(DICTS[locale]["matchCentre.superOver"]).toLowerCase();
+      const boundary = String(DICTS[locale]["matchCentre.ball.boundary"]).toLowerCase();
+      expect(superOver, `${locale}: the premise, an English super-over label`).toBe("super over");
+      expect(boundary, `${locale}: the premise, an English boundary label`).toBe("boundary");
+      expect(render(locale, { kind: "super_over" }), `${locale}: super over`).toContain(superOver);
+      expect(render(locale, { kind: "boundary_count" }), `${locale}: boundary count`).toMatch(/\bboundar(y|ies)\b/);
+      expect(render(locale, { kind: "boundary_count" }), `${locale}: a translated term`).not.toMatch(/l[íi]mites|súper/i);
+    }
+  });
+
   it("the boundary-count sentence is the SAME one the organiser's fixture page already says, in every locale", () => {
     // Review m5: `fixture.decidedBy.boundaryCount` (ui.json) had the approved
     // translation all along while this surface printed "boundary count" in
-    // English. One sentence, one wording — so the two cannot drift again.
+    // English. One sentence, one wording — so the two cannot drift again. The
+    // 2026-09-17 ruling moved both surfaces to "boundaries" together.
     for (const locale of LOCALES) {
       const ui = { ...UI.en, ...UI[locale] } as Dict;
       expect(render(locale, { kind: "boundary_count" })).toBe(t(ui, "fixture.decidedBy.boundaryCount", { winner: "Home Blazers" }));
+      // The super-over sentence moved with it (same ruling), so it is pinned the same way.
+      expect(render(locale, { kind: "super_over" }), `${locale}: super over`).toBe(t(ui, "fixture.decidedBy.superOver", { winner: "Home Blazers" }));
     }
   });
 });

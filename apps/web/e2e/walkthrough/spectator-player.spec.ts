@@ -51,6 +51,7 @@ import {
   anonymousRequest,
   API_CALL_MS,
   activeOrgSlug,
+  awaitStatsFold,
   CONSENT_CLEAR_BAR_MS,
   dictString,
   division,
@@ -72,6 +73,7 @@ import {
   SHOT_STATE_MS,
   shootInPlace,
   spectator,
+  statsFoldLandMs,
   STEP_MS,
   w2Clock,
   type FixtureRow,
@@ -175,19 +177,14 @@ function opponentOf(row: FixtureRow, entrantId: string): string {
   return row.home_entrant_id === entrantId ? row.away_entrant_id! : row.home_entrant_id!;
 }
 
-async function statsRead(orgSlug: string, compSlug: string, divSlug: string): Promise<void> {
-  // Player stat snapshots are written only when stats are READ, never on a
-  // score write or a hub read. Read once, before any hub render, so the hub's
-  // Stats tab exists for the spectator (inventory A9; owner ruling E3).
-  const res = await publicJson<unknown>(`/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/divisions/${divSlug}/stats`);
-  expect(res.status, `public stats read for ${orgSlug}/${compSlug}/${divSlug}`).toBe(200);
-}
-
 test("setup: a Pro competition with cricket, generic, two tennis and badminton divisions, plus three dedicated orgs", async ({
   request,
 }) => {
+  // A read folds nothing: two scheduled stats folds are waited for below
+  // (`awaitStatsFold`), each before any hub render so the Stats tab exists.
+  const foldMs = statsFoldLandMs() + LAND_SLACK_MS;
   test.setTimeout(
-    Math.max(FLOOR_MS, SEED_CALLS * API_CALL_MS + (TENNIS_POINTS + BADMINTON_RALLIES) * EVENT_POST_MS),
+    Math.max(FLOOR_MS, SEED_CALLS * API_CALL_MS + (TENNIS_POINTS + BADMINTON_RALLIES) * EVENT_POST_MS + 2 * foldMs),
   );
   pro = await activeOrgSlug(request);
   comp = await publicCompetition(request, { name: `Player Cards ${TAG}`, orgId: pro.id });
@@ -314,7 +311,7 @@ test("setup: a Pro competition with cricket, generic, two tennis and badminton d
   longRow = { fixtureId: vsO2.id, opponent: o2 };
   longSlab = { fixtureId: vsO1.id, opponent: o1 };
 
-  await statsRead(pro.slug, comp.slug, genericDiv.slug);
+  await awaitStatsFold(pro.slug, comp.slug, genericDiv.slug, foldMs);
 
   // --- EN Community: free-plan links, en entitlement refusal --------------------
   free = await mintSpectatorOrg(request, { name: `Spectator Free EN ${TAG}`, plan: "community" });
@@ -342,7 +339,7 @@ test("setup: a Pro competition with cricket, generic, two tennis and badminton d
     await s.post("generic.score", { by: freeEntrants[1], points: 1, person: freeIds[1]![0] });
     await s.post("generic.result", {});
   }
-  await statsRead(free.slug, freeComp.slug, freeDiv.slug);
+  await awaitStatsFold(free.slug, freeComp.slug, freeDiv.slug, foldMs);
 
   // --- ES Pro: es never-consented and unknown ------------------------------------
   esPro = await mintSpectatorOrg(request, { name: `Spectator Jugadores ${TAG}`, plan: "pro", locale: "es" });
@@ -875,10 +872,19 @@ test("free plan: hub Stats leaders, hub Teams and division Entrants show plain n
     const board = page.getByTestId(`mh-leaders-${div}-points`);
     await expect(board, `${label}: the Stats tab's points board`).toBeVisible();
     const scorer = people[0]!;
-    const row = page.getByTestId(`mh-leaders-${div}-points-row-${scorer.id}`);
-    await expect(row).toContainText(scorer.name);
-    if (links) await expect(row.locator(`a[href="${cardPath(org, compSlug, scorer.id)}"]`)).toHaveCount(1);
-    else await expect(board.locator("a"), `${label}: a leader row links`).toHaveCount(0);
+    if (links) {
+      const row = page.getByTestId(`mh-leaders-${div}-points-row-${scorer.id}`);
+      await expect(row).toContainText(scorer.name);
+      await expect(row.locator(`a[href="${cardPath(org, compSlug, scorer.id)}"]`)).toHaveCount(1);
+    } else {
+      // Final review A m3: only a LINKED row keeps the person id; an unlinked
+      // one gets a stand-in, so the hub carries no id the public views withheld.
+      const row = board.locator(`li[data-testid^="mh-leaders-${div}-points-row-"]`).filter({ hasText: scorer.name });
+      await expect(row, `${label}: the top scorer row`).toHaveCount(1);
+      expect(await row.getAttribute("data-testid"), `${label}: an unlinked row carries the person id`).not.toContain(scorer.id);
+      await expect(board.locator("a"), `${label}: a leader row links`).toHaveCount(0);
+      expect(await page.content(), `${label}: the Stats tab carries a withheld person id`).not.toContain(scorer.id);
+    }
 
     await page.goto(`/shared/${org}/${compSlug}?tab=teams&division=${div}`);
     for (const teamId of teamIds) await expect(page.getByTestId(`mh-team-${teamId}`)).toBeAttached();

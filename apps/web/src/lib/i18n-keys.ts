@@ -6020,6 +6020,8 @@ export type DictionaryKey =
   | "table.fullDivision"
   | "table.more"
   | "table.pool"
+  | "table.region"
+  | "table.regionCaptioned"
   | "table.team"
   | "table.tieBreak"
   | "table.tieBreak.board_ratio"

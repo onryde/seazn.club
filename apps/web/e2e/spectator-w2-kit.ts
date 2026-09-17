@@ -356,6 +356,59 @@ export async function publicJson<T>(path: string): Promise<{ status: number; dat
   }
 }
 
+// ---------------------------------------------------------------------------
+// Player stats: a READ folds nothing
+// ---------------------------------------------------------------------------
+//
+// Option-B stats merge (owner rulings 2026-09-16/17): a result, undo, import or
+// config write schedules the division's fold after its response. A stats or hub
+// read only queues a reconcile, after its own response, at most once a minute
+// per division; it refolds only when the snapshot is behind a SETTLED fixture or
+// a settled input. The fold itself reads every event in the division, a match
+// still in play included (`foldDivision`, no status filter), and a refresh that
+// finds the ledger moved at all refolds everything it reads.
+
+const REFRESH_SOURCE = "src/server/usecases/player-stats-refresh.ts";
+
+/** The longest a scheduled fold can take to land, from the refresh module's
+ *  own `REFRESH_TIMING`: every lock backoff, the one blocking try and one
+ *  statement's ceiling. A renamed field throws, never a guessed budget. Call it
+ *  inside a test (see the header). */
+export function statsFoldLandMs(): number {
+  const block = /export const REFRESH_TIMING\b[^=]*=\s*\{([\s\S]*?)\n\};/.exec(sourceText(REFRESH_SOURCE))?.[1] ?? "";
+  const ms = (raw: string | undefined, name: string) => {
+    const n = Number((raw ?? "").trim().replaceAll("_", ""));
+    if (raw === undefined || !Number.isFinite(n)) throw new Error(`REFRESH_TIMING.${name} not found in ${REFRESH_SOURCE}`);
+    return n;
+  };
+  const backoffs = (/backoffMs: \[([^\]]*)\]/.exec(block)?.[1] ?? "").split(",").filter((v) => v.trim() !== "");
+  if (backoffs.length === 0) throw new Error(`REFRESH_TIMING.backoffMs not found in ${REFRESH_SOURCE}`);
+  return (
+    backoffs.reduce((sum, v) => sum + ms(v, "backoffMs"), 0) +
+    ms(/lockTimeoutMs: ([\d_]+)/.exec(block)?.[1], "lockTimeoutMs") +
+    ms(/statementTimeoutMs: ([\d_]+)/.exec(block)?.[1], "statementTimeoutMs")
+  );
+}
+
+/** Poll a division's public stats JSON until a scheduled fold has landed: its
+ *  rows appear. Spaced out, because every public v1 route shares one per-IP
+ *  rate limit. */
+export async function awaitStatsFold(
+  orgSlug: string,
+  compSlug: string,
+  divSlug: string,
+  budgetMs: number,
+): Promise<void> {
+  const path = `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/divisions/${divSlug}/stats`;
+  await expect
+    .poll(async () => (await publicJson<{ rows?: unknown[] }>(path)).data?.rows?.length ?? 0, {
+      message: `the stats fold never landed: ${path} served no rows within ${budgetMs}ms`,
+      timeout: budgetMs,
+      intervals: [500, 1_000, 2_000],
+    })
+    .toBeGreaterThan(0);
+}
+
 /** Marks the open page so an assertion can prove it was never reloaded or
  *  navigated: a `load` counter, a `window` marker only a reload clears, and
  *  the pathname (lifted from `hub-knockout.spec.ts`'s R10 test). */

@@ -338,6 +338,8 @@
   "table.fewer": "Fewer columns",
   "table.fullDivision": "Full division",
   "table.empty": "No standings yet",
+  "table.region": "Standings",
+  "table.regionCaptioned": "Standings: {caption}",
   "landing.tabsLabel": "Competition tabs",
   "landing.tab.overview": "Overview",
   "landing.tab.matches": "Matches",
