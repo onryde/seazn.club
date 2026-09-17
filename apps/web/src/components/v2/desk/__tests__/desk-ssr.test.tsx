@@ -427,7 +427,7 @@ describe("DivisionLedger", () => {
       stages: [{ id: "s1", name: "League", seq: 1, status: "active", hasFixtures: true, timing: null, sourceReady: false, proposal: "none" as const }],
       fixtures: Array.from({ length: 6 }, (_, i) => ({
         id: `f${i}`, status: "scheduled", scheduledAt: null, startedAt: null, eventCount: 0, matchMinutes: 90, hasScorer: false,
-        stageId: "s1", tbd: false,
+        stageId: "s1", awaitsSeedDraw: false,
       })),
       now: "2026-09-05T09:00:00Z",
       tz: "Europe/London",

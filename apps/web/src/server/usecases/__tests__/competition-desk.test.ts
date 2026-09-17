@@ -12,7 +12,13 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { createStages, generateStageFixtures } from "../stages";
+import {
+  completeStage,
+  confirmSeedProposal,
+  createStages,
+  generateStageFixtures,
+} from "../stages";
+import { appendEvent } from "@/server/engine-db";
 import { getCompetitionDesk, competitionPhase } from "../competition-desk";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -746,6 +752,40 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect(d.attention.some((a) => a.kind === "needs_fixtures")).toBe(false);
     });
 
+    /**
+     * The two slot-label columns cover for each other: a generated bracket
+     * labels BOTH seats of every round-1 line, so dropping `f.home_slot_label`
+     * from this file's query alone left every test green while
+     * `f.away_slot_label` answered for it (and vice versa). Two guards
+     * covering for each other are each untested — mutate them one at a time,
+     * which needs a row labelled on ONE side only.
+     *
+     * That row is real, not contrived: `fillSlot` (stages.ts:2451) fills one
+     * seat at a time and clears only that seat's label, and a bye line is a
+     * filled seat beside a labelled one by construction.
+     */
+    it("BOTH slot-label columns are load-bearing — a one-sided label is still a draw owed", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+      const stillOwed = async () => {
+        const desk = await getCompetitionDesk(auth, competitionId);
+        return desk.divisions.get(divisionId)!.attention.some((a) => a.kind === "needs_draw");
+      };
+      // HOME labelled only: every away seat filled, its label cleared.
+      await sql`update fixtures
+                   set away_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1),
+                       away_slot_label = null
+                 where stage_id = ${finalsId} and home_slot_label is not null`;
+      expect(await stillOwed(), "a home-only label must still raise the draw").toBe(true);
+      // Now the mirror: swap the two sides over, so only AWAY carries a label.
+      await sql`update fixtures
+                   set away_slot_label = home_slot_label, away_entrant_id = null,
+                       home_slot_label = null, home_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1)
+                 where stage_id = ${finalsId} and home_slot_label is not null`;
+      expect(await stillOwed(), "an away-only label must still raise the draw").toBe(true);
+    });
+
     it("K3/M1: the action names the panel's OWN door — a draft proposal makes it 'confirm', not 'compute'", async () => {
       const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
       await generateStageFixtures(auth, finalsId);
@@ -781,6 +821,196 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       await sql`update fixtures set home_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1),
                                     away_entrant_id = (select id from entrants where division_id = ${divisionId} offset 1 limit 1)
                  where stage_id = ${finalsId}`;
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+    });
+
+    /**
+     * The defect `awaitsSeedDraw` replaces `tbd` for, driven against the REAL
+     * generator rather than a hand-built fixture list. `tbd` was "either
+     * entrant is null", and in a bracket that is ALSO true of every round
+     * after the first — a slot fed by the match before it is empty by
+     * construction, for as long as that match is unplayed. So a knockout
+     * whose draw was computed, confirmed and half played kept its red
+     * "Needs draw · Compute proposal" row for good, pointing at a panel
+     * button that re-runs a completed draw.
+     *
+     * The premise is asserted here, off the rows generateStageFixtures
+     * actually wrote, before the state that depends on it: round 1's empty
+     * seats carry `{key, params, seed}` descriptors, and later rounds carry
+     * no label at all (`generateProgressionSetupFixtures`' label pass stamps
+     * only the synthetic seed slots; a sibling-fed slot is wired through
+     * `winner_to_fixture` instead).
+     */
+    it("a DRAWN bracket's later rounds are empty by construction and owe no second draw", async () => {
+      const { auth, competitionId, divisionId, leagueId, finalsId } = await twoStages("setup");
+      await generateStageFixtures(auth, finalsId);
+      await sql`update stages set status = 'complete' where id = ${leagueId}`;
+
+      type SlotRow = {
+        round_no: number;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        home_slot_label: unknown;
+        away_slot_label: unknown;
+      };
+      const bracket = async () => await sql<SlotRow[]>`
+        select round_no, home_entrant_id, away_entrant_id, home_slot_label, away_slot_label
+          from fixtures where stage_id = ${finalsId} order by round_no, seq_in_round`;
+      const generated = await bracket();
+      const firstRound = Math.min(...generated.map((f) => f.round_no));
+      const later = generated.filter((f) => f.round_no > firstRound);
+      expect(later.length, "a 4-qualifier bracket must have a round beyond its first").toBeGreaterThan(0);
+      expect(
+        later.map((f) => [f.home_slot_label, f.away_slot_label]).flat(),
+        "a sibling-fed slot carries no label — it waits on a MATCH, not on the organiser",
+      ).toEqual(later.flatMap(() => [null, null]));
+      expect(
+        generated.filter((f) => f.round_no === firstRound).every((f) => f.home_slot_label !== null),
+        "round 1's empty seats must carry their seed descriptors",
+      ).toBe(true);
+
+      // Confirm the draw exactly as `fillSlot` (stages.ts:2451) does it —
+      // seat the entrant and NULL the label, in one statement, and ONLY for
+      // slots that HAVE a label. That last part is the whole point: the
+      // later round is never touched by a confirm, and stays null v null.
+      await sql`update fixtures
+                   set home_entrant_id = (select id from entrants where division_id = ${divisionId} limit 1),
+                       home_slot_label = null
+                 where stage_id = ${finalsId} and home_slot_label is not null`;
+      await sql`update fixtures
+                   set away_entrant_id = (select id from entrants where division_id = ${divisionId} offset 1 limit 1),
+                       away_slot_label = null
+                 where stage_id = ${finalsId} and away_slot_label is not null`;
+      // State the thing the verdict hangs on, rather than trusting it: the
+      // bracket really is still carrying an unfilled later round.
+      expect(
+        (await bracket()).some(
+          (f) => f.round_no > firstRound && f.home_entrant_id === null && f.away_entrant_id === null,
+        ),
+        "the later round must still be empty, or this proves nothing",
+      ).toBe(true);
+
+      const desk = await getCompetitionDesk(auth, competitionId);
+      const d = desk.divisions.get(divisionId)!;
+      expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);
+      expect(d.needs_draw_stage).toBeNull();
+    });
+
+    /**
+     * The BYE-bearing bracket, driven through the real propose/confirm — the
+     * one shape every other test here misses, because `twoStages` seeds four
+     * entrants and a power-of-two field has no bye.
+     *
+     * Two things only this shape can witness. First, `awardSeededByes`
+     * (stages.ts:2481) leaves the `bracket.slot.bye` marker sitting on the
+     * empty seat and writes `{kind: "award", winner}` instead — so the
+     * OUTCOME term is the entire mechanism that retires that row, and
+     * without it the red "Needs draw" comes back forever for exactly these
+     * competitions. Dropping `f.outcome` from this file's own query left
+     * 297 tests green before this test existed.
+     *
+     * Second, the fill is performed by the REAL `confirmSeedProposal`, not
+     * by hand-written UPDATEs standing in for `fillSlot`: the behaviour the
+     * fix is FOR — press Confirm, the red row goes away — had no coverage at
+     * any layer otherwise.
+     */
+    it("a confirmed BYE-bearing bracket owes no draw once awardSeededByes has baked the walkover", async () => {
+      const { auth } = await seedOrg();
+      const { competitionId, divisionId } = await seedDivision(auth, 4);
+      const [league] = await createStages(auth, divisionId, {
+        seq: 1, kind: "league", name: "League", config: {}, progression: null,
+      });
+      await generateStageFixtures(auth, league!.id);
+      // THREE qualifiers, not four: a 3-seed bracket pads to a power of two
+      // with a bye, which is the whole point of this case.
+      const [finals] = await createStages(auth, divisionId, {
+        seq: 2, kind: "knockout", name: "Finals", config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      });
+      await sql`update divisions set status = 'active' where id = ${divisionId}`;
+      await generateStageFixtures(auth, finals!.id); // day-one TBD bracket
+
+      type BracketRow = {
+        id: string;
+        round_no: number;
+        status: string;
+        home_entrant_id: string | null;
+        away_entrant_id: string | null;
+        home_slot_label: { key: string } | null;
+        away_slot_label: { key: string } | null;
+        outcome: { kind: string } | null;
+      };
+      const bracket = async () => await sql<BracketRow[]>`
+        select id, round_no, status, home_entrant_id, away_entrant_id,
+               home_slot_label, away_slot_label, outcome
+          from fixtures where stage_id = ${finals!.id} order by round_no, seq_in_round`;
+
+      // M1's exception, stated off the real generator BEFORE anything is
+      // confirmed: a bye's winner-feed target is a sibling-fed slot that DOES
+      // carry a label (the third pass stamps the bye's own seed descriptor
+      // there). "Sibling-fed slots are unlabelled" is therefore true of every
+      // one EXCEPT this, and the outcome term below is what covers the rest.
+      const generated = await bracket();
+      const lastRound = Math.max(...generated.map((f) => f.round_no));
+      expect(
+        generated.filter((f) => f.round_no === lastRound)
+          .some((f) => f.home_slot_label !== null || f.away_slot_label !== null),
+        "the bye's winner-feed target should carry the bye seed's own label",
+      ).toBe(true);
+
+      // Play the league out so the table is STRICT (E1 > E2 > E3 > E4 on
+      // points alone) — a 4-way tie on zero points would leave the proposal
+      // holding ties and the confirm refusing them.
+      const leagueRows = await sql<{ id: string; h: string; a: string }[]>`
+        select f.id, h.display_name as h, a.display_name as a
+          from fixtures f
+          join entrants h on h.id = f.home_entrant_id
+          join entrants a on a.id = f.away_entrant_id
+         where f.stage_id = ${league!.id} order by f.fixture_no`;
+      expect(leagueRows.length, "a four-entrant round robin").toBe(6);
+      for (const f of leagueRows) {
+        const homeWins = Number(f.h.slice(1)) < Number(f.a.slice(1));
+        await appendEvent(auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+        await appendEvent(auth.orgId, f.id, 1, {
+          type: "generic.result",
+          payload: homeWins ? { p1Score: 2, p2Score: 1 } : { p1Score: 1, p2Score: 2 },
+        });
+      }
+
+      // The REAL doors, in the order the product uses them.
+      const done = await completeStage(auth, league!.id);
+      expect(done.completed, "the league did not complete").toBe(true);
+      expect(done.seed_proposal, "completing the league computed no proposal").toBeTruthy();
+      const confirmed = await confirmSeedProposal(auth, finals!.id, {
+        proposalId: done.seed_proposal!.id,
+      });
+      expect(confirmed.filled, "the confirm filled no slots").toBeGreaterThan(0);
+
+      // The state the verdict hangs on, read off the DB and derived from the
+      // SEAT rather than from the columns the fix writes (asserting an award
+      // over a set selected BY its award would be a tautology): one line with
+      // exactly one entrant and no feeder that could ever bring another.
+      const filled = await bracket();
+      const firstRound = Math.min(...filled.map((f) => f.round_no));
+      const byeLine = filled.filter(
+        (f) => f.round_no === firstRound
+          && (f.home_entrant_id === null) !== (f.away_entrant_id === null),
+      );
+      expect(byeLine.length, "a 3-qualifier bracket has exactly one bye line").toBe(1);
+      const bye = byeLine[0]!;
+      expect(
+        [bye.home_slot_label?.key, bye.away_slot_label?.key],
+        "the bye marker survives the confirm — which is why the OUTCOME retires this row",
+      ).toContain("bracket.slot.bye");
+      expect(bye.outcome?.kind, "awardSeededByes did not bake the walkover").toBe("award");
+
       const desk = await getCompetitionDesk(auth, competitionId);
       const d = desk.divisions.get(divisionId)!;
       expect(d.attention.some((a) => a.kind === "needs_draw")).toBe(false);

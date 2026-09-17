@@ -155,7 +155,7 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
       matchMinutes: MATCH_MINUTES,
       hasScorer: true,
       stageId: f.stage_id,
-      tbd: false,
+      awaitsSeedDraw: false,
     })),
     now: new Date(NOW_MS).toISOString(),
     tz: TZ,
