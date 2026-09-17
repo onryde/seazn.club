@@ -24,10 +24,11 @@ import "server-only";
 // Four properties, each with a test in `player-stats-refresh.test.ts`:
 //
 // 1. BOUNDED. One refresh transaction at a time per process, whatever the
-//    number of divisions (review I3). Each fold pins a pooled connection
-//    (`max: 5`) and runs synchronous JS for its whole length, so ten finishes
-//    in ten divisions would otherwise take every connection and stall the event
-//    loop for the scoring requests themselves. Refreshes wait in an in-memory
+//    number of divisions (review I3). Each fold pins a connection from the
+//    pool (sized by `DB_POOL_MAX`, `lib/db.ts`: 5 by default, 20 in production
+//    per `fly.toml` [env]) and runs synchronous JS for its whole length, so ten
+//    finishes in ten divisions would otherwise hold ten of those connections at
+//    once and stall the event loop for the scoring requests themselves. Refreshes wait in an in-memory
 //    queue, and a second request for a division already waiting joins it.
 //
 // 2. COALESCED ACROSS PROCESSES. A refresh takes the division's stats lock with
@@ -67,17 +68,30 @@ import "server-only";
 //    had no rows before and has none after clears nothing.
 //
 //    What an open hub sees depends on whether it is still listening. The hub
-//    subscribes only to divisions with a LIVE match (`use-live-competition.ts`).
-//    While another match in the division is live, the second push lands and
-//    the new leaders show about a second after the fold (measured on a 90-match
-//    T20 division). When the finish was the division's LAST live match, the
-//    hub's refetch after the score push drops that channel, the second push is
-//    never heard, and the new leaders show at the next idle poll: up to
-//    `HUB_IDLE_POLL_MS`, 60 s. Accepted (owner decision 2026-09-16). A reload
-//    shows them once the fold has committed AND the after-window's tags have
-//    flushed; a reload before that still reads the old rows. On a 90-match T20
-//    division under heavy machine load the fold committed 2.1 s and 3.5 s after
-//    the deciding tap.
+//    subscribes to divisions with a LIVE match, and keeps a division whose last
+//    live match has just ended subscribed for `HUB_LIVE_LINGER_MS` more (32 s;
+//    `use-live-competition.ts`, spectator W2 T17). While another match in the
+//    division is live, the second push lands and the new leaders show about a
+//    second after the fold (measured on a 90-match T20 division). When the
+//    finish was the division's LAST live match, the linger starts once the hub
+//    applies a document showing the match ended: the deciding push's refetch,
+//    250 ms after that push. The second push leaves after the fold commits and
+//    the hub DEL settles (bounded by `PUSH_AFTER_DELETE_BOUND_MS`, 1.5 s). The
+//    fold committed 2.1 s and 3.5 s after the deciding tap (below), so that
+//    push reaches the channel at most about 5 s into the 32 s linger and the
+//    new leaders show as in the live case. The client half is driven, not
+//    measured: through the hook's own test harness (fake timers, a mocked
+//    channel), a push 5 s or 31 s after the deciding push is heard and
+//    refetches the new document, and one at 33 s reaches no channel. No
+//    browser run covers the whole sequence. A refresh that waits behind a long
+//    queue (about 1 s per queued fold, e.g. read-queued refreshes after a
+//    restart) can miss the linger; the new leaders then show at the next idle
+//    poll, up to `HUB_IDLE_POLL_MS`, 60 s, the wait the owner accepted for
+//    this case before the linger existed (2026-09-16). A reload shows them
+//    once the fold has committed AND the after-window's tags have flushed; a
+//    reload before that still reads the old rows. On a 90-match T20 division
+//    under heavy machine load the fold committed 2.1 s and 3.5 s after the
+//    deciding tap.
 //
 // A failure is logged (`log.warn`, with the division id) and goes no further:
 // the result committed long before this ran.
