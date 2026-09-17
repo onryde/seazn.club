@@ -209,13 +209,14 @@ export interface CompetitionApplyOut {
    * classify a joint report anyway — it takes ONE `crossPersonClash` for a
    * whole call, while a joint call spans divisions that may disagree on it.
    *
-   * `isBlocking` is the taxonomy the joint PLAN end uses whole. This APPLY end
-   * uses it as a floor and adds the emitting division's own `crossPersonClash`
-   * on top (see the blocking loop below), which is the same plan/apply split
-   * the single-division path already has: `verifyConfig` warns, `applySchedule`
-   * refuses. So `isBlocking` is NOT "what both ends of #350 use" — an earlier
-   * version of this comment said so, and item 2 of fix round 1 is what made it
-   * false.
+   * `isBlocking` is the taxonomy BOTH ends use, unmodified (`blockingKeys`
+   * below, :711, is built from `isBlocking(c)` alone — no per-division
+   * branch). Per #399 the emitting division's own `crossPersonClash` no
+   * longer adds anything on top of it: `person_overlap` is unconditionally
+   * blocking in `isBlockingConflict` regardless of that setting, which now
+   * only steers the AI solver's own choices. An earlier version of this
+   * comment described a per-division "floor plus crossPersonClash" split
+   * that #399 retired.
    */
   conflicts: Conflict[];
 }

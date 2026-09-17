@@ -33,6 +33,7 @@ export interface PreflightInput {
   officialsBlackout: number;
   /** Deep links (current schedule page + a tab query). */
   settingsHref: string;
+  courtsHref: string;
   officialsHref: string;
 }
 
@@ -57,7 +58,7 @@ export function AiPreflight(input: PreflightInput) {
   rows.push(
     input.courts > 0
       ? { key: "courts", label: msg("board.ai.preflight.courtsLabel"), tone: "ok", detail: plural("board.ai.preflight.courtsCount", input.courts) }
-      : { key: "courts", label: msg("board.ai.preflight.courtsLabel"), tone: "warn", detail: msg("board.ai.preflight.warnCourts"), href: input.settingsHref, linkLabel: msg("board.ai.preflight.linkSettings") },
+      : { key: "courts", label: msg("board.ai.preflight.courtsLabel"), tone: "warn", detail: msg("board.ai.preflight.warnCourts"), href: input.courtsHref, linkLabel: msg("board.ai.preflight.linkSettings") },
   );
 
   // 2 · Session windows (warn when unset — the AI assumes any time is fine).

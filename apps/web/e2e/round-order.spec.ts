@@ -105,8 +105,10 @@ test("Auto-schedule produces a board the organiser SEES in round order", async (
   await expect(button).toBeVisible({ timeout: 30_000 });
   const strip = page.getByTestId("schedule-result-strip");
   let status: string | null = null;
+  const confirmButton = page.getByTestId("schedule-rebuild-confirm");
   for (let attempt = 1; attempt <= BUSY_RETRIES; attempt++) {
     await button.click();
+    await confirmButton.click();
     await expect(strip).toBeVisible({ timeout: 45_000 });
     await expect(button).toBeEnabled({ timeout: 45_000 });
     status = await strip.getAttribute("data-status");
@@ -208,8 +210,10 @@ test("dragging a card into a round-order violation against an untouched sibling 
   await expect(button).toBeVisible({ timeout: 30_000 });
   const strip = page.getByTestId("schedule-result-strip");
   let status: string | null = null;
+  const confirmButton = page.getByTestId("schedule-rebuild-confirm");
   for (let attempt = 1; attempt <= BUSY_RETRIES; attempt++) {
     await button.click();
+    await confirmButton.click();
     await expect(strip).toBeVisible({ timeout: 45_000 });
     await expect(button).toBeEnabled({ timeout: 45_000 });
     status = await strip.getAttribute("data-status");

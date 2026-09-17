@@ -332,11 +332,18 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   ).toBeLessThanOrEqual(HARD_BUDGET_MS);
 
   // ---------------------------------------------------------------- 1
-  // Required courts and the clock, typed into the Settings tab.
-  await goTab(page, base, "settings");
+  // Required courts, on their own Courts tab (moved off Settings 2026-09-17
+  // — settings-panel.tsx's `showCourts` prop), then the clock on Settings.
+  await goTab(page, base, "courts");
   for (const id of courtIds) {
     await page.getByTestId("court-option").and(page.locator(`[data-court-id="${id}"]`)).check();
   }
+  await page.getByRole("button", { name: en["boardset.save"]! }).click();
+  await expect
+    .poll(async () => [...((await readConfig(request, divisionId)).courts ?? [])].sort())
+    .toEqual([...courtIds].sort());
+
+  await goTab(page, base, "settings");
 
   // `DateTimeField kind="datetime-local"` renders TWO controls — a native date
   // input plus a quarter-hour `<select>` — and deliberately exposes no bare
@@ -635,6 +642,7 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // it, so nothing here says otherwise.
   await goTab(page, base, "board");
   await page.getByTestId("schedule-auto").click();
+  await page.getByTestId("schedule-rebuild-confirm").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: SOLVE_MS });
 

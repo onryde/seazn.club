@@ -207,6 +207,9 @@ export function StandaloneScheduleSettings(props: {
       <SettingsPanel
         {...props}
         defaultOpen
+        // Courts moved to their own tab next to Constraints (`CourtsPanel`) —
+        // this card would otherwise show the same picker twice.
+        showCourts={false}
         onSaved={() => {
           setError(null);
           setNotice(msg("boardset.saved"));
@@ -224,6 +227,144 @@ export function StandaloneScheduleSettings(props: {
   );
 }
 
+/** Localized tab label for the Courts tab, same pattern as
+ *  `HealthTabLabel` (health-panel.tsx) — a tiny client leaf so the page
+ *  component (no request scope in its own test harness) never has to
+ *  resolve a locale itself just to label one tab. */
+export function CourtsTabLabel() {
+  const msg = useMsg();
+  return <>{msg("schedule.courts.tabLabel")}</>;
+}
+
+/**
+ * The court picker, on its own tab next to Constraints — split out of
+ * {@link SettingsPanel} so picking which courts a division's auto-scheduler
+ * may use is not buried inside the hours/match-length settings card. Saves
+ * against the SAME `schedule-settings` PUT the rest of that panel uses,
+ * spreading `config` through unchanged and overriding only `courts` — the
+ * two tabs can never disagree about any other field because neither of them
+ * ever sends one it doesn't own.
+ */
+export function CourtsPanel({
+  divisionId,
+  config,
+  canEdit,
+  venueCap = "Court",
+  venues = [],
+  onSaved,
+  onError,
+}: {
+  divisionId: string;
+  config: BoardConfig;
+  canEdit: boolean;
+  venueCap?: string;
+  venues?: Venue[];
+  onSaved: () => void;
+  onError: (err: unknown) => void;
+}) {
+  const msg = useMsg();
+  const [courts, setCourts] = useState<string[]>([...config.courts]);
+  const [saving, setSaving] = useState(false);
+  // Singular, lowercase — `removeVenue` ("Remove {venue} {n}") reads it as
+  // one court's own name.
+  const venue = venueCap.toLowerCase();
+  // Plural, CAPITALISED — `venuesLabel` is a heading ("{venue}" alone, e.g.
+  // "Pitches"). `venueCap` alone is singular ("Court", "Pitch"), and naively
+  // suffixing "s" in the old template broke on "Pitch" -> "Pitchs" instead of
+  // "Pitches" (`pluralizeVenue` handles that).
+  const venuePluralCap = pluralizeVenue(venueCap);
+  // Plural, lowercase — `venuesDesc` reads `{venue}` mid-sentence ("Pick the
+  // {venue} this schedule can use…").
+  const venuePlural = venuePluralCap.toLowerCase();
+
+  async function save() {
+    setSaving(true);
+    try {
+      // No `tz` key (V305, see SettingsPanel's own save): an absent tz leaves
+      // the stored value alone.
+      await apiV1(`/api/v1/divisions/${divisionId}/schedule-settings`, {
+        method: "PUT",
+        json: { config: { ...config, courts } },
+      });
+      onSaved();
+    } catch (err) {
+      onError(err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="card space-y-6 p-5">
+      {/* No separate heading here — `CourtMultiPicker` already renders
+          `label`/`description` itself (court-multi-picker.tsx:290-291); a
+          second copy above it duplicated the same two lines on screen. */}
+      <div className="sm:max-w-[calc(50%-0.5rem)]">
+        <CourtMultiPicker
+          venues={venues}
+          value={courts}
+          onChange={setCourts}
+          disabled={!canEdit}
+          label={msg("boardset.venuesLabel", { venue: venuePluralCap })}
+          description={msg("boardset.venuesDesc", { venue: venuePlural })}
+          emptyTitle={msg("courtPicker.emptyTitle")}
+          emptyBody={msg("courtPicker.emptyBody")}
+          directoryLinkLabel={msg("courtPicker.directoryLink")}
+          selectedLabel={msg("courtPicker.selected", { n: courts.length })}
+          noneSelectedLabel={msg("courtPicker.noneSelected")}
+          unknownCourtLabel={msg("courtPicker.unknownCourt")}
+          moveUpLabel={msg("venues.court.moveUp")}
+          moveDownLabel={msg("venues.court.moveDown")}
+          removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+        />
+      </div>
+
+      {canEdit && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" disabled={saving} onClick={save} className="btn btn-primary">
+            {saving ? msg("boardset.saving") : msg("boardset.save")}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Self-contained wrapper for RSC pages (courts tab): owns the saved/error
+ *  notice the board would otherwise host, same pattern as
+ *  {@link StandaloneScheduleSettings}. */
+export function StandaloneCourtsSettings(props: {
+  divisionId: string;
+  config: BoardConfig;
+  canEdit: boolean;
+  venueCap?: string;
+  venues?: Venue[];
+}) {
+  const msg = useMsg();
+  const locale = useLocale();
+  const router = useRouter();
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <div className="space-y-2">
+      {notice && <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{notice}</p>}
+      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      <CourtsPanel
+        {...props}
+        onSaved={() => {
+          setError(null);
+          setNotice(msg("boardset.saved"));
+          router.refresh();
+        }}
+        onError={(err) => {
+          setNotice(null);
+          setError(settingsErrorText(err, locale, msg("boardset.error")));
+        }}
+      />
+    </div>
+  );
+}
+
 export function SettingsPanel({
   divisionId,
   config,
@@ -234,6 +375,7 @@ export function SettingsPanel({
   orgTz,
   competitionWindow,
   defaultOpen = false,
+  showCourts = true,
   onSaved,
   onError,
   fixtures = [],
@@ -250,6 +392,12 @@ export function SettingsPanel({
    *  panel without it, and an empty list degrades to the picker's own
    *  "no courts yet" Directory pointer rather than a crash. */
   venues?: Venue[];
+  /** False on the division schedule page, whose `StandaloneScheduleSettings`
+   *  passes it through as `false` — courts moved to their own tab there
+   *  (`CourtsPanel`), so this card would otherwise show the same picker
+   *  twice. Defaults true: every other caller (the competition board's
+   *  inline mount, existing tests) is unaffected. */
+  showCourts?: boolean;
   fixtures?: readonly {
     id: string;
     status: string;
@@ -293,10 +441,10 @@ export function SettingsPanel({
   const [gapMinutes, setGapMinutes] = useState(config.gapMinutes);
   const [rest, setRest] = useState(config.perEntrantMinRest);
   // Courts: real `courts.id` uuids picked from the org's own court list (P9
-  // scope item 5 — the multi-picker below), same UX on both this panel and
-  // the division-creation wizard. No fabricated default: an empty selection
-  // is a legitimate state (`ScheduleConfig.courts` defaults to `[]`) — there
-  // is no free-text name left to invent one from.
+  // scope item 5). On the division schedule page these move to their own tab
+  // (`CourtsPanel`/`showCourts={false}`, passed by `StandaloneScheduleSettings`)
+  // — this stays live on any OTHER caller (the competition board's inline
+  // mount, division-builder wizard) that still wants courts on this same card.
   const [courts, setCourts] = useState<string[]>([...config.courts]);
   const [saving, setSaving] = useState(false);
   const [hoursError, setHoursError] = useState<string | null>(null);
@@ -329,9 +477,13 @@ export function SettingsPanel({
   // (capacityRequestFromDraft, above) and hand it to the hook; the hook
   // debounces, aborts a superseded request, and holds the previous report
   // (marked stale) while a newer one is pending.
+  // When this panel doesn't show the court picker (`showCourts={false}`,
+  // division schedule page), preview capacity against the last SAVED court
+  // selection instead of a live draft — there is no picker here to draft
+  // against, and the Courts tab has its own save.
   const capacityRequest = capacityRequestFromDraft(
     fixtures,
-    { startAt, endAt, matchMinutes, gapMinutes, rest, courts },
+    { startAt, endAt, matchMinutes, gapMinutes, rest, courts: showCourts ? courts : config.courts },
     config,
     orgTz,
     venues,
@@ -349,10 +501,14 @@ export function SettingsPanel({
   // "Add a court" can only offer a REAL, currently-unselected org court now
   // (no more fabricating "Court N" out of thin air) — the next one in the
   // org's own venue/sort order that isn't already in `courts`. `undefined`
-  // when every real court is already selected (or the org has none): the
-  // suggestion itself still renders (CapacityCard), just without an Apply
-  // button, which reads better than a button that silently does nothing.
-  const nextAddableCourt = flattenCourts(venues).find((c) => !courts.includes(c.id))?.id;
+  // when every real court is already selected, the org has none, or this
+  // panel doesn't show courts at all (`showCourts={false}`): the suggestion
+  // itself still renders (CapacityCard), just without an Apply button, which
+  // reads better than a button that silently does nothing or edits a picker
+  // that isn't on screen.
+  const nextAddableCourt = showCourts
+    ? flattenCourts(venues).find((c) => !courts.includes(c.id))?.id
+    : undefined;
   const applyCapacitySuggestion = {
     add_day: () => setEndAt((e) => (e === "" ? e : ymdAddDays(e, 1))),
     ...(nextAddableCourt !== undefined
@@ -458,12 +614,10 @@ export function SettingsPanel({
             matchMinutes,
             gapMinutes,
             perEntrantMinRest: rest,
-            // Real court ids, organiser order, straight from the picker's own
-            // state — no trim/fallback left to do (that was free-text-era
-            // cleanup; `toggleCourtSelection` already guarantees no dupes,
-            // and an empty selection is valid: `ScheduleConfig.courts`
-            // defaults to `[]`).
-            courts,
+            // `showCourts=false` (division schedule page): courts are edited
+            // on their own tab now, and `...config` above already carries the
+            // last-saved value through unchanged — nothing to override here.
+            ...(showCourts ? { courts } : {}),
             sessionWindows,
           },
         },
@@ -481,6 +635,10 @@ export function SettingsPanel({
 
   const constrained = !constraintsAllowed;
   const venue = venueCap.toLowerCase();
+  // See CourtsPanel's own doc comments on these two — `venuesLabel` is a
+  // heading (capitalised), `venuesDesc` reads mid-sentence (lowercase).
+  const venuePluralCap = pluralizeVenue(venueCap);
+  const venuePlural = venuePluralCap.toLowerCase();
   // Field markup mirrors the division-creation wizard — one input system
   // everywhere (default-size .input, wizard hint lines, courts as a list).
   return (
@@ -628,29 +786,29 @@ export function SettingsPanel({
         </div>
       </div>
 
-      <div className="sm:max-w-[calc(50%-0.5rem)]">
-        {/* P9 scope item 5: real org courts, multi-selected and ordered —
-            replaces the old free-text "Court 1"/"Court 2" name list. Section
-            copy (`boardset.venuesLabel`/`venuesDesc`) is UNCHANGED on
-            purpose — only the control underneath it changed shape. */}
-        <CourtMultiPicker
-          venues={venues}
-          value={courts}
-          onChange={setCourts}
-          disabled={!canEdit}
-          label={msg("boardset.venuesLabel", { venue: pluralizeVenue(venueCap) })}
-          description={msg("boardset.venuesDesc", { venue })}
-          emptyTitle={msg("courtPicker.emptyTitle")}
-          emptyBody={msg("courtPicker.emptyBody")}
-          directoryLinkLabel={msg("courtPicker.directoryLink")}
-          selectedLabel={msg("courtPicker.selected", { n: courts.length })}
-          noneSelectedLabel={msg("courtPicker.noneSelected")}
-          unknownCourtLabel={msg("courtPicker.unknownCourt")}
-          moveUpLabel={msg("venues.court.moveUp")}
-          moveDownLabel={msg("venues.court.moveDown")}
-          removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
-        />
-      </div>
+      {showCourts && (
+        <div className="sm:max-w-[calc(50%-0.5rem)]">
+          {/* P9 scope item 5: real org courts, multi-selected and ordered —
+              replaces the old free-text "Court 1"/"Court 2" name list. */}
+          <CourtMultiPicker
+            venues={venues}
+            value={courts}
+            onChange={setCourts}
+            disabled={!canEdit}
+            label={msg("boardset.venuesLabel", { venue: venuePluralCap })}
+            description={msg("boardset.venuesDesc", { venue: venuePlural })}
+            emptyTitle={msg("courtPicker.emptyTitle")}
+            emptyBody={msg("courtPicker.emptyBody")}
+            directoryLinkLabel={msg("courtPicker.directoryLink")}
+            selectedLabel={msg("courtPicker.selected", { n: courts.length })}
+            noneSelectedLabel={msg("courtPicker.noneSelected")}
+            unknownCourtLabel={msg("courtPicker.unknownCourt")}
+            moveUpLabel={msg("venues.court.moveUp")}
+            moveDownLabel={msg("venues.court.moveDown")}
+            removeLabelFor={(n) => msg("boardset.removeVenue", { venue, n })}
+          />
+        </div>
+      )}
 
       {hoursError && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{hoursError}</p>}
       <div className="flex flex-wrap items-center gap-2">

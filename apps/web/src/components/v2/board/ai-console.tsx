@@ -540,6 +540,7 @@ export function AiConsole({
     officials: rosterCount,
     officialsBlackout: brief.officialsWithBlackout,
     settingsHref: `${pathname}?tab=settings`,
+    courtsHref: `${pathname}?tab=courts`,
     officialsHref: `${pathname}?tab=officials`,
   };
   // Instruction that produced the on-screen proposal — lets a refine turn send

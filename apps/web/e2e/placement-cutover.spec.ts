@@ -179,9 +179,11 @@ async function runAutoSchedule(page: Page, divisionId: string): Promise<Locator>
   const button = page.getByTestId("schedule-auto");
   await expect(button).toBeVisible({ timeout: 30_000 });
   const strip = page.getByTestId("schedule-result-strip");
+  const confirmButton = page.getByTestId("schedule-rebuild-confirm");
 
   for (let attempt = 1; attempt <= BUSY_RETRIES; attempt++) {
     await button.click();
+    await confirmButton.click();
     await expect(strip).toBeVisible({ timeout: 45_000 });
     await expect(button).toBeEnabled({ timeout: 45_000 });
     if ((await strip.getAttribute("data-status")) !== "solver_busy") return strip;

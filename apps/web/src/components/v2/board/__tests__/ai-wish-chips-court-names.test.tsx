@@ -101,6 +101,7 @@ const preflight = {
   officials: 0,
   officialsBlackout: 0,
   settingsHref: "/divisions/d1/schedule?tab=settings",
+  courtsHref: "/divisions/d1/schedule?tab=courts",
   officialsHref: "/divisions/d1/schedule?tab=officials",
 };
 
