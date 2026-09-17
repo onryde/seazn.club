@@ -41,8 +41,51 @@ export const HUB_IDLE_POLL_MS = 60_000;
  *  client module. `hub-push-retry-ttl.test.ts` pins it above the TTL. */
 export const HUB_PUSH_RETRY_MS = [1_000, 3_000, 17_000] as const;
 
+/** The hub document's Redis TTL, `HUB_TTL_SECONDS` in usecases/public.ts, in
+ *  ms. A literal for the reason HUB_PUSH_RETRY_MS is one: public.ts is
+ *  server-only and this is a client module. `hub-push-retry-ttl.test.ts` pins
+ *  the two equal. */
+export const HUB_TTL_MS = 15_000;
+
+/** A document build's worth of time on top of HUB_TTL_MS: a cache-aside write
+ *  lands after the read it was built from. The same 2s the last push retry
+ *  carries over the TTL (17s). */
+export const HUB_BUILD_MARGIN_MS = 2_000;
+
 /** Rapid pushes collapse into one refetch. */
 const PUSH_DEBOUNCE_MS = 250;
+
+/** T17: how long a division whose last live match has just ENDED still counts
+ *  as live to the transport: its realtime channel stays subscribed and, without
+ *  realtime, the poll keeps HUB_POLL_MS.
+ *
+ *  Measured on a local prod build: the refetch for the ball BEFORE the deciding
+ *  one can land after the deciding ball commits and before its standings are
+ *  rewritten. That document shows the match finished with the old table. Keyed
+ *  on the live set alone, the page then left `division:{id}` 16ms before the
+ *  deciding push was published, and the poll had already slowed to
+ *  HUB_IDLE_POLL_MS, so the table stayed a result behind for a minute. The
+ *  deciding push goes out after the standings and the DEL
+ *  (`invalidateAndPush`, usecases/scoring.ts), so a channel still open when it
+ *  arrives gets the right table through the ordinary push sequence.
+ *
+ *  The longer of two needs:
+ *   - realtime: one whole push sequence, the debounce and every retry;
+ *   - poll only: no push is coming, so a live-cadence TICK has to land after
+ *     any Redis copy of the ending document can have expired. That copy was
+ *     written no later than a build after the tick that fetched it and lives
+ *     HUB_TTL_MS, so the first tick past HUB_TTL_MS + HUB_BUILD_MARGIN_MS must
+ *     still be at HUB_POLL_MS, with a margin before the cadence slows. */
+const POLL_TICKS_PAST_TTL = Math.floor((HUB_TTL_MS + HUB_BUILD_MARGIN_MS) / HUB_POLL_MS) + 1;
+export const HUB_LIVE_LINGER_MS = Math.max(
+  PUSH_DEBOUNCE_MS + HUB_PUSH_RETRY_MS.reduce((sum: number, ms) => sum + ms, 0),
+  POLL_TICKS_PAST_TTL * HUB_POLL_MS + HUB_BUILD_MARGIN_MS,
+);
+
+/** The divisions with a live match on `doc`. */
+function liveDivisionIds(doc: CompetitionHubDocT): Set<string> {
+  return new Set(doc.matches.filter((m) => m.bucket === "live").map((m) => m.divisionId));
+}
 
 /**
  * The server instant a division broadcast was published, read from the message
@@ -100,15 +143,40 @@ export function useLiveCompetition({
   // way back (the fetch itself is not cancelled, only its effect on state).
   // Unmount also ends the push sequence: no debounce or retry outlives the hook.
   const mountedRef = useRef(true);
+  // T17 (HUB_LIVE_LINGER_MS): the divisions whose last live match ended on a
+  // document this hook applied, each with its own timer. A division that ends
+  // again inside its linger restarts it.
+  const lingerTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [lingering, setLingering] = useState<readonly string[]>([]);
   useEffect(() => {
     mountedRef.current = true;
     const push = pushRef.current;
+    const timers = lingerTimers.current;
     return () => {
       mountedRef.current = false;
       push.generation += 1;
       if (push.timer !== null) clearTimeout(push.timer);
       push.timer = null;
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
     };
+  }, []);
+
+  const linger = useCallback((ended: readonly string[]) => {
+    const timers = lingerTimers.current;
+    const settle = () => setLingering([...timers.keys()].sort());
+    for (const id of ended) {
+      const previous = timers.get(id);
+      if (previous !== undefined) clearTimeout(previous);
+      timers.set(
+        id,
+        setTimeout(() => {
+          timers.delete(id);
+          if (mountedRef.current) settle();
+        }, HUB_LIVE_LINGER_MS),
+      );
+    }
+    settle();
   }, []);
 
   // R10 C1: the document the page holds, read synchronously. Refetches overlap
@@ -131,13 +199,20 @@ export function useLiveCompetition({
       const held = heldRef.current;
       if (Date.parse(next.generatedAt) < Date.parse(held.generatedAt)) return held;
       heldRef.current = next;
+      const stillLive = liveDivisionIds(next);
+      // Only a division seen live on a document this page held can linger. A
+      // page whose FIRST document already shows it ended gets none: the hub
+      // doc carries no finish time to measure from. Owner accepted (ruling A,
+      // 2026-09-17).
+      const ended = [...liveDivisionIds(held)].filter((id) => !stillLive.has(id));
+      if (ended.length > 0) linger(ended);
       setDoc(next);
       return next;
     } catch {
       // transient — keep the last known document (never throw to the UI)
       return null;
     }
-  }, [orgSlug, competitionSlug]);
+  }, [orgSlug, competitionSlug, linger]);
 
   // R10 H3: a push is not satisfied by an OLDER document. Measured on
   // spectw2: the push arrived, its one refetch came back with a `generatedAt`
@@ -172,73 +247,111 @@ export function useLiveCompetition({
     [refresh],
   );
 
-  const hasLive = doc.matches.some((m) => m.bucket === "live");
+  // A lingering division (T17) counts as live for both transports.
+  const hasLive = doc.matches.some((m) => m.bucket === "live") || lingering.length > 0;
   // A stable STRING key, not the array itself — `doc.matches` gets a fresh
   // identity on every poll tick even when the live set is unchanged, and
   // keying the realtime effect on the array would tear the channels down
   // and resubscribe them every tick (the same reasoning `slideshow.tsx`'s
   // own `divisionKey` documents).
-  const liveDivisionKey = Array.from(
-    new Set(doc.matches.filter((m) => m.bucket === "live").map((m) => m.divisionId)),
-  )
+  const liveDivisionKey = Array.from(new Set([...liveDivisionIds(doc), ...lingering]))
     .sort()
     .join(",");
 
   // Realtime push: any failure (env missing, websocket refused) leaves
   // `subscribed` false and polling takes over.
+  //
+  // ONE channel PER DIVISION, held across renders and DIFFED when the live
+  // set changes (T17 review m3): a division that stays in the set keeps its
+  // channel, a new one is subscribed, and only a division that has left the
+  // set (after its linger) is let go. Keying one effect run's channel list on
+  // the whole set tore every channel down and rejoined it on any change, and a
+  // push published in that leave/join gap reached nobody — the T17 race by
+  // another route, for a division that ends in the same document another
+  // starts.
+  //
+  // PER-CHANNEL state, never one shared boolean. Every channel used to write
+  // the same `subscribed` flag and the last writer won, so on a hub with live
+  // matches in two divisions the hook reported whatever the final callback
+  // happened to say. `division:d1` reporting SUBSCRIBED after `division:d2`
+  // reported CHANNEL_ERROR left `subscribed` true, which slowed the poll to the
+  // safety net while d2 had no channel pushing to it. Supabase re-invokes the
+  // status callback on a later CHANNEL_ERROR / TIMED_OUT / CLOSED, so one
+  // channel dropping mid-match flips the whole hook. Realtime is claimed only
+  // when EVERY wanted channel is up; anything less falls back to polling.
   const [subscribed, setSubscribed] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const channelsRef = useRef(new Map<string, { channel: any; up: boolean }>());
+  const wantedRef = useRef<readonly string[]>([]);
+  // A let-go division's leave round trip, until it completes.
+  const leavingRef = useRef(new Map<string, Promise<unknown>>());
+  // The channels outlive the render that subscribed them, so their handler
+  // reads the current `onPush` rather than the one they were created with.
+  const onPushRef = useRef(onPush);
   useEffect(() => {
-    const ids = liveDivisionKey ? liveDivisionKey.split(",") : [];
-    if (!realtime || ids.length === 0) return;
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+    onPushRef.current = onPush;
+  }, [onPush]);
+
+  const report = useCallback(() => {
+    if (!mountedRef.current) return;
+    const channels = channelsRef.current;
+    const wanted = wantedRef.current;
+    setSubscribed(wanted.length > 0 && wanted.every((id) => channels.get(id)?.up === true));
+  }, []);
+
+  useEffect(() => {
+    const ids = realtime && process.env.NEXT_PUBLIC_SUPABASE_URL && liveDivisionKey ? liveDivisionKey.split(",") : [];
+    wantedRef.current = ids;
+    const channels = channelsRef.current;
+    const leaving = leavingRef.current;
+    for (const [id, entry] of channels) {
+      if (ids.includes(id)) continue;
+      channels.delete(id);
+      // An earlier leave of this topic may still be in flight; wait on both.
+      const left = Promise.all([leaving.get(id), entry.channel?.unsubscribe?.()]).catch(() => undefined);
+      leaving.set(id, left);
+      void left.then(() => {
+        if (leaving.get(id) === left) leaving.delete(id);
+      });
+    }
+    report();
+    if (!ids.some((id) => !channels.has(id))) return;
     let cancelled = false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const channels: any[] = [];
 
     (async () => {
       try {
         const { supabaseBrowser } = await import("@/lib/supabase-browser");
+        // A later run owns the set now; it subscribes whatever it still wants.
         if (cancelled) return;
         const sb = supabaseBrowser();
-        // PER-CHANNEL state, never one shared boolean. Every channel used to
-        // write the same `subscribed` flag and the last writer won, so on a
-        // hub with live matches in two divisions the hook reported whatever
-        // the final callback happened to say. `division:d1` reporting
-        // SUBSCRIBED after `division:d2` reported CHANNEL_ERROR left
-        // `subscribed` true, which switched the POLL off — and d2 has no
-        // channel pushing to it, so its live scores froze on the page until
-        // the spectator reloaded. (Since R10 H2 it would only slow the poll to
-        // the safety net, which still leaves d2 up to a minute behind.) That
-        // is the flagship failure mode of the whole surface, and the inverse
-        // order merely lied about the transport instead.
-        //
-        // Not only a startup race: Supabase re-invokes this callback on a
-        // later CHANNEL_ERROR / TIMED_OUT / CLOSED, so one channel dropping
-        // mid-match flipped the whole hook, and one recovering flipped it
-        // back. Realtime is claimed only when EVERY channel is up; anything
-        // less falls back to polling, which covers all of them.
-        //
-        // The loop's own `if (cancelled) return` is gone with it (review nit
-        // 2): everything after the `await` above is synchronous and React
-        // runs cleanups synchronously, so `cancelled` cannot flip mid-loop —
-        // and had it ever fired it would have LEAKED, because the channels
-        // pushed on earlier iterations were pushed after the cleanup already
-        // walked the array. The check at the `await` boundary is the real one.
-        const up = new Set<string>();
+        const handler = (message?: unknown) => onPushRef.current(message);
         for (const id of ids) {
-          channels.push(
-            sb
+          if (channels.has(id)) continue;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const entry: { channel: any; up: boolean } = { channel: null, up: false };
+          channels.set(id, entry);
+          const join = () => {
+            // Let go again (or unmounted) while its old channel was leaving.
+            if (channels.get(id) !== entry) return;
+            entry.channel = sb
               .channel(`division:${id}`)
-              .on("broadcast", { event: "state_changed" }, onPush)
-              .on("broadcast", { event: "schedule_changed" }, onPush)
+              .on("broadcast", { event: "state_changed" }, handler)
+              .on("broadcast", { event: "schedule_changed" }, handler)
               .subscribe((status: string) => {
-                if (cancelled) return;
-                if (status === "SUBSCRIBED") up.add(id);
-                else up.delete(id);
-                setSubscribed(up.size === ids.length);
-              }),
-          );
+                // A channel already let go writes an entry nothing reads any more.
+                entry.up = status === "SUBSCRIBED";
+                report();
+              });
+          };
+          // T17 review n4: until a leave completes, realtime-js hands back the
+          // same-topic LEAVING channel, whose subscribe() does nothing — the
+          // division would silently poll. A leave that fails (`error`) still
+          // does, which is the fallback.
+          const left = leaving.get(id);
+          if (left) void left.then(join);
+          else join();
         }
+        report();
       } catch {
         // env missing / websocket refused → polling
       }
@@ -249,10 +362,17 @@ export function useLiveCompetition({
     // it must still run. Unmount ends the sequence (above).
     return () => {
       cancelled = true;
-      setSubscribed(false);
-      for (const ch of channels) void ch.unsubscribe?.();
     };
-  }, [realtime, liveDivisionKey, onPush]);
+  }, [realtime, liveDivisionKey, report]);
+
+  // Unmount lets every channel go.
+  useEffect(() => {
+    const channels = channelsRef.current;
+    return () => {
+      for (const entry of channels.values()) void entry.channel?.unsubscribe?.();
+      channels.clear();
+    };
+  }, []);
 
   // Whole-document polling. Never switched off (see the header note). With
   // every channel up it slows to HUB_IDLE_POLL_MS rather than stopping (R10

@@ -372,7 +372,12 @@ export function Schedule({
           id="entrant-filter"
           value={entrant}
           onChange={(e) => setEntrant(e.target.value)}
-          className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-line"
+          // `min-w-0 max-w-full`: a `<select>` sizes itself to its LONGEST
+          // option, so a 43-character entrant name made this filter 383px in
+          // a 288px phone column and scrolled the page sideways (T17 HB9d).
+          // Capped, the closed control shows the chosen name cut by the
+          // browser; the open list still shows every name in full.
+          className="min-w-0 max-w-full rounded-lg border border-zinc-300 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-line"
         >
           <option value="">{copy.allEntrants}</option>
           {options.map(([id, name]) => (

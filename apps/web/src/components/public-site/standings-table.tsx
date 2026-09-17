@@ -68,7 +68,11 @@ export function StandingsTable({
   );
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm">
+    // `relative`: the containing block for the `.sr-only` column words in the
+    // header. Left static, their containing block was `<body>`, outside this
+    // box's `overflow-x` clip, and a table wider than a phone scrolled the
+    // whole PAGE sideways with no visible culprit (T17 HB9c, 80px at 320).
+    <div className="relative overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm">
       <table className="w-full text-sm">
         {caption ? (
           <caption className="px-4 pb-1 pt-3 text-left font-display text-lg font-semibold text-ink">

@@ -287,12 +287,15 @@ export default async function DivisionHomePage({ params }: Props) {
   const entrantsPanel = (
     <ul className="grid gap-3 sm:grid-cols-2">
       {entrants.map((e) => (
+        // `min-w-0` on the `li` is the one doing the work: a grid item's
+        // automatic minimum is its content, so a 43-character name grew the
+        // card past a 320 phone (+73px, T17 HB9d) and `truncate` never fired.
         <li
           key={e.id}
-          className="rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm"
+          className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface p-4 shadow-sm"
         >
-          <p className="flex items-baseline justify-between gap-2 font-display text-lg font-semibold text-ink">
-            <span className="truncate">{e.display_name}</span>
+          <p className="flex min-w-0 items-baseline justify-between gap-2 font-display text-lg font-semibold text-ink">
+            <span className="min-w-0 truncate">{e.display_name}</span>
             {e.seed ? (
               <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 font-sans text-[11px] font-medium text-accent-strong">
                 {t(dict, "division.seed", { seed: e.seed })}
@@ -358,11 +361,21 @@ export default async function DivisionHomePage({ params }: Props) {
           <h1 className="font-display text-4xl font-bold uppercase leading-none tracking-tight text-ink sm:text-5xl">
             {division.name}
           </h1>
-          <div className="flex shrink-0 items-center gap-2">
+          {/* Below `md` the pair may shrink to the column and wrap onto two
+              lines. As a `shrink-0` row it was as wide as its longest
+              language: "Presentar ▸" + "Compartir en WhatsApp" is 319px in a
+              288px column at 320, so the share button ran 15px off screen and
+              the page's overflow clip cut it (T17 HB14; fr is as long). From
+              `md` up it is the same one row beside the heading as before. */}
+          <div className="flex shrink-0 items-center gap-2 max-md:min-w-0 max-md:shrink max-md:flex-wrap">
             {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen. */}
             <Link
               href={`/shared/${org.slug}/${competition.slug}/${division.slug}/present`}
-              className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink"
+              // Below `md` the pill takes a 44px tap, like the Share button
+              // beside it (it was 28px, T17 HB14); from `md` up it is the same
+              // compact pill as before. `gap-1` stands in for the space before
+              // the ▸, which a flex container drops.
+              className="rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-ink-muted ring-1 ring-inset ring-zinc-200 transition hover:bg-zinc-200 hover:text-ink max-md:inline-flex max-md:min-h-11 max-md:items-center max-md:gap-1"
             >
               {/* N1e e7: the label in the org's locale; the ▸ is decoration. */}
               {t(dict, "division.present")} <span aria-hidden="true">▸</span>

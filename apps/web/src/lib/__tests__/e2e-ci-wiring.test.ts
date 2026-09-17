@@ -280,6 +280,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // and the feature branch ever met).
   "spectator-public-2.spec.ts",
   "spectator-public.spec.ts",
+
+  // Spectator surface W2 (Task 17) — the competition hub's tabs, the org
+  // home's chips and order, and the player card, one file each so a red seed
+  // hides only its own surface.
+  "spectator-hub.spec.ts",
+  "spectator-org-home.spec.ts",
+  "spectator-player.spec.ts",
 ];
 
 afterEach(() => {

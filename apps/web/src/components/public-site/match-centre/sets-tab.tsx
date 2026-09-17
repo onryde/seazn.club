@@ -145,7 +145,9 @@ export function SetsTab({ doc, dict }: SetsTabProps): ReactNode {
 
   return (
     <TabPanel id="sets" className="grid gap-2">
-      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={caption}>
+      {/* `relative` anchors the `.sr-only` header words to this region, not to
+          `<body>` outside its clip — see `scorecard-tab.tsx`'s `ScrollRegion`. */}
+      <div className="relative overflow-x-auto" tabIndex={0} role="region" aria-label={caption}>
         {/* `table-fixed` for the same reason as the Scorecard's tables:
             `min-w-0` on a `<th>` is inert and an auto-layout table simply grows
             to its longest entrant name, so `truncate` never fires. Each

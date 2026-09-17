@@ -328,7 +328,13 @@ export function StandingsTableView({
             // nothing and fixes every consumer — the Overview's previews and the
             // Table tab's groups alike.
             aria-label={`${view.divisionName} — ${view.caption}`}
-            className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
+            // `relative` makes the region the containing block of the
+            // `.sr-only` header words below (they are `position:absolute`).
+            // Without it their containing block was `<body>`, outside this
+            // region's `overflow-x` clip, so on a phone the unfolded long-tail
+            // columns' labels widened the PAGE: a sideways scroll with nothing
+            // visible causing it (T17 HB9b, 320 → 388px).
+            className="relative overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
           >
             {/* The two floors ride as custom properties so the md: variant
                 can pick the wider one — a computed length has no other way to

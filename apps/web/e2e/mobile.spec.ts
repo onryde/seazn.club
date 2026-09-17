@@ -25,6 +25,7 @@ import {
 } from "./helpers";
 import {
   HIT_TARGET_FLOOR_PX,
+  consentedAnonymousState,
   dismissCookieBanner,
   floorViolationLines,
   hitTargetFloorReport,
@@ -32,6 +33,7 @@ import {
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
+import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 
 // v3/02 §4 viewport gate — runs ONLY in the mobile-se / mobile-14 projects
 // (375×667, 390×844). Every audited route must render with zero page-level
@@ -289,6 +291,11 @@ let soloStatusPath = "";
  *  the page renders its Scorecard/Commentary tabs rather than the two-tab
  *  fallback a bare `core.start` alone would produce. */
 let publicCricketFixturePath = "";
+/** Spectator W2 (Task 17, MS1) — the same band-3 cricket fixture's
+ *  COMPETITION (its hub has a live match, a table and a squad) and one of its
+ *  consenting players, whose card leads with that live match. */
+let publicCricketCompSlug = "";
+let publicCricketPlayerId = "";
 
 test("setup: public competition with an entrant-ready division", async ({ page, request }) => {
   // This file is `mode: "serial"`, so a red HERE aborts every test after it —
@@ -502,6 +509,8 @@ test("setup: public competition with an entrant-ready division", async ({ page, 
   const mcCompSlug = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${mcFx.competitionId}`);
   const mcDivSlug = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${mcFx.divisionId}`);
   publicCricketFixturePath = `/shared/${orgSlug}/${mcCompSlug.data!.slug}/${mcDivSlug.data!.slug}/fixtures/${mcFx.fixtureId}`;
+  publicCricketCompSlug = mcCompSlug.data!.slug;
+  publicCricketPlayerId = mcFx.personIds[`MC Home 1 ${TAG}`]!;
 });
 
 // "load" + a short settle instead of networkidle — the dev server's HMR
@@ -1433,6 +1442,55 @@ test("public surfaces: no horizontal scroll (v3/11 gap 12)", async ({ browser })
     // no-document fallback, both of which also hold at every width).
     await anon.goto(publicCricketFixturePath, { waitUntil: "load" });
     await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  } finally {
+    await anonCtx.close();
+  }
+});
+
+// Spectator W2 (Task 17, MS1) — the competition hub's POPULATED tabs and a
+// player's card at every width project. Its own test, not more entries in the
+// routes list above: a red there would also hide the RS007/RS012 routes.
+// Genuinely anonymous (empty cookies, consent answered so no banner covers the
+// page) — a bare `newContext()` inherits the signed-in Pro state. Every tab is
+// read from the hub document, never assumed, and each must open as ITSELF: a
+// `?tab=` the hub does not render falls back to Overview and would pass the
+// scroll check while proving nothing about that tab.
+test("spectator hub tabs and a player card: no horizontal scroll, each tab opens as itself (W2 MS1)", async ({ browser }) => {
+  const renderable = new Set(["overview", "matches", "table", "knockout", "stats", "teams", "info"]);
+  const anonCtx = await browser.newContext({
+    viewport: projectViewport() ?? undefined,
+    storageState: await consentedAnonymousState(),
+  });
+  try {
+    const anon = await anonCtx.newPage();
+    const hubs: { comp: string; tabs: string[] }[] = [];
+    for (const comp of [publicCricketCompSlug, compSlug]) {
+      expect(comp, "setup did not fill a competition slug").toBeTruthy();
+      const res = await anon.request.get(`/api/v1/public/orgs/${orgSlug}/competitions/${comp}/hub`);
+      expect(res.status(), `hub document for ${comp}`).toBe(200);
+      const doc = ((await res.json()) as { data: { tabs: string[] } }).data;
+      hubs.push({ comp, tabs: doc.tabs.filter((id) => renderable.has(id)) });
+    }
+    console.log(`MS1 hub tabs: ${JSON.stringify(hubs)}`);
+    // The premise: the cricket hub is the populated one this test exists for —
+    // a live match and two squads. It has no Table tab: its fixture is seeded
+    // without a league stage, so there are no standings to draw.
+    expect(hubs[0]!.tabs, "the live cricket competition's hub tabs").toEqual(
+      expect.arrayContaining(["overview", "matches", "teams", "info"]),
+    );
+    const routes = hubs.reduce((n, h) => n + h.tabs.length, 0) + 1;
+    test.setTimeout(Math.max(FLOOR_MS, routes * ROUTE_CHECK_MS));
+    for (const { comp, tabs } of hubs) {
+      for (const id of tabs) {
+        await anon.goto(`/shared/${orgSlug}/${comp}?tab=${id}`, { waitUntil: "load" });
+        await expect(anon.getByTestId(`mh-tab-panel-${id}`), `${comp} ?tab=${id} opened a different tab`).toBeVisible();
+        await expectNoHorizontalScroll(anon);
+      }
+    }
+    expect(publicCricketPlayerId, "setup did not fill the player id").toBeTruthy();
+    await anon.goto(`/shared/${orgSlug}/${publicCricketCompSlug}/players/${publicCricketPlayerId}`, { waitUntil: "load" });
+    await expect(anon.getByTestId("mh-player-matches").locator('[data-slab="true"]')).toBeVisible();
+    await expectNoHorizontalScroll(anon);
   } finally {
     await anonCtx.close();
   }

@@ -16,6 +16,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { activeOrg, apiJson, createStageAndGenerate, expectNoHorizontalScroll, setOrgLocaleSql, TAG } from "../helpers";
 import { scanPadContrast } from "../scorepad-a11y-kit";
+import { absoluteEscapes } from "../spectator-w2-kit";
 import { maskDisplayName } from "../../src/lib/name-display";
 import {
   type Team,
@@ -705,6 +706,37 @@ test("tab deep link: ?tab=scorecard lands on Scorecard; an unknown ?tab=nope fal
   );
   await expect(anon.locator('[role="tab"][aria-selected="true"]'), "exactly one tab is ever selected").toHaveCount(1);
   await expect(anon.getByTestId("mc-tab-panel-summary")).toBeVisible();
+});
+
+// The Scorecard's and the Sets tab's tables sit in `overflow-x-auto` regions
+// and carry `.sr-only` column words. With the region static, those
+// absolutely-positioned words are anchored to `<body>`, outside the region's
+// clip, and a table wider than the phone scrolls the whole PAGE sideways with
+// nothing visible causing it — the defect the hub's Table had (T17, HB9b). At
+// today's data these tables fit 320, so the page check alone would pass on the
+// defect; the containing-block read is what witnesses it.
+test("anchoring: at 320 the Scorecard's and Sets tab's column labels are anchored inside their scroll regions", async ({
+  browser,
+}) => {
+  const cases = [
+    { path: publicFixturePath(orgSlug, compSlug, liveDivSlug, matchA), tab: "scorecard" },
+    { path: publicFixturePath(orgSlug, compSlug, tennisDivSlug, tennisFixture), tab: "sets" },
+  ];
+  for (const { path, tab } of cases) {
+    const anon = await anonPage(browser, { width: 320, height: 568 });
+    await anon.goto(path, { waitUntil: "load" });
+    await expect(anon.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+    await anon.getByTestId(`mc-tab-${tab}`).click();
+    const panel = anon.getByTestId(`mc-tab-panel-${tab}`);
+    await expect(panel).toBeVisible();
+    const regions = `[data-testid="mc-tab-panel-${tab}"] div[role="region"]`;
+    await expect(anon.locator(regions).first(), `${tab}: a scroll region`).toBeAttached();
+    await expect(anon.locator(`${regions} .sr-only`).first(), `${tab}: a screen-reader label inside it`).toBeAttached();
+    const escapes = await absoluteEscapes(anon, regions);
+    console.log(`anchoring ${tab}: ${JSON.stringify(escapes)}`);
+    expect(escapes, `${tab}: labels anchored outside their scroll region`).toEqual([]);
+    await expectNoHorizontalScroll(anon);
+  }
 });
 
 // ---------------------------------------------------------------------------
