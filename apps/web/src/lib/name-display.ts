@@ -95,9 +95,26 @@ export function resolvePersonDisplayName(
   divisionSetting: string | null | undefined,
   youth: boolean,
 ): string {
-  const optedOut = consent?.public_name === false;
-  if (!optedOut && resolveNameDisplay(divisionSetting, youth) === "full") return fullName;
+  if (!isPersonNameMasked(consent, divisionSetting, youth)) return fullName;
   return maskDisplayName(fullName, "first_initial");
+}
+
+/**
+ * The DECISION `resolvePersonDisplayName` makes, without the string — for a
+ * public surface that gates something else on it: the link to the player
+ * card, the person id a public document carries, a photo.
+ *
+ * Decided by the policy, never by comparing the resolved name with the full
+ * one: `maskOne` returns a single-token name unchanged, so a one-word name
+ * would read as unmasked and be handed exactly the link/id/photo the policy
+ * exists to withhold.
+ */
+export function isPersonNameMasked(
+  consent: { public_name?: boolean } | null | undefined,
+  divisionSetting: string | null | undefined,
+  youth: boolean,
+): boolean {
+  return consent?.public_name === false || resolveNameDisplay(divisionSetting, youth) !== "full";
 }
 
 /**

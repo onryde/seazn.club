@@ -45,7 +45,7 @@
 // ---------------------------------------------------------------------------
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { playerLinkId, resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
+import { isPersonNameMasked, playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import type { LeaderBoardT } from "./competition-hub-schema";
 import type { DivisionConsentCtx } from "./public-lineups";
 
@@ -190,6 +190,18 @@ export function specsFor(sportKey: string, model: PlayerStatsModel | undefined):
  * masked here, because the
  * player page renders the unmasked name and linking to it from a youth
  * division would undo that division's own safeguarding policy.
+ *
+ * Masking removes the real `personId` too (privacy hotfix, 2026-09-16). A
+ * person's id is stable across the org, so a masked row's id could be looked
+ * up on an adult division's entrants API, where the same person may appear
+ * under their full name. A masked row carries a stand-in instead, the same
+ * scheme `makePersonOf` (match-centre.ts) uses: `m1`, `m2`, … in first-seen
+ * order, memoised so a person on two of a division's boards keeps one
+ * stand-in. The memo is per DIVISION, the unit the policy masks by: a child
+ * playing up in U12 and U14 gets unrelated stand-ins, so nothing ties the two
+ * rows together. The id is only the row's React key and testid
+ * (`stats-tab.tsx`), which needs uniqueness inside one board only. Unmasked
+ * people keep their real id: the player-page link is built from it.
  */
 export function buildLeaderBoards(a: {
   divisions: readonly LeaderDivision[];
@@ -207,6 +219,15 @@ export function buildLeaderBoards(a: {
   const out: LeaderBoardT[] = [];
 
   for (const division of a.divisions) {
+    const standIns = new Map<string, string>();
+    const publicId = (row: LeaderInputRow): string => {
+      if (!row.masked) return row.personId;
+      const seen = standIns.get(row.personId);
+      if (seen !== undefined) return seen;
+      const minted = `m${standIns.size + 1}`;
+      standIns.set(row.personId, minted);
+      return minted;
+    };
     const model = a.modelFor(division);
     const inDivision = a.rows.filter((r) => r.divisionId === division.id);
 
@@ -227,7 +248,7 @@ export function buildLeaderBoards(a: {
         key: spec.key,
         label: a.label(spec, division, model),
         rows: scored.map(({ row, value }) => ({
-          person: { personId: row.personId, name: row.name, masked: row.masked },
+          person: { personId: publicId(row), name: row.name, masked: row.masked },
           personHref: row.publicProfile && !row.masked ? a.personHref(row.personId) : null,
           entrantName: row.entrantName,
           badgeUrl: row.badgeUrl,
@@ -296,8 +317,8 @@ export function toLeaderInputRows(
 
     // `masked` follows the POLICY, not whether the string changed.
     //
-    // The obvious `name !== row.full_name` (which `readPublicLineups` uses)
-    // is wrong here: `maskOne` returns a SINGLE-TOKEN name unchanged, so a
+    // The obvious `name !== row.full_name` (which `readPublicLineups` used
+    // until the 2026-09-16 privacy hotfix) is wrong here: `maskOne` returns a SINGLE-TOKEN name unchanged, so a
     // one-word name resolves to itself and reads as unmasked. In W1 that flag
     // drives nothing, but here it gates `personHref` — so a minor in a youth
     // division with a one-token name would be handed a link to a player page
@@ -305,9 +326,9 @@ export function toLeaderInputRows(
     // outcome the division's masking policy exists to prevent. The name
     // string leaks nothing extra in that case; the LINK does.
     //
-    // Reads the same two axes in the same order as `resolvePersonDisplayName`
-    // itself, through its own exported helper — not a second resolver.
-    const masked = row.consent?.public_name === false || resolveNameDisplay(setting, youth) !== "full";
+    // The decision `resolvePersonDisplayName` itself makes, from the one
+    // shared rule — never a copy of the predicate.
+    const masked = isPersonNameMasked(row.consent, setting, youth);
 
     out.push({
       divisionId: row.division_id,

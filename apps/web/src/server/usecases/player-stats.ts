@@ -12,6 +12,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
@@ -1021,7 +1022,8 @@ export async function personCareerStats(
 }
 
 /** Public consent-filtered leaderboard (Jul3/07 §6): names via
- *  public_person_name (minors gated, doc 06 §4.7).
+ *  public_person_name, then the division's youth/name-display policy (the
+ *  SQL function alone has no youth axis — privacy hotfix 2026-09-16).
  *
  *  W3-A (2026-09-06, V399): gated on `stats.player`, same key
  *  `divisionPlayerStats`/`personStats` read. Before this it had NO gate at
@@ -1041,8 +1043,10 @@ export async function publicDivisionStats(
   divisionSlug: string,
 ): Promise<{ rows: { name: string; stats: Record<string, number> }[] }> {
   const { sql } = await import("@/lib/db");
-  const [division] = await sql<{ id: string; org_id: string; competition_id: string }[]>`
-    select d.id, d.org_id, c.id as competition_id
+  const [division] = await sql<
+    { id: string; org_id: string; competition_id: string; youth: boolean; player_name_display: string | null }[]
+  >`
+    select d.id, d.org_id, c.id as competition_id, d.youth, d.player_name_display
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -1062,11 +1066,22 @@ export async function publicDivisionStats(
   // lazily: the refresh module imports this one.
   const { reconcilePlayerStatsOnRead } = await import("./player-stats-refresh");
   reconcilePlayerStatsOnRead(division.org_id, division.id);
-  const rows = await sql<{ name: string; stats: Record<string, number> }[]>`
-    select public_person_name(p.full_name, p.consent) as name, ps.stats
+  const rows = await sql<{ name: string; consent: { public_name?: boolean } | null; stats: Record<string, number> }[]>`
+    select public_person_name(p.full_name, p.consent) as name, p.consent, ps.stats
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id
     where ps.division_id = ${division.id}
     order by (ps.stats->>'points')::numeric desc nulls last, name`;
-  return { rows };
+  // Privacy hotfix (2026-09-16): `public_person_name` is consent-only (V229) —
+  // a consented youth player's full name was published here. The division's
+  // youth/name-display policy is applied ON TOP of the SQL name, never instead
+  // of it (the two disagree on an ABSENT consent: SQL initials it, the
+  // resolver would not mask it), the same composition as `publicSuspensions`.
+  // A row carries a name and stats only — no person id or link to withhold.
+  return {
+    rows: rows.map((r) => ({
+      name: resolvePersonDisplayName(r.name, r.consent, division.player_name_display, division.youth),
+      stats: r.stats,
+    })),
+  };
 }

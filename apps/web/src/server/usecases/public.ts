@@ -430,7 +430,10 @@ export async function publicEntrants(
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:entrants`, async () => {
+  // `-v2` (privacy hotfix, 2026-09-16): a masked member now carries no
+  // `person_id`/`photo`. Still under the division glob `pub:v1:div:{id}:*` the
+  // score and schedule writers sweep.
+  return cached(`pub:v1:div:${division.id}:entrants-v2`, async () => {
     const entrants = await sql<
       {
         id: string;

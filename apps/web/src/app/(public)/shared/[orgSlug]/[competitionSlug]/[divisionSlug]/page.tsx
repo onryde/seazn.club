@@ -323,7 +323,9 @@ export default async function DivisionHomePage({ params }: Props) {
                     ) : (
                       // No link on the hub Teams tab's terms (`playerLinkId`): no
                       // public-name consent, player pages not granted to the org,
-                      // or a division that masks names (doc 06 §4.7).
+                      // or a division that masks names (doc 06 §4.7). A masked
+                      // member has no id to link either: `maskPublicEntrantNames`
+                      // withholds it, because the card behind it would undo the mask.
                       <span>{m.name}</span>
                     )}
                     {m.position ? (

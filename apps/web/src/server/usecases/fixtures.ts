@@ -196,8 +196,8 @@ export interface FixtureStreamOut {
  * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
  * `broadcastRevalidate` — the latter is the peer primitive that helper calls
  * internally. It is what busts the `["pub-fixture-v2", fixtureId]` cache entry
- * tagged `divisionTag(division.id)` (data.ts:742), which is the entry the
- * public match page reads the link from.
+ * tagged `divisionTag(division.id)` (`getPublicFixture`, data.ts), which is the
+ * entry the public match page reads the link from.
  */
 export async function setFixtureStreamUrl(
   auth: AuthCtx,

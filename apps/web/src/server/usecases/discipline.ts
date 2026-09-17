@@ -13,12 +13,12 @@ import type { DisciplineModel, EventEnvelope } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import type { Locale } from "@/lib/i18n-constants";
 import { sendSuspensionConfirmedEmail, sendSuspensionServedEmail } from "@/lib/email";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { suspendedPlayersMessage } from "@/lib/registration-rules";
-import { resolvePersonDisplayName } from "@/lib/name-display";
 import { deferred } from "@/lib/deferred";
 import { log } from "@/server/logger";
 import { audit } from "./audit";
@@ -841,14 +841,17 @@ export async function suspensionsForFixture(
 }
 
 /** Public "Suspensions" strip: active bans, names via public_person_name
- *  consent (exactly the publicDivisionStats pattern). Ungated read. */
+ *  consent (exactly the publicDivisionStats pattern), then the division's
+ *  youth/name-display policy. Ungated read. */
 export async function publicSuspensions(
   orgSlug: string,
   competitionSlug: string,
   divisionSlug: string,
 ): Promise<{ name: string; remaining: number }[]> {
-  const [division] = await sql<{ id: string; org_id: string }[]>`
-    select d.id, d.org_id
+  const [division] = await sql<
+    { id: string; org_id: string; youth: boolean; player_name_display: string | null }[]
+  >`
+    select d.id, d.org_id, d.youth, d.player_name_display
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -856,12 +859,22 @@ export async function publicSuspensions(
       and c.visibility in ('public','unlisted')`;
   if (!division) throw new HttpError(404, "division not found");
   await notifyServedSuspensions(await withTenant(division.org_id, (tx) => detectSuspensions(tx, division.id)));
-  return sql<{ name: string; remaining: number }[]>`
-    select public_person_name(p.full_name, p.consent) as name,
+  const rows = await sql<{ name: string; consent: { public_name?: boolean } | null; remaining: number }[]>`
+    select public_person_name(p.full_name, p.consent) as name, p.consent,
            (s.matches_total - s.matches_served) as remaining
     from suspensions s join persons p on p.id = s.person_id
     where s.division_id = ${division.id} and s.status = 'active'
     order by name`;
+  // Privacy hotfix (2026-09-16): `public_person_name` is consent-only (V229),
+  // so a consented youth player's full name was printed here while the rest
+  // of the division page masked it. The shared resolver is applied ON TOP of
+  // the SQL name, never instead of it: the two disagree on an ABSENT consent
+  // (SQL initials it, the resolver does not mask it), and the strip must stay
+  // the stricter of the two. Masking an initials-only name is a no-op.
+  return rows.map((r) => ({
+    name: resolvePersonDisplayName(r.name, r.consent, division.player_name_display, division.youth),
+    remaining: r.remaining,
+  }));
 }
 
 /**

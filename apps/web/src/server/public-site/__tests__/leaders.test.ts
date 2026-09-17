@@ -286,11 +286,52 @@ describe("buildLeaderBoards", () => {
       ]),
     );
     const [masked, open] = boards[0]!.rows;
-    expect(masked!.person).toEqual({ personId: "p1", name: "A. B.", masked: true });
+    // The real id is withheld too (privacy hotfix, 2026-09-16): a stand-in,
+    // never "p1".
+    expect(masked!.person).toEqual({ personId: "m1", name: "A. B.", masked: true });
     expect(masked!.personHref).toBeNull();
     // Positive pair — the absence above is a decision, not a broken link builder.
     expect(open!.personHref).toBe("/shared/o/c/players/p2");
-    expect(open!.person.masked).toBe(false);
+    expect(open!.person).toEqual({ personId: "p2", name: expect.any(String), masked: false });
+  });
+
+  it("CONSENT: a masked person gets ONE stand-in id across their division's boards, and two masked people get two", () => {
+    const boards = buildLeaderBoards(
+      args([
+        row("p1", { runs: 9, wickets: 2 }, { name: "A. B.", masked: true }),
+        row("p2", { runs: 8, wickets: 3 }, { name: "C. D.", masked: true }),
+        row("p3", { runs: 7 }),
+      ]),
+    );
+    const idOf = (key: string, name: string) =>
+      boards.find((b) => b.key === key)!.rows.find((r) => r.person.name === name)!.person.personId;
+    expect(idOf("runs", "A. B.")).toBe(idOf("wickets", "A. B."));
+    expect(idOf("runs", "C. D.")).toBe(idOf("wickets", "C. D."));
+    expect(idOf("runs", "A. B.")).not.toBe(idOf("runs", "C. D."));
+    expect(JSON.stringify(boards)).not.toMatch(/"p1"|"p2"/);
+  });
+
+  it("CONSENT: stand-ins are scoped per division, so they never tie one masked child to another division's row", () => {
+    // p1 plays in both U12 and U14 (playing up), masked in both. A stand-in
+    // shared across the two divisions would tell a reader the rows are the
+    // same child.
+    const u14: LeaderDivision = { ...cricket, id: "d2", slug: "u14", name: "U14" };
+    const boards = buildLeaderBoards({
+      ...args([]),
+      divisions: [cricket, u14],
+      rows: [
+        row("p1", { runs: 9 }, { name: "A. B.", masked: true }),
+        row("p2", { runs: 9 }, { divisionId: "d2", name: "C. D.", masked: true }),
+        row("p1", { runs: 5 }, { divisionId: "d2", name: "A. B.", masked: true }),
+      ],
+    });
+    const idsIn = (divisionId: string) =>
+      boards.find((b) => b.divisionId === divisionId && b.key === "runs")!.rows.map((r) => r.person.personId);
+    // Unique inside each board (they are its React keys)...
+    expect(idsIn("d1")).toEqual(["m1"]);
+    expect(idsIn("d2")).toEqual(["m1", "m2"]);
+    // ...and p1's stand-in in U12 is not p1's stand-in in U14.
+    expect(idsIn("d1")[0]).not.toBe(idsIn("d2")[1]);
   });
 
   it("CONSENT: a masked row is RANKED, never dropped", () => {
@@ -301,7 +342,7 @@ describe("buildLeaderBoards", () => {
       ]),
     );
     expect(boards[0]!.rows).toHaveLength(2);
-    expect(boards[0]!.rows[0]!.person.personId).toBe("top");
+    expect(boards[0]!.rows[0]!.person).toMatchObject({ name: "M. K.", masked: true });
   });
 
   it("CONSENT: an unmasked person with no public profile gets no link either", () => {

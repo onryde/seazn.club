@@ -108,8 +108,8 @@ export async function firePersonRevalidate(
  *  `firePersonRevalidate` — never for a score write), and the reads that follow a score are
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
- *  entry a score changes carries the division tag (`pub-div`, `pub-fixture`,
- *  `pub-hub-v2`), and an expired tag beats a stale one on an entry carrying
+ *  entry a score changes carries the division tag (`pub-div-v2`,
+ *  `pub-fixture-v2`, `pub-hub-v3`), and an expired tag beats a stale one on an entry carrying
  *  both. The competition tag keeps SWR. Cost accepted: the first reader after
  *  a score rebuilds instead of getting a stale answer immediately.
  *
