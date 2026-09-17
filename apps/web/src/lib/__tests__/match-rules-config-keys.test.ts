@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { configKeysFor, STAGE_RULES_SPORTS } from "@/lib/match-rules";
+import {
+  configKeysFor,
+  keysEmittedBy,
+  STAGE_RULES_SPORTS,
+  type RuleField,
+} from "@/lib/match-rules";
 
 describe("configKeysFor", () => {
   // Tennis is the case that matters: three of its five FIELD keys differ from
@@ -31,5 +36,24 @@ describe("configKeysFor", () => {
 
   it("is empty for a sport with no rules table", () => {
     expect(configKeysFor("nosuchsport").size).toBe(0);
+  });
+
+  // Added after Task 1: cutting probeValuesFor down to the first option left
+  // every other test green, because no IN-SCOPE field branches its emitted key
+  // set on its value (carrom's gameTo is the only one in the whole table, and
+  // it is out of scope). Without this case the multi-probe loop is an
+  // unwitnessed guard — correct, but nothing reds if someone deletes it.
+  it("probes every option, so a value-branching build cannot hide a key", () => {
+    const branching: RuleField = {
+      key: "probe",
+      label: "Probe",
+      kind: "select",
+      options: [
+        { value: "a", label: "A" },
+        { value: "b", label: "B" },
+      ],
+      build: (v) => (v === "b" ? { onlyForB: 1 } : { always: 1 }),
+    };
+    expect(keysEmittedBy([branching])).toEqual(new Set(["always", "onlyForB"]));
   });
 });

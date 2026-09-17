@@ -726,15 +726,24 @@ function probeValuesFor(field: RuleField): string[] {
   return [String(field.min ?? 1)];
 }
 
-/** The CONFIG keys a sport's rule fields can write — NOT their field keys.
- *  `division-settings.tsx:273` maps `f.key`; copying that here would 400 four
- *  of tennis's five overrides, because `build` renames three of them. */
-export function configKeysFor(sportKey: string): ReadonlySet<string> {
+/** The CONFIG keys an arbitrary field list can write. Exported separately from
+ *  `configKeysFor` so a synthetic field — one whose `build` actually BRANCHES
+ *  its key set on the value — can be passed in: no field of any in-scope sport
+ *  does that today (carrom's `gameTo` is the only one in the whole table), so
+ *  without such a test the probe loop above is an unwitnessed guard. */
+export function keysEmittedBy(fields: RuleField[]): ReadonlySet<string> {
   const keys = new Set<string>();
-  for (const field of SPORT_RULES[sportKey] ?? []) {
+  for (const field of fields) {
     for (const probe of probeValuesFor(field))
       for (const k of Object.keys(field.build(probe, {}))) keys.add(k);
     if (field.buildOnBlank) for (const k of Object.keys(field.buildOnBlank({}))) keys.add(k);
   }
   return keys;
+}
+
+/** The CONFIG keys a sport's rule fields can write — NOT their field keys.
+ *  `division-settings.tsx:273` maps `f.key`; copying that here would 400 four
+ *  of tennis's five overrides, because `build` renames three of them. */
+export function configKeysFor(sportKey: string): ReadonlySet<string> {
+  return keysEmittedBy(SPORT_RULES[sportKey] ?? []);
 }
