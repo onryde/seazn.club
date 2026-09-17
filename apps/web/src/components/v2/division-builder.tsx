@@ -1029,17 +1029,19 @@ export function DivisionBuilder({
 
         <div>
           {/* P9 scope item 5: real org courts, multi-selected and ordered —
-              replaces the old free-text "Court 1"/"Court 2" name list.
-              Section copy (`boardset.venuesLabel`/`venuesDesc`) is
-              UNCHANGED on purpose, same as the schedule board's own
-              settings panel. */}
+              replaces the old free-text "Court 1"/"Court 2" name list. */}
           <CourtMultiPicker
             venues={venues}
             value={courts}
             onChange={setCourts}
             maxSelected={constraintsAllowed ? undefined : 1}
             label={msg("boardset.venuesLabel", { venue: pluralizeVenue(VenueCap) })}
-            description={msg("boardset.venuesDesc", { venue })}
+            // `venuesDesc` reads `{venue}` as an already-plural noun
+            // ("Pick the {venue} this schedule can use…") — the template
+            // used to hardcode a literal "s" suffix and broke on a sibilant
+            // noun ("Pitch" -> "Pitchs"); fixed by pluralizing here instead
+            // (same fix as settings-panel.tsx's CourtsPanel/SettingsPanel).
+            description={msg("boardset.venuesDesc", { venue: pluralizeVenue(venue) })}
             emptyTitle={msg("courtPicker.emptyTitle")}
             emptyBody={msg("courtPicker.emptyBody")}
             directoryLinkLabel={msg("courtPicker.directoryLink")}

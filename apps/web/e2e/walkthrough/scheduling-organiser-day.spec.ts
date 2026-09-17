@@ -635,6 +635,7 @@ test("the organiser sets up, schedules, saves, clears, restores, freezes and pub
   // it, so nothing here says otherwise.
   await goTab(page, base, "board");
   await page.getByTestId("schedule-auto").click();
+  await page.getByTestId("schedule-rebuild-confirm").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: SOLVE_MS });
 

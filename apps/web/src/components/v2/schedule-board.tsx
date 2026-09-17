@@ -168,8 +168,9 @@ export function buildAiBrief(input: {
  *
  * The other three are things the joint surface cannot infer and the division
  * surface never needs: courts (matched across divisions BY NAME), the division's
- * configured timezone, and `crossPersonClash` — the rule that decides whether
- * the joint apply refuses a person clash the plan only warned about.
+ * configured timezone, and `crossPersonClash` — which per #399 no longer
+ * decides what Apply refuses (a person clash is unconditionally blocked) and
+ * now only steers the AI solver's own placement choices.
  */
 export function jointDivisionsFor(
   divisions: BoardDivision[],
@@ -449,9 +450,9 @@ interface Props {
    * only the competition schedule page passes it, and that page is behind
    * `scheduling.multi_division`. The settings are the joint console's quote
    * inputs (each division's OWN courts), the by-name court-divergence check,
-   * the timezone spread (ruling R8), and the `crossPersonClash` rule that
-   * decides whether the joint apply REFUSES a person clash it only warned
-   * about.
+   * the timezone spread (ruling R8), and each division's `crossPersonClash`
+   * setting — steers the AI solver only; since #399 the joint apply
+   * unconditionally REFUSES a person clash regardless of this setting.
    *
    * As two optional props, dropping the settings one typechecked and stayed
    * green while every division silently fell back to `courts: []` (a PRICING
@@ -701,16 +702,35 @@ export function ScheduleBoard({
   // even a frame, and `null` here means there is nothing to run at all.
   const activeStage =
     runnableStages.find((s) => s.id === pickedStageId) ?? runnableStages[0] ?? null;
-  const stageLockedCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const f of board) {
-      if (f.schedule_locked) counts[f.stage_id] = (counts[f.stage_id] ?? 0) + 1;
-    }
-    return counts;
-  }, [board]);
-  const [pendingBuild, setPendingBuild] = useState<
-    { stageId: string; divisionId: string; locked: number } | null
+  // ----------------------------------------------- always-confirm (2026-09-17)
+  // Every solver action now confirms before it runs, naming what it will touch —
+  // owner ask, superseding the #pins-ui "confirm only when a lock is at risk"
+  // ruling above for these three buttons. One state covers all three: they
+  // differ only in which fixtures a run counts as "moving".
+  const [pendingAction, setPendingAction] = useState<
+    | {
+        kind: "build" | "reflow" | "polish";
+        stageId: string;
+        divisionId: string;
+        locked: number;
+        moving: number;
+      }
+    | null
   >(null);
+  const actionCounts = useCallback(
+    (stageId: string, kind: "build" | "reflow" | "polish") => {
+      const inStage = board.filter((f) => f.stage_id === stageId);
+      const locked = inStage.filter((f) => f.schedule_locked).length;
+      // BUILD/REFLOW can place or move any unlocked card, scheduled or not;
+      // POLISH only tightens times on cards already on the board.
+      const moving =
+        kind === "polish"
+          ? inStage.filter((f) => !f.schedule_locked && f.scheduled_at !== null).length
+          : inStage.length - locked;
+      return { locked, moving };
+    },
+    [board],
+  );
   /** The params of whichever run last populated `actions.lastRun`, so the
    *  infeasible escape hatch can repeat the SAME request with
    *  `ignore_locks: true` rather than silently switching solver. Reading it is
@@ -1275,20 +1295,16 @@ export function ScheduleBoard({
                 type="button"
                 data-testid="schedule-auto"
                 disabled={actions.busy}
-                onClick={() => {
-                  const locked = stageLockedCounts[activeStage.id] ?? 0;
-                  // A confirm step only when THIS stage's rebuild would touch
-                  // a locked fixture — with zero locks the click runs exactly
-                  // as it always did (owner ruling).
-                  if (locked > 0)
-                    setPendingBuild({
-                      stageId: activeStage.id,
-                      divisionId: activeStage.division_id,
-                      locked,
-                    });
-                  else void runAuto(activeStage.id, activeStage.division_id, false);
-                }}
+                onClick={() =>
+                  setPendingAction({
+                    kind: "build",
+                    stageId: activeStage.id,
+                    divisionId: activeStage.division_id,
+                    ...actionCounts(activeStage.id, "build"),
+                  })
+                }
                 className="btn btn-primary relative min-h-11 rounded-r-none px-3 py-1.5 text-xs focus-visible:z-10"
+                title={msg("board.autoScheduleTitle")}
               >
                 {msg("board.autoSchedule")}
               </button>
@@ -1296,7 +1312,14 @@ export function ScheduleBoard({
                 type="button"
                 data-testid="schedule-reflow"
                 disabled={actions.busy}
-                onClick={() => void runAuto(activeStage.id, activeStage.division_id, true)}
+                onClick={() =>
+                  setPendingAction({
+                    kind: "reflow",
+                    stageId: activeStage.id,
+                    divisionId: activeStage.division_id,
+                    ...actionCounts(activeStage.id, "reflow"),
+                  })
+                }
                 className="btn btn-ghost relative -ml-px min-h-11 rounded-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
                 title={msg("board.reflowTitle")}
               >
@@ -1307,14 +1330,19 @@ export function ScheduleBoard({
                   kind of action, and the three only differ by what they ask
                   the solver for. The mode is passed EXPLICITLY because
                   `only_unlocked` cannot express it — polish and re-flow both
-                  send `true` and run different solvers. No confirm dialog
-                  (#pins-ui): POLISH already honoured a lock before that
-                  feature and nothing about it changed. */}
+                  send `true` and run different solvers. */}
               <button
                 type="button"
                 data-testid="schedule-polish"
                 disabled={actions.busy}
-                onClick={() => void runAuto(activeStage.id, activeStage.division_id, true, "polish")}
+                onClick={() =>
+                  setPendingAction({
+                    kind: "polish",
+                    stageId: activeStage.id,
+                    divisionId: activeStage.division_id,
+                    ...actionCounts(activeStage.id, "polish"),
+                  })
+                }
                 className="btn btn-ghost relative -ml-px min-h-11 rounded-l-none px-3 py-1.5 text-xs hover:z-10 focus-visible:z-10"
                 title={msg("board.polishTitle")}
               >
@@ -1726,25 +1754,76 @@ export function ScheduleBoard({
         onDismiss={() => setGate(null)}
       />
 
-      {/* BUILD's pre-run confirm (#pins-ui, owner ruling 2026-08-12) — only
-          reachable via `pendingBuild`, which is only ever set when the clicked
-          stage has at least one locked fixture. Zero locks skips this
-          entirely and runs immediately, matching the ruling exactly. */}
+      {/* Every solver action's pre-run confirm (2026-09-17, owner ask —
+          supersedes the #pins-ui "only when a lock is at risk" ruling for
+          these three). One dialog, its copy keyed off `pendingAction.kind`; a
+          run's mobile view is the SAME dialog, `ConfirmDialog` already
+          renders as a bottom sheet under `sm`. */}
       <ConfirmDialog
-        open={pendingBuild !== null}
-        testId="schedule-rebuild"
-        title={msg("board.autoConfirm.title")}
+        open={pendingAction !== null}
+        testId={
+          pendingAction
+            ? ({ build: "schedule-rebuild", reflow: "schedule-reflow-confirm", polish: "schedule-polish-confirm" } as const)[
+                pendingAction.kind
+              ]
+            : undefined
+        }
+        title={
+          pendingAction
+            ? msg(
+                (
+                  {
+                    build: "board.autoConfirm.title",
+                    reflow: "board.reflowConfirm.title",
+                    polish: "board.polishConfirm.title",
+                  } as const
+                )[pendingAction.kind],
+              )
+            : ""
+        }
         confirmLabel={msg("board.autoConfirm.confirm")}
         cancelLabel={msg("board.cancel")}
         busy={actions.busy}
         onConfirm={() => {
-          const p = pendingBuild;
-          setPendingBuild(null);
-          if (p) void runAuto(p.stageId, p.divisionId, false);
+          const p = pendingAction;
+          setPendingAction(null);
+          if (!p) return;
+          if (p.kind === "build") void runAuto(p.stageId, p.divisionId, false);
+          else if (p.kind === "reflow") void runAuto(p.stageId, p.divisionId, true);
+          else void runAuto(p.stageId, p.divisionId, true, "polish");
         }}
-        onCancel={() => setPendingBuild(null)}
+        onCancel={() => setPendingAction(null)}
       >
-        <p>{pendingBuild && plural("board.autoConfirm.body", pendingBuild.locked)}</p>
+        {pendingAction && (
+          <>
+            {/* Same copy as the button's own hover title — the grey line
+                repeats it for whoever never hovers (touch, keyboard nav). */}
+            <p className="text-slate-500">
+              {msg(
+                (
+                  {
+                    build: "board.autoScheduleTitle",
+                    reflow: "board.reflowTitle",
+                    polish: "board.polishTitle",
+                  } as const
+                )[pendingAction.kind],
+              )}
+            </p>
+            <p>
+              {plural(
+                (
+                  {
+                    build: "board.autoConfirm.moving",
+                    reflow: "board.reflowConfirm.moving",
+                    polish: "board.polishConfirm.moving",
+                  } as const
+                )[pendingAction.kind],
+                pendingAction.moving,
+              )}
+            </p>
+            {pendingAction.locked > 0 && <p>{plural("board.lockedStaysConfirm", pendingAction.locked)}</p>}
+          </>
+        )}
       </ConfirmDialog>
 
       {/* The infeasible escape hatch's own confirm step (#pins-ui) — the single

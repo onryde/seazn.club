@@ -26,7 +26,11 @@ import { withTenant } from "@/lib/db";
 import { ScheduleBoard } from "@/components/v2/schedule-board";
 import { RungConfigProvider } from "@/components/v2/board/rung-config-provider";
 import { resolveRungConfig } from "@/lib/ai-rung";
-import { StandaloneScheduleSettings } from "@/components/v2/board/settings-panel";
+import {
+  StandaloneScheduleSettings,
+  StandaloneCourtsSettings,
+  CourtsTabLabel,
+} from "@/components/v2/board/settings-panel";
 import { HealthPanel } from "@/components/v2/board/health-panel";
 import { OfficialsPanel } from "@/components/v2/officials-panel";
 import { HistoryPanel } from "@/components/v2/history-panel";
@@ -55,7 +59,7 @@ import { resolveSlotLabel } from "@/lib/slot-label";
 // #230 item 4 established, and the one this file's own deferred-load test
 // guards).
 
-const TABS = ["board", "health", "settings", "constraints", "officials", "history"] as const;
+const TABS = ["board", "health", "settings", "courts", "constraints", "officials", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /** The "didn't load it" arm of a gated `Promise.all` slot. Explicitly typed
@@ -278,7 +282,7 @@ export default async function DivisionSchedulePage({
                   : "border-transparent text-slate-500 hover:text-slate-800"
               }`}
             >
-              {tabId === "health" ? <HealthTabLabel /> : tabId}
+              {tabId === "health" ? <HealthTabLabel /> : tabId === "courts" ? <CourtsTabLabel /> : tabId}
             </Link>
           ))}
         </nav>
@@ -411,6 +415,20 @@ export default async function DivisionSchedulePage({
             // officials-only reads) — no new query for this.
             fixtures={fixtures}
             viewerPlan={viewerPlan}
+          />
+        )}
+
+        {/* Court selection on its own tab (organiser ask) — pulled off the
+            Settings tab where it sat beside hours/match-length; picking which
+            courts the auto-scheduler may fill is a different decision from
+            those, and burying it inside that card was the complaint. */}
+        {tab === "courts" && (
+          <StandaloneCourtsSettings
+            divisionId={id}
+            config={settings.config}
+            canEdit={editable}
+            venueCap={venueLabel(division.sport_key)}
+            venues={boardVenues}
           />
         )}
 
