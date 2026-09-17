@@ -72,6 +72,7 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
 import { afterScheduleWrite, validateSchedule, courtNamesById, courtVenueIds, divisionLockState } from "./schedule";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 // The division freeze (`divisions.schedule_locked`), said the same way here as
 // at every other refusing site. IMPORT the constants, never retype the
 // sentence: `lib/schedule-lock.ts`'s own comment makes the import graph the
@@ -450,8 +451,14 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
     // the stage row, so this write names the fixtures it removed. Left to the
     // stage's ON DELETE CASCADE they went unnamed; the rows removed are the
     // same either way (pools and snapshots still cascade from the stage).
-    const removed = await tx<{ id: string }[]>`
-      delete from fixtures where stage_id = ${stageId} returning id`;
+    // `scored`: the fixture carried score events (an abandoned or cancelled
+    // match, or a walkover), which cascade away with it. Every part of a
+    // data-modifying WITH reads the same snapshot, so the outer select still
+    // sees the rows the delete removes.
+    const removed = await tx<{ id: string; scored: boolean }[]>`
+      with gone as (delete from fixtures where stage_id = ${stageId} returning id)
+      select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
+      from gone`;
     await tx`delete from stages where id = ${stageId}`;
 
     // Structural ledger + division watermark (same pattern as stage_seeded).
@@ -468,6 +475,7 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
       divisionId: stage.division_id,
       competitionId: stage.competition_id,
       fixtureIds: removed.map((row) => row.id),
+      scoredFixtureRemoved: removed.some((row) => row.scored),
     };
   });
   // R10e (found): a stage delete takes its fixtures off the hub and out of any
@@ -476,6 +484,9 @@ export async function deleteStage(auth: AuthCtx, stageId: string): Promise<{ del
   // keys in one DEL after the commit and pushes after it. Always sent: the
   // stage itself is gone from the hub even when it held no fixture.
   afterScheduleWrite(divisionId.divisionId, divisionId.competitionId, "schedule", divisionId.fixtureIds);
+  // A removed fixture's score events went with it, so the division's player
+  // stats still count them until they are refolded (review m3).
+  if (divisionId.scoredFixtureRemoved) schedulePlayerStatsRefresh(auth.orgId, { divisionId: divisionId.divisionId });
   return { deleted: true };
 }
 

@@ -367,7 +367,6 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
   it("public leaderboard is consent-filtered", async () => {
     const { auth } = await seedOrg();
     const { comp, division, fixtures, teamA, entrants } = await seedDivision(auth, "public");
-    void division;
     const f = fixtures[0]!;
     await scoreEvent(auth, f.id, {
       expected_seq: 0,
@@ -381,6 +380,9 @@ describe.skipIf(!HAS_DB)("player statistics (Jul3/07)", () => {
     });
     const [org] = await sql<{ slug: string }[]>`
       select slug from organizations where id = ${auth.orgId}`;
+    // The public route serves the snapshot as it stands and never folds (owner
+    // ruling 2026-09-17), so the organiser's own read folds it first.
+    await divisionPlayerStats(auth, division.id, {});
     const pub = await publicDivisionStats(org!.slug, comp.slug, "open");
     const names = pub.rows.map((r) => r.name);
     expect(names.some((n) => n.includes("Minor Hidden"))).toBe(false); // initials only

@@ -140,6 +140,13 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
     },
   };
 });
+// A deciding score also schedules a player-stats refresh, which deletes the hub
+// key a SECOND time once its fold has committed (owner ruling 2026-09-16). In a
+// route handler that runs after the response. Here, with no request scope,
+// `lib/deferred.ts` runs it at once and its DEL would land among the write's
+// own. This file pins the write's own invalidation, so the refresh is left out;
+// `player-stats-refresh.test.ts` pins its DEL and push.
+vi.mock("../player-stats-refresh", () => ({ schedulePlayerStatsRefresh: () => {} }));
 
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";

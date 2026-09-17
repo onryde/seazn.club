@@ -164,6 +164,7 @@ import {
   workUnitAsyncStorage,
   type RequestStore,
 } from "next/dist/server/app-render/work-unit-async-storage.external";
+import { AfterContext } from "next/dist/server/after/after-context";
 import { executeRevalidates } from "next/dist/server/revalidation-utils";
 import { defaultConfig } from "next/dist/server/config-shared";
 import FileSystemCache from "next/dist/server/lib/incremental-cache/file-system-cache";
@@ -205,6 +206,12 @@ async function inRequest<T>(handler: () => Promise<T>): Promise<{ result: T; cal
       },
     },
     cacheLifeProfiles: defaultConfig.cacheLife,
+    // A real route handler always has an after-window. Without one, `after()`
+    // throws and `lib/deferred.ts` runs the task inline, so the player-stats
+    // refresh a deciding write schedules would fire its own tags into THIS
+    // request's flush. The response never closes here, so after-work never runs:
+    // `player-stats-refresh-after.test.ts` covers what it lands.
+    afterContext: new AfterContext({ waitUntil: () => {}, onClose: () => {}, onTaskError: undefined }),
   } as unknown as WorkStore;
   const requestStore = { type: "request", phase: "action" } as unknown as RequestStore;
   probe.store = workStore;

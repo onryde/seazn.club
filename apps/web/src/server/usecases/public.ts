@@ -48,6 +48,8 @@ import {
   PublicPlayerMatches,
   type PublicPlayerMatchesT,
 } from "@/server/public-site/player-matches-schema";
+import { hasFeature } from "@/lib/entitlements";
+import { reconcilePlayerStatsOnRead } from "@/server/usecases/player-stats-refresh";
 // The first TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
@@ -180,6 +182,23 @@ export async function publicCompetitionHub(
   slug: string,
 ): Promise<CompetitionHubDocT> {
   const full = await findCompetition(orgSlug, slug);
+  const doc = await cachedHub(orgSlug, slug, full);
+  // The leader boards serve the snapshot as they stand; after the response,
+  // each division is checked and its refresh queued if the snapshot is behind a
+  // result, so a refresh lost to a restart heals on the page's next poll (owner
+  // ruling 2026-09-17, m8). HERE, at route level, and never in the loader:
+  // the loader also runs inside `unstable_cache` and ISR regenerations, where
+  // `after()` never runs (final review I1). A division whose sport keeps no
+  // player stats is never owed (`playerStatsOwed`).
+  reconcilePlayerStatsOnRead(
+    full.org_id,
+    doc.divisions.map((d) => d.id),
+    { allowed: () => hasFeature(full.org_id, "stats.player", full.id) },
+  );
+  return doc;
+}
+
+async function cachedHub(orgSlug: string, slug: string, full: PublicCompetition): Promise<CompetitionHubDocT> {
   return cachedFor(
     `pub:v1:hub:${full.id}`,
     HUB_TTL_SECONDS,

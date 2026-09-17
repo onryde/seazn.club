@@ -2446,6 +2446,7 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   }
 
   await auto.click();
+  await page.getByTestId("schedule-rebuild-confirm").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: 45_000 });
   // The whole round trip, not just the proposal: `autoRun` clears `busy` in its

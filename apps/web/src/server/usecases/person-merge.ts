@@ -18,7 +18,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { firePersonRevalidate } from "@/server/public-site/revalidate";
-import { recomputePlayerStats } from "./player-stats";
+import { lockPlayerStatsDivisions, recomputePlayerStats } from "./player-stats";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import {
   courtNamesById,
   divisionFixtures,
@@ -129,6 +130,74 @@ export function resolveConsent(survivor: unknown, absorbed: unknown): Record<str
   return out;
 }
 
+/** How many times a merge or unmerge restarts when the divisions it must
+ *  refold grew between its unlocked read and its row locks. Growing needs a
+ *  roster add for one of the pair landing inside that gap, so a third miss in
+ *  a row means something is churning the roster, and the organiser is told to
+ *  retry rather than the transaction spinning. */
+const STATS_LOCK_ATTEMPTS = 3;
+
+class StatsDivisionsGrew extends Error {}
+
+/** The divisions whose stats a merge or unmerge of these persons refolds. */
+async function statsDivisionsOf(tx: Tx, ids: readonly string[]): Promise<string[]> {
+  const rows = await tx<{ division_id: string }[]>`
+    select division_id from player_stat_snapshots where person_id in ${tx(ids)}
+    union
+    select e.division_id from entrant_members em
+      join entrants e on e.id = em.entrant_id
+     where em.person_id in ${tx(ids)}`;
+  return rows.map((r) => r.division_id);
+}
+
+/**
+ * Run a merge or unmerge with its division stats locks taken BEFORE any row
+ * lock (review I1).
+ *
+ * A player-stats fold holds its division's stats lock and inserts snapshot
+ * rows, and every insert's foreign key takes FOR KEY SHARE on the `persons`
+ * row it names (V248). A merge that took `persons ... for update` first and the
+ * stats locks second could hold Ada's row while waiting on a division whose
+ * fold was about to insert Ada: each waits on the other, and Postgres cancels
+ * the merge with 40P01. So the divisions are read UNLOCKED, their stats locks
+ * taken in the shared ascending order (`lockPlayerStatsDivisions`), and only
+ * then does `body` lock the people. `body` re-reads the set under its row
+ * locks and passes it to `assertLocked`; a set that grew in between (a roster
+ * add for one of the pair) restarts the whole transaction rather than taking
+ * a stats lock after a row lock.
+ */
+async function withStatsLocksFirst<T>(
+  orgId: string,
+  action: "merge" | "unmerge",
+  divisionsToLock: (tx: Tx) => Promise<readonly string[]>,
+  body: (tx: Tx, assertLocked: (divisions: readonly string[]) => void) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await withTenant(orgId, async (tx) => {
+        const divisions = await divisionsToLock(tx);
+        await lockPlayerStatsDivisions(tx, divisions);
+        const locked = new Set(divisions.map((d) => d.toLowerCase()));
+        return body(tx, (now) => {
+          if (now.some((d) => !locked.has(d.toLowerCase()))) throw new StatsDivisionsGrew();
+        });
+      });
+    } catch (err) {
+      if (!(err instanceof StatsDivisionsGrew)) throw err;
+      if (attempt >= STATS_LOCK_ATTEMPTS) {
+        // The panel shows its own localised text for this code, one for each
+        // action (`duplicates-panel.tsx`, `mergeErrorText`).
+        throw new HttpError(
+          409,
+          `this person's teams changed while the ${action} ran — try again`,
+          "MERGE_ROSTER_CHANGED",
+        );
+      }
+      log.info({ orgId, attempt }, `persons: ${action} restarting, a roster changed under it`);
+    }
+  }
+}
+
 /**
  * Absorb `absorbedId` into `survivorId` (spec §4). Refusals first, then a
  * snapshot, then a per-table repoint, then the tombstone and the ledger row.
@@ -142,7 +211,8 @@ export async function mergePersons(
   if (survivorId === absorbedId) {
     throw new HttpError(422, "cannot merge a person into itself", "MERGE_SELF");
   }
-  const merged = await withTenant(auth.orgId, async (tx) => {
+  const pair = [survivorId, absorbedId];
+  const { divisions: refolded, ...merged } = await withStatsLocksFirst(auth.orgId, "merge", (tx) => statsDivisionsOf(tx, pair), async (tx, assertLocked) => {
     // `for update`, and in a DETERMINISTIC id order. Without the lock two
     // overlapping merges over one pair (A→B and B→C) can each read
     // `merged_into is null` before the other writes, and the loser leaves
@@ -215,13 +285,10 @@ export async function mergePersons(
     }
 
     // Divisions to refold, read BEFORE anything moves — afterwards the absorbed
-    // person owns none of these rows.
-    const divisions = await tx<{ division_id: string }[]>`
-      select division_id from player_stat_snapshots where person_id in ${tx(ids)}
-      union
-      select e.division_id from entrant_members em
-        join entrants e on e.id = em.entrant_id
-       where em.person_id in ${tx(ids)}`;
+    // person owns none of these rows. Read again here, under the row locks, and
+    // every one of them must already be stats-locked (`withStatsLocksFirst`).
+    const divisions = await statsDivisionsOf(tx, ids);
+    assertLocked(divisions);
 
     // 2. Consent, resolved onto the survivor. photo_path is deliberately not
     //    copied: an absorbed photo must never become reachable through a
@@ -270,8 +337,12 @@ export async function mergePersons(
     //    tombstone is still absent, so the absorbed person's own goals stay
     //    keyed to a row no roster read can see and the survivor never inherits
     //    them — invisible unless BOTH sides carry events.
+    //
+    //    Every division's stats lock is already held, taken before the persons
+    //    rows were (`withStatsLocksFirst` says why that order is the one that
+    //    cannot deadlock against a fold).
     await tx`delete from player_stat_snapshots where person_id in ${tx(ids)}`;
-    for (const { division_id } of divisions) await recomputePlayerStats(tx, division_id);
+    for (const division_id of divisions) await recomputePlayerStats(tx, division_id);
 
     const [updated] = await tx<PersonRow[]>`
       update persons set consent = ${tx.json(consent as never)}, user_id = ${carriedUserId}
@@ -284,8 +355,14 @@ export async function mergePersons(
               ${tx.json(snapshot as never)})
       returning id`;
 
-    return { merge_id: merge!.id, survivor: updated! };
+    return { merge_id: merge!.id, survivor: updated!, divisions };
   });
+  // The refold above committed, but the public copies built from the old rows
+  // (the hub document, the ISR pages) still name the absorbed person, and no
+  // stats read heals them: the snapshot is current, so the read-side check
+  // queues nothing. Each division's refresh finds it current and clears them
+  // (review round 2, gap hunt).
+  for (const divisionId of refolded) schedulePlayerStatsRefresh(auth.orgId, { divisionId });
 
   log.info(
     { orgId: auth.orgId, mergeId: merged.merge_id, survivorId, absorbedId },
@@ -436,6 +513,28 @@ interface MergeLedgerRow {
   reversed_at: Date | null;
 }
 
+/** The divisions an unmerge refolds, read before it locks anything: the pair's
+ *  divisions as they stand, plus the division of every roster row the snapshot
+ *  puts back — a membership removed after the merge comes back with the undo,
+ *  and its division's stats lock has to be held before the persons rows are. */
+async function unmergeStatsDivisions(tx: Tx, mergeId: string): Promise<string[]> {
+  const [merge] = await tx<Pick<MergeLedgerRow, "survivor_id" | "absorbed_id" | "snapshot">[]>`
+    select survivor_id, absorbed_id, snapshot from person_merges where id = ${mergeId}`;
+  if (!merge) return [];
+  const current = await statsDivisionsOf(tx, [merge.survivor_id, merge.absorbed_id]);
+  const entrantIds = [
+    ...new Set((merge.snapshot?.entrant_members ?? []).map((r) => (r as { entrant_id: string }).entrant_id)),
+  ];
+  const restored =
+    entrantIds.length === 0
+      ? []
+      : (
+          await tx<{ division_id: string }[]>`
+            select distinct division_id from entrants where id in ${tx(entrantIds)}`
+        ).map((r) => r.division_id);
+  return [...current, ...restored];
+}
+
 /**
  * Undo a merge (spec §4.4). The undo window is unbounded — Art. 16
  * rectification has no expiry and a duplicate is often noticed a season later —
@@ -459,7 +558,7 @@ export async function reverseMerge(
   mergeId: string,
   opts: { confirmedBy: string },
 ): Promise<void> {
-  const people = await withTenant(auth.orgId, async (tx) => {
+  const { people, divisions: refolded } = await withStatsLocksFirst(auth.orgId, "unmerge", (tx) => unmergeStatsDivisions(tx, mergeId), async (tx, assertLocked) => {
     // `for update` — two concurrent reversals of one merge would otherwise both
     // pass the guard and replay the snapshot twice.
     const [merge] = await tx<MergeLedgerRow[]>`
@@ -585,21 +684,21 @@ export async function reverseMerge(
     //    cleared `merged_into`: the fold relabels event person ids through it
     //    (player-stats.ts:85), so a clear pointer is exactly what keys the rows
     //    back to the person who earned them.
-    const divisions = await tx<{ division_id: string }[]>`
-      select division_id from player_stat_snapshots where person_id in ${tx(ids)}
-      union
-      select e.division_id from entrant_members em
-        join entrants e on e.id = em.entrant_id
-       where em.person_id in ${tx(ids)}`;
+    //    Every division here must already be stats-locked: they were locked
+    //    before any row lock (`withStatsLocksFirst`, `unmergeStatsDivisions`).
+    const divisions = await statsDivisionsOf(tx, ids);
+    assertLocked(divisions);
     await tx`delete from player_stat_snapshots where person_id in ${tx(ids)}`;
-    for (const { division_id } of divisions) await recomputePlayerStats(tx, division_id);
+    for (const division_id of divisions) await recomputePlayerStats(tx, division_id);
 
     // 4. Stamp. Kept, never deleted.
     await tx`
       update person_merges set reversed_at = now(), reversed_by = ${opts.confirmedBy}
        where id = ${mergeId}`;
-    return ids;
+    return { people: ids, divisions };
   });
+  // Same reason as the merge: clear the public copies of the refolded rows.
+  for (const divisionId of refolded) schedulePlayerStatsRefresh(auth.orgId, { divisionId });
 
   // W2 Task 14 — after commit. Both people's consent is back to its snapshot,
   // and the public player page's cached match lines mask names by it only when

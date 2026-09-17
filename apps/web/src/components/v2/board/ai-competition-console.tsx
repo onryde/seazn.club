@@ -23,8 +23,9 @@
 //   * courts are matched BY NAME and nothing else;
 //   * the divisions may be set to different timezones while the board renders in
 //     the reader's own (ruling R8);
-//   * a person clash is a WARNING at plan time and a REFUSAL at apply time, but
-//     only if one of the selected divisions opted into `crossPersonClash: hard`.
+//   * a person clash is ALWAYS blocking, both at plan time and apply time
+//     (`isBlockingConflict`, since #399) — `crossPersonClash: hard` no longer
+//     decides that; it only steers the AI solver's own placement choices.
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useMsg, usePlural } from "@/components/i18n/dict-provider";
 import { UpgradeGate } from "@/components/upgrade-gate";
@@ -89,8 +90,10 @@ export interface JointDivision {
   courts: string[];
   /** Resolved venue zone. */
   tz: string;
-  /** `constraints.crossPersonClash === "hard"`: this division's apply refuses a
-   *  person double-booking that the plan only warned about. */
+  /** `constraints.crossPersonClash === "hard"`. Per #399 this no longer
+   *  decides what Apply refuses — a person double-booking is unconditionally
+   *  blocked regardless of this flag. It only steers the AI solver's own
+   *  placement choices away from creating one. */
   personClashBlocks: boolean;
   movableFixtures: number;
   activeEntrants: number;
@@ -180,42 +183,42 @@ export function timezoneSpread(
 }
 
 /**
- * The person clashes the APPLY will refuse, and which divisions' rule refuses
- * them.
+ * The person clashes the APPLY will refuse, and which divisions own them.
  *
- * The joint plan reports a person double-booking as a WARNING; the joint apply
- * REFUSES it — but only when the division that OWNS the overlapping fixture
- * sets `crossPersonClash: hard`. The server is explicit that this is "NOT a
- * union over the request" (competition-schedule-apply.ts:511-521), so a count
- * that unions over the selection tells the organiser that Apply will reject
- * clashes it will happily accept, which invites abandoning a good plan.
+ * `person_overlap` is unconditionally blocking in the engine's
+ * `isBlockingConflict` (calendar.ts, since #399: "a person double-booking is
+ * refused for every division now"), so it can never land in `plan.warnings`
+ * — the joint planner's `warnings` is the exact complement of that same
+ * blocking test. It is always in `plan.blocking`. The old per-division
+ * `crossPersonClash: "hard"` gate this function used to check is gone from
+ * the write path; `personClashBlocks` now only steers the solver, never what
+ * Apply accepts.
  *
- * Two filters, therefore, and both are load-bearing: only `person_overlap`
- * warnings (a rest or blackout warning is never refused), and only those whose
- * owning division blocks. Ownership comes from the proposal's `division_id`,
- * which the SERVER resolved.
+ * Apply itself only refuses what THIS write introduces or worsens
+ * (`deltaConflicts` in competition-schedule-apply.ts), but the plan carries
+ * no "before" snapshot to diff against here, so this counts every
+ * `person_overlap` row already on the proposed board — an upper bound on
+ * what Apply will reject, not an exact prediction of it.
  */
 export function personClashRisk(
   plan: {
     proposal: { fixture_id: string; division_id: string }[];
-    warnings: { fixtureId: string; reason: string }[];
+    blocking: { fixtureId: string; reason: string }[];
   },
   divisions: JointDivision[],
   selected: string[],
 ): { count: number; divisions: string[] } {
   const chosen = new Set(selected);
-  const blocks = new Map(
-    divisions.filter((d) => chosen.has(d.id)).map((d) => [d.id, d] as const),
-  );
+  const named = new Map(divisions.filter((d) => chosen.has(d.id)).map((d) => [d.id, d.name] as const));
   const ownerOf = new Map(plan.proposal.map((p) => [p.fixture_id, p.division_id]));
-  const refused = plan.warnings.filter((w) => {
-    if (w.reason !== "person_overlap") return false;
-    const owner = ownerOf.get(w.fixtureId);
-    return owner !== undefined && blocks.get(owner)?.personClashBlocks === true;
+  const refused = plan.blocking.filter((c) => {
+    if (c.reason !== "person_overlap") return false;
+    const owner = ownerOf.get(c.fixtureId);
+    return owner !== undefined && named.has(owner);
   });
   if (refused.length === 0) return { count: 0, divisions: [] };
   const names = [
-    ...new Set(refused.map((w) => blocks.get(ownerOf.get(w.fixtureId) as string)?.name ?? "")),
+    ...new Set(refused.map((c) => named.get(ownerOf.get(c.fixtureId) as string) ?? "")),
   ].filter((n) => n !== "");
   return { count: refused.length, divisions: names };
 }

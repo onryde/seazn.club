@@ -571,84 +571,61 @@ describe("jointApplyDivisions — the payload the apply is built from", () => {
   });
 });
 
-describe("a person clash the plan only warns about but the apply refuses", () => {
-  // f1 is owned by d1 (crossPersonClash: "warn"), f2 by d2 ("hard"). The SERVER
-  // blocks a person overlap only when the division that OWNS the fixture is
-  // hard — "NOT a union over the request", in its own words
-  // (competition-schedule-apply.ts:511-521). So exactly one of these two
-  // overlaps will be refused, and a count that unions over the selection says
-  // two and tells the organiser a good plan will be rejected.
+describe("a person clash Apply always refuses", () => {
+  // `person_overlap` is unconditionally blocking (`isBlockingConflict`, engine
+  // calendar.ts, since #399), so the planner can never put it in `warnings` —
+  // that array is the exact complement of the same blocking test. It always
+  // lands in `plan.blocking`. The per-division `crossPersonClash: "hard"` gate
+  // this test file used to exercise is gone from the write path: it now only
+  // steers the AI solver's own placement choices, never what Apply accepts.
   const clash = plan({
-    warnings: [
+    warnings: [{ fixtureId: "f2", reason: "rest", detail: "20 minutes" }],
+    blocking: [
       { fixtureId: "f2", reason: "person_overlap", detail: "Sam Reyes" },
       { fixtureId: "f1", reason: "person_overlap", detail: "Ali Khan" },
-      { fixtureId: "f2", reason: "rest", detail: "20 minutes" },
     ],
   });
 
-  it("counts only the clashes owned by a division whose own rule refuses them", () => {
-    // The rest warning is one decoy — `warnings.length` says 3. The overlap in
-    // the WARN division is the other: unioning over the selection says 2. Only
-    // the owner-keyed count says 1.
+  it("counts every person_overlap on the board, regardless of any division's crossPersonClash setting", () => {
+    // Order follows `clash.blocking` (f2/d2 then f1/d1), not division order.
     expect(personClashRisk(clash, DIVISIONS, ["d1", "d2"])).toEqual({
-      count: 1,
-      divisions: ["Under 14s"],
+      count: 2,
+      divisions: ["Under 14s", "Under 12s"],
     });
-  });
-
-  it("threatens nothing when every clash is owned by a division content to warn", () => {
-    // d2 is still selected and still `hard` — but it owns no overlap here, so
-    // Apply will accept all of them.
-    const softOwners = plan({
-      warnings: [{ fixtureId: "f1", reason: "person_overlap", detail: "Ali Khan" }],
-    });
-    expect(personClashRisk(softOwners, DIVISIONS, ["d1", "d2"])).toEqual({
-      count: 0,
-      divisions: [],
-    });
-    // …and neither does a board where no selected division blocks at all.
+    // `personClashBlocks: false` on every division no longer suppresses the
+    // count — it stopped deciding what Apply refuses per #399.
     expect(
       personClashRisk(clash, DIVISIONS.map((d) => ({ ...d, personClashBlocks: false })), ["d1", "d2"]),
-    ).toEqual({ count: 0, divisions: [] });
+    ).toEqual({ count: 2, divisions: ["Under 14s", "Under 12s"] });
   });
 
   it("ignores a clash owned by a division that is not in the run", () => {
-    // The third filter, and the one the fixture above cannot exercise: it
-    // selects both divisions, so `chosen` is inert in every assertion there.
     // `usableSelection` narrows the picks DURING render, so a refresh that
     // freezes d2 under an open console drops it from the run while the plan on
-    // screen still carries its fixtures — and d2's rule cannot refuse a write
-    // the apply will never be asked to make.
-    expect(personClashRisk(clash, DIVISIONS, ["d1"])).toEqual({ count: 0, divisions: [] });
-    // The positive discriminator, so this cannot pass by the count being 0 for
-    // some other reason: put d2 back and the same plan threatens one refusal.
-    expect(personClashRisk(clash, DIVISIONS, ["d1", "d2"]).count).toBe(1);
+    // screen still carries its fixtures — a clash on a division no longer
+    // selected cannot be something Apply is about to refuse.
+    expect(personClashRisk(clash, DIVISIONS, ["d1"])).toEqual({
+      count: 1,
+      divisions: ["Under 12s"],
+    });
+    // The positive discriminator: put d2 back and its overlap counts too.
+    expect(personClashRisk(clash, DIVISIONS, ["d1", "d2"]).count).toBe(2);
   });
 
-  it("warns before Apply, naming the division whose rule refuses it", () => {
+  it("warns before Apply, naming every division a clash will be refused for", () => {
     const html = review({ plan: clash });
     expect(html).toContain(
-      tEn("board.ai.joint.personClash.one", { count: 1, divisions: "Under 14s" }),
+      tEn("board.ai.joint.personClash.other", { count: 2, divisions: "Under 14s, Under 12s" }),
     );
-    const soft = review({
-      plan: clash,
-      divisions: DIVISIONS.map((d) => ({ ...d, personClashBlocks: false })),
-    });
-    expect(soft).not.toContain(tEn("board.ai.joint.personClash.one", { count: 1, divisions: "Under 14s" }));
   });
 
-  it("lists every engine warning, so the count matches what is on screen", () => {
-    // A "3 warnings to review" line above two amber rows that are NOT warnings
-    // (the skipped division, the court-name mismatch) and one that is reads as
-    // a bug even when it is not. The fix is to show what is counted.
+  it("lists only the real engine warning, not the blocking clashes rendered in their own card", () => {
+    // `person_overlap` rows live in `plan.blocking` now, so the amber review
+    // card (built from `plan.warnings` alone) shows just the rest warning; the
+    // two clashes render in the red blocking card instead (plan.blocking.map).
     const html = review({ plan: clash });
-    expect(html).toContain('data-review-count="3"');
-    // One row per warning, in the order the engine raised them.
-    expect([...html.matchAll(/data-review-row="([^"]*)"/g)].map((m) => m[1])).toEqual([
-      "warning",
-      "warning",
-      "warning",
-    ]);
+    expect(html).toContain('data-review-count="1"');
+    expect([...html.matchAll(/data-review-row="([^"]*)"/g)].map((m) => m[1])).toEqual(["warning"]);
     // …and no card at all when the engine raised none.
     expect(review({ plan: plan({ warnings: [] }) })).not.toContain('data-review-count="');
   });

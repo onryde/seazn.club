@@ -38,6 +38,41 @@ describe("publishFixtureUpdate", () => {
       private: true,
     });
   });
+
+  // Review m1 (player-stats refresh): a caller that awaits a broadcast must not
+  // be held by a realtime endpoint that never answers.
+  it.each(["publishFixtureUpdate", "publishDivisionUpdate"] as const)(
+    "%s aborts a broadcast that never answers after BROADCAST_TIMEOUT_MS, and resolves",
+    async (fn) => {
+      const realtime = await import("../realtime");
+      const controller = new AbortController();
+      const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      fetchMock.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_, reject) => {
+            init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "TimeoutError")));
+          }),
+      );
+      let settled = false;
+      const sent =
+        fn === "publishFixtureUpdate"
+          ? realtime.publishFixtureUpdate("fx-1", "event")
+          : realtime.publishDivisionUpdate("div-1", "score");
+      void sent.then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(timeout).toHaveBeenCalledWith(realtime.BROADCAST_TIMEOUT_MS);
+      expect(settled, "still waiting on the endpoint").toBe(false);
+
+      controller.abort();
+      await sent;
+      expect(settled).toBe(true);
+      timeout.mockRestore();
+      warn.mockRestore();
+    },
+  );
 });
 
 describe("mintPublicFixtureToken", () => {

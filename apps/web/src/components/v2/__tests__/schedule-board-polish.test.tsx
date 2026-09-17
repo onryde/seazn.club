@@ -152,6 +152,20 @@ const withProp = (tree: ReactElement[], prop: string, value: unknown): ReactElem
   return el;
 };
 
+/** Every solver action confirms before it runs (2026-09-17) — click the
+ *  button, then the confirm dialog's own `onConfirm`, exactly as an
+ *  organiser's two taps do. */
+const CONFIRM_TESTID: Record<string, string> = {
+  "schedule-auto": "schedule-rebuild",
+  "schedule-reflow": "schedule-reflow-confirm",
+  "schedule-polish": "schedule-polish-confirm",
+};
+const runAction = async (island: { tree: () => ReactElement[] }, testid: string) => {
+  await (propsOf(withProp(island.tree(), "data-testid", testid)).onClick as () => Promise<void> | void)();
+  const dialog = withProp(island.tree(), "testId", CONFIRM_TESTID[testid]!);
+  await (propsOf(dialog).onConfirm as () => Promise<void> | void)();
+};
+
 /** The body of the last POST to /schedule/auto. */
 const lastAutoBody = () =>
   net.calls.filter((c) => c.url.endsWith("/schedule/auto")).at(-1)?.json as
@@ -172,7 +186,7 @@ describe("the board's three schedule actions post three different bodies", () =>
     // real English catalog here.
     expect(propsOf(button).children).toBe("Improve times");
 
-    await (propsOf(button).onClick as () => Promise<void> | void)();
+    await runAction(island, "schedule-polish");
     await flush();
 
     expect(lastAutoBody()).toStrictEqual({ only_unlocked: true, mode: "polish" });
@@ -196,15 +210,12 @@ describe("the board's three schedule actions post three different bodies", () =>
    */
   it("Auto-schedule and Re-flow keep letting the server derive the mode", async () => {
     const island = renderIsland(ScheduleBoard, baseProps());
-    const tree = island.tree();
-    const auto = withProp(tree, "data-testid", "schedule-auto");
-    const reflow = withProp(tree, "data-testid", "schedule-reflow");
 
-    await (propsOf(auto).onClick as () => Promise<void> | void)();
+    await runAction(island, "schedule-auto");
     await flush();
     expect(lastAutoBody()).toStrictEqual({ only_unlocked: false });
 
-    await (propsOf(reflow).onClick as () => Promise<void> | void)();
+    await runAction(island, "schedule-reflow");
     await flush();
     expect(lastAutoBody()).toStrictEqual({ only_unlocked: true });
   });
@@ -229,10 +240,9 @@ describe("the board's three schedule actions post three different bodies", () =>
    */
   it("exposes schedule-auto / schedule-reflow / schedule-polish, each on its own solver", async () => {
     const island = renderIsland(ScheduleBoard, baseProps());
-    const tree = island.tree();
 
     const fire = async (testid: string) => {
-      await (propsOf(withProp(tree, "data-testid", testid)).onClick as () => Promise<void> | void)();
+      await runAction(island, testid);
       await flush();
       return lastAutoBody();
     };
@@ -272,11 +282,7 @@ describe("the board's three schedule actions post three different bodies", () =>
       },
     };
     const island = renderIsland(ScheduleBoard, baseProps());
-    await (
-      propsOf(withProp(island.tree(), "data-testid", "schedule-polish")).onClick as () =>
-        | Promise<void>
-        | void
-    )();
+    await runAction(island, "schedule-polish");
     await flush();
 
     const strip = island.tree().find((n) => n.type === ScheduleResultStrip);

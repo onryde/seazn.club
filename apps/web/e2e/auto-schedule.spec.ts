@@ -172,14 +172,25 @@ async function seedBoard(
  * matched the previous attempt's strip cannot be the one that answers: `autoRun`
  * clears `lastRun` before it posts, and a locator resolves at read time.
  */
+/** Every solver action confirms before it runs (2026-09-17) — this maps each
+ *  button's testid to its confirm dialog's, same ids the Cancel/Continue
+ *  pair below drives by hand for the locked-fixture case. */
+const CONFIRM_TESTID: Record<string, string> = {
+  "schedule-auto": "schedule-rebuild",
+  "schedule-reflow": "schedule-reflow-confirm",
+  "schedule-polish": "schedule-polish-confirm",
+};
+
 async function runSolver(page: Page, divisionId: string, testid: string): Promise<Locator> {
   await page.goto(await divisionPath(page.request, divisionId, "/schedule?tab=board"));
   const button = page.getByTestId(testid);
   await expect(button).toBeVisible({ timeout: 30_000 });
   const strip = page.getByTestId("schedule-result-strip");
+  const confirmButton = page.getByTestId(`${CONFIRM_TESTID[testid]}-confirm`);
 
   for (let attempt = 1; attempt <= BUSY_RETRIES; attempt++) {
     await button.click();
+    await confirmButton.click();
     await expect(strip).toBeVisible({ timeout: 45_000 });
     await expect(button).toBeEnabled({ timeout: 45_000 });
     if ((await strip.getAttribute("data-status")) !== "solver_busy") return strip;
@@ -432,8 +443,8 @@ test.describe("Auto-schedule confirm gate (#pins-ui)", () => {
     const dialog = page.getByTestId("schedule-rebuild");
     await expect(dialog).toBeVisible({ timeout: 10_000 });
     // The count in the dialog body names exactly the one locked fixture —
-    // wrong copy here would say "2 fixtures" on a board with one pin.
-    await expect(dialog).toContainText("1 fixture is locked");
+    // wrong copy here would say "2 locked matches" on a board with one pin.
+    await expect(dialog).toContainText("1 locked match stays exactly where it is");
 
     await page.getByTestId("schedule-rebuild-cancel").click();
     await expect(dialog).toBeHidden();
@@ -545,6 +556,7 @@ test("the toolbar renders one action set, aimed at the picked stage", async ({ p
 
   const autoButton = page.getByTestId("schedule-auto");
   await autoButton.click();
+  await page.getByTestId("schedule-rebuild-confirm").click();
   const strip = page.getByTestId("schedule-result-strip");
   await expect(strip).toBeVisible({ timeout: 45_000 });
   await expect(autoButton).toBeEnabled({ timeout: 45_000 });

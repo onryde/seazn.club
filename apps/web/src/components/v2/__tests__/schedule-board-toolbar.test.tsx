@@ -182,6 +182,24 @@ const withProp = (tree: ReactElement[], prop: string, value: unknown): ReactElem
 /** The URL of the last POST to a stage's auto endpoint. */
 const lastAutoUrl = () => net.calls.filter((c) => c.url.endsWith("/schedule/auto")).at(-1)?.url;
 
+/** Every solver action confirms before it runs (2026-09-17) — click the
+ *  button, then the confirm dialog's own `onConfirm`, exactly as an
+ *  organiser's two taps do. */
+const CONFIRM_TESTID: Record<string, string> = {
+  "schedule-auto": "schedule-rebuild",
+  "schedule-reflow": "schedule-reflow-confirm",
+  "schedule-polish": "schedule-polish-confirm",
+};
+const runAction = async (
+  island: { tree: () => ReactElement[] },
+  testid: string,
+  expandTree: (tree: ReactElement[]) => ReactElement[] = (t) => t,
+) => {
+  await (propsOf(withProp(expandTree(island.tree()), "data-testid", testid)).onClick as () => void)();
+  const dialog = withProp(expandTree(island.tree()), "testId", CONFIRM_TESTID[testid]!);
+  await (propsOf(dialog).onConfirm as () => void)();
+};
+
 beforeEach(() => {
   net.calls.length = 0;
   net.auto = { assignments: [], conflicts: [] };
@@ -240,7 +258,7 @@ describe("the toolbar renders one action set, whatever the format's stage count"
   it("aims the action set at the picked stage", async () => {
     const island = renderIsland(ScheduleBoard, baseProps());
 
-    await (propsOf(withProp(island.tree(), "data-testid", "schedule-auto")).onClick as () => void)();
+    await runAction(island, "schedule-auto");
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s1/schedule/auto");
 
@@ -251,7 +269,7 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     expect(allWithProp(after, "data-testid", "schedule-stage").map((o) => propsOf(o)["aria-pressed"]))
       .toStrictEqual([false, true]);
 
-    await (propsOf(withProp(after, "data-testid", "schedule-auto")).onClick as () => void)();
+    await runAction(island, "schedule-auto");
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
   });
@@ -291,7 +309,7 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     const tree = island.tree();
 
     expect(allWithProp(tree, "data-testid", "schedule-stage")).toHaveLength(0);
-    await (propsOf(withProp(tree, "data-testid", "schedule-auto")).onClick as () => void)();
+    await runAction(island, "schedule-auto");
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s1/schedule/auto");
   });
@@ -310,7 +328,7 @@ describe("the toolbar renders one action set, whatever the format's stage count"
     const tree = island.tree();
 
     expect(allWithProp(tree, "data-testid", "schedule-stage")).toHaveLength(0);
-    await (propsOf(withProp(tree, "data-testid", "schedule-auto")).onClick as () => void)();
+    await runAction(island, "schedule-auto");
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
   });
@@ -434,7 +452,7 @@ describe("the stage selector is a target chip with a grouped menu on the comp bo
     expect(allWithProp(after, "data-testid", "schedule-stage").map((o) => propsOf(o)["aria-selected"]))
       .toStrictEqual([false, true]);
 
-    await (propsOf(withProp(after, "data-testid", "schedule-auto")).onClick as () => void)();
+    await runAction(island, "schedule-auto", expandBoard);
     await flush();
     expect(lastAutoUrl()).toBe("/api/v1/stages/s2/schedule/auto");
   });

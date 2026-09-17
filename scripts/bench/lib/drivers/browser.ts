@@ -93,6 +93,20 @@ export async function newOrganiserBrowserSession(browser: Browser, base: string,
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(loginUrl);
+  // `MagicLink` (components/magic-link.tsx) consumes the token CLIENT-SIDE,
+  // in a useEffect that fires after hydration — `page.goto()` resolving
+  // proves the page loaded, not that the session cookie has landed. Without
+  // this wait, `configureRegistrationViaApi`'s immediate PATCH/PUT (fired
+  // right after this function returns, with no intervening navigation) races
+  // the consume and 401s — reproduced locally (`browserOrganiser.
+  // configureRegistration(): division ... — PATCH 401, PUT 401`), the exact
+  // convention e2e's own `loginUi` already applies (`e2e/helpers.ts:429`).
+  // `tap-play.ts`'s organiser flow never hit this: it navigates the console
+  // page and waits up to 15s on `device-handover` afterwards, which happens
+  // to outlast the race — an accident, not a guarantee.
+  await page.waitForURL((u) => !u.pathname.startsWith("/login") && !u.pathname.startsWith("/magic-link"), {
+    timeout: 20_000,
+  });
   return { context, page };
 }
 

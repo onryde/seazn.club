@@ -27,6 +27,7 @@ import {
   refreshNews,
   requiresDlsEntitlement,
 } from "./scoring";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
@@ -769,6 +770,12 @@ async function runImport(
   }
   const report = buildReport(input.import_id, results);
   const appended = results.reduce((n, r) => n + r.eventsAppended, 0);
+  // Player stats: ONE refold of the division, after the response, once every
+  // stream has landed (owner ruling 2026-09-16, option B;
+  // `player-stats-refresh.ts`). Not per stream: each fold rereads the whole
+  // division ledger, so fifty streams would pay fifty folds of a ledger that
+  // grows with every one of them.
+  if (appended > 0) schedulePlayerStatsRefresh(auth.orgId, { divisionId: division.id });
   log.info(
     {
       division: divisionId,

@@ -2,8 +2,8 @@ import { resolve } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 import { TAG, apiJson, divisionPath, seedVenueWithCourts, activeOrgIdFromRequest } from "./helpers";
 
-// P9 review wave 2, findings 6 + 13 — the court multi-picker on
-// `/schedule?tab=settings`.
+// P9 review wave 2, findings 6 + 13 — the court multi-picker, moved from
+// `/schedule?tab=settings` onto its own `/schedule?tab=courts` (2026-09-17).
 //
 // A court name is unique only WITHIN its venue (V367's
 // `courts_venue_name_active_idx` is scoped per venue), so two venues may each
@@ -80,7 +80,7 @@ test("court picker: two venues sharing a court name stay distinguishable at ever
     },
   );
 
-  await page.goto(await divisionPath(page.request, div.data!.id, "/schedule?tab=settings"));
+  await page.goto(await divisionPath(page.request, div.data!.id, "/schedule?tab=courts"));
 
   // The OPTION list is grouped by venue, with a venue heading above each
   // group and the bare court name on each checkbox — so the two "Court 1"s

@@ -816,13 +816,20 @@ export async function loadCompetitionHub(
   }
 
   // EMPTY IS A FIRST-CLASS STATE, not an error and not an empty shell.
-  // `player_stat_snapshots` is largely a recompute-on-read cache — its only
-  // writer runs from the two stats endpoints, a person merge and an auto-posts
-  // path that fires only for a division with `auto_posts` in an org holding
-  // `news.auto` — so a division nobody has opened stats for holds ZERO rows.
-  // That is the COMMON case. It yields no boards, and `deriveHubTabs` then
-  // offers no Stats tab, which is exactly right: a tab that opens on nothing
-  // is worse than no tab.
+  // `player_stat_snapshots` is refreshed after the writes listed in
+  // `usecases/player-stats-refresh.ts` (a result among them), so a division
+  // holds rows once a match with player events has finished. Before
+  // that, or in a sport whose module declares no player stats, it holds ZERO
+  // rows. That yields no boards, and `deriveHubTabs` then offers no Stats tab,
+  // which is exactly right: a tab that opens on nothing is worse than no tab.
+  // The boards serve the snapshot as it stands. The check that queues a
+  // division's refresh when the snapshot is behind a result is NOT made here:
+  // this loader runs inside `unstable_cache` and in ISR regenerations, where
+  // `after()` never runs (final review I1). The hub poll's route makes it
+  // (`publicCompetitionHub`). So the first visit after this ships, to a
+  // division whose snapshot was never filled, shows no Stats tab; the tab
+  // appears once the refresh queued by the page's first poll lands (accepted,
+  // owner ruling 2026-09-17; no warm-up job).
   const leaders: LeaderBoardT[] = statsAllowed
     ? buildLeaderBoards({
         divisions: leaderDivisions,

@@ -15,7 +15,7 @@
 // that can be wrong without anybody noticing.
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 
@@ -145,6 +145,21 @@ const consentOrder = (keys: string[]): string[] => [
 
 const errorText = (err: unknown, fallback: string): string =>
   err instanceof Error && err.message ? err.message : fallback;
+
+/** What a failed merge or undo tells the organiser. The server's message is
+ *  English and is shown as it comes, except for a refusal this panel knows by
+ *  its code, which gets its own dictionary entry: `MERGE_ROSTER_CHANGED` (the
+ *  person's teams changed while the merge or the undo ran, `person-merge.ts`). */
+export function mergeErrorText(
+  err: unknown,
+  action: "merge" | "unmerge",
+  msg: (key: MessageKey) => string,
+): string {
+  if (err instanceof ApiV1Error && err.code === "MERGE_ROSTER_CHANGED") {
+    return msg(action === "merge" ? "persons.dupes.rosterChanged.merge" : "persons.dupes.rosterChanged.unmerge");
+  }
+  return errorText(err, msg("persons.dupes.error"));
+}
 
 // ---------------------------------------------------------------------------
 // State 1 + 2 — the queue itself, and the shell that owns states 3-6.
@@ -492,7 +507,7 @@ export function MergeConfirmDialog({
       });
       onMerged(result, survivor, absorbed);
     } catch (err) {
-      setError(errorText(err, msg("persons.dupes.error")));
+      setError(mergeErrorText(err, "merge", msg));
     } finally {
       setBusy(false);
     }
@@ -890,7 +905,7 @@ export function ReverseConfirmDialog({
       });
       onReversed(entry.merge_id);
     } catch (err) {
-      onError(errorText(err, msg("persons.dupes.error")));
+      onError(mergeErrorText(err, "unmerge", msg));
     } finally {
       setBusy(false);
     }
