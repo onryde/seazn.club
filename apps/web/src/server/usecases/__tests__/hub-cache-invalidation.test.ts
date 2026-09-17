@@ -19,12 +19,13 @@
 // them for no reason (ruling R-E). What is asserted is that the keys THIS task
 // owns are dropped, and that the ones it did not touch still are.
 //
-// R10 H4 — on the SCORING path the two LITERAL keys (`pub:v1:fixture:{id}`,
-// `pub:v1:hub:{competitionId}`) go out in one direct DEL (`cacheDel`), and only
-// the division's glob (`pub:v1:div:{id}:*`) is still a SCAN over the whole
-// keyspace (`cacheDelPattern`). The realtime pushes wait on the DEL alone.
-// Which door each key goes through is asserted as "no literal key through a
-// SCAN, no glob through DEL", which keeps the key sets supersets (R-E).
+// R10 H4 — on the SCORING path the LITERAL keys (`pub:v1:fixture:{id}`,
+// `pub:v1:hub:{competitionId}`, …) go out in one direct DEL (`cacheDel`), and
+// the realtime pushes wait on that DEL. The division's documents
+// (`pub:v1:div:{id}:schedule|standings|entrants-v2`) ride the same DEL by name:
+// they used to be a `pub:v1:div:{id}:*` SCAN over the whole keyspace on every
+// score write, billed per page (review r2-m4 follow-up). A score write sends
+// no SCAN at all. "No glob through DEL" keeps the key sets supersets (R-E).
 //
 // R10 I1 — the pushes wait for that DEL, but never longer than
 // PUSH_AFTER_DELETE_BOUND_MS. ioredis has no command timeout, so a Redis that
@@ -134,9 +135,8 @@ const DIVISION = "div-1";
 const COMPETITION = "comp-1";
 const FIXTURE_KEY = `pub:v1:fixture:v2:${FIXTURE}`;
 const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
-const DIVISION_GLOB = `pub:v1:div:${DIVISION}:*`;
-/** The division's documents a schedule write DELs by name (review r2-m4),
- *  spelled out so a drift in the production spelling reds. */
+/** The division's documents a schedule or score write DELs by name (review
+ *  r2-m4), spelled out so a drift in the production spelling reds. */
 const DIVISION_KEYS = [
   `pub:v1:div:${DIVISION}:schedule`,
   `pub:v1:div:${DIVISION}:standings`,
@@ -147,7 +147,6 @@ const DIVISION_KEYS = [
  *  them, so a score write never has to SCAN for them. Spelled out here rather
  *  than imported, so a drift in the production spelling reds. */
 const PLAYER_MATCHES_GEN_KEY = `pub:v1:player-matches-gen:${COMPETITION}`;
-const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
 const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
 const SCHEDULE_DELETE_FAILED = "schedule: a public Redis delete failed (the write stands)";
 
@@ -246,10 +245,10 @@ describe("invalidatePublicCache — a scoring write", () => {
     expect(deletedKeys()).toContain(HUB_KEY);
   });
 
-  it("still drops the fixture and division keys it dropped before", async () => {
+  it("still drops the fixture and division documents it dropped before", async () => {
     await invalidatePublicCache(ORG, FIXTURE);
     expect(deletedKeys()).toContain(FIXTURE_KEY);
-    expect(patterns()).toContain(DIVISION_GLOB);
+    expect(deletedKeys()).toEqual(expect.arrayContaining(DIVISION_KEYS));
     // And the ISR side is untouched by this change (P1 renamed the helper a
     // score write fires: `fireScoreRevalidate`, revalidate.ts).
     expect(fireScoreRevalidate).toHaveBeenCalledWith(DIVISION, COMPETITION);
@@ -281,45 +280,35 @@ describe("invalidatePublicCache — a scoring write", () => {
   });
 });
 
-describe("invalidatePublicCache — literal keys by one DEL, only the glob by SCAN (R10 H4)", () => {
-  it("every literal key goes out in ONE direct DEL; no literal key goes through a SCAN, and no glob through DEL", async () => {
+describe("invalidatePublicCache — every key by name in one DEL, no SCAN (R10 H4, review r2-m4)", () => {
+  it("every key, the division's three documents included, goes out in ONE direct DEL; no SCAN is sent, and no glob through DEL", async () => {
     await invalidatePublicCache(ORG, FIXTURE);
-    expect(cacheDel, "one round trip for every literal key").toHaveBeenCalledTimes(1);
-    expect(deletedKeys()).toEqual(expect.arrayContaining([FIXTURE_KEY, HUB_KEY, PLAYER_MATCHES_GEN_KEY]));
-    // The SCAN set is EXACT, unlike the DEL superset: a sweep walks the whole
-    // keyspace and is billed per page, so a new one must be seen here.
-    expect(patterns()).toEqual([DIVISION_GLOB]);
-    expect(patterns().filter((pattern) => !pattern.endsWith("*")), "a literal key sent through a SCAN").toEqual([]);
+    expect(cacheDel, "one round trip for every key").toHaveBeenCalledTimes(1);
+    expect(deletedKeys()).toEqual(expect.arrayContaining([FIXTURE_KEY, HUB_KEY, PLAYER_MATCHES_GEN_KEY, ...DIVISION_KEYS]));
+    // EXACT, unlike the DEL superset: a sweep walks the whole keyspace and is
+    // billed per page, so a new one must be seen here.
+    expect(cacheDelPattern, "a keyspace SCAN on a score write").not.toHaveBeenCalled();
     expect(deletedKeys().filter((key) => key.includes("*")), "a glob sent through DEL").toEqual([]);
   });
 
-  it("the callback waits for the DEL: nothing while the DEL is in flight, nothing when only the SCAN has settled", async () => {
+  it("the division's documents are the fixture's OWN division's, and no other division's", async () => {
+    await invalidatePublicCache(ORG, FIXTURE);
+    expect(deletedKeys().filter((key) => key.startsWith("pub:v1:div:"))).toEqual(DIVISION_KEYS);
+  });
+
+  it("the callback waits for the DEL that carries the division's documents: nothing while it is in flight", async () => {
     redis.hold = true;
     const after = vi.fn();
     await invalidatePublicCache(ORG, FIXTURE, false, after);
-    expect(redis.held.map((gate) => gate.kind).sort()).toEqual(["del", "scan"]);
+    expect(redis.held.map((gate) => gate.kind)).toEqual(["del"]);
+    expect(redis.held[0]!.target.split(" ")).toEqual(expect.arrayContaining(DIVISION_KEYS));
 
     await macrotask();
     expect(after, "called before the DEL settled").not.toHaveBeenCalled();
-    await release("scan", { resolve: true });
-    expect(after, "released by the SCAN").not.toHaveBeenCalled();
 
     await release("del", { resolve: true });
     expect(after).toHaveBeenCalledTimes(1);
     expect(after).toHaveBeenCalledWith({ divisionId: DIVISION, competitionId: COMPETITION });
-  });
-
-  it("…and never for the SCAN: it runs as soon as the DEL settles, with the SCAN still going", async () => {
-    redis.hold = true;
-    const after = vi.fn();
-    await invalidatePublicCache(ORG, FIXTURE, false, after);
-
-    await release("del", { resolve: true });
-    expect(redis.held.map((gate) => gate.kind), "the SCAN is still in flight").toEqual(["scan"]);
-    expect(after, "waited on the SCAN").toHaveBeenCalledTimes(1);
-
-    await release("scan", { resolve: true });
-    expect(after, "called again once the SCAN settled").toHaveBeenCalledTimes(1);
   });
 
   it("a DEL that REJECTS is logged, never left unhandled, and still runs the callback", async () => {
@@ -333,40 +322,16 @@ describe("invalidatePublicCache — literal keys by one DEL, only the glob by SC
       // Checked first, the moment the DEL has failed.
       expect(unhandled, "a DEL rejected with no handler").toEqual([]);
       expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: FIXTURE, keys: expect.arrayContaining([FIXTURE_KEY, HUB_KEY]) },
+        { err: failure, fixture: FIXTURE, keys: expect.arrayContaining([FIXTURE_KEY, HUB_KEY, ...DIVISION_KEYS]) },
         DELETE_FAILED,
       );
       expect(after, "a failed DEL swallowed the callback").toHaveBeenCalledTimes(1);
-
-      await release("scan", { resolve: true });
       expect(logMock.error).toHaveBeenCalledTimes(1);
       expect(unhandled).toEqual([]);
     });
   });
 
-  it("a SCAN that REJECTS is logged and never left unhandled; the callback still waits on the DEL alone", async () => {
-    await watchingUnhandled(async (unhandled) => {
-      redis.hold = true;
-      const after = vi.fn();
-      const failure = new Error("simulated Redis failure");
-      await invalidatePublicCache(ORG, FIXTURE, false, after);
-
-      await release("scan", { reject: failure });
-      expect(unhandled, "a voided SCAN rejected with no handler").toEqual([]);
-      expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: FIXTURE, pattern: DIVISION_GLOB },
-        SWEEP_FAILED,
-      );
-      expect(after, "released by a failed SCAN").not.toHaveBeenCalled();
-
-      await release("del", { resolve: true });
-      expect(after).toHaveBeenCalledTimes(1);
-      expect(logMock.error).toHaveBeenCalledTimes(1);
-      expect(unhandled).toEqual([]);
-    });
-  });
-
-  it("the quiet twin: a DEL and a SCAN that succeed log nothing", async () => {
+  it("the quiet twin: a DEL that succeeds logs nothing", async () => {
     const after = vi.fn();
     await invalidatePublicCache(ORG, FIXTURE, false, after);
     await macrotask();
@@ -412,7 +377,6 @@ describe("invalidatePublicCache — the pushes wait for the DEL, never longer th
     await vi.advanceTimersByTimeAsync(PUSH_AFTER_DELETE_BOUND_MS * 4);
     expect(after, "the bound fired more than once").toHaveBeenCalledTimes(1);
     await settleHeld("del", { resolve: true });
-    await settleHeld("scan", { resolve: true });
     expect(after, "the late DEL sent the pushes a second time").toHaveBeenCalledTimes(1);
   });
 

@@ -6,7 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { cacheGet, cacheSet, cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
+import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
@@ -19,6 +19,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { playerMatchesGenKey } from "@/server/public-site/player-matches-cache-keys";
 import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
+import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import {
   fireScoreRevalidate,
   fireDiscoveryRevalidate,
@@ -211,8 +212,8 @@ async function invalidateAndPush(
   // tag fired later. The voided call fired its tag after a DB lookup, so after
   // every score the hub, the competition page and the division page kept
   // serving the pre-score document until their 30s TTL ran out
-  // (`__tests__/score-revalidate-in-request.test.ts`). The Redis sweeps inside
-  // stay non-blocking. A failure is logged, not thrown: the score has already
+  // (`__tests__/score-revalidate-in-request.test.ts`). The Redis delete inside
+  // stays non-blocking. A failure is logged, not thrown: the score has already
   // committed, and this must not report it as failed.
   //
   // P1 round 2 (F2) — the realtime pushes go out only once the public Redis
@@ -225,9 +226,9 @@ async function invalidateAndPush(
   // copy, and a subscribed page only polls as a slow safety net.
   //
   // R10 H4: both of those keys are literal, so the pushes wait on one direct
-  // DEL, not on a full-keyspace SCAN; the division's glob sweep is not waited
-  // on at all. The division push is addressed from the invalidation's own
-  // lookup rather than a second query.
+  // DEL, not on a full-keyspace SCAN. Review r2-m4: the division's documents
+  // ride that same DEL by name, and no SCAN is sent at all. The division push
+  // is addressed from the invalidation's own lookup rather than a second query.
   //
   // R10 I1: and never longer than PUSH_AFTER_DELETE_BOUND_MS. A DEL that
   // never answers sends the pushes at the bound instead of never, once.
@@ -247,7 +248,7 @@ async function invalidateAndPush(
     for (const id of advanced) void publishFixtureUpdate(id, "schedule");
   }, advanced).catch((err: unknown) => {
     log.error({ err, fixture: fixtureId }, "scoring: public cache invalidation failed (the score stands)");
-    // It failed before any sweep started (the lookup, or the tag call), so
+    // It failed before the delete started (the lookup, or the tag call), so
     // there is nothing to wait for. The scorer's other devices read the
     // ledger, not Redis, and still need their ping.
     //
@@ -656,7 +657,7 @@ export async function invalidatePublicCache(
   /** Runs EXACTLY ONCE: when the literal-key DEL below settles (resolved or
    *  rejected), or after PUSH_AFTER_DELETE_BOUND_MS, whichever comes first
    *  (R10 I1). Never awaited by this function, so it never holds the caller's
-   *  response. It does NOT wait for the division glob's SCAN (R10 H4). Handed
+   *  response. The division's documents are in that DEL (review r2-m4). Handed
    *  the fixture's division and competition, or null when the fixture no
    *  longer exists. `scoreEvent` sends its realtime pushes here (P1 round 2,
    *  F2). Must not throw. */
@@ -688,8 +689,7 @@ export async function invalidatePublicCache(
   // before the tag would let a hub read in between rebuild from the
   // still-cached division and put the stale document back.
   //
-  // R10 H4: two doors. The LITERAL keys, whose names are known, go out in ONE
-  // direct DEL (`cacheDel`):
+  // R10 H4: every key goes out BY NAME in ONE direct DEL (`cacheDel`):
   //   - the fixture's own document;
   //   - W2's competition HUB document (usecases/public.ts's
   //     `pub:v1:hub:{competitionId}`). It carries every division's live
@@ -707,41 +707,41 @@ export async function invalidatePublicCache(
   //     every listed competition's in-play fixtures, and a score write is what
   //     moves a fixture into and out of `in_play`. Keyed by the fixture's own
   //     org, read in the lookup above.
-  // Only the division's glob still needs a SCAN over the whole keyspace
-  // (cache.ts), and no push depends on it. The hub rebuilds through
-  // `loadCompetitionHub` and the fixture through `publicFixture`'s own query.
-  // `pub:v1:div:{id}:*` backs only the public schedule, standings and entrants
-  // endpoints.
+  //   - the division's public schedule, standings and entrants documents
+  //     (`publicDivisionCacheKeys`, division-doc-cache-keys.ts, the same names
+  //     `afterScheduleWrite` drops). These were a `pub:v1:div:{id}:*` SCAN over
+  //     the whole keyspace on every score write, every page of it a billed
+  //     Upstash command (review r2-m4). Now the pushes below also wait on the
+  //     delete that covers them, so a standings refetch a push triggers never
+  //     reads the pre-score document.
+  // No SCAN is sent. The hub rebuilds through `loadCompetitionHub` and the
+  // fixture through `publicFixture`'s own query.
   const fixtureKey = publicFixtureCacheKey(fixtureId);
   // R10h: the advanced-into fixtures' own documents ride the same DEL, after
-  // the four keys every score drops. One round trip, and the pushes below then
-  // wait on the delete that covers all of them.
+  // the keys every score drops. One round trip, and the pushes below then wait
+  // on the delete that covers all of them.
   const keys = row
     ? [
         fixtureKey,
         `pub:v1:hub:${row.competition_id}`,
         playerMatchesGenKey(row.competition_id),
         `pub:v1:org-live:${row.org_id}`,
+        ...publicDivisionCacheKeys(row.division_id),
       ]
     : [fixtureKey];
   for (const id of alsoFixtureIds) keys.push(publicFixtureCacheKey(id));
-  // F4: neither call is ever left to reject unhandled. Both helpers fail open
-  // inside their try, but `client()` sits outside it (cache.ts). ioredis's
+  // F4: the call is never left to reject unhandled. The helper fails open
+  // inside its try, but `client()` sits outside it (cache.ts). ioredis's
   // constructor throws synchronously on a REDIS_URL it cannot parse, so every
   // call would then reject.
   const deleted = cacheDel(...keys).catch((err: unknown) => {
     log.error({ err, fixture: fixtureId, keys }, "scoring: a public Redis delete failed (the write stands)");
   });
-  if (row) {
-    const pattern = `pub:v1:div:${row.division_id}:*`;
-    void cacheDelPattern(pattern).catch((err: unknown) => {
-      log.error({ err, fixture: fixtureId, pattern }, "scoring: a public Redis sweep failed (the write stands)");
-    });
-  }
   // F2: the catch above means this cannot reject, so it settles exactly when
-  // the DEL has, whichever way that went. It does not wait for the SCAN.
+  // the DEL has, whichever way that went.
   //
-  // R10 I1: nor longer than PUSH_AFTER_DELETE_BOUND_MS, and exactly once.
+  // R10 I1: the pushes wait for it, but never longer than
+  // PUSH_AFTER_DELETE_BOUND_MS, and exactly once.
   // `sendAfterDeleteOrBound` (cache.ts) owns that, and the schedule path sends
   // through the same helper (R10c m1).
   const scope = row ? { divisionId: row.division_id, competitionId: row.competition_id } : null;

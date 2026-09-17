@@ -163,7 +163,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches the rewrite makes stale", () => {
-  it("a re-snapshot drops the org home's live key, the competition hub and the fixture's own document", async () => {
+  it("a re-snapshot drops the org home's live key, the competition hub, the fixture's own document and the division's documents", async () => {
     const s = await scoredThenCorrected();
     await resnapshotFixtureConfig(s.actorId, s.fixtureId, "organiser set the points table wrong");
 
@@ -172,11 +172,15 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
         `pub:v1:org-live:${s.orgId}`,
         `pub:v1:hub:${s.competitionId}`,
         `pub:v1:fixture:v2:${s.fixtureId}`,
+        `pub:v1:div:${s.divisionId}:schedule`,
+        `pub:v1:div:${s.divisionId}:standings`,
+        `pub:v1:div:${s.divisionId}:entrants-v2`,
       ]),
     );
-    // In ONE literal-key DEL, the scoring door's shape.
+    // In ONE DEL by name, the scoring door's shape, and no keyspace SCAN
+    // (review r2-m4: the division's documents used to be a glob sweep).
     expect(cacheDel).toHaveBeenCalledTimes(1);
-    expect(cacheDelPattern).toHaveBeenCalledWith(`pub:v1:div:${s.divisionId}:*`);
+    expect(cacheDelPattern).not.toHaveBeenCalled();
     // …and the ISR tag for the same division and competition.
     expect(fireScoreRevalidate).toHaveBeenCalledWith(s.divisionId, s.competitionId);
   });
