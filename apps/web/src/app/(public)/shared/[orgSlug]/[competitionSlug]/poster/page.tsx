@@ -5,6 +5,8 @@ import type { Metadata } from "next";
 import QRCode from "qrcode";
 import { getPublicCompetition } from "@/server/public-site/data";
 import { PrintButton } from "@/components/print-button";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 
 export const revalidate = 300;
 
@@ -16,9 +18,21 @@ export async function generateStaticParams() {
 
 type Props = { params: Promise<{ orgSlug: string; competitionSlug: string }> };
 
-export const metadata: Metadata = {
-  robots: { index: false, follow: false }, // a print artefact, not a landing page
-};
+// Every field a page's metadata leaves out is INHERITED from the root layout,
+// whose title and description are English (`app/layout.tsx`), so this page
+// sets both in the org's language (Task 16 review, I2).
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const robots = { index: false, follow: false }; // a print artefact, not a landing page
+  const { orgSlug, competitionSlug } = await params;
+  const data = await getPublicCompetition(orgSlug, competitionSlug);
+  if (!data) return { robots };
+  const dict = await getDictionary(toLocale(data.org.default_locale), "public");
+  return {
+    title: t(dict, "qrPoster.metaTitle", { competition: data.competition.name }),
+    description: t(dict, "qrPoster.scan"),
+    robots,
+  };
+}
 
 export default async function PosterPage({ params }: Props) {
   const { orgSlug, competitionSlug } = await params;
@@ -28,6 +42,9 @@ export default async function PosterPage({ params }: Props) {
 
   const url = `https://seazn.club/shared/${org.slug}/${competition.slug}`;
   const qr = await QRCode.toDataURL(url, { width: 480, margin: 1 });
+  // The ORG's language, like every other /shared page: this is printed and
+  // pinned to a clubhouse wall, where nobody's browser locale is involved.
+  const dict = await getDictionary(toLocale(org.default_locale), "public");
 
   return (
     <div className="mx-auto max-w-xl py-8">
@@ -46,10 +63,10 @@ export default async function PosterPage({ params }: Props) {
             {/* data: URI QR code — generated in-memory, not storage-served; next/image
                 optimizer doesn't apply, stays <img> */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={qr} alt={`QR code for ${url}`} className="h-72 w-72" />
+            <img src={qr} alt={t(dict, "qrPoster.qrAlt", { url })} className="h-72 w-72" />
           </div>
           <p className="font-display text-3xl font-semibold text-ink">
-            Scan for live scores, fixtures & standings
+            {t(dict, "qrPoster.scan")}
           </p>
           <p className="rounded-full bg-accent-soft px-4 py-1.5 text-sm font-medium text-accent-strong">
             {url}
@@ -57,7 +74,7 @@ export default async function PosterPage({ params }: Props) {
         </div>
       </div>
       <div className="mt-6 text-center print:hidden">
-        <PrintButton />
+        <PrintButton label={t(dict, "qrPoster.print")} />
       </div>
     </div>
   );

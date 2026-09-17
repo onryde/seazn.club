@@ -42,7 +42,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { UTC, fmtDate, fmtTime } from "@/lib/format";
+import { UTC, fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import {
   dayKeyInZone,
   landingStatus,
@@ -57,9 +57,9 @@ import { MatchCard } from "./match-card";
 export interface OverviewTabProps {
   doc: CompetitionHubDocT;
   dict: PublicDict;
-  /** The viewer's locale — `MatchCard`'s `Intl.RelativeTimeFormat`. NOT threaded
-   *  into any date: `fmtDate`/`fmtTime` pin `en-GB` repo-wide
-   *  (`lib/format.ts:10`) and take no locale parameter. */
+  /** The page's locale — `MatchCard`'s `Intl.RelativeTimeFormat`, and every
+   *  date on the tab (`fmtPublicDate`; owner ruling 2026-09-16, English
+   *  day-month). */
   locale: Locale;
   /** `Date.now()` at render, passed down rather than read here so a card's
    *  "Starts in 2 hours" is stable across a server render and its hydration. */
@@ -259,9 +259,15 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * a date. The schema permits the pair (`HubInfo` nulls both independently) and
  * no builder emits it today.
  */
-function datesCopy(dict: PublicDict, startsOn: string | null, endsOn: string | null): string | null {
-  const from = startsOn ? fmtDate(UTC, startsOn, DATE_OPTS) : "";
-  const to = endsOn ? fmtDate(UTC, endsOn, DATE_OPTS) : "";
+function datesCopy(
+  dict: PublicDict,
+  locale: string,
+  startsOn: string | null,
+  endsOn: string | null,
+): string | null {
+  // The page's locale (owner ruling 2026-09-16), English day-month.
+  const from = startsOn ? fmtPublicDate(locale, UTC, startsOn, DATE_OPTS) : "";
+  const to = endsOn ? fmtPublicDate(locale, UTC, endsOn, DATE_OPTS) : "";
   if (from && to) return t(dict, "landing.status.dates", { from, to });
   if (from || to) return t(dict, "landing.status.datesFrom", { from: from || to });
   return null;
@@ -280,7 +286,7 @@ function datesCopy(dict: PublicDict, startsOn: string | null, endsOn: string | n
  * reached anyway (a document parsed by an older build, a cast), and it names
  * the rung so the report is one line long.
  */
-export function overviewPlan(status: LandingStatus, dict: PublicDict): OverviewPlan {
+export function overviewPlan(status: LandingStatus, dict: PublicDict, locale: string): OverviewPlan {
   switch (status.kind) {
     case "empty":
       return { copy: t(dict, "landing.status.empty"), order: PRESEASON_ORDER, nextUp: null };
@@ -311,10 +317,10 @@ export function overviewPlan(status: LandingStatus, dict: PublicDict): OverviewP
     case "next":
       return {
         // The venue's OWN zone, carried on the fixture — never the viewer's and
-        // never a platform default. `fmtDate`'s default options are
-        // weekday/day/month, so this reads "Sat 5 Sept 14:00".
+        // never a platform default — in the page's locale. The default options
+        // are weekday/day/month, so an English org reads "Sat 5 Sept 14:00".
         copy: t(dict, "landing.status.next", {
-          when: `${fmtDate(status.tz, status.at)} ${fmtTime(status.tz, status.at)}`,
+          when: `${fmtPublicDate(locale, status.tz, status.at)} ${fmtPublicTime(locale, status.tz, status.at)}`,
         }),
         order: NEXT_ORDER,
         nextUp: "ahead",
@@ -330,7 +336,7 @@ export function overviewPlan(status: LandingStatus, dict: PublicDict): OverviewP
       return { copy: t(dict, "landing.status.finished"), order: FINISHED_ORDER, nextUp: null };
     case "dates":
       return {
-        copy: datesCopy(dict, status.startsOn, status.endsOn),
+        copy: datesCopy(dict, locale, status.startsOn, status.endsOn),
         order: PRESEASON_ORDER,
         nextUp: null,
       };
@@ -483,7 +489,7 @@ export function OverviewTab({
     endsOn: doc.info.endsOn,
     now: new Date(now),
   });
-  const plan = overviewPlan(status, dict);
+  const plan = overviewPlan(status, dict, locale);
 
   // Ordered by `sortHubMatches`, never by document order: inside a bucket it
   // reads soonest-first, which is what both of these rails mean.

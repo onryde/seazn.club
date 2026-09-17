@@ -1,6 +1,6 @@
 import { v1, reply } from "@/server/api-v1/http";
 import { requireFixtureActor } from "@/server/api-v1/auth";
-import { getFixtureState } from "@/server/usecases/fixtures";
+import { fixtureStateEtag, getFixtureState } from "@/server/usecases/fixtures";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -11,7 +11,7 @@ export async function GET(req: Request, { params }: Ctx) {
   const res = await v1(async () => {
     const auth = await requireFixtureActor(req, id, "read");
     const state = await getFixtureState(auth, id);
-    etag = `"seq-${state.last_seq}"`;
+    etag = fixtureStateEtag(state.last_seq);
     return reply(200, state, { ETag: etag });
   });
   if (etag && req.headers.get("if-none-match") === etag) {

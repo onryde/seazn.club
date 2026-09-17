@@ -194,9 +194,9 @@ export interface FixtureStreamOut {
  *
  * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
  * `broadcastRevalidate` — the latter is the peer primitive that helper calls
- * internally. It is what busts the `["pub-fixture", fixtureId]` cache entry
- * tagged `divisionTag(division.id)` (data.ts:742), which is the entry the
- * public match page reads the link from.
+ * internally. It is what busts the `["pub-fixture-v3", fixtureId]` cache entry
+ * tagged `divisionTag(division.id)` (`getPublicFixture`, data.ts), which is the
+ * entry the public match page reads the link from.
  */
 export async function setFixtureStreamUrl(
   auth: AuthCtx,
@@ -533,6 +533,12 @@ export interface FixtureStateOut {
   outcome: unknown;
 }
 
+/** The `/state` ETag: the ledger seq. The `-m2` suffix is kept as it is (the
+ *  representation's name since the cricket margin became `{ kind, value? }`). */
+export function fixtureStateEtag(lastSeq: number): string {
+  return `"seq-${lastSeq}-m2"`;
+}
+
 /** Live state: fold cache summary + status + outcome (ETag on last_seq). */
 export async function getFixtureState(auth: AuthCtx, fixtureId: string): Promise<FixtureStateOut> {
   return withTenant(auth.orgId, async (tx) => {
@@ -543,6 +549,8 @@ export async function getFixtureState(auth: AuthCtx, fixtureId: string): Promise
       from fixtures f left join match_states m on m.fixture_id = f.id
       where f.id = ${fixtureId}`;
     if (!row) throw new HttpError(404, "fixture not found");
+    // `CricketState.margin` is `{ kind, value? }` in every stored fold (greenfield:
+    // no legacy English margins are stored), so the rows are served as they are.
     return {
       fixture_id: fixtureId,
       status: row.status,

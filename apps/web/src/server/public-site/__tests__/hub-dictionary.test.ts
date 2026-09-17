@@ -105,19 +105,64 @@ export const W2_KEYS = [
   "knockout.feederWinnerOnly", "knockout.feederLoserOnly",
   // table
   "table.team", "table.col.rank", "table.col.played", "table.col.won", "table.col.drawn", "table.col.lost", "table.col.points", "table.tieBreak", "table.fullDivision", "table.more", "table.fewer", "table.empty", "table.pool", "table.champion",
+  // Task 16 (zero-English sweep): the structural headers' VISIBLE abbreviation.
+  // `table.col.*` translated only the hover title; the header itself read
+  // "P W D L Pts" in every locale, and a Spanish "P" is Perdidos — the lost
+  // column's letter printed over the played count.
+  "table.abbr.played", "table.abbr.won", "table.abbr.drawn", "table.abbr.lost", "table.abbr.points",
+  // Task 16 review (M2): the goal columns football and both hockeys declare
+  // read "GF GA GD", English initials, in every locale.
+  "table.abbr.gf", "table.abbr.ga", "table.abbr.gd", "table.col.gf", "table.col.ga", "table.col.gd",
+  // Fix round 2: every other sport's metric and derived column header
+  // (`METRIC_HEADER_KEYS`), which printed the engine's English label.
+  "table.abbr.ties", "table.col.ties", "table.abbr.noResults", "table.col.noResults", "table.col.wins",
+  "table.col.setsWon", "table.col.setsLost", "table.col.gamesWon", "table.col.gamesLost",
+  "table.col.for", "table.col.against", "table.col.difference",
+  "table.col.ratio", "table.col.boardRatio", "table.col.pointRatio",
   // leaders / teams / info (per-stat leader labels live in `stat.<sport>.<key>` in ui.json — see the coverage test below)
   "leaders.title", "leaders.empty",
   "teams.title", "teams.seed", "teams.division", "info.title", "info.dates", "info.venues", "info.registration.open", "info.registration.closed", "info.calendar", "info.share",
+  // Division-page parity (owner ruling 2026-09-16, before any redirect): the
+  // Teams card opens in place onto its squad, and Info gains a box per
+  // division. The division page said "to serve", "Seed" and "Suspensions" in
+  // hardcoded English; none of that carries over — every word the hub adds
+  // for it is one of these, in four locales.
+  "teams.members.one", "teams.members.other", "teams.suspended", "teams.squadEmpty",
+  "info.divisions", "info.suspensions", "info.toServe.one", "info.toServe.other",
   // division page
   "division.tab.schedule", "division.tab.standings", "division.tab.entrants", "division.tabsLabel", "division.champion", "division.resultsGrid", "division.standingsEmpty", "division.entrantsEmpty",
   "division.seed", "division.filter.label", "division.filter.all", "division.filter.allEntrants", "division.view.label", "division.view.day", "division.view.round", "division.calendar", "division.metaDescription", "division.scheduleEmpty",
   // the schedule's zone caption and the division page's kiosk link (N1e e5, e7)
   "division.timesIn", "division.present", "division.filter.showFor",
-  // player page
-  "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling", "player.line.result",
+  // player page. NO `player.line.result` ("{result} — {opponent}"): Task 14's
+  // page renders the result as a chip and the opponent as its own element, so
+  // a joined sentence had no consumer, and a meta string glued with a dash is
+  // the composition _DESIGN.md §3 forbids. Deleted from all four locales with
+  // this line; `RETIRED_KEYS` below keeps it deleted.
+  "player.inThisCompetition", "player.noSquad", "player.stats", "player.matches", "player.matches.empty", "player.line.cricket", "player.line.batting", "player.line.bowling",
   "player.result.won", "player.result.lost", "player.result.drawn", "player.result.live",
+  // The opponent on a match line — "v Queens". The page used to have no way to
+  // say it that was not an English letter glued to a name.
+  "player.opponent",
   // org home + layout + share
   "org.live.one", "org.live.other", "layout.tagline", "layout.poweredBy", "share.share", "share.whatsapp", "share.whatsappAria", "share.copy", "share.copied",
+  // Task 16 — the /shared leaf surfaces' sweep, one block: `shareLabels`' short
+  // WhatsApp label (read by every public ShareBar, and asserted nowhere until
+  // now), the QR poster page, the player page's meta description
+  // (`lib/public-meta.ts`), the share images' footer tagline and free-tier
+  // badge, and the match centre's fallback scorebug (realtime word, serve dot).
+  "share.whatsappShort",
+  "qrPoster.qrAlt", "qrPoster.scan", "qrPoster.print",
+  // Task 16 review (I1, I2): the division page's results-grid corner and share
+  // text, and the titles of the two pages that inherited the root's English one.
+  "division.resultsGrid.corner", "division.share.text", "qrPoster.metaTitle", "kiosk.metaTitle",
+  // Fix round 2: the embed bracket widget over a division with no bracket.
+  "division.bracketEmpty",
+  "player.metaDescription", "og.tagline", "news.card.liveOn",
+  "matchCentre.realtime", "matchCentre.serving",
+  // Review F2: the division share card's placeholder name and the two lines
+  // it draws in place of a table.
+  "og.standings.youth", "og.standings.empty", "og.division",
   // format chips
   "format.cricket.overs", "format.minutes", "format.sets.bestOf",
 ] as const;
@@ -198,6 +243,29 @@ describe("W2 public dictionary coverage", () => {
       // drops `{round}` says "Winner of" and stops.
       "knockout.feederWinnerOnly": ["round"],
       "knockout.feederLoserOnly": ["round"],
+      // player-matches.tsx — the opponent on the slab and on every row. A
+      // locale that drops `{opponent}` prints "v" against nobody.
+      "player.opponent": ["opponent"],
+      // Task 16. The QR poster's alt names the URL it encodes; the player
+      // page's description names both; the share-image badge names the brand
+      // (passed, so no translator retypes it).
+      "qrPoster.qrAlt": ["url"],
+      "player.metaDescription": ["competition", "player"],
+      // Task 16 review (I1, I2): the division page's share text and the page
+      // titles of the QR poster and the kiosk boards.
+      "division.share.text": ["competition", "division"],
+      "qrPoster.metaTitle": ["competition"],
+      "kiosk.metaTitle": ["name"],
+      "news.card.liveOn": ["brand"],
+      "og.standings.youth": ["brand"],
+      "og.standings.empty": ["brand"],
+      // teams-tab.tsx / info-tab.tsx — `plural()` always passes `{count}`; a
+      // locale that drops it tells a spectator "members" with no number, or
+      // "to serve" with no matches.
+      "teams.members.one": ["count"],
+      "teams.members.other": ["count"],
+      "info.toServe.one": ["count"],
+      "info.toServe.other": ["count"],
     };
     const params = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -213,6 +281,25 @@ describe("W2 public dictionary coverage", () => {
           expect(params((dict as Record<string, string>)[k] ?? ""), `${locale} ${k}`).toEqual(wanted);
         }
       });
+    }
+  });
+});
+
+// Keys deleted on purpose. A deletion nothing asserts comes back with the next
+// translation sync that copies a stale locale over a fresh one.
+describe("retired public keys stay deleted", () => {
+  const RETIRED_KEYS = ["player.line.result"] as const;
+  for (const [locale, dict] of Object.entries({ en, es, fr, nl })) {
+    it(`${locale} carries none of them`, () => {
+      for (const k of RETIRED_KEYS) expect(Object.hasOwn(dict, k), k).toBe(false);
+    });
+  }
+  // The positive pair: the sibling keys the reader still uses are present, so
+  // an assertion that could pass on an empty dictionary is not what holds the
+  // line above.
+  it("the player.line keys the reader uses are still authored", () => {
+    for (const k of ["player.line.cricket", "player.line.batting", "player.line.bowling"]) {
+      expect(Object.hasOwn(en, k), k).toBe(true);
     }
   });
 });

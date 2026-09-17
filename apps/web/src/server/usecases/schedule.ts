@@ -9,9 +9,11 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { requireFeature } from "@/lib/entitlements";
-import { cacheDel, cacheDelPattern, sendAfterDeleteOrBound } from "@/lib/cache";
+import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
+import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
 import { publishDivisionUpdate, publishFixtureUpdate } from "@/lib/realtime";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED, REASON_CODE } from "@/lib/schedule-board";
 import { resolveVenueTz } from "@/lib/tz";
@@ -104,7 +106,6 @@ export function afterScheduleWrite(
   fixtureIds: readonly string[],
 ): void {
   fireDivisionRevalidate(divisionId, competitionId);
-  sweepPublicKey(`pub:v1:div:${divisionId}:*`);
   // W2 — the competition HUB document (`pub:v1:hub:{competitionId}`) carries
   // every fixture's kick-off time and venue, so a RESCHEDULE makes it stale
   // exactly as a score does. Scoring's own `invalidatePublicCache` drops the
@@ -115,7 +116,11 @@ export function afterScheduleWrite(
   // DEL instead of a SCAN over the whole keyspace, and the division push waits
   // for that DEL, never longer than PUSH_AFTER_DELETE_BOUND_MS, exactly once. A
   // push sent first sends the hub's refetch to a Redis copy the delete has not
-  // reached yet. The glob's SCAN above is not waited on: no push depends on it.
+  // reached yet.
+  //
+  // Final review r2-m4: the division's own schedule, standings and entrants
+  // documents ride the same DEL by name (`publicDivisionCacheKeys`), where a
+  // `pub:v1:div:{id}:*` SCAN over the whole keyspace used to find them.
   //
   // R10d n2: the match centre and the overlay read `pub:v1:fixture:{id}`
   // (`publicFixture`, usecases/public.ts), a 30s cache of a fixture's kick-off,
@@ -126,8 +131,14 @@ export function afterScheduleWrite(
   // (a whole-division apply, publish or start) still drops every key but sends
   // no per-fixture push: one write must not fan out hundreds of broadcasts, and
   // those match centres catch up on their poll.
-  const keys = [`pub:v1:hub:${competitionId}`, ...fixtureIds.map((id) => `pub:v1:fixture:${id}`)];
-  // F4: never left to reject unhandled, for the reason `sweepPublicKey` gives.
+  const keys = [
+    `pub:v1:hub:${competitionId}`,
+    ...fixtureIds.map(publicFixtureCacheKey),
+    ...publicDivisionCacheKeys(divisionId),
+  ];
+  // F4: never left to reject unhandled. `cacheDel` fails open inside its own
+  // try, but its `client()` call sits outside it (cache.ts), and ioredis's
+  // constructor throws synchronously on a REDIS_URL it cannot parse.
   const deleted = cacheDel(...keys).catch((err: unknown) => {
     log.error({ err, keys }, "schedule: a public Redis delete failed (the write stands)");
   });
@@ -141,16 +152,6 @@ export function afterScheduleWrite(
 /** R10d n2: a schedule write that changed MORE fixtures than this sends no
  *  per-fixture push. Its DEL still drops every one of their keys. */
 export const SCHEDULE_FIXTURE_PUSH_CAP = 50;
-
-/** A public Redis sweep, not awaited, that can never reject unhandled (P1
- *  round 2, F4). `cacheDelPattern` fails open inside its own try, but its
- *  `client()` call sits outside it (cache.ts), and ioredis's constructor throws
- *  synchronously on a REDIS_URL it cannot parse — every call would reject. */
-function sweepPublicKey(pattern: string): void {
-  void cacheDelPattern(pattern).catch((err: unknown) => {
-    log.error({ err, pattern }, "schedule: a public Redis sweep failed (the write stands)");
-  });
-}
 
 // A fixture the auto pass / board may still move; everything else on the
 // timetable is a fixed obstacle (doc 12 §6: decided fixtures are immutable —

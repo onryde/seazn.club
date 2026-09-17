@@ -8,6 +8,8 @@ import { standingsCardModel } from "@/server/og/model";
 import { CardFrame, OG_SIZE } from "@/server/og/card";
 import { posterImageDataUrl } from "@/server/og/poster-image";
 import type { StandingsSnapshotRow } from "@/server/public-site/data";
+import { toLocale } from "@/lib/i18n-constants";
+import { getDictionary, t } from "@/lib/i18n";
 
 export const size = OG_SIZE;
 export const contentType = "image/png";
@@ -20,6 +22,9 @@ type Props = {
 export default async function Image({ params }: Props) {
   const { orgSlug, competitionSlug, divisionSlug } = await params;
   const data = await getPublicDivision(orgSlug, competitionSlug, divisionSlug);
+  // The ORG's language, like the page this card previews. With no division
+  // there is no org either, so English is the only locale there is.
+  const dict = await getDictionary(toLocale(data?.org.default_locale), "public");
 
   // Youth flag lives outside the public views on purpose — read it directly.
   const [priv] = data
@@ -34,7 +39,7 @@ export default async function Image({ params }: Props) {
   const model = standingsCardModel({
     orgName: data?.org.name ?? "seazn.club",
     competitionName: data?.competition.name ?? "",
-    divisionName: data?.division.name ?? "Division",
+    divisionName: data?.division.name ?? t(dict, "og.division"),
     logo,
     branding: [data?.competition.branding, data?.org.branding],
     youth: priv?.youth ?? false,
@@ -51,7 +56,12 @@ export default async function Image({ params }: Props) {
 
   return new ImageResponse(
     (
-      <CardFrame theme={theme} orgName={model.orgName} logo={model.logo}>
+      <CardFrame
+        theme={theme}
+        orgName={model.orgName}
+        logo={model.logo}
+        tagline={t(dict, "og.tagline")}
+      >
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div
             style={{
@@ -76,7 +86,7 @@ export default async function Image({ params }: Props) {
             marginTop: 22,
           }}
         >
-          {model.fallbackLine ? (
+          {model.fallbackKey ? (
             <div
               style={{
                 display: "flex",
@@ -86,7 +96,7 @@ export default async function Image({ params }: Props) {
                 color: theme.muted,
               }}
             >
-              {model.fallbackLine}
+              {t(dict, model.fallbackKey, { brand: "seazn.club" })}
             </div>
           ) : (
             model.rows.map((row, i) => (

@@ -226,10 +226,16 @@ test.describe.serial("pro lifecycle", () => {
   }) => {
     orgSlug = (await activeOrg(page)).slug;
 
-    // G9: the console division header deep-links to this public page.
+    // G9: the console division header deep-links to the public HUB with this
+    // division already selected — `?tab=matches&division=<slug>`, not the
+    // standalone division page it used to point at (that page is slated for a
+    // 308 into the hub). The spellings are the hub's own: "matches" is a
+    // `deriveHubTabs` id and `?division=` is what `readDivisionParam` reads.
     await page.goto(await divisionPath(page.request, divisionId));
     await expect(
-      page.locator(`a[href="/shared/${orgSlug}/${competitionSlug}/${divisionSlug}"]`),
+      page.locator(
+        `a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`,
+      ),
     ).toBeVisible({ timeout: 20_000 });
 
     // Public competition page lists the division.

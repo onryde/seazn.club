@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `after` is wrapped (not replaced) so the two request-scope-less tests below
 // keep exercising the REAL next/server after() throwing outside a request
@@ -11,6 +11,7 @@ vi.mock("next/server", async (importOriginal) => {
 
 import { after } from "next/server";
 import { deferred } from "@/lib/deferred";
+import { log } from "@/server/logger";
 
 describe("deferred", () => {
   it("runs the callback inline when outside a Next request scope", async () => {
@@ -19,12 +20,21 @@ describe("deferred", () => {
     await vi.waitFor(() => expect(fn).toHaveBeenCalledTimes(1));
   });
 
-  it("swallows callback rejections", async () => {
+  // `log` is a module singleton: a spy left in place leaks into later tests.
+  let warn: ReturnType<typeof vi.spyOn> | undefined;
+  afterEach(() => {
+    warn?.mockRestore();
+    warn = undefined;
+  });
+
+  it("swallows callback rejections — and logs them through the repo logger", async () => {
+    warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
     const fn = vi.fn(async () => {
       throw new Error("boom");
     });
     expect(() => deferred(fn)).not.toThrow();
     await vi.waitFor(() => expect(fn).toHaveBeenCalled());
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith({ err: "boom" }, "deferred: a tail task failed"));
   });
 
   // Task 6 review finding 1 (CRITICAL) / finding 4: `run` used to be

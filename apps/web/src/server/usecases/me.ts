@@ -8,7 +8,8 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { consentLocked } from "@/lib/guardian";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { firePersonRevalidate } from "@/server/public-site/revalidate";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { publicStorageUrl } from "@/lib/supabase-storage";
 import { uploadPersonPhotoBytes } from "./persons";
 import {
@@ -26,6 +27,7 @@ import { countMatchesByDivision } from "./player-stats";
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import { playerLinkId } from "@/lib/name-display";
 // #14: this read is a SUPERUSER, cross-org query (no `withTenant`/RLS — a
 // claimed player is usually not an org member) — `courtLabelsByOrg` is the
 // cross-org twin of schedule.ts's `courtNamesById` (which needs a
@@ -303,8 +305,13 @@ export interface MyStatBlock {
   org_slug: string;
   competition_name: string;
   competition_slug: string;
-  /** Only public competitions get a "public profile" link from /me. */
-  competition_public: boolean;
+  /** Whether /me links to this person's PUBLIC card, on the rule every public
+   *  link to the card uses (`playerLinkId`): `public_entrants_v` published the
+   *  person's id in this division (public-name consent AND the org's
+   *  player-page entitlement for the competition) and the division shows full
+   *  names. Consent plus a public competition alone opened the card's refusal
+   *  on a plan without player pages. */
+  public_card: boolean;
   division_name: string;
   division_slug: string;
   sport_key: string;
@@ -317,17 +324,22 @@ export interface MyStatBlock {
  *  PUBLIC card). Labels via the shared module-declared model. */
 export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> {
   const rows = await sql<
-    (Omit<MyStatBlock, "metrics" | "competition_public"> & {
+    (Omit<MyStatBlock, "metrics" | "public_card"> & {
       module_version: string;
-      visibility: string;
       stats: Record<string, number>;
+      published: boolean;
+      youth: boolean;
+      player_name_display: string | null;
     })[]
   >`
     select ps.person_id, p.full_name as person_name,
            o.name as org_name, o.slug as org_slug,
-           c.name as competition_name, c.slug as competition_slug, c.visibility,
+           c.name as competition_name, c.slug as competition_slug,
            d.name as division_name, d.slug as division_slug,
-           ps.sport_key, d.module_version, ps.stats
+           ps.sport_key, d.module_version, ps.stats, d.youth, d.player_name_display,
+           exists (select 1 from public_entrants_v en
+                   cross join lateral jsonb_array_elements(en.members) m
+                   where en.division_id = d.id and m->>'person_id' = ps.person_id::text) as published
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id and p.user_id = ${userId} and p.merged_into is null
     join divisions d on d.id = ps.division_id and d.archived_at is null
@@ -340,10 +352,11 @@ export async function listMyPlayerStats(userId: string): Promise<MyStatBlock[]> 
   // English is the right answer there, not a crash.
   const locale = await resolveLocale().catch(() => DEFAULT_LOCALE);
   const m = (k: Parameters<typeof msgFor>[1]) => msgFor(locale, k);
-  return rows.flatMap(({ module_version, visibility, stats, ...row }) => {
+  return rows.flatMap(({ module_version, stats, published, youth, player_name_display, ...row }) => {
     const metrics = labelPlayerStats(row.sport_key, module_version, stats, m);
     if (metrics.length === 0) return [];
-    return [{ ...row, competition_public: visibility === "public", metrics }];
+    const public_card = playerLinkId(published ? row.person_id : null, { youth, player_name_display }) !== null;
+    return [{ ...row, public_card, metrics }];
   });
 }
 
@@ -458,8 +471,8 @@ export async function listMyPersons(userId: string): Promise<MyPerson[]> {
 
 /**
  * Player-owned consent flags (doc 06 §4.7 handover): merge into
- * persons.consent, then revalidate every division the person is rostered in
- * so the public card and entrant lists flip immediately. Guardian gate:
+ * persons.consent, then revalidate the person's card (at any competition URL)
+ * and every division page naming them, so both flip immediately. Guardian gate:
  * under-16 by dob → 403, organiser-set values hold.
  */
 export async function setMyConsent(
@@ -467,8 +480,8 @@ export async function setMyConsent(
   personId: string,
   patch: { public_name?: boolean; public_photo?: boolean },
 ): Promise<MyPerson> {
-  const [person] = await sql<{ id: string; dob: string | null }[]>`
-    select id, dob from persons
+  const [person] = await sql<{ id: string; org_id: string; dob: string | null }[]>`
+    select id, org_id, dob from persons
      where id = ${personId} and user_id = ${userId} and merged_into is null`;
   if (!person) throw new HttpError(404, "player profile not found");
   if (consentLocked(person.dob)) {
@@ -481,13 +494,17 @@ export async function setMyConsent(
     update persons set consent = coalesce(consent, '{}'::jsonb) || ${sql.json(clean)}
     where id = ${personId}`;
 
-  const memberships = await sql<{ division_id: string; competition_id: string }[]>`
-    select distinct e.division_id, d.competition_id
-    from entrant_members em
-    join entrants e on e.id = em.entrant_id
-    join divisions d on d.id = e.division_id
-    where em.person_id = ${personId}`;
-  for (const m of memberships) fireDivisionRevalidate(m.division_id, m.competition_id);
+  // The person's card at every competition URL, and every division, fixture
+  // and card entry naming them (`firePersonRevalidate`: scope, cost and failure
+  // there). Awaited inside the request, after the write.
+  await firePersonRevalidate([personId], { person: personId });
+
+  // W2 Task 14 — the public player page's POLL document, and every other
+  // player's document naming this person as an opponent, is cached in Redis and
+  // gated only on a miss; the ISR revalidation above reaches neither, and never
+  // rejects, so this always runs. Retire the org's documents
+  // (`retireOrgPlayerMatches` — scope, cost and failure there).
+  await retireOrgPlayerMatches(person.org_id, { person: personId });
 
   const [me] = await listMyPersons(userId).then((all) => all.filter((p) => p.id === personId));
   return me;
@@ -519,13 +536,10 @@ export async function setMyPersonPhoto(
     await sql`update persons set photo_path = ${path} where id = ${personId}`;
   }
 
-  const memberships = await sql<{ division_id: string; competition_id: string }[]>`
-    select distinct e.division_id, d.competition_id
-    from entrant_members em
-    join entrants e on e.id = em.entrant_id
-    join divisions d on d.id = e.division_id
-    where em.person_id = ${personId}`;
-  for (const m of memberships) fireDivisionRevalidate(m.division_id, m.competition_id);
+  // The person's card at every competition URL, and every division, fixture
+  // and card entry naming them (`firePersonRevalidate`: scope, cost and failure
+  // there). Awaited inside the request, after the write.
+  await firePersonRevalidate([personId], { person: personId });
 
   const [me] = await listMyPersons(userId).then((all) => all.filter((p) => p.id === personId));
   return me;

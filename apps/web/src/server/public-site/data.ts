@@ -9,8 +9,9 @@ import "server-only";
 // `revalidateTag('division:{id}')` for instant refresh (see usecases/scoring.ts).
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
-import { isoDateTime } from "@/lib/public-site";
+import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { resolveVenueTz } from "@/lib/tz";
 import { venueTzRow } from "@/server/venue-tz";
 import { buildCourtDirectory } from "@/lib/court-directory";
@@ -26,9 +27,11 @@ import type { MessageKey } from "@/lib/messages";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
-import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
+import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
 import { loadMatchCentre } from "./match-centre-load";
+import { variantLabel } from "./variant-label";
 import type { MatchCentreDocT } from "./match-centre-schema";
+import type { PlayerMatchLine } from "./public-player-matches";
 
 /**
  * `{count}`-pluralized org-default-locale copy — the `public-site/data.ts`
@@ -163,6 +166,37 @@ export const REVALIDATE_SLOW = 300; // entrant / player pages
 export const divisionTag = (divisionId: string) => `division:${divisionId}`;
 export const competitionTag = (competitionId: string) => `competition:${competitionId}`;
 export const orgTag = (orgSlug: string) => `org-public:${orgSlug}`;
+/** One person's public card entries — at every competition URL, allowed or
+ *  refused. Fired by every write to what a card shows about them
+ *  (`firePersonRevalidate`); nothing else carries it. */
+export const personTag = (personId: string) => `pub-person:${personId}`;
+
+/** Next keeps at most this many tags on one cache entry and drops the rest
+ *  with nothing but a console line (`validateTags`, next/dist/lib/constants).
+ *  Pinned against Next's own value by the person-writes revalidate suite. */
+export const NEXT_CACHE_TAG_MAX_ITEMS = 128;
+
+/** The player card's entry tags: `fixed`, then one division tag per id IN THE
+ *  ORDER GIVEN, never more than Next keeps (review r2-m3). Past the cap the
+ *  LAST ids are dropped, with a warning: a score in a dropped division then
+ *  reaches the card only through the competition tag, which a score makes
+ *  stale, not expired, so that card is served stale once. The caller orders the
+ *  person's own divisions first, so what is dropped is a division the person
+ *  plays no match in. */
+export function playerCardTags(
+  fixed: string[],
+  orderedDivisionIds: string[],
+  context: { competitionId: string; personId: string },
+): string[] {
+  const room = NEXT_CACHE_TAG_MAX_ITEMS - fixed.length;
+  if (orderedDivisionIds.length > room) {
+    log.warn(
+      { ...context, divisions: orderedDivisionIds.length, kept: room },
+      "player card: the competition has more divisions than one cache entry can carry tags for; a score in a dropped division serves this card stale once",
+    );
+  }
+  return [...fixed, ...orderedDivisionIds.slice(0, room).map(divisionTag)];
+}
 /** One shared tag for every discovery surface (doc 15, PROMPT-19). */
 export const DISCOVERY_TAG = "discovery";
 
@@ -236,6 +270,11 @@ export interface PublicDivision {
    *  Optional so a hand-built `PublicDivision` in an existing test still
    *  type-checks — every real query that builds one now selects it. */
   config?: unknown;
+  /** T16b fix round 3 — `sport_variants.name` for this division's variant
+   *  (this org's own row over the system row), the FALLBACK `variantLabel`
+   *  prints only for a variant `VARIANT_LABEL_KEYS` does not name. Optional
+   *  for the same hand-built-fixture reason as the fields above. */
+  variant_name?: string | null;
 }
 
 export interface PublicFixture {
@@ -355,8 +394,13 @@ export interface StandingsSnapshotRow {
 
 export interface PublicEntrantMember {
   name: string;
+  /** Null without photo consent — and null whenever the division's name
+   *  policy masks this member (`maskPublicEntrantNames`). */
   photo: string | null;
-  person_id: string | null; // null = no public-name consent, no player card
+  /** Null = no player card: no public-name consent, OR the division's name
+   *  policy masks this member (`maskPublicEntrantNames` withholds the id, which
+   *  is the card's URL — the card would otherwise undo the mask). */
+  person_id: string | null;
   squad_number: number | null;
   position: string | null;
 }
@@ -446,24 +490,69 @@ export function resolveLogoUrl(
   return logoUrl ?? null;
 }
 
+/** A competition as the org home lists it: the public row plus how many of its
+ *  public fixtures are in play right now (spectator W2, Task 15). */
+export interface PublicOrgCompetition extends PublicCompetition {
+  in_play: number;
+}
+
+/**
+ * The org home's competition list — the ONE query behind both the page's first
+ * paint (`getPublicOrg`) and the chip island's poll (`publicOrgLive`,
+ * usecases/public.ts), so the two can never disagree about which competitions
+ * are listed or what a count means.
+ *
+ * Listed: `visibility = 'public'` only. `public_competitions_v` admits
+ * `unlisted` too; an unlisted competition is readable by link and never listed.
+ *
+ * `in_play` counts `in_play` fixtures through `public_divisions_v`, and the
+ * join is what makes it a PUBLIC count: `public_fixtures_v` filters on the
+ * competition's visibility only, so it still returns the fixtures of an
+ * ARCHIVED division, which the public pages do not show (V262).
+ *
+ * Order (owner ruling 2026-09-17): three tiers, each read off the chip its card
+ * shows — a match in play ("{count} live now") first, then marked `live` with
+ * nothing in play ("On now"), then the rest; within each tier `starts_on`
+ * descending (undated last), the newer row breaking a tie. The SQL sorts by
+ * date only and `sortOrgHomeCompetitions` (lib/public-site.ts) lifts the
+ * tiers, reading the SAME `status` and `in_play` the row carries to the chip,
+ * through the chip's own predicates — so the list cannot put a competition
+ * above one whose chip is livelier, and there is no second, SQL copy of the
+ * rule to drift. The poll (`publicOrgLive`) returns rows in this order, and the
+ * island sorts its cards with the same function after every poll, so a
+ * competition going live moves up on the same poll that lights its chip.
+ */
+export async function listOrgHomeCompetitions(orgId: string): Promise<PublicOrgCompetition[]> {
+  const byDate = await sql<PublicOrgCompetition[]>`
+    select c.id, c.org_id, c.name, c.slug, c.description, c.starts_on, c.ends_on,
+           c.branding, c.status, c.visibility,
+           (select count(*)::int
+              from public_fixtures_v f
+              join public_divisions_v d on d.id = f.division_id
+             where d.competition_id = c.id and f.status = 'in_play') as in_play
+    from public_competitions_v c
+    where c.org_id = ${orgId} and c.visibility = 'public'
+    order by c.starts_on desc nulls last, c.created_at desc`;
+  return sortOrgHomeCompetitions(byDate);
+}
+
 /** Org landing: the org + its `public` competitions (unlisted stays link-only). */
 export async function getPublicOrg(orgSlug: string): Promise<{
   org: PublicOrg;
-  competitions: PublicCompetition[];
+  competitions: PublicOrgCompetition[];
 } | null> {
   return unstable_cache(
     async () => {
       const org = await loadOrg(orgSlug);
       if (!org) return null;
-      const competitions = await sql<PublicCompetition[]>`
-        select id, org_id, name, slug, description, starts_on, ends_on, branding,
-               status, visibility
-        from public_competitions_v
-        where org_id = ${org.id} and visibility = 'public'
-        order by starts_on desc nulls last, created_at desc`;
+      const competitions = await listOrgHomeCompetitions(org.id);
       return { org, competitions };
     },
-    ["pub-org", orgSlug],
+    // v2 (spectator W2, Task 15): each competition gained `in_play`. The page
+    // reads it for the chip, and a v1 entry would serve the old "Upcoming"
+    // on a live competition for a full REVALIDATE_FAST window after deploy —
+    // same reason `pub-player` and `pub-hub` retire their keys on a shape change.
+    ["pub-org-v2", orgSlug],
     { tags: [orgTag(orgSlug)], revalidate: REVALIDATE_FAST },
   )();
 }
@@ -504,7 +593,16 @@ export async function getPublicCompetition(
                -- these (see PublicDivision's own doc comment) — a cheap
                -- primary-key join to the base table rather than widening
                -- that view for every other consumer of it.
-               dv.youth, dv.player_name_display, dv.config
+               dv.youth, dv.player_name_display, dv.config,
+               -- T16b fix round 3: the stored format name, the fallback for a
+               -- variant the dictionary map does not name (variant-label.ts).
+               -- System rows and this org's own only, the org's row first —
+               -- the same scoping as getPublicFixture's variant lookup.
+               (select v.name from sport_variants v
+                 where v.sport_key = d.sport_key and v.key = d.variant_key
+                   and (v.org_id is null or v.org_id = ${org.id})
+                 order by v.org_id nulls last
+                 limit 1) as variant_name
         from public_divisions_v d
         left join sports s on s.key = d.sport_key
         join divisions dv on dv.id = d.id
@@ -641,21 +739,42 @@ export async function maskPublicEntrantNames<
     }
   }
 
+  const setting = division.player_name_display ?? null;
+  const youth = division.youth ?? false;
   return entrants.map((e) => {
     const optedOut = e.kind !== "team" && anyOptedOut(consentsByEntrant.get(e.id) ?? []);
     const fresh = e.members ? memberRowsByEntrant.get(e.id) : undefined;
-    const remaskedMembers =
-      e.members && fresh && fresh.length === e.members.length
+    // Privacy hotfix (2026-09-16): a member whose name the policy masks also
+    // loses `person_id` and `photo`. This output is what the division page
+    // renders AND what the anonymous entrants API serves, and the id is the
+    // player card's URL — a masked "Arun K." linked to a card (or an id a
+    // client can build that URL from) is the full name one hop away. No public
+    // surface shows a masked member's photo, so none is served either.
+    const remaskedMembers = !e.members
+      ? undefined
+      : fresh && fresh.length === e.members.length
         ? e.members.map((m, i) => ({
             ...m,
-            name: resolvePersonDisplayName(
-              fresh[i]!.full_name,
-              fresh[i]!.consent,
-              division.player_name_display ?? null,
-              division.youth ?? false,
-            ),
+            name: resolvePersonDisplayName(fresh[i]!.full_name, fresh[i]!.consent, setting, youth),
+            ...(isPersonNameMasked(fresh[i]!.consent, setting, youth) ? { person_id: null, photo: null } : {}),
           }))
-        : undefined;
+        : // The roster moved between the view's read and the fresh one (a
+          // member joined or left, or the read found none), so index i no
+          // longer names the same person in both. The view's own
+          // names are consent-gated but carry NO youth axis, so they are never
+          // published as they stand: the DIVISION's policy is applied to every
+          // member instead (no per-person consent to hand it — the view's
+          // name already carries that axis, initials without consent).
+          e.members.map((m) =>
+            isPersonNameMasked(null, setting, youth)
+              ? {
+                  ...m,
+                  name: m.name === null ? null : resolvePersonDisplayName(m.name, null, setting, youth),
+                  person_id: null,
+                  photo: null,
+                }
+              : m,
+          );
     return {
       ...e,
       ...(remaskedMembers ? { members: remaskedMembers } : {}),
@@ -666,11 +785,64 @@ export async function maskPublicEntrantNames<
           : resolvePersonDisplayName(
               e.display_name,
               optedOut ? { public_name: false } : null,
-              division.player_name_display ?? null,
-              division.youth ?? false,
+              setting,
+              youth,
             ),
     };
   });
+}
+
+/** One squad line's INTERNAL identity — see `readEntrantMemberRefs`. */
+export interface EntrantMemberRef {
+  personId: string;
+  fullName: string;
+  consent: { public_name?: boolean } | null;
+  squadNumber: number | null;
+  /** `entrant_members.default_position_key` — the view's `position`. */
+  positionKey: string | null;
+}
+
+/**
+ * The person behind each line of `public_entrants_v`'s `members`, per entrant,
+ * in the view's own order (`squad_number nulls last, full_name`, V350) — the
+ * same positional zip `maskPublicEntrantNames` relies on, so index i names the
+ * same person in both (callers still guard on length).
+ *
+ * SERVER-ONLY JOIN KEY. The ids here are every member's, consented or not, and
+ * the full names are unmasked: nothing returned may reach a document. It exists
+ * so the competition hub can mark a suspended player by PERSON rather than by
+ * display name, and it is deliberately NOT folded into
+ * `maskPublicEntrantNames`'s output, which the public entrants API
+ * (`usecases/public.ts`) serves as-is.
+ */
+export async function readEntrantMemberRefs(entrantIds: string[]): Promise<Record<string, EntrantMemberRef[]>> {
+  if (entrantIds.length === 0) return {};
+  const rows = await sql<
+    {
+      entrant_id: string;
+      person_id: string;
+      full_name: string;
+      consent: { public_name?: boolean } | null;
+      squad_number: number | null;
+      default_position_key: string | null;
+    }[]
+  >`
+    select em.entrant_id, p.id as person_id, p.full_name, p.consent, em.squad_number, em.default_position_key
+    from entrant_members em
+    join persons p on p.id = em.person_id
+    where em.entrant_id in ${sql(entrantIds)} and p.merged_into is null
+    order by em.entrant_id, em.squad_number nulls last, p.full_name`;
+  const out: Record<string, EntrantMemberRef[]> = {};
+  for (const r of rows) {
+    (out[r.entrant_id] ??= []).push({
+      personId: r.person_id,
+      fullName: r.full_name,
+      consent: r.consent,
+      squadNumber: r.squad_number,
+      positionKey: r.default_position_key,
+    });
+  }
+  return out;
 }
 
 /** Division home: schedule + standings + entrants + stage skeleton. */
@@ -744,7 +916,9 @@ export async function getPublicDivision(
         where d.id = ${division.id}`;
       return { stages, pools, fixtures, standings, entrants, tz: ss?.tz ?? "UTC" };
     },
-    ["pub-div", division.id],
+    // v2 (privacy hotfix, 2026-09-16): a member the division's name policy
+    // masks now carries no `person_id` and no `photo` (maskPublicEntrantNames).
+    ["pub-div-v2", division.id],
     {
       tags: [divisionTag(division.id), competitionTag(division.competition_id)],
       revalidate: REVALIDATE_FAST,
@@ -842,9 +1016,17 @@ export async function getPublicFixture(
       //
       // Scoped to system rows and this org's own: variants are org-scoped, and
       // a bare match on (sport_key, key) would happily return ANOTHER org's
-      // renamed variant. The org's own row wins where both exist, which is what
-      // renaming a variant is for; the key remains the fallback, so a division
-      // pointing at a variant the catalog no longer has still says something.
+      // renamed variant. Between those two rows the org's own is read first.
+      //
+      // PRECEDENCE on public pages (`variantLabel`, variant-label.ts): the
+      // dictionary word wins for every engine-declared variant key, in the
+      // org's locale; this row is the fallback only for a key the map does not
+      // name (an org's own custom variant), and the raw key after that. So an
+      // org RENAME of an engine-declared key (e.g. its own row for `t20`) does
+      // NOT show publicly — deliberate (T16b fix round 3: a variant is copy in
+      // four locales, a rename is one English string), and pinned by
+      // public-fixture-format-label.test.ts. Nothing in the product writes org
+      // rows today; an org-variant editor must settle this before it ships.
       const [variantRow] = await sql<{ name: string }[]>`
         select name from sport_variants
         where sport_key = ${division.sport_key} and key = ${division.variant_key}
@@ -858,7 +1040,13 @@ export async function getPublicFixture(
         division: {
           sportKey: division.sport_key,
           moduleVersion: division.module_version,
-          formatLabel: variantRow?.name ?? division.variant_key,
+          // T16b fix round 3: the dictionary's word for an engine-declared
+          // variant, in the org's locale; the catalog name above only for a
+          // variant the map does not name, the key after that.
+          formatLabel: variantLabel(
+            { sportKey: division.sport_key, variantKey: division.variant_key, storedName: variantRow?.name ?? null },
+            (key) => msgFor(locale, key),
+          ),
           tz: tzRow?.division_tz ?? null,
           youth: division.youth ?? false,
           playerNameDisplay: division.player_name_display ?? null,
@@ -887,7 +1075,21 @@ export async function getPublicFixture(
         stageName: stageRow?.name ?? null,
       };
     },
-    ["pub-fixture", fixtureId],
+    // v2 (owner decision 2026-09-16): `matchCentre.header.statusLine` for a
+    // decided cricket match changed shape (the margin is its own key, not a
+    // `{margin}` word). A v1 entry would render "X won" without the margin
+    // for a REVALIDATE_FAST window after deploy, so retire the key rather than
+    // wait — same reason as `pub-player-v15` below.
+    //
+    // v2 (privacy hotfix, 2026-09-16): the match centre's lineup `masked` flag
+    // is the name policy's decision (readPublicLineups), so a one-word masked
+    // name now gets a surrogate id instead of its real one.
+    //
+    // v3 (merge of the two v2 changes above, 2026-09-17): each branch moved
+    // the unversioned key to `-v2` for its own change, so a `-v2` entry
+    // written by either one lacks the other's. The merged document retires
+    // both rather than serve one for a REVALIDATE_FAST window.
+    ["pub-fixture-v3", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;
@@ -946,14 +1148,90 @@ export interface PublicCareerSport extends CareerSportStats {
   meta: string;
 }
 
+/** What `publicPlayerGate` hands a caller that passed it: the context the page
+ *  and the player-matches endpoint both build on. */
+export interface PublicPlayerGate {
+  org: PublicOrg;
+  competition: PublicCompetition;
+  player: PublicPlayer;
+}
+
 /**
- * Player card. Two gates, in two places, deliberately:
+ * W2 Task 14 — the player page's REFUSAL, and nothing else: null exactly when
+ * `getPublicPlayer` is null, because `getPublicPlayer` is built on it — the two
+ * cannot drift. Folds nothing and reads no stats, so a caller that needs only
+ * "may this person be shown here" (the player-matches endpoint) does not pay
+ * for the page. Three conditions, all evaluated per call:
+ *  - the id is a uuid and the competition is public/unlisted
+ *    (`getPublicCompetition`, cached on the competition tag);
+ *  - the `dashboard.player_profiles` ENTITLEMENT for THIS competition (V307) —
+ *    outside any cache on purpose: no entitlement write busts the competition
+ *    tag, so a gate inside one would stay frozen at whatever the org held when
+ *    it was first cached. No entitlement write fires a tag, so a grant or a
+ *    denial reaches the card only as these expire, not immediately:
+ *      · the card page — MEASURED (review of W2 round 2, response headers on
+ *        a prod build): served `s-maxage=30`, not the route's `revalidate =
+ *        300`, because this gate's `getPublicCompetition` read
+ *        (`REVALIDATE_FAST`, 30s) lowers the page's revalidate;
+ *      · `hasFeature`'s cache — INFERRED from `ENT_TTL_SECONDS` (300s, Redis):
+ *        up to 5 more minutes wherever the write that changed the entitlement
+ *        does not call `invalidateOrgEntitlements`;
+ *      · a CDN in front — INFERRED: its own copy for up to the s-maxage.
+ *    So the worst case is INFERRED at about 30s + 300s + 30s — past five
+ *    minutes when the write skips the invalidation. MEASURED in a local prod
+ *    build with no Redis (spectator W2, 2026-09-17): a denial took ~13s to
+ *    refuse the card, and a restore kept serving the refusal for 38s. Owner
+ *    ruling 2026-09-17: up to 5 minutes stale after an entitlement change is
+ *    accepted, no tag owed — the composite above can exceed that.
+ *    The competition id is what makes an Event Pass count for the competition
+ *    it paid for, and only that one;
+ *  - CONSENT and org scope: the person is in `public_players_v` (granted
+ *    `public_name`, rostered in a public competition) for this org.
+ */
+export async function publicPlayerGate(
+  orgSlug: string,
+  compSlug: string,
+  personId: string,
+): Promise<PublicPlayerGate | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
+  const shell = await getPublicCompetition(orgSlug, compSlug);
+  if (!shell) return null;
+  // The competition tag goes on the render BEFORE either refusal below can
+  // return. Next adds a cached function's tags to the page entry being
+  // rendered whether the function hits or misses, and a REFUSED card is cached
+  // too (the page's `notFound()`). Task 14 moved the consent read out of the
+  // competition-tagged read below, which left a refusal with the org tag alone
+  // (`getPublicCompetition`'s), which no person write fires. The PERSON tag is
+  // what a write about this person fires (`firePersonRevalidate`), and it
+  // reaches the card at a competition they are not rostered in (the view is
+  // org-scoped); the competition tag is what writers scoped to this
+  // competition or its divisions fire. So a refused card is reached by exactly
+  // what reaches an allowed one. The consent read stays OUT of the cache: this
+  // entry holds nothing but the tags.
+  await unstable_cache(async () => true, ["pub-player-gate-tag", shell.competition.id, personId], {
+    tags: [competitionTag(shell.competition.id), personTag(personId)],
+  })();
+  if (!(await hasFeature(shell.org.id, "dashboard.player_profiles", shell.competition.id))) {
+    return null;
+  }
+  const [player] = await sql<PublicPlayer[]>`
+    select id, org_id, name, photo from public_players_v
+    where id = ${personId} and org_id = ${shell.org.id} limit 1`;
+  if (!player) return null;
+  return { org: shell.org, competition: shell.competition, player };
+}
+
+/**
+ * Player card. Every refusal is `publicPlayerGate`'s, evaluated first and per
+ * call, and the card adds none of its own. Two gates, in two places,
+ * deliberately:
  *  - consent lives in public_players_v (the view only contains persons who
- *    granted `public_name`);
- *  - the `dashboard.player_profiles` ENTITLEMENT lives here (V307). The view
- *    cannot hold it: its filter sits over `from persons p` and a person plays
- *    in many competitions, so there is no competition in scope to make the
- *    check pass-aware — and an org-wide check would ignore an Event Pass.
+ *    granted `public_name`), read by the gate;
+ *  - the `dashboard.player_profiles` ENTITLEMENT (V307) is checked by the
+ *    gate, not the view. The view cannot hold it: its filter sits over `from
+ *    persons p` and a person plays in many competitions, so there is no
+ *    competition in scope to make the check pass-aware — and an org-wide
+ *    check would ignore an Event Pass.
  */
 export async function getPublicPlayer(
   orgSlug: string,
@@ -972,22 +1250,19 @@ export async function getPublicPlayer(
   /** Pre-rendered "Career" section heading — this page has no Dict/locale
    *  pair (see statMsg), so, like `career[].meta`, the copy is baked here. */
   careerLabel: string;
+  /** W2 Task 14 — one line per started fixture the person appeared in within
+   *  THIS competition, newest first (`readPlayerMatchLines`). Empty → []. */
+  matches: PlayerMatchLine[];
+  /** W2 Task 14 — ISO instant of the CACHED read behind `matches` (which
+   *  fixtures, which side, the result): the page's true freshness. Repeats for
+   *  every render served from the same cache entry. */
+  generatedAt: string;
 } | null> {
-  if (!/^[0-9a-f-]{36}$/i.test(personId)) return null;
-  const shell = await getPublicCompetition(orgSlug, compSlug);
-  if (!shell) return null;
-
-  // OUTSIDE the cache on purpose. The closure below is keyed on
-  // `competition:{id}`, and no entitlement write busts that tag — a gate placed
-  // inside it would be frozen at whatever the org held when the page was first
-  // cached, so a lapsed org would keep serving player cards for a full
-  // REVALIDATE_SLOW window. Evaluated per request, `hasFeature`'s own 5-minute
-  // cache is the only staleness, which is the bound we accept everywhere else.
-  // The competition id is what makes an Event Pass count for the competition it
-  // paid for, and only that one.
-  if (!(await hasFeature(shell.org.id, "dashboard.player_profiles", shell.competition.id))) {
-    return null;
-  }
+  // OUTSIDE the cache on purpose, every condition of it — see `publicPlayerGate`.
+  const gate = await publicPlayerGate(orgSlug, compSlug, personId);
+  if (!gate) return null;
+  const shell = { org: gate.org, competition: gate.competition };
+  const { player } = gate;
 
   // Stat-row copy for spectators. Deliberately NOT resolveLocale(): that reads
   // cookies()/headers() and would opt this ISR route (revalidate = 300) into
@@ -996,26 +1271,147 @@ export async function getPublicPlayer(
   const orgLocale = toLocale(shell.org.default_locale);
   const statMsg = (k: Parameters<typeof msgFor>[1]) => msgFor(orgLocale, k);
 
+  // W2 Task 14 — the per-match lines. Imported lazily because the reader
+  // takes `maskPublicEntrantNames` from THIS file (one masking decision, never
+  // a second): a static import back would be a value-level module cycle, and a
+  // `vi.mock` of this module that spreads `importOriginal()` would meet itself
+  // half-built.
+  const { readPlayerMatchSeeds, completePlayerMatchLines } = await import("./public-player-matches");
+
+  // Final review I1 (owner rule: results are never stale). The entry below
+  // bakes each match's result, score line and `lastSeq`, and a score write
+  // EXPIRES only the division tag (`fireScoreRevalidate`); the competition tag
+  // it merely makes stale, which served the old result for the next loads. So
+  // the entry carries the tag of EVERY division in the competition: the
+  // matches come from any of them (a lineup can seat the person outside their
+  // roster division), and the tags must be known before the read. Read here,
+  // uncached, so a division created a moment ago is covered too. Cost: the
+  // first card read after a score in the competition rebuilds, as the fixture
+  // page already does.
+  //
+  // In a FIXED order (review r2-m3): the person's own divisions first (a roster
+  // or a lineup seats them there), then the rest by id. An entry holds at most
+  // 128 tags (`playerCardTags`), so in a competition with more divisions than
+  // that, the ones dropped are divisions this person plays no match in.
+  const competitionDivisions = await sql<{ id: string }[]>`
+    select d.id from divisions d
+    where d.competition_id = ${shell.competition.id}
+    order by (
+      exists (select 1 from entrant_members em join entrants e on e.id = em.entrant_id
+              where e.division_id = d.id and em.person_id = ${personId})
+      or exists (select 1 from lineups l join fixtures f on f.id = l.fixture_id
+                 where f.division_id = d.id and l.person_id = ${personId})
+    ) desc, d.id`;
+
   const detail = await unstable_cache(
     async () => {
-      const [player] = await sql<PublicPlayer[]>`
-        select id, org_id, name, photo from public_players_v
-        where id = ${personId} and org_id = ${shell.org.id} limit 1`;
-      if (!player) return null;
+      // Only the relational half is held in this entry; the cricket figures are
+      // added below, OUTSIDE it (see there). Same org-default locale as `statMsg`.
+      // `generatedAt` is taken with it, so it travels in the same entry.
+      const generatedAt = new Date().toISOString();
+      const matchSeeds = await readPlayerMatchSeeds(sql, {
+        personId,
+        competitionId: shell.competition.id,
+        orgSlug: shell.org.slug,
+        compSlug: shell.competition.slug,
+        locale: orgLocale,
+      });
+
+      // Privacy hotfix (2026-09-16): `public_players_v.name` is the FULL name,
+      // gated by public-name consent alone — which RS007 grants every
+      // registered player by default. The division's youth/name-display policy
+      // is the other axis, and the division page masks by it; this card did
+      // not, so a youth player's full name reached the h1, <title>, meta
+      // description, and their photo the card. Applied at the data layer, so
+      // every consumer of this payload reads the masked name.
+      //
+      // The consent read itself is `publicPlayerGate`'s, per call and OUTSIDE
+      // this entry (W2 Task 14). What this entry holds is the policy DECISION
+      // (`nameMask`), applied to the gate's player after the entry resolves
+      // (below), so the one decision is cached under this entry's tags, the
+      // org tag included.
+      //
+      // A card is a PERSON, not a division, so every division the person is
+      // rostered in across the ORG is asked, and the strictest wins. Not just
+      // this competition's: the card resolves the person by org
+      // (`publicPlayerGate`), so a youth player's id under any sibling
+      // competition's URL would otherwise print the full name. Resolved through
+      // the one shared resolver against the masking division's own policy; a
+      // masked card carries no photo, because no public surface shows a masked
+      // person's.
+      //
+      // Freshness. A division POLICY change is immediate: this entry carries
+      // `orgTag`, and `patchDivision` expires it (`fireOrgRevalidate`) when a
+      // division's stored `youth` or `player_name_display` changes. ROSTER
+      // writes (entrants.ts, registrations.ts, stages.ts, imports.ts,
+      // person-merge.ts) stay bounded: busting the org's whole public tree on
+      // every roster edit costs too much, so a new youth roster reaches the
+      // card within REVALIDATE_SLOW plus the page's 300s ISR, plus one stale
+      // hit. That stale entry predates the roster, so it only shows a name
+      // that was already public. Competition visibility is not an input: this
+      // query reads every roster in the org, whatever the visibility.
+      const rosterPolicies = await sql<
+        { youth: boolean; player_name_display: string | null; consent: { public_name?: boolean } | null }[]
+      >`
+        select d.youth, d.player_name_display, p.consent
+        from entrant_members em
+        join entrants e  on e.id = em.entrant_id
+        join divisions d on d.id = e.division_id
+        join persons p   on p.id = em.person_id
+        where em.person_id = ${personId} and d.org_id = ${shell.org.id}`;
+      // Fails CLOSED. `public_players_v` only matches a person with a roster
+      // row, so an empty read here means this query could not see it (a
+      // database role that RLS filters, or a roster removed between the two
+      // reads). With no policy to go on, mask. A read that throws serves no
+      // card at all.
+      const strictest =
+        rosterPolicies.length === 0
+          ? { youth: false, player_name_display: "first_initial", consent: null }
+          : rosterPolicies.find((r) => isPersonNameMasked(r.consent, r.player_name_display, r.youth));
+      const nameMask = strictest ?? null;
+
       // Memberships within THIS competition, via the consent-filtered members
       // payload (person_id present only with consent — same gate as the card).
-      const memberships = await sql<
-        { division_name: string; division_slug: string; entrant_name: string; squad_number: number | null; position: string | null }[]
+      const membershipRows = await sql<
+        {
+          division_name: string; division_slug: string; entrant_id: string; kind: string;
+          entrant_name: string; squad_number: number | null; position: string | null;
+          youth: boolean; player_name_display: string | null;
+        }[]
       >`
         select d.name as division_name, d.slug as division_slug,
-               e.display_name as entrant_name,
+               e.id as entrant_id, e.kind, e.display_name as entrant_name,
                (m->>'squad_number')::int as squad_number,
-               m->>'position' as position
+               m->>'position' as position,
+               dv.youth, dv.player_name_display
         from public_entrants_v e
         join public_divisions_v d on d.id = e.division_id
+        join divisions dv on dv.id = d.id
         cross join lateral jsonb_array_elements(e.members) m
         where d.competition_id = ${shell.competition.id}
           and m->>'person_id' = ${personId}`;
+      // A non-team entrant's display name IS a person's name — an individual
+      // entrant's is this player's own — so it goes through the same entrant
+      // mask the division page uses, never straight off the view. Under the
+      // division's own policy, or the card's strictest one when the card is
+      // masked: "Arun K." above an "— Arun Kumar" membership line would undo it.
+      const memberships: {
+        division_name: string; division_slug: string; entrant_name: string;
+        squad_number: number | null; position: string | null;
+      }[] = [];
+      for (const r of membershipRows) {
+        const [masked] = await maskPublicEntrantNames(
+          [{ id: r.entrant_id, kind: r.kind, display_name: r.entrant_name }],
+          strictest ?? r,
+        );
+        memberships.push({
+          division_name: r.division_name,
+          division_slug: r.division_slug,
+          entrant_name: masked!.display_name,
+          squad_number: r.squad_number,
+          position: r.position,
+        });
+      }
 
       // PROMPT-65: per-division totals from player_stat_snapshots, labelled
       // by the sport module's declared playerStats model (never hardcoded).
@@ -1080,7 +1476,15 @@ export async function getPublicPlayer(
         (s) => (divisionsPerSport.get(s.sport_key)?.size ?? 0) > 1,
       );
       if (aggregating.length === 0) {
-        return { player, memberships, stats, career: [], careerLabel: statMsg("player.career.title") };
+        return {
+          nameMask,
+          memberships,
+          stats,
+          career: [],
+          careerLabel: statMsg("player.career.title"),
+          matchSeeds,
+          generatedAt,
+        };
       }
       const divisionIds = [...new Set(aggregating.map((s) => s.division_id))];
       const matchesByDivision = await countMatchesByDivision(sql, { by: "person", personId }, divisionIds);
@@ -1102,8 +1506,28 @@ export async function getPublicPlayer(
         ].join(" · "),
       }));
 
-      return { player, memberships, stats, career, careerLabel: statMsg("player.career.title") };
+      return { nameMask, memberships, stats, career, careerLabel: statMsg("player.career.title"), matchSeeds, generatedAt };
     },
+    // v16 (W2 Task 14): added `matchSeeds` and `generatedAt` to this cached
+    // payload, and moved `player` OUT of it (the consent read is now part of
+    // `publicPlayerGate`, evaluated per call). A live v15
+    // entry would keep serving without it for a full REVALIDATE_SLOW window
+    // after deploy, and the page would read `undefined` where it expects a
+    // list — same reason v15 retired v14's key rather than waiting.
+    //
+    // v16 (privacy hotfix, 2026-09-16): `player.name`, `player.photo` and
+    // `memberships[].entrant_name` now follow the division name policy. A live
+    // v15 entry would keep serving a youth player's full name and photo for a
+    // full REVALIDATE_SLOW window after deploy.
+    //
+    // v17 (merge of the two v16 changes above, 2026-09-17): each branch
+    // moved v15 to `-v16` with a different payload. W2's has `matchSeeds` and
+    // `generatedAt` and no `player`; the privacy hotfix's still has `player`
+    // and no `nameMask`. The merged payload is neither: a `-v16` entry from
+    // either would read `undefined` where the page expects `matchSeeds` or
+    // `nameMask`, and a W2 entry carries no mask at all. Retired rather than
+    // served for a REVALIDATE_SLOW window.
+    //
     // v15 (S9/#418): added the `career` rollup to this cached payload. A live
     // v14 entry would keep serving without it for a full REVALIDATE_SLOW
     // window after deploy — same reason v13 → v14 retired its key instead of
@@ -1112,12 +1536,40 @@ export async function getPublicPlayer(
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v15", shell.competition.id, personId],
-    { tags: [competitionTag(shell.competition.id)], revalidate: REVALIDATE_SLOW },
+    ["pub-player-v17", shell.competition.id, personId],
+    // The person tag: a write about THIS person must rebuild this entry at a
+    // competition they are not rostered in, which no competition tag reaches.
+    // The org tag: a division name-policy change anywhere in the org
+    // (`patchDivision`) must rebuild `nameMask` (privacy hotfix).
+    // The division tags: a score write expires this entry (final review I1,
+    // above).
+    {
+      tags: playerCardTags(
+        [competitionTag(shell.competition.id), personTag(personId), orgTag(shell.org.slug)],
+        competitionDivisions.map((d) => d.id),
+        { competitionId: shell.competition.id, personId },
+      ),
+      revalidate: REVALIDATE_SLOW,
+    },
   )();
-  if (!detail) return null;
 
-  return { org: shell.org, competition: shell.competition, ...detail };
+  // The figures half runs HERE, after the entry above has resolved, because it
+  // reads a per-fixture `unstable_cache` of its own — and Next skips the cache
+  // read of an `unstable_cache` called inside another one's callback. From in
+  // there, every miss of this page's entry (every score write in the
+  // competition busts it) would re-fold every cricket match the person played.
+  const { matchSeeds, nameMask, ...rest } = detail;
+  const matches = await completePlayerMatchLines(sql, matchSeeds, { personId, locale: orgLocale });
+  // The privacy hotfix's decision, cached above, applied to the gate's
+  // per-call player: the masked name, and no photo.
+  const shown: PublicPlayer = nameMask
+    ? {
+        ...player,
+        name: resolvePersonDisplayName(player.name, nameMask.consent, nameMask.player_name_display, nameMask.youth),
+        photo: null,
+      }
+    : player;
+  return { org: shell.org, competition: shell.competition, player: shown, ...rest, matches };
 }
 
 /**

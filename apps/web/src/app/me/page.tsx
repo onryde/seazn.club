@@ -359,8 +359,8 @@ export default async function MePage({
 
         {/* G6 — my stat blocks (PROMPT-65 self-view): every snapshot for my
             claimed persons, private competitions included; the public-profile
-            link shows only where the public card would actually render
-            (public competition + name consent). */}
+            link shows only on the rule every public link to the card uses
+            (`public_card`, `playerLinkId`). */}
         {stats.length > 0 && (
           <section className="mb-8" data-testid="me-stats">
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
@@ -368,8 +368,6 @@ export default async function MePage({
             </h2>
             <ul className="space-y-3">
               {stats.map((s) => {
-                const consented =
-                  persons.find((p) => p.id === s.person_id)?.consent.public_name === true;
                 return (
                   <li key={`${s.person_id}:${s.division_slug}`} className="card space-y-2 p-4">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -377,7 +375,7 @@ export default async function MePage({
                         {s.division_name} · {s.competition_name}
                         <span className="ml-1.5 text-xs text-slate-400">{s.org_name}</span>
                       </p>
-                      {s.competition_public && consented && (
+                      {s.public_card && (
                         <Link
                           href={`/shared/${s.org_slug}/${s.competition_slug}/players/${s.person_id}`}
                           className="text-xs font-medium text-purple-700 hover:underline"

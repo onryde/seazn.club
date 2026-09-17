@@ -28,7 +28,7 @@ import Link from "next/link";
 import { EmptyCrest, EntityLogo, PendingCrest } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import { fmtDate, fmtTime } from "@/lib/format";
+import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import type { HubMatchT } from "@/server/public-site/competition-hub-schema";
 
 export interface MatchCardProps {
@@ -138,7 +138,8 @@ export function MatchCard({
       );
       return t(dict, "matchesHub.startsIn", { when });
     }
-    return fmtDate(m.tz, m.scheduledAt, { weekday: "short", day: "numeric", month: "short" });
+    // The page's locale (owner ruling 2026-09-16), English day-month.
+    return fmtPublicDate(locale, m.tz, m.scheduledAt, { weekday: "short", day: "numeric", month: "short" });
   }
 
   function sideRow(i: 0 | 1) {
@@ -273,7 +274,7 @@ export function MatchCard({
           ) : m.bucket === "completed" ? (
             t(dict, "matchesHub.ended")
           ) : m.scheduledAt ? (
-            fmtTime(m.tz, m.scheduledAt)
+            fmtPublicTime(locale, m.tz, m.scheduledAt)
           ) : (
             t(dict, "matchesHub.timeTbd")
           )}

@@ -9,8 +9,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import type { PublicFixture } from "@/server/public-site/data";
-import { fmtTime, fmtZoneAbbrev } from "@/lib/format";
+import { fmtPublicZoneAbbrev, fmtTime } from "@/lib/format";
 import { dayDateShort, dayLabelLong } from "@/lib/day-label";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { msg } from "@/lib/messages";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
@@ -107,9 +108,6 @@ function dayKey(iso: string, tz: string): string {
   }
 }
 
-/** The Intl tag dates are written in: the org's locale, "en" as en-GB
- *  ("Friday 25 September"), as every public date was before N1e e5. */
-export const dateTagFor = (locale: string) => (locale === "en" ? "en-GB" : locale);
 
 const UNSCHEDULED = "unscheduled";
 
@@ -296,7 +294,9 @@ export function Schedule({
   const shown = entrant
     ? fixtures.filter((f) => f.home_entrant_id === entrant || f.away_entrant_id === entrant)
     : fixtures;
-  const dateTag = dateTagFor(locale);
+  // The Intl tag dates are written in: the org's locale, "en" as en-GB
+  // ("Friday 25 September"), as every public date was before N1e e5.
+  const dateTag = intlLocaleFor(locale);
 
   // Only offer the day view when at least one fixture actually has a date.
   const anyScheduled = fixtures.some((f) => f.scheduled_at);
@@ -372,7 +372,12 @@ export function Schedule({
           id="entrant-filter"
           value={entrant}
           onChange={(e) => setEntrant(e.target.value)}
-          className="rounded-lg border border-zinc-300 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-line"
+          // `min-w-0 max-w-full`: a `<select>` sizes itself to its LONGEST
+          // option, so a 43-character entrant name made this filter 383px in
+          // a 288px phone column and scrolled the page sideways (T17 HB9d).
+          // Capped, the closed control shows the chosen name cut by the
+          // browser; the open list still shows every name in full.
+          className="min-w-0 max-w-full rounded-lg border border-zinc-300 bg-surface px-2.5 py-1.5 text-sm text-ink outline-none transition focus:border-accent focus:ring-2 focus:ring-accent-line"
         >
           <option value="">{copy.allEntrants}</option>
           {options.map(([id, name]) => (
@@ -421,7 +426,7 @@ export function Schedule({
               const anchor = list.find((x) => x.scheduled_at)?.scheduled_at;
               return anchor ? (
                 <span className="font-sans text-[10px] font-medium normal-case tracking-normal text-ink-muted/70">
-                  {copy.timesIn.replace("{zone}", fmtZoneAbbrev(tz, anchor))}
+                  {copy.timesIn.replace("{zone}", fmtPublicZoneAbbrev(locale, tz, anchor))}
                 </span>
               ) : null;
             })()}

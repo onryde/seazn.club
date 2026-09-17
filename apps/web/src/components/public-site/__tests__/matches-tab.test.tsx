@@ -92,16 +92,9 @@ describe("MatchesTab", () => {
   it("upcoming matches group by venue day with a day header and the zone caption", () => {
     const h = render(doc, { initialFilter: "upcoming" });
     expect(h).toContain(`data-testid="mh-day-2026-09-06"`);
-    // `fmtDate(tz, iso, { weekday: "long", day: "numeric", month: "long" })`.
-    // The brief's own comment here said "in the ORG locale"; that is FALSE and
-    // the correction matters, because it is the difference between a test
-    // pinning a bug and a test pinning a deliberate deferral. `format.ts:10`
-    // is `const LOCALE = "en-GB"`, hard-pinned, and `fmtDate` (`format.ts:33`)
-    // takes NO locale parameter — so every date on the public spectator
-    // surface renders in English in all four locales, repo-wide, deferred to
-    // the wave that threads the resolved locale through those signatures (see
-    // that file's own header comment). The Spanish test below is this fact's
-    // second, deliberate witness.
+    // `fmtPublicDate(locale, tz, iso, { weekday: "long", day: "numeric", month:
+    // "long" })` — the page's locale, English day-month (owner ruling
+    // 2026-09-16). The Spanish test below is this fact's second witness.
     expect(h).toMatch(
       /mh-day-2026-09-06[^>]*>[\s\S]*?Sunday 6 September[\s\S]*?times in BST/,
     );
@@ -263,7 +256,7 @@ describe("MatchesTab", () => {
     const undated = h.indexOf(`data-testid="mh-day-unscheduled"`);
     expect(dated).toBeGreaterThan(-1);
     expect(undated).toBeGreaterThan(dated);
-    // `fmtZoneAbbrev(tz, null)` falls back to `new Date()` — it would happily
+    // `fmtPublicZoneAbbrev(locale, tz, null)` falls back to `new Date()` — it would happily
     // print a caption for a fixture that has no time at all. The section from
     // the unscheduled heading onward carries none.
     expect(h.slice(undated)).not.toContain("times in");
@@ -289,19 +282,34 @@ describe("MatchesTab", () => {
     );
   });
 
-  it("the day heading is ENGLISH in every locale — `format.ts:10` pins the formatter to en-GB and `fmtDate` takes no locale (the dictionary copy around it IS translated)", () => {
-    // Deliberate and repo-wide, not a defect this test is freezing: `fmtDate`
-    // has no locale parameter to thread, and giving it one is a separate wave
-    // (`format.ts`'s header comment). What this pins is that the surrounding
-    // COPY is not English by accident — if the caption were hardcoded rather
-    // than dictionary-resolved, this test is what would catch it.
+  it("the day heading is in the org's locale, and so is the dictionary copy around it", () => {
+    // Until the owner's 2026-09-16 ruling this test pinned the heading as
+    // ENGLISH in Spanish ("Sunday 6 September"), because `fmtDate` was en-GB in
+    // every locale. The heading now reads Spanish, and so does the zone label
+    // inside the caption: it pinned `fmtZoneAbbrev`'s en-GB "BST" — British
+    // Summer Time, an English name — until Task 16's zero-English sweep. What
+    // this also pins is that the surrounding COPY is not English by accident —
+    // if the caption were hardcoded rather than dictionary-resolved, this test
+    // is what would catch it.
     const h = renderToStaticMarkup(
       <MatchesTab doc={doc} dict={es as Dict} locale="es" now={NOW} initialFilter="upcoming" />,
     );
-    expect(h).toContain("Sunday 6 September"); // the DATE: English, in Spanish
-    expect(h).toContain("horarios en BST"); // the COPY around it: translated
+    const esDay = new Intl.DateTimeFormat("es", {
+      timeZone: "Europe/London",
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+    }).format(new Date("2026-09-06T13:00:00Z"));
+    expect(h).toContain(esDay); // the DATE: Spanish
+    expect(h).not.toContain("Sunday 6 September");
+    const esZone = new Intl.DateTimeFormat("es", { timeZone: "Europe/London", timeZoneName: "short" })
+      .formatToParts(new Date("2026-09-06T13:00:00Z"))
+      .find((p) => p.type === "timeZoneName")?.value;
+    expect(esZone, "premise: Intl's es label is not the English one").not.toBe("BST");
+    expect(h).toContain(`horarios en ${esZone}`); // the COPY around it, and the zone: Spanish
     expect(h).toContain("Todas las divisiones");
-    expect(h).not.toContain("times in BST");
+    expect(h).not.toContain("BST");
+    expect(h).not.toContain("times in");
   });
 
   it("every card sits in a min-w-0 grid cell (class assertion — node vitest cannot measure a line box)", () => {

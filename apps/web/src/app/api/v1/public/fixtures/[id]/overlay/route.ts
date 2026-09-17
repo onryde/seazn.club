@@ -1,5 +1,5 @@
 import { v1, reply } from "@/server/api-v1/http";
-import { publicRateLimit } from "@/server/usecases/public";
+import { publicPollRateLimit } from "@/server/usecases/public";
 import { loadOverlayLiveData } from "@/server/overlay/load";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -19,7 +19,7 @@ const LIVE_CACHE_CONTROL = "public, s-maxage=2, stale-while-revalidate=30";
  *  PAGE, not here — this JSON is public exactly as /public/fixtures/{id} is. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await publicRateLimit(req);
+    await publicPollRateLimit(req);
     const { id } = await params;
     const data = await loadOverlayLiveData(id);
     return reply(200, data, { "Cache-Control": LIVE_CACHE_CONTROL });

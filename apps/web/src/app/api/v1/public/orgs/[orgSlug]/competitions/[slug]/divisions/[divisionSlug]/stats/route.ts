@@ -4,8 +4,9 @@ import { publicDivisionStats } from "@/server/usecases/player-stats";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string; divisionSlug: string }> };
 
-/** Consent-filtered public leaderboard (Jul3/07 §6): minors' names gated via
- *  public_person_name (doc 06 §4.7). */
+/** Consent-filtered public leaderboard (Jul3/07 §6). Names follow the
+ *  division's youth / name-display policy through `resolvePersonDisplayName`,
+ *  on top of SQL `public_person_name`'s consent gate (doc 06 §4.7). */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);

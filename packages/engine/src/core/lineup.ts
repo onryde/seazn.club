@@ -173,7 +173,7 @@ export const DEFAULT_LINEUP_POLICY: LineupPolicy = {
  * was scored, and an organiser later tightening `maxSubs` or switching a
  * variant from `unlimited` to `none` must not make already-scored fixtures
  * unreadable. Under this policy only STRUCTURAL refusals survive replay (an
- * unknown person, a player taken off who was never on), and the fold treats
+ * unknown person, a player taken off who was not on), and the fold treats
  * those as a no-op rather than an error. cfg is not the ledger's to police
  * retroactively.
  */

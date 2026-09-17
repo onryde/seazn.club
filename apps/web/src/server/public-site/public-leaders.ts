@@ -21,20 +21,16 @@
 // ledger on a spectator render is not a trade worth making, and `data.ts`'s
 // public player card already reads this table without recomputing.
 //
-// Be clear about what that costs, though, because it is NOT "a few seconds of
-// lag". `player_stat_snapshots` is largely a recompute-on-read cache.
-// `recomputePlayerStats` is its only writer, and it runs from
-// `divisionPlayerStats` (console stats route), `publicDivisionStats` (public
-// stats route), a person merge, the auto-posts enrichment
-// (`usecases/org-posts.ts:888,952`), and the weekly digest sweep (`:1331`).
-// Only the auto-posts path is reached from scoring — `refreshNews` on a
-// decided fixture — and it fires only when the division has `auto_posts` AND
-// the org holds `news.auto`, so it is not a hook this reader can rely on. The
-// digest cron POSTs `https://stg.seazn.club` and nothing else
-// (`news-digest-stg.yml:36`), so production never gets that refresh at all.
-// A division outside every one of those paths holds ZERO rows, and this
-// reader correctly returns nothing for it. Who keeps the snapshot fresh is an open question for the
-// wave; this module deliberately does not answer it by recomputing.
+// The snapshot is kept fresh by the write side instead (owner ruling
+// 2026-09-16): the writes listed at the top of
+// `usecases/player-stats-refresh.ts` (the one authority for that list) schedule
+// a refold of the division after their response, which clears the public
+// caches and pushes the division again. Rows therefore lag those writes by a
+// queue wait plus one fold, and events of a match still in play reach this
+// table only at the division's next refresh. An open hub that no longer follows
+// the division (its last live match was the one that finished) picks the new
+// rows up at its idle poll, up to 60 s later. A division with no refreshed
+// match yet holds ZERO rows, and this reader correctly returns nothing for it.
 // ---------------------------------------------------------------------------
 import postgres from "postgres";
 import { maskPublicEntrantNames } from "./data";
@@ -63,6 +59,13 @@ export async function readLeaderRows(
 ): Promise<LeaderInputRow[]> {
   if (divisions.length === 0) return [];
 
+  // `public_profile` is whether `public_entrants_v` published this person's id
+  // in their entrant's members — it does so only with public-name consent AND
+  // the org's player-page entitlement for this competition, the public card's
+  // own terms (`toLeaderInputRows` adds the division's full-names check through
+  // `playerLinkId`). It used to be "is in `public_players_v`", which is consent
+  // only: on a plan with stats but without player pages, every consented
+  // leader linked to a card that refuses them.
   const rows = await sql<SnapshotQueryRow[]>`
     select ps.division_id, ps.person_id, ps.stats,
            p.full_name, p.consent,
@@ -71,12 +74,14 @@ export async function readLeaderRows(
            e.display_name  as entrant_name,
            e.badge_url,
            e.team_display->>'logo_path' as team_logo_path,
-           exists (select 1 from public_players_v v where v.id = ps.person_id) as public_profile
+           coalesce(e.published, false) as public_profile
     from player_stat_snapshots ps
     join public_divisions_v d on d.id = ps.division_id
     join persons p on p.id = ps.person_id and p.merged_into is null
     left join lateral (
-      select en.id, en.kind, en.display_name, en.badge_url, en.team_display
+      select en.id, en.kind, en.display_name, en.badge_url, en.team_display,
+             exists (select 1 from jsonb_array_elements(en.members) m
+                      where m->>'person_id' = ps.person_id::text) as published
       from entrant_members em
       join public_entrants_v en on en.id = em.entrant_id
       where em.person_id = ps.person_id and en.division_id = ps.division_id

@@ -60,10 +60,12 @@ const PERIODSPORT = "timeline.periodsport.";
 /**
  * Keys a per-payload override can emit INSTEAD of the type's table entry.
  *
- * Two today, and both are the same shape: a sentence that names a side, and
- * the one it falls back to when no side could be resolved. `boardgame.result`
- * with a winner is a decisive result and without one a draw; a `core.lineup.*`
- * whose entrant matches neither side has no side to name. These
+ * Two shapes. First, a sentence that names a side, and the one it falls back
+ * to when no side could be resolved: `boardgame.result` with a winner is a
+ * decisive result and without one a draw; a `core.lineup.*` whose entrant
+ * matches neither side has no side to name. Second, a payload flag that is
+ * part of the sentence: a football goal from the spot, or into the scorer's
+ * own net. These
  * are unioned into the dictionary coverage gates exactly like `TIMELINE_KEY_FOR`
  * — a key reachable at runtime that no locale carries is the same defect
  * whether it comes from the table or from an override.
@@ -71,6 +73,11 @@ const PERIODSPORT = "timeline.periodsport.";
 export const TIMELINE_OVERRIDE_KEYS: readonly string[] = [
   "timeline.boardgame.draw",
   "timeline.core.lineup.unknownSide",
+  // Task 16: a football goal's penalty / own-goal flag picks the sentence. It
+  // used to be an English "(pen)" / "(og)" glued onto `detail`, which no
+  // renderer can translate.
+  "timeline.football.penaltyGoal",
+  "timeline.football.ownGoal",
 ];
 
 /** The template table: recorded event type -> dictionary key. */

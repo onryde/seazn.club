@@ -13,6 +13,7 @@ import { kindEyebrow, scoreboardFor } from "@/lib/news-presentation";
 import { PostCard, type PostCardView } from "@/components/news/post-card";
 import { getDictionary, t } from "@/lib/i18n";
 import { hasLocale, DEFAULT_LOCALE, type Locale } from "@/lib/i18n-constants";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 
 // No ISR here: the feed paginates via ?page= and reading searchParams is
 // request-bound — under `revalidate` the prod render throws
@@ -33,8 +34,11 @@ function orgLocale(defaultLocale: string): Locale {
 // server render: a zone-less format follows whatever zone the Node host happens
 // to run in, which is never the reader's zone, so two hosts print two different
 // days for the same post. UTC makes it one day everywhere.
+// In the org's locale through `intlLocaleFor` (owner ruling 2026-09-16): bare
+// "en" is a US format to `Intl` ("Mar 2, 2026"); English public dates are
+// day-month.
 function fmtDate(iso: string, locale: Locale): string {
-  return new Date(iso).toLocaleDateString(locale, {
+  return new Date(iso).toLocaleDateString(intlLocaleFor(locale), {
     day: "numeric",
     month: "short",
     year: "numeric",

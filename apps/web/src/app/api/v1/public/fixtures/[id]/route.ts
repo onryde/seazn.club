@@ -1,5 +1,5 @@
 import { v1, reply } from "@/server/api-v1/http";
-import { publicFixture, publicRateLimit } from "@/server/usecases/public";
+import { publicFixture, publicPollRateLimit } from "@/server/usecases/public";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,7 +16,7 @@ const LIVE_CACHE_CONTROL = "public, s-maxage=2, stale-while-revalidate=30";
 /** Live public fixture summary (doc 08 §3). */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await publicRateLimit(req);
+    await publicPollRateLimit(req);
     const { id } = await params;
     const data = await publicFixture(id);
     return reply(200, data, { "Cache-Control": LIVE_CACHE_CONTROL });

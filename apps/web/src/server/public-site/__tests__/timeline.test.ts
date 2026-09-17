@@ -860,6 +860,39 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(missing).toEqual([]);
   });
 
+  it("a penalty and an own goal name themselves through their OWN sentence, never an English flag in the detail", () => {
+    // Task 16 (zero-English sweep): the goal line appended "(pen)" / "(og)" to
+    // `detail`, so a French reader got "But — Harbour Rovers Player H-p9 (pen)".
+    // The builder has no dictionary, so the flag chooses the TEMPLATE instead,
+    // through KEY_OVERRIDE, and every locale writes the whole sentence.
+    const lines = linesOf(
+      args({
+        sportKey: "football",
+        events: [
+          env(0, "core.start", {}),
+          env(1, "football.goal", { by: "H", scorer: "H-p9", penalty: true, minute: 23 }),
+          env(2, "football.goal", { by: "A", scorer: "A-p4", ownGoal: true, minute: 40 }),
+          env(3, "football.goal", { by: "H", scorer: "H-p7", minute: 55 }),
+        ],
+      }),
+    );
+    const bySeq = (seq: number) => lines.find((l) => l.seq === seq)!;
+    expect(bySeq(1).text.key).toBe("timeline.football.penaltyGoal");
+    expect(bySeq(2).text.key).toBe("timeline.football.ownGoal");
+    // The positive pair: an open-play goal keeps its own sentence.
+    expect(bySeq(3).text.key).toBe("timeline.football.goal");
+    for (const seq of [1, 2, 3]) {
+      const detail = String(bySeq(seq).text.params?.detail);
+      expect(detail).not.toMatch(/\((pen|og)\)/);
+      expect(detail, "the scorer is still named").toMatch(/Player [HA]-p\d/);
+    }
+    for (const locale of LOCALES) {
+      for (const key of ["timeline.football.penaltyGoal", "timeline.football.ownGoal"]) {
+        expect(typeof DICTS[locale][key], `${locale}:${key}`).toBe("string");
+      }
+    }
+  });
+
   it("every KEY_OVERRIDE branch returns a key the gates know about", () => {
     // The override map is reachable at runtime and its keys are NOT in
     // `TIMELINE_KEY_FOR`, so nothing else in the suite would notice one that no
@@ -882,8 +915,19 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
         if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
       }
     }
-    // The gate says what it saw: both no-side branches fired.
-    expect(overridden).toBe(2);
+    // Football's goal: open play, a penalty, an own goal.
+    const goals = [
+      env(0, "core.start", {}),
+      env(1, "football.goal", { by: "H", scorer: "H-p9", minute: 10 }),
+      env(2, "football.goal", { by: "H", scorer: "H-p9", penalty: true, minute: 20 }),
+      env(3, "football.goal", { by: "A", scorer: "A-p4", ownGoal: true, minute: 30 }),
+    ];
+    for (const line of linesOf(args({ sportKey: "football", events: goals }))) {
+      emitted.add(line.text.key);
+      if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+    }
+    // The gate says what it saw: both no-side branches and both goal flags fired.
+    expect(overridden).toBe(4);
     const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
     expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
   });

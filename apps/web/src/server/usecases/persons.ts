@@ -9,6 +9,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import type { CreatePerson, PatchPerson, PutProfile } from "@/server/api-v1/schemas";
+import { retireOrgPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
+import { firePersonRevalidate } from "@/server/public-site/revalidate";
 
 export interface PersonRow {
   id: string;
@@ -108,7 +110,7 @@ export async function uploadPersonPhotoBytes(orgId: string, file: PhotoFile): Pr
  *  dedupe, mirroring club badges). */
 export async function setPersonPhoto(auth: AuthCtx, id: string, file: PhotoFile): Promise<PersonRow> {
   const path = await uploadPersonPhotoBytes(auth.orgId, file);
-  return withTenant(auth.orgId, async (tx) => {
+  const updated = await withTenant(auth.orgId, async (tx) => {
     const [person] = await tx<PersonRow[]>`
       select id from persons where id = ${id} and merged_into is null`;
     if (!person) throw new HttpError(404, "person not found");
@@ -116,6 +118,10 @@ export async function setPersonPhoto(auth: AuthCtx, id: string, file: PhotoFile)
       update persons set photo_path = ${path} where id = ${id} returning ${tx(COLS)}`;
     return row!;
   });
+  // After commit, awaited inside the request: the photo shows on the public
+  // player card, the same as the player's own photo write (`setMyPersonPhoto`).
+  await firePersonRevalidate([id], { person: id });
+  return updated;
 }
 
 export async function getPerson(auth: AuthCtx, id: string): Promise<PersonRow> {
@@ -127,8 +133,15 @@ export async function getPerson(auth: AuthCtx, id: string): Promise<PersonRow> {
   });
 }
 
+/** The patch fields that change what the public player page's cached match
+ *  lines may show about a person: their consent, the name those lines mask,
+ *  and the date of birth that decides who may change that consent (an
+ *  under-16's can only change here). `gender` and `external_ref` reach no
+ *  public document. */
+const PUBLIC_IDENTITY_FIELDS: readonly string[] = ["consent", "full_name", "dob"];
+
 export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson): Promise<PersonRow> {
-  return withTenant(auth.orgId, async (tx) => {
+  const updated = await withTenant(auth.orgId, async (tx) => {
     const cols = Object.keys(patch);
     const values = { ...patch, ...(patch.consent ? { consent: tx.json(patch.consent as never) } : {}) };
     const [row] = await tx<PersonRow[]>`
@@ -137,6 +150,17 @@ export async function patchPerson(auth: AuthCtx, id: string, patch: PatchPerson)
     if (!row) throw new HttpError(404, "person not found");
     return row;
   });
+  // W2 Task 14 — after commit: a document rebuilt before it would put the old
+  // consent straight back. The ISR pages first (the person's card at every
+  // competition URL, whichever way this turned it, and every entry naming them
+  // — `firePersonRevalidate`),
+  // awaited so the tag reaches this request's flush; then the Redis poll
+  // documents. Neither step rejects, so one failing never skips the other.
+  if (Object.keys(patch).some((field) => PUBLIC_IDENTITY_FIELDS.includes(field))) {
+    await firePersonRevalidate([id], { person: id });
+    await retireOrgPlayerMatches(auth.orgId, { person: id });
+  }
+  return updated;
 }
 
 // The merge lives in person-merge.ts (#404). It used to end here with

@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { BALL_GLYPH_KINDS, BALL_LINE_KEYS, DISMISSAL_KINDS, RESULT_KINDS } from "../match-centre";
+import { BALL_GLYPH_KINDS, BALL_LINE_KEYS, DISMISSAL_KINDS, RESULT_KINDS, RESULT_MARGIN_KEYS } from "../match-centre";
 import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -79,6 +79,9 @@ const DERIVED_KEYS = [
     // to the glyph-label family and the two collided on `wicket`, which is
     // how a wicket line shipped rendering the bare word "Wicket".
     ...BALL_LINE_KEYS,
+    // The worded cricket margin (owner decision 2026-09-16): unit × DLS ×
+    // `.one`/`.other`, derived from the same table `cricketMarginMsg` reads.
+    ...RESULT_MARGIN_KEYS,
   ]),
 ].sort();
 
@@ -98,6 +101,9 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
     // this number moving is what forces all four dictionaries to gain the
     // new form alongside.
     expect(BALL_LINE_KEYS.length).toBe(11);
+    // 10: runs, wickets, DLS runs, DLS wickets and the innings victory, each a
+    // `.one` and an `.other`. EXACT, for the same reason as the two above.
+    expect(RESULT_MARGIN_KEYS.length).toBe(10);
     expect(DERIVED_KEYS.length).toBeGreaterThanOrEqual(30);
   });
 
@@ -155,6 +161,28 @@ describe("match-centre parity — every key buildMatchCentre can emit exists in 
           const category = new Intl.PluralRules(locale).select(runs) === "one" ? "one" : "other";
           const key = `matchCentre.ballLine.${kind}.${category}`;
           if (typeof DICTS[locale][key] !== "string") missing.push(`${locale}:${key} (runs=${runs})`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * Same narrowing, applied to a MARGIN: a count that can be 0 (a chase won
+   * with the last man out on the winning run — French selects `one` there)
+   * or run into the hundreds (an innings victory). Every margin family, every
+   * locale, a spread of real magnitudes — the key the builder names must exist.
+   */
+  it("every locale resolves a REAL template for every margin family at every magnitude a margin can reach", () => {
+    const families = [...new Set(RESULT_MARGIN_KEYS.map((k) => k.replace(/\.(one|other)$/, "")))];
+    expect(families.length).toBe(5);
+    const missing: string[] = [];
+    for (const locale of LOCALES) {
+      for (const family of families) {
+        for (const count of [0, 1, 2, 3, 11, 21, 100, 101, 250]) {
+          const category = new Intl.PluralRules(locale).select(count) === "one" ? "one" : "other";
+          const key = `${family}.${category}`;
+          if (typeof DICTS[locale][key] !== "string") missing.push(`${locale}:${key} (count=${count})`);
         }
       }
     }

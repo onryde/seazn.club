@@ -45,15 +45,19 @@ describe("windowDate — labels the zone it's showing instead of a bare, silentl
   // Same instant as the fix wave's own illustration: 2026-03-05T23:00:00Z.
   const CLOSES = "2026-03-05T23:00:00Z";
 
+  // English is day-month (owner ruling 2026-09-16): `intlLocaleFor` writes
+  // "en" as en-GB, whose short zone label for Los Angeles is the offset
+  // ("GMT-8") rather than en-US's "PST". Until the ruling these read
+  // "Mar 6, GMT+11" / "Mar 5, PST".
   it("Sydney and Los Angeles read DIFFERENT calendar days for the SAME instant — each one now named", () => {
-    expect(windowDate(CLOSES, "en", "Australia/Sydney")).toBe("Mar 6, GMT+11");
-    expect(windowDate(CLOSES, "en", "America/Los_Angeles")).toBe("Mar 5, PST");
+    expect(windowDate(CLOSES, "en", "Australia/Sydney")).toBe("6 Mar, GMT+11");
+    expect(windowDate(CLOSES, "en", "America/Los_Angeles")).toBe("5 Mar, GMT-8");
   });
 
   it("regression: pre-fix this returned a bare 'Mar 5' with no zone at all — UTC must show one too", () => {
     const result = windowDate(CLOSES, "en", "UTC");
-    expect(result).toBe("Mar 5, UTC");
-    expect(result).not.toBe("Mar 5"); // the old, ambiguous shape
+    expect(result).toBe("5 Mar, UTC");
+    expect(result).not.toBe("5 Mar"); // the old, ambiguous shape
   });
 
   it("localizes the zone label itself, not just the date, across all 4 app locales", () => {
@@ -68,7 +72,7 @@ describe("windowDate — labels the zone it's showing instead of a bare, silentl
     // cannot do) — only that the 2-arg production call shape still works
     // and still names SOME zone rather than throwing or going bare.
     const ambient = windowDate(CLOSES, "en");
-    expect(ambient).toMatch(/^\w+ \d+, \S+/);
+    expect(ambient).toMatch(/^\d+ \w+, \S+/);
   });
 });
 

@@ -3,11 +3,19 @@
 // exactly what /r/[ref] shows: masked name, ref, status — nothing more.
 // Brand frame: night masthead with the wordmark + ball over the lime pitch
 // line, and an ADMIT ONE stub behind a perforation for the QR.
+//
+// Every word on it is in the VISITOR's locale, resolved exactly as
+// `/r/[ref]/page.tsx` resolves the ticket it draws (`resolveLocale`): the same
+// person saves the picture of the page they are reading. It drew English in
+// every locale until Task 16's fix round 2.
 import { ImageResponse } from "next/og";
 import QRCode from "qrcode";
 import { publicRegistrationStatusByRef } from "@/server/usecases/registrations";
 import { HttpError } from "@/lib/errors";
 import { baseUrl } from "@/lib/oauth";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { getDictionary, t } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +24,14 @@ const CREAM = "#f5f0e8";
 const LIME = "#a3e635";
 const BALL = "#ef4444";
 
-const STAMP: Record<string, { label: string; color: string }> = {
-  pending: { label: "RECEIVED", color: "#b45309" },
-  paid: { label: "PAID", color: "#047857" },
-  confirmed: { label: "CONFIRMED", color: "#047857" },
-  waitlisted: { label: "WAITLIST", color: "#0369a1" },
-  withdrawn: { label: "WITHDRAWN", color: "#71717a" },
+/** The stamp's words are the on-page ticket's own (`ticket.tsx`), so the saved
+ *  picture and the page cannot name a status differently. */
+const STAMP: Record<string, { labelKey: MessageKey; color: string }> = {
+  pending: { labelKey: "ticket.stamp.pending", color: "#b45309" },
+  paid: { labelKey: "ticket.stamp.paid", color: "#047857" },
+  confirmed: { labelKey: "ticket.stamp.confirmed", color: "#047857" },
+  waitlisted: { labelKey: "ticket.stamp.waitlisted", color: "#0369a1" },
+  withdrawn: { labelKey: "ticket.stamp.withdrawn", color: "#71717a" },
 };
 
 export async function GET(req: Request, { params }: { params: Promise<{ ref: string }> }) {
@@ -36,6 +46,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
     throw err;
   }
   const stamp = STAMP[view.status] ?? STAMP.pending!;
+  const ui = await getDictionary(await resolveLocale(), "ui");
   const qr = await QRCode.toDataURL(`${baseUrl(req)}/r/${view.ref_code}`, {
     margin: 1,
     width: 180,
@@ -108,11 +119,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
 
               <div style={{ display: "flex", flexDirection: "column", marginTop: "auto" }}>
                 <div style={{ fontSize: 15, letterSpacing: 3, color: "#71717a", textTransform: "uppercase" }}>
-                  Entrant
+                  {t(ui, "register.ticket.entrant")}
                 </div>
                 <div style={{ fontSize: 28, fontWeight: 700, color: "#18181b" }}>{view.display_name}</div>
                 <div style={{ fontSize: 15, letterSpacing: 3, color: "#71717a", textTransform: "uppercase", marginTop: 14 }}>
-                  Your reference
+                  {t(ui, "register.ticket.refLabel")}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 22 }}>
                   <div style={{ fontSize: 36, fontWeight: 800, color: "#18181b", fontFamily: "monospace", letterSpacing: 2 }}>
@@ -131,7 +142,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
                       transform: "rotate(-4deg)",
                     }}
                   >
-                    {stamp.label}
+                    {t(ui, stamp.labelKey)}
                   </div>
                 </div>
               </div>
@@ -155,16 +166,25 @@ export async function GET(req: Request, { params }: { params: Promise<{ ref: str
               {/* eslint-disable-next-line @next/next/no-img-element -- OG renderer */}
               <img src={qr} alt="" width={150} height={150} style={{ borderRadius: 10 }} />
               <div style={{ fontSize: 13, letterSpacing: 2, color: "#71717a", textTransform: "uppercase" }}>
-                Scan at the desk
+                {t(ui, "register.ticket.scanAtDesk")}
               </div>
               <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: 6, color: NIGHT }}>
-                ADMIT ONE
+                {t(ui, "register.ticket.admitOne")}
               </div>
             </div>
           </div>
         </div>
       </div>
     ),
-    { width: 900, height: 470 },
+    {
+      width: 900,
+      height: 470,
+      // The words are the VISITOR's (`resolveLocale`: cookie, session,
+      // Accept-Language), so no shared cache may hand one visitor's picture to
+      // the next. The same header Next serves `/r/[ref]/page.tsx`
+      // (`force-dynamic`) with; ImageResponse alone sends
+      // `public, max-age=0, must-revalidate`. T16b re-review m4.
+      headers: { "Cache-Control": "private, no-cache, no-store, max-age=0, must-revalidate" },
+    },
   );
 }

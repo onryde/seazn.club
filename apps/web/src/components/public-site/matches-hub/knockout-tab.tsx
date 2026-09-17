@@ -48,7 +48,7 @@ import type {
 } from "@/server/public-site/competition-hub-schema";
 import { BRACKET_CREST_CLASS } from "./bracket-crest";
 import { MatchCard } from "./match-card";
-import { HUB_RAIL_CLASS, hubChip } from "./hub-chip";
+import { divisionChoices, HUB_RAIL_CLASS, hubChip } from "./hub-chip";
 import { useSearchParam, writeDivisionParam, writeSearchParam } from "../use-tab-param";
 
 export interface KnockoutTabProps {
@@ -370,19 +370,6 @@ export function revealScrollLeft(
     next += shift;
   }
   return Math.max(0, next);
-}
-
-/** The divisions that have a bracket, first-appearance order — and only when
- *  there are at least two, because one division is no choice. ONE list, read
- *  by the rail AND by the reconciliation, so a chosen division can never be
- *  honoured without a chip on screen that clears it (the Matches tab's review
- *  F2, which found the two written separately). */
-function divisionChoices(views: readonly KnockoutViewT[]): { slug: string; name: string }[] {
-  const seen = new Map<string, string>();
-  for (const view of views) {
-    if (!seen.has(view.divisionSlug)) seen.set(view.divisionSlug, view.divisionName);
-  }
-  return seen.size > 1 ? [...seen].map(([slug, name]) => ({ slug, name })) : [];
 }
 
 /** Views under one entry per division, first-appearance order — by a map on

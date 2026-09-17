@@ -128,7 +128,10 @@ const CLIP_CHILD_SELECTOR = "*";
  *
  *  The split is reconciled against `overflowingIn`'s own count before either
  *  half is asserted, so if that function's classification ever moves, this reds
- *  with the disagreement instead of silently exempting more. */
+ *  with the disagreement instead of silently exempting more. That is why this
+ *  scan carries its OWN copy of that function's exemptions, `sr-only` included
+ *  (exception 4 there): the two run over the same boxes, so an exemption only
+ *  one of them knows shows up here as a drift, not as a pass. */
 export async function expectNoClip(page: Page, root: string, label: string): Promise<Seen> {
   const childSel = CLIP_CHILD_SELECTOR;
   const { clipped, scrollable, truncatedByDesign } = await overflowingIn(
@@ -142,11 +145,16 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
     0,
   );
 
-  const { realClips, bleeds, bleedIds } = await page.evaluate(
+  const { realClips, bleeds, bleedIds, srOnly } = await page.evaluate(
     ({ rootSel, childSel: cs }) => {
       const rootEl = document.querySelector<HTMLElement>(rootSel);
       if (!rootEl) {
-        return { realClips: [`<${rootSel} not in DOM>`], bleeds: [] as string[], bleedIds: [] as string[] };
+        return {
+          realClips: [`<${rootSel} not in DOM>`],
+          bleeds: [] as string[],
+          bleedIds: [] as string[],
+          srOnly: [] as string[],
+        };
       }
       const identity = (el: HTMLElement) =>
         el.tagName.toLowerCase() + (el.dataset.testid ? `[data-testid=${el.dataset.testid}]` : "");
@@ -157,6 +165,19 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
         const clamp = s.webkitLineClamp;
         return clamp !== "" && clamp !== "none";
       };
+      // `overflowingIn`'s exception 4, by the same computed shape: out of
+      // flow, clipped to a rectangle, and a box no bigger than the 1px
+      // `sr-only` leaves. A screen-reader word is MEANT to be wider than its
+      // box (7 of them in this wave's standings header, run "parallel 2/2").
+      const screenReaderOnly = (el: Element) => {
+        const s = getComputedStyle(el);
+        if (s.position !== "absolute" && s.position !== "fixed") return false;
+        if ((s.clip === "auto" || s.clip === "") && (s.clipPath === "none" || s.clipPath === "")) {
+          return false;
+        }
+        const box = el as HTMLElement;
+        return box.clientWidth <= 1 && box.clientHeight <= 1;
+      };
       const describe = (el: HTMLElement) =>
         `${identity(el)}` +
         `${typeof el.className === "string" && el.className.trim() ? `.${el.className.trim().split(/\s+/).slice(0, 4).join(".")}` : ""}` +
@@ -164,6 +185,7 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
       const realClips: string[] = [];
       const bleeds: string[] = [];
       const bleedIds: string[] = [];
+      const srOnly: string[] = [];
       const suspects: HTMLElement[] = [
         rootEl,
         ...Array.from(rootEl.querySelectorAll<HTMLElement>(cs)),
@@ -184,6 +206,10 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
         const overhang = visibleOverhang(el);
         if (overhang <= 1) continue;
         if (reachable(el) || truncatedByDesign(el)) continue; // already split out
+        if (screenReaderOnly(el)) {
+          srOnly.push(describe(el));
+          continue;
+        }
         // How far past this box's own content edge do the reachable rails
         // inside it actually reach? That is the ONLY overhang a bleed can
         // account for; anything beyond it is something else overflowing.
@@ -208,7 +234,7 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
           );
         }
       }
-      return { realClips, bleeds, bleedIds };
+      return { realClips, bleeds, bleedIds, srOnly };
     },
     { rootSel: root, childSel },
   );
@@ -225,6 +251,7 @@ export async function expectNoClip(page: Page, root: string, label: string): Pro
       ...bleeds.map((s) => `bleed: ${s}`),
       ...scrollable.slice(0, 3).map((s) => `rail: ${s}`),
       ...truncatedByDesign.slice(0, 3).map((s) => `truncated: ${s}`),
+      ...srOnly.slice(0, 3).map((s) => `sr-only: ${s}`),
     ],
     exempt: { bleeds: bleedIds },
   };

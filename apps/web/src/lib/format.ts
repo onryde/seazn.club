@@ -6,6 +6,12 @@
 // the v5 i18n wave threads the resolved locale through the same signatures.
 //
 // Safe on both server and client (no server-only, no next imports).
+//
+// ONE relative import, with its `.ts` extension: `format.test.ts` loads this
+// file under bare `node` in a child process (TZ is only honoured at spawn), and
+// Node's strip-types loader resolves no extensionless specifier and no `@/`.
+// `public-date-locale.ts` itself imports nothing.
+import { intlLocaleFor } from "./public-date-locale.ts";
 
 const LOCALE = "en-GB";
 export const UTC = "UTC";
@@ -20,13 +26,13 @@ function toDate(value: string | number | Date | null | undefined): Date | null {
 /** Build a DateTimeFormat, retrying in UTC if the zone string is unknown. An
  *  invalid IANA name throws RangeError at construction — we never want that to
  *  bubble into a render, so fall back and (in dev) warn. */
-function fmt(tz: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+function fmt(tz: string, opts: Intl.DateTimeFormatOptions, locale: string = LOCALE): Intl.DateTimeFormat {
   try {
-    return new Intl.DateTimeFormat(LOCALE, { timeZone: tz, ...opts });
+    return new Intl.DateTimeFormat(locale, { timeZone: tz, ...opts });
   } catch {
     if (process.env.NODE_ENV !== "production")
       console.warn(`[format] unknown timezone "${tz}", falling back to UTC`);
-    return new Intl.DateTimeFormat(LOCALE, { timeZone: UTC, ...opts });
+    return new Intl.DateTimeFormat(locale, { timeZone: UTC, ...opts });
   }
 }
 
@@ -57,6 +63,46 @@ export function fmtDateTime(
   return d ? fmt(tz, opts).format(d) : "";
 }
 
+// ── Public pages: the same three helpers in the PAGE's locale ───────────────
+// Owner ruling 2026-09-16: every date a spectator reads on a public page is in
+// the org's locale (the register pages: the locale their copy renders in), and
+// English is day-month. The helpers above stay en-GB with no locale parameter
+// because the organiser surfaces that call them (registration hub, officials
+// panel, `client-time.tsx`) are not part of that ruling — so these are
+// siblings, not a new parameter on the shared three. The locale goes through
+// `intlLocaleFor` (bare "en" is a US format to `Intl`); the zone is still
+// explicit, with the same unknown-zone → UTC fallback.
+
+export function fmtPublicDate(
+  locale: string,
+  tz: string,
+  value: string | number | Date | null | undefined,
+  opts: Intl.DateTimeFormatOptions = { weekday: "short", day: "numeric", month: "short" },
+): string {
+  const d = toDate(value);
+  return d ? fmt(tz, opts, intlLocaleFor(locale)).format(d) : "";
+}
+
+export function fmtPublicTime(
+  locale: string,
+  tz: string,
+  value: string | number | Date | null | undefined,
+  opts: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-digit", hourCycle: "h23" },
+): string {
+  const d = toDate(value);
+  return d ? fmt(tz, opts, intlLocaleFor(locale)).format(d) : "";
+}
+
+export function fmtPublicDateTime(
+  locale: string,
+  tz: string,
+  value: string | number | Date | null | undefined,
+  opts: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" },
+): string {
+  const d = toDate(value);
+  return d ? fmt(tz, opts, intlLocaleFor(locale)).format(d) : "";
+}
+
 /**
  * Short zone label at THIS instant — "IST", "BST"/"GMT", "EDT"/"EST". The
  * abbreviation is DST-dependent, so the moment matters: Europe/London is GMT in
@@ -78,6 +124,27 @@ export function fmtZoneAbbrev(
   // untouched and stay correct across the year.
   if (/^(?:GMT|UTC)[+-]/.test(raw) && DST_FREE_ABBREV[tz]) return DST_FREE_ABBREV[tz];
   return raw;
+}
+
+/** `fmtZoneAbbrev` in a PUBLIC page's locale (the owner ruling above).
+ *  English keeps the en-GB label, with its named DST-free zones ("IST"). Every
+ *  other locale gets exactly the label `Intl` writes in that locale, which is
+ *  NOT always an offset: it is a name wherever that locale's CLDR data has one.
+ *  Measured (Node ICU, July): London is "GMT+1" in es and nl and "UTC+1" in fr;
+ *  Madrid is "CEST" in es and nl and "UTC+2" in fr; Los Angeles is "GMT-7" in
+ *  es, "UTC−7" in fr and "PDT" in nl, which names the American zones. None of
+ *  them writes "BST", and none gets the English substitutions above, which are
+ *  the English abbreviations of English zone names. */
+export function fmtPublicZoneAbbrev(
+  locale: string,
+  tz: string,
+  value: string | number | Date | null | undefined,
+): string {
+  const tag = intlLocaleFor(locale);
+  if (tag === LOCALE) return fmtZoneAbbrev(tz, value);
+  const d = toDate(value) ?? new Date();
+  const parts = fmt(tz, { timeZoneName: "short" }, tag).formatToParts(d);
+  return parts.find((p) => p.type === "timeZoneName")?.value ?? tz;
 }
 
 /**

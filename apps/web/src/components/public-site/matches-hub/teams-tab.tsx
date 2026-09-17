@@ -1,11 +1,20 @@
 // Spectator surface W2, Task 10 — the competition hub's Teams tab: every
-// entrant the competition carries, grouped under its division, each a card
-// linking to that division's Entrants tab.
+// entrant the competition carries, grouped under its division.
+//
+// DIVISION-PAGE PARITY (owner ruling 2026-09-16). Each card is a native
+// `<details>` whose body is the team's SQUAD — number, name, position or a
+// Suspended tag — and its own "Add to calendar" link, which is what the
+// division page's Entrants tab showed. The card used to LINK to that tab; it
+// no longer does, because the division page is about to redirect here and the
+// link would loop. `TeamCard.href` stays in the document for that decision.
+// Cards open independently (no `name` on the details), and an open card spans
+// the whole grid row so a squad is never read in a 150px column.
 //
 // The document decides who is here and what they are called: `doc.teams` is
-// built one division at a time (`competition-hub.ts:598-610`), already through
-// `maskPublicEntrantNames`, already carrying its resolved badge and its own
-// `?tab=entrants` href. Nothing here re-derives a name or a link.
+// built one division at a time, already through `maskPublicEntrantNames`,
+// already carrying its resolved badge, its members (masked, with a player-page
+// href only where the name is public) and its `.ics` href. Nothing here
+// re-derives a name or a link.
 //
 // What it does decide is the tab-level EMPTY sentence, which the hub itself
 // cannot reach. Everything else it lays out.
@@ -21,17 +30,26 @@
 // `components/ui/entity-logo.tsx`, gate and reasoning intact, and this file
 // asks for `size={32}` like any other caller.
 //
-// NO `"use client"` — nothing here is stateful, so Task 11 can render it in a
-// server component.
+// `"use client"` since `?division=` (same ruling): the filter is state. Its only
+// importer is `competition-landing.tsx`, itself a client island.
+"use client";
+
 import Link from "next/link";
+import { useState } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
-import type { Dict as PublicDict } from "@/lib/i18n-constants";
-import { t } from "@/lib/i18n-runtime";
-import type { CompetitionHubDocT, TeamCardT } from "@/server/public-site/competition-hub-schema";
+import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
+import { plural, t } from "@/lib/i18n-runtime";
+import type { CompetitionHubDocT, HubMemberT, TeamCardT } from "@/server/public-site/competition-hub-schema";
+import { writeDivisionParam } from "../use-tab-param";
+import { divisionChoices, divisionRail } from "./hub-chip";
 
 export interface TeamsTabProps {
   doc: CompetitionHubDocT;
   dict: PublicDict;
+  /** The viewer's locale, for the member count's plural category. */
+  locale: Locale;
+  /** `?division=` — a SEED, as on the Matches, Knockout and Table tabs. */
+  initialDivision?: string | null;
 }
 
 /** `doc.teams` under one entry per division, in first-appearance order. Same
@@ -48,7 +66,53 @@ function byDivision(teams: readonly TeamCardT[]): TeamCardT[][] {
   return [...groups.values()];
 }
 
-export function TeamsTab({ doc, dict }: TeamsTabProps) {
+/** One squad line: number, name, and the position OR the Suspended tag. */
+function MemberLine({ entrantId, index, m, dict }: { entrantId: string; index: number; m: HubMemberT; dict: PublicDict }) {
+  const testid = `mh-team-${entrantId}-member-${index}`;
+  return (
+    <li data-testid={testid} className="grid min-h-11 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2">
+      {/* `!== null`: squad number 0 is a number. */}
+      <span className="font-display text-sm font-semibold tabular-nums text-ink-muted">
+        {m.squadNumber !== null ? m.squadNumber : "—"}
+      </span>
+      {/* A link ONLY where the document gives one — the builder withholds it
+          for every masked name, and this line never invents one. */}
+      {m.playerHref ? (
+        <Link
+          href={m.playerHref}
+          title={m.name}
+          // `py-3` + the 20px line is the 44px tap target; `block` so
+          // `truncate` ellipsises the text itself.
+          className="block min-w-0 truncate py-3 text-sm font-medium text-ink hover:text-accent-strong"
+        >
+          {m.name}
+        </Link>
+      ) : (
+        <span title={m.name} className="min-w-0 truncate text-sm text-ink">
+          {m.name}
+        </span>
+      )}
+      {/* The tag WINS: a suspended player's position is not what a spectator
+          needs to read on that line. Red-700 on red-50 is 5.9:1. The position is
+          the raw key — no position dictionary exists (`HubMember.position`). */}
+      {m.suspendedRemaining !== null ? (
+        <span
+          data-testid={`${testid}-suspended`}
+          className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700"
+        >
+          {t(dict, "teams.suspended")}
+        </span>
+      ) : m.position ? (
+        <span className="shrink-0 text-xs text-ink-muted">{m.position}</span>
+      ) : (
+        <span />
+      )}
+    </li>
+  );
+}
+
+export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) {
+  const [chosenDivision, setDivision] = useState<string | null>(initialDivision ?? null);
   // Stated first, like both siblings. Unreachable through the hub —
   // `deriveHubTabs` (`lib/matches-hub.ts:242`) only emits the `teams` tab when
   // `teams > 0` — so what this catches is a direct render and a `?tab=teams`
@@ -78,73 +142,140 @@ export function TeamsTab({ doc, dict }: TeamsTabProps) {
     );
   }
 
+  // Reconciled against the chips on screen — the Knockout tab's rule.
+  const choices = divisionChoices(doc.teams);
+  const division = choices.some((d) => d.slug === chosenDivision) ? chosenDivision : null;
+  const shown = doc.teams.filter((tm) => division === null || tm.divisionSlug === division);
+  const chooseDivision = (slug: string | null) => {
+    setDivision(slug);
+    writeDivisionParam(slug);
+  };
+
   return (
     // `min-w-0` on the root for the mount site nobody has written yet — the
     // same reason `matches-tab.tsx` and `table-tab.tsx` carry one.
     <div data-testid="mh-teams" className="min-w-0 space-y-6">
-      {byDivision(doc.teams).map((teams) => {
+      {divisionRail("mh-teams", dict, choices, division, chooseDivision)}
+      {byDivision(shown).map((teams) => {
         const first = teams[0]!;
         return (
           <section key={first.divisionId} className="space-y-3">
+            {/* `mh-teams-heading-`: the rail's chips own `mh-teams-division-`. */}
             <h2
-              data-testid={`mh-teams-division-${first.divisionSlug}`}
+              data-testid={`mh-teams-heading-${first.divisionSlug}`}
               className="font-display text-xl font-semibold tracking-tight text-ink md:text-2xl"
             >
               {first.divisionName}
             </h2>
-            {/* One column on the smallest phones and two from 380-ish: a card
-                is a crest, a 30-character name and sometimes a seed chip, and
-                two of those at 320 truncate to nothing. R1's one-DOM rule —
-                the same cards, laid out wider, no control appears or
-                disappears. */}
-            <ul className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-4" role="list">
-              {teams.map((tm) => (
-                <li key={tm.entrantId} className="min-w-0">
-                  {/* The whole card is the link and the whole card is the
-                      44px tap target — `MatchCard`'s shape. The href is the
-                      document's (`competition-hub.ts:608`), pointing at the
-                      division page's Entrants tab, which became a real
-                      destination in `9150768cd`: `Tabs` reads `?tab=` now,
-                      where it was `useState(0)` and every one of these links
-                      would have landed the spectator on Schedule. */}
-                  <Link
-                    data-testid={`mh-team-${tm.entrantId}`}
-                    href={tm.href}
-                    className="flex min-h-11 min-w-0 items-center gap-2 rounded-xl border border-zinc-100 bg-white px-3 py-2 shadow-sm transition hover:border-accent hover:shadow"
-                  >
-                    {/* 32, the size this card's crest has always been — a
-                        card here is a crest, a name and sometimes a seed
-                        chip, so the badge is most of what tells one card
-                        from the next. `colour` is what makes a badge-less
-                        club its own colour rather than the neutral tile. */}
-                    <EntityLogo
-                      src={tm.badgeUrl}
-                      name={tm.name}
-                      colour={tm.colour}
-                      size={32}
-                    />
-                    {/* `truncate` needs `min-w-0` on the whole ancestor chain —
-                        the card, the cell and this span all carry it. `title`
-                        so the full name is still reachable on a pointer. */}
-                    <span
-                      className="min-w-0 flex-1 truncate text-sm font-medium text-ink"
-                      title={tm.name}
+            {/* Columns chosen from MEASURED card widths (R11, Chromium), not
+                from device names. A closed card spends 86px on everything but
+                the name — border, padding, the 32px crest, the chevron and two
+                gaps — and a realistic 24-character name paints up to 185px
+                ("West Wimbledon Wanderers", Geist 14px medium), so a card needs
+                ~280px. In the org layout's `max-w-5xl px-4` column that is one
+                column below `sm` (the old two at 380 left a name 28px), two
+                from `sm` (300px cards at 640) and three from `lg` (325px); four
+                would be 242px even at the 992px cap, which cut "Millbrook Ro…"
+                at 1280. `stats-teams-info-tabs.test.tsx` redoes this arithmetic
+                from these classes. R1's one-DOM rule — the same cards, laid out
+                wider, no control appears or disappears. */}
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3" role="list">
+              {teams.map((tm) => {
+                // Absent on a document cached before squads existed — the
+                // schema keeps both fields optional for exactly that hit. Such
+                // a card says NOTHING about its squad: "0 members" and "No
+                // squad listed yet" would both be claims the document never
+                // made.
+                const members = tm.members;
+                const nameId = `mh-team-${tm.entrantId}-name`;
+                const calendarId = `mh-team-${tm.entrantId}-calendar`;
+                return (
+                  // An OPEN card takes the whole row. The class is on the GRID
+                  // ITEM (the `<li>`), because `grid-column` is the item's.
+                  <li key={tm.entrantId} className="min-w-0 [&:has(details[open])]:col-span-full">
+                    <details
+                      data-testid={`mh-team-${tm.entrantId}`}
+                      className="group min-w-0 rounded-xl border border-zinc-200/80 bg-surface"
                     >
-                      {tm.name}
-                    </span>
-                    {/* `!== null`, never a truthiness test: `seed` is
-                        `number | null` and 0 is a number. A `{tm.seed ? …}`
-                        here drops the chip for a zero-seeded entrant, which is
-                        the same family of defect as `Number("")` reading as a
-                        real zero. */}
-                    {tm.seed !== null ? (
-                      <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
-                        {t(dict, "teams.seed", { seed: tm.seed })}
-                      </span>
-                    ) : null}
-                  </Link>
-                </li>
-              ))}
+                      {/* `select-none`: a pointer or touch tap on the name puts a
+                          collapsed selection (a caret) in its text node, and
+                          Chromium lays out a line holding the caret WITHOUT its
+                          `text-overflow` ellipsis — the name stayed cut
+                          mid-letter, open or closed, until the selection moved
+                          (R11 at 320; keyboard Enter and the chevron place no
+                          caret and kept it). The summary is a control, so no
+                          caret belongs in it; the full name stays in `title`. */}
+                      <summary className="flex min-h-11 min-w-0 cursor-pointer select-none list-none items-center gap-2 px-3 py-2 [&::-webkit-details-marker]:hidden">
+                        {/* 32, the size this card's crest has always been. */}
+                        <EntityLogo src={tm.badgeUrl} name={tm.name} colour={tm.colour} size={32} />
+                        {/* `truncate` needs `min-w-0` on the whole chain — the
+                            item, the details, the summary and this column. */}
+                        <span className="min-w-0 flex-1">
+                          <span className="block min-w-0 truncate text-sm font-medium text-ink" id={nameId} title={tm.name}>
+                            {tm.name}
+                          </span>
+                          {/* The seed chip rides this second line, beside the
+                              count, rather than the name's row: beside the name
+                              it took 61px of a 202px column at 320 (more in
+                              Spanish, "Cabeza de serie 1"). Neither can wrap
+                              inside itself; the chip drops below the count
+                              before either would. */}
+                          {members !== undefined || tm.seed !== null ? (
+                            <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                              {members !== undefined ? (
+                                <span className="whitespace-nowrap text-xs text-ink-muted">
+                                  {plural(dict, "teams.members", members.length, locale)}
+                                </span>
+                              ) : null}
+                              {/* `!== null`, never truthiness: seed 0 is a seed. */}
+                              {tm.seed !== null ? (
+                                <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
+                                  {t(dict, "teams.seed", { seed: tm.seed })}
+                                </span>
+                              ) : null}
+                            </span>
+                          ) : null}
+                        </span>
+                        {/* The house disclosure chevron (spec §3,
+                            `scorecard-tab.tsx`): points right, turns down. */}
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 12 12"
+                          className="h-3 w-3 shrink-0 text-ink-muted transition-transform group-open:rotate-90"
+                        >
+                          <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.75" />
+                        </svg>
+                      </summary>
+                      <div className="space-y-2 border-t border-zinc-100 px-3 pb-3 pt-1">
+                        {members === undefined ? null : members.length === 0 ? (
+                          <p data-testid={`mh-team-${tm.entrantId}-squad-empty`} className="py-2 text-sm text-ink-muted">
+                            {t(dict, "teams.squadEmpty")}
+                          </p>
+                        ) : (
+                          <ul className="divide-y divide-zinc-100" role="list">
+                            {members.map((m, i) => (
+                              <MemberLine key={i} entrantId={tm.entrantId} index={i} m={m} dict={dict} />
+                            ))}
+                          </ul>
+                        )}
+                        {tm.calendarHref ? (
+                          // Named "Add to calendar" + the team, so a screen
+                          // reader's link list is not N identical entries.
+                          <Link
+                            data-testid={calendarId}
+                            id={calendarId}
+                            href={tm.calendarHref}
+                            aria-labelledby={`${calendarId} ${nameId}`}
+                            className="inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 text-sm font-medium text-ink transition hover:border-accent hover:text-accent-strong"
+                          >
+                            {t(dict, "info.calendar")}
+                          </Link>
+                        ) : null}
+                      </div>
+                    </details>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         );

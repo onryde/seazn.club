@@ -25,26 +25,27 @@
 //    running count, not a resume point), so calling it per division on a
 //    public page render is O(all events) on a spectator's page load.
 //
-//    What that table is NOT is a projection the scoring write reliably
-//    maintains. `recomputePlayerStats` is its only writer, and it runs from
-//    the console and public stats endpoints (`divisionPlayerStats`,
-//    `publicDivisionStats`), a person merge, the auto-posts enrichment
-//    (`usecases/org-posts.ts:888,952`), and the weekly digest sweep
-//    (`:1331`). Only the auto-posts path is reached from scoring —
-//    `refreshNews` on a decided fixture — and it is doubly conditional: the
-//    division must have `auto_posts` set AND the org must hold `news.auto`.
-//    The digest cron POSTs `https://stg.seazn.club` and nothing else
-//    (`news-digest-stg.yml:36`), so it never refreshes production at all.
-//    A division outside every one of those paths holds ZERO rows and yields
-//    NO boards here; where rows exist they are as fresh as the last such
-//    call, not as fresh as the live fixture. Not recomputing on a spectator render
-//    is still right — `data.ts`'s public player card reads the same table the
-//    same way — but who refreshes it is an open question for the wave, not
-//    something this module settles.
+//    Who keeps it fresh (owner ruling 2026-09-16): the writes listed at the
+//    top of `usecases/player-stats-refresh.ts` schedule a refold of the
+//    division after their response, which then clears the public caches and
+//    pushes the division again. That list is the one authority; it is not
+//    repeated here. Rows lag those writes by a queue wait plus one fold (0.5–1.3 s
+//    measured for a 90-match T20 season), and goals or runs in a match still in
+//    play reach the boards only at the division's next refresh. Writes outside
+//    that list (a roster edit, a division config edit) reach the boards at the
+//    next refresh too. An open hub shows new rows after that push only while it
+//    still follows the division; when the finish was the division's last live
+//    match, it waits for its idle poll (up to 60 s, `player-stats-refresh.ts`
+//    point 4). A division with no refreshed match yet holds ZERO rows and
+//    yields NO boards here. `recomputePlayerStats` also runs from the console
+//    and public stats endpoints, `personStats`, a person merge or unmerge, the
+//    auto-posts enrichment and the digest. Not recomputing on a spectator
+//    render stays right: `data.ts`'s public player card reads the same table
+//    the same way.
 // ---------------------------------------------------------------------------
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
-import { resolveNameDisplay, resolvePersonDisplayName } from "@/lib/name-display";
+import { isPersonNameMasked, playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import type { LeaderBoardT } from "./competition-hub-schema";
 import type { DivisionConsentCtx } from "./public-lineups";
 
@@ -107,8 +108,10 @@ export interface LeaderInputRow {
   /** Already display-resolved. Never the raw `full_name` for a masked person. */
   name: string;
   masked: boolean;
-  /** True only when the person is in `public_players_v` — i.e. a player page
-   *  exists for them. Absence of a profile is never absence of a row. */
+  /** True only when a public name may link to the player's card, on the terms
+   *  every public roster link uses (`playerLinkId`): the view published the
+   *  person's id (consent + the org's player-page entitlement) and the
+   *  division shows full names. Absence of a profile is never absence of a row. */
   publicProfile: boolean;
   entrantName: string | null;
   badgeUrl: string | null;
@@ -183,9 +186,28 @@ export function specsFor(sportKey: string, model: PlayerStatsModel | undefined):
  * A masked person is RANKED and rendered under their masked label — dropping
  * the row would silently change the standings a spectator sees. What masking
  * removes is the LINK: `personHref` is offered only for a person who both has
- * a public profile (`public_players_v`) and is not masked here, because the
+ * a public profile (`publicProfile`, on `playerLinkId`'s terms) and is not
+ * masked here, because the
  * player page renders the unmasked name and linking to it from a youth
  * division would undo that division's own safeguarding policy.
+ *
+ * Masking removes the real `personId` too (privacy hotfix, 2026-09-16). A
+ * person's id is stable across the org, so a masked row's id could be looked
+ * up on an adult division's entrants API, where the same person may appear
+ * under their full name. A masked row carries a stand-in instead, the same
+ * scheme `makePersonOf` (match-centre.ts) uses: `m1`, `m2`, … in first-seen
+ * order, memoised so a person on two of a division's boards keeps one
+ * stand-in. The memo is per DIVISION, the unit the policy masks by: a child
+ * playing up in U12 and U14 gets unrelated stand-ins, so nothing ties the two
+ * rows together. The id is only the row's React key and testid
+ * (`stats-tab.tsx`), which needs uniqueness inside one board only.
+ *
+ * Only a LINKED row keeps its real id (final review A m3): the one whose
+ * `personHref` is built from it, which is exactly a row `playerLinkId` published
+ * (`publicProfile`) and the policy does not mask. An unmasked row the public
+ * views did not publish (no consent answer, or no player-page entitlement)
+ * gets a stand-in too: the hub must carry no person id `public_entrants_v`
+ * withheld.
  */
 export function buildLeaderBoards(a: {
   divisions: readonly LeaderDivision[];
@@ -203,6 +225,16 @@ export function buildLeaderBoards(a: {
   const out: LeaderBoardT[] = [];
 
   for (const division of a.divisions) {
+    const standIns = new Map<string, string>();
+    const linked = (row: LeaderInputRow): boolean => row.publicProfile && !row.masked;
+    const publicId = (row: LeaderInputRow): string => {
+      if (linked(row)) return row.personId;
+      const seen = standIns.get(row.personId);
+      if (seen !== undefined) return seen;
+      const minted = `m${standIns.size + 1}`;
+      standIns.set(row.personId, minted);
+      return minted;
+    };
     const model = a.modelFor(division);
     const inDivision = a.rows.filter((r) => r.divisionId === division.id);
 
@@ -223,8 +255,8 @@ export function buildLeaderBoards(a: {
         key: spec.key,
         label: a.label(spec, division, model),
         rows: scored.map(({ row, value }) => ({
-          person: { personId: row.personId, name: row.name, masked: row.masked },
-          personHref: row.publicProfile && !row.masked ? a.personHref(row.personId) : null,
+          person: { personId: publicId(row), name: row.name, masked: row.masked },
+          personHref: linked(row) ? a.personHref(row.personId) : null,
           entrantName: row.entrantName,
           badgeUrl: row.badgeUrl,
           // Formatted from the SAME number the ranking used, so a change to
@@ -254,6 +286,7 @@ export interface LeaderSnapshotRow {
   entrant_name: string | null;
   badge_url: string | null;
   team_logo_path: string | null;
+  /** `public_entrants_v` published this person's id in their entrant. */
   public_profile: boolean;
 }
 
@@ -291,8 +324,8 @@ export function toLeaderInputRows(
 
     // `masked` follows the POLICY, not whether the string changed.
     //
-    // The obvious `name !== row.full_name` (which `readPublicLineups` uses)
-    // is wrong here: `maskOne` returns a SINGLE-TOKEN name unchanged, so a
+    // The obvious `name !== row.full_name` (which `readPublicLineups` used
+    // until the 2026-09-16 privacy hotfix) is wrong here: `maskOne` returns a SINGLE-TOKEN name unchanged, so a
     // one-word name resolves to itself and reads as unmasked. In W1 that flag
     // drives nothing, but here it gates `personHref` — so a minor in a youth
     // division with a one-token name would be handed a link to a player page
@@ -300,16 +333,16 @@ export function toLeaderInputRows(
     // outcome the division's masking policy exists to prevent. The name
     // string leaks nothing extra in that case; the LINK does.
     //
-    // Reads the same two axes in the same order as `resolvePersonDisplayName`
-    // itself, through its own exported helper — not a second resolver.
-    const masked = row.consent?.public_name === false || resolveNameDisplay(setting, youth) !== "full";
+    // The decision `resolvePersonDisplayName` itself makes, from the one
+    // shared rule — never a copy of the predicate.
+    const masked = isPersonNameMasked(row.consent, setting, youth);
 
     out.push({
       divisionId: row.division_id,
       personId: row.person_id,
       name,
       masked,
-      publicProfile: row.public_profile,
+      publicProfile: playerLinkId(row.public_profile ? row.person_id : null, division) !== null,
       entrantName: row.entrant_id === null ? null : (entrantNames.get(row.entrant_id) ?? null),
       badgeUrl: resolveEntrantBadge({
         badge_url: row.badge_url,

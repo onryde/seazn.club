@@ -12,11 +12,17 @@
 // and this test, which may import both, keeps the two from drifting apart.
 import { describe, expect, it } from "vitest";
 import { HUB_TTL_SECONDS } from "@/server/usecases/public";
-import { HUB_PUSH_RETRY_MS } from "../use-live-competition";
+import { HUB_PUSH_RETRY_MS, HUB_TTL_MS } from "../use-live-competition";
 
 describe("the hub's last push retry outlives the hub's Redis TTL (R10c m2)", () => {
   it("the TTL is read from the server module, not re-typed here", () => {
     expect(HUB_TTL_SECONDS).toBeGreaterThan(0);
+  });
+
+  // T17 review m1: the hub hook's ended-division linger is derived from this
+  // mirror, so a TTL change has to move it.
+  it("the hook's HUB_TTL_MS mirror equals HUB_TTL_SECONDS", () => {
+    expect(HUB_TTL_MS).toBe(HUB_TTL_SECONDS * 1_000);
   });
 
   it("the last retry delay is longer than HUB_TTL_SECONDS", () => {

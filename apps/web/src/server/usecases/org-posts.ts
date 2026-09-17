@@ -29,7 +29,7 @@ import { loadLineupPair } from "@/server/engine-db/lineups";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
-import { recomputePlayerStats } from "./player-stats";
+import { playerStatsWithoutWaiting } from "./player-stats";
 import {
   resultDraft,
   roundRecapDraft,
@@ -834,7 +834,7 @@ async function entrantRecentOutcomes(
  * `scorers` derivation — it cannot isolate leaderboardMoves alone. A bogus
  * `fx.division_id` (well-formed UUID, no such division) can: `scorers` is a
  * plain parameter here, not derived from `fx.division_id`, so it stays
- * real while `recomputePlayerStats(tx, fx.division_id)` genuinely 404s.
+ * real while `playerStatsWithoutWaiting(tx, fx.division_id)` genuinely 404s.
  */
 export async function assembleResultEnrichment(
   tx: Tx,
@@ -885,7 +885,8 @@ export async function assembleResultEnrichment(
         // draft in, turning "drop one section" into "drop the whole
         // draft" — exactly the failure mode this file exists to prevent.
         const moves = await tx.savepoint(async (sp) => {
-          const { rows } = await recomputePlayerStats(sp, fx.division_id);
+          // Never waits on the stats lock inside this request (review I3).
+          const { rows } = await playerStatsWithoutWaiting(sp, fx.division_id);
           const after = rows.map((r) => ({ personId: r.personId, personName: "", value: r.stats[metric!.key] ?? 0 }));
           const contributions = scorers.map((s) => ({ personId: s.personId, personName: s.name, credit: s.count }));
           return computeLeaderboardMoves(after, contributions, metric.label);
@@ -949,7 +950,8 @@ export async function assembleRecapEnrichment(
     // rejected statement here must not poison the transaction the recap
     // draft's own INSERT commits in.
     await tx.savepoint(async (sp) => {
-      const { rows, hasModel } = await recomputePlayerStats(sp, fx.division_id);
+      // Never waits on the stats lock inside this request (review I3).
+      const { rows, hasModel } = await playerStatsWithoutWaiting(sp, fx.division_id);
       if (hasModel && rows.length > 0) {
         const model = resolveModule(fx.sport_key, fx.module_version).playerStats;
         const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
@@ -1297,7 +1299,7 @@ export interface DivisionHeadline {
 }
 
 /**
- * One `recomputePlayerStats` + headline-metric resolution per active
+ * One `playerStatsWithoutWaiting` + headline-metric resolution per active
  * division, shared by assembleDigestLeaders and assembleDigestClaimed so
  * neither recomputes the same division's stats twice.
  *
@@ -1317,6 +1319,10 @@ export async function loadDivisionHeadlines(
   divisions: readonly ActiveDivision[],
 ): Promise<Map<string, DivisionHeadline>> {
   const out = new Map<string, DivisionHeadline>();
+  // Each division never waits on its stats lock and folds only when its
+  // snapshot is behind (review n3); a division another transaction is folding
+  // is folded in memory. Try-locks never wait, so the order this list arrives
+  // in cannot deadlock against a person merge or a player card.
   for (const div of divisions) {
     try {
       // Savepoint (P3 review finding 3 unplanned fix): digestForOrg calls
@@ -1328,7 +1334,7 @@ export async function loadDivisionHeadlines(
         const model = resolveModule(div.sport_key, div.module_version).playerStats;
         const metric = model?.metrics.find((m) => m.key === "goals") ?? model?.metrics[0];
         if (!metric) return;
-        const { rows } = await recomputePlayerStats(sp, div.division_id);
+        const { rows } = await playerStatsWithoutWaiting(sp, div.division_id);
         if (rows.length > 0) out.set(div.division_id, { metric, rows });
       });
     } catch (err) {

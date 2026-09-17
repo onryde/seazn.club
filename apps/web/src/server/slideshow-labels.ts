@@ -11,6 +11,7 @@ import "server-only";
 // mock that module wholesale, keep resolving it.
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 
 /** The fixture statuses a slide row names in words. `in_play` is not one: a
  *  live row shows the pulsing `live` chip instead. */
@@ -54,6 +55,11 @@ export interface SlideshowLabels {
   status: Record<SlideshowStatus, string>;
   /** The card a phone sees instead of the board (C1). */
   phoneCard: KioskPhoneCardLabels;
+  /** The `Intl` locale the board's wall clock is written in: the board's own
+   *  locale through `intlLocaleFor` (owner ruling 2026-09-16 — English as
+   *  en-GB, a 24-hour clock). Not a string to render: without it the clock
+   *  fell back to the BROWSER's locale, so an en-US TV read "02:30 PM". */
+  clockLocale: string;
 }
 
 export function slideshowLabels(locale: string | null | undefined): SlideshowLabels {
@@ -101,6 +107,7 @@ export function slideshowLabels(locale: string | null | undefined): SlideshowLab
       openLive: m("slideshow.phoneCard.openLive"),
       showBoard: m("slideshow.phoneCard.showBoard"),
     },
+    clockLocale: intlLocaleFor(l),
   };
 }
 

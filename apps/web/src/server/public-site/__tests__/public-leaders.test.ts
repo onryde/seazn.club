@@ -42,6 +42,7 @@ vi.mock("../data", async (importOriginal) => {
 });
 
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
@@ -279,6 +280,16 @@ async function seedOrg(): Promise<{ auth: AuthCtx; orgId: string }> {
   return { auth: { orgId, via: "session", userId: null, role: "owner", keyId: null }, orgId };
 }
 
+/** An explicit entitlement answer for one org. `org_has_feature` (the view's
+ *  check) reads overrides directly; the resolver cache is busted too. */
+async function setFeature(orgId: string, featureKey: string, value: boolean): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, ${featureKey}, ${value}, 'test')
+    on conflict (org_id, feature_key) do update set bool_value = excluded.bool_value`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 async function seedPerson(orgId: string, fullName: string, consent: Record<string, boolean>): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
     insert into persons (org_id, full_name, dob, gender, photo_path, consent)
@@ -304,6 +315,8 @@ afterAll(async () => {
 describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
   it("joins snapshot → person (consent-resolved) → entrant, and flags the public profile", async () => {
     const { auth, orgId } = await seedOrg();
+    // The profile flag is the public card's own terms, entitlement included.
+    await setFeature(orgId, "dashboard.player_profiles", true);
     const publicFullName = "Alice Wonder";
     const privateFullName = "Bob Private";
     const publicPersonId = await seedPerson(orgId, publicFullName, { public_name: true });
@@ -351,13 +364,49 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     expect(priv.masked).toBe(true);
     expect(priv.name).not.toBe("");
     expect(priv.name).not.toBe(privateFullName);
-    // A person who opted out is absent from public_players_v — no profile to
-    // link to, but the ROW still exists.
+    // A person who opted out has no id published by public_entrants_v — no
+    // profile to link to, but the ROW still exists.
     expect(priv.publicProfile).toBe(false);
     expect(priv.stats).toEqual({ runs: 12 });
     // A TEAM's own declared name carries no personal consent, so it survives
     // the masking pass untouched even though a member opted out.
     expect(priv.entrantName).toBe("Blazers");
+  });
+
+  it("ENTITLEMENT: the free plan's state — stats granted, player pages NOT — gives a consented leader no public profile, so no link to a card that would refuse them; granting player pages restores it", async () => {
+    const { auth, orgId } = await seedOrg();
+    await setFeature(orgId, "stats.player", true);
+    await setFeature(orgId, "dashboard.player_profiles", false);
+    const personId = await seedPerson(orgId, "Leila Okafor", { public_name: true });
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Free Plan Cup",
+      visibility: "public",
+      branding: {},
+    });
+    const division = await createDivision(auth, competition.id, {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    await createEntrants(auth, division.id, [
+      {
+        kind: "team",
+        display_name: "Comets",
+        seed: 1,
+        members: [{ person_id: personId, squad_number: 4, default_position_key: null, is_captain: true, roles: [] }],
+      },
+    ]);
+    await seedSnapshot(division.id, personId, { runs: 40 });
+    const policy = [{ id: division.id, youth: false, player_name_display: null }];
+
+    const [denied] = await readLeaderRows(sql, policy);
+    expect(denied).toMatchObject({ name: "Leila Okafor", masked: false, publicProfile: false });
+
+    await setFeature(orgId, "dashboard.player_profiles", true);
+    const [granted] = await readLeaderRows(sql, policy);
+    expect(granted).toMatchObject({ name: "Leila Okafor", masked: false, publicProfile: true });
   });
 
   it("VISIBILITY: a private competition's snapshots are not readable", async () => {
@@ -418,6 +467,7 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
 
   it("a youth division masks every name, consent notwithstanding", async () => {
     const { auth, orgId } = await seedOrg();
+    await setFeature(orgId, "dashboard.player_profiles", true);
     const personId = await seedPerson(orgId, "Priya Sharma", { public_name: true });
     const competition = await createCompetition(auth, {
       ends_on: "2030-12-31",
@@ -453,9 +503,10 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     const [row] = await readLeaderRows(sql, [{ id: division.id, youth: true, player_name_display: null }]);
     expect(row!.masked).toBe(true);
     expect(row!.name).toBe("Priya S.");
-    // Still in public_players_v — a profile exists; the LINK decision belongs
-    // to buildLeaderBoards, which withholds it for a masked person.
-    expect(row!.publicProfile).toBe(true);
+    // The card exists (consent + entitlement), but a masked name never links
+    // to it: `playerLinkId` withholds the profile in a division that masks
+    // names, the same rule the Teams and Entrants tabs link by.
+    expect(row!.publicProfile).toBe(false);
   });
 
   it("SAFEGUARDING: a single-token youth name is masked, so no player-page link is offered", async () => {
@@ -489,9 +540,13 @@ describe.skipIf(!HAS_DB)("readLeaderRows against real Postgres", () => {
     ]);
     await seedSnapshot(division.id, personId, { runs: 7 });
 
+    await setFeature(orgId, "dashboard.player_profiles", true);
     const [row] = await readLeaderRows(sql, [{ id: division.id, youth: true, player_name_display: null }]);
     expect(row!.name).toBe("Ronaldinho");
-    expect(row!.publicProfile).toBe(true);
+    // Both guards refuse the link: the division masks names, so `playerLinkId`
+    // withholds the profile even though the card exists, and `masked` (the
+    // policy, not the unchanged string) is true.
+    expect(row!.publicProfile).toBe(false);
     expect(row!.masked).toBe(true);
   });
 });

@@ -176,10 +176,10 @@ export interface CompetitionLandingProps {
    * What is NOT in this root's gift, and is worth stating where the props are:
    * `competition-hub.ts:368` builds the whole document in the org's
    * `default_locale`, so every pre-resolved string in it — board labels,
-   * `divisionName` everywhere — is org-language whatever is passed here; and
-   * `lib/format.ts:10` pins `en-GB` for every date on the surface. So a page
-   * that chose to pass a viewer locale would produce three languages in one
-   * panel. Passing the org's collapses it to two.
+   * `divisionName` everywhere — is org-language whatever is passed here, while
+   * the dates follow THIS locale (`fmtPublicDate`, owner ruling 2026-09-16). So
+   * a page that chose to pass a viewer locale would put two languages in one
+   * panel. Passing the org's collapses it to one.
    */
   dict: PublicDict;
   locale: Locale;
@@ -339,9 +339,9 @@ export interface PanelArgs {
   now: number;
   descriptionSlot?: ReactNode;
   shareSlot?: ReactNode;
-  /** `?division=` — the seed for the two tabs that FILTER by division,
-   *  Matches and Knockout. The Table and Teams tabs group by division
-   *  rather than filtering, so there is nothing for them to seed. */
+  /** `?division=` — the seed for the tabs that FILTER by division: Matches,
+   *  Knockout, and (since the division-page parity ruling, 2026-09-16) Table
+   *  and Teams. Stats groups by division and has nothing to seed. */
   initialDivision?: string | null;
 }
 
@@ -354,8 +354,9 @@ export interface PanelArgs {
  *
  * Note the props each panel takes differ, which is the other reason this is not
  * a table — `TAB_PANELS`-style uniformity (W1's `tab-panels.ts`) only works
- * where every panel has one signature, and these five do not: `TableTab`,
- * `StatsTab` and `TeamsTab` read nothing but the document and the dictionary.
+ * where every panel has one signature, and these do not: `StatsTab` reads
+ * nothing but the document and the dictionary, while `TableTab` and `TeamsTab`
+ * also take the `?division=` seed (and Teams the locale).
  *
  * EXPORTED for its own test, and the mutation sweep is why: replacing the
  * `never` default with `if (unhandled) return null` survived the whole suite,
@@ -385,7 +386,7 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
         />
       );
     case "table":
-      return <TableTab doc={a.doc} dict={a.dict} />;
+      return <TableTab doc={a.doc} dict={a.dict} initialDivision={a.initialDivision} />;
     case "knockout":
       return (
         <KnockoutTab
@@ -399,7 +400,7 @@ export function panelFor(active: LandingTabId, a: PanelArgs): ReactNode {
     case "stats":
       return <StatsTab doc={a.doc} dict={a.dict} />;
     case "teams":
-      return <TeamsTab doc={a.doc} dict={a.dict} />;
+      return <TeamsTab doc={a.doc} dict={a.dict} locale={a.locale} initialDivision={a.initialDivision} />;
     case "info":
       return (
         <InfoTab

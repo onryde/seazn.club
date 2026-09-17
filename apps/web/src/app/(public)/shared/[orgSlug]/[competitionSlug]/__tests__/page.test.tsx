@@ -93,6 +93,7 @@ import Page, { generateMetadata } from "../page";
 /** React escapes text and attributes on the way into the markup, so an
  *  expectation taken straight from a dictionary misses: French "S'inscrire"
  *  ships as "S&#x27;inscrire". */
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const esc = (s: string) =>
   s
     .replace(/&/g, "&amp;")
@@ -738,6 +739,20 @@ describe("every word on this page comes from the org's dictionary", () => {
     "share.copy",
   ];
 
+  // Owner ruling 2026-09-16: the hero's dates are in the page's locale too,
+  // English day-month. Until then they were en-GB in all four.
+  for (const locale of ["en", "es", "fr", "nl"]) {
+    it(`${locale}: the hero's dates are in that locale, in UTC`, async () => {
+      const day = (iso: string) =>
+        new Intl.DateTimeFormat(locale, { ...DATE_OPTS, timeZone: UTC }).format(new Date(iso));
+      const expected =
+        locale === "en" ? "5 September 2026 – 20 September 2026" : `${day(STARTS_ON)} – ${day(ENDS_ON)}`;
+      if (locale !== "en") expect(expected).not.toBe("5 September 2026 – 20 September 2026");
+      const h = await forLocale(locale);
+      expect(h).toMatch(new RegExp(`data-testid="mh-hero-dates"[^>]*>${escapeRe(expected)}<`));
+    });
+  }
+
   for (const locale of ["en", "es", "fr", "nl"]) {
     it(`${locale}: renders that locale's own copy, and drops the English where the two differ`, async () => {
       const dict = DICTS[locale]!;
@@ -786,9 +801,10 @@ describe("every word on this page comes from the org's dictionary", () => {
     // This is exactly the hole `ShareBarLabels`' all-five-or-none shape exists
     // to close. The interface guarantees all five are PRESENT; only this
     // asserts the page bound the right VALUES. Read at the prop boundary,
-    // deep-equal over all five, for BOTH bars — and note `DEFAULT_LABELS.copied`
-    // is "Copied ✓", a string that exists in no dictionary at all, so a page
-    // that simply dropped the prop would ship it in French.
+    // deep-equal over all five, for BOTH bars. (`ShareBar` once fell back to an
+    // English `DEFAULT_LABELS` whose `copied` was "Copied ✓", a string in no
+    // dictionary at all, so a page that dropped the prop shipped it in French.
+    // Task 16 deleted those defaults and made `labels` required.)
     it(`${locale}: both share bars carry all five of that locale's share words`, async () => {
       const dict = DICTS[locale]!;
       stub.getPublicCompetition.mockResolvedValue(shell({ locale }));

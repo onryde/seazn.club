@@ -48,8 +48,10 @@
 //      → the table COUNT and the per-view ids.
 //  (k) `min-w-0` dropped from the root or any grid cell → the class
 //      assertions, which read every cell rather than the first.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -91,9 +93,9 @@ const render = (d: CompetitionHubDocT = doc) =>
  *  negative assertion can be scoped to it instead of to the whole document.
  *  Same shape as `standings-table-view.test.tsx`'s `rowHtml`. */
 const groupHtml = (h: string, slug: string): string => {
-  const start = h.indexOf(`data-testid="mh-table-division-${slug}"`);
+  const start = h.indexOf(`data-testid="mh-table-heading-${slug}"`);
   expect(start, `the ${slug} heading`).toBeGreaterThan(-1);
-  const next = h.indexOf(`data-testid="mh-table-division-`, start + 1);
+  const next = h.indexOf(`data-testid="mh-table-heading-`, start + 1);
   return next === -1 ? h.slice(start) : h.slice(start, next);
 };
 
@@ -101,7 +103,7 @@ const groupHtml = (h: string, slug: string): string => {
  *  a containment check: the defects it separates are "one heading per table"
  *  and "one heading for everything", and both pass any `toContain`. */
 const headings = (h: string) =>
-  [...h.matchAll(/data-testid="mh-table-division-([a-z0-9-]+)"/g)].map((x) => x[1]);
+  [...h.matchAll(/data-testid="mh-table-heading-([a-z0-9-]+)"/g)].map((x) => x[1]);
 
 describe("TableTab", () => {
   // ------------------------------------------------------------- (a) empty
@@ -115,7 +117,7 @@ describe("TableTab", () => {
     // not on another.
     expect(h).toContain(`data-testid="mh-table"`);
     expect(h).toContain("No standings yet"); // the dictionary's copy, not the key
-    expect(h).not.toContain(`data-testid="mh-table-division-`);
+    expect(h).not.toContain(`data-testid="mh-table-heading-`);
     expect(h).not.toContain("<table");
 
     // The brief's own note on this case: the sentence is UNREACHABLE through
@@ -191,15 +193,15 @@ describe("TableTab", () => {
     // A list, not a containment check: one heading per TABLE and one heading
     // for everything both survive `toContain`.
     expect(headings(h)).toEqual(["sunday-league", "premier"]);
-    expect(h).toMatch(/data-testid="mh-table-division-sunday-league"[^>]*>Sunday League</);
-    expect(h).toMatch(/data-testid="mh-table-division-premier"[^>]*>Premier</);
+    expect(h).toMatch(/data-testid="mh-table-heading-sunday-league"[^>]*>Sunday League</);
+    expect(h).toMatch(/data-testid="mh-table-heading-premier"[^>]*>Premier</);
     // Re-review NEW-2 — the LEVEL, not just the text. `<h2>` is the rank a
     // division heading has to hold: the tab panel is a section of the hub page
     // and `StandingsTableView`'s own caption sits below this. Swapping it to
     // `<h3>` survived every other assertion here, and a heading level is
     // markup, so it is pinnable now rather than at the post-mount leg.
-    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-division-sunday-league"/);
-    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-division-premier"/);
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-heading-sunday-league"/);
+    expect(h).toMatch(/<h2[^>]*data-testid="mh-table-heading-premier"/);
 
     // The heading has to outrank the table caption directly below it at EVERY
     // width, not only from `md`: `StandingsTableView`'s caption is
@@ -208,7 +210,7 @@ describe("TableTab", () => {
     // built around stops being visible on a phone. Token matching, not a
     // substring — `text-lg` is a prefix of nothing here but `truncate` once was.
     const headingCls = h.match(
-      /data-testid="mh-table-division-sunday-league" class="([^"]*)"/,
+      /data-testid="mh-table-heading-sunday-league" class="([^"]*)"/,
     )?.[1];
     expect(headingCls, "the division heading's class attribute").toBeTruthy();
     expect(headingCls!.split(" ")).toContain("text-xl");
@@ -345,7 +347,7 @@ describe("TableTab", () => {
 
     // "Above the table" is the brief's word for it, and it is also below the
     // heading it belongs to — the crown names a DIVISION's champion.
-    expect(h.indexOf(`data-testid="mh-table-division-sunday-league"`)).toBeLessThan(
+    expect(h.indexOf(`data-testid="mh-table-heading-sunday-league"`)).toBeLessThan(
       h.indexOf(`data-testid="mh-table-champion-sunday-league"`),
     );
     expect(h.indexOf(`data-testid="mh-table-champion-sunday-league"`)).toBeLessThan(
@@ -452,3 +454,90 @@ describe("TableTab", () => {
     expect(crowned).toContain("División completa");
   });
 });
+
+// ---------------------------------------------------------------------------
+// `?division=` (owner ruling 2026-09-16, division-page parity): the Table tab
+// FILTERS by division, with the same rail the Matches and Knockout tabs carry,
+// so the division page's redirect can land on `?tab=table&division={slug}`.
+// ---------------------------------------------------------------------------
+
+describe("TableTab — the division filter", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const renderWith = (d: CompetitionHubDocT, initialDivision: string | null | undefined) =>
+    renderToStaticMarkup(<TableTab doc={d} dict={dict} initialDivision={initialDivision} />);
+  const tablesIn = (h: string) =>
+    [...h.matchAll(/<section data-testid="mh-table-([a-z0-9-]+)"/g)].map((x) => x[1]);
+  const pressedChips = (h: string) =>
+    [...h.matchAll(/data-testid="(mh-table-division-[a-z0-9-]+)"[^>]*aria-pressed="true"/g)].map((x) => x[1]);
+
+  it("NO FILTER FIRST: every division's tables, All pressed, and a chip per division in document order", () => {
+    const h = renderWith(doc, null);
+    expect(tablesIn(h)).toEqual(["sunday-super", "sunday-group", "premier-league"]);
+    expect(pressedChips(h)).toEqual(["mh-table-division-all"]);
+    expect([...h.matchAll(/data-testid="mh-table-division-([a-z0-9-]+)"/g)].map((x) => x[1])).toEqual([
+      "all",
+      "sunday-league",
+      "premier",
+    ]);
+    expect(h).toMatch(/data-testid="mh-table-divisions"[^>]*role="group"[^>]*tabindex="0"[^>]*aria-label="Filter by division"/);
+  });
+
+  it("a valid `?division=` shows ONLY that division's tables and presses its chip — the other division's heading and tables are gone", () => {
+    const h = renderWith(doc, "premier");
+    expect(tablesIn(h)).toEqual(["premier-league"]);
+    expect(headings(h)).toEqual(["premier"]);
+    expect(pressedChips(h)).toEqual(["mh-table-division-premier"]);
+    // …and the other way round, so a filter hardwired to one slug cannot pass.
+    const sunday = renderWith(doc, "sunday-league");
+    expect(tablesIn(sunday)).toEqual(["sunday-super", "sunday-group"]);
+    expect(headings(sunday)).toEqual(["sunday-league"]);
+  });
+
+  it("an unknown, empty or table-less `?division=` behaves exactly like no filter", () => {
+    const unfiltered = renderWith(doc, null);
+    for (const slug of ["ghost", "", "all"]) {
+      expect(renderWith(doc, slug), JSON.stringify(slug)).toBe(unfiltered);
+    }
+  });
+
+  it("ONE division is no choice: no rail, and its `?division=` still shows its tables", () => {
+    const single = hubDoc({ tables: [tableView("premier-league", "premier", { caption: "League" })] });
+    const h = renderWith(single, "premier");
+    expect(h).not.toContain(`data-testid="mh-table-divisions"`);
+    expect(tablesIn(h)).toEqual(["premier-league"]);
+  });
+
+  it("a chip tap narrows the tab and writes `division=` back to the URL; All takes it out again", () => {
+    const loc = { href: "https://seazn.club/shared/riverside/autumn-cup?tab=table", search: "?tab=table" };
+    const replaced: string[] = [];
+    vi.stubGlobal("window", {
+      location: loc,
+      history: {
+        replaceState: (_s: unknown, _t: unknown, next: string) => {
+          replaced.push(next);
+          const u = new URL(next);
+          loc.href = u.toString();
+          loc.search = u.search;
+        },
+      },
+    });
+    const island = renderIsland(TableTab, { doc, dict, initialDivision: null });
+    const views = () =>
+      island
+        .tree()
+        .filter((x: ReactElement) => typeof propsOf(x).testid === "string")
+        .map((x: ReactElement) => propsOf(x).testid);
+    const tap = (testid: string) =>
+      (propsOf(island.tree().find((x: ReactElement) => propsOf(x)["data-testid"] === testid)!).onClick as () => void)();
+
+    expect(views()).toEqual(["mh-table-sunday-super", "mh-table-sunday-group", "mh-table-premier-league"]);
+    tap("mh-table-division-premier");
+    expect(replaced).toEqual(["https://seazn.club/shared/riverside/autumn-cup?tab=table&division=premier"]);
+    expect(views()).toEqual(["mh-table-premier-league"]);
+    tap("mh-table-division-all");
+    expect(replaced.at(-1)).toBe("https://seazn.club/shared/riverside/autumn-cup?tab=table");
+    expect(views()).toEqual(["mh-table-sunday-super", "mh-table-sunday-group", "mh-table-premier-league"]);
+  });
+});
+

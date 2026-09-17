@@ -279,7 +279,11 @@ function dismissalText(dict: PublicDict, dismissal: CricketBattingRowT["dismissa
 
 function ScrollRegion({ label, children }: { label: string; children: ReactNode }): ReactNode {
   return (
-    <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={label}>
+    // `relative`: the containing block for the tables' `.sr-only` column
+    // words. Static, their containing block was `<body>`, outside this
+    // region's clip, so a table wider than the phone would widen the PAGE
+    // with nothing visible causing it (T17; the hub Table shipped exactly that).
+    <div className="relative overflow-x-auto" tabIndex={0} role="region" aria-label={label}>
       {children}
     </div>
   );

@@ -7,6 +7,10 @@
 // resolve its label through the org's own default_locale, not print the
 // raw, hardcoded, always-English "TBD vs TBD" the route shipped with.
 import { describe, expect, it, vi } from "vitest";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import type {
   PublicFixture,
   PublicEntrant,
@@ -194,7 +198,9 @@ describe("GET .../calendar.ics — slot-label resolution (P6 finding #1)", () =>
     // non-English locale can tell the resolver's fallback apart from the
     // route's old hardcoded one. Proves the fallback goes through
     // resolveSlotLabel + the org's locale, not a hand-written "TBD" string.
-    expect(text).toMatch(/SUMMARY:À déterminer vs À déterminer/);
+    // The joining word is fr's own `schedule.vs` ("contre") since Task 16 —
+    // this line used to pin the English "vs" inside a French SUMMARY.
+    expect(text).toMatch(/SUMMARY:À déterminer contre À déterminer/);
     expect(text).not.toMatch(/SUMMARY:TBD vs TBD/);
   });
 });
@@ -583,4 +589,41 @@ describe("GET .../calendar.ics — a waiting side names its feeder's ROUND (N1 f
     expect(lines).toContain("Side 1 vs Side 2 — Open");
     expect(lines.join(" | ")).not.toMatch(/R\d+·\d+/);
   });
+});
+
+// Spectator W2, Task 16 — the word BETWEEN the two sides. Both names were
+// resolved through the org's locale while the SUMMARY glued them with a
+// hardcoded English " vs ", so a French calendar read "Real Team vs Rivals".
+// The fixture page's own <h1> already uses ui.json's `schedule.vs`; the feed
+// now says the same word. Expectations are each locale's dictionary VALUE (es
+// and nl write "vs" too, so fr is the locale that witnesses the fix).
+describe("GET .../calendar.ics — the SUMMARY's joining word is the org locale's", () => {
+  const UI: Record<string, Record<string, string>> = {
+    en: uiEn as Record<string, string>,
+    es: uiEs as Record<string, string>,
+    fr: uiFr as Record<string, string>,
+    nl: uiNl as Record<string, string>,
+  };
+
+  it("premise: at least one locale's `schedule.vs` differs from English", () => {
+    expect(["es", "fr", "nl"].some((l) => UI[l]!["schedule.vs"] !== UI.en!["schedule.vs"])).toBe(true);
+  });
+
+  for (const locale of Object.keys(UI)) {
+    it(`${locale}: "<home> ${UI[locale]!["schedule.vs"]} <away> — <division>"`, async () => {
+      getPublicDivision.mockResolvedValue(
+        baseData(
+          locale,
+          [F({ id: "rivals", home_entrant_id: "e1", away_entrant_id: "e2" })],
+          {},
+          [E({ id: "e1", display_name: "Real Team" }), E({ id: "e2", display_name: "Rivals" })],
+        ),
+      );
+      const { text } = await get();
+      expect(text).toContain(`SUMMARY:Real Team ${UI[locale]!["schedule.vs"]} Rivals — Open`);
+      if (UI[locale]!["schedule.vs"] !== UI.en!["schedule.vs"]) {
+        expect(text).not.toContain("Real Team vs Rivals");
+      }
+    });
+  }
 });

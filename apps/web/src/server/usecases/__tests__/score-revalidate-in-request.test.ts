@@ -70,7 +70,8 @@ vi.mock("@/server/logger", () => ({ log: logMock }));
 // The public Redis calls are recorded, with the tags already pending in the
 // request at the moment each one STARTED, and held open until the test
 // releases them. That covers every literal-key DEL (`cacheDel`) and every SCAN
-// sweep (`cacheDelPattern`). A use-case that waits on one therefore never
+// sweep (`cacheDelPattern`), so a SCAN a score write should no longer send is
+// seen here too (review r2-m4). A use-case that waits on one therefore never
 // resolves, and `unblocked` below reports that as a failure instead of a hang.
 vi.mock("@/lib/cache", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cache")>();
@@ -164,6 +165,7 @@ import {
   workUnitAsyncStorage,
   type RequestStore,
 } from "next/dist/server/app-render/work-unit-async-storage.external";
+import { AfterContext } from "next/dist/server/after/after-context";
 import { executeRevalidates } from "next/dist/server/revalidation-utils";
 import { defaultConfig } from "next/dist/server/config-shared";
 import FileSystemCache from "next/dist/server/lib/incremental-cache/file-system-cache";
@@ -205,6 +207,12 @@ async function inRequest<T>(handler: () => Promise<T>): Promise<{ result: T; cal
       },
     },
     cacheLifeProfiles: defaultConfig.cacheLife,
+    // A real route handler always has an after-window. Without one, `after()`
+    // throws and `lib/deferred.ts` runs the task inline, so the player-stats
+    // refresh a deciding write schedules would fire its own tags into THIS
+    // request's flush. The response never closes here, so after-work never runs:
+    // `player-stats-refresh-after.test.ts` covers what it lands.
+    afterContext: new AfterContext({ waitUntil: () => {}, onClose: () => {}, onTaskError: undefined }),
   } as unknown as WorkStore;
   const requestStore = { type: "request", phase: "action" } as unknown as RequestStore;
   probe.store = workStore;
@@ -272,7 +280,6 @@ async function settleSweeps(
   await sleep(20);
 }
 
-const SWEEP_FAILED = "scoring: a public Redis sweep failed (the write stands)";
 const DELETE_FAILED = "scoring: a public Redis delete failed (the write stands)";
 
 /** Every target the recorded public Redis calls of one kind were handed. */
@@ -380,7 +387,8 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
       // What the NEXT public read sees. `pub-div` / `pub-hub-v2` carry the
       // division tag, so an expired tag makes them a miss rebuilt with the
-      // score — not one more stale read. The competition tag keeps SWR.
+      // score — not the previous render served again while it rebuilds. The
+      // competition tag keeps SWR.
       expect(areTagsExpired([div], cachedAt), `${write.type}: division entry is a miss`).toBe(true);
       expect(areTagsExpired([comp, div], cachedAt), write.type).toBe(true);
       expect(areTagsExpired([comp], cachedAt), write.type).toBe(false);
@@ -388,57 +396,61 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
       // The public Redis deletes still run, and each one started only AFTER
       // the tag was pending: a delete first lets a hub rebuild re-cache the
-      // stale doc. R10 H4: the two LITERAL keys go out in one direct DEL, and
-      // only the division glob is a SCAN.
+      // stale doc. R10 H4: the keys go out BY NAME in one direct DEL — the
+      // fixture, the hub, the competition's player-matches generation (Task 14)
+      // and, review r2-m4, the division's schedule, standings and entrants
+      // documents, which used to be a `pub:v1:div:{id}:*` SCAN. No SCAN is sent.
       expect(targetsOf("del"), write.type).toEqual(
-        expect.arrayContaining([`pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
+        expect.arrayContaining([
+          `pub:v1:fixture:v2:${fixtureId}`,
+          `pub:v1:hub:${competitionId}`,
+          `pub:v1:player-matches-gen:${competitionId}`,
+          `pub:v1:div:${divisionId}:schedule`,
+          `pub:v1:div:${divisionId}:standings`,
+          `pub:v1:div:${divisionId}:entrants-v2`,
+        ]),
       );
-      expect(targetsOf("scan"), write.type).toEqual(expect.arrayContaining([`pub:v1:div:${divisionId}:*`]));
-      expect(
-        targetsOf("scan").filter((pattern) => !pattern.endsWith("*")),
-        `${write.type}: a literal key sent through a SCAN`,
-      ).toEqual([]);
+      expect(targetsOf("scan"), `${write.type}: a keyspace SCAN on a score write`).toEqual([]);
       for (const sweep of probe.sweeps) {
         expect(sweep.pendingAtCall, `${write.type}: ${sweep.kind} ${sweep.targets.join(" ")}`).toContain(div);
       }
 
-      // F2 (P1 round 2): scoreEvent has resolved while the DEL and the SCAN
-      // are both still held (`unblocked` above), and NO realtime push has gone
+      // F2 (P1 round 2): scoreEvent has resolved while the DEL is still held
+      // (`unblocked` above), and NO realtime push has gone
       // out. A spectator page refetches on a push, and a refetch that beats the
       // delete reads the old Redis copy. Both channels have public receivers:
       // `fixture:{id}` feeds the match centre (`pub:v1:fixture:{id}`), and
       // `division:{id}` feeds the hub (`pub:v1:hub:{competitionId}`).
-      expect(probe.gates.map((g) => g.kind).sort(), `${write.type}: DEL and SCAN still held`).toEqual([
-        "del",
-        "scan",
-      ]);
+      expect(probe.gates.map((g) => g.kind), `${write.type}: the DEL still held`).toEqual(["del"]);
       expect(probe.fixturePushes, `${write.type}: fixture push before the DEL settled`).toEqual([]);
       expect(probe.divisionPushes, `${write.type}: division push before the DEL settled`).toEqual([]);
 
-      // R10 H4: the pushes wait on the DEL alone. It settles while the SCAN is
-      // still walking the keyspace, and both pushes go out now, each exactly
-      // once. The division push is addressed from the invalidation's own lookup
-      // (one query where there were two).
+      // R10 H4: the pushes wait on the DEL. It settles, and both pushes go out
+      // now, each exactly once. The division push is addressed from the
+      // invalidation's own lookup (one query where there were two).
       await settleSweeps({ resolve: true }, "del");
-      expect(probe.gates.map((g) => g.kind), `${write.type}: the SCAN is still held`).toEqual(["scan"]);
+      expect(probe.gates, `${write.type}: nothing left held`).toEqual([]);
       expect(probe.fixturePushes, write.type).toEqual([{ fixtureId, reason: "event" }]);
       expect(probe.divisionPushes, write.type).toEqual([{ divisionId, reason: "score" }]);
-
-      await settleSweeps({ resolve: true }, "scan");
-      expect(probe.fixturePushes, `${write.type}: pushed again once the SCAN settled`).toHaveLength(1);
-      expect(probe.divisionPushes, `${write.type}: pushed again once the SCAN settled`).toHaveLength(1);
-      expect(errorMessages(), write.type).not.toContain(SWEEP_FAILED);
       expect(errorMessages(), write.type).not.toContain(DELETE_FAILED);
     }
   });
 
-  it("a public Redis SCAN and DEL that both REJECT: the pushes wait for the DEL alone and still go out; both failures are logged and nothing is left unhandled", async () => {
+  it("a public Redis DEL that REJECTS: the pushes wait for it and still go out; the failure is logged and nothing is left unhandled", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);
     const competitionId = await competitionOf(divisionId);
-    const fixtureKey = `pub:v1:fixture:${fixtureId}`;
+    const fixtureKey = `pub:v1:fixture:v2:${fixtureId}`;
     const hubKey = `pub:v1:hub:${competitionId}`;
-    const divisionGlob = `pub:v1:div:${divisionId}:*`;
+    const playerMatchesGenKey = `pub:v1:player-matches-gen:${competitionId}`;
+    // Spectator W2 Task 15: the org home's live document rides the same DEL.
+    const orgLiveKey = `pub:v1:org-live:${auth.orgId}`;
+    // Review r2-m4: the division's documents by name, where a SCAN used to be.
+    const divisionKeys = [
+      `pub:v1:div:${divisionId}:schedule`,
+      `pub:v1:div:${divisionId}:standings`,
+      `pub:v1:div:${divisionId}:entrants-v2`,
+    ];
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason);
@@ -448,35 +460,27 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       await unblocked(
         inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
       );
-      expect(probe.gates.map((g) => g.kind).sort()).toEqual(["del", "scan"]);
-      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey].sort());
-      expect(targetsOf("scan")).toEqual([divisionGlob]);
+      expect(probe.gates.map((g) => g.kind)).toEqual(["del"]);
+      expect(targetsOf("del").sort()).toEqual([fixtureKey, hubKey, playerMatchesGenKey, orgLiveKey, ...divisionKeys].sort());
+      expect(targetsOf("scan"), "a keyspace SCAN on a score write").toEqual([]);
 
-      // The SCAN fails first, while the DEL is still in flight.
-      const failure = new Error("simulated Redis failure");
-      await settleSweeps({ reject: failure }, "scan");
-      // F4: checked first, the moment the SCAN has failed. Handled, and logged.
-      expect(unhandled, "a voided SCAN rejected with no handler").toEqual([]);
-      expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: fixtureId, pattern: divisionGlob },
-        SWEEP_FAILED,
-      );
-      // And it releases nothing: a push now would send a hub spectator to the
-      // hub key, which is not gone yet.
+      // Nothing is pushed while the DEL is in flight: a push now would send a
+      // hub spectator to the hub key, which is not gone yet.
+      await sleep(20);
       expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
       expect(probe.divisionPushes, "division push before the DEL settled").toEqual([]);
 
-      // Then the DEL fails too.
+      // Then the DEL fails.
+      const failure = new Error("simulated Redis failure");
       await settleSweeps({ reject: failure }, "del");
       expect(unhandled, "a DEL rejected with no handler").toEqual([]);
       expect(logMock.error).toHaveBeenCalledWith(
-        { err: failure, fixture: fixtureId, keys: expect.arrayContaining([fixtureKey, hubKey]) },
+        { err: failure, fixture: fixtureId, keys: expect.arrayContaining([fixtureKey, hubKey, ...divisionKeys]) },
         DELETE_FAILED,
       );
       // A failed DEL does not swallow the pushes.
       expect(probe.fixturePushes).toEqual([{ fixtureId, reason: "event" }]);
       expect(probe.divisionPushes).toEqual([{ divisionId, reason: "score" }]);
-      expect(errorMessages().filter((m) => m === SWEEP_FAILED)).toHaveLength(1);
       expect(errorMessages().filter((m) => m === DELETE_FAILED)).toHaveLength(1);
       expect(unhandled, "a voided rejection with no handler").toEqual([]);
     } finally {
@@ -591,7 +595,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     expect(targetsOf("del")).toEqual(
-      expect.arrayContaining([`pub:v1:fixture:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
+      expect.arrayContaining([`pub:v1:fixture:v2:${fixtureId}`, `pub:v1:hub:${competitionId}`]),
     );
 
     // And the pushes still wait for the DEL, then go out once each.

@@ -14,9 +14,13 @@
 // - the scoreboard display face, mounted as `--ps-font-display` (the same
 //   weights as the chrome layout, as `app/embed/layout.tsx` also does);
 // - the org's brand palette on the root, so a board without its own branding
-//   still wears the org's.
+//   still wears the org's;
+// - `<html lang>` in the org's language, as the chrome layout sets it (a TV
+//   board has no visitor cookie to correct it from).
 // And nothing else: no header, no <main>, no footer.
 import { Barlow_Condensed } from "next/font/google";
+import { HtmlLang } from "@/components/i18n/html-lang";
+import { toLocale } from "@/lib/i18n-constants";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { publicOrgOrNull } from "@/server/public-site/org-guard";
 
@@ -49,6 +53,7 @@ export default async function KioskOrgLayout({
       style={publicThemeStyle(data?.org.branding)}
       className={`${displayFont.variable} min-h-screen bg-canvas text-ink`}
     >
+      {data ? <HtmlLang lang={toLocale(data.org.default_locale)} /> : null}
       {children}
     </div>
   );

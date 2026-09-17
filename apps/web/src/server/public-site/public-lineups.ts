@@ -12,7 +12,7 @@
 // tombstoned/merged duplicate's stale consent never counts, and resolve through
 // the single shared `resolvePersonDisplayName` — never a second resolver.
 import postgres from "postgres";
-import { resolvePersonDisplayName } from "@/lib/name-display";
+import { isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
 
 export type Sql = ReturnType<typeof postgres>;
 
@@ -55,18 +55,19 @@ export async function readPublicLineups(
     order by l.entrant_id, l.order_no nulls last, p.full_name`;
 
   const byEntrant: Record<string, PublicPerson[]> = {};
+  const setting = division.player_name_display ?? null;
+  const youth = division.youth ?? false;
   for (const row of rows) {
-    const name = resolvePersonDisplayName(
-      row.full_name,
-      row.consent,
-      division.player_name_display ?? null,
-      division.youth ?? false,
-    );
+    const name = resolvePersonDisplayName(row.full_name, row.consent, setting, youth);
     const list = byEntrant[row.entrant_id] ?? [];
     list.push({
       personId: row.person_id,
       name,
-      masked: name !== row.full_name,
+      // The POLICY's decision, never `name !== full_name` (privacy hotfix,
+      // 2026-09-16): a one-word name masks to itself, so the string compare
+      // read a one-word youth or opted-out player as unmasked — and
+      // `makePersonOf` publishes an unmasked person's REAL id.
+      masked: isPersonNameMasked(row.consent, setting, youth),
       // Anything that is not the string "bench" is a starter. The column is
       // `starting`/`bench` today; defaulting the unknown to "starting" keeps a
       // null or a value added later on the field rather than silently benching

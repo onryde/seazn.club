@@ -510,6 +510,35 @@ interface PlayerLineRec {
   bowling?: { legalBalls: number; runs: number; wickets: number; maidens?: number; wides?: number; noBalls?: number };
 }
 
+/**
+ * How a decided cricket match was won, as DATA — owner decision 2026-09-16.
+ *
+ * This used to be English prose the reducer composed itself ("by 12 runs",
+ * "by 1 wicket", "by an innings and 50 runs", "Super Over", "on boundary
+ * count"), and the web passed it verbatim into every locale's result sentence,
+ * so an es/fr/nl spectator read "ganó by 12 runs". The engine now states the
+ * fact and the web owns the words, the word order and the plural (which is a
+ * per-locale `Intl.PluralRules` question — French selects `one` for 0 as well
+ * as 1 — and so could never be answered here).
+ *
+ * The kinds are exactly the five margins `decideWin` is called with; nothing is
+ * invented. The two things this deliberately does NOT carry:
+ * - DLS. It is a METHOD, not a margin: a DLS result is still won by runs or by
+ *   wickets, and `outcome.method === "dls"` already says so by name. Copying
+ *   it here would be a second authority for one fact.
+ * - tie / draw / no_result / award. Those are `outcome.kind`s with no winner
+ *   and nothing to measure, so their margin is `null`, as it always was.
+ *
+ * `value` is the bare count — runs, wickets in hand, or the runs beyond the
+ * innings — never pre-inflected, so a margin of one is the number 1.
+ */
+export const CRICKET_COUNTED_MARGIN_KINDS = ["runs", "wickets", "innings_and_runs"] as const;
+export const CRICKET_MARGIN_KINDS = [...CRICKET_COUNTED_MARGIN_KINDS, "super_over", "boundary_count"] as const;
+export type CricketMargin =
+  | { kind: (typeof CRICKET_COUNTED_MARGIN_KINDS)[number]; value: number }
+  | { kind: "super_over" }
+  | { kind: "boundary_count" };
+
 export interface CricketState {
   cfg: CricketCfg;
   entrants: { home: string; away: string };
@@ -530,7 +559,7 @@ export interface CricketState {
     dismissed: { home: string[]; away: string[] };
   } | null;
   outcome: MatchOutcome | null;
-  margin: string | null;
+  margin: CricketMargin | null;
   playerLines: PlayerLineRec[];
   // S3/W4b (#426) — the kernel's squad, persisted by `onLineup`. Structurally a
   // `SquadCarrier` (src/sports/squad-state.ts), which is what lets cricket share
@@ -888,7 +917,7 @@ function decideWin(
   state: CricketState,
   winnerSide: Side,
   method: string,
-  margin: string,
+  margin: CricketMargin,
 ): CricketState {
   return {
     ...state,
@@ -928,21 +957,11 @@ function decideAfterClose(state: CricketState): CricketState {
     const target = chaseTarget(state);
     if (chase.runs >= target) {
       const wicketsLeft = allOutWickets(state, chase.battingSide) - chase.wickets;
-      return decideWin(
-        state,
-        chase.battingSide,
-        methodSuffix,
-        `by ${wicketsLeft} wicket${wicketsLeft === 1 ? "" : "s"}`,
-      );
+      return decideWin(state, chase.battingSide, methodSuffix, { kind: "wickets", value: wicketsLeft });
     }
     if (chase.runs === target - 1) return decideTie(state);
     const runs = target - 1 - chase.runs;
-    return decideWin(
-      state,
-      opponent(chase.battingSide),
-      methodSuffix,
-      `by ${runs} run${runs === 1 ? "" : "s"}`,
-    );
+    return decideWin(state, opponent(chase.battingSide), methodSuffix, { kind: "runs", value: runs });
   }
 
   // Two innings per side — spec §2.3 test rules.
@@ -958,11 +977,11 @@ function decideAfterClose(state: CricketState): CricketState {
     const otherAgg = chaseSide === "home" ? aggAway : aggHome;
     if (chaseAgg > otherAgg) {
       const wicketsLeft = allOutWickets(state, chaseSide) - chase.wickets;
-      return decideWin(state, chaseSide, "regulation", `by ${wicketsLeft} wicket${wicketsLeft === 1 ? "" : "s"}`);
+      return decideWin(state, chaseSide, "regulation", { kind: "wickets", value: wicketsLeft });
     }
     if (chaseAgg === otherAgg) return decideTie(state);
     const runs = otherAgg - chaseAgg;
-    return decideWin(state, opponent(chaseSide), "regulation", `by ${runs} run${runs === 1 ? "" : "s"}`);
+    return decideWin(state, opponent(chaseSide), "regulation", { kind: "runs", value: runs });
   }
 
   // Innings victory: a side finished both innings still behind an opponent
@@ -973,7 +992,7 @@ function decideAfterClose(state: CricketState): CricketState {
     const otherAgg = side === "home" ? aggAway : aggHome;
     if (done[side] === 2 && done[other] === 1 && sideAgg < otherAgg) {
       const runs = otherAgg - sideAgg;
-      return decideWin(state, other, "innings", `by an innings and ${runs} run${runs === 1 ? "" : "s"}`);
+      return decideWin(state, other, "innings", { kind: "innings_and_runs", value: runs });
     }
   }
   return state;
@@ -1149,13 +1168,13 @@ function applyAbandon(state: CricketState): CricketState {
     const par = dlsPar(s1, state.r1, state.r2, state.r2 - remaining);
     if (chase.runs > par) {
       const runs = chase.runs - par;
-      return decideWin(state, chase.battingSide, "dls", `by ${runs} run${runs === 1 ? "" : "s"}`);
+      return decideWin(state, chase.battingSide, "dls", { kind: "runs", value: runs });
     }
     if (chase.runs === par) {
       return { ...state, phase: "done", outcome: { kind: "tie" }, margin: null };
     }
     const runs = par - chase.runs;
-    return decideWin(state, opponent(chase.battingSide), "dls", `by ${runs} run${runs === 1 ? "" : "s"}`);
+    return decideWin(state, opponent(chase.battingSide), "dls", { kind: "runs", value: runs });
   }
   return { ...state, phase: "done", outcome: { kind: "no_result" }, margin: null };
 }
@@ -1843,10 +1862,10 @@ function applySuperOverBall(
   // Pair complete — decide or recurse (spec §2.3).
   const first = nextList[index - 1] as InningsState;
   if (closed.runs > first.runs) {
-    return decideWin(next, closed.battingSide, "super_over", "Super Over");
+    return decideWin(next, closed.battingSide, "super_over", { kind: "super_over" });
   }
   if (closed.runs < first.runs) {
-    return decideWin(next, first.battingSide, "super_over", "Super Over");
+    return decideWin(next, first.battingSide, "super_over", { kind: "super_over" });
   }
   switch (next.cfg.superOverStillTied) {
     case "repeat":
@@ -1857,7 +1876,7 @@ function applySuperOverBall(
       if (home === away) {
         return { ...next, phase: "done", outcome: { kind: "tie" }, margin: null };
       }
-      return decideWin(next, home > away ? "home" : "away", "boundary_count", "on boundary count");
+      return decideWin(next, home > away ? "home" : "away", "boundary_count", { kind: "boundary_count" });
     }
     case "shared":
       return { ...next, phase: "done", outcome: { kind: "tie" }, margin: null };

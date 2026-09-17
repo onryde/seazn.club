@@ -1,5 +1,5 @@
 import { v1, reply } from "@/server/api-v1/http";
-import { publicCompetitionHub, publicRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
+import { publicCompetitionHub, publicPollRateLimit, PUBLIC_CACHE_CONTROL } from "@/server/usecases/public";
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 
@@ -7,7 +7,7 @@ type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
  *  JSON the page rendered from; Redis 15 s in front, deleted on every scoring write. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
-    await publicRateLimit(req);
+    await publicPollRateLimit(req);
     const { orgSlug, slug } = await params;
     return reply(200, await publicCompetitionHub(orgSlug, slug), { "Cache-Control": PUBLIC_CACHE_CONTROL });
   });

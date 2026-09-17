@@ -1,15 +1,18 @@
 // Spectator match centre — cricket scorecard fold (spectator-surface design,
 // "The shared model"; standing rule R5 — "never re-implement a cricket
-// rule"). `deriveCricketScorecard` is a pure fold that replays `cricket.init`
-// + `cricket.apply` event by event and reads every total off the reducer's
-// own state; it never re-derives a cricket rule of its own. Task 1 wired the
+// rule"). `deriveCricketScorecard` is a pure fold that rides the kernel's own
+// `foldMatch` (observing every event through `FoldOptions.onFolded`) and reads
+// every total off the reducer's own state; it never re-derives a cricket rule
+// of its own, and never re-implements which events the kernel keeps from a
+// module (see `deriveCricketScorecard`). Task 1 wired the
 // fold, the fidelity band and the totals/extras; Task 2 the batting and
 // bowling lines; Task 3 the fall of wickets, partnerships, over log and live
 // block (including the chase maths, whose target comes from the reducer's own
 // exported `chaseTarget` and never from a second copy of the rule); Task 4
 // the two COARSER bands (`cricket.player.line` at band 2, and a ledger of
 // `cricket.innings.summary` alone at band 0) and the super over as cards.
-import type { CoreEv, EventEnvelope, FoldContext } from "../../core/events.ts";
+import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { isLineupEventType, memberOf, sideOf, type LineupEventType, type SquadState } from "../../core/lineup.ts";
 import type { LineupPair } from "../../core/types.ts";
 import type { FidelityBand } from "../../sport/module.ts";
 import {
@@ -18,7 +21,6 @@ import {
   cricket,
   padSpec,
   type CricketCfg,
-  type CricketEv,
   type CricketState,
   type FineInnings,
   type InningsState,
@@ -41,15 +43,6 @@ export interface ScorecardInput {
   cfg: CricketCfg;
   lineups: LineupPair;
 }
-
-// The read-path context: an already-validated ledger being replayed, not a
-// candidate being appended. This is exactly what `apps/web/src/server/
-// engine-db/fold.ts`'s `foldMatch` passes to every event on a read — no
-// `strictFromSeq` option ⇒ `strict` is `false` for the whole stream (see
-// `foldMatchWithStoppage` in `core/events.ts`). There is no `strictFold` key
-// on the real `FoldContext` (`{ strict: boolean; squads?: SquadState }`); the
-// brief's illustrative `{ strictFold: false }` does not match the actual type.
-const READ_CTX: FoldContext = { strict: false };
 
 interface ExtrasTally {
   wides: number;
@@ -74,7 +67,7 @@ function fmtOvers(legalBalls: number, ballsPerOver: number): string {
  * W1 review finding P4 — the bowler STATE credited for the delivery just
  * folded: the one `finishDelivery` charged its runs, balls and wicket to,
  * never the name the payload carried. On the read path (`strict: false`,
- * which is what `READ_CTX` above passes for the whole stream) a ball may
+ * which `deriveCricketScorecard`'s fold passes for the whole stream) a ball may
  * name a bowler who does not own the over in progress; `applyDelivery`
  * keeps the over's own bowler, so anything keyed on `payload.bowler` prints
  * a name `fine.bowlerRuns`/`bowlerWickets` never touched — a card reading
@@ -142,6 +135,16 @@ interface OpenPartnership {
   runsAt: number;
   ballsAt: number;
 }
+
+/** `core.lineup.substitution` / `.replacement` bring someone ON for the player
+ *  they take off; `core.lineup.retirement` brings nobody. Typed against the
+ *  kernel's own `LineupEventType`, so a renamed type is a compile error here
+ *  rather than a silently dead branch. */
+const SWAPPED_OFF: ReadonlySet<LineupEventType> = new Set<LineupEventType>([
+  "core.lineup.substitution",
+  "core.lineup.replacement",
+]);
+const RETIRED_OFF: LineupEventType = "core.lineup.retirement";
 
 /**
  * Per-innings running tallies built from ball payloads and state diffs as the
@@ -237,6 +240,19 @@ class InningsAccumulator {
     }>
   > = [];
 
+  // Who could have batted in each MAIN innings — see `onFolded`.
+  private availableByIndex: string[][] = [];
+  private availableFrozenByIndex: boolean[] = [];
+  // How each player LAST left the field, per side, by the kernel event that
+  // took him off — see `onFolded` for why the squad itself cannot say.
+  private readonly lastDeparture = {
+    home: new Map<string, "swapped" | "retired">(),
+    away: new Map<string, "swapped" | "retired">(),
+  };
+  // The squads handed to the previous `onFolded` call — the accepted-event
+  // signal, see `onFolded`.
+  private previousSquads: Readonly<SquadState> | undefined;
+
   // Task 3 — fall of wickets, partnerships and the over log.
   private fowByIndex: FallOfWicket[][] = [];
   private partnershipsByIndex: Partnership[][] = [];
@@ -247,6 +263,84 @@ class InningsAccumulator {
     while (this.extrasByIndex.length <= index) {
       this.extrasByIndex.push(emptyExtras());
       this.hasBallEventByIndex.push(false);
+    }
+  }
+
+  /**
+   * Called after EVERY folded event, the kernel-owned ones included, with the
+   * kernel's own squads. Records, per main innings, who could have batted in
+   * it: the batting side's `state.orders` less anyone SWAPPED off the field
+   * and not back on — FROZEN the moment that innings closes.
+   *
+   * This is the one place a squad change reaches a card, and each part is
+   * load-bearing:
+   *  - `state.orders` is append-only (`withArrivals`, cricket.ts), so a
+   *    replaced player never leaves it. Read raw, he would be reported as
+   *    "did not bat" in an innings he was no longer part of — dropping
+   *    players swapped off is what removes him, and the append is what lists
+   *    his replacement.
+   *  - A player RETIRED from the field with nobody on for him
+   *    (`core.lineup.retirement`) is KEPT. Owner ruling 2026-09-16, option A:
+   *    he is still in the XI; an "absent hurt" line is later work. The squad
+   *    cannot tell the two apart — `takeOff` (core/lineup.ts) records every
+   *    departure as `onField: false, timesOff + 1` — so the card reads WHY he
+   *    last left from the event that took him off.
+   *  - Only a departure the kernel ACCEPTED is recorded. On replay the kernel
+   *    IGNORES a lineup event it refuses structurally, and the commonest such
+   *    refusal is `not-on-field` — a player who is ALREADY off, typically
+   *    after an undo voided his return. Recording that event would overwrite
+   *    how he really last left: a replaced player would come back onto the
+   *    list, or a retired one would be dropped. The kernel replaces its
+   *    `squads` object only when it accepts a lineup event and passes the
+   *    same reference otherwise (core/events.ts, pinned in events.test.ts
+   *    "FoldOptions.onFolded"), so an unchanged reference means this event
+   *    moved nobody. The first call has no previous reference and is treated
+   *    as a change; that cannot mislist anyone, because at the first event
+   *    everyone in `orders` is on the field, and he can only be off it later
+   *    through an ACCEPTED departure, which overwrites the record.
+   *  - `cricket.retire` is not read here. It retires a batter at the crease:
+   *    one who has faced a ball has a batting line and is not listed, but one
+   *    who came in after a wicket and retired before facing has no batting
+   *    line (`order` is built from ball payloads and the current crease), so
+   *    he IS still listed. That gap predates this hook.
+   *  - The final state alone would push a replacement BACK into an innings
+   *    that closed before he arrived, and drop the player he replaced from an
+   *    innings he was part of. Freezing at the close keeps each card to the XI
+   *    that innings actually had.
+   *
+   * A ledger with no `core.lineup.*` event never changes `orders` or anyone's
+   * `onField`, so for every such ledger this is `state.orders` exactly — the
+   * value `card()` read before this existed.
+   */
+  onFolded(after: Readonly<CricketState>, ev: Readonly<EventEnvelope>, squads: Readonly<SquadState>): void {
+    if (squads !== this.previousSquads) this.noteDeparture(ev, squads);
+    this.previousSquads = squads;
+    after.innings.forEach((innings, index) => {
+      if (this.availableFrozenByIndex[index] === true) return;
+      const side = innings.battingSide;
+      this.availableByIndex[index] = after.orders[side].filter(
+        (person) =>
+          !(memberOf(squads[side], person)?.onField === false && this.lastDeparture[side].get(person) === "swapped"),
+      );
+      if (innings.closed) this.availableFrozenByIndex[index] = true;
+    });
+  }
+
+  /** Records why a player left, for a lineup event the kernel has just
+   *  ACCEPTED. `payload.side` is an entrant id; the kernel's own `sideOf`
+   *  maps it to the squad key the list is filtered by. */
+  private noteDeparture(ev: Readonly<EventEnvelope>, squads: Readonly<SquadState>): void {
+    if (!isLineupEventType(ev.type)) return;
+    const payload: unknown = ev.payload;
+    if (typeof payload !== "object" || payload === null) return;
+    if (!("side" in payload) || typeof payload.side !== "string") return;
+    const side = sideOf(squads, payload.side);
+    if (side === null) return;
+    if (SWAPPED_OFF.has(ev.type) && "off" in payload && typeof payload.off === "string") {
+      this.lastDeparture[side].set(payload.off, "swapped");
+    }
+    if (ev.type === RETIRED_OFF && "personId" in payload && typeof payload.personId === "string") {
+      this.lastDeparture[side].set(payload.personId, "retired");
     }
   }
 
@@ -823,10 +917,16 @@ class InningsAccumulator {
     // batters and the ledger records no nomination anywhere, so the team's
     // batting order is not the list of people who were available — reporting
     // the other eight as "did not bat" would be the same overconfident claim.
-    const battingOrderFull = state.orders[innings.battingSide];
+    //
+    // WHO could have batted is `availableByIndex` — the side's order as the
+    // innings closed, less anyone swapped off the field and not back on; a
+    // player retired with no replacement stays (see `onFolded`). Never
+    // `state.orders` read raw at the end of the match.
     const atCrease = new Set(order);
     const didNotBat =
-      fine === null || isSuperOver ? [] : battingOrderFull.filter((person) => !atCrease.has(person));
+      fine === null || isSuperOver
+        ? []
+        : (this.availableByIndex[index] ?? []).filter((person) => !atCrease.has(person));
 
     return {
       number: index + 1,
@@ -983,15 +1083,40 @@ class InningsAccumulator {
   }
 }
 
+/**
+ * THE KERNEL'S FOLD, OBSERVED — never a second replay loop.
+ *
+ * This used to call `cricket.apply` on every event itself, which handed the
+ * module events the kernel never forwards: `core.suspend`, `core.resume` and
+ * the five `core.lineup.*` types (plus `core.void`, had one reached it).
+ * `cricket.apply` threw `unknown event type` on each, so one stoppage or one
+ * concussion replacement cost the match centre its Scorecard and Commentary
+ * tabs and the overlay its crease band, for the rest of the match.
+ *
+ * Skipping those types would not have been a fix. A lineup event reaches
+ * cricket through `onLineup`, which appends a replacement to `state.orders`,
+ * and `applyDelivery` refuses a bowler (and `resolveIncoming` a named batter)
+ * who is not in that list — on the read path too. So `foldMatch` with
+ * `onFolded` is the only honest shape: the kernel decides which events the
+ * module sees and how (voids resolved, stoppages consumed, lineups reduced
+ * against `REPLAY_LINEUP_POLICY` and handed to `onLineup`), and this function
+ * only watches the state after each one.
+ *
+ * THE READ PATH: an already-validated ledger being replayed, not a candidate
+ * being appended. No `strictFromSeq`, exactly as `apps/web/src/server/
+ * engine-db/fold.ts` reads ⇒ `strict` is `false` for the whole stream (see
+ * `foldMatchWithStoppage` in `core/events.ts`).
+ */
 export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput): CricketScorecard {
   const bands = padSpec(cfg).fidelity;
   let band: FidelityBand = 0;
-  let state = cricket.init(cfg, lineups);
   const acc = new InningsAccumulator();
   let toss: CricketScorecard["toss"] = null;
 
-  for (const ev of events) {
-    state = cricket.apply(state, ev as EventEnvelope<CricketEv | CoreEv>, READ_CTX);
+  // The body of the old replay loop, now run by the kernel after each event
+  // it folds — with the state AFTER that event, as the loop had it.
+  function observe(after: Readonly<CricketState>, ev: Readonly<EventEnvelope>, squads: Readonly<SquadState>): void {
+    acc.onFolded(after, ev, squads);
 
     const eventBand = bands[ev.type];
     if (eventBand !== undefined && eventBand > band) band = eventBand;
@@ -1001,10 +1126,10 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
       toss = { wonBy: payload.wonBy, elected: payload.elected };
     }
     if (ev.type === "cricket.ball" || ev.type === "cricket.superover.ball") {
-      acc.onBall(state, ev);
+      acc.onBall(after, ev);
     }
     if (ev.type === "cricket.retire") {
-      acc.onRetire(state, ev);
+      acc.onRetire(after, ev);
     }
     if (ev.type === "cricket.player.line") {
       acc.onLine(ev);
@@ -1024,6 +1149,8 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
     // and two-innings cases besides.
   }
 
+  const state = foldMatch(cricket, cfg, lineups, events, { onFolded: observe });
+
   const summary = cricket.summary(state);
   const outcome = cricket.outcome(state);
   const winner = outcome !== null && (outcome.kind === "win" || outcome.kind === "award") ? outcome.winner : null;
@@ -1038,7 +1165,10 @@ export function deriveCricketScorecard({ events, cfg, lineups }: ScorecardInput)
         ? null
         : {
             headline: summary.headline,
-            margin: (summary.detail as { margin?: unknown } | undefined)?.margin ?? null,
+            // The fold's own structured margin (kind + count), the same value
+            // `summary.detail.margin` publishes — never words, which are the
+            // web's to choose per locale.
+            margin: state.margin,
             winner,
           },
   };

@@ -2,6 +2,7 @@
 // "The shared model"). Types only: `scorecard.ts` folds a ledger into this
 // shape; nothing here computes anything.
 import type { FidelityBand } from "../../sport/module.ts";
+import type { CricketMargin } from "./cricket.ts";
 
 export type SideId = string;
 export type PersonId = string;
@@ -103,5 +104,5 @@ export interface CricketScorecard {
   toss: { wonBy: SideId; elected: "bat" | "bowl" } | null;
   innings: CricketInningsCard[];
   live: CricketLive | null;
-  result: { headline: string; margin: unknown; winner: SideId | null } | null; // from cricket.summary / outcome
+  result: { headline: string; margin: CricketMargin | null; winner: SideId | null } | null; // from cricket.summary / outcome
 }

@@ -13,7 +13,7 @@
 // it flips the day-group order for the completed bucket so a Results list opens
 // on the most recent day.
 import { useState, useSyncExternalStore } from "react";
-import { fmtDate, fmtZoneAbbrev } from "@/lib/format";
+import { fmtPublicDate, fmtPublicZoneAbbrev } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import {
@@ -115,7 +115,7 @@ function readViewerZoneOnServer(): string | null {
  *
  * Three reasons to say nothing, and the third is a correctness fix rather than
  * a tidy-up (review P2):
- *   • the unscheduled group has no instant — `fmtZoneAbbrev` falls back to
+ *   • the unscheduled group has no instant — `fmtPublicZoneAbbrev` falls back to
  *     `new Date()` and would cheerfully print a zone for a fixture that has no
  *     time to state one at;
  *   • the group's fixtures DISAGREE about their zone. `DayGroup.tz` is the
@@ -353,17 +353,16 @@ export function MatchesTab({
                       level is an outline fact, not a paint one. */}
                   <h2 className="font-display text-sm font-semibold text-ink">
                     {dated
-                      ? // en-GB, in every locale. `format.ts:10` pins `LOCALE`
-                        // and `fmtDate` takes no locale parameter — a
-                        // repo-wide, deliberate deferral, not an oversight
-                        // here. The copy AROUND this heading is translated.
-                        fmtDate(g.tz, first.scheduledAt, DAY_OPTS)
+                      ? // The venue's day in the page's locale (owner ruling
+                        // 2026-09-16), English day-month.
+                        fmtPublicDate(locale, g.tz, first.scheduledAt, DAY_OPTS)
                       : t(dict, "matchesHub.unscheduled")}
                   </h2>
                   {showZoneCaption(g, viewerZone) ? (
                     <span className="text-xs text-ink-muted">
                       {t(dict, "matchesHub.timesIn", {
-                        tz: fmtZoneAbbrev(g.tz, first.scheduledAt),
+                        // The zone label too: "BST" is an English name (Task 16).
+                        tz: fmtPublicZoneAbbrev(locale, g.tz, first.scheduledAt),
                       })}
                     </span>
                   ) : null}

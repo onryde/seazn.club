@@ -2,12 +2,13 @@ import { timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { z } from "zod";
+import { PEER_REVALIDATE_MAX_TAGS } from "@/lib/peer-revalidate";
 
 // Peer endpoint for multi-machine ISR coherence (lib/peer-revalidate). Applies
 // tags LOCALLY only — it never re-broadcasts, so fan-out cannot loop. Guarded
 // by the same CRON_SECRET the GHA cron endpoints use.
 const Body = z.object({
-  tags: z.array(z.string().min(1).max(200)).min(1).max(20),
+  tags: z.array(z.string().min(1).max(200)).min(1).max(PEER_REVALIDATE_MAX_TAGS),
   mode: z.enum(["swr", "expire"]),
 });
 

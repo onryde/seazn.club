@@ -12,6 +12,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
+import { resolvePersonDisplayName } from "@/lib/name-display";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPairsForDivision } from "@/server/engine-db/lineups";
@@ -21,6 +22,7 @@ import { groupCareerStatsBySport, type CareerSnapshotRow, type CareerSportStats 
 import { DEFAULT_LOCALE } from "@/lib/i18n-constants";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
+import { playerLinkId } from "@/lib/name-display";
 
 type Tx = postgres.TransactionSql;
 
@@ -49,20 +51,324 @@ function liveSurvivor(personId: string, survivorOf: ReadonlyMap<string, string>)
   return id;
 }
 
+/** The advisory-lock key that serialises every write of ONE division's
+ *  `player_stat_snapshots`. Its own `player-stats:` namespace, never
+ *  `division:` — schedule and history hold that one, and a stats fold must not
+ *  queue behind a schedule apply. Lower-cased: `z.uuid()` accepts either case,
+ *  Postgres hands back lower case, and two spellings of one id would otherwise
+ *  hash to two locks. */
+function playerStatsLockKey(divisionId: string): string {
+  return `player-stats:${divisionId.toLowerCase()}`;
+}
+
+/** Take the division's stats lock, waiting for it, until the transaction ends.
+ *  Re-entrant within one transaction. A caller that locks SEVERAL divisions
+ *  takes them in ascending id order (`lockPlayerStatsDivisions`). */
+export async function lockPlayerStats(tx: Tx, divisionId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${playerStatsLockKey(divisionId)}))`;
+}
+
+/** Every division's stats lock, in ascending id order — the ONE ordering
+ *  authority for every transaction that WAITS on more than one division (person
+ *  merge and unmerge), so no two of them can each hold a division the other is
+ *  waiting on. Call it before the first fold and before any row lock: a fold's
+ *  own lock is taken in whatever order the caller iterates. The read paths
+ *  (`personStats`, the digest) take try-locks instead and never wait
+ *  (`playerStatsWithoutWaiting`). `player-stats-lock-order.test.ts` pins that. */
+export async function lockPlayerStatsDivisions(tx: Tx, divisionIds: readonly string[]): Promise<void> {
+  const sorted = [...new Set(divisionIds.map((id) => id.toLowerCase()))].sort();
+  for (const id of sorted) await lockPlayerStats(tx, id);
+}
+
+/** Take the division's stats lock only if it is free. `false` means another
+ *  transaction is folding this division right now. */
+export async function tryLockPlayerStats(tx: Tx, divisionId: string): Promise<boolean> {
+  const [row] = await tx<{ locked: boolean }[]>`
+    select pg_try_advisory_xact_lock(hashtext(${playerStatsLockKey(divisionId)})) as locked`;
+  return row?.locked === true;
+}
+
+/** md5 over every input of a division's player-stats fold OTHER than the
+ *  score events: the division's sport, module and config; each SETTLED fixture
+ *  (no longer in play: decided, finalized, forfeited, abandoned or cancelled)
+ *  with events: its stage, entrants, frozen config, stage config and lineups;
+ *  the roster; the org's merge tombstones. `player_stat_folds`
+ *  stores it beside the ledger the fold read (V409), and
+ *  `playerStatsCoverage` compares both against the database as it stands.
+ *  Settled fixtures only: a match in play reaches the snapshot at its next
+ *  refresh by design (its events are in the ledger check), and hashing it
+ *  would make its first event, or a lineup edit during play, read as a
+ *  snapshot owed a refresh on every stats read (`reconcilePlayerStatsOnRead`).
+ *  Every nullable value is coalesced: `concat_ws` skips NULLs, so an absent
+ *  home entrant and an absent away entrant would otherwise hash the same.
+ *  The tombstones are the WHOLE org's (final review m3, accepted): a merge or
+ *  unmerge changes every division's md5 once, so each division reads as owed
+ *  once and refolds at its next refresh or stats read. Narrowing them to the
+ *  persons a division's events and rosters name would need the event payloads
+ *  read here, which costs every check more than one refold wave per merge. */
+export async function playerStatsInputsMd5(tx: Tx, divisionId: string): Promise<string> {
+  const [row] = await tx<{ md5: string }[]>`
+    select md5(concat_ws('|',
+      (select concat_ws(':', d.sport_key, d.module_version, md5(coalesce(d.config::text, '-')))
+         from divisions d where d.id = ${divisionId}),
+      (select string_agg(concat_ws(':', f.id, f.stage_id, coalesce(f.home_entrant_id::text, '-'),
+                                   coalesce(f.away_entrant_id::text, '-'),
+                                   md5(coalesce(f.config_snapshot::text, '-')), md5(coalesce(s.config::text, '-'))),
+                         ',' order by f.id)
+         from fixtures f join stages s on s.id = f.stage_id
+        where f.division_id = ${divisionId}
+          and not (f.status = any(${IN_PLAY_FIXTURE_STATUSES as string[]}))
+          and exists (select 1 from score_events se where se.fixture_id = f.id)),
+      (select string_agg(concat_ws(':', e.id, e.kind, coalesce(em.person_id::text, '-')), ','
+                         order by e.id, em.person_id)
+         from entrants e left join entrant_members em on em.entrant_id = e.id
+        where e.division_id = ${divisionId}),
+      (select string_agg(concat_ws(':', l.fixture_id, l.entrant_id, l.person_id, coalesce(l.slot, '-'),
+                                   coalesce(l.position_key, '-'), coalesce(l.order_no::text, '-'),
+                                   coalesce(l.roles::text, '-'), coalesce(l.role, '-'),
+                                   coalesce(em.squad_number::text, '-')),
+                         ',' order by l.fixture_id, l.entrant_id, l.person_id)
+         from lineups l
+         join fixtures f on f.id = l.fixture_id
+         left join entrant_members em on em.entrant_id = l.entrant_id and em.person_id = l.person_id
+        where f.division_id = ${divisionId}
+          and not (f.status = any(${IN_PLAY_FIXTURE_STATUSES as string[]}))
+          and exists (select 1 from score_events se where se.fixture_id = f.id)),
+      (select string_agg(p.id::text || '>' || p.merged_into::text, ',' order by p.id)
+         from persons p where p.merged_into is not null and p.org_id = current_org_id())
+    )) as md5`;
+  return row!.md5;
+}
+
+/** One fixture whose (event count, max seq) differs from the last fold's ledger
+ *  map, or that is in only one of the two. */
+export interface PlayerStatsDrift {
+  fixtureId: string;
+  /** The snapshot is owed this fixture's events: the fixture is gone, or is
+   *  settled now (a result, or abandoned or cancelled, final review m2). False
+   *  for a match still in play, whose events reach the snapshot at its next
+   *  refresh by design (goals in play do not schedule one). A result undone
+   *  since the fold is owed through the inputs md5 instead, which hashes the
+   *  set of settled fixtures. */
+  owed: boolean;
+}
+
+/** Does the division's snapshot reflect the database as it stands?
+ *  - `covered`: the last fold's ledger map matches every fixture's (event
+ *    count, max seq) now, fixture for fixture, AND its inputs md5 matches. A
+ *    deleted scored fixture, an appended event and a re-snapshotted config
+ *    each break it; so does a division that was never folded (no
+ *    `player_stat_folds` row).
+ *  - `owed`: the snapshot is behind by something a refresh should already have
+ *    folded: an owed drift, or a changed inputs md5, or (never folded) a
+ *    settled fixture with events. Drift from matches in play alone is not owed,
+ *    so a read that finds only that queues nothing (`reconcilePlayerStatsOnRead`).
+ *  `token` names the last fold (its time and inputs), so a caller can tell
+ *  whether it has already cleared the public caches for it. Read it under the
+ *  division's stats lock where a fold committing mid-read matters. */
+export interface PlayerStatsCoverage {
+  covered: boolean;
+  owed: boolean;
+  drift: readonly PlayerStatsDrift[];
+  /** Whether the inputs md5 still matches. Null when it was not computed: no
+   *  fold record, or an owed drift, which already answers every question. */
+  inputsSame: boolean | null;
+  /** Rows the last fold wrote; null when there is no fold record. */
+  rowCount: number | null;
+  /** The last fold's ledger map, {fixture_id: [event_count, max_seq]}. */
+  ledger: Readonly<Record<string, readonly [number, number]>> | null;
+  token: string | null;
+}
+
+export async function playerStatsCoverage(tx: Tx, divisionId: string): Promise<PlayerStatsCoverage> {
+  const [rec] = await tx<
+    { ledger: Record<string, [number, number]>; inputs_md5: string; row_count: number; token: string }[]
+  >`
+    select ledger, inputs_md5, row_count, folded_at::text || '/' || inputs_md5 as token
+    from player_stat_folds where division_id = ${divisionId}`;
+  // The record's ledger is passed back in, so both statements compare the SAME
+  // fold even if another one commits between them.
+  const drift = await tx<{ fixture_id: string; owed: boolean }[]>`
+    with cur as (
+      select se.fixture_id::text as fixture_id, count(*)::int as n, max(se.seq)::int as m,
+             bool_or(not (f.status = any(${IN_PLAY_FIXTURE_STATUSES as string[]}))) as settled
+      from score_events se join fixtures f on f.id = se.fixture_id
+      where f.division_id = ${divisionId}
+      group by se.fixture_id
+    ), rec as (
+      select l.key as fixture_id, (l.value->>0)::int as n, (l.value->>1)::int as m
+      from jsonb_each(${tx.json((rec?.ledger ?? {}) as never)}::jsonb) l
+    )
+    select coalesce(cur.fixture_id, rec.fixture_id) as fixture_id,
+           (cur.fixture_id is null or coalesce(cur.settled, false)) as owed
+    from cur full join rec on rec.fixture_id = cur.fixture_id
+    where cur.fixture_id is null or rec.fixture_id is null or rec.n <> cur.n or rec.m <> cur.m`;
+  const owedDrift = drift.some((d) => d.owed);
+  const inputsSame =
+    rec !== undefined && !owedDrift ? (await playerStatsInputsMd5(tx, divisionId)) === rec.inputs_md5 : null;
+  return {
+    covered: rec !== undefined && drift.length === 0 && inputsSame === true,
+    owed: owedDrift || inputsSame === false,
+    drift: drift.map((d) => ({ fixtureId: d.fixture_id, owed: d.owed })),
+    inputsSame,
+    rowCount: rec?.row_count ?? null,
+    ledger: rec?.ledger ?? null,
+    token: rec?.token ?? null,
+  };
+}
+
+/** Is a refresh owed that a read should queue (owner ruling 2026-09-17, m8)?
+ *  False for a sport that declares no player stats: it never gets a fold
+ *  record, and would otherwise read as owed for ever. */
+export async function playerStatsOwed(tx: Tx, divisionId: string): Promise<boolean> {
+  const division = await loadStatsDivision(tx, divisionId);
+  if (resolveModule(division.sport_key, division.module_version).playerStats === undefined) return false;
+  return (await playerStatsCoverage(tx, divisionId)).owed;
+}
+
+/** Fixture statuses still in play, for the coverage check and the inputs md5.
+ *  Every other status is settled: decided, finalized and forfeited, and also
+ *  abandoned and cancelled, whose events the fold reads too (final review m2:
+ *  a match abandoned after a goal schedules no refresh, so only a read that
+ *  counts it as owed ever folds that goal; `recomputePlayerStats` puts no
+ *  status filter on its events read). `fixtures.status`'s check constraint
+ *  lists them all (`db/migration/v2-engine/tables/V214__fixtures.sql`). */
+const IN_PLAY_FIXTURE_STATUSES: readonly string[] = ["scheduled", "in_play"];
+
+interface StatsDivision {
+  sport_key: string;
+  module_version: string;
+  config: unknown;
+}
+
 /** Refold every fixture's ledger into the division snapshot (Jul3/07 §2 —
  *  rebuildable at any time; the CI-style consistency check refolds and
- *  compares). Returns the fresh rows. */
+ *  compares). Returns the fresh rows.
+ *
+ *  `throughSeq` is the number of score events the fold read. The fold also
+ *  records what it read in `player_stat_folds` (V409): the ledger map from its
+ *  OWN events read, and the md5 of its other inputs taken BEFORE that read —
+ *  so a write landing mid-fold is folded but not stamped, and costs a later
+ *  refold rather than a skipped one (`playerStatsCoverage`).
+ *
+ *  The division's stats lock is the FIRST statement. Without it, two folds of
+ *  one division interleave: the second reads the ledger before the first
+ *  one's score commits, then deletes and rewrites the first one's rows with
+ *  that older picture, and the last writer wins with stale numbers. Under READ
+ *  COMMITTED the select that follows the lock takes a fresh snapshot, so a
+ *  fold that waited sees everything committed before it got the lock. */
 export async function recomputePlayerStats(
   tx: Tx,
   divisionId: string,
 ): Promise<{ rows: PlayerStatRow[]; throughSeq: number; hasModel: boolean }> {
-  const [division] = await tx<{ sport_key: string; module_version: string; config: unknown }[]>`
+  await lockPlayerStats(tx, divisionId);
+  const division = await loadStatsDivision(tx, divisionId);
+  const model = resolveModule(division.sport_key, division.module_version).playerStats;
+  if (model === undefined) return { rows: [], throughSeq: 0, hasModel: false };
+  const inputsMd5 = await playerStatsInputsMd5(tx, divisionId);
+  const { rows, throughSeq, ledger } = await foldDivision(tx, divisionId, division, model);
+
+  await tx`delete from player_stat_snapshots where division_id = ${divisionId}`;
+  for (const row of rows) {
+    await tx`
+      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
+      values (${divisionId}, ${row.personId}, ${division.sport_key},
+              ${tx.json(row.stats as never)}, ${throughSeq})
+      on conflict (division_id, person_id) do update
+        set stats = excluded.stats, computed_through_seq = excluded.computed_through_seq,
+            updated_at = now()`;
+  }
+  await tx`
+    insert into player_stat_folds (division_id, ledger, inputs_md5, row_count)
+    values (${divisionId}, ${tx.json(ledger as never)}, ${inputsMd5}, ${rows.length})
+    on conflict (division_id) do update
+      set ledger = excluded.ledger, inputs_md5 = excluded.inputs_md5,
+          row_count = excluded.row_count, folded_at = now()`;
+  return { rows, throughSeq, hasModel: true };
+}
+
+/** The same fold as `recomputePlayerStats`, in memory only: no lock, no write.
+ *  For a caller that must not wait on another transaction's fold and cannot
+ *  use a snapshot that is behind (an auto-post draft, `org-posts.ts`). */
+export async function computePlayerStats(
+  tx: Tx,
+  divisionId: string,
+): Promise<{ rows: PlayerStatRow[]; hasModel: boolean }> {
+  const division = await loadStatsDivision(tx, divisionId);
+  const model = resolveModule(division.sport_key, division.module_version).playerStats;
+  if (model === undefined) return { rows: [], hasModel: false };
+  const { rows } = await foldDivision(tx, divisionId, division, model);
+  return { rows, hasModel: true };
+}
+
+/** The snapshot rows as they stand, for a caller that serves them rather than
+ *  refolding. */
+export async function readPlayerStatSnapshot(tx: Tx, divisionId: string): Promise<PlayerStatRow[]> {
+  const rows = await tx<{ person_id: string; stats: Record<string, number> }[]>`
+    select person_id, stats from player_stat_snapshots where division_id = ${divisionId}`;
+  return rows.map((r) => ({ personId: r.person_id, stats: r.stats }));
+}
+
+/** Where a read's rows came from: the snapshot as it stands, a fold this call
+ *  wrote, or a fold in memory that wrote nothing. */
+export type PlayerStatsServed = "snapshot" | "folded" | "memory";
+
+/** Current rows for a request that must not wait on another transaction's fold
+ *  and cannot use rows behind the ledger (review I3, n3): the console
+ *  leaderboard, the player card, the digest, and the auto-post drafts (written
+ *  once, so no later refresh corrects them). Never waits on the stats lock:
+ *  - the snapshot already covers the ledger: serve it, fold nothing;
+ *  - behind, lock free: refold and write;
+ *  - behind, lock held: fold in memory and write nothing. The holder is
+ *    folding it.
+ *  When the snapshot is behind a result (`owed`), it also queues the division's
+ *  refresh, so the public copies built from the old rows are cleared once the
+ *  new rows land (a refresh lost to a restart heals here too, m8).
+ *  With the lock held elsewhere, the coverage read can see a fold commit
+ *  between its statements. Each statement sees a state no older than the one
+ *  before, so that only makes what is served newer than the check, never older.
+ *  Concurrent in-memory folds of one division are not combined (final review
+ *  m4, accepted): each such read folds on its own. They happen only while
+ *  another fold holds the lock, so they are bounded by the requests in flight
+ *  in that window, and each costs what every read cost before the snapshot
+ *  existed. Sharing one would need a per-process promise map keyed by the
+ *  ledger state, which a fold in another process could not join anyway. */
+export async function playerStatsWithoutWaiting(
+  tx: Tx,
+  divisionId: string,
+): Promise<{ rows: PlayerStatRow[]; hasModel: boolean; served: PlayerStatsServed }> {
+  const free = await tryLockPlayerStats(tx, divisionId);
+  const coverage = await playerStatsCoverage(tx, divisionId);
+  if (coverage.covered) {
+    return { rows: await readPlayerStatSnapshot(tx, divisionId), hasModel: true, served: "snapshot" };
+  }
+  const { rows, hasModel } = free ? await recomputePlayerStats(tx, divisionId) : await computePlayerStats(tx, divisionId);
+  if (hasModel && coverage.owed) await queueRefreshFromRead(tx, divisionId);
+  return { rows, hasModel, served: free ? "folded" : "memory" };
+}
+
+/** Queue the division's refresh from inside a read. Imported lazily: the
+ *  refresh module imports this one. */
+async function queueRefreshFromRead(tx: Tx, divisionId: string): Promise<void> {
+  const [division] = await tx<{ org_id: string }[]>`select org_id from divisions where id = ${divisionId}`;
+  if (!division) return;
+  const { schedulePlayerStatsRefresh } = await import("./player-stats-refresh");
+  schedulePlayerStatsRefresh(division.org_id, { divisionId });
+}
+
+async function loadStatsDivision(tx: Tx, divisionId: string): Promise<StatsDivision> {
+  const [division] = await tx<StatsDivision[]>`
     select sport_key, module_version, config from divisions where id = ${divisionId}`;
   if (!division) throw new HttpError(404, "division not found");
-  const sportModule = resolveModule(division.sport_key, division.module_version);
-  const model = sportModule.playerStats;
-  if (model === undefined) return { rows: [], throughSeq: 0, hasModel: false };
+  return division;
+}
 
+async function foldDivision(
+  tx: Tx,
+  divisionId: string,
+  division: StatsDivision,
+  model: NonNullable<ReturnType<typeof resolveModule>["playerStats"]>,
+): Promise<{ rows: PlayerStatRow[]; throughSeq: number; ledger: Record<string, [number, number]> }> {
   const events = await tx<EventRow[]>`
     select se.fixture_id, se.id, se.seq, se.type, se.payload, se.recorded_at, se.voids_event_id
     from score_events se
@@ -72,8 +378,12 @@ export async function recomputePlayerStats(
 
   const byFixture = new Map<string, EventEnvelope[]>();
   let throughSeq = 0;
+  // {fixture_id: [event_count, max_seq]} of exactly this read (V409).
+  const ledgerMap: Record<string, [number, number]> = {};
   for (const e of events) {
     throughSeq += 1;
+    const seen = ledgerMap[e.fixture_id];
+    ledgerMap[e.fixture_id] = [(seen?.[0] ?? 0) + 1, Math.max(seen?.[1] ?? 0, Number(e.seq))];
     const envelope = {
       id: e.id,
       seq: e.seq,
@@ -159,17 +469,6 @@ export async function recomputePlayerStats(
     }),
   );
   const rows = sumPlayerStats(relabelled, model);
-
-  await tx`delete from player_stat_snapshots where division_id = ${divisionId}`;
-  for (const row of rows) {
-    await tx`
-      insert into player_stat_snapshots (division_id, person_id, sport_key, stats, computed_through_seq)
-      values (${divisionId}, ${row.personId}, ${division.sport_key},
-              ${tx.json(row.stats as never)}, ${throughSeq})
-      on conflict (division_id, person_id) do update
-        set stats = excluded.stats, computed_through_seq = excluded.computed_through_seq,
-            updated_at = now()`;
-  }
 
   // S8/#417 — structured logging (owner standing rule: all new code logs).
   // A recompute pass, and what its entrant-fallback attribution actually
@@ -268,7 +567,7 @@ export async function recomputePlayerStats(
     );
   }
 
-  return { rows, throughSeq, hasModel: true };
+  return { rows, throughSeq, ledger: ledgerMap };
 }
 
 
@@ -414,8 +713,12 @@ export interface LeaderboardRow {
   squad_number: number | null;
   entrant: string | null;
   stats: Record<string, number>;
-  /** PROMPT-65: the person has a public profile (public_name consent) — rows
-   *  link there; non-consented rows stay plain text. */
+  /** PROMPT-65: the row may link to the person's PUBLIC card — on the rule
+   *  every public link to the card uses (`playerLinkId`): `public_entrants_v`
+   *  published their id (public-name consent AND the org's player-page
+   *  entitlement for this competition) and the division shows full names.
+   *  Otherwise plain text: consent alone linked organisers on a plan without
+   *  player pages straight into the card's refusal. */
   public_profile: boolean;
 }
 
@@ -434,9 +737,14 @@ export async function divisionPlayerStats(
 }> {
   await requireFeature(auth.orgId, "stats.player", await competitionForDivision(divisionId));
   return withTenant(auth.orgId, async (tx) => {
-    const { rows, hasModel } = await recomputePlayerStats(tx, divisionId);
-    const [division] = await tx<{ sport_key: string; module_version: string }[]>`
-      select sport_key, module_version from divisions where id = ${divisionId}`;
+    // Never waits on the division's stats lock, and folds only when the
+    // snapshot is behind (review n3); behind a result, it also queues the
+    // refresh that clears the public copies of the old rows (m8).
+    const { rows, hasModel } = await playerStatsWithoutWaiting(tx, divisionId);
+    const [division] = await tx<
+      { sport_key: string; module_version: string; youth: boolean; player_name_display: string | null }[]
+    >`
+      select sport_key, module_version, youth, player_name_display from divisions where id = ${divisionId}`;
     const sportModule = resolveModule(division!.sport_key, division!.module_version);
     const model = sportModule.playerStats;
     const metrics = [
@@ -447,11 +755,8 @@ export async function divisionPlayerStats(
 
     const personIds = rows.map((r) => r.personId);
     const people = personIds.length
-      ? await tx<
-          { id: string; full_name: string; squad_number: number | null; entrant: string | null; public_name: boolean }[]
-        >`
-          select p.id, p.full_name, em.squad_number, e.display_name as entrant,
-                 coalesce((p.consent->>'public_name')::boolean, false) as public_name
+      ? await tx<{ id: string; full_name: string; squad_number: number | null; entrant: string | null }[]>`
+          select p.id, p.full_name, em.squad_number, e.display_name as entrant
           from persons p
           left join entrant_members em on em.person_id = p.id
             and em.entrant_id in (select id from entrants where division_id = ${divisionId})
@@ -459,6 +764,19 @@ export async function divisionPlayerStats(
           where p.id in ${tx(personIds)}`
       : [];
     const infoById = new Map(people.map((p) => [p.id, p]));
+    // The ids the public view publishes for this division's rosters — the
+    // public card's own consent + entitlement terms (see `public_profile`).
+    const published = personIds.length
+      ? new Set(
+          (
+            await tx<{ person_id: string }[]>`
+              select distinct m->>'person_id' as person_id
+              from public_entrants_v en
+              cross join lateral jsonb_array_elements(en.members) m
+              where en.division_id = ${divisionId} and m->>'person_id' is not null`
+          ).map((r) => r.person_id),
+        )
+      : new Set<string>();
 
     const metric = query.metric ?? metrics[0]?.key ?? "points";
     const dir = query.sort === "asc" ? 1 : -1;
@@ -469,7 +787,7 @@ export async function divisionPlayerStats(
         squad_number: infoById.get(r.personId)?.squad_number ?? null,
         entrant: infoById.get(r.personId)?.entrant ?? null,
         stats: r.stats,
-        public_profile: infoById.get(r.personId)?.public_name ?? false,
+        public_profile: playerLinkId(published.has(r.personId) ? r.personId : null, division!) !== null,
       }))
       .sort((a, b) => dir * ((a.stats[metric] ?? 0) - (b.stats[metric] ?? 0)) || a.full_name.localeCompare(b.full_name));
 
@@ -520,13 +838,33 @@ export async function personStats(
               where em.person_id = ${personId}`
           ).map((r) => r.division_id)
     ).filter((d) => readableSet.has(d));
-    for (const d of divisionIds) await recomputePlayerStats(tx, d);
-    const rows = await tx<{ division_id: string; division_name: string; stats: Record<string, number> }[]>`
+    // One division at a time, never waiting on a stats lock and folding only a
+    // division whose snapshot is behind (review n3). A division another
+    // transaction is folding right now is folded in memory instead; its row
+    // replaces the snapshot's below. Try-locks never wait, so the order the
+    // query above returns the divisions in cannot deadlock.
+    const inMemory = new Map<string, Record<string, number> | null>();
+    for (const d of divisionIds) {
+      const { rows: foldRows, served } = await playerStatsWithoutWaiting(tx, d);
+      if (served === "memory") inMemory.set(d, foldRows.find((r) => r.personId === personId)?.stats ?? null);
+    }
+    const snapshot = await tx<{ division_id: string; division_name: string; stats: Record<string, number> }[]>`
       select ps.division_id, d.name as division_name, ps.stats
       from player_stat_snapshots ps join divisions d on d.id = ps.division_id
       where ps.person_id = ${personId}
         and ps.division_id = any(${readable})
       order by d.name`;
+    if (inMemory.size === 0) return { divisions: snapshot };
+    const names = new Map(
+      (
+        await tx<{ id: string; name: string }[]>`select id, name from divisions where id in ${tx([...inMemory.keys()])}`
+      ).map((r) => [r.id, r.name] as const),
+    );
+    const rows = snapshot.filter((r) => !inMemory.has(r.division_id));
+    for (const [d, stats] of inMemory) {
+      if (stats !== null) rows.push({ division_id: d, division_name: names.get(d) ?? "", stats });
+    }
+    rows.sort((a, b) => (a.division_name < b.division_name ? -1 : a.division_name > b.division_name ? 1 : 0));
     return { divisions: rows };
   });
 }
@@ -548,7 +886,7 @@ export async function personStats(
  *  never explicitly finalized contributed its stats to the snapshot while
  *  contributing ZERO to `matches` — on all three call sites at once. A
  *  player's card could read "5 goals · 0 matches". */
-const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
+export const COMPLETED_FIXTURE_STATUSES: readonly string[] = ["decided", "finalized", "forfeited"];
 
 /** Pooled `sql` or an open transaction — `postgres.TransactionSql` and `Sql`
  *  share `ISql` (same fact as admin-fixture-config.ts's own `Queryable`).
@@ -684,7 +1022,8 @@ export async function personCareerStats(
 }
 
 /** Public consent-filtered leaderboard (Jul3/07 §6): names via
- *  public_person_name (minors gated, doc 06 §4.7).
+ *  public_person_name, then the division's youth/name-display policy (the
+ *  SQL function alone has no youth axis — privacy hotfix 2026-09-16).
  *
  *  W3-A (2026-09-06, V399): gated on `stats.player`, same key
  *  `divisionPlayerStats`/`personStats` read. Before this it had NO gate at
@@ -704,8 +1043,10 @@ export async function publicDivisionStats(
   divisionSlug: string,
 ): Promise<{ rows: { name: string; stats: Record<string, number> }[] }> {
   const { sql } = await import("@/lib/db");
-  const [division] = await sql<{ id: string; org_id: string; competition_id: string }[]>`
-    select d.id, d.org_id, c.id as competition_id
+  const [division] = await sql<
+    { id: string; org_id: string; competition_id: string; youth: boolean; player_name_display: string | null }[]
+  >`
+    select d.id, d.org_id, c.id as competition_id, d.youth, d.player_name_display
     from divisions d
     join competitions c on c.id = d.competition_id
     join organizations o on o.id = c.org_id
@@ -715,13 +1056,32 @@ export async function publicDivisionStats(
   if (!(await hasFeature(division.org_id, "stats.player", division.competition_id))) {
     throw new HttpError(404, "division not found");
   }
-  const refresh = await withTenant(division.org_id, async (tx) => recomputePlayerStats(tx, division.id));
-  void refresh;
-  const rows = await sql<{ name: string; stats: Record<string, number> }[]>`
-    select public_person_name(p.full_name, p.consent) as name, ps.stats
+  // Serves the snapshot as it stands and folds nothing (owner ruling
+  // 2026-09-17): an anonymous, uncached route must never pay for a fold. After
+  // the response, a check queues the division's refresh if the snapshot is
+  // behind a result, a refresh lost to a restart included
+  // (`reconcilePlayerStatsOnRead`). A division whose snapshot was never filled
+  // serves no rows until that refresh lands, the first visit after this ships
+  // included (accepted, owner ruling 2026-09-17; no warm-up job). Imported
+  // lazily: the refresh module imports this one.
+  const { reconcilePlayerStatsOnRead } = await import("./player-stats-refresh");
+  reconcilePlayerStatsOnRead(division.org_id, division.id);
+  const rows = await sql<{ name: string; consent: { public_name?: boolean } | null; stats: Record<string, number> }[]>`
+    select public_person_name(p.full_name, p.consent) as name, p.consent, ps.stats
     from player_stat_snapshots ps
     join persons p on p.id = ps.person_id
     where ps.division_id = ${division.id}
     order by (ps.stats->>'points')::numeric desc nulls last, name`;
-  return { rows };
+  // Privacy hotfix (2026-09-16): `public_person_name` is consent-only (V229) —
+  // a consented youth player's full name was published here. The division's
+  // youth/name-display policy is applied ON TOP of the SQL name, never instead
+  // of it (the two disagree on an ABSENT consent: SQL initials it, the
+  // resolver would not mask it), the same composition as `publicSuspensions`.
+  // A row carries a name and stats only — no person id or link to withhold.
+  return {
+    rows: rows.map((r) => ({
+      name: resolvePersonDisplayName(r.name, r.consent, division.player_name_display, division.youth),
+      stats: r.stats,
+    })),
+  };
 }

@@ -172,4 +172,20 @@ describe.skipIf(!HAS_DB)("publicFixture — match_centre (Task 9)", () => {
     expect(res.match_centre).not.toBeNull();
     expect(MatchCentreDoc.safeParse(res.match_centre).success).toBe(true);
   });
+
+  // T16b fix round 3. This document replaces the page's on every poll, and it
+  // printed `divisions.variant_key` raw ("score") where the page's own loader
+  // printed the catalog name — now both name a declared variant through
+  // server/public-site/variant-label.ts, in the org's locale.
+  it("names the division's format in the org's locale, through the variant map", async () => {
+    const { fixtureId, divisionId } = await publicGenericFixture();
+    await sql`
+      update organizations set default_locale = 'es'
+      where id = (select org_id from divisions where id = ${divisionId})`;
+
+    const res = (await publicFixture(fixtureId)) as { match_centre: unknown };
+    const meta = MatchCentreDoc.parse(res.match_centre).header.metaLine ?? "";
+    expect(meta, "es `variant.generic.score`").toContain("Marcador");
+    expect(meta).not.toMatch(/\bscore\b/i);
+  });
 });

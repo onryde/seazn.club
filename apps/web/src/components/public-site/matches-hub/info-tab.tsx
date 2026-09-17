@@ -7,13 +7,20 @@
 // state: a competition always has a Present link and always has a registration
 // status, even when it has no dates, no venues and no divisions yet.
 //
-// NO `"use client"` — nothing here is stateful.
+// DIVISION-PAGE PARITY (owner ruling 2026-09-16): a Divisions section with one
+// box per division that has something to say — its prose, its calendar (MOVED
+// here from the calendar list) and its active suspensions. The calendar list
+// survives only for an entry no division owns.
+//
+// NO `"use client"` — nothing here is stateful, and `page.tsx` imports
+// `competitionDateLine` from this file on the server.
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { UTC, fmtDate } from "@/lib/format";
+import { UTC, fmtPublicDate } from "@/lib/format";
 import type { Dict as PublicDict, Locale } from "@/lib/i18n-constants";
-import { t } from "@/lib/i18n-runtime";
+import { plural, t } from "@/lib/i18n-runtime";
 import type { CompetitionHubDocT } from "@/server/public-site/competition-hub-schema";
+import { CompetitionProse } from "../competition-prose";
 
 export interface InfoTabProps {
   doc: CompetitionHubDocT;
@@ -27,11 +34,10 @@ export interface InfoTabProps {
    * (review F9). `competition-hub.ts:368` builds the whole document in the
    * ORG's `default_locale`, so every pre-resolved string in it — the board
    * labels on the Stats tab, `divisionName` everywhere — is org-language. This
-   * prop is the viewer's, and drives the venue conjunction. The dates are
-   * en-GB in all four. A Spanish viewer of an English org therefore reads
-   * Spanish chrome, English board labels and English dates on one screen. That
-   * is the shipped behaviour of the merged document, not a choice this file
-   * makes; what Task 11 decides is which dict it hands down here.
+   * prop drives the venue conjunction and the dates (owner ruling 2026-09-16:
+   * public dates are in the page's locale, English day-month). The competition
+   * page hands down the document's locale, so today the three agree; a caller
+   * that handed down a different one would mix languages on one screen.
    */
   locale: Locale;
   /** The competition's own prose. The page renders it (`renderProse` +
@@ -83,13 +89,12 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * Kept, corrected, because the trap itself is worth naming: a `date` column is
  * a wall-clock DAY, and any zone at all — including none — can move it.
  *
- * ── AND IN ENGLISH, IN EVERY LOCALE ────────────────────────────────────────
- * `format.ts:10` pins `const LOCALE = "en-GB"` and `fmtDate` takes no locale
- * parameter — a repo-wide, deliberate deferral ("the v5 i18n wave threads the
- * resolved locale through the same signatures"). The brief's "`fmtDate` in
- * `Intl` of the org locale" describes something the helper cannot do today.
- * Threading a locale through it is that wave's work, not this tab's: it would
- * move every date on every surface at once.
+ * ── IN THE PAGE'S LOCALE ───────────────────────────────────────────────────
+ * Owner ruling 2026-09-16: a public page's dates are in the org's locale, and
+ * English is day-month. `fmtPublicDate` is `fmtDate`'s public sibling — same
+ * zone handling, locale through `intlLocaleFor` — because `fmtDate` itself
+ * stays en-GB for the organiser surfaces that call it. Until this ruling the
+ * line read "1 September 2026" in all four locales.
  *
  * ── WHY NOT `fmtRange` ─────────────────────────────────────────────────────
  * `format.ts`'s own range helper returns "" when `from` is null, which would
@@ -97,13 +102,16 @@ const DATE_OPTS: Intl.DateTimeFormatOptions = {
  * schema makes the two nullable independently, so both halves are filtered and
  * de-duplicated instead.
  */
-export function competitionDateLine(info: {
-  startsOn: string | null;
-  endsOn: string | null;
-}): string {
+export function competitionDateLine(
+  info: {
+    startsOn: string | null;
+    endsOn: string | null;
+  },
+  locale: string,
+): string {
   const days = [info.startsOn, info.endsOn]
     .filter((d): d is string => d !== null)
-    .map((d) => fmtDate(UTC, d, DATE_OPTS));
+    .map((d) => fmtPublicDate(locale, UTC, d, DATE_OPTS));
   // De-duplicated on the FORMATTED value, so a one-day competition reads "1
   // September 2026" rather than the same date twice with a dash between it.
   return [...new Set(days)].join(" – ");
@@ -175,6 +183,9 @@ const LINK_CLASS =
 // this tab at all. The suite pins the level so the choice is a decision rather
 // than an accident.
 const LABEL_CLASS = "text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted";
+// The Divisions section's own title (owner ruling 2026-09-16, P3) — a display
+// heading, unlike the 11px labels above, because it heads boxes, not links.
+const SECTION_TITLE_CLASS = "font-display text-base font-semibold uppercase tracking-wide text-ink";
 const VALUE_CLASS = "mt-0.5 text-sm text-ink";
 
 export function InfoTab({
@@ -185,7 +196,7 @@ export function InfoTab({
   shareSlot,
 }: InfoTabProps) {
   const info = doc.info;
-  const dates = competitionDateLine(info);
+  const dates = competitionDateLine(info, locale);
   // `Intl.ListFormat` on the VIEWER's locale, the same helper
   // `components/v2/stages-panel.tsx:1343` uses and for the same reason: a
   // hardcoded ", " is English punctuation, and the conjunction that ends the
@@ -194,6 +205,24 @@ export function InfoTab({
   const venues = info.venues.length
     ? new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format([...info.venues])
     : "";
+
+  // One box per division that has ANYTHING: prose, its calendar, or a ban. The
+  // calendar is found by the same structural href join `calendarSlug` uses —
+  // never by position. `description`/`suspensions` are optional on the schema
+  // (a document cached before they existed), so absent reads as none.
+  const boxes = doc.divisions
+    .map((d) => ({
+      d,
+      description: d.description ?? null,
+      suspensions: d.suspensions ?? [],
+      calendar: info.calendars.find((cal) => cal.href === `${d.href}/calendar.ics`) ?? null,
+    }))
+    .filter((b) => b.description !== null || b.calendar !== null || b.suspensions.length > 0);
+  // What did NOT move: an entry no division's href owns keeps the old list,
+  // with its index-fallback testid. Every entry moved → no list at all.
+  const unowned = info.calendars
+    .map((cal, i) => ({ cal, i }))
+    .filter(({ cal }) => !doc.divisions.some((d) => cal.href === `${d.href}/calendar.ics`));
 
   return (
     // `min-w-0` on the root for the mount site nobody has written yet — the
@@ -248,7 +277,77 @@ export function InfoTab({
         ) : null}
       </div>
 
-      {info.calendars.length > 0 ? (
+      {boxes.length > 0 ? (
+        <section data-testid="mh-info-divisions" className="min-w-0 space-y-3">
+          <h2 className={SECTION_TITLE_CLASS}>{t(dict, "info.divisions")}</h2>
+          <div className="space-y-3">
+            {boxes.map(({ d, description, suspensions, calendar }) => {
+              const headingId = `mh-info-division-${d.slug}-name`;
+              const calendarId = `mh-info-calendar-${d.slug}`;
+              return (
+                <article
+                  key={d.id}
+                  data-testid={`mh-info-division-${d.slug}`}
+                  className="min-w-0 space-y-3 rounded-xl border border-zinc-200/80 bg-surface p-3"
+                >
+                  <h3 className="font-display text-lg font-semibold text-ink" id={headingId}>
+                    {d.name}
+                  </h3>
+                  {description !== null ? (
+                    <div data-testid={`mh-info-division-${d.slug}-description`} className="min-w-0">
+                      <CompetitionProse html={description} />
+                    </div>
+                  ) : null}
+                  {calendar ? (
+                    // "Add to calendar" + the box's heading: every box's link
+                    // says the same words, so the name comes from the heading
+                    // (`aria-labelledby`) rather than repeating on screen.
+                    <Link
+                      data-testid={calendarId}
+                      id={calendarId}
+                      href={calendar.href}
+                      aria-labelledby={`${calendarId} ${headingId}`}
+                      className={LINK_CLASS}
+                    >
+                      {t(dict, "info.calendar")}
+                    </Link>
+                  ) : null}
+                  {suspensions.length > 0 ? (
+                    <div data-testid={`mh-info-suspensions-${d.slug}`} className="min-w-0 space-y-1">
+                      <h4 className={LABEL_CLASS}>{t(dict, "info.suspensions")}</h4>
+                      <ul className="divide-y divide-zinc-100" role="list">
+                        {suspensions.map((ban, i) => (
+                          <li
+                            key={i}
+                            data-testid={`mh-info-suspension-${d.slug}-${i}`}
+                            className="flex min-w-0 items-center justify-between gap-3 py-2"
+                          >
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-medium text-ink" title={ban.name}>
+                                {ban.name}
+                              </span>
+                              {ban.entrantName ? (
+                                <span className="block truncate text-xs text-ink-muted" title={ban.entrantName}>
+                                  {ban.entrantName}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="shrink-0 text-sm tabular-nums text-ink">
+                              {plural(dict, "info.toServe", ban.remaining, locale)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {unowned.length > 0 ? (
         <section data-testid="mh-info-calendars" className="min-w-0 space-y-2">
           {/* ONE heading over the list, and each link named by its DIVISION.
               The other way round — "Add to calendar" as the text of every link
@@ -256,7 +355,7 @@ export function InfoTab({
               which is the defect `matchesHub.card.label` shipped in W2 Task 7. */}
           <h2 className={LABEL_CLASS}>{t(dict, "info.calendar")}</h2>
           <ul className="flex flex-wrap gap-2" role="list">
-            {info.calendars.map((cal, i) => (
+            {unowned.map(({ cal, i }) => (
               <li key={cal.href} className="min-w-0">
                 <Link
                   data-testid={`mh-info-calendar-${calendarSlug(cal, i, doc.divisions)}`}

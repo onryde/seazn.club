@@ -59,7 +59,15 @@ const HAS_DB = !!process.env.DATABASE_URL;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const hubKey = (competitionId: string) => `pub:v1:hub:${competitionId}`;
-const fixtureKey = (fixtureId: string) => `pub:v1:fixture:${fixtureId}`;
+const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v2:${fixtureId}`;
+/** The division's own public documents (schedule, standings, entrants), DEL'd
+ *  by name in the same DEL since review r2-m4 replaced the keyspace SCAN.
+ *  Spelled out, so a drift in the production spelling reds. */
+const divisionKeys = (divisionId: string) => [
+  `pub:v1:div:${divisionId}:schedule`,
+  `pub:v1:div:${divisionId}:standings`,
+  `pub:v1:div:${divisionId}:entrants-v2`,
+];
 
 /** Let a PREVIOUS write's DEL settle and its pushes land (the rig's own
  *  `startDivision` runs `afterScheduleWrite`), then clear the recorders. */
@@ -124,7 +132,7 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     const [row] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${moved!}`;
     expect(new Date(row!.scheduled_at).toISOString(), "the move landed").toBe(at);
 
-    expect(probe.dels).toEqual([[hubKey(competitionId), fixtureKey(moved!)]]);
+    expect(probe.dels).toEqual([[hubKey(competitionId), fixtureKey(moved!), ...divisionKeys(rig.divisionId)]]);
     await sleep(20);
     expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
     expect(probe.divisionPushes, "division push before the DEL settled").toEqual([]);
@@ -164,7 +172,7 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
     });
     expect(out.applied, "the apply landed").toBe(1);
 
-    expect(probe.dels).toEqual([[hubKey(competitionId), fixtureKey(assigned!)]]);
+    expect(probe.dels).toEqual([[hubKey(competitionId), fixtureKey(assigned!), ...divisionKeys(rig.divisionId)]]);
     await sleep(20);
     expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
 
@@ -187,7 +195,7 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
 
     const del = theOneDel();
     expect(del.first).toBe(hubKey(competitionId));
-    expect(del.rest).toEqual(all.map(fixtureKey));
+    expect(del.rest).toEqual([...all.map(fixtureKey), ...divisionKeys(rig.divisionId)].sort());
     await sleep(20);
     expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
 
@@ -211,7 +219,7 @@ describe.skipIf(!HAS_DB)("a real schedule write drops the fixture documents it c
 
     const del = theOneDel();
     expect(del.first).toBe(hubKey(competitionId));
-    expect(del.rest).toEqual(all.map(fixtureKey));
+    expect(del.rest).toEqual([...all.map(fixtureKey), ...divisionKeys(rig.divisionId)].sort());
     await sleep(20);
     expect(probe.fixturePushes, "fixture push before the DEL settled").toEqual([]);
 

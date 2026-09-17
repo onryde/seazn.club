@@ -7,6 +7,12 @@ import {
   type JWK,
 } from "jose";
 
+/** How long a broadcast may take before its fetch is aborted. Every caller is
+ *  fire-and-forget, but one that awaits the promise (a player-stats refresh
+ *  inside `after()` once did) must not be held by a realtime endpoint that
+ *  never answers: undici's own timeouts run to minutes. */
+export const BROADCAST_TIMEOUT_MS = 3_000;
+
 /**
  * Broadcast a state_changed event on `fixture:{id}` after a v2 scoring write
  * (doc 08 §4 — publish after commit). Same transport as tournaments; fire-and-
@@ -43,6 +49,7 @@ export async function publishFixtureUpdate(
       body: JSON.stringify({
         messages: [{ topic, event: "state_changed", payload, private: true }],
       }),
+      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.warn(`[realtime] fixture broadcast failed (${res.status}) for ${fixtureId}`);
@@ -83,6 +90,7 @@ export async function publishDivisionUpdate(
           },
         ],
       }),
+      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.warn(`[realtime] division broadcast failed (${res.status}) for ${divisionId}`);

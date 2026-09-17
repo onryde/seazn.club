@@ -36,7 +36,12 @@ type Sql = ReturnType<typeof postgres>;
 export interface MatchCentreLoadDivision {
   sportKey: string;
   moduleVersion: string;
-  /** The division's own variant/format key, printed verbatim as the Info
+  /** T16b fix round 3: both loaders now pass `variantLabel(...)` here — the
+   *  dictionary's word for an engine-declared variant, in the org's locale,
+   *  the stored catalog name only for a variant the map lacks. The history
+   *  below predates that.
+   *
+   *  The division's own variant/format key, printed verbatim as the Info
    *  tab's "format" row (fix round 1 ruling — `match-centre.ts`'s own doc
    *  comment on `MatchCentreInput.formatLabel`). No shared "described
    *  format" labeller exists on the public surface today (grepped
@@ -237,16 +242,15 @@ async function loadSides(
  * pure `buildMatchCentre`.
  *
  * `resolveVoids` runs ONCE here, before either sport branch sees the
- * stream. `foldMatch` (the fold `foldFixture` itself uses) and
- * `buildTimeline` (the non-cricket branch inside `buildMatchCentre`) both
- * already call `resolveVoids` internally — idempotent on an
- * already-resolved stream, so this is a no-op for them — but
- * `deriveCricketScorecard` (the cricket branch) has NO void resolution of
- * its own (verified by reading `scorecard.ts`: it folds `events` directly
- * through `cricket.apply`, one event at a time, with no `resolveVoids` call
- * anywhere in the function). Resolving here once, before the branch, is the
- * one place that gap can be closed without touching the frozen builder —
- * flagged in the report as a finding for whoever owns that file next.
+ * stream. `foldMatch` (the fold `foldFixture` itself uses), `buildTimeline`
+ * (the non-cricket branch inside `buildMatchCentre`) and
+ * `deriveCricketScorecard` (the cricket branch) all resolve voids
+ * internally — idempotent on an already-resolved stream, so this is a no-op
+ * for each. It was NOT always so: the scorecard used to replay `events`
+ * through `cricket.apply` itself, with no `resolveVoids` call (and threw on
+ * every kernel-owned event), and this line was written to close that gap.
+ * The scorecard now rides `foldMatch` (`FoldOptions.onFolded`); the call
+ * stays because it is free and keeps every branch reading one stream.
  */
 export async function loadMatchCentre(
   sql: Sql,

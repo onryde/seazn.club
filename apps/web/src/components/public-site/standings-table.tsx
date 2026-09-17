@@ -1,10 +1,15 @@
 // Server component: MetricSpec-driven standings table (doc 09 §2 — zero
 // per-sport table code). Tie explanations render as a <details> popover from
 // the snapshot's tieBreak trace: no client JS.
+//
+// Every word is the caller's dictionary's (Task 16 review, I1): the header
+// letters and their titles, "Team", and the tie note come from the SAME
+// helpers the competition hub's table resolves them with
+// (`server/public-site/standings-view.ts`), so the division page, the embed and
+// the organiser console print what the hub prints over the same column.
 import {
   DERIVED_METRICS,
   derivedMetricText,
-  tieBreakLabel,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
@@ -13,6 +18,9 @@ import {
   formatMetric,
   type MetricSpecLike,
 } from "@/lib/public-site";
+import type { Dict } from "@/lib/i18n-constants";
+import { t, type TKey } from "@/lib/i18n-runtime";
+import { columnHeader, tieBreakRule } from "@/server/public-site/standings-view";
 import { EntityLogo } from "@/components/ui/entity-logo";
 
 interface Props {
@@ -24,6 +32,9 @@ interface Props {
    *  column at all; null values fall back to initials via EntityLogo. */
   entrantLogos?: Record<string, string | null>;
   caption?: string;
+  /** The PUBLIC dictionary, in the language the page is read in: the org's on
+   *  the public division page and the embed, the viewer's in the console. */
+  dict: Dict;
 }
 
 export function StandingsTable({
@@ -33,7 +44,9 @@ export function StandingsTable({
   entrantNames,
   entrantLogos,
   caption,
+  dict,
 }: Props) {
+  const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
   const columns = standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // Podium chips are fixed vocabulary (gold/silver/bronze) — deliberately NOT
@@ -55,7 +68,18 @@ export function StandingsTable({
   );
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm">
+    // `relative`: the containing block for the `.sr-only` column words in the
+    // header. Left static, their containing block was `<body>`, outside this
+    // box's `overflow-x` clip, and a table wider than a phone scrolled the
+    // whole PAGE sideways with no visible culprit (T17 HB9c, 80px at 320).
+    // A named, focusable region: a keyboard user scrolls to the hidden columns
+    // only through `tabIndex` (final review B m3), as on the hub's table.
+    <div
+      role="region"
+      tabIndex={0}
+      aria-label={caption ? msg("table.regionCaptioned", { caption }) : msg("table.region")}
+      className="relative overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
+    >
       <table className="w-full text-sm">
         {caption ? (
           <caption className="px-4 pb-1 pt-3 text-left font-display text-lg font-semibold text-ink">
@@ -65,12 +89,19 @@ export function StandingsTable({
         <thead>
           <tr className="border-b border-zinc-200 text-left text-[11px] uppercase tracking-wider text-ink-muted">
             <th scope="col" className="sticky left-0 z-10 w-12 bg-surface py-2.5 pl-4 pr-2 font-semibold">#</th>
-            <th scope="col" className="py-2.5 pr-3 font-semibold">Team</th>
-            {columns.map((col) => (
-              <th key={col.key} scope="col" className="px-2.5 py-2.5 text-right font-semibold last:pr-4">
-                {col.label}
-              </th>
-            ))}
+            <th scope="col" className="py-2.5 pr-3 font-semibold">{msg("table.team")}</th>
+            {columns.map((col) => {
+              // The letters are what fits; the word is what a hover and a
+              // screen reader get — a `<th>`'s text wins its accessible name,
+              // so the word rides as sr-only text and the letters are hidden.
+              const { abbr, title } = columnHeader(col, msg);
+              return (
+                <th key={col.key} scope="col" title={title} className="px-2.5 py-2.5 text-right font-semibold last:pr-4">
+                  <span className="sr-only">{title}</span>
+                  <span aria-hidden="true">{abbr}</span>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -98,11 +129,10 @@ export function StandingsTable({
                       role="tooltip"
                       className="absolute left-0 z-10 mt-1 w-56 rounded-lg border border-zinc-200 bg-surface p-2 text-xs text-zinc-700 shadow-lg"
                     >
-                      Level with{" "}
-                      {row.tieBreak.with
-                        .map((id) => entrantNames[id] ?? "another entrant")
-                        .join(", ")}{" "}
-                      — separated on <strong>{tieBreakLabel(row.tieBreak.key)}</strong>.
+                      {msg("table.tieBreak", {
+                        with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
+                        rule: tieBreakRule(row.tieBreak.key, msg),
+                      })}
                     </p>
                   </details>
                 ) : (

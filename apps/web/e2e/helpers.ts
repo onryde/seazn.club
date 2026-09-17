@@ -134,16 +134,28 @@ export async function expectNoHorizontalScroll(
  *  way (this file's own `whoNames`+hint join, scorebug.tsx) — visually
  *  shortened, never lost to a screen reader.
  *
+ *  4. An `sr-only` box (Tailwind's screen-reader utility: `position:absolute`
+ *     with a 1px box and a clipping rectangle) holds text that is MEANT to be
+ *     wider than its box — it exists to be read aloud and never painted, so
+ *     every one of them reports `70px content in 1px` by construction. Found
+ *     live: run "Playwright e2e — parallel 2/2", `standings-768`, seven
+ *     `span.sr-only` column words the wave's standings header added
+ *     (standings-table.tsx). Matched on the COMPUTED shape, never the class
+ *     name — `.sr-only` is one spelling of the technique, and a component can
+ *     reorder or rename its classes without changing what the box does.
+ *
  *  `hidden`/`visible` overflow with NEITHER signal is what remains a
  *  defect — that is the clipped-name case these scans were written for
  *  (`scorepad-v3-strip-geometry.spec.ts`'s own long-surname test), and
- *  none of the three exceptions weakens it: a name that clips WITHOUT an
- *  ellipsis or a line-clamp still reddens here.
+ *  none of the four exceptions weakens it: a name that clips WITHOUT an
+ *  ellipsis or a line-clamp still reddens here, and so does any box big
+ *  enough for a reader to see — the sr-only test needs a 1px box AND a
+ *  clipping rectangle, which no painted text has.
  *
- *  `scrollable`/`truncatedByDesign` are returned rather than silently
- *  dropped so the caller can hold each to something: an exemption nothing
- *  checks would let any future overflow hide behind any of the three. See
- *  `expectScorebugNotClipped`.
+ *  `scrollable`/`truncatedByDesign`/`screenReaderOnly` are returned rather
+ *  than silently dropped so the caller can hold each to something: an
+ *  exemption nothing checks would let any future overflow hide behind any of
+ *  the four. See `expectScorebugNotClipped`.
  *
  *  Moved here from mobile.spec.ts (2026-09-07, streaming T1) so the visual
  *  gate (`e2e/visual/asserts.ts`) and the mobile matrix measure with ONE
@@ -159,11 +171,16 @@ export async function overflowingIn(
   rootSelector: string,
   childSelector: string,
   absentMessage: string,
-): Promise<{ clipped: string[]; scrollable: string[]; truncatedByDesign: string[] }> {
+): Promise<{
+  clipped: string[];
+  scrollable: string[];
+  truncatedByDesign: string[];
+  screenReaderOnly: string[];
+}> {
   return page.evaluate(
     ({ rootSel, childSel, absent }) => {
       const root = document.querySelector<HTMLElement>(rootSel);
-      if (!root) return { clipped: [absent], scrollable: [], truncatedByDesign: [] };
+      if (!root) return { clipped: [absent], scrollable: [], truncatedByDesign: [], screenReaderOnly: [] };
       const suspects: HTMLElement[] = [root, ...Array.from(root.querySelectorAll<HTMLElement>(childSel))];
       // Hide `visibility: hidden` descendants before measuring. Overlay name
       // probes (and anything like them) are in-flow for scrollWidth even when
@@ -193,11 +210,26 @@ export async function overflowingIn(
         const clamp = cs.webkitLineClamp;
         return clamp !== "" && clamp !== "none";
       };
-      const rest = over.filter((el) => !reachable(el));
+      // Exception 4, by COMPUTED shape: taken out of flow, clipped to a
+      // rectangle (`clip` is what Tailwind's `sr-only` emits, `clip-path:
+      // inset(50%)` the modern spelling some kits use), and a box no larger
+      // than the 1px `sr-only` leaves behind. All three together: a painted
+      // box fails the size test, and a 1px spacer with no clip fails the
+      // second, so this cannot swallow a real clip.
+      const screenReaderOnly = (el: HTMLElement) => {
+        const cs = getComputedStyle(el);
+        if (cs.position !== "absolute" && cs.position !== "fixed") return false;
+        const clipRect = cs.clip !== "auto" && cs.clip !== "";
+        const clipPath = cs.clipPath !== "none" && cs.clipPath !== "";
+        if (!clipRect && !clipPath) return false;
+        return el.clientWidth <= 1 && el.clientHeight <= 1;
+      };
+      const rest = over.filter((el) => !reachable(el) && !screenReaderOnly(el));
       return {
         clipped: rest.filter((el) => !truncatedByDesign(el)).map(describe),
         scrollable: over.filter(reachable).map(describe),
         truncatedByDesign: rest.filter(truncatedByDesign).map(describe),
+        screenReaderOnly: over.filter((el) => !reachable(el) && screenReaderOnly(el)).map(describe),
       };
     },
     { rootSel: rootSelector, childSel: childSelector, absent: absentMessage },

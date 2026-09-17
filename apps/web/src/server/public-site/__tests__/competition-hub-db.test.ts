@@ -7,10 +7,10 @@
 // standings reads compose into a document that parses, and — ruling B — that a
 // division with fixtures and a standings snapshot but ZERO
 // `player_stat_snapshots` rows degrades to no boards and no Stats tab with no
-// error and no empty shell. That is the COMMON case in production, not an
-// edge: the snapshot table is a recompute-on-read cache whose only writer runs
-// from the two stats endpoints, a person merge and a doubly-conditional
-// auto-posts path.
+// error and no empty shell. Every division is in that state until its first
+// finished match: the snapshot is refreshed after each result
+// (`usecases/player-stats-refresh.ts`), and a fixture seeded here without
+// scoring through that path never schedules one.
 //
 // Real Postgres required; skipped without DATABASE_URL, same convention as
 // `consent.test.ts`, whose seeding shape this reuses verbatim rather than
@@ -399,4 +399,126 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
     expect(await loadCompetitionHub(scene.orgSlug, "no-such-competition")).toBeNull();
     expect(await loadCompetitionHub("no-such-org", scene.compSlug)).toBeNull();
   });
+});
+
+describe.skipIf(!HAS_DB)("loadCompetitionHub — squads, bans and division prose off real rows", () => {
+  it("members arrive masked in the view's order; the ban marks the banned PERSON, not their same-named twin; a youth division never links; prose and team calendars ride along", async () => {
+    // Its OWN competition, so no assertion above (three teams, one division,
+    // no Knockout) moves.
+    const auth: AuthCtx = { orgId: scene.orgId, via: "session", userId: null, role: "owner", keyId: null };
+    const competition = await createCompetition(auth, {
+      ends_on: "2030-12-31",
+      name: "Squad Cup " + randomUUID().slice(0, 8),
+      visibility: "public",
+      branding: {},
+    });
+    const open = await createDivision(auth, competition.id, {
+      name: "Open",
+      slug: "open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    const youth = await createDivision(auth, competition.id, {
+      name: "Under 12",
+      slug: "u12",
+      sport_key: "generic",
+      variant_key: "score",
+      config: DIVISION_CONFIG,
+    });
+    await sql`update divisions set description = 'Bring **boots**.' where id = ${open.id}`;
+    await sql`update divisions set youth = true where id = ${youth.id}`;
+    await createEntrants(auth, open.id, [
+      { kind: "team", display_name: "Alpha", seed: 1, members: [] },
+      { kind: "team", display_name: "Bravo", seed: 2, members: [] },
+    ]);
+    await createEntrants(auth, youth.id, [{ kind: "team", display_name: "Cubs", seed: 1, members: [] }]);
+    const entrantId = async (divisionId: string, name: string) =>
+      (await sql<{ id: string }[]>`
+        select id from entrants where division_id = ${divisionId} and display_name = ${name}`)[0]!.id;
+    const alpha = await entrantId(open.id, "Alpha");
+    const bravo = await entrantId(open.id, "Bravo");
+    const cubs = await entrantId(youth.id, "Cubs");
+    const person = async (fullName: string, consent: Record<string, boolean>) =>
+      (await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent)
+        values (${scene.orgId}, ${fullName}, ${sql.json(consent)}) returning id`)[0]!.id;
+    const samA = await person("Sam Carter", { public_name: true });
+    const olly = await person("Olly Brown", { public_name: false });
+    const zed = await person("Zed Adams", { public_name: true });
+    const samB = await person("Sam Carter", { public_name: true });
+    const kit = await person("Kit Young", { public_name: true });
+    const join = (entrant: string, personId: string, squad: number | null, position: string | null) => sql`
+      insert into entrant_members (entrant_id, person_id, org_id, squad_number, default_position_key)
+      values (${entrant}, ${personId}, ${scene.orgId}, ${squad}, ${position})`;
+    // Inserted out of order: the view sorts `squad_number nulls last, full_name`.
+    await join(alpha, zed, null, null);
+    await join(alpha, samA, 7, "GK");
+    await join(alpha, olly, 3, null);
+    await join(bravo, samB, 9, null);
+    await join(cubs, kit, 1, null);
+    // Player pages are an entitlement the view checks itself
+    // (`org_has_feature('dashboard.player_profiles')`), so grant it explicitly.
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+      values (${scene.orgId}, 'dashboard.player_profiles', true, 'test')
+      on conflict (org_id, feature_key) do update set bool_value = excluded.bool_value`;
+    await invalidateOrgEntitlements(scene.orgId);
+    // An ACTIVE ban on Alpha's Sam Carter only — Bravo's Sam Carter is a
+    // different person with the same name.
+    await sql`
+      insert into suspensions
+        (org_id, division_id, person_id, entrant_id, status, source, reason, matches_total, decided_at)
+      values (${scene.orgId}, ${open.id}, ${samA}, ${alpha}, 'active', 'manual', 'test', 2, now())`;
+
+    const doc = (await loadCompetitionHub(scene.orgSlug, competition.slug))!;
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+    const base = `/shared/${scene.orgSlug}/${competition.slug}`;
+    const team = (id: string) => doc.teams.find((t) => t.entrantId === id)!;
+
+    expect(team(alpha).members).toEqual([
+      // Opted out: masked, no id, no link.
+      { personId: null, name: "Olly B.", squadNumber: 3, position: null, playerHref: null, suspendedRemaining: null },
+      {
+        personId: samA,
+        name: "Sam Carter",
+        squadNumber: 7,
+        position: "GK",
+        playerHref: `${base}/players/${samA}`,
+        suspendedRemaining: 2,
+      },
+      {
+        personId: zed,
+        name: "Zed Adams",
+        squadNumber: null,
+        position: null,
+        playerHref: `${base}/players/${zed}`,
+        suspendedRemaining: null,
+      },
+    ]);
+    expect(team(bravo).members).toEqual([
+      {
+        personId: samB,
+        name: "Sam Carter",
+        squadNumber: 9,
+        position: null,
+        playerHref: `${base}/players/${samB}`,
+        suspendedRemaining: null,
+      },
+    ]);
+    // Consented, so the VIEW publishes the id — but a youth division masks the
+    // name, and a masked name never links.
+    expect(team(cubs).members).toEqual([
+      { personId: null, name: "Kit Y.", squadNumber: 1, position: null, playerHref: null, suspendedRemaining: null },
+    ]);
+    expect(team(alpha).calendarHref).toBe(`${base}/open/calendar.ics?entrant=${alpha}`);
+
+    const division = (slug: string) => doc.divisions.find((d) => d.slug === slug)!;
+    expect(division("open").description).toBe("<p>Bring <strong>boots</strong>.</p>");
+    expect(division("open").suspensions).toEqual([
+      { personId: samA, name: "Sam Carter", entrantId: alpha, entrantName: "Alpha", remaining: 2 },
+    ]);
+    expect(division("u12").description).toBeNull();
+    expect(division("u12").suspensions).toEqual([]);
+  }, 60_000);
 });

@@ -1,3 +1,6 @@
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+
 // Meta-description builders for the public /shared tree. A page must always
 // return a non-empty description: this Next build does not fall back to the
 // root layout's description, so `undefined` here means NO meta description,
@@ -41,9 +44,20 @@ export function competitionMetaDescription(
   return fallback;
 }
 
+/**
+ * The player page's `<meta name="description">`, from `player.metaDescription`
+ * in the caller's `public` dictionary — the org's locale, like the rest of the
+ * page.
+ *
+ * `dict` is REQUIRED. It defaulted to the English dictionary while the player
+ * page was still unwired (Task 16), which let that page print English to every
+ * org; a default here is exactly how a caller forgets its locale and still
+ * compiles. The page resolves the org's `public` dictionary and passes it.
+ */
 export function playerMetaDescription(
   playerName: string,
   competitionName: string,
+  dict: Dict,
 ): string {
-  return `${playerName}'s player card at ${competitionName} — appearances, results and stats on Seazn Club.`;
+  return t(dict, "player.metaDescription", { player: playerName, competition: competitionName });
 }

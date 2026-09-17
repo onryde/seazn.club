@@ -36,6 +36,8 @@ import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
+import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
+import { renderProse } from "@/lib/prose";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail } from "@/lib/scoring-vocab";
 import {
@@ -46,6 +48,8 @@ import {
 } from "@/lib/matches-hub";
 import { resolveModule } from "@/server/engine-db";
 import { publicRegistrationInfo } from "@/server/usecases/registrations";
+import { activePublicSuspensionEntries } from "@/server/usecases/discipline";
+import { log } from "@/server/logger";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { AnySportModule } from "@seazn/engine/sport";
 // The LEAF, not the `@seazn/engine/scheduling` barrel: `bracket-layout.ts` has
@@ -57,7 +61,11 @@ import {
   getPublicCompetition,
   getPublicDivision,
   orgTag,
+  readEntrantMemberRefs,
   REVALIDATE_FAST,
+  type EntrantMemberRef,
+  type PublicDivision,
+  type PublicEntrant,
   type PublicFixture,
   type PublicStage,
 } from "./data";
@@ -72,6 +80,8 @@ import type {
   CompetitionHubDocT,
   HubDivisionT,
   HubMatchT,
+  HubMemberT,
+  HubSuspensionT,
   KnockoutRoundT,
   KnockoutViewT,
   LeaderBoardT,
@@ -586,9 +596,23 @@ export async function loadCompetitionHub(
   // all is a 404 from this reader, and that is not an error for a hub.
   const registration = await publicRegistrationInfo(orgSlug, compSlug).catch(() => null);
 
-  const details = await Promise.all(
-    divisions.map(async (d) => ({ d, detail: await getPublicDivision(orgSlug, compSlug, d.slug) })),
-  );
+  // ONE discipline read for every division, beside the details, and a READ:
+  // no detection, no serving pass, no email — a hub rebuild has no
+  // single-flight, and `refreshDiscipline` serves bans on the write path. A
+  // failure is an empty list, never a hub-down: bans are a line on a squad,
+  // not the page.
+  const [details, allBans] = await Promise.all([
+    Promise.all(divisions.map(async (d) => ({ d, detail: await getPublicDivision(orgSlug, compSlug, d.slug) }))),
+    activePublicSuspensionEntries(divisions.map((d) => d.id)).catch((err: unknown): HubBan[] => {
+      log.warn(
+        { competitionId: competition.id, err: err instanceof Error ? err.message : String(err) },
+        "competition-hub: the suspension read failed; bans and Suspended marks are absent",
+      );
+      return [];
+    }),
+  ]);
+  const bansByDivision = new Map<string, HubBan[]>();
+  for (const b of allBans) (bansByDivision.get(b.divisionId) ?? bansByDivision.set(b.divisionId, []).get(b.divisionId)!).push(b);
 
   const matches: HubMatchT[] = [];
   const tables: TableViewT[] = [];
@@ -606,6 +630,7 @@ export async function loadCompetitionHub(
 
   for (const { d, detail } of details) {
     if (!detail) continue;
+    const bans = bansByDivision.get(d.id) ?? [];
     const { stages, pools, fixtures, standings, entrants, tz } = detail;
     const module_ = resolveModuleOrNull(d.sport_key, d.module_version);
     modules.set(d.id, module_);
@@ -626,6 +651,7 @@ export async function loadCompetitionHub(
       colours[e.id] = primaryColour(e.team_display?.colors);
     }
     const divHref = `${base}/${d.slug}`;
+    const squads = await divisionSquads({ division: d, entrants, bans, names, base });
 
     hubDivisions.push({
       id: d.id,
@@ -639,6 +665,10 @@ export async function loadCompetitionHub(
       formatLine: describeFormat(d.sport_key, module_, d.config),
       variantKey: d.variant_key,
       href: divHref,
+      // Sanitised by THE prose pipeline here, once, so no renderer holds raw
+      // organiser Markdown. Blank prose is no prose.
+      description: d.description ? (await renderProse(d.description)) || null : null,
+      suspensions: squads.suspensions,
     });
     leaderDivisions.push({
       id: d.id,
@@ -777,18 +807,29 @@ export async function loadCompetitionHub(
         colour: colours[e.id] ?? null,
         seed: e.seed,
         href: `${divHref}?tab=entrants`,
+        members: squads.membersByEntrant.get(e.id) ?? [],
+        // The division's own .ics route, filtered to this entrant
+        // (`calendar.ics/route.ts` reads `?entrant=`).
+        calendarHref: `${divHref}/calendar.ics?entrant=${encodeURIComponent(e.id)}`,
       });
     }
   }
 
   // EMPTY IS A FIRST-CLASS STATE, not an error and not an empty shell.
-  // `player_stat_snapshots` is largely a recompute-on-read cache — its only
-  // writer runs from the two stats endpoints, a person merge and an auto-posts
-  // path that fires only for a division with `auto_posts` in an org holding
-  // `news.auto` — so a division nobody has opened stats for holds ZERO rows.
-  // That is the COMMON case. It yields no boards, and `deriveHubTabs` then
-  // offers no Stats tab, which is exactly right: a tab that opens on nothing
-  // is worse than no tab.
+  // `player_stat_snapshots` is refreshed after the writes listed in
+  // `usecases/player-stats-refresh.ts` (a result among them), so a division
+  // holds rows once a match with player events has finished. Before
+  // that, or in a sport whose module declares no player stats, it holds ZERO
+  // rows. That yields no boards, and `deriveHubTabs` then offers no Stats tab,
+  // which is exactly right: a tab that opens on nothing is worse than no tab.
+  // The boards serve the snapshot as it stands. The check that queues a
+  // division's refresh when the snapshot is behind a result is NOT made here:
+  // this loader runs inside `unstable_cache` and in ISR regenerations, where
+  // `after()` never runs (final review I1). The hub poll's route makes it
+  // (`publicCompetitionHub`). So the first visit after this ships, to a
+  // division whose snapshot was never filled, shows no Stats tab; the tab
+  // appears once the refresh queued by the page's first poll lands (accepted,
+  // owner ruling 2026-09-17; no warm-up job).
   const leaders: LeaderBoardT[] = statsAllowed
     ? buildLeaderBoards({
         divisions: leaderDivisions,
@@ -850,6 +891,134 @@ export async function loadCompetitionHub(
   };
 }
 
+/** One active ban as the hub's single discipline read returns it. */
+type HubBan = Awaited<ReturnType<typeof activePublicSuspensionEntries>>[number];
+
+/**
+ * One division's squads (per entrant) and its list of active bans.
+ *
+ * Members are the MASKED lines `getPublicDivision` already produced — never
+ * re-read, never re-masked. A line links to the player page only where the
+ * view published an id (consent + player-profile entitlement) AND the
+ * division shows full names: a masked name with a link is the full name one
+ * click away (`playerLinkId`, which the division page's Entrants tab links
+ * through too). The id is withheld on exactly the same terms.
+ *
+ * A ban is matched to a line by PERSON, never by name (two players can share
+ * one), by zipping `readEntrantMemberRefs`'s internal rows onto the view's
+ * lines by position. The lines come from `getPublicDivision`'s cache while the
+ * rows are read fresh, and a roster write does not revalidate that cache, so
+ * a renumber or a swap between the two reads shifts who sits at index i
+ * without changing the count. The zip is therefore trusted for a team only
+ * when EVERY row agrees with its line (`squadRowsMatchLines`): same count,
+ * same squad number, same position, the same name once the row's full name
+ * is masked by the division's own policy, the same person wherever the view
+ * published an id, and no two rows the view's sort cannot order. Any
+ * disagreement marks nobody on that team — marking the wrong person
+ * "Suspended" is worse than marking no one, and the ban still lists on Info.
+ * The team-sheet gate is division-scoped, so a person is marked on any team
+ * of the division, with their longest remaining ban. The internal read runs
+ * only when the division has a ban at all.
+ */
+async function divisionSquads(args: {
+  division: PublicDivision;
+  entrants: PublicEntrant[];
+  bans: HubBan[];
+  names: Record<string, string>;
+  base: string;
+}): Promise<{ membersByEntrant: Map<string, HubMemberT[]>; suspensions: HubSuspensionT[] }> {
+  const { division, entrants, bans, names, base } = args;
+  const membersByEntrant = new Map<string, HubMemberT[]>();
+  for (const e of entrants) {
+    membersByEntrant.set(
+      e.id,
+      (e.members ?? []).map((m) => {
+        const publicId = playerLinkId(m.person_id, division);
+        return {
+          personId: publicId,
+          name: m.name,
+          squadNumber: m.squad_number ?? null,
+          position: m.position ?? null,
+          playerHref: publicId ? `${base}/players/${publicId}` : null,
+          suspendedRemaining: null,
+        };
+      }),
+    );
+  }
+
+  const publicIdByPerson = new Map<string, string | null>();
+  if (bans.length > 0) {
+    const longest = new Map<string, number>();
+    for (const b of bans) longest.set(b.personId, Math.max(longest.get(b.personId) ?? 0, b.remaining));
+    const withSquads = entrants.filter((e) => (e.members?.length ?? 0) > 0);
+    const refs: Record<string, EntrantMemberRef[]> =
+      withSquads.length > 0
+        ? await readEntrantMemberRefs(withSquads.map((e) => e.id)).catch((err: unknown) => {
+            log.warn(
+              { divisionId: division.id, err: err instanceof Error ? err.message : String(err) },
+              "competition-hub: the squad member read failed; Suspended marks are absent",
+            );
+            return {};
+          })
+        : {};
+    for (const e of withSquads) {
+      const rows = refs[e.id] ?? [];
+      if (!squadRowsMatchLines(rows, e.members!, division)) continue;
+      const lines = membersByEntrant.get(e.id)!;
+      rows.forEach((r, i) => {
+        const line = lines[i]!;
+        const remaining = longest.get(r.personId);
+        if (remaining !== undefined) line.suspendedRemaining = remaining;
+        if (line.personId) publicIdByPerson.set(r.personId, line.personId);
+      });
+    }
+  }
+
+  const suspensions: HubSuspensionT[] = bans
+    .map((b) => {
+      const entrantId = b.entrantId !== null && b.entrantId in names ? b.entrantId : null;
+      return {
+        personId: publicIdByPerson.get(b.personId) ?? null,
+        name: b.name,
+        entrantId,
+        entrantName: entrantId ? names[entrantId]! : null,
+        remaining: b.remaining,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { membersByEntrant, suspensions };
+}
+
+/**
+ * May this team's fresh internal rows be zipped onto its cached squad lines by
+ * position? Only when every row provably describes its line — checked for ALL
+ * rows before any is used, so one moved player voids the whole team's marks.
+ */
+function squadRowsMatchLines(
+  rows: EntrantMemberRef[],
+  lines: PublicEntrant["members"],
+  division: PublicDivision,
+): boolean {
+  if (rows.length !== lines.length) return false;
+  return rows.every((r, i) => {
+    const line = lines[i]!;
+    // Same full name, same number: `public_entrants_v` sorts by
+    // `squad_number nulls last, full_name`, so their relative order is
+    // Postgres's choice, not a promise — either row could be either line.
+    const unorderable = rows.some((o, j) => j !== i && o.fullName === r.fullName && o.squadNumber === r.squadNumber);
+    return (
+      !unorderable &&
+      r.squadNumber === (line.squad_number ?? null) &&
+      r.positionKey === (line.position ?? null) &&
+      resolvePersonDisplayName(r.fullName, r.consent, division.player_name_display ?? null, division.youth ?? false) ===
+        line.name &&
+      // The view publishes a person id only with consent + entitlement; where
+      // it did, it must be this row's person.
+      (line.person_id == null || line.person_id === r.personId)
+    );
+  });
+}
+
 /**
  * The ISR-cached hub, for the page render.
  *
@@ -864,12 +1033,13 @@ export async function getPublicCompetitionHub(
 ): Promise<CompetitionHubDocT | null> {
   const shell = await getPublicCompetition(orgSlug, compSlug);
   if (!shell) return null;
-  // v2 since the Knockout tab added `knockouts`: the page renders this cached
-  // document WITHOUT re-parsing it (unlike `usecases/public.ts`, whose Redis
-  // hit goes back through `CompetitionHubDoc.safeParse`), so a v1 entry must
-  // never reach a renderer that reads the new field. Bump again on any shape
-  // change a cached hit cannot satisfy.
-  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v2", shell.competition.id], {
+  // v2 since the Knockout tab added `knockouts`; v3 since squads, bans and
+  // division prose (division-page parity, 2026-09-16). The page renders this
+  // cached document WITHOUT re-parsing it (unlike `usecases/public.ts`, whose
+  // Redis hit goes back through `CompetitionHubDoc.safeParse`), so an older
+  // entry must never reach a renderer that reads the new fields. Bump again on
+  // any shape change a cached hit cannot satisfy.
+  return unstable_cache(() => loadCompetitionHub(orgSlug, compSlug), ["pub-hub-v3", shell.competition.id], {
     tags: [
       orgTag(orgSlug),
       competitionTag(shell.competition.id),

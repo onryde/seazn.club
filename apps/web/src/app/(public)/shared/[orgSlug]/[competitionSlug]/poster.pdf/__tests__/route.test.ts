@@ -501,6 +501,29 @@ describe("GET .../poster.pdf — page 1 copy resolves through the org's own loca
     expect(text).not.toContain("September");
   });
 
+  // Owner ruling 2026-09-16: an English org's public dates are day-month. Bare
+  // "en" gave `Intl` the US "September 1, 2026"; the handout reads the order a
+  // British or Irish club (and every other English org) writes.
+  it("an English org's dates read day-month, not the US month-day bare 'en' gives Intl", async () => {
+    getPublicCompetition.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION, // starts_on 2026-09-01, ends_on 2026-09-13
+      divisions: [DIVISION()],
+      liveNow: [],
+    });
+    getPublicDivision.mockResolvedValue({
+      org: ORG("en"),
+      competition: COMPETITION,
+      division: DIVISION(),
+      ...NO_FIXTURES_DRAW,
+    });
+
+    const text = decodePdfText((await get()).buf);
+    expect(text).toContain("1 September 2026");
+    expect(text).toContain("13 September 2026");
+    expect(text).not.toContain("September 1, 2026");
+  });
+
   // ── THE PRINTED DATES ARE CALENDAR DAYS ─────────────────────────────────
   // `competition.starts_on`/`ends_on` are pg `date` columns — wall-clock days,
   // not instants. `new Date("2026-09-01")` is UTC MIDNIGHT, so formatting it

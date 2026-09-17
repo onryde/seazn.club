@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { buildMatchCentre, startTimeText, type MatchCentreInput } from "../match-centre";
+import { LOCALES } from "@/lib/i18n-constants";
 import type { PublicFixture } from "../data";
 import type { PublicPerson } from "../public-lineups";
 import type { SideT } from "../match-centre-schema";
@@ -95,8 +96,8 @@ describe("startTime — one formatter for the court card and the page's subheadi
   });
 
   it("writes an `en` org's date en-GB, not the US form bare 'en' gives Intl", () => {
-    // The whole public surface is en-GB (`lib/format.ts:10`, `schedule.tsx`'s
-    // `dateTagFor`); bare "en" made this one line read "Jul 20, 2026, 2:30 PM"
+    // The whole public surface is en-GB (`lib/format.ts:10`, `intlLocaleFor`
+    // in `lib/public-date-locale.ts`); bare "en" made this one line read "Jul 20, 2026, 2:30 PM"
     // beside neighbours reading "20 Jul 2026, 14:30".
     const doc = buildMatchCentre(input({ locale: "en" }));
     expect(doc.startTime).toBe("20 Jul 2026, 14:30");
@@ -133,6 +134,33 @@ describe("startTime — one formatter for the court card and the page's subheadi
       );
     }
   });
+});
+
+// Owner ruling 2026-09-16: every public date is in the org's locale and English
+// is day-month. The Info tab's "Start" row ran its own `Intl.DateTimeFormat`
+// with the raw locale, so an English org read "Monday, July 20, 2026 at 2:30
+// PM" a tab away from a card that already read "20 Jul 2026, 14:30".
+describe("Info tab 'Start' row — the org's locale, English day-month", () => {
+  const startRow = (locale: string) => {
+    const doc = buildMatchCentre(input({ locale }));
+    const row = doc.info.rows.find((r) => r.label.key === "matchCentre.info.start");
+    return row?.value.params?.when;
+  };
+
+  it("an English org reads day-month in the venue's 24-hour clock", () => {
+    expect(startRow("en")).toBe("Monday, 20 July 2026 at 14:30");
+  });
+
+  for (const locale of LOCALES.filter((l) => l !== "en")) {
+    it(`a ${locale} org reads its own Intl format in the venue's zone`, () => {
+      const own = new Intl.DateTimeFormat(locale, {
+        timeZone: "Europe/London",
+        dateStyle: "full",
+        timeStyle: "short",
+      }).format(new Date(AT));
+      expect(startRow(locale)).toBe(own);
+    });
+  }
 });
 
 describe("venueName / courtName — the subheading's other two facts", () => {

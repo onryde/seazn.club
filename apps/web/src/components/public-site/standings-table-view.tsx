@@ -285,10 +285,17 @@ export function StandingsTableView({
           {view.caption}
         </h3>
         {showFullLink ? (
+          // `inline-flex min-h-11 items-center` is the 44px tap floor, the
+          // same shape `match-centre/info-tab.tsx` uses. W2 contact sheet
+          // img-115/116 (owner approved): this link was plain text, so its
+          // box WAS its line box — 16px measured at 320 — and a class that
+          // only looked bigger would not have moved it. The height has to
+          // come from the box a finger meets, which is why the display goes
+          // with the `min-h`: `min-height` on an inline box does nothing.
           <Link
             data-testid={`${testid}-full`}
             href={view.fullHref}
-            className="shrink-0 text-xs font-medium uppercase tracking-wide text-accent-strong hover:underline"
+            className="inline-flex min-h-11 shrink-0 items-center text-xs font-medium uppercase tracking-wide text-accent-strong hover:underline"
           >
             {t(dict, "table.fullDivision")}
           </Link>
@@ -328,7 +335,13 @@ export function StandingsTableView({
             // nothing and fixes every consumer — the Overview's previews and the
             // Table tab's groups alike.
             aria-label={`${view.divisionName} — ${view.caption}`}
-            className="overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
+            // `relative` makes the region the containing block of the
+            // `.sr-only` header words below (they are `position:absolute`).
+            // Without it their containing block was `<body>`, outside this
+            // region's `overflow-x` clip, so on a phone the unfolded long-tail
+            // columns' labels widened the PAGE: a sideways scroll with nothing
+            // visible causing it (T17 HB9b, 320 → 388px).
+            className="relative overflow-x-auto rounded-xl border border-zinc-200/80 bg-surface shadow-sm"
           >
             {/* The two floors ride as custom properties so the md: variant
                 can pick the wider one — a computed length has no other way to

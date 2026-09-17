@@ -7,6 +7,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { publicStorageUrl } from "@/lib/storage-url";
+import { maskPublicEntrantNames } from "@/server/public-site/data";
 import type { OrgPost } from "@/server/usecases/org-posts";
 import type { ScorebugSide } from "@/components/news/post-scorebug";
 
@@ -47,12 +48,18 @@ export interface PostSides {
 }
 
 interface SideRow {
+  home_id: string | null;
+  away_id: string | null;
+  home_kind: string | null;
+  away_kind: string | null;
   home_name: string | null;
   away_name: string | null;
   home_badge: string | null;
   away_badge: string | null;
   home_team: { logo_path: string | null } | null;
   away_team: { logo_path: string | null } | null;
+  youth: boolean;
+  player_name_display: string | null;
 }
 
 /**
@@ -60,30 +67,48 @@ interface SideRow {
  * two entrants (badge → team logo → null; the scorebug renders a monogram on
  * null). Any hiccup (no fixture id, view miss, error) yields null — the caller
  * then falls back to parseScoreline names + monograms. Never throws.
+ *
+ * The names REPLACE the ones parsed from the title, and a singles or pairs
+ * entrant's display name is a person's name. So they go through the same
+ * `maskPublicEntrantNames` pass as the division page, under the fixture's own
+ * division policy (privacy hotfix, 2026-09-16): a youth result must not print
+ * a full name the division page masks.
  */
 export async function resolvePostSides(post: OrgPost): Promise<PostSides | null> {
   const fixtureId = post.kind === "result" ? post.autoSource?.fixture_id : undefined;
   if (!fixtureId) return null;
   try {
     const [row] = await sql<SideRow[]>`
-      select h.display_name as home_name, a.display_name as away_name,
+      select h.id as home_id, a.id as away_id, h.kind as home_kind, a.kind as away_kind,
+             h.display_name as home_name, a.display_name as away_name,
              h.badge_url as home_badge, a.badge_url as away_badge,
-             h.team_display as home_team, a.team_display as away_team
+             h.team_display as home_team, a.team_display as away_team,
+             d.youth, d.player_name_display
       from public_fixtures_v f
+      join divisions d on d.id = f.division_id
       left join public_entrants_v h on h.id = f.home_entrant_id
       left join public_entrants_v a on a.id = f.away_entrant_id
       where f.id = ${fixtureId}`;
-    if (!row || !row.home_name || !row.away_name) return null;
+    if (!row || !row.home_id || !row.away_id || !row.home_kind || !row.away_kind || !row.home_name || !row.away_name) {
+      return null;
+    }
+    const [home, away] = await maskPublicEntrantNames(
+      [
+        { id: row.home_id, kind: row.home_kind, display_name: row.home_name },
+        { id: row.away_id, kind: row.away_kind, display_name: row.away_name },
+      ],
+      { youth: row.youth, player_name_display: row.player_name_display },
+    );
     return {
       home: {
-        name: row.home_name,
+        name: home!.display_name,
         crest: resolveEntrantBadge({
           badge_url: row.home_badge,
           team_logo_path: row.home_team?.logo_path ?? null,
         }),
       },
       away: {
-        name: row.away_name,
+        name: away!.display_name,
         crest: resolveEntrantBadge({
           badge_url: row.away_badge,
           team_logo_path: row.away_team?.logo_path ?? null,

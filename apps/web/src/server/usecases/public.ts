@@ -20,6 +20,7 @@ import "server-only";
 // `PUBLICLY_READABLE_VISIBILITIES` (usecases/entitlement-freeze.ts) is now the
 // single authority for "readable by anyone with the link", and it is what the
 // quota, the create path, the PATCH guard and both usage meters read.
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { cacheGet, cacheSet } from "@/lib/cache";
 import { HttpError } from "@/lib/errors";
@@ -29,15 +30,33 @@ import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
 import {
+  listOrgHomeCompetitions,
   maskPublicEntrantNames,
+  publicPlayerGate,
   withCourtVenueName,
   withCourtVenueNames,
   type PublicEntrantMember,
   type PublicFixture,
 } from "@/server/public-site/data";
+import { PublicOrgLive, type PublicOrgLiveT } from "@/server/api-v1/schemas";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
+import { variantLabel } from "@/server/public-site/variant-label";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
-// The one TYPED public usecase in this file — review note N5. Every other
+import { readPlayerMatchLines } from "@/server/public-site/public-player-matches";
+import { playerMatchesGenKey, playerMatchesKey } from "@/server/public-site/player-matches-cache-keys";
+import {
+  PublicPlayerMatches,
+  type PublicPlayerMatchesT,
+} from "@/server/public-site/player-matches-schema";
+import { hasFeature } from "@/lib/entitlements";
+import { reconcilePlayerStatsOnRead } from "@/server/usecases/player-stats-refresh";
+import { publicFixtureCacheKey } from "@/server/public-site/fixture-doc-cache-key";
+import {
+  publicDivisionEntrantsCacheKey,
+  publicDivisionScheduleCacheKey,
+  publicDivisionStandingsCacheKey,
+} from "@/server/public-site/division-doc-cache-keys";
+// The first TYPED public usecase in this file — review note N5. Every other
 // reader here returns `unknown` because it hands back a raw row set with no
 // schema; the hub has one, so Task 5's route need not re-narrow it.
 import {
@@ -49,13 +68,25 @@ import {
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
 const TTL_SECONDS = 30;
 
+/** The client IP both public limiters key on. */
+function publicClientIp(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip") ?? "unknown";
+}
+
 /** Per-IP limit for unauthenticated reads (doc 08 §6: 60/min). */
 export async function publicRateLimit(req: Request): Promise<void> {
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    req.headers.get("x-real-ip") ??
-    "unknown";
-  await rateLimit(`pubv1:${ip}`, { max: 60, windowSeconds: 60 });
+  await rateLimit(`pubv1:${publicClientIp(req)}`, { max: 60, windowSeconds: 60 });
+}
+
+/** Per-IP limit for the public endpoints a page POLLS on a timer: the match
+ *  centre and overlay fixture reads, the competition hub, a player's match
+ *  lines and the org home's live chips (owner ruling 2026-09-17: 300/min). A
+ *  bucket of its own, so an open page's polling never spends the 60 a minute
+ *  every other public read gets, and the reverse. A route calls exactly one of
+ *  the two. `app/api/v1/public/__tests__/poll-rate-limit.test.ts` lists where
+ *  each poll lives in the client. */
+export async function publicPollRateLimit(req: Request): Promise<void> {
+  await rateLimit(`pubv1poll:${publicClientIp(req)}`, { max: 300, windowSeconds: 60 });
 }
 
 async function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
@@ -169,6 +200,23 @@ export async function publicCompetitionHub(
   slug: string,
 ): Promise<CompetitionHubDocT> {
   const full = await findCompetition(orgSlug, slug);
+  const doc = await cachedHub(orgSlug, slug, full);
+  // The leader boards serve the snapshot as they stand; after the response,
+  // each division is checked and its refresh queued if the snapshot is behind a
+  // result, so a refresh lost to a restart heals on the page's next poll (owner
+  // ruling 2026-09-17, m8). HERE, at route level, and never in the loader:
+  // the loader also runs inside `unstable_cache` and ISR regenerations, where
+  // `after()` never runs (final review I1). A division whose sport keeps no
+  // player stats is never owed (`playerStatsOwed`).
+  reconcilePlayerStatsOnRead(
+    full.org_id,
+    doc.divisions.map((d) => d.id),
+    { allowed: () => hasFeature(full.org_id, "stats.player", full.id) },
+  );
+  return doc;
+}
+
+async function cachedHub(orgSlug: string, slug: string, full: PublicCompetition): Promise<CompetitionHubDocT> {
   return cachedFor(
     `pub:v1:hub:${full.id}`,
     HUB_TTL_SECONDS,
@@ -197,13 +245,149 @@ export async function publicCompetitionHub(
   );
 }
 
+/** How long the player page's match lines may be served stale. The hub's
+ *  number and the hub's reason — these lines carry a live match's figures.
+ *  The key is per person, and a scoring write knows the fixture, not everyone
+ *  who played in it, so no writer can name it. Instead every document embeds
+ *  its competition's GENERATION (`player-matches-cache-keys.ts`), and a writer
+ *  deletes that one literal key: scoring's `invalidatePublicCache` in its
+ *  existing DEL, and a consent change (`setMyConsent`). So this TTL is a
+ *  ceiling on a failed delete, and the whole bound for a write that deletes
+ *  nothing here (a reschedule: `afterScheduleWrite` drops the hub and fixture
+ *  keys only). */
+export const PLAYER_MATCHES_TTL_SECONDS = 15;
+
+/** How long a minted generation token lives. Any value above the document TTL
+ *  is correct — a token that expires is simply re-minted, one miss per
+ *  person — so this only trades an idle competition's stored key against one
+ *  extra SET a day. */
+export const PLAYER_MATCHES_GEN_TTL_SECONDS = 86_400;
+
+/**
+ * The competition's current player-matches generation, minted when absent.
+ *
+ * Correct without SET NX. A token is random and written once, by its minter,
+ * and a reader keys a document under a token only AFTER it has seen that token
+ * in Redis (its own GET, or its own completed SET). So a document built before
+ * a write committed sits under a token that existed before that write's DEL —
+ * which the DEL removed, and nothing ever sets again. Two readers minting at
+ * once just overwrite each other: one extra miss, never a stale hit. That is
+ * also why the token is minted BEFORE the load and never after it: a token set
+ * after a slow load could land after a write's DEL and front a pre-write
+ * document. (A refused read therefore may leave a token behind — it names no
+ * person, and `findCompetition` has already 404'd an unknown competition.)
+ *
+ * Cost: one GET per poll on top of the document's own (two round trips where
+ * the hub has one), plus one SET on the first poll after each delete. Fail-open
+ * with the rest of cache.ts: with Redis down the GET misses, the SET no-ops, and
+ * the document read misses too.
+ */
+async function playerMatchesGeneration(competitionId: string): Promise<string> {
+  const key = playerMatchesGenKey(competitionId);
+  const held = await cacheGet<unknown>(key);
+  if (typeof held === "string" && held !== "") return held;
+  const minted = randomUUID();
+  await cacheSet(key, minted, PLAYER_MATCHES_GEN_TTL_SECONDS);
+  return minted;
+}
+
+/**
+ * Spectator W2, Task 14 — the public player page's match lines, the document
+ * its client island polls while a spectator has the page open (R10).
+ *
+ * A GATE, THEN ONE READ. `publicPlayerGate` is the page's own refusal —
+ * `getPublicPlayer` is built on it — so the consent view and the
+ * `dashboard.player_profiles` entitlement decide here exactly what they decide
+ * for the page, and a person whose page 404s cannot be read through this
+ * endpoint either. It folds nothing. `readPlayerMatchLines` is the DATA, read
+ * once per rebuild. Never `getPublicPlayer` itself: it would fold every line a
+ * second time, and read the card's whole `unstable_cache` entry (stats,
+ * career, memberships) that a poll does not need. A score write expires that
+ * entry through its division tags (final review I1), and this document through
+ * the generation key.
+ *
+ * Same refusal order as `publicCompetitionHub`: `findCompetition` 404s a
+ * private or unknown competition before the cache is touched. A 404 inside
+ * the loader throws before `cacheSet`, so a refusal is never cached.
+ *
+ * The key embeds the competition's generation (`playerMatchesGeneration`), so
+ * one DEL of the generation key retires every person's document at once.
+ */
+export async function publicPlayerMatches(
+  orgSlug: string,
+  slug: string,
+  personId: string,
+): Promise<PublicPlayerMatchesT> {
+  const full = await findCompetition(orgSlug, slug);
+  const generation = await playerMatchesGeneration(full.id);
+  return cachedFor(
+    playerMatchesKey(full.id, generation, personId),
+    PLAYER_MATCHES_TTL_SECONDS,
+    async () => {
+      const gate = await publicPlayerGate(orgSlug, slug, personId);
+      if (!gate) throw new HttpError(404, "player not found");
+      const matches = await readPlayerMatchLines(sql, {
+        personId,
+        competitionId: full.id,
+        orgSlug,
+        compSlug: slug,
+        // The page's locale — the org's, never the viewer's (the page is ISR).
+        locale: toLocale(gate.org.default_locale),
+      });
+      return { matches, generatedAt: new Date().toISOString() };
+    },
+    (hit) => PublicPlayerMatches.safeParse(hit).success,
+  );
+}
+
+/** How long the org home's live poll may be served stale — the hub's window,
+ *  for the hub's reason: it is what a spectator watching for a match to start
+ *  feels. A scoring write deletes the key outright (`invalidatePublicCache`),
+ *  so this bounds a missed invalidation, not the refresh rate. */
+export const ORG_LIVE_TTL_SECONDS = 15;
+
+/**
+ * The org home's chip island poll (spectator W2, Task 15, R10): for every
+ * competition the org home LISTS, its status and in-play count.
+ *
+ * The list and the counts come from `listOrgHomeCompetitions`, the same query
+ * `getPublicOrg` renders the page from, so the poll can never name a
+ * competition the page does not list (an unlisted or private one) or count a
+ * match the page would not.
+ *
+ * The org lookup runs FIRST and throws its own 404, before the cache is
+ * touched — the same order `publicCompetitionHub` keeps. A Redis hit is
+ * PARSED before it is served (`cachedFor`'s `isValid`): an entry of another
+ * shape, left by an older build, is a miss and is rewritten, never served.
+ */
+export async function publicOrgLive(orgSlug: string): Promise<PublicOrgLiveT> {
+  const [org] = await sql<{ id: string }[]>`
+    select id from organizations where slug = ${orgSlug} limit 1`;
+  if (!org) throw new HttpError(404, "organization not found");
+  return cachedFor(
+    `pub:v1:org-live:${org.id}`,
+    ORG_LIVE_TTL_SECONDS,
+    async () => {
+      const competitions = await listOrgHomeCompetitions(org.id);
+      return {
+        competitions: competitions.map((c) => ({
+          id: c.id,
+          status: c.status as PublicOrgLiveT["competitions"][number]["status"],
+          in_play: c.in_play,
+        })),
+      };
+    },
+    (hit) => PublicOrgLive.safeParse(hit).success,
+  );
+}
+
 export async function publicSchedule(
   orgSlug: string,
   compSlug: string,
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:schedule`, async () => {
+  return cached(publicDivisionScheduleCacheKey(division.id), async () => {
     // Fix round 3 (Gap 9): home_slot_label/away_slot_label were on
     // public_fixtures_v since V362 but never selected here, so an API v1
     // consumer saw nothing where the HTML schedule page (public-site/data.ts)
@@ -249,7 +433,7 @@ export async function publicStandings(
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:standings`, async () => {
+  return cached(publicDivisionStandingsCacheKey(division.id), async () => {
     const standings = await sql`
       select stage_id, pool_id, rows, updated_at
       from public_standings_v where division_id = ${division.id}`;
@@ -263,7 +447,10 @@ export async function publicEntrants(
   divSlug: string,
 ): Promise<unknown> {
   const division = await findDivision(orgSlug, compSlug, divSlug);
-  return cached(`pub:v1:div:${division.id}:entrants`, async () => {
+  // `-v2` (privacy hotfix, 2026-09-16): a masked member now carries no
+  // `person_id`/`photo`. Named in division-doc-cache-keys.ts with its siblings,
+  // so every invalidator drops it by name.
+  return cached(publicDivisionEntrantsCacheKey(division.id), async () => {
     const entrants = await sql<
       {
         id: string;
@@ -390,6 +577,7 @@ async function loadFixtureMatchCentreCtx(
       sport_key: string;
       module_version: string;
       variant_key: string;
+      variant_name: string | null;
       youth: boolean;
       player_name_display: string | null;
       division_tz: string | null;
@@ -401,6 +589,14 @@ async function loadFixtureMatchCentreCtx(
     }[]
   >`
     select d.sport_key, d.module_version, d.variant_key,
+           -- T16b fix round 3: the stored format name, scoped like
+           -- getPublicFixture's (system rows and this org's own, org first) —
+           -- the fallback for a variant variant-label.ts does not name.
+           (select v.name from sport_variants v
+             where v.sport_key = d.sport_key and v.key = d.variant_key
+               and (v.org_id is null or v.org_id = d.org_id)
+             order by v.org_id nulls last
+             limit 1) as variant_name,
            d.youth, d.player_name_display,
            ss.tz as division_tz,
            o.slug as org_slug, o.timezone as org_tz, o.default_locale as org_default_locale,
@@ -419,7 +615,12 @@ async function loadFixtureMatchCentreCtx(
     division: {
       sportKey: row.sport_key,
       moduleVersion: row.module_version,
-      formatLabel: row.variant_key,
+      // T16b fix round 3: the same word the page's own loader prints
+      // (getPublicFixture) — this document replaces the page's on every poll.
+      formatLabel: variantLabel(
+        { sportKey: row.sport_key, variantKey: row.variant_key, storedName: row.variant_name },
+        (key) => msgFor(locale, key),
+      ),
       tz: row.division_tz,
       youth: row.youth,
       playerNameDisplay: row.player_name_display,
@@ -434,7 +635,7 @@ async function loadFixtureMatchCentreCtx(
 /** Live public fixture summary (the score widget). */
 export async function publicFixture(fixtureId: string): Promise<unknown> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) throw new HttpError(404, "fixture not found");
-  return cached(`pub:v1:fixture:${fixtureId}`, async () => {
+  return cached(publicFixtureCacheKey(fixtureId), async () => {
     // Fix round 3 (Gap 9): same gap as publicSchedule above.
     // Task 9 — `pool_id` added to this Pick (was absent): `loadMatchCentre`
     // takes a full `PublicFixture` (match-centre.ts's own `MatchCentreInput`

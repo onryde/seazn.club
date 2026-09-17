@@ -1850,8 +1850,52 @@ async function hubKnockoutSuite(): Promise<void> {
     if (!filled) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   check("hub knockout: the final's two slots fill from the semi-final winners", filled);
+
+  // Spectator W2 (Task 17, SM1) — the org home's chip island polls
+  // `/api/v1/public/orgs/{org}/live`. Its in-play count must move on the
+  // write itself: the read is primed first, so a cache entry that a scoring
+  // write failed to retire would still say 0 right after the start. (Where
+  // no REDIS_URL is set — CI's smoke server included — the cache is inert and
+  // this pins the count's values, not the retirement.)
+  type OrgLiveOut = { competitions: { id: string; status: string; in_play: number }[] };
+  const livePath = `/api/v1/public/orgs/${orgSlug}/live`;
+  const inPlay = async () => {
+    const res = await v1(newSession(), livePath);
+    const row = v1data<OrgLiveOut | undefined>(res)?.competitions?.find((c) => c.id === compRow.id);
+    return { status: res.status, inPlay: row?.in_play };
+  };
+  const livePrimed = await inPlay();
+  check(
+    "org live: the competition is listed with nothing in play before the final starts",
+    livePrimed.status === 200 && livePrimed.inPlay === 0,
+  );
+  const finalStart = filled
+    ? (await v1(owner, `/api/v1/fixtures/${finalId}/events`, "POST", {
+        expected_seq: v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${finalId}/state`)).last_seq,
+        type: "core.start",
+        payload: {},
+      })).status
+    : 0;
+  const liveStarted = await inPlay();
+  check(
+    "org live: starting the final reads in_play 1 on the very next request",
+    finalStart === 201 && liveStarted.status === 200 && liveStarted.inPlay === 1,
+  );
+
   const finalWrite = filled ? (await score(finalId)).status : 0;
   check("hub knockout: the final's result is accepted", finalWrite > 0 && finalWrite < 300);
+  const liveEnded = await inPlay();
+  check(
+    "org live: the final's result reads in_play 0 on the very next request",
+    liveEnded.status === 200 && liveEnded.inPlay === 0,
+  );
+  const liveUnknown = await v1(newSession(), `/api/v1/public/orgs/no-such-org-${tag}/live`);
+  check("org live: an unknown org is a 404, not a 500", liveUnknown.status === 404);
+  const orgHome = await html(newSession(), `/shared/${orgSlug}`);
+  check(
+    "org live: the org home renders this competition's live chip",
+    orgHome.status === 200 && orgHome.body.includes(`data-testid="mh-org-chip-${compRow.id}"`),
+  );
 
   const done = v1data<HubOut | undefined>(await v1(newSession(), hubPath));
   check(
@@ -2884,6 +2928,42 @@ async function passGrantsSuite(): Promise<void> {
     "pass grants/profiles: the UNPASSED sibling stays dark (404) — V396 made profiles paid again",
     plainCard.status === 404,
   );
+  // Spectator W2 (Task 17, SM2) — the card's open page polls its match lines
+  // from a public API. That API must refuse exactly where the card does, or a
+  // Community org's paid-only lines are one curl away from the 404 above.
+  const matchesPath = (compSlug: string, personId: string) =>
+    `/api/v1/public/orgs/${org.slug}/competitions/${compSlug}/players/${personId}/matches`;
+  //
+  // The 200 carries NO lines, and that is the value, not a gap: the reader
+  // lists a person's appearances only (`APPEARANCE_STATUSES`, completed or
+  // in play — public-player-matches.ts), and this suite's board fixture is
+  // generated and never started. Starting it here would move the officials
+  // and device-link checks below, which read the same fixture. Lines a card
+  // actually shows are proven in the browser by the player walkthrough
+  // (spectator-player.spec.ts PP1/PP2), so the check pins the EMPTY list
+  // exactly rather than accepting any array.
+  //
+  // SM3 (a score write retires the player-matches generation) is deferred on
+  // purpose: the only thing it can witness is a Redis DEL, and no smoke
+  // environment sets REDIS_URL (CI's smoke-e2e job has none), so it would pass
+  // with the DEL deleted. The DEL is pinned by unit tests instead
+  // (`player-matches-cache-keys.test.ts`, `hub-cache-invalidation.test.ts`).
+  const passMatches = await v1(newSession(), matchesPath(passComp.slug, person.id));
+  const passLines = v1data<{ matches?: unknown; generatedAt?: string } | undefined>(passMatches);
+  check(
+    "pass grants/profiles: the passed competition's player-matches API serves 200, a timestamp, and exactly no lines (its only fixture never started)",
+    passMatches.status === 200 &&
+      Array.isArray(passLines?.matches) &&
+      passLines.matches.length === 0 &&
+      !Number.isNaN(Date.parse(passLines?.generatedAt ?? "")),
+  );
+  const plainMatches = await v1(newSession(), matchesPath(plainComp.slug, person.id));
+  check(
+    "pass grants/profiles: the UNPASSED sibling's player-matches API is a 404, like its card",
+    plainMatches.status === 404,
+  );
+  const junkMatches = await v1(newSession(), matchesPath(passComp.slug, "not-a-person"));
+  check("pass grants/profiles: a non-uuid person on the player-matches API is a 404", junkMatches.status === 404);
 
   // === sponsors.tiers + sponsors.monetize — community false, pass true ====
   const tierOn = async (competitionId: string, label: string) =>
@@ -5362,6 +5442,21 @@ async function plgGrowthSuite(admin: Session, proOrgId: string, proOrgSlug: stri
     "plg pro page KEEPS the Seazn attribution footer (V396: badge removal is enterprise-only)",
     proShared.body.includes("Run your own free"),
   );
+  // Spectator W2 (Task 17, SM4) — the competition page IS the hub now. The
+  // markers are the hub's own testids (anchored on `="`), and the old landing's
+  // "Divisions" section must be gone rather than rendered beside it.
+  check(
+    "hub: the public competition page renders the matches hub with its Overview tab",
+    proShared.body.includes(`data-testid="mh-root"`) && proShared.body.includes(`data-testid="mh-tab-overview"`),
+  );
+  check("hub: the old landing's Divisions section is gone", !/<h2[^>]*>Divisions<\/h2>/.test(proShared.body));
+  const emptyHub = v1data<{ tabs?: string[]; matches?: unknown[] } | undefined>(
+    await v1(newSession(), `/api/v1/public/orgs/${proOrgSlug}/competitions/${proComp.slug}/hub`),
+  );
+  check(
+    "hub: a competition with no divisions offers only Overview and Info, with no matches",
+    JSON.stringify(emptyHub?.tabs) === JSON.stringify(["overview", "info"]) && emptyHub?.matches?.length === 0,
+  );
 
   // --- RS007: the `/shared/[orgSlug]` segment must MISS with a 404, never a
   // 500. `not-found.tsx` there once called `resolveLocale()`, which reads
@@ -6435,7 +6530,8 @@ interface CricketFold {
   targetSource: "dls" | "manual" | null;
   r1: number | null;
   r2: number | null;
-  margin: string | null;
+  // Structured since 2026-09-16 (`CricketMargin`: kind + count, never English).
+  margin: { kind: string; value?: number } | null;
   outcome: { kind: string; winner?: string; loser?: string; method?: string } | null;
 }
 
@@ -6553,7 +6649,7 @@ async function cricketDlsSuite(): Promise<void> {
   );
   check(
     "dls/pairs: and the published margin is runs, not wickets",
-    bDone.margin === "by 4 runs" && bDone.outcome?.method === "dls",
+    bDone.margin?.kind === "runs" && bDone.margin.value === 4 && bDone.outcome?.method === "dls",
   );
   // The result the rest of the product reads is the `fixtures.outcome` column,
   // written beside the fold — not the fold cache the checks above read.
