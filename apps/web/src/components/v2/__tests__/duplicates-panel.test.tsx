@@ -9,9 +9,14 @@ import {
   MergeConfirmDialog,
   MergeHistoryList,
   MergeOutcomeCard,
+  mergeErrorText,
+  ReverseConfirmDialog,
   type DupCandidate,
   type DupPerson,
 } from "@/components/v2/duplicates-panel";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { msg as msgEn, type MessageKey } from "@/lib/messages";
+import esUi from "@/dictionaries/es/ui.json";
 
 // The panel refreshes the roster after a merge; there is no router in a node
 // test. `useRouter` is the only next/navigation surface it touches.
@@ -268,5 +273,55 @@ describe("DuplicatesPanel — the queue", () => {
     const html = renderToStaticMarkup(<DuplicatesPanel canEdit candidates={[]} />);
     expect(html).toContain("No duplicates to review");
     expect(html).toMatch(/data-dupes-empty="true"/);
+  });
+});
+
+// Review n4 (a): `MERGE_ROSTER_CHANGED` used to reach the organiser as the
+// server's raw English, in every locale, and said "merge" on an undo too.
+describe("DuplicatesPanel — a merge or undo refused because the person's teams changed", () => {
+  const RAW = "this person's teams changed while the merge ran — try again";
+  const refused = () => new ApiV1Error(RAW, 409, "MERGE_ROSTER_CHANGED", {});
+  const es = (key: MessageKey) => (esUi as Record<string, string>)[key]!;
+
+  it("the merge dialog shows the dictionary text for the code, not the server's English", async () => {
+    vi.mocked(apiV1).mockImplementationOnce(async () => {
+      throw refused();
+    });
+    const island = renderIsland(MergeConfirmDialog, dialogProps(SURVIVOR, ABSORBED));
+    check(island, "data-affirm");
+    await (propsFor(island, "data-merge-confirm").onClick as () => Promise<void>)();
+    const shown = island
+      .tree()
+      .filter((el) => propsOf(el).role === "status")
+      .map((el) => propsOf(el).children);
+    expect(shown).toEqual([msgEn("persons.dupes.rosterChanged.merge")]);
+    expect(shown).not.toContain(RAW);
+  });
+
+  it("the undo dialog reports the undo's own text", async () => {
+    vi.mocked(apiV1).mockImplementationOnce(async () => {
+      throw refused();
+    });
+    const errors: string[] = [];
+    const island = renderIsland(ReverseConfirmDialog, {
+      entry: { merge_id: "m1", survivor_name: "Ada", absorbed_name: "Ada L" },
+      onCancel: () => {},
+      onReversed: () => {},
+      onError: (message: string) => errors.push(message),
+    });
+    await (propsFor(island, "data-reverse-confirm").onClick as () => Promise<void>)();
+    expect(errors).toEqual([msgEn("persons.dupes.rosterChanged.unmerge")]);
+  });
+
+  it("in Spanish, each action gets its own sentence; any other refusal keeps the server's message", () => {
+    const merge = mergeErrorText(refused(), "merge", es);
+    const unmerge = mergeErrorText(refused(), "unmerge", es);
+    expect(merge).toBe(esUi["persons.dupes.rosterChanged.merge"]);
+    expect(unmerge).toBe(esUi["persons.dupes.rosterChanged.unmerge"]);
+    expect(merge).not.toBe(unmerge);
+    expect(merge).not.toBe(msgEn("persons.dupes.rosterChanged.merge"));
+    const other = new ApiV1Error("this merge has already been reversed", 409, "MERGE_ALREADY_REVERSED", {});
+    expect(mergeErrorText(other, "unmerge", es)).toBe("this merge has already been reversed");
+    expect(mergeErrorText(new Error(""), "merge", es)).toBe(esUi["persons.dupes.error"]);
   });
 });

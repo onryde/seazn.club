@@ -3845,6 +3845,8 @@
   "persons.dupes.reverse.confirm": "Annuler la fusion",
   "persons.dupes.reverse.working": "Annulation…",
   "persons.dupes.error": "Cela n’a pas fonctionné",
+  "persons.dupes.rosterChanged.merge": "Les équipes de cette personne ont changé pendant la fusion, donc rien n’a été fusionné. Réessayez.",
+  "persons.dupes.rosterChanged.unmerge": "Les équipes de cette personne ont changé pendant l’annulation de la fusion, donc rien n’a été annulé. Réessayez.",
   "persons.dupes.account.note": "Seule la fiche à fusionner est liée au compte d’un joueur. La fiche que vous conservez hérite de ce lien.",
   "persons.dupes.dialog.keepShort": "Conserver",
   "persons.dupes.dialog.absorbShort": "Fusionner",

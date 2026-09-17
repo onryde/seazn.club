@@ -3845,6 +3845,8 @@
   "persons.dupes.reverse.confirm": "Undo the merge",
   "persons.dupes.reverse.working": "Undoing…",
   "persons.dupes.error": "That did not work",
+  "persons.dupes.rosterChanged.merge": "This person's teams changed while the merge was running, so nothing was merged. Try again.",
+  "persons.dupes.rosterChanged.unmerge": "This person's teams changed while the undo was running, so nothing was undone. Try again.",
   "persons.dupes.account.note": "Only the record being merged in is linked to a player’s account. The record you keep inherits that link.",
   "persons.dupes.dialog.keepShort": "Keep",
   "persons.dupes.dialog.absorbShort": "Merge in",

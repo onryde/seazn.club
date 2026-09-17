@@ -3991,6 +3991,8 @@ export type DictionaryKey =
   | "persons.dupes.reverse.title"
   | "persons.dupes.reverse.working"
   | "persons.dupes.review"
+  | "persons.dupes.rosterChanged.merge"
+  | "persons.dupes.rosterChanged.unmerge"
   | "persons.dupes.strength"
   | "persons.dupes.title"
   | "persons.dupes.undo"

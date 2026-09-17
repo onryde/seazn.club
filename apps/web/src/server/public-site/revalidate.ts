@@ -53,6 +53,51 @@ export function fireScoreRevalidate(divisionId: string, competitionId: string): 
   void purgeCdn();
 }
 
+/** A player-stats refresh landed (`player-stats-refresh.ts`). The same two tags
+ *  and the same effect as `fireScoreRevalidate` — competition stale-while-
+ *  revalidate, division expired — but it runs inside `after()`, and there the
+ *  score request's own profiles would be DROPPED without a sound:
+ *
+ *  Next's flush never clears `workStore.pendingRevalidatedTags`. `revalidateTag`
+ *  skips a tag whose tag AND profile are already on that list, and
+ *  `AfterContext.runCallbacks` flushes only the entries its callbacks ADDED,
+ *  keyed `tag:profile` (node_modules/next/dist/server/revalidation-utils.js
+ *  `diffRevalidationState`, web/spec-extension/revalidate.js). The score
+ *  request already put `competition:x "max"` and `division:y {"expire":0}` on
+ *  it, so repeating either call from the after-task adds nothing and flushes
+ *  nothing, and a hub document rebuilt between the score and the fold stays
+ *  cached with the old leaders.
+ *
+ *  So these profiles are spelled differently and mean the same thing:
+ *  `revalidateTags` reads only `expire` from a profile, and "max" is
+ *  `expire: 31536000` in Next's defaults (`config-shared` `cacheLife.max`),
+ *  which `next.config.js` does not override. If it ever does, this number has
+ *  to follow: `player-stats-refresh-after.test.ts` loads the app's RESOLVED
+ *  config and fails when the two differ, and drives both profiles through
+ *  Next's real AfterContext and tag manifest. */
+export const STATS_REFRESH_COMPETITION_PROFILE = { revalidate: 0, expire: 31_536_000 } as const;
+export const STATS_REFRESH_DIVISION_PROFILE = { revalidate: 0, expire: 0 } as const;
+
+/** False when Next REFUSED the tags: the call ran inside a cache scope
+ *  (`unstable_cache`, "use cache") or a render, where `revalidateTag` throws
+ *  (E306, E7) and nothing is cleared (final review m7). The caller owns the
+ *  retry. True when the tags were registered, or when there is no Next scope
+ *  at all (E263: tests, scripts), where there is nothing to invalidate. */
+export function fireStatsRevalidate(divisionId: string, competitionId: string): boolean {
+  let registered = true;
+  try {
+    // Same order as fireScoreRevalidate, for the same reason.
+    revalidateTag(competitionTag(competitionId), { ...STATS_REFRESH_COMPETITION_PROFILE });
+    revalidateTag(divisionTag(divisionId), { ...STATS_REFRESH_DIVISION_PROFILE });
+  } catch (err) {
+    registered = (err as { __NEXT_ERROR_CODE?: unknown } | null)?.__NEXT_ERROR_CODE === "E263";
+  }
+  void broadcastRevalidate([divisionTag(divisionId)], "expire");
+  void broadcastRevalidate([competitionTag(competitionId)], "swr");
+  void purgeCdn();
+  return registered;
+}
+
 /** Org chrome changes (name, logo, brand color) show on every page of the
  *  org's public tree — bust the whole org tag. `{ expire: 0 }`, NOT 'max':
  *  'max' is stale-while-revalidate, so the organiser's very next look at

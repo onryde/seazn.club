@@ -25,22 +25,23 @@
 //    running count, not a resume point), so calling it per division on a
 //    public page render is O(all events) on a spectator's page load.
 //
-//    What that table is NOT is a projection the scoring write reliably
-//    maintains. `recomputePlayerStats` is its only writer, and it runs from
-//    the console and public stats endpoints (`divisionPlayerStats`,
-//    `publicDivisionStats`), a person merge, the auto-posts enrichment
-//    (`usecases/org-posts.ts:888,952`), and the weekly digest sweep
-//    (`:1331`). Only the auto-posts path is reached from scoring —
-//    `refreshNews` on a decided fixture — and it is doubly conditional: the
-//    division must have `auto_posts` set AND the org must hold `news.auto`.
-//    The digest cron POSTs `https://stg.seazn.club` and nothing else
-//    (`news-digest-stg.yml:36`), so it never refreshes production at all.
-//    A division outside every one of those paths holds ZERO rows and yields
-//    NO boards here; where rows exist they are as fresh as the last such
-//    call, not as fresh as the live fixture. Not recomputing on a spectator render
-//    is still right — `data.ts`'s public player card reads the same table the
-//    same way — but who refreshes it is an open question for the wave, not
-//    something this module settles.
+//    Who keeps it fresh (owner ruling 2026-09-16): the writes listed at the
+//    top of `usecases/player-stats-refresh.ts` schedule a refold of the
+//    division after their response, which then clears the public caches and
+//    pushes the division again. That list is the one authority; it is not
+//    repeated here. Rows lag those writes by a queue wait plus one fold (0.5–1.3 s
+//    measured for a 90-match T20 season), and goals or runs in a match still in
+//    play reach the boards only at the division's next refresh. Writes outside
+//    that list (a roster edit, a division config edit) reach the boards at the
+//    next refresh too. An open hub shows new rows after that push only while it
+//    still follows the division; when the finish was the division's last live
+//    match, it waits for its idle poll (up to 60 s, `player-stats-refresh.ts`
+//    point 4). A division with no refreshed match yet holds ZERO rows and
+//    yields NO boards here. `recomputePlayerStats` also runs from the console
+//    and public stats endpoints, `personStats`, a person merge or unmerge, the
+//    auto-posts enrichment and the digest. Not recomputing on a spectator
+//    render stays right: `data.ts`'s public player card reads the same table
+//    the same way.
 // ---------------------------------------------------------------------------
 import type { PlayerStatsModel } from "@seazn/engine/stats";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";

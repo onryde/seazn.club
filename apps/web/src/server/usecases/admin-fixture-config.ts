@@ -11,6 +11,7 @@ import {
   resolveFixtureCfg,
 } from "@/server/engine-db";
 import { foldFixture } from "@/server/engine-db/fold";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 /**
  * THE ESCAPE HATCH FROM THE V347 CONFIG SNAPSHOT.
@@ -316,6 +317,13 @@ export async function resnapshotFixtureConfig(
       } as never)})`;
     return row;
   });
+
+  // The re-snapshot can decide or un-decide the fixture, and the player-stats
+  // fold replays under this cfg, so the division's stats refresh after the
+  // response (`player-stats-refresh.ts`). No event was appended: the refresh
+  // sees the change through the frozen config its coverage check hashes.
+  // Scheduled before the standings recompute, so a throw there cannot skip it.
+  schedulePlayerStatsRefresh(row.org_id, { fixtureId });
 
   // AFTER commit, and outside the transaction on purpose: `recomputeStandings`
   // opens its own tenant connection and takes the DIVISION advisory lock, which

@@ -21,20 +21,16 @@
 // ledger on a spectator render is not a trade worth making, and `data.ts`'s
 // public player card already reads this table without recomputing.
 //
-// Be clear about what that costs, though, because it is NOT "a few seconds of
-// lag". `player_stat_snapshots` is largely a recompute-on-read cache.
-// `recomputePlayerStats` is its only writer, and it runs from
-// `divisionPlayerStats` (console stats route), `publicDivisionStats` (public
-// stats route), a person merge, the auto-posts enrichment
-// (`usecases/org-posts.ts:888,952`), and the weekly digest sweep (`:1331`).
-// Only the auto-posts path is reached from scoring — `refreshNews` on a
-// decided fixture — and it fires only when the division has `auto_posts` AND
-// the org holds `news.auto`, so it is not a hook this reader can rely on. The
-// digest cron POSTs `https://stg.seazn.club` and nothing else
-// (`news-digest-stg.yml:36`), so production never gets that refresh at all.
-// A division outside every one of those paths holds ZERO rows, and this
-// reader correctly returns nothing for it. Who keeps the snapshot fresh is an open question for the
-// wave; this module deliberately does not answer it by recomputing.
+// The snapshot is kept fresh by the write side instead (owner ruling
+// 2026-09-16): the writes listed at the top of
+// `usecases/player-stats-refresh.ts` (the one authority for that list) schedule
+// a refold of the division after their response, which clears the public
+// caches and pushes the division again. Rows therefore lag those writes by a
+// queue wait plus one fold, and events of a match still in play reach this
+// table only at the division's next refresh. An open hub that no longer follows
+// the division (its last live match was the one that finished) picks the new
+// rows up at its idle poll, up to 60 s later. A division with no refreshed
+// match yet holds ZERO rows, and this reader correctly returns nothing for it.
 // ---------------------------------------------------------------------------
 import postgres from "postgres";
 import { maskPublicEntrantNames } from "./data";

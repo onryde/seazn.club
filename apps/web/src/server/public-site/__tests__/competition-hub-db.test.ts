@@ -7,10 +7,10 @@
 // standings reads compose into a document that parses, and — ruling B — that a
 // division with fixtures and a standings snapshot but ZERO
 // `player_stat_snapshots` rows degrades to no boards and no Stats tab with no
-// error and no empty shell. That is the COMMON case in production, not an
-// edge: the snapshot table is a recompute-on-read cache whose only writer runs
-// from the two stats endpoints, a person merge and a doubly-conditional
-// auto-posts path.
+// error and no empty shell. Every division is in that state until its first
+// finished match: the snapshot is refreshed after each result
+// (`usecases/player-stats-refresh.ts`), and a fixture seeded here without
+// scoring through that path never schedules one.
 //
 // Real Postgres required; skipped without DATABASE_URL, same convention as
 // `consent.test.ts`, whose seeding shape this reuses verbatim rather than

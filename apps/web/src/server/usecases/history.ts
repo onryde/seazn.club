@@ -31,6 +31,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures } from "./stages";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 type Tx = postgres.TransactionSql;
 
@@ -131,6 +132,8 @@ async function execute(
   tx: Tx,
   divisionId: string,
   event: { type: string; payload: Record<string, unknown> },
+  /** Filled in: did a delete remove a fixture that carried score events? */
+  effects: { scoredFixtureRemoved: boolean } = { scoredFixtureRemoved: false },
 ): Promise<string[]> {
   const p = event.payload;
   const written: string[] = [];
@@ -204,7 +207,18 @@ async function execute(
           ? ((p.fixture_ids as string[]) ?? [])
           : ((p.fixtures as FixtureSnapshot[]) ?? []).map((s) => s.id);
       if (ids.length > 0) {
-        wrote(await tx<{ id: string }[]>`delete from fixtures where id in ${tx(ids)} and status <> 'decided' returning id`);
+        // `scored`: whether the fixture carried score events, which cascade away
+        // with it. Every part of a data-modifying WITH reads the same snapshot,
+        // so the outer select still sees the rows its delete removes. The
+        // caller refreshes the division's player stats when one did.
+        const removed = await tx<{ id: string; scored: boolean }[]>`
+          with gone as (
+            delete from fixtures where id in ${tx(ids)} and status <> 'decided' returning id
+          )
+          select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
+          from gone`;
+        wrote(removed);
+        if (removed.some((row) => row.scored)) effects.scoredFixtureRemoved = true;
       }
       break;
     }
@@ -255,6 +269,7 @@ interface StepWrite {
   out: HistoryStepOut;
   competitionId: string;
   fixtureIds: string[];
+  scoredFixtureRemoved: boolean;
 }
 
 async function stepWrite(
@@ -336,7 +351,8 @@ async function stepWrite(
         result.event.payload.fixtures = rows;
       }
     }
-    const fixtureIds = await execute(tx, divisionId, result.event);
+    const effects = { scoredFixtureRemoved: false };
+    const fixtureIds = await execute(tx, divisionId, result.event, effects);
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = ${result.newWatermark}
              where id = ${divisionId}`;
@@ -372,6 +388,7 @@ async function stepWrite(
       },
       competitionId: meta.competition_id,
       fixtureIds,
+      scoredFixtureRemoved: effects.scoredFixtureRemoved,
     };
   });
   // generator re-run outside the history tx (it takes its own division lock).
@@ -388,8 +405,17 @@ async function stepWrite(
  *  commit, then pushes (`afterScheduleWrite`, 50-fixture push cap). An undo is
  *  the move it reverses, so the hub and an open match centre must follow it
  *  at once, not at the next poll. A write that changed nothing sends nothing. */
-function publishHistoryWrite(divisionId: string, competitionId: string, fixtureIds: readonly string[]): void {
+function publishHistoryWrite(
+  auth: AuthCtx,
+  divisionId: string,
+  competitionId: string,
+  fixtureIds: readonly string[],
+  scoredFixtureRemoved: boolean,
+): void {
   if (fixtureIds.length > 0) afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
+  // A removed fixture's score events went with it, so the division's player
+  // stats still count them until they are refolded (review m3).
+  if (scoredFixtureRemoved) schedulePlayerStatsRefresh(auth.orgId, { divisionId });
 }
 
 async function step(
@@ -399,7 +425,7 @@ async function step(
   expectedSeq: number | undefined,
 ): Promise<HistoryStepOut> {
   const write = await stepWrite(auth, divisionId, direction, expectedSeq);
-  publishHistoryWrite(divisionId, write.competitionId, write.fixtureIds);
+  publishHistoryWrite(auth, divisionId, write.competitionId, write.fixtureIds, write.scoredFixtureRemoved);
   return write.out;
 }
 
@@ -765,6 +791,7 @@ export async function restoreCheckpoint(
   // (or stops part-way: the steps that committed stay committed), not once
   // per step — a restore is one organiser write.
   const changed = new Set<string>();
+  let scoredFixtureRemoved = false;
   let competitionId = "";
   try {
     // Each undo is its own single-writer append (concurrency-safe); stop once
@@ -777,11 +804,12 @@ export async function restoreCheckpoint(
       if (wm <= target) return { watermark: wm, steps };
       const write = await stepWrite(auth, divisionId, "undo", undefined);
       for (const id of write.fixtureIds) changed.add(id);
+      if (write.scoredFixtureRemoved) scoredFixtureRemoved = true;
       steps++;
     }
     throw new HttpError(500, "restore did not converge");
   } finally {
-    publishHistoryWrite(divisionId, competitionId, [...changed]);
+    publishHistoryWrite(auth, divisionId, competitionId, [...changed], scoredFixtureRemoved);
   }
 }
 
@@ -859,15 +887,26 @@ export async function clearScheduleScoped(
     const { event, cleared, skipped } = engineClearSchedule(fixtures, input.scope);
     if (cleared.length === 0) {
       const meta = await divisionMeta(tx, divisionId);
-      return { out: { cleared: 0, skipped, seq: meta.seq }, competitionId: division.competition_id, fixtureIds: [] };
+      return {
+        out: { cleared: 0, skipped, seq: meta.seq },
+        competitionId: division.competition_id,
+        fixtureIds: [],
+        scoredFixtureRemoved: false,
+      };
     }
-    const fixtureIds = await execute(tx, divisionId, event);
+    const effects = { scoredFixtureRemoved: false };
+    const fixtureIds = await execute(tx, divisionId, event, effects);
     const seq = await appendEvent(tx, divisionId, event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = null
              where id = ${divisionId}`;
-    return { out: { cleared: cleared.length, skipped, seq }, competitionId: division.competition_id, fixtureIds };
+    return {
+      out: { cleared: cleared.length, skipped, seq },
+      competitionId: division.competition_id,
+      fixtureIds,
+      scoredFixtureRemoved: effects.scoredFixtureRemoved,
+    };
   });
-  publishHistoryWrite(divisionId, write.competitionId, write.fixtureIds);
+  publishHistoryWrite(auth, divisionId, write.competitionId, write.fixtureIds, write.scoredFixtureRemoved);
   return write.out;
 }
 
@@ -935,7 +974,8 @@ export async function clearPoolEntrants(
     } catch (err) {
       toEngineError(err);
     }
-    const fixtureIds = await execute(tx, divisionId, result.event);
+    const effects = { scoredFixtureRemoved: false };
+    const fixtureIds = await execute(tx, divisionId, result.event, effects);
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = null
              where id = ${divisionId}`;
@@ -944,11 +984,12 @@ export async function clearPoolEntrants(
       divisionId,
       competitionId: pool.competition_id,
       fixtureIds,
+      scoredFixtureRemoved: effects.scoredFixtureRemoved,
     };
   });
   // R10e (found beside m1): removing a pool's entrants DELETES its fixtures, so
   // the hub and their match centres drop them the same way.
-  publishHistoryWrite(write.divisionId, write.competitionId, write.fixtureIds);
+  publishHistoryWrite(auth, write.divisionId, write.competitionId, write.fixtureIds, write.scoredFixtureRemoved);
   return write.out;
 }
 

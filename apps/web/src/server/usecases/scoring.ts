@@ -29,6 +29,7 @@ import { subjectToScorerCapabilityGates } from "./scorers";
 import { fillSlot, markDependentSeedProposalsStale } from "./stages";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
+import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 
 export interface ScoreOutcome {
   seq: number;
@@ -139,6 +140,20 @@ export async function scoreEvent(
   // them. A throw from inside `onDecided` itself, after its fill committed,
   // does not — that path leaves the next fixture on its own 30s TTL, which is
   // what every score did before this change.
+  // Player stats (owner ruling 2026-09-16, option B): a result, or an undo that
+  // may have changed one, refolds the division's stat snapshot AFTER the
+  // response (`player-stats-refresh.ts`, which explains the timing and the
+  // coalescing). Scheduled before the hooks below, so a hook that throws cannot
+  // skip it: the events have committed either way.
+  // An undo names its own seq: the refresh skips it when no fold ever read the
+  // event it took back (a mid-play undo), which is most of them.
+  if (refreshesPlayerStats(input.type, result.outcome)) {
+    schedulePlayerStatsRefresh(
+      auth.orgId,
+      input.type === "core.void" ? { fixtureId, voidSeq: result.seq } : { fixtureId },
+    );
+  }
+
   let advanced: readonly string[] = [];
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
@@ -153,6 +168,24 @@ export async function scoreEvent(
     await invalidateAndPush(auth, fixtureId, input, result, advanced);
   }
   return out;
+}
+
+/** Does this write change what the stats snapshot should say?
+ *
+ *  - A write that leaves the fixture decided: the deciding event itself, and
+ *    anything recorded on a decided fixture afterwards.
+ *  - Any `core.void`: an undo can drop a goal, or erase the decision.
+ *
+ *  `core.finalize` is left out. It locks a result that the deciding write
+ *    already refreshed, and it carries no stat, so it would only fold the whole
+ *    division a second time for every finished match.
+ *
+ *  Writes during play refresh nothing: leaders move when a result stands, not
+ *  on every ball. */
+export function refreshesPlayerStats(type: string, outcome: unknown): boolean {
+  if (type === "core.void") return true;
+  if (type === "core.finalize") return false;
+  return outcome !== null;
 }
 
 /** scoreEvent's post-commit invalidation and realtime pushes (R10 M3: run from
