@@ -469,6 +469,16 @@ function fakeWorld(opts: FakeWorldOptions = {}) {
       waitForResponse(pred) {
         return new Promise<TapResponse>((resolve) => listeners.push({ pred, resolve }));
       },
+      // The fake's `goto` (above) models the magic-link consume as
+      // synchronous — `signedIn`/`url` are already updated by the time it
+      // resolves, unlike the real client-side consume this method exists to
+      // wait out (tap-play.ts's `organiserContext` doc comment). So this
+      // fake can resolve immediately once the predicate is satisfied, with
+      // no polling loop to model.
+      async waitForURL(predicate) {
+        const current = new URL(url);
+        if (!predicate(current)) throw new Error(`fake page: waitForURL predicate never satisfied for "${url}"`);
+      },
       async close() {
         record.closedPages += 1;
       },

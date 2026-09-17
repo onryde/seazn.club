@@ -326,6 +326,12 @@ export interface TapPage extends PadPage {
   reload(): Promise<unknown>;
   viewportSize(): { width: number; height: number } | null;
   waitForResponse(predicate: (response: TapResponse) => boolean, options?: { timeout?: number }): Promise<TapResponse>;
+  /** Waits for the CLIENT-SIDE `MagicLink` consume (components/magic-link.tsx's
+   *  useEffect, which navigates away from /magic-link only once the session
+   *  cookie is actually set) — narrower than a real `Page.waitForURL`'s
+   *  `string | RegExp | function` union because this file only ever needs
+   *  the predicate form. */
+  waitForURL(predicate: (url: { pathname: string }) => boolean, options?: { timeout?: number }): Promise<void>;
   close(): Promise<void>;
   /** B07a video capture (owner ruling R86 — "watch the bench play a
    *  match"). OPTIONAL: a real Playwright `Page` always has this (returning
@@ -547,6 +553,20 @@ export function createTapPlayer(input: CreateTapPlayerInput): TapPlayer {
       await context.addInitScript(seedConsent, CONSENT_SEED);
       const login = await context.newPage();
       await login.goto(input.loginUrl);
+      // `MagicLink` (components/magic-link.tsx) consumes the token
+      // CLIENT-SIDE, in a useEffect that fires after hydration —
+      // `goto()` resolving proves the page loaded, not that the session
+      // cookie has landed. Without this wait, every fixture's FIRST
+      // handover locator races the consume: reproduced in CI (PR #793,
+      // runs 35152786466 / 35221112225), never locally, where the extra
+      // few hundred ms before the next page navigates happened to outlast
+      // it — an accident of timing, not a guarantee. Same convention e2e's
+      // own `loginUi` already applies (`e2e/helpers.ts:429`), and the same
+      // fix just applied to `drivers/browser.ts`'s
+      // `newOrganiserBrowserSession` for the identical race.
+      await login.waitForURL((u) => !u.pathname.startsWith("/login") && !u.pathname.startsWith("/magic-link"), {
+        timeout: 20_000,
+      });
       const loginVideo = login.video?.() ?? null;
       await login.close();
       // The throwaway consume page — never renamed, so it must not linger
