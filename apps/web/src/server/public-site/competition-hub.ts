@@ -806,6 +806,12 @@ export async function loadCompetitionHub(
         badgeUrl: badges[e.id] ?? null,
         colour: colours[e.id] ?? null,
         seed: e.seed,
+        // `PublicEntrant.kind` is a bare `string` (the COLUMN is an enum, the
+        // type is not), so it is narrowed here rather than cast: anything that
+        // is not a person or a pair is a team card, which is the shape every
+        // card had before this field existed. `hubSides` asks the same
+        // question of the same value for `isPerson`, one map away.
+        kind: e.kind === "individual" || e.kind === "pair" ? e.kind : "team",
         href: `${divHref}?tab=entrants`,
         members: squads.membersByEntrant.get(e.id) ?? [],
         // The division's own .ics route, filtered to this entrant

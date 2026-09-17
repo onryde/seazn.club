@@ -38203,6 +38203,14 @@
                                   }
                                 ]
                               },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "team",
+                                  "individual",
+                                  "pair"
+                                ]
+                              },
                               "href": {
                                 "type": "string"
                               },

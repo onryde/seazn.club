@@ -1156,6 +1156,41 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     });
     expect(doc.teams[1]!.colour).toBeNull();
   });
+
+  // The Teams tab renders a SQUAD DISCLOSURE per card — a member count, a
+  // chevron and "No squad listed yet" — and a singles entrant is none of
+  // those things. `entrant_kind` already reached this builder (it decides
+  // `Side.isPerson`) and stopped there, so the card had no way to tell one
+  // person from a club. The whole table, not one sample: a kind that arrives
+  // as anything else falls through to `team`, which is the shape every card
+  // had before this field existed.
+  it("each card carries its entrant's KIND — individual and pair are not teams, and an unknown kind falls through to team", async () => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        entrants: [
+          ENTRANTS[0]!,
+          { ...ENTRANTS[1]!, kind: "individual" },
+          { ...ENTRANTS[2]!, kind: "pair" },
+        ],
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.teams.map((t) => [t.entrantId, t.kind])).toEqual([
+      ["e1", "team"],
+      ["e2", "individual"],
+      ["e3", "pair"],
+    ]);
+    // …and the document the route serves still validates, which is what says
+    // the value is inside the schema's own enum rather than merely a string.
+    expect(CompetitionHubDoc.safeParse(doc).error?.issues ?? []).toEqual([]);
+
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ entrants: [{ ...ENTRANTS[0]!, kind: "club" }] }),
+    );
+    const odd = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(odd.teams.map((t) => t.kind)).toEqual(["team"]);
+    expect(CompetitionHubDoc.safeParse(odd).error?.issues ?? []).toEqual([]);
+  });
 });
 
 describe("loadCompetitionHub — info", () => {

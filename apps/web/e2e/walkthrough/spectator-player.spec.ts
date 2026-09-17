@@ -582,7 +582,13 @@ test("PP4: an organiser's consent revoke clears Quinn's card, endpoint, name on 
   const hidden = dictString("en", "player.opponent", { opponent: masked });
   const hubTeams = `/shared/${pro.slug}/${comp.slug}?tab=teams&division=${tennisA.divSlug}`;
   const quinnLink = `a[href="${cardPath(pro.slug, comp.slug, quinn.id)}"]`;
-  const memberLine = (page: Page) => page.getByTestId(`mh-team-${tennisA.quinnEntrant}-member-0`);
+  // Quinn is an `individual` entrant, and a singles entrant's hub card no
+  // longer opens onto a squad (2026-09-17): one person is not a team of zero,
+  // so the card is a flat row and its NAME carries both the player-page link
+  // and the `title` that prints the name in full. Same two claims as the
+  // squad line this used to read (`mh-team-{e}-member-0`), read off the card
+  // itself — a team or pair card is unchanged and still discloses its squad.
+  const quinnCard = (page: Page) => page.getByTestId(`mh-team-${tennisA.quinnEntrant}`);
 
   const opponentLines = async (page: Page) => {
     await page.goto(cardPath(pro.slug, comp.slug, priya.id));
@@ -602,8 +608,9 @@ test("PP4: an organiser's consent revoke clears Quinn's card, endpoint, name on 
     const before = await spectator(browser, { width: 390 });
     expect(await opponentLines(before), "Priya's card names Quinn in full before").toEqual([full, full]);
     await before.goto(hubTeams);
-    await expect(memberLine(before)).toBeAttached();
-    await expect(memberLine(before).locator(quinnLink)).toHaveCount(1);
+    await expect(quinnCard(before)).toBeAttached();
+    await expect(quinnCard(before).locator(quinnLink)).toHaveCount(1);
+    await expect(quinnCard(before).locator("[title]").first()).toHaveAttribute("title", quinn.name);
     await before.context().close();
 
     const revoked = await apiJson(request, `/api/v1/persons/${quinn.id}`, "PATCH", { consent: { public_name: false } });
@@ -643,10 +650,10 @@ test("PP4: an organiser's consent revoke clears Quinn's card, endpoint, name on 
         async () => {
           const page = await spectator(browser, { width: 390 });
           await page.goto(hubTeams);
-          await expect(memberLine(page)).toBeAttached();
+          await expect(quinnCard(page)).toBeAttached();
           const state = {
-            links: await memberLine(page).locator(quinnLink).count(),
-            title: await memberLine(page).locator("[title]").first().getAttribute("title"),
+            links: await quinnCard(page).locator(quinnLink).count(),
+            title: await quinnCard(page).locator("[title]").first().getAttribute("title"),
           };
           await page.context().close();
           return state;
