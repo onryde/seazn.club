@@ -1,0 +1,229 @@
+name: Bench
+
+# The scheduler bench, run end to end against a real environment: real
+# Postgres, the real CP-SAT placement solver, a real production server, and
+# real Chromium tapping the scoring pad. It is the only thing in CI that drives
+# the product the way a person does; `ci.yml`'s "Bench lib unit tests" step runs
+# the bench's LIBRARY suite and never starts a server.
+#
+# MANUAL ONLY (R84). There is deliberately no `schedule:` here. The bench stands
+# up an entire environment and taps a browser — the two things most likely to
+# fail in CI for reasons that have nothing to do with the product — and a cron
+# that reds on infrastructure trains everyone to ignore it. On 2026-09-16 this
+# repo's own e2e failed all 8 jobs in 3 seconds with `steps=0`: runners never
+# started. Cron is a separate decision, to be taken only after three consecutive
+# green manual runs, with their wall times in hand.
+#
+# `pull_request` is scoped to THIS FILE's own path. Two reasons: a
+# `workflow_dispatch` workflow cannot be triggered from a feature branch at all
+# (GitHub only exposes the button from the default branch), so without this the
+# leg could only ever be proved AFTER merging it untested; and it means every
+# future edit to this file re-proves itself on its own PR. It costs a full run
+# only when this file changes.
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Bench suite to run
+        default: _tiny
+      engine:
+        description: Engine ASSERTION, not a selector — optimized | greedy | both
+        default: optimized
+      # No `sport`/`variant` input: the CLI has no such flag, and sport lives in
+      # the PACK, which `--suite` already selects (_tiny is generic, suite11 is
+      # darts, B08-B15 add their own). An input nothing consumes is an inert
+      # seam. Per-sport dispatch is CLI work first, a workflow input second.
+      #
+      # No video/trace input either (owner, 2026-09-16). Capture exists in the
+      # CLI as `--record-video`/`--trace` and stays a local, on-request tool;
+      # CI's job here is the verdict, not the footage.
+  pull_request:
+    paths:
+      - .github/workflows/bench.yml
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        # Host port 5433, NOT 5432. `scripts/bench/lib/env.ts`'s DEV_DB_PORT
+        # guard refuses any DATABASE_URL resolving to 5432 outright — that port
+        # is the owner's shared local dev database, and the bench always owns a
+        # throwaway one. The container still listens on 5432 internally.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      # No Redis, deliberately (same as e2e). Without REDIS_URL the rate limiter
+      # is inert, which is also why this leg CANNOT prove R60's mint pacing —
+      # do not describe it as though it does.
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # The NAME is load-bearing. Actions strips job-env vars by name match, and
+      # every "PRIVATE_KEY" spelling was proved to vanish from step envs (see
+      # e2e.yml's own comment, run 34830995761). Same CI-only dummy keypair as
+      # e2e.yml — a literal there, a literal here, never a real JWKS.
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJfdWhQc1BWSFI3ZGdRRHpKMTJlYmtSUXhmbmY1T3YyRVFROWpyckJOYnBBIiwieSI6Ikd2TUhJa2YzYUpiWElSdTlJaGNjOXlTMWhuR0RzMUFYVm40Wjk5akZpZzAiLCJjcnYiOiJQLTI1NiIsImQiOiJEVXlsTzdFMVhSdHdidkNEcG13YUkxbDFUMFFON21DOWNUM0EwenNld2d3IiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZHVtbXktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
+      # Stub, not empty: publicStorageUrl("") hides every crest and badge.
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Required, and required to be a DUMMY. `env.ts` refuses a run outright
+      # when STRIPE_SECRET_KEY is shaped like a live key (`sk_live_` prefix),
+      # and an empty value breaks Stripe client construction. Nothing here makes
+      # a real Stripe call: the entitlement gate picks its plan by reading
+      # `plan_entitlements` directly, so this leg needs no `stripe:sync`.
+      STRIPE_SECRET_KEY: sk_test_ci_bench_dummy
+      # JOB level on purpose. NEXT_PUBLIC_* is baked into the client bundle at
+      # BUILD time, and the bench derives its own post-tap waits from the same
+      # number — setting it on only one of the two leaves the run racing a hold
+      # window the browser is not using.
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      # NOT optional and NOT implied by db:apply: without it the sport catalog
+      # is unpopulated and sport-keyed packs resolve to `generic`.
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      - name: Build (production)
+        run: npm run build --workspace apps/web
+        env:
+          SKIP_TYPECHECK: "1"
+
+      # The solver must be REACHABLE. `build.ts` attempts it every time and
+      # falls back to greedy when it is not, so without this container every
+      # board comes back greedy while the run reports on it — `_RULES.md` §2
+      # calls that "the false green, and it looks exactly like a pass". The
+      # `--engine` assertion below is what catches it, but only if the solver
+      # was genuinely available to begin with. Image build is cached (type=gha)
+      # and shared with ci.yml and placement-ci.yml.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+
+      - name: Start placement service
+        run: |
+          docker run -d --name placement-bench -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-bench-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
+            placement-service:ci
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+              echo "placement accepting connections"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+          docker logs placement-bench || true
+          exit 1
+
+      # The bench taps a real pad in a real browser; `env.ts` pre-flights
+      # `chromium.executablePath()` and refuses the run when it is missing.
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+        working-directory: apps/web
+
+      - name: Start server
+        env:
+          # 3200, NOT 3000. `env.ts`'s FORBIDDEN_BASE_PORTS refuses 3000 and
+          # 3100 outright (the owner's dev server and the e2e target); the
+          # bench always owns its own server. The standalone entrypoint reads
+          # PORT (`server.js`: `parseInt(process.env.PORT, 10) || 3000`).
+          PORT: "3200"
+          # The bench's ONLY auth path is the magic link, and it consumes the
+          # dev-exposed `login_url` (`scripts/bench/lib/http.ts`). A production
+          # build exposes that field only when this flag is set — see
+          # `mayExposeDevLink()` in `apps/web/src/lib/dev-links.ts`, whose own
+          # comment names "a production-mode harness" as the intended opt-in.
+          AUTH_DEV_LINKS: "1"
+          # On the SERVER, never on the bench process. The server is what dials
+          # the solver; setting these on the test process instead is the exact
+          # false green `_RULES.md` §2 documents.
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-bench-secret
+          # Default pino level floods the log with every accepted score event
+          # and buries the actual failure.
+          LOG_LEVEL: warn
+        run: |
+          rm -rf apps/web/.next/standalone/apps/web/.next/static
+          cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          node apps/web/.next/standalone/apps/web/server.js > bench-server.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3200/api/health >/dev/null; then
+              echo "server up after ${i} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::server did not become healthy on :3200"
+          cat bench-server.log
+          exit 1
+
+      # `--engine` is an ASSERTION, not a selector: nothing chooses an engine,
+      # and this fails the run when the board came back from one the operator
+      # did not expect. That is what stands between a silently-greedy run and a
+      # green that proves nothing.
+      - name: Run the bench
+        run: |
+          node --experimental-strip-types scripts/bench/bench.ts \
+            --suite "${{ inputs.suite || '_tiny' }}" \
+            --engine "${{ inputs.engine || 'optimized' }}" \
+            --base http://localhost:3200
+
+      # `warn`, not `error`: with `if: always()` a job that dies before the
+      # bench step has no report to upload, and a hard error there would raise
+      # a second, misleading red on top of the real failure.
+      - name: Upload bench report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-report
+          path: bench-report/
+          if-no-files-found: warn
+
+      - name: Server log on failure
+        if: failure()
+        run: cat bench-server.log || true
