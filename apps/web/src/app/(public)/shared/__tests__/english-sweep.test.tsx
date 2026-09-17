@@ -83,6 +83,8 @@ vi.mock("next/navigation", async (importOriginal) => ({
   // The match centre's `?tab=`, read on the client.
   useSearchParams: () => new URLSearchParams(state.search),
   usePathname: () => "/shared/9zqorg",
+  // The player card's 404 links to the org home by the route's own param.
+  useParams: () => ({ orgSlug: "9zqorg", competitionSlug: "9zqcup", personId: "9zqperson" }),
   useRouter: () => ({ push: () => {}, replace: () => {}, refresh: () => {} }),
 }));
 // `unstable_cache` has no incremental cache outside a Next request.
@@ -182,6 +184,8 @@ import * as Competition from "../[orgSlug]/[competitionSlug]/page";
 import * as Division from "../[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import * as Fixture from "../[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page";
 import * as Player from "../[orgSlug]/[competitionSlug]/players/[personId]/page";
+import PlayerCardLayout from "../[orgSlug]/[competitionSlug]/players/[personId]/layout";
+import PlayerNotFound from "../[orgSlug]/[competitionSlug]/players/[personId]/not-found";
 import KioskOrgLayout from "../(kiosk)/[orgSlug]/layout";
 import * as PresentCompetition from "../(kiosk)/[orgSlug]/[competitionSlug]/present/page";
 import * as PresentDivision from "../(kiosk)/[orgSlug]/[competitionSlug]/[divisionSlug]/present/page";
@@ -1004,6 +1008,8 @@ const SCENES: Scene[] = [
           competitionRow("2", "published", 0, "2026-10-04", null),
           competitionRow("3", "completed", 0, null, null),
           competitionRow("4", "active", 3, "2026-09-01", null),
+          // Marked live with nothing in play: the uncounted "On now" chip.
+          competitionRow("5", "live", 0, "2026-09-02", null),
         ],
       });
       stub.publicPosts.mockResolvedValue({ posts: POSTS.slice(0, 3), hasMore: false });
@@ -1104,6 +1110,24 @@ const SCENES: Scene[] = [
     files: ["[orgSlug]/[competitionSlug]/players/[personId]/page.tsx"],
     minDictValues: 8,
     render: renderPlayer,
+  },
+  {
+    // A refused or absent card's own 404 (W2 eaf97b0ed). A not-found page takes
+    // no props, so the card's layout resolves the org's copy and hands it down;
+    // rendered here the way Next mounts it, inside that layout.
+    name: "player card not-found (inside the card's layout)",
+    files: ["[orgSlug]/[competitionSlug]/players/[personId]/layout.tsx", "[orgSlug]/[competitionSlug]/players/[personId]/not-found.tsx"],
+    minDictValues: 3,
+    render: async () => {
+      stub.getPublicOrg.mockResolvedValue({ org: org(), competitions: [] });
+      const tree = await PlayerCardLayout({
+        children: createElement(PlayerNotFound),
+        ...params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, personId: PERSON_ID }),
+      });
+      const segments = await html(tree);
+      expect(segments.length, "the 404 drew its heading, sentence and link").toBeGreaterThanOrEqual(3);
+      return segments;
+    },
   },
   {
     name: "kiosk boards (competition and division, every slide, in the kiosk layout)",

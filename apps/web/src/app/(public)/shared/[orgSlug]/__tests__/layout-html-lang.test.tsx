@@ -24,6 +24,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement, type ReactElement } from "react";
 import { renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { HtmlLang } from "@/components/i18n/html-lang";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("next/font/google", () => ({
   Barlow_Condensed: () => ({ variable: "--ps-font-display", className: "" }),
@@ -42,6 +45,8 @@ vi.mock("next/navigation", async (importOriginal) => ({
 
 import PublicOrgLayout from "../layout";
 import KioskOrgLayout from "../../(kiosk)/[orgSlug]/layout";
+import PlayerCardLayout from "../[competitionSlug]/players/[personId]/layout";
+import PlayerNotFound from "../[competitionSlug]/players/[personId]/not-found";
 
 const org = (locale: string) => ({
   id: "o1",
@@ -118,6 +123,37 @@ describe("the kiosk layout for an org nothing answers to", () => {
       })) as ReactElement,
     );
     expect(htmlLangs(els)).toHaveLength(0);
+  });
+});
+
+// The player card's own 404 (W2 eaf97b0ed). Its layout used to hand the copy
+// down through a `DictProvider`, whose effect also wrote `<html lang>`; it now
+// uses a context of its own that writes nothing. The attribute is therefore the
+// org layout's alone — Next mounts the card's not-found boundary inside the card
+// layout, inside the org layout — and a Spanish org's refused card reads "es".
+describe("the player card's 404 under a Spanish org", () => {
+  it("premise: no layout sits between the org layout and the card's own", () => {
+    expect(existsSync(join(__dirname, "..", "[competitionSlug]", "layout.tsx"))).toBe(false);
+    expect(existsSync(join(__dirname, "..", "[competitionSlug]", "players", "layout.tsx"))).toBe(false);
+  });
+
+  it("carries exactly the org layout's HtmlLang lang=es, and no other writer of the attribute", async () => {
+    getPublicOrg.mockResolvedValue({ org: org("es"), competitions: [] });
+    const params = Promise.resolve({ orgSlug: "test-org", competitionSlug: "cup", personId: "p1" });
+    const card = await PlayerCardLayout({ children: createElement(PlayerNotFound), params });
+    const els = walk((await PublicOrgLayout({ children: card, params })) as ReactElement);
+    expect(els.some((el) => el.type === PlayerNotFound), "premise: the boundary is inside the tree").toBe(true);
+    const langs = htmlLangs(els);
+    expect(langs).toHaveLength(1);
+    expect((langs[0]!.props as { lang?: string }).lang).toBe("es");
+    expect(els.filter((el) => el.type === DictProvider), "a provider here would write its own lang").toHaveLength(0);
+
+    const documentElement = { lang: "en" };
+    vi.stubGlobal("document", { documentElement, cookie: "" });
+    nav.pathname = "/shared/test-org/cup/players/p1";
+    const island = renderIsland(HtmlLang, langs[0]!.props as { lang?: string });
+    expect(documentElement.lang).toBe("es");
+    island.unmount();
   });
 });
 
