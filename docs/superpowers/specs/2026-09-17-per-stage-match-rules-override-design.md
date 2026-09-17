@@ -165,9 +165,10 @@ same way.
 allowlist and merged-config validation, the T2 atomic write, and an
 **awaited** revalidation — `stages.ts` has four `void fireStageRevalidate`
 calls recorded as a defect (spectator W2 handoff §8, P1c); do not add a
-fifth. Body `{rules: {...}}`; `{rules: null}` clears back to the division.
-`createStages` accepts `rules` per stage. OpenAPI regen (`ci.yml:92-96`
-gates drift).
+fifth. Body `{rules: {...}}`; `{rules: null}` clears back to the division. This
+endpoint is the ONLY writer — `createStages` is deliberately left alone,
+since the builder no longer offers rules (T6) and no other caller needs
+them at creation. OpenAPI regen (`ci.yml:92-96` gates drift).
 
 ### T4 — resolver threading
 
@@ -182,17 +183,20 @@ the division editor) hydrate. With `read` complete for the exposed set, the
 PATCH carries the full override and replace-vs-merge stops being ambiguous:
 **the endpoint replaces `config.rules` wholesale** with the form's output.
 
-### T6 — UI
+### T6 — UI: the Fixture Console only
 
-- `division-builder.tsx` — a "Same as division" toggle per stage,
-  expanding to `MatchRuleFields`; submits `rules` with each stage.
-- Fixtures tab `stages-panel.tsx` (the owner's "Fixture Console") — a
-  per-stage rules panel calling `PUT /stages/:id/rules`, usable before and
-  after generation, disabled with a reason once D1's lock bites.
-- `structureDraftsForApply` (`division-settings.tsx:213-227`, applied at
-  `:551-553`) rebuilds stage drafts from the template and drops stored
-  config — it must carry each surviving stage's `rules` forward, with a
-  test that fails without it.
+Owner ruling 2026-09-17: **no division-builder change.** The only editor is
+the fixtures tab `stages-panel.tsx` (the owner's "Fixture Console") — a
+per-stage rules panel calling `PUT /stages/:id/rules`, usable before and
+after generation, disabled with a reason once D1's lock bites. This is
+where an organiser stands when they decide the knockout's format, and it
+keeps the wizard, its payload and its screenshot round out of scope.
+
+`structureDraftsForApply` (`division-settings.tsx:213-227`, applied at
+`:551-553`) rebuilds stage drafts from the template and drops stored
+config — it must still carry each surviving stage's `rules` forward, with a
+test that fails without it. That path is reachable from the Format tab
+regardless of where rules were set.
 
 ### T7 — public format line (D3)
 
@@ -217,7 +221,9 @@ bump as above.
   carrying only `shootout` still overlays as before; (c) a division with no
   stage rules anywhere resolves byte-identically. (a) and (b) are the real
   regression risk of T4 and are invisible to a "no override" test.
-- **Smoke** — builder round-trip with a per-stage override.
+- **Smoke** — Fixture Console round-trip: set a stage override, reload,
+  confirm it hydrates back into the panel (the `read` gap in T5 is exactly
+  what makes this fail today).
 - **Visual** — contact sheet at 320/390/768/1024/1280, per-screen verdicts,
   owner sign-off before PR (spectator programme gate applies to T7's hub
   change).
@@ -238,3 +244,9 @@ bump as above.
 - Team sports (`points.*`, `shootout`, `extraTime`, `teamSize`) are
   deliberately excluded. Extending to them re-opens D2's entitlement and
   two-sources questions and owes its own design round.
+- **Per-ROUND overrides are out** (owner, 2026-09-17: "per stage only").
+  The unit is the stage: a Swiss stage at Bo1 and its playoff stage at Bo3.
+  Round 5 of a Swiss differing from rounds 1-4 is NOT buildable on this
+  design — a round is an integer column on `fixtures`, not a row that can
+  carry config — and it would re-open the mid-stage fairness question D1
+  closes. Its own design round if it is ever wanted.
