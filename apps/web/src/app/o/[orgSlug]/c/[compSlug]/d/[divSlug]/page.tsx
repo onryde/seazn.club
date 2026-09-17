@@ -502,9 +502,15 @@ export default async function DivisionPage({
               <span className="hidden sm:inline">{t(dict, "action.registration")}</span>
             </Link>
             {competition.visibility !== "private" && (
-              // G9: straight to this division's public page.
+              // G9: straight to this division's public view — which is now the
+              // HUB with the division selected, not the standalone division
+              // page (owner ruling 2026-09-17; that page is slated for a 308
+              // into the hub). Both spellings are the hub's own: "matches" is
+              // one of `deriveHubTabs`' ids (`lib/matches-hub.ts`), and
+              // `?division=` is what `readDivisionParam` reads and
+              // `competition-landing.tsx` seeds into the Matches tab.
               <a
-                href={`/shared/${orgSlug}/${competition.slug}/${divSlug}`}
+                href={`/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`}
                 target="_blank"
                 aria-label={t(dict, "aria.viewPublic")}
                 className="btn btn-ghost gap-1.5"
