@@ -15,7 +15,7 @@
 //  - THAT THE NAME IS GONE FROM THE DATA, not just the pages. Next checks a
 //    data entry (`unstable_cache`) against its OWN tags only, so an expired page
 //    that rebuilds from an unexpired `pub-div`, `pub-fixture` or
-//    `pub-player-v16` entry bakes the revoked name back in. Firing the org tag
+//    `pub-player-v17` entry bakes the revoked name back in. Firing the org tag
 //    alone did exactly that.
 //
 // The `unstable_cache` double below behaves as Next's does for these reads
@@ -489,11 +489,11 @@ describe.skipIf(!HAS_DB)("a person write reaches every cached page and data entr
     expect(tags).not.toContain(orgTag(s.orgSlug));
     expect(fires).toEqual([true]);
     for (const [label, entry] of adaPages) expect(expired(entry), `Ada's page, ${label}`).toBe(true);
-    expect(expired(dataEntry("pub-player-v16", third.id, s.ada.id)), "Ada's card DATA where she is not rostered").toBe(
+    expect(expired(dataEntry("pub-player-v17", third.id, s.ada.id)), "Ada's card DATA where she is not rostered").toBe(
       true,
     );
     expect(untouched(cyPage), "Cy's page at the same URL").toBe(true);
-    expect(untouched(dataEntry("pub-player-v16", third.id, cy.id)), "Cy's card data").toBe(true);
+    expect(untouched(dataEntry("pub-player-v17", third.id, cy.id)), "Cy's card data").toBe(true);
     expect(untouched(foreign), "another org's page").toBe(true);
     const after = await render(() => card(s, s.ada.id, third.slug));
     expect(after.result, "and the not-rostered URL now refuses").toBeNull();

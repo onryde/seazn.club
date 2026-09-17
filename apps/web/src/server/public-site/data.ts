@@ -1056,7 +1056,12 @@ export async function getPublicFixture(
     // v2 (privacy hotfix, 2026-09-16): the match centre's lineup `masked` flag
     // is the name policy's decision (readPublicLineups), so a one-word masked
     // name now gets a surrogate id instead of its real one.
-    ["pub-fixture-v2", fixtureId],
+    //
+    // v3 (merge of the two v2 changes above, 2026-09-17): each branch moved
+    // the unversioned key to `-v2` for its own change, so a `-v2` entry
+    // written by either one lacks the other's. The merged document retires
+    // both rather than serve one for a REVALIDATE_FAST window.
+    ["pub-fixture-v3", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   )();
   if (!detail) return null;
@@ -1462,6 +1467,14 @@ export async function getPublicPlayer(
     // v15 entry would keep serving a youth player's full name and photo for a
     // full REVALIDATE_SLOW window after deploy.
     //
+    // v17 (merge of the two v16 changes above, 2026-09-17): each branch
+    // moved v15 to `-v16` with a different payload. W2's has `matchSeeds` and
+    // `generatedAt` and no `player`; the privacy hotfix's still has `player`
+    // and no `nameMask`. The merged payload is neither: a `-v16` entry from
+    // either would read `undefined` where the page expects `matchSeeds` or
+    // `nameMask`, and a W2 entry carries no mask at all. Retired rather than
+    // served for a REVALIDATE_SLOW window.
+    //
     // v15 (S9/#418): added the `career` rollup to this cached payload. A live
     // v14 entry would keep serving without it for a full REVALIDATE_SLOW
     // window after deploy — same reason v13 → v14 retired its key instead of
@@ -1470,7 +1483,7 @@ export async function getPublicPlayer(
     // v14: stat labels inside this payload are now localized copy, not the
     // engine's English. A live v13 entry would keep serving English for a full
     // REVALIDATE_SLOW window after deploy, so retire the key rather than wait.
-    ["pub-player-v16", shell.competition.id, personId],
+    ["pub-player-v17", shell.competition.id, personId],
     // The person tag: a write about THIS person must rebuild this entry at a
     // competition they are not rostered in, which no competition tag reaches.
     // The org tag: a division name-policy change anywhere in the org

@@ -46,7 +46,7 @@ export function fireDivisionRevalidate(divisionId: string, competitionId?: strin
  *     in, deduped, stale-while-revalidate ('max') — the tags the player's
  *     consent write has always fired: the entries that mask their name for
  *     others (`pub-div`, `pub-fixture`, and other players' cards through
- *     `pub-player-v16`), and the pages built on them. 'max' serves the
+ *     `pub-player-v17`), and the pages built on them. 'max' serves the
  *     PREVIOUS render while the background rebuild runs. Measured after a
  *     consent OFF (spectator W2, 2026-09-17): those pages kept serving the
  *     previous render for a few seconds — 2.8–4.3s, 2–3 loads — in a local
@@ -109,7 +109,7 @@ export async function firePersonRevalidate(
  *  read-your-own-writes (the smoke hub champion check reads a single time; a
  *  realtime push triggers one refresh). Every spectator
  *  entry a score changes carries the division tag (`pub-div-v2`,
- *  `pub-fixture-v2`, `pub-hub-v3`), and an expired tag beats a stale one on an entry carrying
+ *  `pub-fixture-v3`, `pub-hub-v3`), and an expired tag beats a stale one on an entry carrying
  *  both. The competition tag keeps SWR. Cost accepted: the first reader after
  *  a score rebuilds instead of getting a stale answer immediately.
  *

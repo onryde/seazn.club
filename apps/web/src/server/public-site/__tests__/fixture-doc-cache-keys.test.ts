@@ -8,6 +8,10 @@
 //
 //   * Redis `pub:v1:fixture:{id}` (usecases/public.ts, 30 s) → `pub:v1:fixture:v2:{id}`
 //   * Next `["pub-fixture", id]`  (public-site/data.ts, REVALIDATE_FAST) → `["pub-fixture-v2", id]`
+//     → `["pub-fixture-v3", id]`: the privacy hotfix ALSO moved the unversioned
+//     key to `-v2`, for its own change (the lineup `masked` flag). Each branch's
+//     `-v2` entry holds only its own change, so the merge of the two retires
+//     both under `-v3`.
 //
 // The Redis READER's key is pinned here as a literal — the same literal the
 // invalidator suites (`hub-cache-invalidation`, `score-revalidate-in-request`,
@@ -65,10 +69,10 @@ describe("the public fixture document's cache names (v2, 2026-09-16)", () => {
     expect(probe.gets).not.toContain(`pub:v1:fixture:${FIXTURE_ID}`);
   });
 
-  it("getPublicFixture caches the page's document under [pub-fixture-v2, id]", async () => {
+  it("getPublicFixture caches the page's document under [pub-fixture-v3, id]", async () => {
     const out = await getPublicFixture("org", "comp", "div", FIXTURE_ID);
     expect(out?.fixture).toEqual({ id: FIXTURE_ID });
     const fixtureEntries = probe.keyParts.filter((parts) => parts[0]?.startsWith("pub-fixture"));
-    expect(fixtureEntries).toEqual([["pub-fixture-v2", FIXTURE_ID]]);
+    expect(fixtureEntries).toEqual([["pub-fixture-v3", FIXTURE_ID]]);
   });
 });
