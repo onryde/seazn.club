@@ -90,6 +90,19 @@ const REST = [
   "src/server/public-site/__tests__/match-centre-msg-params.test.ts",
   "src/server/public-site/__tests__/match-centre-start-time.test.ts",
   "src/server/public-site/__tests__/public-fixture-format-label.test.ts",
+  // W2 final review wave (stats refresh, cricket margin, privacy hotfix, the
+  // scoring SCAN->DEL cleanup): none begin with "c", so all nine belong here
+  // rather than in C_GLOBBED. This gate reddened the moment they landed,
+  // fifth wave running, which is the explicit list doing its job again.
+  "src/server/public-site/__tests__/division-doc-cache-keys.test.ts",
+  "src/server/public-site/__tests__/fixture-doc-cache-keys.test.ts",
+  "src/server/public-site/__tests__/match-centre-margin.test.ts",
+  "src/server/public-site/__tests__/org-home-live-db.test.ts",
+  "src/server/public-site/__tests__/player-card-policy-db.test.ts",
+  "src/server/public-site/__tests__/player-matches-cache-keys.test.ts",
+  "src/server/public-site/__tests__/public-player-matches.test.ts",
+  "src/server/public-site/__tests__/variant-label.test.ts",
+  "src/server/public-site/__tests__/youth-name-policy-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 
