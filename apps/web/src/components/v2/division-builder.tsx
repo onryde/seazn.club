@@ -96,7 +96,13 @@ function qualifierOptionsFor(templateKey: string): readonly number[] {
   // an odd Top N is a real shape rather than an error — 3 especially: the
   // qualifying winner waits while second plays third. The other templates
   // here feed brackets an organiser expects to be clean powers of two.
-  if (templateKey === "swiss_knockout") return [2, 3, 4, 6, 8, 16];
+  //
+  // The top of this list is load-bearing: format.swiss_knockout.body.1
+  // promises "anything from 2 to 32" in all four locales, and the Settings
+  // tab's own Top N input is min 2 / max 32. A wizard that stopped at 16 made
+  // the marketing copy false and left the largest brackets reachable only
+  // after the division already existed.
+  if (templateKey === "swiss_knockout") return [2, 3, 4, 6, 8, 12, 16, 24, 32];
   return [2, 4, 8, 16];
 }
 
