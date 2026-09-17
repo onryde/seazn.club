@@ -420,9 +420,12 @@ describe.skipIf(!HAS_DB)("getPublicDivision / getPublicFixture — entrant displ
   // The re-mask zips fresh rows onto the view's members by position, so it
   // only runs when the two counts agree. When they do not (a member joined or
   // left between the two reads), the view's own `public_person_name` is NOT a
-  // safe fallback: it ignores youth, so a consented minor would print in
-  // full. Every member gets the strictest mask instead, whatever the policy.
-  it("maskPublicEntrantNames: when the fresh roster count disagrees with the view's, EVERY member falls back to first name + initial — youth or not", async () => {
+  // safe fallback as it stands: it ignores youth, so a consented minor would
+  // print in full. The DIVISION's policy is applied to every member instead
+  // (privacy hotfix 2026-09-16, which this merge keeps): a masking division
+  // masks every member and withholds each id and photo; an open division keeps
+  // the view's consent-gated names.
+  it("maskPublicEntrantNames: when the fresh roster count disagrees with the view's, a youth division masks EVERY member and an open one keeps the view's names", async () => {
     const { auth, orgId } = await seedOrg();
     const comp = await createCompetition(auth, {
       ends_on: "2030-12-31",
@@ -469,10 +472,11 @@ describe.skipIf(!HAS_DB)("getPublicDivision / getPublicFixture — entrant displ
 
     const [youth] = await maskPublicEntrantNames(stale, { youth: true, player_name_display: null });
     expect(youth!.members!.map((m) => m.name)).toEqual(["Pat P."]);
+    // A masked member carries no id and no photo; the rest is the view's.
+    expect(youth!.members![0]).toEqual({ ...stale[0]!.members[0], name: "Pat P.", person_id: null, photo: null });
     const [open] = await maskPublicEntrantNames(stale, { youth: false, player_name_display: null });
-    expect(open!.members!.map((m) => m.name)).toEqual(["Pat P."]);
-    // Everything but the name is the view's, untouched.
-    expect(open!.members![0]).toEqual({ ...stale[0]!.members[0], name: "Pat P." });
+    // The view's consent-gated member, untouched.
+    expect(open!.members![0]).toEqual(stale[0]!.members[0]);
 
     // The positive pair: once the counts agree, the resolver's answer stands —
     // a consented adult in an open division reads in full.

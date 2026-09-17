@@ -171,7 +171,7 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
       expect.arrayContaining([
         `pub:v1:org-live:${s.orgId}`,
         `pub:v1:hub:${s.competitionId}`,
-        `pub:v1:fixture:${s.fixtureId}`,
+        `pub:v1:fixture:v2:${s.fixtureId}`,
       ]),
     );
     // In ONE literal-key DEL, the scoring door's shape.
