@@ -60,14 +60,4 @@ export const ENGLISH_SWEEP_ALLOWLIST: readonly AllowlistEntry[] = [
   scorecardNotation("W"),
   scorecardNotation("wd"),
   scorecardNotation("nb"),
-  {
-    // The scene's cricket result: home by 12 runs. The poster's hero is the
-    // same result sentence, so the same held leak reaches it (fix round 2 swept
-    // the poster; the margin itself is untouched here).
-    text: "by 12 runs",
-    onlyOn: [FIXTURE_PAGE, MATCH_POSTER],
-    kind: "out-of-lane",
-    reason:
-      "OUT OF LANE, owed by the engine: cricket's `decideWin` stores its margin as English prose (CricketState.margin, \"by 12 runs\"), and match-centre.ts passes it verbatim into matchCentre.result.* by coordinator ruling (never parsed). Localising it needs a structured margin from packages/engine.",
-  },
 ];

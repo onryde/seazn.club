@@ -968,7 +968,7 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
     expect(await linesFor(scene.persons.ula)).toEqual([]);
   });
 
-  it("BENCH (cricket), KNOWN ENGINE GAP: a bench player who came on and bowled has NO figures today, so the row is left out", async () => {
+  it("BENCH (cricket): a bench player who came on and bowled is listed, with the figures the real ledger folds to", async () => {
     // Premise: Bea's row still says bench, the write path accepted her arrival,
     // and she really bowled (the test's own fold, over the effective sheet).
     const [row] = await sql<{ slot: string; subs: number }[]>`
@@ -977,9 +977,9 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
                where s.fixture_id = l.fixture_id and s.type = 'core.lineup.substitution') as subs
       from lineups l where l.person_id = ${scene.persons.bea}`;
     expect(row).toEqual({ slot: "bench", subs: 1 });
-    expect(expectedCricketLine(scene.bench.card, scene.persons.bea)).toMatch(/^\d+\/\d+$/);
-    // The reader's SQL half DOES carry the bench row — the exclusion below is
-    // the bench policy's, not a query that dropped the row.
+    const figures = expectedCricketLine(scene.bench.card, scene.persons.bea);
+    expect(figures).toMatch(/^\d+\/\d+$/);
+    // The reader's SQL half carries the bench row; the bench policy decides.
     const seeds = await readPlayerMatchSeeds(sql, {
       personId: scene.persons.bea,
       competitionId: scene.competitionId,
@@ -988,24 +988,21 @@ describe.skipIf(!HAS_DB)("readPlayerMatchLines against real Postgres", () => {
       locale: "en",
     });
     expect(seeds.map((x) => [x.fixtureId, x.slot])).toEqual([[scene.bench.fixtureId, "bench"]]);
-    // THE GAP, pinned as a fact: the engine's scorecard fold (the one authority
-    // for figures) calls `cricket.apply` on every ledger event, and the module
-    // refuses the kernel's lineup events — so the real ledger cannot be folded
-    // at all, and nobody in this fixture has figures. Only a lineup event can
-    // bring a bench player on to bat or bowl, so under today's engine a bench
-    // row never carries figures and the policy never admits one. When the fold
-    // learns lineup events this assertion fails: flip the one below to "listed,
-    // with her figures" (the policy's positive branch is pinned in the pure
-    // half already).
+    // Was the KNOWN ENGINE GAP: the scorecard fold refused the kernel's lineup
+    // events, so this ledger could not be folded and no bench row was ever
+    // listed. The fold now reads them (fix/cricket-scorecard-core-events): the
+    // REAL ledger folds, gives Bea the same figures as the test's own fold, and
+    // the policy's positive branch admits her row.
     const inputs = await sql.begin((tx) => loadFoldInputs(tx, scene.bench.fixtureId));
-    expect(() =>
-      deriveCricketScorecard({
-        events: inputs!.envelopes,
-        cfg: cricket.configSchema.parse(inputs!.cfg),
-        lineups: inputs!.lineups,
-      }),
-    ).toThrow(/unknown event type "core\.lineup\.substitution"/);
-    expect(await linesFor(scene.persons.bea)).toEqual([]);
+    const card = deriveCricketScorecard({
+      events: inputs!.envelopes,
+      cfg: cricket.configSchema.parse(inputs!.cfg),
+      lineups: inputs!.lineups,
+    });
+    expect(expectedCricketLine(card, scene.persons.bea)).toBe(figures);
+    const lines = await linesFor(scene.persons.bea);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ fixtureId: scene.bench.fixtureId, line: figures });
   });
 
   it("BENCH (other sports): a bench row is not an appearance; the same player's roster-only fixture still is", async () => {

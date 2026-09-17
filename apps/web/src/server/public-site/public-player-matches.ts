@@ -135,9 +135,10 @@ const APPEARANCE_STATUSES: readonly string[] = [...COMPLETED_FIXTURE_STATUSES, "
  * player came on — they are left out. A starting row and a roster stand-in are
  * never asked.
  *
- * Under TODAY's engine the cricket branch never admits anyone: only a lineup
- * event brings a bench player on, and the scorecard fold refuses every
- * `core.lineup.*` event (see the "KNOWN ENGINE GAP" test).
+ * Only a lineup event brings a bench player on. The scorecard fold reads the
+ * kernel's `core.lineup.*` events (fix/cricket-scorecard-core-events), so a
+ * bench player who came on and batted or bowled has figures and is listed
+ * (the "BENCH (cricket): a bench player who came on and bowled" test).
  *
  * The `sportKey` test is belt-and-braces TODAY: no other sport produces
  * `figures`, so it changes no answer until one does.
@@ -500,22 +501,23 @@ const LIVE_FIGURES_REVALIDATE = 300;
  * again on the next read: a database error, and a refusal while the ledger
  * names a merged person `asRecorded` could not seat.
  *
- * THE KEY'S VERSION ("-v1") IS A PROMISE ABOUT ENGINE OUTPUT, not just shape:
+ * THE KEY'S VERSION ("-v2") IS A PROMISE ABOUT ENGINE OUTPUT, not just shape:
  * nothing else in the key moves when a deploy changes what the same ledger
  * folds to, and a settled fixture's entry never goes stale. Bump it with ANY
  * change to `FixtureFigures`' shape, to `deriveCricketScorecard`'s batting or
- * bowling figures, or to what the fold refuses. The cricket core-event fix
- * (branch fix/cricket-scorecard-core-events) changes `didNotBat`, which nothing
- * here reads — but it also turns a ledger with a `core.lineup.*` event from a
- * refusal (cached here as `null`) into figures, so it owes a bump when it lands.
+ * bowling figures, or to what the fold refuses.
+ *
+ * "-v2": the cricket core-event fix (fix/cricket-scorecard-core-events) turned
+ * a ledger with a `core.lineup.*` event from a refusal (cached under "-v1" as
+ * `null`) into figures. It also changed `didNotBat`, which nothing here reads.
  */
 async function fixtureFigures(sql: Sql, seed: PlayerMatchSeed): Promise<FixtureFigures | null> {
   const { fixtureId, lastSeq, snapshotAt, status } = seed;
   try {
     return await unstable_cache(
       () => foldFixtureFigures(sql, fixtureId),
-      // "-v1": bump with any change to the scorecard fold's figures or refusals (above).
-      ["pub-player-figures-v1", fixtureId, String(lastSeq), snapshotAt ?? "no-snapshot"],
+      // "-v2": bump with any change to the scorecard fold's figures or refusals (above).
+      ["pub-player-figures-v2", fixtureId, String(lastSeq), snapshotAt ?? "no-snapshot"],
       { revalidate: status === "in_play" ? LIVE_FIGURES_REVALIDATE : false },
     )();
   } catch (err) {
