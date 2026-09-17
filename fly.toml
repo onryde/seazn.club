@@ -61,12 +61,21 @@ primary_region = "lhr"
   size   = "shared-cpu-1x"
   memory = "1gb"
 
+[env]
+  # Postgres connections per machine (lib/db.ts connectionOptions, 1..50,
+  # default 5). Background work sizes itself from this value, e.g. the
+  # player-stats read check runs at most 20% of the pool at once. Each
+  # machine opens up to this many sessions on the Supabase SESSION pooler,
+  # so machines × DB_POOL_MAX must stay within the project's pooler pool
+  # size. A `fly secrets set DB_POOL_MAX` overrides this line.
+  DB_POOL_MAX = "20"
+
 # ── Secrets (set via `fly secrets set KEY=value`) ─────────────────────────────
 # DATABASE_URL             — Supabase SESSION pooler URL (port 5432, Supavisor).
 #                            The app is an always-on server: session mode keeps
 #                            prepared statements (transaction pooler :6543
 #                            disables them — lib/db.ts auto-detects either).
-# DB_POOL_MAX              — optional, default 5; raise with machine size.
+# DB_POOL_MAX              — set in [env] above (20); not a secret.
 # AUTH_SECRET              — random 32-byte hex; `openssl rand -hex 32`
 # SUPABASE_SERVICE_ROLE_KEY
 # SUPABASE_JWT_SECRET
