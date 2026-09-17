@@ -1,14 +1,22 @@
 // Spectator surface W2, Task 10 — the competition hub's Teams tab: every
 // entrant the competition carries, grouped under its division.
 //
-// DIVISION-PAGE PARITY (owner ruling 2026-09-16). Each card is a native
-// `<details>` whose body is the team's SQUAD — number, name, position or a
+// DIVISION-PAGE PARITY (owner ruling 2026-09-16). A team's or a pair's card is
+// a native `<details>` whose body is its SQUAD — number, name, position or a
 // Suspended tag — and its own "Add to calendar" link, which is what the
 // division page's Entrants tab showed. The card used to LINK to that tab; it
 // no longer does, because the division page is about to redirect here and the
 // link would loop. `TeamCard.href` stays in the document for that decision.
 // Cards open independently (no `name` on the details), and an open card spans
 // the whole grid row so a squad is never read in a 150px column.
+//
+// A SINGLES ENTRANT IS NOT A TEAM (owner ruling 2026-09-17, option A). An
+// `individual` card has no squad to disclose, so it is one flat row — crest,
+// name, seed chip, calendar — with no chevron, no member count and no "No
+// squad listed yet". Those three were claims the product could not make, and a
+// live singles division published all three under a lone player ("0 members").
+// The branch is on `TeamCard.kind`, and a document that carries no `kind` (an
+// ISR entry baked before the field shipped) keeps the disclosure.
 //
 // The document decides who is here and what they are called: `doc.teams` is
 // built one division at a time, already through `maskPublicEntrantNames`,
@@ -189,6 +197,96 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                 const members = tm.members;
                 const nameId = `mh-team-${tm.entrantId}-name`;
                 const calendarId = `mh-team-${tm.entrantId}-calendar`;
+                // ONE person is not a team of zero. A singles entrant has no
+                // squad to disclose, so the count, the chevron and "No squad
+                // listed yet" are three claims its card cannot make — a live
+                // singles division published exactly that under a lone player.
+                // `individual` gets a flat row instead; team and pair keep the
+                // disclosure. A document that does not SAY (cached before
+                // `kind` shipped) is read as today's card, never as a person.
+                const flat = tm.kind === "individual";
+                // The one squad row a singles entrant does carry is where its
+                // player page lived, and the flat card no longer renders it —
+                // so the name takes the link rather than the hub losing its
+                // only route to a singles player's card. Withheld exactly as
+                // `MemberLine` withholds it: no href in the document, no link
+                // here, because the card behind a masked name would undo the
+                // mask.
+                const solo = flat && members?.length === 1 ? members[0]! : null;
+                // `py-3` + the 20px line is the 44px tap target (as
+                // `MemberLine`); `-my-2` gives it back to the layout, so the
+                // row keeps the closed card's height. Both arms carry it, so
+                // a card is the same height whether the person is linked.
+                const nameClass = "block min-w-0 truncate py-3 -my-2 text-sm font-medium text-ink";
+                // ONE calendar link, rendered in both arms: on the team card
+                // it stays in the disclosure body, on the flat card it sits on
+                // the row itself. Named "Add to calendar" + the team, so a
+                // screen reader's link list is not N identical entries.
+                const calendar = tm.calendarHref ? (
+                  <Link
+                    data-testid={calendarId}
+                    id={calendarId}
+                    href={tm.calendarHref}
+                    aria-labelledby={`${calendarId} ${nameId}`}
+                    className="inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 text-sm font-medium text-ink transition hover:border-accent hover:text-accent-strong"
+                  >
+                    {t(dict, "info.calendar")}
+                  </Link>
+                ) : null;
+                if (flat) {
+                  return (
+                    <li key={tm.entrantId} className="min-w-0">
+                      <div
+                        data-testid={`mh-team-${tm.entrantId}`}
+                        className="min-w-0 rounded-xl border border-zinc-200/80 bg-surface"
+                      >
+                        {/* The closed card's own row, without the chevron —
+                            and the calendar the disclosure used to hide rides
+                            the SECOND line, beside the seed chip, for the
+                            reason the seed chip is there in the first place: a
+                            person's name is what this card is for. Measured in
+                            Chromium on this page, a one-row card (crest, name,
+                            calendar) left the name 121px at 1280, 160 at 768
+                            and 84 at 320, against 239/278/202 on a team card —
+                            "Alexander Montgomery-Fitzwilliam" cut to
+                            "Alexander Mo…" on a desktop with a whole row
+                            spare. Nothing is hidden either way; the two lines
+                            are what let the name have the width. */}
+                        <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 py-2">
+                          <EntityLogo src={tm.badgeUrl} name={tm.name} colour={tm.colour} size={32} />
+                          <span className="min-w-0 flex-1">
+                            {solo?.playerHref ? (
+                              <Link
+                                href={solo.playerHref}
+                                id={nameId}
+                                title={tm.name}
+                                className={`${nameClass} hover:text-accent-strong`}
+                              >
+                                {tm.name}
+                              </Link>
+                            ) : (
+                              <span className={nameClass} id={nameId} title={tm.name}>
+                                {tm.name}
+                              </span>
+                            )}
+                            {tm.seed !== null || calendar ? (
+                              <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                                {/* `!== null`, never truthiness: seed 0 is a
+                                    seed, and a singles entrant can be seeded. */}
+                                {tm.seed !== null ? (
+                                  <span className="shrink-0 whitespace-nowrap rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-muted">
+                                    {t(dict, "teams.seed", { seed: tm.seed })}
+                                  </span>
+                                ) : null}
+                                {calendar}
+                              </span>
+                            ) : null}
+                          </span>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                }
                 return (
                   // An OPEN card takes the whole row. The class is on the GRID
                   // ITEM (the `<li>`), because `grid-column` is the item's.
@@ -258,19 +356,7 @@ export function TeamsTab({ doc, dict, locale, initialDivision }: TeamsTabProps) 
                             ))}
                           </ul>
                         )}
-                        {tm.calendarHref ? (
-                          // Named "Add to calendar" + the team, so a screen
-                          // reader's link list is not N identical entries.
-                          <Link
-                            data-testid={calendarId}
-                            id={calendarId}
-                            href={tm.calendarHref}
-                            aria-labelledby={`${calendarId} ${nameId}`}
-                            className="inline-flex min-h-11 items-center rounded-lg border border-zinc-200/80 px-3 text-sm font-medium text-ink transition hover:border-accent hover:text-accent-strong"
-                          >
-                            {t(dict, "info.calendar")}
-                          </Link>
-                        ) : null}
+                        {calendar}
                       </div>
                     </details>
                   </li>

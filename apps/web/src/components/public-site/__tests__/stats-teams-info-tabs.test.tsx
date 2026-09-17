@@ -947,6 +947,200 @@ describe("TeamsTab — squads, bans and the team calendar (division-page parity,
   });
 });
 
+// ===========================================================================
+// Teams — an INDIVIDUAL entrant is not a team (2026-09-17)
+// ===========================================================================
+
+// Every entrant shipped as the SAME squad disclosure: a member count, a
+// chevron, and "No squad listed yet" under an empty list. For a singles
+// entrant all three are claims the product cannot make — one person is not a
+// team of zero — and a live singles division published exactly that ("0
+// members" / "No squad listed yet" under a lone player). `TeamCard.kind` now
+// travels in the document and the card branches on it: `individual` gets ONE
+// flat row, team and pair keep the disclosure unchanged.
+describe("TeamsTab — an individual entrant gets a flat card; team and pair keep the squad disclosure", () => {
+  /**
+   * ALL THREE KINDS AND THE LEGACY SHAPE IN ONE RENDER — one sample is not a
+   * parity sweep (AGENTS #7), and the two arms have to be read against each
+   * other rather than in separate documents:
+   *
+   *  • `i1` INDIVIDUAL, seeded **0**, whose one squad row carries a player
+   *    page — the singles entrant the hub must still get you to;
+   *  • `i2` INDIVIDUAL with an EMPTY squad — the bug's own shape, the card
+   *    that read "0 members / No squad listed yet" under one player;
+   *  • `t1` TEAM with an empty squad — the card that must STILL say both;
+   *  • `p1` PAIR with two members — the disclosure that earns its keep;
+   *  • `l1` a document cached BEFORE `kind` existed (the field deleted), which
+   *    must render exactly as it does today.
+   */
+  const quinn = member("Quinn Montgomery", null, {
+    personId: "pq",
+    playerHref: "/riverside/autumn-cup/players/pq",
+  });
+  const mixed = () => {
+    const d = hubDoc({
+      teams: [
+        team("i1", "Quinn Montgomery", null, null, { kind: "individual", seed: 0, members: [quinn] }),
+        team("i2", "Priya Natarajan", null, null, { kind: "individual" }),
+        team("t1", "Red Rockets", null, null, { kind: "team" }),
+        team("p1", "Ito / Watanabe", null, null, {
+          kind: "pair",
+          members: [member("Sana Ito", null), member("Ren Watanabe", null)],
+        }),
+        team("l1", "Blue Blazers", null, null, { kind: "team" }),
+      ],
+    });
+    delete (d.teams[4] as Partial<TeamCardT>).kind;
+    return d;
+  };
+  const render = (d: CompetitionHubDocT = mixed(), dd: Dict = dict) =>
+    renderToStaticMarkup(<TeamsTab doc={d} dict={dd} locale="en" />);
+
+  /** One whole CARD. `rowHtml` stops at the first `</li>`, which inside a team
+   *  card is its first squad line; this stops at the next card's own testid
+   *  instead. Every id in this block is alphanumeric, so the pattern cannot
+   *  match `mh-team-i1-member-0`, `-calendar` or `-squad-empty`. */
+  const cardOf = (h: string, entrantId: string): string => {
+    const at = h.indexOf(`data-testid="mh-team-${entrantId}"`);
+    expect(at, `${entrantId} is in the markup`).toBeGreaterThan(-1);
+    const rest = h.slice(at + 1);
+    const next = rest.search(/data-testid="mh-team-[a-z0-9]+"/);
+    // Back to that card's own `<li`, not to its testid — the testid sits
+    // INSIDE the next card's opening tag, so slicing at it hands back the
+    // word "<details" and every negative below passes on the neighbour.
+    return next === -1 ? rest : rest.slice(0, rest.lastIndexOf("<li", next));
+  };
+  const classesOf = (tag: string) => tag.match(/class="([^"]*)"/)?.[1]?.split(" ") ?? [];
+  /** The WHOLE tag carrying a card's name — an `<a>` when the document gives
+   *  the person a page, a `<span>` when it does not. Read whole because
+   *  `next/link` reorders props: it serialises `href` LAST, after `class`,
+   *  while the plain span carries `class` first. An attribute-order regex
+   *  passes on one arm and fails on the other. */
+  const nameTag = (h: string, entrantId: string): string => {
+    const at = h.indexOf(`id="mh-team-${entrantId}-name"`);
+    expect(at, `${entrantId}'s name element`).toBeGreaterThan(-1);
+    return h.slice(h.lastIndexOf("<", at), h.indexOf(">", at) + 1);
+  };
+  /** A card that must be FLAT. Read through this rather than `cardOf`, so that
+   *  every assertion below is made about an OPEN row rather than about markup
+   *  that a disclosure still hides — otherwise each of them passes on today's
+   *  card, which carries the same name, seed and calendar inside a `<details>`. */
+  const flatCardOf = (h: string, entrantId: string): string => {
+    expect(tagOf(h, `mh-team-${entrantId}`), entrantId).toMatch(/^<div /);
+    const card = cardOf(h, entrantId);
+    expect(card, entrantId).not.toContain("<details");
+    return card;
+  };
+
+  it("INDIVIDUAL: no <details>, no <summary>, no chevron, no member count, no squad-empty sentence — and no squad line either", () => {
+    const h = render();
+    for (const id of ["i1", "i2"]) {
+      const card = cardOf(h, id);
+      expect(tagOf(h, `mh-team-${id}`), id).toMatch(/^<div /);
+      expect(card, id).not.toContain("<details");
+      expect(card, id).not.toContain("<summary");
+      expect(card, id).not.toContain("group-open:rotate-90");
+      // The three squad claims, each read off THIS card rather than the
+      // document: a page-wide negative would pass on a page with one team.
+      expect(card, id).not.toMatch(/>\d+ members?</);
+      expect(card, id).not.toContain("No squad listed yet");
+      expect(h, id).not.toContain(`data-testid="mh-team-${id}-squad-empty"`);
+      expect(h, id).not.toContain(`data-testid="mh-team-${id}-member-`);
+    }
+    // THE POSITIVE PAIR, in the same render. A team with an empty squad still
+    // says both things, and a pair still counts its two.
+    expect(tagOf(h, "mh-team-t1")).toMatch(/^<details /);
+    expect(cardOf(h, "t1")).toContain(">0 members<");
+    expect(cardOf(h, "t1")).toContain("No squad listed yet");
+    expect(h).toContain(`data-testid="mh-team-t1-squad-empty"`);
+    expect(tagOf(h, "mh-team-p1")).toMatch(/^<details /);
+    expect(cardOf(h, "p1")).toContain(">2 members<");
+    expect(h).toContain(`data-testid="mh-team-p1-member-1"`);
+  });
+
+  it("a document cached before `kind` existed keeps the disclosure — missing is NOT individual", () => {
+    const h = render();
+    expect(mixed().teams[4]!.kind, "the legacy card carries no kind").toBeUndefined();
+    expect(tagOf(h, "mh-team-l1")).toMatch(/^<details /);
+    expect(cardOf(h, "l1")).toContain(">0 members<");
+  });
+
+  it("the flat card keeps the crest at 32, the truncate chain with its title, and the seed chip — INCLUDING seed 0", () => {
+    const h = render();
+    const i1 = flatCardOf(h, "i1");
+    expect(i1).toContain("h-8 w-8");
+    expect(i1).not.toContain("h-6 w-6");
+    const name = classesOf(nameTag(h, "i1"));
+    expect(name).toContain("truncate");
+    expect(name).toContain("min-w-0");
+    // `py-3` is the 44px tap target `MemberLine` buys the same way; `-my-2`
+    // gives it back to the layout so the row keeps the closed card's height.
+    expect(name).toContain("py-3");
+    expect(nameTag(h, "i1")).toContain('title="Quinn Montgomery"');
+    // The grid item and the card itself, or `truncate` is inert (AGENTS: the
+    // whole ancestor chain).
+    expect(classesOf(tagOf(h, "mh-team-i1"))).toContain("min-w-0");
+    // `seed !== null`, never truthiness: a singles entrant can be seeded, and
+    // seed 0 is a seed. `i2` is unseeded — the negative pair, per card.
+    expect(i1).toContain("Seed 0");
+    expect(flatCardOf(h, "i2")).not.toContain("Seed");
+  });
+
+  it("the calendar link is reachable WITHOUT opening anything, same 44px target and same aria-labelledby pair", () => {
+    const h = render();
+    const tag = tagOf(h, "mh-team-i1-calendar");
+    expect(tag).toContain(`href="/riverside/autumn-cup/sunday-league/calendar.ics?entrant=i1"`);
+    expect(classesOf(tag)).toEqual(
+      expect.arrayContaining(["min-h-11", "rounded-lg", "border", "border-zinc-200/80", "px-3"]),
+    );
+    // It is INSIDE the card and behind no disclosure — the assertion above
+    // only says it exists somewhere.
+    expect(flatCardOf(h, "i1")).toContain(`data-testid="mh-team-i1-calendar"`);
+    const labelledBy = tag.match(/aria-labelledby="([^"]*)"/)?.[1]?.split(" ") ?? [];
+    expect(labelledBy).toEqual(["mh-team-i1-calendar", "mh-team-i1-name"]);
+    expect(nameTag(h, "i1")).toContain(`id="mh-team-i1-name"`);
+    // And a document that offers none renders none.
+    const noIcs = render(hubDoc({ teams: [team("i1", "Solo", null, null, { kind: "individual", calendarHref: undefined })] }));
+    expect(noIcs).not.toContain(`data-testid="mh-team-i1-calendar"`);
+  });
+
+  it("the flat card's name LINKS to the person's page where the document gives one, and is plain text where it does not", () => {
+    // DEVIATION from the brief (recorded in the task report, owner ruling
+    // owed): the brief's flat card is "badge + name + calendar link". A
+    // singles entrant's ONE squad row is where the player-page link lived —
+    // `e2e/walkthrough/spectator-player.spec.ts` PP4 reads it off
+    // `mh-team-{e}-member-0` — so dropping the row without moving the link
+    // would delete the hub's only route to a singles player's card. The name
+    // carries it instead; the masked arm still links nothing, which is the
+    // half that keeps a withheld name withheld.
+    const h = render();
+    flatCardOf(h, "i1");
+    expect(nameTag(h, "i1")).toMatch(/^<a /);
+    expect(nameTag(h, "i1")).toContain('href="/riverside/autumn-cup/players/pq"');
+    expect(h).toMatch(/id="mh-team-i1-name"[^>]*>Quinn Montgomery</);
+    // Masked: the builder withholds `playerHref` for a masked member, and the
+    // card must not invent one (the same rule `MemberLine` follows).
+    const masked = render(
+      hubDoc({
+        teams: [team("i1", "Q. Montgomery", null, null, { kind: "individual", members: [member("Q. Montgomery", null)] })],
+      }),
+    );
+    expect(flatCardOf(masked, "i1")).not.toContain('href="/riverside/autumn-cup/players/');
+    expect(nameTag(masked, "i1")).toMatch(/^<span /);
+    expect(masked).toMatch(/id="mh-team-i1-name"[^>]*>Q. Montgomery</);
+    // No squad at all: nothing to link, and nothing invented.
+    expect(flatCardOf(h, "i2")).not.toContain("/players/");
+  });
+
+  it("the flat card says nothing in English of its own — the calendar link is the dictionary's, in Spanish", () => {
+    const h = render(mixed(), es as Dict);
+    const i1 = flatCardOf(h, "i1");
+    expect(i1).toContain(">Añadir al calendario<");
+    expect(i1).not.toContain("Add to calendar");
+    expect(i1).toContain("Cabeza de serie 0");
+  });
+});
+
 // R11 screenshot run (2026-09-16), Chromium: at 390 the two-column grid left a
 // team name 28px wide ("Ki…", "Mil…") and wrapped "7 members" onto two lines; at
 // 1280 four columns cut "Millbrook Ro…"; and a TAP on a name at 320 left it cut

@@ -282,6 +282,18 @@ export const LeaderBoard = z.object({
   rows: z.array(LeaderRow),
 });
 
+/**
+ * What an entrant IS — the `entrants.kind` column, which the v1 surface
+ * declares as `EntrantKind` (`server/api-v1/schemas.ts`). Restated here rather
+ * than imported, like the fixture-status enum this file's sibling restates:
+ * `api-v1/schemas.ts` is the WRITE surface's vocabulary and this is a public
+ * read document, and the client can only ever `import type` from this module
+ * (a zod value cannot cross that boundary), so the two would not share a value
+ * at runtime either way. If the column ever grows a fourth kind, both lists
+ * move together.
+ */
+export const TeamCardKind = z.enum(["team", "individual", "pair"]);
+
 export const TeamCard = z.object({
   entrantId: z.string(),
   divisionId: z.string(),
@@ -291,6 +303,17 @@ export const TeamCard = z.object({
   badgeUrl: z.string().nullable(),
   colour: z.string().nullable(),
   seed: z.number().nullable(),
+  /** Team, pair or one person — the difference between a card that has a
+   *  SQUAD and a card that is somebody. The Teams tab renders a squad
+   *  disclosure for the first two and a flat row for `individual`; a member
+   *  count and "No squad listed yet" are claims a singles entrant's card
+   *  cannot make. The builder always fills it (unknown column values fall
+   *  through to `team`); OPTIONAL only for the reader's sake, because the hub
+   *  document is served from an ISR entry built before this field existed and
+   *  the page renders that entry without re-parsing it. Absent therefore means
+   *  "this document does not say", and the tab reads it as today's card —
+   *  never as `individual`. Same reasoning as `members` below. */
+  kind: TeamCardKind.optional(),
   /** The division page's Entrants tab. The Teams card no longer LINKS here
    *  (it opens in place, 2026-09-16); kept because the redirect that retires
    *  the division page decides where this points, and has not been signed
