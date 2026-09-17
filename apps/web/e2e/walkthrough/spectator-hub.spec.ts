@@ -1011,7 +1011,14 @@ test("HB15: the Full division link and the results-grid toggle each clear the 44
     "the Full division link takes a tap over the whole floor",
   ).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
 
-  await page.goto(`/shared/${org.slug}/${comp.slug}/${genericSlug}`, { waitUntil: "load" });
+  // `?tab=standings` is part of the PREMISE, not decoration: the division page
+  // opens on Schedule (`tabs.tsx` — an absent or unknown `?tab=` falls through
+  // to the first panel) and the other panels render `hidden`, so the results
+  // grid is in the markup and invisible. CI caught exactly that, with the
+  // locator RESOLVED and "Received: hidden"; a local run that read green had
+  // skipped this test behind an earlier serial failure.
+  await page.goto(`/shared/${org.slug}/${comp.slug}/${genericSlug}?tab=standings`, { waitUntil: "load" });
+  await expect(page.locator("#panel-standings"), "?tab=standings opens the Standings panel").toBeVisible();
   const toggle = page
     .locator("summary")
     .filter({ hasText: dictString("en", "division.resultsGrid") })
