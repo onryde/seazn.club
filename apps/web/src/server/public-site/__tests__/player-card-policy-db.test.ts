@@ -75,7 +75,9 @@ describe.skipIf(!HAS_DB)("getPublicPlayer — the card's cache entry is tagged w
     probe.cacheCalls.length = 0;
     const data = await getPublicPlayer(s.orgSlug, s.compSlug, s.youth.personId);
     expect(data, "precondition: the card is served").not.toBeNull();
-    const card = probe.cacheCalls.find((c) => String(c.keyParts[0]).startsWith("pub-player-"));
+    // The versioned card DATA entry (`pub-player-v<N>`), not W2's
+    // `pub-player-gate-tag` entry, which holds tags only and is called first.
+    const card = probe.cacheCalls.find((c) => /^pub-player-v\d+$/.test(String(c.keyParts[0])));
     expect(card, `cache calls: ${JSON.stringify(probe.cacheCalls)}`).toBeDefined();
     expect(card!.tags).toContain(orgTag(s.orgSlug));
   });
