@@ -3172,9 +3172,14 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
       carriedMode = carryMode;
       carriedDeltas = buildCarryDeltas(sourceTables, entrants, carryMode);
     }
+    // Server-side merge, not a spread of `next.config` read earlier in this
+    // transaction (design §T2): any other key written between that read and
+    // this write — a per-stage `rules` override, most immediately — would
+    // otherwise be silently reverted. Not `stages.ts`'s write-once `rounds`
+    // pattern: that one is guarded `and config->>'rounds' is null`, which is
+    // right for a key set once and wrong for one that must stay replaceable.
     await tx`
-      update stages set config = ${tx.json({
-        ...next.config,
+      update stages set config = config || ${tx.json({
         qualified: entrants,
         ...(carriedDeltas !== undefined ? { carry_deltas: carriedDeltas } : {}),
       } as never)}
@@ -3261,9 +3266,12 @@ export async function overrideStandings(
     const ranks = new Set(input.rows.map((r) => r.rank));
     if (ranks.size !== input.rows.length) throw new HttpError(422, "duplicate ranks in override");
 
+    // Server-side merge (design §T2). `stage.config` was read BEFORE the
+    // advisory lock above, so a writer that committed while this transaction
+    // waited is already invisible to it; spreading that stale object back
+    // reverts the other writer's key with no error.
     await tx`
-      update stages set config = ${tx.json({
-        ...stage.config,
+      update stages set config = config || ${tx.json({
         rank_overrides: input.rows.map((r) => ({ entrant_id: r.entrant_id, rank: r.rank })),
       } as never)}
       where id = ${stageId}`;
@@ -3695,8 +3703,9 @@ export async function confirmSeedProposal(
       }
       const entrants = [...new Set(expandedEntries.map(([, id]) => id))];
       const carriedDeltas = buildCarryDeltas(tables, entrants, carryMode);
+      // Server-side merge (design §T2) — see seedNextStage's write.
       await tx`
-        update stages set config = ${tx.json({ ...stage.config, carry_deltas: carriedDeltas } as never)}
+        update stages set config = config || ${tx.json({ carry_deltas: carriedDeltas } as never)}
         where id = ${stageId}`;
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
@@ -3873,7 +3882,10 @@ export async function issueChallenge(
         where division_id = ${stage.division_id} and status in ('registered','confirmed')
         order by seed nulls last, created_at, id`;
       order = entrants.map((e) => e.id);
-      await tx`update stages set config = ${tx.json({ ...stage.config, ladder_order: order } as never)}
+      // Server-side merge (design §T2): `stage.config` was read before the
+      // advisory lock, so anything written while this transaction waited must
+      // not be spread back over.
+      await tx`update stages set config = config || ${tx.json({ ladder_order: order } as never)}
                where id = ${stageId}`;
     }
     const ci = order.indexOf(input.challenger_id);

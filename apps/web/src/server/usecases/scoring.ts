@@ -551,8 +551,12 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
           .rank_overrides ?? []).filter((r) => r.entrant_id !== winner && r.entrant_id !== loser);
       overrides.push({ entrant_id: winner, rank: place[0] });
       overrides.push({ entrant_id: loser, rank: place[1] });
+      // Server-side merge, not a spread of the `stage_config` joined in at the
+      // top of this transaction (design §T2): this is the hot recordResult
+      // path, and spreading a stale read back reverts any other stage-config
+      // key — a per-stage `rules` override among them — with no error.
       await tx`
-        update stages set config = ${tx.json({ ...(fixture.stage_config as object), rank_overrides: overrides } as never)}
+        update stages set config = config || ${tx.json({ rank_overrides: overrides } as never)}
         where id = ${fixture.stage_id}`;
     }
     // Ladder (Jul3/08 §6): the challenger taking the game takes the position.
@@ -563,8 +567,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, outcome: unkno
       const li = order.indexOf(loser);
       if (wi >= 0 && li >= 0 && wi > li) {
         [order[wi], order[li]] = [order[li]!, order[wi]!];
+        // Server-side merge (design §T2) — see the rank_overrides write above.
         await tx`
-          update stages set config = ${tx.json({ ...(fixture.stage_config as object), ladder_order: order } as never)}
+          update stages set config = config || ${tx.json({ ladder_order: order } as never)}
           where id = ${fixture.stage_id}`;
       }
     }
