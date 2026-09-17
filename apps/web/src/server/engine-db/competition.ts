@@ -383,9 +383,35 @@ async function writeSnapshot(
 }
 
 /**
- * Recompute + cache the standings snapshot for one (stage, pool). Folds every
- * decided fixture's delta and ranks via the tiebreaker cascade (spec 03 §4.3),
- * under a division advisory lock. `poolId` null = the single non-pool table.
+ * Recompute + cache the standings snapshots for a stage, under a division
+ * advisory lock. Folds every decided fixture's delta and ranks via the
+ * tiebreaker cascade (spec 03 §4.3).
+ *
+ * Writes EVERY pool the fold produced, each under its OWN key — `pool_id`
+ * null only for the "" pool, i.e. the single non-pool table. This is
+ * pool-safety held HERE rather than at each call site, because none of the
+ * four (usecases/stages.ts `getStandings` + `overrideStandings`,
+ * usecases/scoring.ts `onDecided`, usecases/admin-fixture-config.ts) knows
+ * whether the stage it is recomputing has pools: `overrideStandings` passes
+ * no pool at all, and the other three forward a FIXTURE's own `pool_id`.
+ *
+ * It used to write only the asked-for pool, and pick it with
+ * `find(...) ?? tables.pools[0]` — then persist that fallback under the
+ * ARGUMENT's key, never the table's. On a pooled stage a caller passing no
+ * pool therefore minted a phantom `pool_id IS NULL` snapshot holding a byte
+ * copy of the FIRST pool's table, and a caller naming a pool with no fixtures
+ * of its own (an empty pool of a snake distribution) wrote Pool A's rows under
+ * that pool's id. Nothing downstream can tell either apart from a real table —
+ * the public division page renders every snapshot it is handed, and
+ * usecases/stage-seeding.ts's `sourceStandingsTables` reads a null row as the
+ * "" pool alongside "A"/"B". Same write set as `completeStageIfReady`'s, which
+ * has always keyed on `pool.pool || null`; the two can no longer disagree
+ * about the same stage.
+ *
+ * The return value is the asked-for pool's rows, and `[]` when no pool answers
+ * to that key — including "no poolId given" on a pooled stage, which has no
+ * overall table to return. `getStandings` (the only caller that reads it)
+ * surfaces that as an empty table rather than a wrong one.
  */
 export async function recomputeStandings(
   orgId: string,
@@ -396,12 +422,14 @@ export async function recomputeStandings(
     const inputs = await loadStageInputs(tx, stageId);
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
-    // completeTableStage folds + ranks each pool; pick the one we were asked for.
+    // completeTableStage folds + ranks each pool; cache them all, then hand
+    // back the one we were asked for.
     const { tables } = completeTableStage(toTableStage(inputs), inputs.tableFixtures);
-    const target = tables.pools.find((p) => (p.pool || null) === (poolId ?? null)) ?? tables.pools[0];
-    const rows = target ? target.rows : [];
-    await writeSnapshot(tx, stageId, poolId ?? null, rows, inputs.division.seq);
-    return rows;
+    for (const pool of tables.pools) {
+      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+    }
+    const target = tables.pools.find((p) => (p.pool || null) === (poolId ?? null));
+    return target ? target.rows : [];
   });
 }
 
