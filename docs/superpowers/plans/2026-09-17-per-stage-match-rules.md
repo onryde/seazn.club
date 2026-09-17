@@ -1089,6 +1089,11 @@ Use `localhost`, never `127.0.0.1`. A `-g` filter is a filename sweep in disguis
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stage-match-rules/apps/web && npx tsc --noEmit; echo "EXIT=$?"
+# The bench suites run from the WORKTREE ROOT and are not in the root npm test
+# script (found in Task 2) — a gate that runs only the two workspaces will not
+# see the resolver mirror this branch changed.
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stage-match-rules && \
+  npx vitest run --reporter=json --outputFile=/tmp/bench.json scripts/bench/lib/__tests__/
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stage-match-rules && rtk proxy npm run lint    # read "✖ N problems"; rtk hides this output
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/stage-match-rules/apps/web && \
   npx vitest run --reporter=json --outputFile=/tmp/full.json
